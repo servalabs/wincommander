@@ -128,11 +128,11 @@
   ; Runs in the interactive user's session 5 seconds after the installer exits.
   ; The app deletes this task on startup (see lib.rs). Gracefully no-ops if no
   ; interactive session is present (headless/server installs).
-  ; Resolve the interactive user robustly: Win32_ComputerSystem.UserName is
-  ; EMPTY in an RDP/non-console install context, so fall back to the owner of
-  ; the running explorer.exe (the actual logged-in user). Keep the full
-  ; DOMAIN\user form — New-ScheduledTaskPrincipal -UserId expects it. Pass the
-  ; bare exe path to -Execute (no embedded quotes; Task Scheduler handles
+  ; Use the built-in Users group as the task principal, matching the app's
+  ; machine-wide autostart task. Resolving a username here can select the
+  ; separate administrator account used for UAC or fail in RDP contexts, which
+  ; leaves a GUI process outside the desktop user's interactive session. Pass
+  ; the bare exe path to -Execute (no embedded quotes; Task Scheduler handles
   ; spaces) — embedding quotes made the task target a non-existent quoted path.
   ; KT: -RunLevel MUST be Highest. The app's manifest is requireAdministrator,
   ; so launching it from a *Limited* (non-elevated) task fails with
@@ -142,16 +142,13 @@
   ; Highest + an admin principal runs the app elevated in the interactive
   ; session with no UAC prompt — same as the app's own logon autostart task.
   nsExec::ExecToLog 'powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
-    -Command "$u = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName; \
-    if (-not $u) { try { $u = (Get-Process explorer -IncludeUserName -ErrorAction Stop | Select-Object -First 1 -ExpandProperty UserName) } catch {} } \
-    if ($u) { \
-      $a = New-ScheduledTaskAction -Execute ''$INSTDIR\${MAINBINARYNAME}.exe''; \
-      $t = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds(5)); \
-      $p = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Highest; \
-      Register-ScheduledTask -TaskName ''WinCommanderLaunchOnce'' \
-        -Action $a -Trigger $t -Principal $p -Force -ErrorAction SilentlyContinue | Out-Null; \
-      Start-ScheduledTask -TaskName ''WinCommanderLaunchOnce'' -ErrorAction SilentlyContinue \
-    }"'
+    -Command "$a = New-ScheduledTaskAction -Execute ''$INSTDIR\${MAINBINARYNAME}.exe''; \
+    $t = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds(5)); \
+    $p = New-ScheduledTaskPrincipal -GroupId ''S-1-5-32-545'' -RunLevel Highest; \
+    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero); \
+    Register-ScheduledTask -TaskName ''WinCommanderLaunchOnce'' \
+      -Action $a -Trigger $t -Principal $p -Settings $s -Force -ErrorAction SilentlyContinue | Out-Null; \
+    Start-ScheduledTask -TaskName ''WinCommanderLaunchOnce'' -ErrorAction SilentlyContinue"'
 
   ; --- 5. Honour pre-update shortcut state ------------------------------------
   ; The app writes HKLM\SOFTWARE\WinCommander!HiddenMode (REG_DWORD, 1 = active)
