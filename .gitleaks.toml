@@ -1,0 +1,13 @@
+[allowlist]
+description = "Confirmed false positives: docs prose, test fixtures, demo text, and binary icon data."
+regexTarget = "match"
+regexes = [
+  '''HMAC-authenticated IPC, AES-256-GCM-encrypted PowerShell modules''',
+  '''secret = "0123456789abcdef0123456789abcdef"''',
+  '''AKIAABCDEFGHIJKLMNOP''',
+  '''idempotency_key = "duress-wipe-2026-07-05-ab12cd34"''',
+]
+paths = [
+  '''softwares/listary\.ico''',
+  '''ref/wiki-compliance-audit\.md''',
+]

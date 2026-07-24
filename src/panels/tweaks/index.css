@@ -1,0 +1,602 @@
+.panel-container {
+    width: 100%;
+    padding: 0;
+}
+
+/* Responsive card grid. Cards flow into as many equal columns as fit (min
+   240px each) and `dense` backfills gaps, so short cards no longer strand a
+   blank column. NOTE: column-count masonry was tried but broke panels that use
+   .panel-grid as a section wrapper (a tall/wide card crammed into one narrow
+   column) — a width-filling grid is safe for both uses. */
+.panel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    grid-auto-flow: row dense;
+    gap: 12px;
+    align-items: start;
+}
+
+/* Two independent stacked columns for the Windows Settings sections. Each
+   column packs its own sections tightly with a consistent gap (no blank space
+   BETWEEN sections), which the row-major grid and column masonry both failed at
+   (see UI_problem screenshots). Any leftover blank is only at the bottom of the
+   shorter column. */
+.panel-columns {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 14px;
+    padding-right: 8px;
+}
+
+.column-stack {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.tweaks-panel .panel-columns > .column-stack:last-child {
+    padding-right: 4px;
+}
+
+.tweaks-panel .panel-columns > .column-stack:last-child .section-card {
+    border-right-color: var(--color-border-light) !important;
+    box-shadow:
+        inset -1px 0 0 var(--color-border-light),
+        0 8px 24px -20px rgba(0, 0, 0, 0.7);
+}
+
+html.light .tweaks-panel .panel-columns > .column-stack:last-child .section-card {
+    border-right-color: var(--border-strong) !important;
+    box-shadow:
+        inset -1px 0 0 var(--border-strong),
+        0 10px 28px -22px rgba(28, 42, 34, 0.45),
+        0 1px 3px rgba(28, 42, 34, 0.12);
+}
+
+/* Sub-label dividers within combined cards (e.g. System Hardware) */
+.tweaks-sublabel {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.3px;
+    color: var(--color-text-muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.tweaks-sublabel::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--color-border);
+}
+
+.tweaks-sublabel-gap {
+    margin-top: 16px;
+}
+
+.context-menu-toggle-wrap {
+    margin-top: 14px;
+}
+
+.system-managers-card {
+    margin-top: 18px;
+}
+
+.system-managers-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.system-managers-tabs .bp6-button {
+    min-height: 28px;
+    border-radius: 4px;
+}
+
+.system-manager-embedded {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.system-manager-embedded__meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+}
+
+.section-header-right:has(.system-manager-caption) {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 12px;
+    margin-left: 12px;
+}
+
+.system-manager-caption {
+    min-width: 180px;
+    flex: 1 1 auto;
+    color: var(--color-text-muted);
+    font-size: 11.5px;
+    line-height: 1.35;
+}
+
+.system-manager-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: flex-end;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+}
+
+.system-manager-path {
+    min-width: 0;
+    max-width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.35;
+    text-align: left;
+    cursor: pointer;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-all;
+}
+
+.system-manager-path:hover:not(:disabled) {
+    color: var(--color-accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.system-manager-path:disabled {
+    cursor: default;
+}
+
+.runtime-signal-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 130px;
+}
+
+.runtime-signal-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+@media(max-width: 1000px) {
+    .panel-grid {
+        grid-template-columns: 1fr;
+    }
+    .panel-columns {
+        flex-direction: column;
+    }
+}
+
+.quick-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    align-items: start;
+}
+
+.quick-action-card {
+    background: linear-gradient(to right, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.5));
+    border: 1px solid var(--color-border);
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+    /* hover changes: background, border-color, box-shadow, transform */
+    transition: background var(--dur-slow, 300ms) cubic-bezier(0.4, 0, 0.2, 1),
+                border-color var(--dur-slow, 300ms) cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow var(--dur-slow, 300ms) cubic-bezier(0.4, 0, 0.2, 1),
+                transform var(--dur-slow, 300ms) cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+.quick-action-card::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+    transition: left 0.6s ease;
+}
+
+.quick-action-card:hover::before {
+    left: 100%;
+}
+
+.quick-action-card:hover {
+    background: linear-gradient(to right, color-mix(in srgb, var(--accent) 12%, transparent), rgba(0, 80, 90, 0.5));
+    border: 2px solid var(--color-accent);
+    box-shadow: 0 0 20px color-mix(in srgb, var(--accent) 30%, transparent);
+    transform: translateY(-2px);
+}
+
+.quick-action-card.primary {
+    background: linear-gradient(to right, color-mix(in srgb, var(--accent) 8%, transparent), rgba(0, 50, 60, 0.5));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.quick-action-card.primary:hover {
+    background: linear-gradient(to right, color-mix(in srgb, var(--accent) 20%, transparent), rgba(0, 100, 110, 0.6));
+    border: 2px solid var(--color-accent);
+    box-shadow: 0 0 25px color-mix(in srgb, var(--accent) 40%, transparent), inset 0 0 10px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.warning-callout {
+    margin-bottom: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 4px;
+    padding: 10px 14px;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 12px;
+    background: rgba(247, 194, 107, 0.08) !important;
+    border: 1px solid rgba(247, 194, 107, 0.2);
+    color: var(--color-warning);
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+
+/* ── Maintenance Run State ── */
+.maintenance-action {
+    position: relative;
+}
+
+.maintenance-action::after {
+    content: "";
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+    opacity: 0.5;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-muted) 28%, transparent);
+}
+
+.maintenance-action.maintenance-running {
+    overflow: hidden;
+    background:
+        linear-gradient(90deg, color-mix(in srgb, var(--color-info) 14%, transparent), transparent 48%),
+        var(--color-bg-card);
+    border-color: color-mix(in srgb, var(--color-info) 55%, var(--color-border)) !important;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-info) 18%, transparent);
+}
+
+.maintenance-action.maintenance-running::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        110deg,
+        transparent 0%,
+        transparent 34%,
+        color-mix(in srgb, var(--color-info) 18%, transparent) 48%,
+        transparent 62%,
+        transparent 100%
+    );
+    transform: translateX(-100%);
+    animation: maintenance-scan 1.1s linear infinite;
+    pointer-events: none;
+}
+
+.maintenance-action.maintenance-running::after {
+    background: var(--color-info);
+    opacity: 1;
+    box-shadow:
+        0 0 0 4px color-mix(in srgb, var(--color-info) 12%, transparent),
+        0 0 16px color-mix(in srgb, var(--color-info) 78%, transparent);
+    animation: maintenance-pulse 0.85s ease-in-out infinite;
+}
+
+.maintenance-action.maintenance-fresh {
+    background:
+        linear-gradient(90deg, color-mix(in srgb, var(--color-success) 10%, transparent), transparent 46%),
+        var(--color-bg-card);
+    border-color: color-mix(in srgb, var(--color-success) 45%, var(--color-border)) !important;
+}
+
+.maintenance-action.maintenance-fresh::after {
+    background: var(--color-success);
+    opacity: 1;
+    box-shadow: 0 0 12px color-mix(in srgb, var(--color-success) 72%, transparent);
+}
+
+.maintenance-action.maintenance-stale {
+    background:
+        linear-gradient(90deg, color-mix(in srgb, var(--color-warning) 10%, transparent), transparent 46%),
+        var(--color-bg-card);
+    border-color: color-mix(in srgb, var(--color-warning) 45%, var(--color-border)) !important;
+}
+
+.maintenance-action.maintenance-stale::after {
+    background: var(--color-warning);
+    opacity: 1;
+    box-shadow: 0 0 12px color-mix(in srgb, var(--color-warning) 70%, transparent);
+}
+
+.maintenance-action.maintenance-never {
+    border-color: color-mix(in srgb, var(--color-danger) 30%, var(--color-border)) !important;
+}
+
+.maintenance-action.maintenance-never::after {
+    background: var(--color-danger);
+    opacity: 0.85;
+    box-shadow: 0 0 10px color-mix(in srgb, var(--color-danger) 55%, transparent);
+}
+
+/* ── Power Plan Switch ── */
+.power-plan-switch {
+    --power-plan-slot: 0;
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
+    padding: 5px;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--color-bg-card) 86%, transparent);
+    overflow: hidden;
+}
+
+.power-plan-switch--0 { --power-plan-slot: 0; }
+.power-plan-switch--1 { --power-plan-slot: 1; }
+.power-plan-switch--2 { --power-plan-slot: 2; }
+.power-plan-switch--3 { --power-plan-slot: 3; }
+
+/* The energy scale is intentional: battery saving → balanced → speed → max.
+   Keep these distinct from the app's generic warning state so the active plan
+   is recognizable at a glance, even before its label is read. */
+.power-plan-switch--0 {
+    border-color: color-mix(in srgb, #eab308 30%, var(--color-border));
+}
+.power-plan-switch--1 {
+    border-color: color-mix(in srgb, var(--color-success) 25%, var(--color-border));
+}
+.power-plan-switch--2 {
+    border-color: color-mix(in srgb, #f97316 28%, var(--color-border));
+}
+.power-plan-switch--3 {
+    border-color: color-mix(in srgb, var(--color-danger) 25%, var(--color-border));
+}
+
+.power-plan-switch__thumb {
+    --plan-color: var(--color-accent);
+    position: absolute;
+    top: 5px;
+    bottom: 5px;
+    left: 5px;
+    width: calc((100% - 25px) / 4);
+    border-radius: 11px;
+    border: 1px solid color-mix(in srgb, var(--plan-color) 40%, var(--color-border));
+    background: var(--color-bg-elevated);
+    box-shadow:
+        0 0 8px color-mix(in srgb, var(--plan-color) 15%, transparent),
+        inset 0 1px 0 rgba(255,255,255,0.05);
+    transform: translateX(calc(var(--power-plan-slot) * (100% + 5px)));
+    transform-origin: center;
+    /* Calm, precise glide — no cartoonish squish. Matches the rest of the
+       app's measured, technical motion language. */
+    transition: transform 360ms cubic-bezier(0.33, 1, 0.68, 1), border-color 220ms ease, background 220ms ease, box-shadow 220ms ease;
+}
+
+.power-plan-switch--0 .power-plan-switch__thumb { --plan-color: #eab308; }
+.power-plan-switch--1 .power-plan-switch__thumb { --plan-color: var(--color-success); }
+.power-plan-switch--2 .power-plan-switch__thumb { --plan-color: #f97316; }
+.power-plan-switch--3 .power-plan-switch__thumb { --plan-color: var(--color-danger); }
+
+
+.power-plan-option {
+    position: relative;
+    z-index: 1;
+    min-width: 0;
+    min-height: 58px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 7px;
+    row-gap: 2px;
+    align-items: center;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--color-text-muted);
+    text-align: left;
+    cursor: pointer;
+    transition: color 180ms ease, transform 240ms cubic-bezier(0.22, 1.45, 0.36, 1), opacity 160ms ease;
+}
+
+.power-plan-option:hover:not(:disabled) {
+    color: var(--color-text-primary);
+    transform: translateY(-1px);
+}
+
+.power-plan-option:disabled {
+    cursor: wait;
+    opacity: 0.55;
+}
+
+.power-plan-option.active {
+    color: var(--color-text-primary);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 26%, transparent);
+    background: color-mix(in srgb, currentColor 9%, var(--color-bg-elevated));
+}
+
+.power-plan-option .bp6-icon,
+.power-plan-option > svg {
+    grid-row: 1 / span 2;
+    color: currentColor;
+}
+
+.power-plan-option .plan-title {
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    white-space: normal;
+    line-height: 1.2;
+}
+
+.power-plan-option .plan-tag {
+    min-width: 0;
+    font-size: 9.5px;
+    color: var(--color-text-muted);
+    overflow-wrap: break-word;
+    word-break: break-word;
+    white-space: normal;
+    line-height: 1.2;
+}
+
+.power-plan-option.powersaver.active { color: #eab308; }
+.power-plan-option.balanced.active { color: var(--color-success); }
+.power-plan-option.performance.active { color: #f97316; }
+.power-plan-option.ultimate.active { color: var(--color-danger); }
+
+.power-plan-option__spin {
+    animation: power-plan-spin 0.9s linear infinite;
+}
+
+@keyframes power-plan-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (max-width: 900px) {
+    .power-plan-switch {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .power-plan-switch__thumb {
+        display: none;
+    }
+
+    .power-plan-option.active {
+        background: var(--color-bg-elevated);
+        border: 1px solid var(--color-border-accent);
+    }
+}
+
+/* Runtime Concealment card — danger-tinted border, consistent with
+   the red stealth card that used to live in Settings. */
+.tweaks-runtime-card {
+    margin-top: 14px;
+}
+
+.tweaks-runtime-card > div {
+    border-color: rgba(255, 90, 69, 0.22) !important;
+    background: rgba(255, 90, 69, 0.02) !important;
+}
+
+/* Local scroll surfaces inside settings cards need stable geometry. Opt these
+   out of SectionCard's content-visibility measurement so nested scroll and
+   portaled menus do not jump while the main panel is scrolling. */
+.disk-cleanup-section {
+    content-visibility: visible;
+    contain-intrinsic-size: none;
+}
+
+.defender-exclusion-auditor-card {
+    content-visibility: visible;
+    contain-intrinsic-size: none;
+}
+
+.defender-exclusion-auditor-card.defender-exclusion-auditor-card {
+    margin-bottom: 4px;
+    border-bottom-color: var(--color-border-light) !important;
+    padding-bottom: 22px !important;
+    box-shadow:
+        inset 0 -1px 0 var(--color-border-light),
+        0 8px 24px -20px rgba(0, 0, 0, 0.7);
+}
+
+.defender-exclusion-auditor-card.defender-exclusion-auditor-card::after {
+    content: "";
+    display: block;
+    height: 1px;
+    margin: 14px -16px -6px;
+    background: var(--color-border-light);
+}
+
+.disk-cleanup-category-scroll {
+    max-height: min(44vh, 420px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    padding-right: 4px;
+    scrollbar-gutter: stable;
+    touch-action: pan-y;
+}
+
+.disk-cleanup-category-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    align-items: start;
+}
+
+.disk-cleanup-popover {
+    z-index: calc(var(--z-modal, 1000) + 20);
+    width: max-content;
+    min-width: 220px;
+    max-width: min(360px, 92vw);
+}
+
+.defender-exclusion-auditor-table-wrap {
+    position: relative;
+    max-height: 280px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    padding-bottom: 10px;
+    scrollbar-gutter: stable;
+}
+
+.defender-exclusion-auditor-table-wrap::after {
+    content: "";
+    position: sticky;
+    bottom: 0;
+    display: block;
+    height: 12px;
+    margin-top: -12px;
+    pointer-events: none;
+    background: linear-gradient(to bottom, transparent, var(--color-bg-card));
+}
+
+@media (max-width: 720px) {
+    .disk-cleanup-category-grid {
+        grid-template-columns: 1fr;
+    }
+}

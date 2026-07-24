@@ -1,0 +1,46 @@
+import { useState } from "react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "../../components/ui/alert-dialog";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Icon } from "../../components/ui/icon";
+import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { formatBytes } from "./routineCleanerHelpers";
+import { useSystemHygiene, type SystemHygieneTool } from "./useSystemHygiene";
+
+export function SystemHygieneTools() {
+  const tools = useSystemHygiene();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const items = tools.tool === "shortcuts" ? tools.shortcuts?.shortcuts
+    : tools.tool === "environment" ? tools.environment?.entries : tools.leftovers?.entries;
+  const scanLabel = items ? `Rescan ${tools.tool}` : `Scan ${tools.tool}`;
+
+  return <div className="flex flex-col gap-4">
+    <Card>
+      <CardHeader><CardTitle>System hygiene</CardTitle><CardDescription>Audit broken shortcuts, stale environment paths, and conservative uninstall leftovers. Nothing is preselected.</CardDescription></CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <Tabs value={tools.tool} onValueChange={(value) => tools.changeTool(value as SystemHygieneTool)}><TabsList><TabsTrigger value="shortcuts">Shortcuts</TabsTrigger><TabsTrigger value="environment">Environment</TabsTrigger><TabsTrigger value="leftovers">Uninstall leftovers</TabsTrigger></TabsList></Tabs>
+        <div className="flex flex-wrap items-center gap-2"><Button size="icon" variant="primary" disabled={tools.busy} onClick={() => void tools.scan()} title={scanLabel} aria-label={scanLabel}><Icon icon={tools.busy || items ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} /></Button>{tools.busy && tools.tool !== "environment" && <Button size="icon" variant="outline" onClick={() => void tools.cancel()} title={`Cancel ${tools.tool} scan`} aria-label={`Cancel ${tools.tool} scan`}><Icon icon="stop" /></Button>}{items && <Badge tone="accent">{items.length} candidate{items.length === 1 ? "" : "s"}</Badge>}</div>
+      </CardContent>
+    </Card>
+
+    {tools.error && <Notice tone="danger" text={tools.error} />}
+    {tools.summary && <Notice tone="success" text={tools.summary} />}
+
+    {tools.tool === "shortcuts" && tools.shortcuts && <Card><CardHeader><CardTitle>Broken shortcuts</CardTitle><CardDescription>{tools.shortcuts.scannedShortcuts.toLocaleString()} local shortcuts inspected. URL, UWP, namespace, Windows, and unresolved targets are excluded.</CardDescription></CardHeader><CardContent className="flex flex-col gap-2">{tools.shortcuts.shortcuts.map((item) => <Row key={item.id} checked={tools.selected.has(item.id)} onClick={() => tools.select(item.id)} title={item.name} detail={`${item.path} → ${item.target}`} />)}{!tools.shortcuts.shortcuts.length && <Empty />}</CardContent></Card>}
+
+    {tools.tool === "environment" && tools.environment && <Card><CardHeader><CardTitle>Stale environment entries</CardTitle><CardDescription>PATH and selected directory variables are expanded and checked. Current registry values are re-read and backed up before repair.</CardDescription></CardHeader><CardContent className="flex flex-col gap-2">{tools.environment.entries.map((item) => <Row key={item.id} checked={tools.selected.has(item.id)} onClick={() => tools.select(item.id)} title={`${item.scope} · ${item.variable}`} detail={`${item.kind} · ${item.value}`} />)}{!tools.environment.entries.length && <Empty />}</CardContent></Card>}
+
+    {tools.tool === "leftovers" && tools.leftovers && <Card><CardHeader><CardTitle>Possible uninstall leftovers</CardTitle><CardDescription>{tools.leftovers.scannedFolders.toLocaleString()} app-data folders inspected. Recent, installed-app-matching, running, tiny, protected, and linked folders are excluded.</CardDescription></CardHeader><CardContent className="flex flex-col gap-2">{tools.leftovers.entries.map((item) => <Row key={item.id} checked={tools.selected.has(item.id)} onClick={() => tools.select(item.id)} title={`${item.name} · ${formatBytes(item.bytes)}`} detail={`${item.scope} · ${item.path}`} />)}{!tools.leftovers.entries.length && <Empty />}</CardContent></Card>}
+
+    {!!tools.selected.size && <div className="flex justify-end"><Button variant="danger" onClick={() => setConfirmOpen(true)}>{tools.tool === "environment" ? "Repair" : "Remove"} {tools.selected.size} selected</Button></div>}
+    <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{tools.tool === "environment" ? "Repair environment entries?" : "Remove selected items?"}</AlertDialogTitle><AlertDialogDescription>Every target is revalidated against its preview. Changed or out-of-scope targets are refused; environment edits retain registry backups.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => { setConfirmOpen(false); void tools.apply(); }}>Continue</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+  </div>;
+}
+
+function Row({ checked, onClick, title, detail }: { checked: boolean; onClick: () => void; title: string; detail: string }) { return <button type="button" onClick={onClick} className="flex w-full items-start gap-3 rounded-[var(--r)] border border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--surface-2)]"><span className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[var(--r-sm)] border ${checked ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]" : "border-[var(--border-strong)]"}`}>{checked && <Icon icon="check" />}</span><span className="min-w-0"><span className="block text-sm text-[var(--text)]">{title}</span><span className="block break-all font-mono text-[11px] text-[var(--text-mute)]">{detail}</span></span></button>; }
+function Notice({ tone, text }: { tone: "success" | "danger"; text: string }) { return <Card><CardContent className="flex items-center gap-3 py-4"><Badge tone={tone}>{tone}</Badge><p className="text-sm text-[var(--text-dim)]">{text}</p></CardContent></Card>; }
+function Empty() { return <p className="py-6 text-center text-sm text-[var(--text-mute)]">No safe candidates found.</p>; }

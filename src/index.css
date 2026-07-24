@@ -1,0 +1,1290 @@
+@import "tailwindcss";
+/* V2: enter/exit micro-animation utilities (animate-in / fade-in / zoom-in /
+   slide-in-from-*) used by the shadcn/ui kit. Tailwind-v4 successor to
+   tailwindcss-animate. */
+@import "tw-animate-css";
+
+/* Tie Tailwind's dark: variant to the app's class-based theme.
+   Without this, Tailwind v4 defaults to OS media-query which conflicts
+   with the app's html.dark / html.light class switching. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+html.wc-no-motion {
+  scroll-behavior: auto !important;
+}
+
+html.wc-no-motion *,
+html.wc-no-motion *::before,
+html.wc-no-motion *::after {
+  animation: none !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0ms !important;
+}
+
+/* ========================================
+   Vault 007 - Palantir Dark Theme
+   ======================================== */
+
+:root {
+  /* ── Backgrounds ───────────────────────────────────── */
+  --color-bg-primary: #0a0f12;
+  --color-bg-secondary: #111a1f;
+  --color-bg-tertiary: #162128;
+  --color-bg-card: rgba(255, 255, 255, 0.04);
+  --color-bg-elevated: rgba(255, 255, 255, 0.06);
+
+  /* ── Borders ───────────────────────────────────────── */
+  --color-border: rgba(255, 255, 255, 0.12);
+  --color-border-light: rgba(255, 255, 255, 0.2);
+  --color-border-accent: color-mix(in srgb, var(--accent) 40%, transparent);
+
+  /* ── Text ──────────────────────────────────────────── */
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted: #64748b;
+
+  /* ── Accent (Primary action color — Cyan) ──────────── */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-2);
+  --color-accent-dim: color-mix(in srgb, var(--accent) 15%, transparent);
+  --color-accent-subtle: color-mix(in srgb, var(--accent) 6%, transparent);
+  /* Alias: some panels reference --color-accent-primary; keep it === accent. */
+  --color-accent-primary: var(--color-accent);
+
+  /* ── Semantic Status ───────────────────────────────── */
+  --color-success: #4ed99c;
+  --color-success-dim: rgba(78, 217, 156, 0.15);
+  --color-warning: #f7c26b;
+  --color-warning-dim: rgba(247, 194, 107, 0.15);
+  --color-danger: #ff4444;
+  --color-danger-dim: rgba(255, 68, 68, 0.15);
+  --color-error: #d64545;
+  --color-info: #60a5fa;
+  --color-info-dim: rgba(96, 165, 250, 0.15);
+
+  /* ── Domain Tints (toggle category coloring) ───────── */
+  --color-domain-privacy: rgba(96, 165, 250, 0.04);
+  --color-domain-security: rgba(255, 68, 68, 0.04);
+  --color-domain-network: rgba(78, 217, 156, 0.04);
+  --color-domain-tweaks: rgba(247, 194, 107, 0.04);
+  --color-domain-identity: rgba(168, 85, 247, 0.04);
+
+  /* ── Spacing ──────────────────────────────────────── */
+  --spacing-xs: 2px;
+  --spacing-sm: 6px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 24px;
+  --spacing-2xl: 32px;
+
+  /* ── Typography ───────────────────────────────────── */
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  --font-sans: "Inter", -apple-system, system-ui, sans-serif;
+
+  /* ── Radius ──────────────────────────────────────────
+     House rule (2026-06): MINIMUM 2px rounding — nothing sharp.
+     --radius-none is retained for full-bleed surfaces ONLY; never
+     apply it to a visible box/button/input/card. */
+  --radius-none: 0;
+  --radius-sm: 2px;   /* badges, chips, status tags, inner tiles — the floor */
+  --radius-md: 4px;   /* inputs, selects, callouts, small controls */
+  --radius-lg: 6px;   /* buttons, toggle rows, chips */
+  --radius-xl: 8px;   /* cards, dialogs, brand cards, panels */
+  --radius-full: 9999px; /* switch pills, dots */
+
+  /* ── Z-Index Scale ───────────────────────────────── */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-sidebar: 300;
+  --z-overlay: 400;
+  --z-modal: 500;
+  --z-popover: 600;
+  --z-toast: 700;
+  --z-status: 750;
+  --z-operation: 800;
+  --z-splash: 900;
+  --z-nuclear: 9999;
+
+  /* ── Privacy Shield (Dark/Default) ───────────────── */
+  --shield-bg-running: linear-gradient(160deg, rgba(0, 140, 255, 0.12) 0%, rgba(0, 40, 80, 0.25) 100%);
+  --shield-bg-idle: linear-gradient(160deg, rgba(30, 32, 40, 0.4) 0%, rgba(20, 22, 28, 0.6) 100%);
+  --shield-border-running: 1px solid rgba(0, 160, 255, 0.35);
+  --shield-border-idle: 1px solid rgba(255, 255, 255, 0.08);
+  --shield-shadow-running: 0 8px 32px -8px rgba(0, 140, 255, 0.25);
+  --shield-shadow-idle: 0 4px 12px rgba(0, 0, 0, 0.2);
+  --shield-inner-bg: rgba(0, 0, 0, 0.3);
+  --shield-inner-border: rgba(255, 255, 255, 0.05);
+  --shield-text-primary: rgba(255, 255, 255, 0.9);
+  --shield-text-subtle: rgba(255, 255, 255, 0.6);
+  --shield-text-muted: rgba(255, 255, 255, 0.4);
+
+  color-scheme: dark;
+}
+
+@theme {
+  /* ── Backgrounds ── */
+  --color-bg-primary: var(--color-bg-primary);
+  --color-bg-secondary: var(--color-bg-secondary);
+  --color-bg-tertiary: var(--color-bg-tertiary);
+  --color-bg-card: var(--color-bg-card);
+  --color-bg-elevated: var(--color-bg-elevated);
+
+  /* ── Borders ── */
+  --color-border: var(--color-border);
+  --color-border-light: var(--color-border-light);
+  --color-border-accent: var(--color-border-accent);
+
+  /* ── Text ── */
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-text-muted: var(--color-text-muted);
+
+  /* ── Accent ── */
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-accent-dim: var(--color-accent-dim);
+  --color-accent-subtle: var(--color-accent-subtle);
+  --color-accent-primary: var(--color-accent-primary);
+
+  /* ── Semantic Status ── */
+  --color-success: var(--color-success);
+  --color-success-dim: var(--color-success-dim);
+  --color-warning: var(--color-warning);
+  --color-warning-dim: var(--color-warning-dim);
+  --color-danger: var(--color-danger);
+  --color-danger-dim: var(--color-danger-dim);
+  --color-error: var(--color-error);
+  --color-info: var(--color-info);
+  --color-info-dim: var(--color-info-dim);
+
+  /* ── Domain Tints ── */
+  --color-domain-privacy: var(--color-domain-privacy);
+  --color-domain-security: var(--color-domain-security);
+  --color-domain-network: var(--color-domain-network);
+  --color-domain-tweaks: var(--color-domain-tweaks);
+  --color-domain-identity: var(--color-domain-identity);
+
+  /* ── Typography ── */
+  --font-mono: var(--font-mono);
+  --font-sans: var(--font-sans);
+
+  /* ── Radius ── */
+  --radius-none: var(--radius-none);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-full: var(--radius-full);
+
+  /* ── Shield ── */
+  --shield-bg-running: var(--shield-bg-running);
+  --shield-bg-idle: var(--shield-bg-idle);
+  --shield-border-running: var(--shield-border-running);
+  --shield-border-idle: var(--shield-border-idle);
+  --shield-text-primary: var(--shield-text-primary);
+}
+
+/* Base styles */
+* {
+  margin: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  cursor: default;
+}
+
+/* ── Search overlay window: transparent shell so the Tauri transparent window shows through */
+html.search-overlay-window,
+body.search-overlay-window,
+html.search-overlay-window body,
+html.search-overlay-window #root,
+html.search-overlay-window .esb-overlay-fullscreen {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* Belt-and-suspenders: any descendant outside the search card should be invisible */
+html.search-overlay-window body::before,
+html.search-overlay-window body::after {
+  display: none !important;
+  content: none !important;
+}
+
+/* ── Custom notification window: branded alert stack outside the main app shell */
+html.notification-toast-window,
+body.notification-toast-window,
+html.notification-toast-window body,
+html.notification-toast-window #root {
+  background: transparent !important;
+  background-color: transparent !important;
+  margin: 0;
+  overflow: hidden;
+}
+
+.wc-custom-notification-window {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: transparent;
+  pointer-events: none;
+}
+
+.wc-custom-notification {
+  width: 100%;
+  min-height: 126px;
+  max-width: 100%;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 28px;
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--wc-toast-accent, var(--color-accent)) 48%, var(--color-border));
+  border-radius: var(--radius-xl);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--wc-toast-accent, var(--color-accent)) 13%, transparent),
+      color-mix(in srgb, var(--wc-toast-accent, var(--color-accent)) 4%, transparent)
+    ),
+    var(--color-bg-primary);
+  color: var(--color-text-primary);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.48);
+  overflow: hidden;
+  pointer-events: auto;
+  animation: wc-custom-notification-enter 180ms ease-out both;
+}
+
+.wc-custom-notification--info {
+  --wc-toast-accent: var(--color-info);
+  --wc-toast-accent-dim: var(--color-info-dim);
+}
+
+.wc-custom-notification--warning {
+  --wc-toast-accent: var(--color-warning);
+  --wc-toast-accent-dim: var(--color-warning-dim);
+}
+
+.wc-custom-notification--danger {
+  --wc-toast-accent: var(--color-danger);
+  --wc-toast-accent-dim: var(--color-danger-dim);
+}
+
+.wc-custom-notification__icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in srgb, var(--wc-toast-accent, var(--color-accent)) 42%, transparent);
+  color: var(--wc-toast-accent, var(--color-accent));
+  background: var(--wc-toast-accent-dim, var(--color-accent-dim));
+}
+
+.wc-custom-notification__body {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.wc-custom-notification__brand {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0;
+  color: var(--color-text-muted);
+  margin-bottom: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.wc-custom-notification__brand span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wc-custom-notification__brand span:last-child {
+  color: var(--wc-toast-accent, var(--color-accent));
+  flex: 0 1 auto;
+}
+
+.wc-custom-notification__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.wc-custom-notification__text {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  overflow: hidden;
+}
+
+.wc-custom-notification__close {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.wc-custom-notification__close:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+html.light .wc-custom-notification {
+  box-shadow: 0 14px 36px rgba(20, 31, 39, 0.22);
+}
+
+@keyframes wc-custom-notification-enter {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wc-custom-notification {
+    animation: none;
+  }
+}
+
+.wc-no-motion .wc-custom-notification {
+  animation: none;
+}
+
+button,
+a,
+[role="button"] {
+  cursor: pointer !important;
+}
+
+/* App Layout */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background-color: var(--color-bg-primary);
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  /* Isolate panel stacking contexts so high z-index panel elements
+     cannot punch through Blueprint Dialog/Overlay portals which
+     are appended outside #root at the body level. */
+  isolation: isolate;
+}
+
+.app-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--spacing-lg);
+  background-color: var(--color-bg-primary);
+}
+
+.app-universal-search {
+  flex-shrink: 0;
+  padding: 8px 12px 0;
+  background: var(--color-bg-primary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-light);
+}
+
+/* BlueprintJS v6 Dark Theme Overrides - INDUSTRIAL */
+
+/* Raise Blueprint overlay z-index above all panel chrome.
+   Default is 20 which is below dashboard elements at z-index 50-100.
+   These portals are appended to body, outside the isolated .app-body
+   stacking context, so they must be explicitly above it.
+   NOTE: Do NOT set z-index on .bp6-overlay-backdrop directly — the
+   backdrop is a sibling to the dialog inside the overlay and would
+   cover the dialog content if given its own stacking order. */
+/* ── Universal Dialog (wc-dialog) — still used by a few dialogs pending re-skin ── */
+.wc-dialog {
+  background: var(--color-bg-secondary) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-xl) !important;
+  box-shadow: 0 16px 60px rgba(0, 0, 0, 0.6) !important;
+  padding: 0 !important;
+  overflow: hidden; /* clip header/footer to the rounded corner */
+}
+
+.wc-dialog .wc-dialog-header {
+  background: var(--color-bg-tertiary) !important;
+  border-bottom: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0 !important;
+}
+
+.wc-dialog .bp6-heading {
+  font-family: var(--font-mono);
+  font-size: 11px !important;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--color-accent) !important;
+  text-transform: uppercase;
+}
+
+.wc-dialog .wc-dialog-body {
+  background: var(--color-bg-secondary) !important;
+  color: var(--color-text-primary) !important;
+}
+
+.wc-dialog .wc-dialog-footer {
+  background: var(--color-bg-secondary) !important;
+  border-top: 1px solid var(--color-border) !important;
+}
+
+/* wc-dialog inputs */
+.wc-dialog .bp6-input,
+.wc-dialog .bp6-input-group input {
+  background: var(--color-bg-tertiary) !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-primary) !important;
+  border-radius: var(--radius-md) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  box-shadow: none !important;
+}
+
+.wc-dialog .bp6-input:focus {
+  border-color: var(--color-accent) !important;
+  background: var(--color-accent-subtle) !important;
+}
+
+.wc-dialog .bp6-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.wc-dialog .bp6-html-select select {
+  background: var(--color-bg-tertiary) !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-primary) !important;
+  border-radius: var(--radius-md) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  box-shadow: none !important;
+}
+
+html.light .wc-dialog {
+  box-shadow: 0 16px 60px rgba(0, 0, 0, 0.2) !important;
+}
+
+.wc-heading {
+  font-family: var(--font-mono) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+}
+
+/* Status indicators */
+.status-active {
+  color: var(--color-success);
+}
+
+.status-inactive {
+  color: var(--color-text-muted);
+}
+
+.status-warning {
+  color: var(--color-warning);
+}
+
+.status-danger {
+  color: var(--color-danger);
+}
+
+/* Panel titles */
+.panel-title {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--spacing-md);
+}
+
+/* Dense data display */
+.data-grid {
+  display: grid;
+  gap: var(--spacing-md);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.data-card {
+  background-color: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--spacing-md);
+}
+
+.data-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-sm);
+}
+
+.data-card-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-text-muted);
+}
+
+.data-card-value {
+  font-family: var(--font-mono);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* Quick action buttons */
+.quick-action {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  /* hover changes: background, border-color */
+  transition: background-color var(--dur-normal, 200ms) var(--ease),
+              border-color var(--dur-normal, 200ms) var(--ease);
+}
+
+.quick-action:hover {
+  background: rgba(20, 30, 35, 0.4);
+  border-color: var(--color-accent);
+}
+
+.quick-action.danger {
+  background: rgba(40, 0, 0, 0.3);
+  border: 1px solid var(--color-danger);
+}
+
+.quick-action.danger:hover {
+  background: rgba(60, 0, 0, 0.4);
+  border-color: var(--color-danger);
+}
+
+/* Toggle switches */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.toggle-row:last-child {
+  border-bottom: none;
+}
+
+.toggle-label {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.toggle-description {
+  font-size: 12.5px;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+.toggle-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.restart-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 1px;
+  padding: 2px 6px;
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-muted);
+  border-radius: var(--radius-sm);
+}
+
+.action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.presets-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.preset-btn {
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  letter-spacing: 0.5px;
+  border-radius: var(--radius-lg) !important;
+}
+
+/* Section headers */
+.section-header {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-accent);
+  padding: var(--spacing-sm) 0;
+  margin-top: var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* Monospace data */
+
+/* Shared utility classes */
+.action-btn {
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  letter-spacing: 0.5px;
+  border-radius: var(--radius-lg) !important;
+}
+
+/* ========================================
+   Light Mode Configuration
+   ======================================== */
+
+html.light {
+  /* Light-mode contrast ramp tuned so panels stand out on the page:
+   *   primary  -> kept white -- it's the "neutral content surface"
+   *               that dialogs, inputs, and any explicit "page surface"
+   *               component still expects to be white.
+   *   secondary -> pure white for cards/panels (same as primary). The
+   *                BODY background is overridden to slate below, so
+   *                white cards now sit on a slate page and visibly
+   *                stand out instead of blending into white-on-white.
+   *   tertiary -> pale slate for inner tiles inside cards.
+   *   card    -> white -- cards are bright white panels.
+   *
+   * Stronger border tokens so panel/card boundaries actually register
+   * (the prior 12% black was nearly invisible on white). */
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #ffffff;
+  --color-bg-tertiary: #f1f5f9;
+  --color-bg-card: #ffffff;
+  --color-bg-elevated: rgba(255, 255, 255, 0.95);
+
+  --color-border: rgba(15, 23, 42, 0.18);
+  --color-border-light: rgba(15, 23, 42, 0.1);
+  --color-border-accent: rgba(14, 165, 233, 0.5);
+
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  /* Was #94a3b8 (~2.6:1 on white). Darkened to ~4.7:1 for WCAG AA. */
+  --color-text-muted: #6b766d;
+
+  --color-accent: #059669;
+  --color-accent-hover: #10b981;
+  --color-accent-dim: rgba(5, 150, 105, 0.12);
+  --color-accent-subtle: rgba(5, 150, 105, 0.05);
+
+  --color-success: #16a34a;
+  --color-success-dim: rgba(22, 163, 74, 0.12);
+  --color-warning: #d97706;
+  --color-warning-dim: rgba(217, 119, 6, 0.12);
+  --color-danger: #dc2626;
+  --color-danger-dim: rgba(220, 38, 38, 0.12);
+  --color-error: #dc2626;
+  /* Light "info" follows the green accent (owner: no blue in light mode). */
+  --color-info: #059669;
+  --color-info-dim: rgba(5, 150, 105, 0.12);
+
+  --color-domain-privacy: rgba(5, 150, 105, 0.07);
+  --color-domain-security: rgba(220, 38, 38, 0.07);
+  --color-domain-network: rgba(22, 163, 74, 0.07);
+  --color-domain-tweaks: rgba(217, 119, 6, 0.07);
+  --color-domain-identity: rgba(147, 51, 234, 0.07);
+
+  /* Privacy Shield (Light) */
+  --shield-bg-running: linear-gradient(160deg, rgba(5, 150, 105, 0.1) 0%, rgba(255, 255, 255, 0.8) 100%);
+  --shield-bg-idle: linear-gradient(160deg, #f1f5f9 0%, #e2e8f0 100%);
+  --shield-border-running: 1px solid rgba(5, 150, 105, 0.35);
+  --shield-border-idle: 1px solid #cbd5e1;
+  --shield-shadow-running: 0 8px 32px -8px rgba(5, 150, 105, 0.25);
+  --shield-shadow-idle: 0 4px 12px rgba(0, 0, 0, 0.05);
+  --shield-inner-bg: rgba(255, 255, 255, 0.5);
+  --shield-inner-border: rgba(0, 0, 0, 0.05);
+  --shield-text-primary: #0f172a;
+  --shield-text-subtle: #475569;
+  --shield-text-muted: #6b766d;
+}
+
+/* ── Lockdown: triggers as equal-width columns in one card ─────────── */
+.lockdown-triggers-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-card);
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+.lockdown-trigger-col {
+  display: flex;
+  flex-direction: column;
+}
+.lockdown-trigger-block {
+  padding: 14px 16px;
+}
+/* Vertical divider between adjacent top-level columns */
+.lockdown-triggers-card > * + * {
+  border-left: 1px solid var(--color-border);
+}
+/* Horizontal divider between triggers stacked inside one column */
+.lockdown-trigger-col > .lockdown-trigger-block + .lockdown-trigger-block {
+  border-top: 1px solid var(--color-border);
+}
+@media (max-width: 680px) {
+  .lockdown-triggers-card {
+    grid-template-columns: 1fr;
+  }
+  .lockdown-triggers-card > * + * {
+    border-left: none;
+    border-top: 1px solid var(--color-border);
+  }
+}
+.lockdown-trigger-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.lockdown-trigger-icon {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+.lockdown-trigger-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  flex: 1;
+  min-width: 0;
+}
+/* Short trigger description text used below the head row */
+.lockdown-trigger-desc {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+  margin: 4px 0 8px;
+}
+/* Status pill (e.g. "Listening", "2 active") shown in the header */
+.lockdown-trigger-status {
+  font-size: 9px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--color-success);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.lockdown-trigger-status.is-idle {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-muted);
+}
+/* Standard pill toggle switch used by every trigger that has on/off */
+.lockdown-trigger-toggle {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  background: var(--color-bg-tertiary);
+  transition: background 0.15s;
+}
+.lockdown-trigger-toggle.is-on {
+  background: var(--color-accent);
+}
+.lockdown-trigger-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.15s;
+}
+.lockdown-trigger-toggle.is-on::after {
+  left: 16px;
+}
+/* Shared form-control styling so every trigger uses the same look */
+.lockdown-trigger-input,
+.lockdown-trigger-select {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  outline: none;
+}
+.lockdown-trigger-input:focus,
+.lockdown-trigger-select:focus {
+  border-color: var(--color-accent);
+}
+.lockdown-trigger-input::placeholder {
+  color: var(--color-text-muted);
+}
+.lockdown-trigger-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.lockdown-trigger-row > .lockdown-trigger-input,
+.lockdown-trigger-row > .lockdown-trigger-select {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── Standard panel header (big title + easy description) ───────────── */
+.panel-header {
+  margin-bottom: 22px;
+}
+/* Panels that lay content out in a flex-gap column already space the header
+   from the first card via the column gap (`.panel-container` is flex+gap:12px
+   app-wide; Network uses its own 32px stack). The header's own margin-bottom
+   would double that gap — zero it here so the column gap is the single spacer. */
+.panel-container > .panel-header,
+.network-panel-stack > .panel-header {
+  margin-bottom: 0;
+}
+/* Cleanup + Tweaks header→content gap: 2-class specificity (0,2,0) so this
+   deterministically beats the single-class `.panel-container` rule (0,1,0)
+   in apps/identity/privacy/tweaks css regardless of chunk load order,
+   giving both panels a fixed 16px gap below PanelHeader. */
+.panel-container.cleanup-panel,
+.panel-container.tweaks-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.panel-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.panel-header-title {
+  font-family: var(--font-display, var(--font-sans));
+  font-size: 25px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+.panel-header-desc {
+  margin: 7px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  max-width: 720px;
+}
+
+/* Component Overrides for Light Mode */
+
+html.light body {
+  /* Page background is slate so white panels / cards on top read as
+   * distinct surfaces. Cards continue to use --color-bg-secondary
+   * (pure white) and stand out against this slate. */
+  background-color: #eef2f7;
+  color: var(--color-text-primary);
+}
+
+.light .quick-action {
+  background: #ffffff;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+}
+
+.light .quick-action:hover {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-accent);
+}
+
+.light .restart-badge {
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+}
+
+/* ========================================
+   WinCommander Toast / Notification System
+   ======================================== */
+
+@keyframes wc-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(18px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.wc-toast-near-bell {
+  position: relative;
+  transform-origin: top right;
+}
+
+/* Shared notification caret — a rotated-square "diamond" whose two bordered
+   edges form a ^ pointing up at the title-bar bell. Used by BOTH the bell
+   dropdown (NotificationsMenu → .wc-notif-caret) and the near-bell toast so
+   the two popups connect to the bell with ONE identical shape (they used to
+   use different carets — a diamond here, a double-triangle in the dropdown —
+   which is what felt inconsistent). The per-surface `right` offsets below aim
+   each caret at the bell from its own anchor position. */
+.wc-toast-near-bell::before,
+.wc-notif-caret::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  width: 12px;
+  height: 12px;
+  transform: rotate(45deg);
+  background: var(--surface);
+  border-left: 1px solid var(--border-strong);
+  border-top: 1px solid var(--border-strong);
+}
+
+.wc-toast-near-bell::before { right: 12px; }
+.wc-notif-caret::before { right: 18px; }
+
+/* ========================================
+   Universal Button Classes
+   ======================================== */
+
+.wc-btn-ghost {
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: var(--color-text-muted) !important;
+  letter-spacing: 1px !important;
+  border-radius: var(--radius-lg) !important;
+}
+
+.wc-btn-primary {
+  background: var(--color-accent-subtle) !important;
+  border: 1px solid var(--color-accent) !important;
+  color: var(--color-accent) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 1px !important;
+  padding: 8px 20px !important;
+  border-radius: var(--radius-lg) !important;
+  /* hover changes: background, box-shadow */
+  transition: background-color var(--dur-fast, 150ms) var(--ease),
+              box-shadow var(--dur-fast, 150ms) var(--ease) !important;
+}
+
+.wc-btn-primary:hover:not(:disabled) {
+  background: var(--color-accent-dim) !important;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 25%, transparent) !important;
+}
+
+.wc-btn-primary:disabled {
+  opacity: 0.3;
+  filter: grayscale(1);
+}
+
+.wc-btn-danger {
+  background: var(--color-danger-dim) !important;
+  border: 1px solid var(--color-danger) !important;
+  color: var(--color-danger) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 1px !important;
+  padding: 8px 20px !important;
+  border-radius: var(--radius-lg) !important;
+  /* hover changes: background, box-shadow */
+  transition: background-color var(--dur-fast, 150ms) var(--ease),
+              box-shadow var(--dur-fast, 150ms) var(--ease) !important;
+}
+
+.wc-btn-danger:hover:not(:disabled) {
+  background: rgba(255, 68, 68, 0.25) !important;
+  box-shadow: 0 0 14px rgba(255, 68, 68, 0.3) !important;
+}
+
+/* ========================================
+   Glass Morphism (Floating Elements Only)
+   ======================================== */
+
+.floating-glass {
+  background: var(--color-bg-elevated);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+/* ========================================
+   Toggle Sweep & Card Pulse Animations
+   ======================================== */
+
+@keyframes wc-sweep {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+
+  30% {
+    opacity: 1;
+  }
+
+  100% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+@keyframes wc-card-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--color-accent-dim);
+  }
+
+  50% {
+    box-shadow: 0 0 0 2px var(--color-accent-dim);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.section-card.pulsing {
+  animation: wc-card-pulse var(--dur-slow, 300ms) var(--ease);
+}
+
+/* ── Accessibility: Respect OS "Reduce Motion" preference ──────── */
+/* Also helps low-power devices (e.g. N100) that are near CPU limits.     */
+/* Targets only CSS animations (spinners, pulses, sweeps) — CSS           */
+/* transitions (tooltips, panel fades) are intentionally left intact.     */
+/*                                                                         */
+/* The following classes are EXCLUDED — they are functional loading        */
+/* feedback (spinners, shimmer, progress bars) that must run regardless   */
+/* of the OS preference. Add .wc-anim-essential to any new essential loader.*/
+@media (prefers-reduced-motion: reduce) {
+  /* stylelint-disable selector-not-notation */
+  html:not(.wc-motion-enabled) *:not(.bp6-spinner-animation, .wc-anim-essential, .op-icon-running, .license-gate-spinner-icon, .scan-spinner, .ps-shimmer, .sd-label-armed, .hk-input),
+  html:not(.wc-motion-enabled) *:not(.bp6-spinner-animation, .wc-anim-essential, .op-icon-running, .license-gate-spinner-icon, .scan-spinner, .ps-shimmer, .sd-label-armed, .hk-input)::before,
+  html:not(.wc-motion-enabled) *:not(.bp6-spinner-animation, .wc-anim-essential, .op-icon-running, .license-gate-spinner-icon, .scan-spinner, .ps-shimmer, .sd-label-armed, .hk-input)::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ========================================
+   Universal Polish & Accessibility
+   ======================================== */
+
+/* Mouse/programmatic focus: suppress outline (no visual change for pointer users).
+   Keyboard focus (:focus-visible) is intentionally excluded — rings are added
+   per-component in each component's .css file. */
+*:focus:not(:focus-visible) {
+  outline: none !important;
+}
+
+.bp6-focus-disabled *:focus {
+  outline: none !important;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Responsive Scaling — adapt to small windows / high-DPI displays
+   ════════════════════════════════════════════════════════════════ */
+
+/* Small windows (< 1100px effective width) */
+@media (max-width: 1100px) {
+  .panel-container { padding: 12px !important; gap: 10px !important; }
+  .panel-columns { gap: 10px !important; }
+  .section-card { padding: 12px !important; }
+  .section-card-title { font-size: 11px !important; }
+
+  /* Cleanup cards smaller */
+  .grid-cols-4 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+}
+
+/* ── Custom checkbox ──────────────────────────────────────────────────
+   Native `<input type=checkbox>` + `accent-color` lets the browser pick
+   the tick mark colour, which in light mode can render a near-black
+   tick on a light blue fill — invisible at the 14×14 default size.
+   This class draws the box and tick ourselves with guaranteed contrast
+   in both themes. Apply with `<input type=checkbox className=wc-check>`. */
+.wc-check {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--color-border-light);
+  border-radius: 3px;
+  background: var(--color-bg-secondary);
+  cursor: pointer;
+  display: inline-grid;
+  place-content: center;
+  flex-shrink: 0;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.wc-check::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  transform: scale(0);
+  background-color: var(--color-bg-primary);
+  /* Tick mark drawn as a clip-path so we control the colour, not the browser. */
+  clip-path: polygon(14% 44%, 0% 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+  transition: transform 120ms ease;
+}
+.wc-check:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.wc-check:checked::before {
+  transform: scale(1);
+}
+.wc-check:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.wc-check.wc-check-danger:checked {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+}
+.light .wc-check {
+  border-color: rgba(0, 0, 0, 0.28);
+  background: #ffffff;
+}
+.light .wc-check:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+.light .wc-check::before {
+  background-color: #ffffff;
+}
+.light .wc-check.wc-check-danger:checked {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+@keyframes maintenance-scan {
+  to { transform: translateX(100%); }
+}
+
+@keyframes maintenance-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.35); opacity: 1; }
+}
+
+/* Process info legend — container always visible, text only on i-button hover */
+.process-info-text {
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+.process-info-trigger:hover ~ .process-info-text {
+  opacity: 1;
+}

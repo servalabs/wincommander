@@ -1,0 +1,29 @@
+/* CleanupTraceCard — cleanup-owned color fixes.
+   KT: privacy/index.css sets [data-trace-card-action="schedule"] to
+   var(--color-success), which equals var(--color-info) in html.light
+   (both #059669 — Daylight's --accent/--ok/--color-info all share the
+   same teal-green) — the clock icon and the info icon were
+   indistinguishable in Daylight. --color-accent was ruled out for the
+   same reason (also #059669 in light). --color-danger is the only
+   token that stays visually distinct from both --color-info and
+   --color-warning (rescan) in dark AND light — used here purely for
+   hue separation, not to imply the schedule action is destructive.
+   Higher selector specificity than the base rule so this wins
+   regardless of stylesheet load order. */
+[data-cleanup-trace-card] [data-trace-card-action="schedule"] {
+  color: var(--color-danger) !important;
+}
+
+/* Card contents update while scans finish. Keep individual cards out of
+   Chromium's anchor selection without disabling anchoring for the whole panel. */
+[data-cleanup-trace-card] {
+  overflow-anchor: none;
+}
+
+/* Cleanup cards change state and height while scans finish. Keep this panel
+   fully laid out so Chromium does not revise off-screen intrinsic estimates
+   mid-scroll, which can otherwise feel like the page is pulling upward. */
+.cleanup-panel .section-card {
+  content-visibility: visible;
+  contain-intrinsic-size: unset;
+}

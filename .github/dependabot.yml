@@ -1,0 +1,52 @@
+version: 2
+
+updates:
+  # ── npm / Bun (frontend + worker) ──────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - area/frontend
+    commit-message:
+      prefix: "chore(deps)"
+    ignore:
+      # Major version bumps in UI libs are usually breaking — handle manually.
+      - dependency-name: "framer-motion"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@xyflow/*"
+        update-types: ["version-update:semver-major"]
+
+  # ── Cargo (Rust workspace) ──────────────────────────────────────────────────
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - area/free
+    commit-message:
+      prefix: "chore(deps)"
+
+  # ── GitHub Actions ──────────────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"

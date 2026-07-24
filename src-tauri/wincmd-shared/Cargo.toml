@@ -1,0 +1,49 @@
+[package]
+name = "wincmd-shared"
+version = "3.0.7"
+description = "WinCommander — shared IPC types between Free and Pro binaries"
+authors = ["ServaLabs"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+
+# Pure data crate — no side effects, no platform deps. Both
+# commander-free and commander-pro link to it for IPC envelope shapes.
+# Tokio is in here only for the AsyncRead/AsyncWrite bounds on the
+# framing helpers (`read_envelope` / `write_envelope`); no runtime is
+# spun up from this crate. Both consumers already pull tokio in for
+# their own reasons.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["io-util"] }
+# Phase 9 — HMAC-SHA256 over IPC request bodies, keyed by the per-spawn
+# session token. Both Free and Pro verify these so a patcher can't
+# replay a Request from outside the active session.
+hmac = "0.13"
+sha2 = "0.11"
+subtle = "2"  # constant-time eq for HMAC tag comparison
+# `signing` + `rand_core` features are needed by wipe_auth (key generation + signing);
+# getrandom provides the OS RNG for provisioning-time nonce + key generation.
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "signature", "rand_core"] }
+getrandom = { version = "0.4", features = ["std"] }
+base64 = "0.22"
+# Fleet wire types + canonical signing preimages moved to the standalone
+# `fleet-proto` crate (SSOT, consumed by fleet-server/TuxCommander/secureOS
+# too); re-exported below as `wincmd_shared::fleet` so existing call sites
+# (settings.rs etc.) keep compiling unchanged.
+fleet-proto = { path = "../fleet-proto" }
+
+# WI-2 SSOT codegen: derive TypeScript types from these Rust types. Optional +
+# build-only — gated behind the `ts-codegen` feature so it is NEVER in a
+# production binary's dependency closure.
+ts-rs = { version = "10", optional = true, features = ["serde-json-impl"] }
+
+[features]
+# Activate ONLY for the Rust->TS codegen step (build.rs / emit binaries).
+ts-codegen = ["dep:ts-rs"]
+
+# Test-only — `#[tokio::test]`, `tokio::join!`, and `tokio::io::duplex`
+# need `macros` + `rt`. Production builds don't pull these.
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt"] }
+tempfile = "3"

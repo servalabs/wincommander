@@ -1,0 +1,139 @@
+.section-card {
+    animation-duration: 0.32s;
+    animation-fill-mode: forwards;
+}
+
+.section-card.pulsing {
+    animation-name: wc-card-pulse;
+}
+
+.section-card {
+    background-color: var(--color-bg-card) !important;
+    /* Dark theme's --color-border (rgba(255,255,255,0.10)) is nearly
+       invisible against the card surface, so rightmost cards read as
+       borderless next to the scrollbar gutter. --color-border-light
+       (--border-strong, 0.18 alpha) keeps all four sides legible without
+       going heavy — light theme overrides this back down below. */
+    border: 1px solid var(--color-border-light) !important;
+    border-radius: var(--radius-xl) !important;
+    /* Extra bottom padding so the last UniversalToggle row inside the card
+       has breathing room — previously its bordered row looked clipped/touching
+       the card edge. */
+    padding: 16px 16px 20px 16px !important;
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+    /* Resting depth so dark-theme cards read as layered surfaces, not flat
+       fills (light theme already carries a shadow below). box-shadow eases so
+       the armed-state glow fades in/out rather than snapping. */
+    box-shadow: 0 8px 24px -20px rgba(0, 0, 0, 0.7);
+    transition: box-shadow var(--dur-slow, 300ms) var(--ease),
+                border-color var(--dur-slow, 300ms) var(--ease);
+}
+
+/* Armed = this section is actively protecting. A static accent glow + brighter
+   border signals live state (the section's status dots carry the motion). */
+.section-card.armed {
+    border-color: var(--accent-line) !important;
+    box-shadow: 0 0 0 1px var(--accent-soft),
+                0 10px 30px -18px var(--glow);
+}
+
+.section-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+    transition: border-color 0.3s ease;
+}
+
+.section-card.armed .section-header-row {
+    border-bottom-color: var(--color-accent);
+    border-bottom-width: 2px;
+}
+
+.section-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.section-header-right {
+    display: flex;
+    align-items: center;
+}
+
+.section-header-text {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--color-accent);
+}
+
+.section-icon {
+    font-size: 16px;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-accent);
+    flex-shrink: 0;
+}
+
+.section-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0px;
+    /* Toggles handle their own padding */
+}
+
+/* PERF (scroll): skip layout + paint for cards that are off-screen. A dense
+ * settings panel has 15-25 of these; without this the WebView re-paints every
+ * card on every scroll frame — the dominant scroll cost, and what lets a
+ * running animation tip scrolling into jank. With it, scroll cost is
+ * proportional to what's actually visible, so scrolling stays smooth even
+ * with animations on. `contain-intrinsic-size: auto <len>` reserves an
+ * estimated height for not-yet-rendered cards and then remembers each card's
+ * real measured height, so the scrollbar doesn't jump. Paint containment only
+ * clips descendant overflow (portaled popovers/tooltips escape it) — the
+ * card's own resting/armed box-shadow is unaffected. */
+.section-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 240px;
+}
+
+html.light .section-card {
+    background-color: var(--surface) !important;
+    border-color: var(--border-strong) !important;
+    box-shadow: 0 10px 28px -22px rgba(28, 42, 34, 0.45), 0 1px 3px rgba(28, 42, 34, 0.12);
+}
+
+/* Specificity match: html.light .section-card (above) would otherwise win
+   over .section-card.armed and swallow the armed glow in Daylight. */
+html.light .section-card.armed {
+    border-color: var(--accent-line) !important;
+    box-shadow: 0 0 0 1px var(--accent-soft),
+                0 10px 30px -18px var(--glow);
+}
+
+html.light .section-header-row {
+    border-bottom-color: var(--border);
+}
+
+/* Collapsible chevron rotates (chevron-down → up) instead of swapping glyphs,
+   mirroring the accordion's smooth treatment. inline-flex so the transform
+   applies (transforms are ignored on raw inline elements). */
+.section-chevron {
+    display: inline-flex;
+    transition: transform var(--dur-normal, 200ms) var(--ease);
+}
+.section-chevron--open {
+    transform: rotate(180deg);
+}

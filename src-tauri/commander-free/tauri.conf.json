@@ -1,0 +1,74 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "WinCommander",
+  "version": "3.0.43",
+  "identifier": "com.servalabs.wincommander",
+  "build": {
+    "beforeDevCommand": "bun run fetch-icons && bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bun install --frozen-lockfile && bun run encrypt-backend && bun x tsc && bun x vite build",
+    "frontendDist": "../../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "WinCommander",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": false,
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' tauri: asset: ipc:; script-src 'self' tauri: asset: ipc:; style-src 'self' 'unsafe-inline' tauri: asset:; img-src 'self' data: blob: tauri: asset: https:; font-src 'self' data: tauri: asset:; connect-src 'self' tauri: ipc: http://ipc.localhost http://tauri.localhost https://winupdates.servalabs.com https://wincommander-licensing.servalabs.com http://localhost:1420 ws://localhost:1420 http://[::1]:1420 ws://[::1]:1420 http://localhost:8787 ws://localhost:8787 http://127.0.0.1:8787 ws://127.0.0.1:8787 http://*.ts.net:* https://*.ts.net:* ws://*.ts.net:* wss://*.ts.net:*; frame-src 'self' tauri: asset: https:; media-src 'self' tauri: asset: data: blob:; object-src 'none'; base-uri 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": "all",
+    "publisher": "Secure Health",
+    "homepage": "https://servalabs.com",
+    "resources": [
+      "scripts/core/*.enc",
+      "scripts/modules/**/*.enc"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "licenseFile": "nsis/LICENSE.rtf",
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "nsis/hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    },
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://winupdates.servalabs.com/free/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI4ODY4MjkxOUU5QjJGNUEKUldSYUw1dWVrWUtHdUpyNURuLzFwQ2kwbDBzM0VmZUZtczIzU2EwNUpyaFFjMTRKOWVFUkMxRGkK"
+    }
+  }
+}

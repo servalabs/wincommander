@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/png" href="/logo.png" />
+  <link rel="preload" as="image" href="/Logo.png" fetchpriority="high" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WinCommander</title>
+  <!-- Synchronously mark the overlay window transparent BEFORE first paint to prevent white flash -->
+  <script>
+    try {
+      if (window.__TAURI_INTERNALS__?.metadata?.currentWindow?.label === "search-overlay") {
+        document.documentElement.classList.add("search-overlay-window");
+      }
+    } catch (e) {}
+  </script>
+  <!-- Apply persisted theme synchronously so the user-chosen theme paints on the
+       very first frame. settings.json is still the source of truth (loaded async
+       in ThemeContext), but localStorage acts as a fast cache to avoid the flash. -->
+  <script>
+    try {
+      var t = localStorage.getItem("wc-theme");
+      var isLight = t === "light";
+      document.documentElement.classList.add(isLight ? "light" : "dark");
+      document.documentElement.setAttribute("data-theme", isLight ? "daylight" : "anduril");
+    } catch (e) {
+      document.documentElement.classList.add("dark");
+      document.documentElement.setAttribute("data-theme", "anduril");
+    }
+  </script>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>

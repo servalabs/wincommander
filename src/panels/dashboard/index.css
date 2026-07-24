@@ -1,0 +1,3052 @@
+.dashboard-panel {
+    height: 100%;
+    width: 100%;
+    position: relative;
+    overflow: hidden;
+    /* Health-band ambient glow (peripheral cue) — --dash-glow is set by the
+       panel from the live score colour; eases as the band shifts. */
+    background: radial-gradient(circle at 50% 28%, color-mix(in srgb, var(--dash-glow, var(--color-accent)) 11%, transparent) 0%, var(--color-bg-primary) 68%);
+    transition: background 0.6s ease;
+}
+
+.dashboard-scaler {
+    width: calc(100% / var(--dashboard-scale, 1));
+    height: calc(100% / var(--dashboard-scale, 1));
+    transform: scale(var(--dashboard-scale, 1));
+    transform-origin: top left;
+    display: flex;
+    flex-direction: row;
+    position: relative;
+    overflow: hidden;
+    /* Reserve clearance for the absolutely-positioned .dashboard-lock-btn
+       (top-right corner) so it never overlaps the sidebar/radar content
+       below. Global box-sizing:border-box keeps this inside the 100% height
+       (no overflow). */
+    padding-top: 44px;
+}
+
+/* ── Left column: radar / risk / products ─────────────── */
+.dash-left {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+}
+
+.tech-grid {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image:
+        linear-gradient(var(--color-border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--color-border) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: radial-gradient(circle at 50% 50%, black 40%, transparent 100%);
+    opacity: 0.15;
+    /* Increased base visibility */
+    pointer-events: none;
+    z-index: 0;
+    transition: opacity 0.6s ease;
+}
+
+.tech-grid.armed {
+    opacity: 0.25;
+}
+
+html.light .tech-grid {
+    opacity: 0.12;
+    /* Distinct in light mode */
+}
+
+html.light .tech-grid.armed {
+    opacity: 0.2;
+}
+
+.command-center-header {
+    position: absolute;
+    top: 48px;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    z-index: 50;
+    width: 100%;
+}
+
+.hero-title {
+    /* Header above the radar. Enlarged on owner request so the WinCommander
+       wordmark reads as the centrepiece (still capped so it can't overlap the
+       radar — the radar group's top padding is bumped to match). */
+    font-size: clamp(26px, 3vw, 38px);
+    font-weight: 800;
+    letter-spacing: clamp(2px, 0.4vw, 4px);
+    background: linear-gradient(180deg, var(--color-text-primary) 0%, var(--color-text-muted) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin: 0;
+}
+
+.hero-subtitle {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 6px;
+    color: var(--color-accent);
+    margin-top: -2px;
+    opacity: 0.85;
+}
+
+.dash-map-title {
+    /* In-flow (not absolute) so it sits ABOVE the radar and pushes it down
+       instead of floating over it — fixes the tagline/radar overlap. */
+    position: relative;
+    text-align: center;
+    z-index: 50;
+    width: 100%;
+    margin: 12px 0 10px;
+    flex-shrink: 0;
+}
+
+.location-badge-container {
+    display: flex;
+    justify-content: center;
+    margin-top: 12px;
+}
+
+/* KT: Previously position:absolute top:180px left:8px — cards were taken
+   out of flow, so expanding a card didn't push siblings down (they overlapped),
+   and mismatched heights left gaps. Now a real flex-column in the scaler row.
+   Width + opacity are toggled per-view-mode in JSX (w-0 ↔ w-[260px]) so
+   columns gracefully collapse when switching to Risk / Products views. */
+.dashboard-top-bar {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 14px 0 14px clamp(12px, 1.3vw, 18px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    z-index: 20;
+    /* Vertically centre the card stack inside the column (owner: cards
+       should sit lower than the title, near the radar's vertical band).
+       Restored after the e1f8a3c "nudge radar+legend" pass removed it. */
+    justify-content: center;
+    margin: auto 0;
+}
+
+/* PublicIPCard reuses .hardware-specs-card styling (which is 280px wide
+ * in the right column). When it's stacked under SystemStatusCard in the
+ * left column, override to match SystemStatusCard's 240px so the two
+ * cards align flush. */
+.dashboard-top-bar .hardware-specs-card {
+    width: 240px;
+}
+
+/* KT: Same as dashboard-top-bar — moved from position:absolute to flex flow.
+   See KT comment above. Width toggled in JSX (w-0 ↔ w-[300px]). */
+.dashboard-right-bar {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+    padding: 14px clamp(18px, 1.8vw, 28px) 14px 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    z-index: 20;
+    /* Same vertical centring as .dashboard-top-bar — keeps right-column
+       cards (System / Storage / Network Traffic) aligned with the radar
+       band, not pushed to the top of the panel. */
+    justify-content: center;
+    margin: auto 0;
+}
+
+/* System Card — flat tokened surface (unified with SectionCard 2026-06) */
+.system-status-card {
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    padding: 14px 16px;
+    width: 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 10px;
+}
+
+/* ── Network Traffic card (right column, paid) ─────────────────────── */
+.nettraffic-card {
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    padding: 14px 16px;
+    width: 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 10px;
+}
+
+.nettraffic-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.nettraffic-cog {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.nettraffic-cog:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+}
+
+.nettraffic-cog.on {
+    color: var(--color-accent);
+    border-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+    background: var(--color-accent-dim);
+}
+
+/* Right-side header controls: the alert bell (always visible, boxed to match System Info). */
+.nettraffic-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Header title doubles as the collapse toggle (chevron + label). */
+.nettraffic-card-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    cursor: pointer;
+}
+
+.nettraffic-stat-pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    align-items: flex-end;
+}
+
+.nettraffic-stat-label {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    margin-bottom: 2px;
+}
+
+.nettraffic-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.nettraffic-stat-value {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: 900;
+    line-height: 1;
+    color: var(--color-accent);
+}
+
+.nettraffic-unit {
+    font-size: 9px;
+    font-weight: 400;
+    color: var(--color-text-muted);
+}
+
+.nettraffic-stat--up .nettraffic-stat-value {
+    color: var(--color-warning);
+}
+
+.nettraffic-stat--up .nettraffic-stat-label {
+    color: color-mix(in srgb, var(--color-warning) 75%, var(--color-text-muted));
+}
+
+.nettraffic-stat--down .nettraffic-stat-value {
+    color: var(--color-accent);
+}
+
+.nettraffic-stat--down .nettraffic-stat-label {
+    color: color-mix(in srgb, var(--color-accent) 75%, var(--color-text-muted));
+}
+
+.nettraffic-spark {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 24px;
+    position: relative;
+}
+
+.nettraffic-bar {
+    flex: 1;
+    min-width: 2px;
+    border-radius: 2px 2px 0 0;
+    transition: height 0.3s ease, background 0.2s ease;
+}
+
+.nettraffic-spark-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-muted);
+}
+
+.nettraffic-chart-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.nettraffic-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.nettraffic-chart-label {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+}
+
+.nettraffic-chart:first-child .nettraffic-chart-label {
+    color: color-mix(in srgb, var(--color-warning) 75%, var(--color-text-muted));
+}
+
+.nettraffic-chart:last-child .nettraffic-chart-label {
+    color: color-mix(in srgb, var(--color-accent) 75%, var(--color-text-muted));
+}
+
+.nettraffic-bar--up {
+    background: var(--color-warning-dim);
+}
+
+.nettraffic-bar--up.over {
+    background: var(--color-warning);
+}
+
+.nettraffic-bar--down {
+    background: var(--color-accent-dim);
+}
+
+.nettraffic-bar--down.over {
+    background: var(--color-accent);
+}
+
+.nettraffic-foot {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    color: var(--color-text-muted);
+    letter-spacing: 0.3px;
+}
+
+.nettraffic-drawer {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 4px;
+    padding-top: 8px;
+    border-top: 1px solid var(--color-border);
+}
+
+.nettraffic-drawer-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    align-items: end;
+}
+
+/* Grid items also default to min-width:auto — let fields shrink too. */
+.nettraffic-drawer .nettraffic-field {
+    min-width: 0;
+}
+
+.nettraffic-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-secondary);
+}
+
+.nettraffic-input-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    position: relative;
+}
+
+.nettraffic-input-unit {
+    font-size: 8px;
+    font-weight: 700;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+}
+
+.nettraffic-field--row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.nettraffic-field input[type="number"] {
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 4px 6px;
+    flex: 1;
+    min-width: 50px;
+    box-sizing: border-box;
+}
+
+.nettraffic-input-group input[type="number"] {
+    width: auto;
+}
+
+.nettraffic-save {
+    margin-top: 4px;
+    background: var(--color-accent-dim);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 7px 12px;
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    width: 100%;
+}
+
+.nettraffic-save:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+    border-color: var(--color-accent);
+}
+
+.nettraffic-save:disabled {
+    opacity: 0.55;
+    cursor: wait;
+}
+
+/* ── Recent Downloads card (left column) ───────────────────────────── */
+.downloads-card {
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    padding: 12px 14px;
+    width: 240px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 10px;
+}
+
+.downloads-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+/* Header doubles as the collapse toggle (icon · label · chevron). */
+.downloads-card-toggle {
+    width: 100%;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+}
+
+.downloads-card-toggle span {
+    flex: 1;
+    text-align: left;
+}
+
+.downloads-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.downloads-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 5px 6px;
+    border: none;
+    background: transparent;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s;
+}
+
+.downloads-row:hover {
+    background: var(--color-bg-tertiary);
+}
+
+.downloads-name {
+    color: var(--color-text-primary);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.downloads-meta {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.downloads-empty {
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.3px;
+    padding: 8px 4px;
+}
+
+.downloads-footer {
+    margin-top: 2px;
+    padding-top: 8px;
+    border-top: 1px solid var(--color-border);
+    background: transparent;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    text-align: left;
+    transition: color 0.15s;
+}
+
+.downloads-footer:hover {
+    color: var(--color-accent);
+}
+
+.dashboard-capability-toggles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-top: 9px;
+}
+
+.dashboard-capability-toggle {
+    min-width: 0;
+    height: 28px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 0.8px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.dashboard-capability-toggle:hover:not(:disabled) {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+
+.dashboard-capability-toggle.active {
+    border-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+    background: var(--color-accent-dim);
+    color: var(--color-accent);
+}
+
+.dashboard-capability-toggle:disabled {
+    opacity: 0.55;
+    cursor: wait;
+}
+
+.dashboard-capability-toggle.no-device {
+    opacity: 0.35;
+    cursor: not-allowed;
+    font-style: italic;
+}
+
+/* Internet kill switch — full-width button under the CAM/MIC grid.
+ * Red while internet is live (danger: traffic is flowing), green once cut
+ * (safe: machine is air-gapped). Mirrors the capability-toggle sizing. */
+.killswitch-toggle {
+    width: 100%;
+    margin-top: 6px;
+    min-height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.8px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.killswitch-toggle.live {
+    color: var(--color-danger);
+    border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
+    background: var(--color-danger-dim);
+}
+
+.killswitch-toggle.cut {
+    color: var(--color-success);
+    border-color: color-mix(in srgb, var(--color-success) 40%, transparent);
+    background: var(--color-success-dim);
+}
+
+.killswitch-toggle:disabled {
+    opacity: 0.55;
+    cursor: wait;
+}
+
+/* ── Network identity strip ──────────────────────────────────────────
+   Live Public IP + DNS readouts; hosted below the Internet toggle. */
+.radar-control-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    position: relative;
+    z-index: 22;
+    margin: 0 auto;
+    padding: 8px 10px;
+    max-width: 560px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background: color-mix(in srgb, var(--color-bg-secondary) 70%, transparent);
+}
+
+.radar-strip-readout {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    min-width: 0;
+}
+
+.radar-strip-readout .rsr-icon {
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+}
+
+.radar-strip-readout .rsr-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 0.8px;
+    color: var(--color-text-muted);
+}
+
+.radar-strip-readout .rsr-value {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+}
+
+/* Fix-footer actions (disk-cleanup chip + Update All Apps) — rendered inside
+   Needs-Attention when expanded, below the radar when collapsed. */
+.na-expanded-footer {
+    padding: 10px 12px;
+    border-top: 1px solid var(--color-border);
+}
+
+.na-footer-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 8px;
+}
+
+/* Unified footer action button — used by both the "X to clean" and "Update Apps"
+   actions so they are visually identical side by side. */
+.na-footer-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    flex: 1;
+    padding: 9px 14px;
+    border-radius: var(--radius-lg);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+    background: var(--color-accent-dim);
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.na-footer-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+    border-color: var(--color-accent);
+}
+
+.na-footer-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
+}
+
+.dashboard-security-dropdown {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.dashboard-security-toggle {
+    width: 100%;
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    cursor: pointer;
+    padding: 7px 9px;
+}
+
+.dashboard-security-toggle span {
+    flex: 1;
+    text-align: left;
+}
+
+.dashboard-security-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.hardware-specs-card {
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    padding: 14px 16px;
+    width: 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 10px;
+}
+
+.card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.hardware-specs-card .card-header {
+    margin-bottom: 0;
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.hardware-card-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.hardware-card-toggle span {
+    flex: 1;
+    text-align: left;
+}
+
+/* Compact icon-only action button placed beside .hardware-card-toggle (e.g.
+   "Open Disk Space Analyzer" in the STORAGE card). Stays subtle so it
+   doesn't compete with the card-header label. */
+.hardware-card-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.hardware-card-action:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+.status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    box-shadow: 0 0 8px currentColor;
+}
+
+.status-text {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--color-text-primary);
+}
+
+.card-divider {
+    height: 1px;
+    background: var(--color-border);
+    margin: 4px 0;
+}
+
+.card-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.card-row.main-stat {
+    margin-bottom: 4px;
+}
+
+.stat-label,
+.sys-label {
+    font-size: 9px;
+    color: var(--color-text-muted);
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.stat-value-large {
+    font-size: clamp(20px, 2vw, 28px);
+    font-weight: 800;
+    line-height: 1;
+    font-family: var(--font-mono);
+}
+
+.sys-value {
+    font-size: 13px;
+    color: var(--color-text-primary);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.spec-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.system-info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.system-info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 9px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    min-width: 0;
+}
+
+.system-info-item--wide {
+    grid-column: 1 / -1;
+}
+
+.system-info-quick-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.hardware-process-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.hardware-metric-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Merged CPU + Memory summary bars (always visible; detail expands below). */
+.hw-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.hw-bar-row {
+    display: grid;
+    grid-template-columns: 14px 30px minmax(0, 1fr) 38px;
+    align-items: center;
+    gap: 8px;
+}
+
+.hw-bar-icon {
+    color: var(--color-text-muted);
+}
+
+.hw-bar-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    color: var(--color-text-muted);
+}
+
+.hw-bar-track {
+    position: relative;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--color-bg-tertiary);
+    overflow: hidden;
+}
+
+.hw-bar-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    height: 100%;
+    border-radius: 999px;
+    transition: width 0.4s var(--ease, ease), background 0.4s var(--ease, ease);
+}
+
+.hw-bar-pct {
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 900;
+    color: var(--color-text-primary);
+}
+
+/* Detail sub-row: sits below each bar in expanded mode, indented past
+   the icon + label columns to align flush with the bar track. */
+.hw-detail-sub {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 0 0 3px 22px;
+    margin-top: -2px;
+}
+
+.hw-detail-text {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+
+.hw-detail-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+/* ── Reusable metric alert row (CPU / Upload / Download) ───────────────── */
+.hw-cpu-alert {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--color-border);
+}
+
+.metric-alert-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    row-gap: 6px;
+    gap: 8px;
+    padding: 4px 0;
+    min-width: 0;
+}
+
+.metric-alert-bell {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.metric-alert-bell.on {
+    color: var(--color-accent);
+    border-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+    background: var(--color-accent-dim);
+}
+
+.metric-alert-bell:hover:not(:disabled) {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+
+.metric-alert-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 0.6px;
+    color: var(--color-text-secondary);
+    min-width: 40px;
+}
+
+.metric-alert-over {
+    font-size: 10px;
+    color: var(--color-text-muted);
+}
+
+.metric-alert-controls {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.metric-alert-input {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.metric-alert-input input {
+    width: 46px;
+    height: 26px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    text-align: right;
+    padding: 0 6px;
+    outline: none;
+}
+
+.metric-alert-input input:focus {
+    border-color: var(--color-accent);
+}
+
+.metric-alert-input input:disabled {
+    opacity: 0.5;
+}
+
+.metric-alert-unit {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-muted);
+    min-width: 14px;
+}
+
+/* Left-column privacy toggles card (Cam / Mic / Internet). */
+.privacy-toggles-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-secondary);
+}
+
+/* Wraps Cam/Mic/Internet (everything except RadarControlStrip, which sits
+   outside as a sibling). Reproduces the flex-column gap that used to come
+   from .privacy-toggles-card's own layout before this wrapper existed. */
+.privacy-toggles-card .ptc-toggles {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.privacy-toggles-card .ptc-title {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 1.5px;
+    color: var(--color-text-muted);
+}
+
+.privacy-toggles-card .dashboard-capability-toggles {
+    margin-top: 0;
+}
+
+.privacy-toggles-card .radar-control-strip {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+
+.privacy-toggles-card .radar-strip-readout {
+    width: 100%;
+}
+
+.privacy-toggles-card .radar-strip-readout .rsr-value {
+    margin-left: auto;
+    max-width: 108px;
+}
+
+/* System Info header: toggle on the left, CPU-alert bell on the right. */
+.hw-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.hw-card-header .hardware-card-toggle {
+    flex: 1;
+}
+
+.hw-alert-btn {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.hw-alert-btn:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+}
+
+.hw-alert-btn.on {
+    color: var(--color-accent);
+    border-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+    background: var(--color-accent-dim);
+}
+
+.hardware-metric-row {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+}
+
+.hardware-metric-row > svg {
+    color: var(--color-accent);
+}
+
+.hardware-metric-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.hardware-metric-value {
+    min-width: 0;
+    color: var(--color-text-primary);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.hardware-metric-stat {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 900;
+    color: var(--color-accent);
+}
+
+.hardware-metric-stats {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.hardware-process-toggle {
+    width: 100%;
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    cursor: pointer;
+    padding: 7px 9px;
+}
+
+.hardware-process-toggle span:first-child {
+    flex: 1;
+    text-align: left;
+}
+
+.hardware-process-count {
+    color: var(--color-accent);
+    background: var(--color-accent-dim);
+    border-radius: 999px;
+    padding: 1px 6px;
+}
+
+.hardware-process-list {
+    margin-top: 0 !important;
+}
+
+.system-mini-stat {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 9px;
+    border-radius: 8px;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    color: var(--color-accent);
+    min-width: 0;
+}
+
+.system-mini-stat .sys-value {
+    font-size: 11px;
+}
+
+.spec-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.spec-label {
+    font-size: 10px;
+    color: var(--color-text-muted);
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.spec-value {
+    font-size: 12px;
+    color: var(--color-text-primary);
+    font-weight: 500;
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.spec-value--wrap {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.disk-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 252px;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.disk-item {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border-radius: 10px;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+}
+
+.disk-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+.disk-id-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.disk-icon-small {
+    color: var(--color-text-muted);
+    opacity: 0.7;
+}
+
+.disk-id {
+    color: var(--color-text-primary);
+    word-break: break-word;
+}
+
+.disk-health-badge {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    background: var(--color-bg-tertiary);
+}
+
+.disk-health-badge.good {
+    color: var(--color-accent);
+    border-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+    background: var(--color-accent-dim);
+}
+
+.disk-health-badge.warn {
+    color: var(--color-warning);
+    border-color: color-mix(in srgb, var(--color-warning) 40%, transparent);
+    background: var(--color-warning-dim);
+}
+
+.disk-health-badge.bad {
+    color: var(--color-danger);
+    border-color: color-mix(in srgb, var(--color-danger) 45%, transparent);
+    background: var(--color-danger-dim);
+}
+
+.disk-usage {
+    color: var(--color-text-muted);
+}
+
+/* Thickened Progress Bars */
+.disk-progress-container-thick {
+    height: 24px;
+    background: var(--color-bg-tertiary);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--color-border);
+}
+
+.disk-progress-bar-thick {
+    height: 100%;
+    transition: width 0.8s var(--ease);
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    /* Left align occupied text */
+    position: relative;
+    z-index: 10;
+}
+
+.inner-text {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 900;
+    white-space: nowrap;
+    pointer-events: none;
+    letter-spacing: 0.5px;
+    z-index: 20;
+}
+
+.inner-text.used {
+    margin: 0 10px;
+    color: #fff;
+    text-shadow: 0 0 4px rgba(0, 0, 0, 0.85), 0 1px 0 rgba(0, 0, 0, 0.6);
+}
+
+.inner-text.free {
+    position: absolute;
+    right: 10px;
+    color: #fff;
+    text-shadow: 0 0 4px rgba(0, 0, 0, 0.85), 0 1px 0 rgba(0, 0, 0, 0.6);
+}
+
+html.light .inner-text.free {
+    color: #0a0f14;
+    text-shadow: 0 0 4px rgba(255, 255, 255, 0.9), 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.disk-footer-simple {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 4px;
+}
+
+.disk-total-label {
+    font-size: 9px;
+    color: var(--color-text-muted);
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.storage-empty-state {
+    padding: 18px 12px;
+    border-radius: 8px;
+    text-align: center;
+    color: var(--color-text-muted);
+    background: var(--color-bg-tertiary);
+    border: 1px dashed var(--color-border);
+    font-family: var(--font-mono);
+    letter-spacing: 0.4px;
+}
+
+.disk-percent-badge {
+    font-size: 10px;
+    color: var(--color-accent);
+    font-weight: 800;
+    font-family: var(--font-mono);
+}
+
+.location-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 8px 16px;
+    border-radius: 20px;
+    /* PERF: dropped backdrop-filter: blur(10px) — recomputed every frame when
+       anything animated behind it, for a barely-visible frost over a 5% tint. */
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.location-badge .label {
+    font-weight: bold;
+    letter-spacing: 1px;
+    font-size: 12px;
+}
+
+.map-stage {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    position: relative;
+    z-index: 10;
+}
+
+.map-stage > * {
+    min-height: 0;
+}
+
+.dns-status-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.dns-label-blocked {
+    font-size: 10px;
+    color: var(--color-danger);
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+
+.dns-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.dns-badge {
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 2px;
+    /* Rectangular as requested */
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.dns-badge.system {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
+}
+
+.dns-badge.secure {
+    background: var(--color-accent-dim);
+    color: var(--color-accent);
+    border: 1px solid var(--color-accent-dim);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.dns-badge-icon {
+    font-size: 12px;
+    line-height: 1;
+}
+
+.productivity-mini-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+}
+
+.status-dot.active {
+    background: var(--color-accent);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 50%, transparent);
+    animation: pulse-ring 2s infinite;
+}
+
+@keyframes pulse-ring {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    100% {
+        transform: scale(1.5);
+        opacity: 0;
+    }
+}
+
+@keyframes pulsing {
+    0% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.5;
+        transform: scale(1.2);
+    }
+
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.pulsing {
+    animation: pulsing 2s infinite ease-in-out;
+}
+
+.made-in-bharat-container {
+    position: absolute;
+    bottom: 40px;
+    left: 50% !important;
+    transform: translateX(-65%) !important;
+    z-index: 100;
+    pointer-events: none;
+}
+
+.made-in-bharat-tag {
+    background: var(--color-bg-secondary);
+    /* blur removed — opaque bg made it invisible but costly (perf fix 2026-06-09) */
+    border: 1px solid var(--color-border);
+    padding: 8px 20px;
+    border-radius: 100px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.made-in-bharat-tag .text {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+}
+
+.dashboard-footer {
+    display: none;
+}
+
+.view-toggle-container {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 6px;
+    z-index: 100;
+    background: color-mix(in srgb, var(--color-bg-secondary) 94%, transparent);
+    /* blur removed — opaque bg made it invisible but costly (perf fix 2026-06-09) */
+    padding: 6px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--color-border-light) 52%, transparent);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+    white-space: nowrap;
+}
+
+.view-toggle-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: 9px;
+    border: none;
+    background: color-mix(in srgb, var(--color-bg-tertiary) 58%, transparent);
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    cursor: pointer;
+    /* hover/active changes: color, background, box-shadow */
+    transition: color var(--dur-normal, 200ms) var(--ease),
+                background-color var(--dur-normal, 200ms) var(--ease),
+                box-shadow var(--dur-normal, 200ms) var(--ease);
+    white-space: nowrap;
+}
+
+.view-toggle-btn:hover {
+    color: var(--color-text-primary);
+    background: color-mix(in srgb, var(--color-bg-tertiary) 86%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border-light) 45%, transparent);
+}
+
+.view-toggle-btn.active {
+    background: color-mix(in srgb, var(--color-accent) 14%, var(--color-bg-secondary));
+    color: var(--color-accent);
+    box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 24%, transparent),
+        0 0 10px color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+/* Light mode needs explicit pill surfaces or the watermark/grid behind the
+   dashboard washes out the inactive labels. */
+html.light .view-toggle-container {
+    background: color-mix(in srgb, var(--color-bg-secondary) 94%, transparent);
+    border-color: rgba(24, 34, 29, 0.14);
+    box-shadow: 0 14px 34px rgba(28, 42, 34, 0.16);
+}
+
+html.light .view-toggle-btn {
+    background: color-mix(in srgb, var(--color-bg-tertiary) 78%, transparent);
+    color: var(--color-text-secondary);
+}
+
+html.light .view-toggle-btn:hover {
+    background: color-mix(in srgb, var(--color-bg-tertiary) 96%, transparent);
+    box-shadow: inset 0 0 0 1px rgba(24, 34, 29, 0.1);
+}
+
+html.light .view-toggle-btn.active {
+    background: color-mix(in srgb, var(--color-accent) 15%, white);
+    box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 28%, transparent),
+        0 10px 24px rgba(5, 150, 105, 0.14);
+}
+
+/* ── Storage Stats ─────────────────────────────────────────────────────── */
+
+.storage-stats-section {
+    padding-top: 4px;
+}
+
+.storage-scan-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    /* hover changes: border-color, color, background */
+    transition: border-color var(--dur-normal, 200ms) var(--ease),
+                color var(--dur-normal, 200ms) var(--ease),
+                background-color var(--dur-normal, 200ms) var(--ease);
+    margin-left: auto;
+}
+
+.storage-scan-btn:hover:not(:disabled) {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+    background: var(--color-accent-dim);
+}
+
+.storage-scan-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.storage-stats-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 20px 0;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-align: center;
+}
+
+.storage-stats-hint {
+    font-size: 9px;
+    opacity: 0.6;
+}
+
+.storage-stats-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 6px 0;
+}
+
+.storage-stats-source-badge {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--color-accent);
+    opacity: 0.7;
+    margin-bottom: 2px;
+}
+
+.storage-stat-row {
+    display: grid;
+    grid-template-columns: 14px 82px 1fr 36px 52px;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+}
+
+.ss-icon {
+    color: var(--color-text-muted);
+    opacity: 0.6;
+    display: flex;
+    align-items: center;
+}
+
+.ss-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ss-bar-wrap {
+    height: 4px;
+    background: var(--color-bg-tertiary);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.ss-bar {
+    height: 100%;
+    background: var(--color-accent);
+    border-radius: 2px;
+    opacity: 0.7;
+    transition: width 0.5s var(--ease);
+    min-width: 2px;
+}
+
+.ss-count {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    text-align: right;
+}
+
+.ss-size {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    text-align: right;
+    opacity: 0.8;
+}
+
+/* spin animation for scan icon */
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+.spin {
+    animation: spin 1.2s linear infinite;
+}
+
+html.light .ss-bar {
+    opacity: 0.85;
+}
+
+html.light .storage-scan-btn {
+    border-color: var(--color-border);
+}
+
+/* ── Dashboard Radar ──────────────────────────────────────────────── */
+.dashboard-radar-wrap {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    height: 100%;
+    padding: 0 0 12px;
+    box-sizing: border-box;
+    overflow: visible;
+    scrollbar-width: none;
+}
+
+.dashboard-radar-wrap::-webkit-scrollbar {
+    display: none;
+}
+
+/* WINCOMMANDER wordmark — always mounted behind the radar so expanding or
+   collapsing NeedsAttention never makes the brand anchor blink out. */
+.dashboard-radar-watermark {
+    display: block;
+    position: absolute;
+    top: 8px;
+    left: 0;
+    right: 0;
+    /* Keep the wordmark above the expanded Needs Attention surface. It stays
+       pointer-events:none and low-opacity, so it reads as brand texture rather
+       than blocking the fix controls. */
+    z-index: 26;
+    pointer-events: none;
+    user-select: none;
+    text-align: center;
+    font-family: var(--font-display, var(--font-mono));
+    font-weight: 900;
+    font-size: clamp(64px, 9vw, 142px);
+    line-height: 0.9;
+    letter-spacing: clamp(0px, 0.12vw, 3px);
+    color: var(--color-text-primary);
+    opacity: 0.055;
+    text-transform: uppercase;
+    white-space: nowrap;
+    max-width: none;
+    overflow: hidden;
+}
+
+.dashboard-panel--watermark .dashboard-radar-watermark {
+    opacity: 0.075;
+}
+
+html.light .dashboard-radar-watermark {
+    opacity: 0.07;
+}
+
+html.light .dashboard-panel--watermark .dashboard-radar-watermark {
+    opacity: 0.09;
+}
+
+/* Radar + IP/DNS strip + updater — packed to the top of the available space
+   (flex-start) with a fixed top pad so the disc never touches the panel edge.
+   Using flex-start (not center) means overflow can only happen at the bottom,
+   never at the top — eliminating the disc-clipping-at-header bug.
+   Default padding-top: 110px clears the absolutely-positioned WINCOMMANDER
+   title (top:60px, ~38px tall → bottom ~98px) so domain nodes never overlap it.
+   When NeedsAttention is expanded (title hidden), --expanded drops it back to
+   28px so the radar sits near the top with the findings list below. */
+.radar-center-group {
+    flex: 0 0 auto;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    /* Positioning context for the .dashboard-radar-watermark child — so
+       the wordmark sits behind the disc no matter how the column reflows. */
+    position: relative;
+    /* View-toggle bar is ~40px at top:10px; 48px clears it with a small gap. */
+    padding-top: 48px;
+    padding-bottom: 0;
+    gap: 10px;
+    overflow: visible;
+    transition: padding-top 0.25s ease, padding-bottom 0.25s ease, gap 0.25s ease;
+}
+
+.radar-center-group--expanded {
+    /* Title is hidden while NeedsAttention is expanded — push the radar up
+       further so it doesn't get clipped by the NeedsAttention card below and
+       the WIN COMMANDER watermark sits above it as a backdrop. */
+    padding-top: 4px;
+    padding-bottom: 2px;
+    gap: 4px;
+}
+
+/* ViewToggle (Risk Matrix / More Products switcher) only renders when at
+   least one of those views is available. With both off, the default 48px
+   padding-top (reserved to clear the toggle bar) leaves a dead gap — shrink
+   it to match the .dashboard-top-bar ~14px rhythm instead. Never combines
+   with --expanded (mutually exclusive at the call site). */
+.radar-center-group--no-toggle {
+    padding-top: 14px;
+}
+
+/* Shrink the radar scope when NeedsAttention is expanded so the legend
+   (which lives inside .sov-radar, 10px below the scope) stays visible
+   above the findings card rather than overflowing under it. */
+.radar-center-group--expanded .sov-radar {
+    gap: 6px;
+}
+
+.radar-center-group--expanded .sov-radar__scope {
+    max-width: 300px;
+}
+
+.dashboard-radar-wrap .radar-center-group:not(.radar-center-group--expanded) .sov-radar__scope {
+    max-width: 420px;
+}
+
+/* Chosen treatment "scale + crossfade": smoothly animate the radar grow/shrink
+   between collapsed/expanded states. One contained element, one-shot (not a
+   per-frame loop), so the max-width transition is acceptable on the N100 target;
+   the wc-no-motion class zeroes transition-duration, so it's instant when the
+   user disables animations. */
+.dashboard-radar-wrap .sov-radar__scope {
+    transition: max-width var(--dur-slow) var(--ease);
+}
+
+.dashboard-radar-wrap .radar-container {
+    /* Matches the bumped .sov-radar__scope max-width — no point capping
+       the legacy canvas wrapper smaller than the new SVG disc. */
+    width: min(460px, 48vw);
+    flex: 0 0 auto;
+    max-width: unset;
+    max-height: unset;
+    min-height: unset;
+}
+
+.dashboard-radar-wrap .radar-container canvas {
+    border-radius: var(--radius-md) !important;
+}
+
+/* ── Dashboard Updater — overlaid inside the radar's lower arc ─────── */
+.dashboard-radar-updates {
+    /* Flows directly under the centered radar (was absolutely positioned). */
+    position: relative;
+    z-index: 15;
+    min-width: 0;
+    width: 300px;
+    max-width: 300px;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-xl);
+    padding: 0;
+    box-shadow: none;
+}
+
+.dashboard-radar-updates .updater-status {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-text-secondary);
+    padding: 0;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.dashboard-radar-updates .updater-status--error {
+    color: var(--color-warning);
+}
+
+.dashboard-radar-updates .updater-status--checking {
+    color: var(--color-text-muted);
+}
+
+.dashboard-radar-updates .updater-status__label,
+.dashboard-radar-updates .updater-status span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Compact fix-all-btn variant for the radar HUD slot — used by the commander
+ * update prompt. Apps-update button now lives in the dashboard-fix-btn slot
+ * below the radar, so it's not affected by these overrides. */
+.dashboard-radar-updates .fix-all-btn {
+    padding: 10px 14px;
+    margin-top: 0;
+    animation: none;
+}
+
+.dashboard-radar-updates .fix-all-btn .fix-all-icon {
+    font-size: 20px;
+}
+
+.dashboard-radar-updates .fix-all-btn .fix-all-title {
+    font-size: 13px;
+}
+
+.dashboard-radar-updates .fix-all-btn .fix-all-sub {
+    font-size: 11px;
+}
+
+/* ── Dashboard action buttons — centred row below the radar ──
+ * Buttons sit either side of the radar's bottom centre with a tight gap so
+ * they read as a paired action group rather than two stranded controls. */
+.dashboard-fix-actions {
+    /* Pinned below the radar group (flex-none). Margin-top gives clear breathing
+       room between the IP/DNS strip and the NeedsAttention card. */
+    position: relative;
+    z-index: 20;
+    flex: 0 0 auto;
+    width: 100%;
+    margin-top: 18px;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 14px;
+    align-items: stretch;
+    justify-content: center;
+}
+
+.dashboard-panel--watermark .dashboard-fix-actions {
+    margin-top: 8px;
+}
+
+.dashboard-fix-actions .fix-all-btn {
+    width: 260px;
+    margin-top: 0;
+    /* hover changes: transform, background, box-shadow */
+    transition: transform var(--dur-slow, 300ms) var(--ease),
+                background-color var(--dur-slow, 300ms) var(--ease),
+                box-shadow var(--dur-slow, 300ms) var(--ease);
+}
+
+.dashboard-fix-actions .fix-all-btn:hover {
+    transform: scale(1.04);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, transparent) 0%, color-mix(in srgb, var(--accent-2) 12%, transparent) 100%);
+    box-shadow: 0 0 30px color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+
+.dashboard-drift-oneshot {
+    display: flex;
+    justify-content: center;
+    flex: 0 0 auto;
+    margin-top: 8px;
+}
+
+.dashboard-heal-drift-btn {
+    min-height: 44px;
+    padding: 0 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: 1px solid color-mix(in srgb, var(--color-warning) 32%, var(--color-border));
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--color-warning) 9%, var(--color-bg-secondary));
+    color: var(--color-text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: transform var(--dur-fast, 150ms) var(--ease),
+                border-color var(--dur-fast, 150ms) var(--ease),
+                background-color var(--dur-fast, 150ms) var(--ease);
+}
+
+.dashboard-heal-drift-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    border-color: var(--color-warning);
+    background: color-mix(in srgb, var(--color-warning) 14%, var(--color-bg-secondary));
+}
+
+.dashboard-heal-drift-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.dashboard-heal-drift-btn span {
+    min-width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-full);
+    background: var(--color-warning);
+    color: var(--color-bg-primary);
+    font-size: 10px;
+}
+
+/* SVG-icon variant of fix-all-icon — Blueprint <Icon> renders as inline-block,
+ * unicode-glyph spans use line-height: 1; this normalizes both. */
+.fix-all-icon.fix-all-icon--svg {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-accent);
+}
+
+/* ── Live Map Title (mirrors Risk Matrix heading position) ── */
+.dash-map-title {
+    position: absolute;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    z-index: 25; /* Increased from 5 to sit above radar-wrap (10) and radar-updates (15) */
+    pointer-events: none;
+    width: 100%;
+}
+
+/* ── Dashboard Side Panel ──────────────────────────────── */
+.dash-side-panel {
+    width: 380px;
+    flex-shrink: 0;
+    align-self: flex-start;
+    max-height: calc(100% - 28px);
+    overflow: hidden;
+    overflow-x: hidden;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 14px;
+    margin: 14px 14px 14px 0;
+    z-index: 10;
+    box-sizing: border-box;
+}
+
+.dsp-score-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 2px;
+}
+
+.dsp-score-indicator {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.dsp-score-texts {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.dsp-status-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+}
+
+.dsp-score-value {
+    font-family: var(--font-mono);
+    font-size: 28px;
+    font-weight: 900;
+    line-height: 1;
+    letter-spacing: -1px;
+}
+
+.dsp-divider {
+    height: 1px;
+    background: var(--color-border);
+    margin: 10px 0;
+    flex-shrink: 0;
+}
+
+.dsp-section-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+
+/* Security grid */
+.dsp-security-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.dsp-security-item {
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.dsp-sec-tag {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+}
+
+.dsp-sec-val {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 900;
+    line-height: 1;
+    letter-spacing: 0.5px;
+}
+
+/* Resource row (CPU) */
+.dsp-resource-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.dsp-ring-wrap {
+    position: relative;
+    flex-shrink: 0;
+    width: 68px;
+    height: 68px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dsp-ring-center {
+    position: absolute;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 900;
+    line-height: 1;
+    letter-spacing: -0.5px;
+    pointer-events: none;
+}
+
+.dsp-resource-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.dsp-resource-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+}
+
+.dsp-resource-sub {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+}
+
+/* Bars */
+.dsp-bar-wrap {
+    height: 4px;
+    background: var(--color-bg-tertiary);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 2px;
+}
+
+.dsp-bar-wrap--md {
+    height: 6px;
+    margin-top: 4px;
+}
+
+.dsp-bar-wrap--lg {
+    height: 8px;
+    border-radius: 4px;
+    margin-top: 6px;
+    border: 1px solid var(--color-border);
+}
+
+.dsp-bar-fill {
+    height: 100%;
+    border-radius: inherit;
+    transition: width 0.8s var(--ease);
+    min-width: 2px;
+}
+
+/* RAM section */
+.dsp-ram-section {
+    display: flex;
+    flex-direction: column;
+}
+
+.dsp-ram-stats-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-family: var(--font-mono);
+}
+
+.dsp-ram-used {
+    font-size: 20px;
+    font-weight: 900;
+    line-height: 1;
+}
+
+.dsp-ram-sep {
+    font-size: 13px;
+    color: var(--color-text-muted);
+}
+
+.dsp-ram-total {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+}
+
+.dsp-ram-pct {
+    font-size: 11px;
+    font-weight: 700;
+    margin-left: auto;
+}
+
+/* Brand header */
+.dsp-brand {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 2px;
+}
+
+.dsp-brand-name {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 3px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    opacity: 0.6;
+}
+
+/* CPU meta row (usage label + temp) */
+.dsp-cpu-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.dsp-temp-badge {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+.dsp-cpu-alert {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    margin-top: 2px;
+    opacity: 0.85;
+}
+
+/* Compact storage */
+.dsp-disks-compact {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow: hidden;
+}
+
+.dsp-disk-compact {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.dsp-disk-compact-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.dsp-disk-icon {
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.dsp-disk-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dsp-disk-pct {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 800;
+    flex-shrink: 0;
+}
+
+.dsp-disk-free {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+    min-width: 62px;
+    text-align: right;
+}
+
+.dsp-disk-bar {
+    height: 4px;
+    background: var(--color-bg-tertiary);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.dsp-disk-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.8s var(--ease);
+    min-width: 2px;
+}
+
+/* Top processes */
+.dsp-processes {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.dsp-proc-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    margin-bottom: 2px;
+}
+
+.dsp-proc-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.dsp-proc-name {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    width: 76px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dsp-proc-bar-wrap {
+    flex: 1;
+    height: 4px;
+    background: var(--color-bg-tertiary);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.dsp-proc-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.6s ease;
+    min-width: 2px;
+}
+
+.dsp-proc-pct {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 800;
+    width: 36px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.dsp-proc-ram {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--color-text-muted);
+    width: 48px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+/* Accordion */
+.dsp-accordion {
+    margin-top: 8px;
+    flex-shrink: 0;
+}
+
+.dsp-accordion-header {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 7px 10px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.dsp-accordion-header:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+html.light .dsp-accordion-header:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.dsp-acc-title {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    flex: 1;
+    text-align: left;
+}
+
+.dsp-acc-count {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 800;
+    color: var(--color-accent);
+    background: var(--color-accent-dim);
+    border-radius: 10px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+}
+
+.dsp-acc-chevron {
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+    transition: transform 0.2s ease;
+}
+
+.dsp-accordion-body {
+    padding: 7px 2px 1px 2px;
+    overflow: hidden;
+}
+
+/* Score improvements */
+.dsp-improvements {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.dsp-imp-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: var(--radius-md);
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    cursor: pointer;
+    text-align: left;
+    width: 100%;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.dsp-imp-row:hover {
+    border-color: var(--color-accent);
+    background: var(--color-accent-dim);
+}
+
+.dsp-imp-left {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.dsp-imp-cat {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+}
+
+.dsp-imp-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dsp-imp-arrow {
+    font-size: 16px;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+    transition: color 0.15s;
+    line-height: 1;
+}
+
+.dsp-imp-row:hover .dsp-imp-arrow {
+    color: var(--color-accent);
+}
+
+.dsp-empty {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-muted);
+    letter-spacing: 0.5px;
+    padding: 4px 0;
+}
+
+/* Light mode */
+html.light .dash-side-panel {
+    background: #f8f9fa;
+    border-color: rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+html.light .dsp-security-item {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+html.light .dsp-bar-wrap--lg {
+    background: rgba(0, 0, 0, 0.07);
+}
+
+html.light .dsp-disk-bar {
+    background: rgba(0, 0, 0, 0.07);
+}
+
+/* Light mode dashboard background — reduce red intensity */
+html.light .dashboard-panel {
+    /* Slate base (so near-white cards keep a visible boundary) + a softer
+     * health-band glow so the peripheral cue reads in Daylight too. */
+    background: radial-gradient(circle at 50% 28%, color-mix(in srgb, var(--dash-glow, var(--color-accent)) 9%, transparent) 0%, #eef2f7 70%) !important;
+}
+
+html.light .tech-grid {
+    opacity: 0.12;
+}
+
+/* ── Dashboard-card contrast fixes for light mode ─────────────────────
+ * The default --color-bg-secondary (#f8fafc) was nearly indistinguishable
+ * from the white page, and --color-border at 12% black was too faint to
+ * register. Scope these stronger surfaces to the dashboard cards only
+ * so the rest of the app (which uses different tints elsewhere) isn't
+ * affected. */
+html.light .system-status-card,
+html.light .hardware-specs-card {
+    background: #ffffff !important;
+    border: 1px solid rgba(15, 23, 42, 0.16) !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06) !important;
+}
+
+html.light .card-divider {
+    background: rgba(15, 23, 42, 0.1);
+}
+
+html.light .system-info-item {
+    background: #f8fafc;
+    border-color: rgba(15, 23, 42, 0.12);
+}
+
+html.light .dashboard-capability-toggle {
+    background: #f8fafc;
+    border-color: rgba(15, 23, 42, 0.14);
+    color: #475569;
+}
+
+/* Active (CAM OFF / MIC OFF) state in light mode — the base .active
+   rule uses hardcoded cyan color-mix(in srgb, var(--accent) 35%, transparent) for the border,
+   which is invisible against the light background. Override with the
+   light-mode accent (sky-blue 0ea5e9 = rgb(14, 165, 233)). */
+html.light .dashboard-capability-toggle.active {
+    border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
+    background: var(--color-accent-dim);
+    color: var(--color-accent);
+}
+
+html.light .dashboard-security-toggle {
+    background: #f8fafc;
+    border-color: rgba(15, 23, 42, 0.14);
+    color: #475569;
+}
+
+/* ── Crazy Fix Everything Button Revamp (Subtle Palantir Defense-Tech Style) ── */
+.fix-all-crazy {
+    position: relative;
+    background: rgba(15, 23, 42, 0.75) !important;
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent) !important;
+    border-radius: 10px !important;
+    padding: 14px 20px !important;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(255, 255, 255, 0.03) !important;
+    /* hover changes: transform, background, border-color, box-shadow */
+    transition: transform var(--dur-normal, 200ms) var(--ease),
+                background-color var(--dur-normal, 200ms) var(--ease),
+                border-color var(--dur-normal, 200ms) var(--ease),
+                box-shadow var(--dur-normal, 200ms) var(--ease) !important;
+    /* PERF: no backdrop-filter — the background is ~opaque (0.75) so the blur
+       was barely visible, but sitting over the animated radar it forced a
+       full blur re-compute every animation frame (continuous CPU). */
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 260px;
+    cursor: pointer;
+}
+
+/* Sci-fi tech corner brackets */
+.fix-all-crazy-corner {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+    border-style: solid;
+    pointer-events: none;
+    /* hover changes: border-color, width, height */
+    transition: border-color var(--dur-normal, 200ms) var(--ease),
+                width var(--dur-normal, 200ms) var(--ease),
+                height var(--dur-normal, 200ms) var(--ease);
+}
+.fix-all-crazy-corner-tl { top: 4px; left: 4px; border-width: 1px 0 0 1px; }
+.fix-all-crazy-corner-tr { top: 4px; right: 4px; border-width: 1px 1px 0 0; }
+.fix-all-crazy-corner-bl { bottom: 4px; left: 4px; border-width: 0 0 1px 1px; }
+.fix-all-crazy-corner-br { bottom: 4px; right: 4px; border-width: 0 1px 1px 0; }
+
+/* Glowing icon container */
+.fix-all-icon-crazy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+    padding: 8px;
+    border-radius: var(--radius-md);
+    border: 1px solid color-mix(in srgb, var(--accent) 15%, transparent);
+    color: var(--color-accent);
+    /* hover changes: border-color, background */
+    transition: border-color var(--dur-normal, 200ms) var(--ease),
+                background-color var(--dur-normal, 200ms) var(--ease);
+}
+
+/* Hover and active states */
+.fix-all-crazy:hover {
+    transform: translateY(-1px) !important;
+    background: rgba(13, 20, 38, 0.85) !important;
+    border-color: var(--color-accent) !important;
+    box-shadow: 0 0 20px color-mix(in srgb, var(--accent) 15%, transparent), inset 0 0 8px color-mix(in srgb, var(--accent) 10%, transparent) !important;
+}
+
+.fix-all-crazy:hover .fix-all-crazy-corner {
+    border-color: var(--color-accent) !important;
+    width: 8px;
+    height: 8px;
+}
+
+.fix-all-crazy:hover .fix-all-icon-crazy {
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.fix-all-crazy:hover .fix-chip--crazy-total {
+    background: color-mix(in srgb, var(--accent) 15%, transparent) !important;
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent) !important;
+}
+
+/* Total chip style */
+.fix-chip--crazy-total {
+    background: color-mix(in srgb, var(--accent) 6%, transparent) !important;
+    color: var(--color-accent) !important;
+    border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent) !important;
+    padding: 2px 7px !important;
+    border-radius: 4px;
+    font-size: 9.5px !important;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    /* hover changes: background, border-color */
+    transition: background-color var(--dur-normal, 200ms) var(--ease),
+                border-color var(--dur-normal, 200ms) var(--ease);
+}
+
+/* Light mode support for the crazy button */
+html.light .fix-all-crazy {
+    background: rgba(255, 255, 255, 0.85) !important;
+    border-color: rgba(14, 116, 144, 0.2) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05) !important;
+}
+
+html.light .fix-all-crazy .fix-all-crazy-corner {
+    border-color: rgba(14, 116, 144, 0.25);
+}
+
+html.light .fix-all-crazy .fix-all-icon-crazy {
+    background: rgba(14, 116, 144, 0.03);
+    border-color: rgba(14, 116, 144, 0.15);
+    color: #0e7490;
+}
+
+html.light .fix-all-crazy:hover {
+    background: rgba(255, 255, 255, 0.95) !important;
+    border-color: #0e7490 !important;
+    box-shadow: 0 4px 12px rgba(14, 116, 144, 0.12) !important;
+}
+
+html.light .fix-all-crazy:hover .fix-all-crazy-corner {
+    border-color: #0e7490 !important;
+}
+
+html.light .fix-all-crazy:hover .fix-all-icon-crazy {
+    border-color: rgba(14, 116, 144, 0.4);
+    background: rgba(14, 116, 144, 0.08);
+}
+
+html.light .fix-chip--crazy-total {
+    background: rgba(14, 116, 144, 0.05) !important;
+    color: #0e7490 !important;
+    border-color: rgba(14, 116, 144, 0.18) !important;
+}
+
+html.light .fix-all-crazy:hover .fix-chip--crazy-total {
+    background: rgba(14, 116, 144, 0.1) !important;
+    border-color: rgba(14, 116, 144, 0.3) !important;
+}
+
+/* ── Calculator lock button — top-right corner of dashboard ── */
+.dashboard-lock-btn {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    z-index: 50;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: var(--radius-lg);
+    border: 1px solid color-mix(in srgb, var(--color-text-muted) 30%, transparent);
+    background: color-mix(in srgb, var(--color-bg-secondary) 85%, transparent);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    transition: border-color var(--dur-fast, 150ms) var(--ease),
+                background-color var(--dur-fast, 150ms) var(--ease),
+                color var(--dur-fast, 150ms) var(--ease);
+}
+
+.dashboard-lock-btn:hover {
+    border-color: var(--color-text-primary);
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+}

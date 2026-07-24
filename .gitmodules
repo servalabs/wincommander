@@ -1,0 +1,4 @@
+[submodule "assets"]
+	path = assets
+	url = https://github.com/servalabs/assets.git
+	branch = main

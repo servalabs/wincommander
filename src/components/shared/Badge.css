@@ -1,0 +1,44 @@
+/* Badge — universal status/tier/severity chip. Tokens only, 2px corners. */
+.wc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-light);
+  background: rgba(100, 116, 139, 0.12);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.wc-badge--accent {
+  color: var(--color-accent);
+  background: var(--color-accent-subtle);
+  border-color: var(--color-accent);
+}
+.wc-badge--success {
+  color: var(--color-success);
+  background: var(--color-success-dim);
+  border-color: var(--color-success);
+}
+.wc-badge--warning {
+  color: var(--color-warning);
+  background: var(--color-warning-dim);
+  border-color: var(--color-warning);
+}
+.wc-badge--danger {
+  color: var(--color-danger);
+  background: var(--color-danger-dim);
+  border-color: var(--color-danger);
+}
+.wc-badge--info {
+  color: var(--color-info);
+  background: var(--color-info-dim);
+  border-color: var(--color-info);
+}

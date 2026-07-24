@@ -1,0 +1,105 @@
+/* ── Card entrance (fade + scale) ────────────────────────────────────────
+   Framer-motion drives the animation via gateCardVariants in DependencyGate.tsx
+   (DURATION_S.slow + EASE.enter from motion.ts). This rule ensures instant-
+   display when the .wc-no-motion flag is applied at the document root.
+   Reduced-motion via @media is handled globally by <MotionConfig> in App.tsx. */
+.wc-no-motion .dependency-gate__card {
+  animation: none !important;
+  transition: none !important;
+}
+
+.dependency-gate {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 100%;
+          width: 100%;
+          background: var(--color-bg-primary);
+          position: relative;
+        }
+        .dependency-gate__card {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 16px;
+          max-width: 420px;
+          padding: 48px 40px;
+          border-radius: 16px;
+          background: var(--color-bg-secondary);
+          border: 1px solid var(--color-border);
+          text-align: center;
+        }
+        .dependency-gate__icon {
+          color: var(--color-accent);
+          opacity: 0.7;
+        }
+        .dependency-gate__title {
+          margin: 0;
+          font-size: 22px;
+          font-weight: 600;
+          color: var(--color-text-primary);
+          letter-spacing: -0.3px;
+        }
+        .dependency-gate__desc {
+          margin: 0;
+          font-size: 14px;
+          color: var(--color-text-secondary);
+          line-height: 1.5;
+        }
+        .dependency-gate__error {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 16px;
+          border-radius: 8px;
+          background: var(--color-danger-dim);
+          border: 1px solid var(--color-danger-dim);
+          color: var(--color-danger);
+          font-size: 13px;
+          width: 100%;
+          text-align: left;
+        }
+        .dependency-gate__btn {
+          margin-top: 8px;
+          min-width: 200px;
+        }
+        .dependency-gate__tagline {
+          margin: 0;
+          font-size: 14px;
+          color: var(--color-text-secondary);
+          line-height: 1.5;
+        }
+        .dependency-gate__features {
+          margin: 0;
+          padding: 0 0 0 18px;
+          text-align: left;
+          width: 100%;
+          font-size: 12px;
+          color: var(--color-text-secondary);
+          line-height: 1.8;
+        }
+        .dependency-gate__features li {
+          margin-bottom: 2px;
+        }
+        .dependency-gate__success {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 16px;
+          border-radius: 8px;
+          background: var(--color-success-dim);
+          border: 1px solid var(--color-success-dim);
+          color: var(--color-success);
+          font-size: 13px;
+          width: 100%;
+          text-align: left;
+        }
+        /* Light mode: ensure button text stays white on hover */
+        html.light .dependency-gate__btn.bp6-intent-primary,
+        html.light .dependency-gate__btn.bp6-intent-primary:hover {
+          color: #ffffff !important;
+        }
+        html.light .dependency-gate__btn.bp6-intent-primary:hover {
+          background: var(--color-accent-hover) !important;
+          box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 25%, transparent) !important;
+        }

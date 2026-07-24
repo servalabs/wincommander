@@ -1,0 +1,18 @@
+{
+  "$schema": "../schema/rules.schema.json",
+  "type": "steam",
+  "libraries": [
+    "${PROGRAMFILES_X86}/Steam",
+    "${PROGRAMFILES}/Steam",
+    "D:/SteamLibrary",
+    "E:/SteamLibrary",
+    "F:/SteamLibrary"
+  ],
+  "redistPatterns": [
+    "_CommonRedist", "CommonRedist", "__installer", "__Installer",
+    "_Redist", "Redist", "redist", "DirectX", "directx",
+    "vcredist", "VCRedist", "DotNetFX", "dotnetfx",
+    "UE4PrereqSetup", "xnafx", "DXSETUP", "Mono",
+    "WindowsNoEditor/Engine/Extras/Redist"
+  ]
+}

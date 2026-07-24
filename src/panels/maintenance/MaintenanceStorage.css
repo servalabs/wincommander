@@ -1,0 +1,118 @@
+.maintenance-cleanup-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr));
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.maintenance-cleanup-card,
+.maintenance-cache-cleaner,
+.maintenance-cache-card {
+  min-width: 0;
+  height: 100%;
+}
+
+.maintenance-cache-idle {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  flex: 1;
+  min-height: 14rem;
+  place-content: center;
+  justify-items: center;
+  gap: 1rem;
+  overflow: hidden;
+  padding: 1.5rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(circle at center, color-mix(in srgb, var(--accent) 11%, transparent) 0, transparent 62%),
+    var(--surface-2);
+}
+
+.maintenance-cache-idle::before {
+  position: absolute;
+  z-index: -1;
+  width: 22rem;
+  height: 22rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: var(--radius-full);
+  content: "";
+}
+
+.maintenance-cache-idle__visual {
+  position: relative;
+  width: 7rem;
+  height: 7rem;
+  border-radius: var(--radius-full);
+}
+
+.maintenance-cache-idle__orbit,
+.maintenance-cache-idle__sweep,
+.maintenance-cache-idle__core {
+  position: absolute;
+  border-radius: var(--radius-full);
+}
+
+.maintenance-cache-idle__orbit {
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+}
+
+.maintenance-cache-idle__orbit--outer {
+  inset: 0;
+}
+
+.maintenance-cache-idle__orbit--inner {
+  inset: 1.4rem;
+  border-style: dashed;
+  animation: maintenance-cache-orbit 7s linear infinite reverse;
+}
+
+.maintenance-cache-idle__sweep {
+  inset: 0;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg 280deg,
+    color-mix(in srgb, var(--accent) 30%, transparent) 330deg,
+    transparent 360deg
+  );
+  animation: maintenance-cache-orbit 4.5s linear infinite;
+}
+
+.maintenance-cache-idle__core {
+  inset: 2.25rem;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--accent);
+  box-shadow: 0 0 1.75rem color-mix(in srgb, var(--accent) 20%, transparent);
+  animation: maintenance-cache-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes maintenance-cache-orbit {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes maintenance-cache-breathe {
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 2.25rem color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .maintenance-cache-idle__orbit--inner,
+  .maintenance-cache-idle__sweep,
+  .maintenance-cache-idle__core {
+    animation: none;
+  }
+}
+
+.wc-no-motion .maintenance-cache-idle__orbit--inner,
+.wc-no-motion .maintenance-cache-idle__sweep,
+.wc-no-motion .maintenance-cache-idle__core {
+  animation: none;
+}

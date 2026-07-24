@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  en-US\commander.adml — English display strings for commander.admx
+  Version: 1.0  (F9 v1)
+
+  Installation:
+    Copy to:
+      %SystemRoot%\PolicyDefinitions\en-US\commander.adml      (local)
+      \\<SYSVOL>\PolicyDefinitions\en-US\commander.adml        (domain)
+-->
+<policyDefinitionResources
+    xmlns="http://www.microsoft.com/GroupPolicy/PolicyDefinitions"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    revision="1.0"
+    schemaVersion="1.0">
+
+  <displayName>WinCommander Group Policy</displayName>
+  <description>
+    Administrative template for WinCommander by ServaLabs.
+    Policies are applied from HKLM\SOFTWARE\Policies\ServaLabs\WinCommander.
+    WinCommander v1 reads and surfaces these values as a read-only overlay.
+    Hard enforcement (locking individual toggles) is planned for a future release.
+  </description>
+
+  <resources>
+    <stringTable>
+
+      <!-- ── Category names ──────────────────────────────────────────────── -->
+      <string id="ServaLabs">ServaLabs</string>
+      <string id="WinCommander">WinCommander</string>
+
+      <!-- ── Supported-on string ─────────────────────────────────────────── -->
+      <string id="SUPPORTED_WIN10_AND_ABOVE">
+        Windows 10 and later, Windows Server 2016 and later
+      </string>
+
+      <!-- ── LockTelemetryOff ─────────────────────────────────────────────── -->
+      <string id="LockTelemetryOff_Name">
+        Require all Windows telemetry settings to be disabled
+      </string>
+      <string id="LockTelemetryOff_Explain">
+        When enabled, WinCommander treats all Windows telemetry settings as
+        organisation-mandated OFF and displays a "managed by your organisation"
+        indicator next to affected controls.
+
+        Phase 2 (planned): enabling this policy will also lock the telemetry
+        toggles so users cannot re-enable them without administrator action.
+
+        Registry value: HKLM\SOFTWARE\Policies\ServaLabs\WinCommander\LockTelemetryOff
+        Type: DWORD   1 = Enabled   0 or absent = Not configured
+      </string>
+
+      <!-- ── ForceSecureDNS ──────────────────────────────────────────────── -->
+      <string id="ForceSecureDNS_Name">
+        Force DNS-over-HTTPS resolver URL
+      </string>
+      <string id="ForceSecureDNS_Explain">
+        When configured, WinCommander shows the specified DNS-over-HTTPS resolver
+        URL as organisation-managed in the Settings panel.
+
+        Enter the full URL of the DoH endpoint, for example:
+          https://1.1.1.1/dns-query
+          https://dns.google/dns-query
+          https://doh.opendns.com/dns-query
+
+        Phase 2 (planned): the specified URL will replace the user-configurable
+        resolver, and the resolver field will be locked.
+
+        Registry value: HKLM\SOFTWARE\Policies\ServaLabs\WinCommander\ForceSecureDNS
+        Type: REG_SZ   (empty or absent = Not configured)
+      </string>
+
+      <!-- ── DisableSelfDestruct ─────────────────────────────────────────── -->
+      <string id="DisableSelfDestruct_Name">
+        Prevent the panic / self-destruct flow from firing
+      </string>
+      <string id="DisableSelfDestruct_Explain">
+        When enabled, WinCommander shows the self-destruct / panic trigger as
+        organisation-managed and indicates it is not permitted by policy.
+
+        Phase 2 (planned): enabling this policy will remove the panic button
+        from the UI and prevent any panic trigger (hotkey, voice, coercion
+        phrase) from initiating a self-destruct sequence.
+
+        Use this policy in environments where data-destruction software must be
+        controlled by IT rather than individual users.
+
+        Registry value: HKLM\SOFTWARE\Policies\ServaLabs\WinCommander\DisableSelfDestruct
+        Type: DWORD   1 = Enabled   0 or absent = Not configured
+      </string>
+
+      <!-- ── RequireStartupPin ───────────────────────────────────────────── -->
+      <string id="RequireStartupPin_Name">
+        Require the startup PIN gate to always be enabled
+      </string>
+      <string id="RequireStartupPin_Explain">
+        When enabled, WinCommander shows the startup PIN setting as
+        organisation-managed.
+
+        Phase 2 (planned): enabling this policy will prevent users from
+        disabling the startup PIN gate.  Users may still change their PIN
+        but cannot remove the gate entirely.
+
+        Registry value: HKLM\SOFTWARE\Policies\ServaLabs\WinCommander\RequireStartupPin
+        Type: DWORD   1 = Enabled   0 or absent = Not configured
+      </string>
+
+      <!-- ── ManagedBannerText ───────────────────────────────────────────── -->
+      <string id="ManagedBannerText_Name">
+        Custom managed-policy banner message
+      </string>
+      <string id="ManagedBannerText_Explain">
+        Optional.  When one or more WinCommander policies are active, the app
+        displays a "managed by your organisation" banner in the Settings panel.
+        This setting lets you customise the message shown — for example to
+        include a helpdesk contact or company name.
+
+        If this value is absent or empty, WinCommander shows its default
+        "Some settings are managed by your organisation" text.
+
+        Example value: "Managed by Acme Corp IT — contact helpdesk@acme.com"
+
+        Registry value: HKLM\SOFTWARE\Policies\ServaLabs\WinCommander\ManagedBannerText
+        Type: REG_SZ   (empty or absent = use default banner text)
+      </string>
+
+    </stringTable>
+  </resources>
+</policyDefinitionResources>

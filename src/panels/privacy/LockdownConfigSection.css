@@ -1,0 +1,705 @@
+/* LockdownConfigSection.css
+ *
+ * Layout for the customisable self-destruct cascade configuration UI.
+ * Lives in Privacy panel under Panic Triggers. Goal: 35+ checkboxes
+ * configured across 5 groups without it feeling like a wall of text.
+ *
+ * Visual hierarchy:
+ *   - Status strip (counts + reset)
+ *   - Group blocks: clickable header with chevron, count badge, bulk
+ *     actions; collapsible body with one row per step
+ *   - Privacy Clean group gets a danger-tinted header + body to call
+ *     out that those steps are slow / irreversible
+ *   - On-completion globals share the same row component as steps
+ *     so the visual rhythm is consistent
+ */
+
+/* Outer wrapper when embedded inline (no SectionCard). Adds a top
+ * separator so the block reads as distinct from whatever sits above
+ * it (currently the Panic Hotkey row in the Cleanup panel). */
+.sd-config-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+/* ── Panic Hotkey row ─────────────────────────────────────────── */
+.sd-hotkey-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: var(--color-danger-dim);
+    border: 1px solid var(--color-danger-dim);
+    border-radius: 4px;
+}
+
+.sd-hotkey-icon {
+    color: var(--color-danger);
+    flex-shrink: 0;
+}
+
+.sd-hotkey-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.sd-hotkey-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--color-text-primary);
+}
+
+.sd-hotkey-desc {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    line-height: 1.35;
+}
+
+.sd-hotkey-badge {
+    background: var(--color-danger-dim);
+    border: 1px solid var(--color-danger);
+    border-radius: 3px;
+    color: var(--color-danger);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    padding: 4px 9px;
+    cursor: pointer;
+    text-align: center;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.sd-hotkey-badge:hover {
+    background: var(--color-danger-dim);
+    border-color: var(--color-danger);
+}
+
+.sd-hotkey-input {
+    background: var(--color-danger-dim);
+    border: 1px solid var(--color-danger);
+    border-radius: 3px;
+    color: var(--color-danger);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 4px 8px;
+    width: 110px;
+    text-align: center;
+    outline: none;
+    caret-color: transparent;
+    animation: sd-hk-pulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes sd-hk-pulse {
+    from { box-shadow: 0 0 4px color-mix(in srgb, var(--color-danger) 30%, transparent); }
+    to   { box-shadow: 0 0 10px color-mix(in srgb, var(--color-danger) 70%, transparent); }
+}
+
+.sd-config-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    margin-bottom: 12px;
+    background: var(--color-accent-subtle);
+    border: 1px solid var(--color-accent-dim);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-secondary);
+}
+
+.sd-config-status-count {
+    color: var(--color-accent);
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+.sd-config-status-meta {
+    color: var(--color-text-muted);
+    font-size: 10px;
+    margin-left: 8px;
+}
+
+.sd-config-status-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+/* ── Columns card — single card, groups as columns ──────────────── */
+/* Layout:
+ *   Col 1+2 (span 2): Privacy Traces — inner 2-column row grid (~23 items)
+ *   Col 3:            Deep Trace Cleaner (~9 items)
+ *   Col 4:            Privacy Deep Clean (~3 items, danger-tinted)
+ * On Completion sits BELOW the card as a toggles-only row.
+ */
+.sd-columns-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl, 8px);
+    background: var(--color-bg-card);
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.sd-columns-card > .sd-group {
+    margin-bottom: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.sd-columns-card > .sd-group + .sd-group {
+    border-left: 1px solid var(--color-border);
+}
+.sd-columns-card > .sd-group.is-wide {
+    grid-column: span 2;
+}
+.sd-columns-card .sd-group-header {
+    cursor: default;
+    background: var(--color-bg-tertiary);
+    border-bottom: 1px solid var(--color-border);
+}
+.sd-columns-card .sd-group.is-danger > .sd-group-header {
+    background: var(--color-danger-dim);
+}
+.sd-columns-card .sd-group-body {
+    border-top: none;
+    padding: 4px 0;
+    max-height: 360px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex: 1 1 auto;
+}
+/* Single-column rows by default inside the columns card */
+.sd-columns-card .sd-rows-grid,
+.sd-columns-card .sd-rows-grid.is-two-col {
+    grid-template-columns: 1fr;
+    column-gap: 0;
+}
+/* The wide (spanning) group puts its rows in 2 sub-columns to use the space */
+.sd-columns-card > .sd-group.is-wide .sd-rows-grid {
+    grid-template-columns: 1fr 1fr;
+    column-gap: 8px;
+}
+@media (max-width: 1100px) {
+    .sd-columns-card {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .sd-columns-card > .sd-group.is-wide {
+        grid-column: span 2;
+    }
+    .sd-columns-card > .sd-group:nth-child(2n+1) {
+        border-left: none;
+    }
+    .sd-columns-card > .sd-group:not(.is-wide):nth-child(n+2) {
+        border-top: 1px solid var(--color-border);
+    }
+}
+@media (max-width: 640px) {
+    .sd-columns-card {
+        grid-template-columns: 1fr;
+    }
+    .sd-columns-card > .sd-group,
+    .sd-columns-card > .sd-group.is-wide {
+        grid-column: span 1;
+        border-left: none !important;
+    }
+    .sd-columns-card > .sd-group + .sd-group {
+        border-top: 1px solid var(--color-border);
+    }
+    .sd-columns-card > .sd-group.is-wide .sd-rows-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ── On Completion — full-width row below the columns card ── */
+.sd-completion-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 20px;
+    padding: 10px 14px;
+    margin-top: 4px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.015);
+}
+.sd-completion-row > .sd-completion-label {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+    margin-right: 4px;
+}
+.sd-completion-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 20px;
+}
+.sd-completion-toggle {
+    font-size: 11px;
+    color: var(--color-text-primary);
+    cursor: pointer;
+    user-select: none;
+}
+
+/* ── Group block ─────────────────────────────────────────────── */
+.sd-group {
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    margin-bottom: 8px;
+    background: rgba(255, 255, 255, 0.015);
+    overflow: hidden;
+    transition: border-color 0.2s, background 0.2s;
+}
+
+html.light .sd-group {
+    background: rgba(0, 0, 0, 0.015);
+}
+
+.sd-group.is-danger {
+    border-color: var(--color-danger-dim);
+    background: var(--color-danger-dim);
+}
+
+.sd-group.is-danger:hover {
+    border-color: var(--color-danger);
+}
+
+.sd-group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+}
+
+.sd-group-header:not(.is-static):hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+html.light .sd-group-header:not(.is-static):hover {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+/* Static (non-collapsible) group headers — owner: flat list, not dropdowns. */
+.sd-group-header.is-static {
+    cursor: default;
+}
+
+.sd-group.is-danger .sd-group-header {
+    background: var(--color-danger-dim);
+}
+
+.sd-group.is-danger .sd-group-header:hover {
+    background: var(--color-danger-dim);
+}
+
+.sd-group-chevron {
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+    transition: transform 0.2s;
+}
+
+.sd-group.is-collapsed .sd-group-chevron {
+    transform: rotate(-90deg);
+}
+
+.sd-group-icon {
+    color: var(--color-accent);
+    flex-shrink: 0;
+}
+
+.sd-group.is-danger .sd-group-icon {
+    color: var(--color-danger);
+}
+
+.sd-group-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--color-text-primary);
+    flex-grow: 1;
+}
+
+.sd-group.is-danger .sd-group-title {
+    color: var(--color-danger);
+}
+
+.sd-group-count {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--color-text-muted);
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2px 7px;
+    border-radius: 10px;
+    letter-spacing: 0.3px;
+    flex-shrink: 0;
+}
+
+html.light .sd-group-count {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.sd-group.is-danger .sd-group-count {
+    color: var(--color-danger);
+    background: var(--color-danger-dim);
+}
+
+.sd-group-bulk {
+    display: flex;
+    gap: 2px;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+/* ── Group body ──────────────────────────────────────────────── */
+.sd-group-body {
+    border-top: 1px solid var(--color-border);
+    padding: 6px 0;
+}
+
+.sd-group.is-danger .sd-group-body {
+    border-top-color: var(--color-danger-dim);
+}
+
+.sd-group-body-note {
+    padding: 8px 14px;
+    margin: 0 6px 4px 6px;
+    background: var(--color-danger-dim);
+    border-left: 2px solid var(--color-danger);
+    border-radius: 2px;
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    line-height: 1.4;
+}
+
+/* ── Step row ────────────────────────────────────────────────── */
+.sd-row {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    gap: 6px;
+    align-items: center;
+    padding: 4px 12px;
+    cursor: pointer;
+    transition: background 0.12s;
+    border-radius: 2px;
+}
+
+.sd-row:hover {
+    background: rgba(255, 255, 255, 0.025);
+}
+
+html.light .sd-row:hover {
+    background: rgba(0, 0, 0, 0.025);
+}
+
+.sd-row-checkbox {
+    margin-top: 1px;
+    margin-bottom: 0;
+    /* Blueprint Checkbox needs a min height to align with the
+     * label/description block — without this the checkbox sits
+     * 2-3px above the label baseline. */
+    min-height: 18px;
+}
+
+.sd-row-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.sd-row-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    letter-spacing: 0.2px;
+    line-height: 1.2;
+}
+
+.sd-row-label.is-disabled {
+    color: var(--color-text-muted);
+}
+
+.sd-row-desc {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    line-height: 1.35;
+}
+
+/* ── Two-column rows on wide containers ──────────────────────── */
+.sd-rows-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+}
+
+@media (min-width: 720px) {
+    .sd-rows-grid.is-two-col {
+        grid-template-columns: 1fr 1fr;
+        column-gap: 8px;
+    }
+}
+
+/* ── Bulk-action mini-buttons ────────────────────────────────── */
+.sd-bulk-btn.bp6-button.bp6-minimal {
+    min-height: 22px !important;
+    height: 22px !important;
+    min-width: 0 !important;
+    padding: 2px 8px !important;
+    font-family: var(--font-mono);
+    font-size: 9px !important;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border: none !important;
+}
+
+.sd-bulk-btn.bp6-button.bp6-minimal:hover {
+    background: rgba(255, 255, 255, 0.06) !important;
+}
+
+html.light .sd-bulk-btn.bp6-button.bp6-minimal:hover {
+    background: rgba(0, 0, 0, 0.06) !important;
+}
+
+/* ── User-folder shred list ───────────────────────────────────── */
+.sd-shred-folders {
+    margin: 10px 0 14px;
+    padding: 10px 12px;
+    background: var(--color-danger-dim);
+    border: 1px solid var(--color-danger-dim);
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sd-shred-folders-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.sd-shred-folders-icon {
+    color: var(--color-danger);
+    flex-shrink: 0;
+}
+
+.sd-shred-folders-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.sd-shred-folders-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--color-text-primary);
+}
+
+.sd-shred-folders-desc {
+    font-size: 11px;
+    color: var(--color-text-muted);
+    line-height: 1.35;
+}
+
+.sd-shred-folders-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 6px;
+    border-top: 1px solid var(--color-danger-dim);
+}
+
+.sd-shred-folder-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.15);
+}
+
+.sd-shred-folder-icon {
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+}
+
+.sd-shred-folder-path {
+    flex: 1;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+html.light .sd-shred-folder-row {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+/* ── Remove Users & Wipe Data list ────────────────────────────── */
+/* Shares the sd-shred-folders header/wrapper family above; only the
+ * bits specific to the account checklist live here. */
+.sd-remove-users-warning {
+    margin: 0;
+    font-size: 11px;
+    color: var(--color-text-muted);
+    line-height: 1.4;
+}
+
+.sd-remove-users-empty {
+    padding: 6px 2px;
+    font-size: 11px;
+    color: var(--color-text-muted);
+}
+
+.sd-remove-users-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 6px;
+    border-top: 1px solid var(--color-danger-dim);
+}
+
+.sd-remove-users-fullname {
+    margin-left: 6px;
+    font-family: var(--font-sans);
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0;
+    color: var(--color-text-muted);
+}
+
+/* Reboot-to-USB is intentionally a distinct, always-visible card: it is not
+ * a routine checkbox and its USB preparation actions must stay discoverable. */
+.sd-f6-wipe-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+    border-radius: var(--radius-xl);
+    background: color-mix(in srgb, var(--color-danger-dim) 44%, var(--color-bg-secondary));
+}
+
+.sd-f6-wipe-card__header,
+.sd-f6-wipe-card__title,
+.sd-f6-wipe-card__actions,
+.sd-f6-wipe-card__usb-actions {
+    display: flex;
+    align-items: center;
+}
+
+.sd-f6-wipe-card__header {
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.sd-f6-wipe-card__title {
+    gap: 9px;
+    min-width: 0;
+    color: var(--color-danger);
+}
+
+.sd-f6-wipe-card__title h4,
+.sd-f6-wipe-card__warning,
+.sd-f6-wipe-card__gated {
+    margin: 0;
+}
+
+.sd-f6-wipe-card__title h4 {
+    color: var(--color-text-primary);
+    font-size: 13px;
+    line-height: 1.2;
+}
+
+.sd-f6-wipe-card__eyebrow {
+    margin-bottom: 2px;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+}
+
+.sd-f6-wipe-card__status {
+    flex-shrink: 0;
+    padding: 3px 7px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-full);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.sd-f6-wipe-card__status.is-armed {
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+}
+
+.sd-f6-wipe-card__warning,
+.sd-f6-wipe-card__gated {
+    color: var(--color-text-secondary);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.sd-f6-wipe-card__gated {
+    color: var(--color-warning);
+}
+
+.sd-f6-wipe-card__actions {
+    flex-wrap: wrap;
+    gap: 8px 12px;
+}
+
+.sd-f6-wipe-card__usb-actions {
+    gap: 6px;
+    margin-left: auto;
+}
+
+@media (max-width: 720px) {
+    .sd-f6-wipe-card__header,
+    .sd-f6-wipe-card__actions {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .sd-f6-wipe-card__usb-actions {
+        margin-left: 0;
+    }
+}
