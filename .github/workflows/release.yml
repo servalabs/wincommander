@@ -15,18 +15,21 @@ name: release
 # commander-pro repo (see tools/release.ps1). This is the public, secret-free
 # verifiability layer for the Free build only.
 #
-# Triggers on a version tag (v*) or manual dispatch only — it never runs on
-# ordinary pushes, so it cannot interfere with the `invariants` PR checks.
-#
-# TEMPORARY: the tag-push trigger is commented out while the release flow is
-# being tested end-to-end. Manual dispatch only for now — restore the `push:
-# tags` trigger below once testing is done.
+# The local commander-pro release script publishes the signed MSI and R2
+# manifests first. Its version tag then starts this public, secret-free
+# attestation build for the same source revision.
 
 on:
   workflow_dispatch:
-  # push:
-  #   tags:
-  #     - 'v*'
+  push:
+    tags:
+      - "v*"
+
+# Keep duplicate runs for one version tag serialized. The local commander-pro
+# script remains the only authority for updater signing and R2 publication.
+concurrency:
+  group: public-release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write # create/attach a GitHub Release on tag builds
