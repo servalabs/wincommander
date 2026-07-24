@@ -1,0 +1,384 @@
+/* ── AI Security Advisor panel (spec 13 / #10) ─────────────────────── */
+
+.advisor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+/* ── Header + status pill ── */
+.advisor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.advisor-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-primary);
+}
+
+.advisor-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+}
+
+.advisor-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-text-muted);
+}
+
+.advisor-status-pill--ready {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+.advisor-status-pill--ready .advisor-status-dot {
+  background: var(--color-success);
+}
+
+.advisor-status-pill--model-missing,
+.advisor-status-pill--server-down {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+.advisor-status-pill--model-missing .advisor-status-dot,
+.advisor-status-pill--server-down .advisor-status-dot {
+  background: var(--color-warning);
+}
+
+.advisor-status-pill--engine-missing {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+.advisor-status-pill--engine-missing .advisor-status-dot {
+  background: var(--color-danger);
+}
+
+.advisor-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  max-width: 70ch;
+}
+
+/* ── Controls (model picker + actions) ── */
+.advisor-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.advisor-controls-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.advisor-model-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+
+/* ── Model chip grid ── */
+.advisor-model-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.advisor-model-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.advisor-model-chip:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.advisor-model-chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.advisor-model-chip.is-selected {
+  border-color: var(--color-accent);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  box-shadow: inset 3px 0 0 0 var(--color-accent);
+}
+
+.advisor-model-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.advisor-model-chip-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.advisor-model-chip-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.advisor-model-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-bg-primary);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1.4;
+}
+
+.advisor-model-chip-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.advisor-model-chip-size {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.advisor-model-chip-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.advisor-model-chip-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.advisor-model-chip-state.is-installed {
+  color: var(--color-success);
+}
+
+.advisor-controls-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.advisor-refresh-btn,
+.advisor-pull-btn {
+  border-radius: var(--radius-lg) !important;
+}
+
+/* ── Pull progress bar ── */
+.advisor-pull-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.advisor-pull-bar {
+  height: 6px;
+  width: 100%;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.advisor-pull-fill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 250ms ease;
+}
+
+.advisor-pull-fill[data-indeterminate="true"] {
+  width: 35%;
+  animation: advisor-pull-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes advisor-pull-indeterminate {
+  0% { margin-left: -35%; }
+  100% { margin-left: 100%; }
+}
+
+.advisor-pull-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+/* ── Task buttons ── */
+.advisor-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.advisor-task-btn {
+  border-radius: var(--radius-lg) !important;
+}
+
+/* ── Error ── */
+.advisor-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-danger);
+  background: var(--color-danger-dim);
+  color: var(--color-danger);
+  font-size: 13px;
+}
+
+/* ── Result view ── */
+.advisor-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 120px;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+}
+
+.advisor-result-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.advisor-result-loading span {
+  font-family: var(--font-mono);
+}
+
+.advisor-result-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.advisor-result-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+}
+
+.advisor-result-empty {
+  color: var(--color-text-muted);
+  font-size: 14px;
+  font-style: italic;
+}
+
+.advisor-disclaimer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border);
+  font-size: 11px;
+  color: var(--color-warning);
+}
+
+/* ── SafeMarkdown render styles ── */
+.advisor-md {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.advisor-md-h1,
+.advisor-md-h2,
+.advisor-md-h3,
+.advisor-md-h4,
+.advisor-md-h5,
+.advisor-md-h6 {
+  margin: 14px 0 6px;
+  color: var(--color-text-primary);
+  letter-spacing: 0.02em;
+}
+
+.advisor-md-h1 { font-size: 17px; }
+.advisor-md-h2 { font-size: 16px; }
+.advisor-md-h3 { font-size: 15px; }
+
+.advisor-md-p {
+  margin: 6px 0;
+}
+
+.advisor-md-ul,
+.advisor-md-ol {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+
+.advisor-md-ul li,
+.advisor-md-ol li {
+  margin: 3px 0;
+}
+
+.advisor-md-code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.82em;
+  padding: 1px 5px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  color: var(--color-accent);
+}

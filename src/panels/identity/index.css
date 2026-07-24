@@ -1,0 +1,445 @@
+.panel-container {
+                  width: 100%;
+                  animation: fadeIn 0.4s ease-out;
+                  overflow-x: hidden;
+                }
+                
+                @keyframes fadeIn {
+                  from { opacity: 0; transform: translateY(10px); }
+                  to { opacity: 1; transform: translateY(0); }
+                }
+
+                /* Settings split: general/system cards on the left, quick app
+                   controls (Appearance, Censorship, Versions) on the right. */
+                .identity-cols {
+                  display: grid;
+                  grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.92fr);
+                  gap: 18px;
+                  align-items: start;
+                  margin-bottom: 18px;
+                }
+
+                .identity-col-left,
+                .identity-col-right {
+                  display: flex;
+                  flex-direction: column;
+                  /* Bumped from 10px so adjacent SectionCards don't look pressed
+                     against each other (especially the last toggle inside one
+                     card and the SectionCard header below it). */
+                  gap: 18px;
+                }
+
+                .identity-card-grid {
+                  display: grid;
+                  gap: 18px;
+                  align-items: start;
+                  min-width: 0;
+                }
+
+                .identity-card-grid--two {
+                  grid-template-columns: repeat(2, minmax(0, 1fr));
+                }
+
+                .identity-card-grid--compact-row {
+                  align-items: start;
+                  grid-template-columns: repeat(2, minmax(0, 1fr));
+                }
+
+                .identity-col-right .version-management-card,
+                .identity-col-right .section-card {
+                  width: 100%;
+                }
+
+                .identity-censorship-card {
+                  min-height: 0;
+                  padding: 9px 11px 11px !important;
+                }
+
+                .identity-censorship-card .section-header-row {
+                  padding-bottom: 5px;
+                  margin-bottom: 6px;
+                }
+
+                .identity-censorship-card .section-header-text {
+                  font-size: 10px;
+                  letter-spacing: 1.2px;
+                }
+
+                .identity-censorship-card .section-icon {
+                  width: 18px;
+                  height: 18px;
+                  font-size: 13px;
+                }
+
+                .identity-censorship-card .section-content {
+                  gap: 0;
+                }
+
+                @media (max-width: 1024px) {
+                  .identity-cols {
+                    grid-template-columns: 1fr;
+                  }
+
+                  .identity-card-grid--two {
+                    grid-template-columns: 1fr;
+                  }
+                }
+
+                .compact-form {
+                  margin-bottom: 12px !important;
+                }
+
+                .identity-form-grid {
+                  display: grid;
+                  grid-template-columns: repeat(2, minmax(0, 1fr));
+                  gap: 18px 22px;
+                  align-items: start;
+                }
+
+                @media (max-width: 720px) {
+                  .identity-form-grid {
+                    grid-template-columns: 1fr;
+                  }
+                }
+
+                .red-card-stealth {
+                  background-color: rgba(255, 75, 75, 0.02) !important;
+                  border: 1px solid rgba(255, 75, 75, 0.22) !important;
+                  border-radius: 6px !important;
+                  padding: 20px !important;
+                  box-shadow: 0 4px 16px rgba(255, 0, 0, 0.04);
+                }
+
+                .red-card-stealth .bp6-card {
+                  background: transparent !important;
+                  border: none !important;
+                  box-shadow: none !important;
+                  padding: 0 !important;
+                }
+
+                .compact-form label {
+                  margin-bottom: 6px !important;
+                  font-size: 10px;
+                  text-transform: uppercase;
+                  letter-spacing: 0.1em;
+                  color: var(--color-text-muted);
+                }
+
+                .compact-form .bp6-input,
+                .compact-form .bp6-input-group input {
+                  min-height: 34px;
+                  border-radius: 6px !important;
+                }
+
+                .identity-helper-text {
+                  max-width: 680px;
+                  color: var(--color-text-muted);
+                  font-size: 11px;
+                  line-height: 1.45;
+                }
+
+                .hidden-panel-grid {
+                  display: grid;
+                  grid-template-columns: repeat(2, minmax(0, 1fr));
+                  gap: 8px;
+                }
+
+                .hidden-panel-grid--spaced {
+                  gap: 12px;
+                }
+
+                @media (max-width: 560px) {
+                  .hidden-panel-grid {
+                    grid-template-columns: 1fr;
+                  }
+                }
+
+                .hidden-panel-toggle {
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                  min-height: 36px;
+                  padding: 8px 10px;
+                  border: 1px solid var(--color-border);
+                  border-radius: 6px;
+                  background: var(--color-bg-tertiary);
+                  color: var(--color-text-muted);
+                  cursor: pointer;
+                  font-family: var(--font-mono);
+                  font-size: 10px;
+                  font-weight: 700;
+                  letter-spacing: 0.06em;
+                  text-align: left;
+                  text-transform: uppercase;
+                  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease, opacity 0.16s ease;
+                  opacity: 0.72;
+                }
+
+                .hidden-panel-toggle:hover {
+                  border-color: var(--color-border-light);
+                  color: var(--color-text-secondary);
+                  opacity: 0.95;
+                }
+
+                .hidden-panel-toggle.on {
+                  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+                  background: color-mix(in srgb, var(--accent) 7%, transparent);
+                  color: var(--color-text-primary);
+                  opacity: 1;
+                }
+
+                .wc-hide-block {
+                  display: flex;
+                  flex-direction: column;
+                }
+
+                .identity-hide-stack {
+                  margin-bottom: 12px;
+                }
+
+                .wc-hide-block .hidden-panel-toggle {
+                  border-radius: 6px 6px 0 0;
+                }
+
+                .wc-hotkey-row {
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                  padding: 6px 10px 6px 12px;
+                  border: 1px solid var(--color-border);
+                  border-top: none;
+                  border-radius: 0 0 6px 6px;
+                  background: var(--color-bg-tertiary);
+                  opacity: 0.85;
+                }
+
+                .wc-hotkey-row-label {
+                  font-family: var(--font-mono);
+                  font-size: 9px;
+                  font-weight: 600;
+                  letter-spacing: 0.06em;
+                  text-transform: uppercase;
+                  color: var(--color-text-muted);
+                  flex: 1;
+                }
+
+                .wc-hotkey-badge {
+                  font-family: var(--font-mono);
+                  font-size: 10px;
+                  font-weight: 700;
+                  padding: 2px 8px;
+                  border: 1px solid var(--color-border-light);
+                  border-radius: 4px;
+                  background: var(--color-bg-secondary);
+                  color: var(--color-text-secondary);
+                  cursor: pointer;
+                  white-space: nowrap;
+                  transition: border-color 0.12s ease, color 0.12s ease;
+                }
+
+                .wc-hotkey-badge:hover {
+                  border-color: rgba(255, 75, 75, 0.5);
+                  color: var(--color-text-primary);
+                }
+
+                .wc-hotkey-input {
+                  font-family: var(--font-mono);
+                  font-size: 10px;
+                  font-weight: 700;
+                  padding: 2px 8px;
+                  border: 1px solid rgba(255, 75, 75, 0.5);
+                  border-radius: 4px;
+                  background: rgba(255, 75, 75, 0.07);
+                  color: var(--color-danger);
+                  outline: none;
+                  width: 120px;
+                  text-align: center;
+                }
+
+                .dev-option-stack {
+                  display: flex;
+                  flex-direction: column;
+                  gap: 12px;
+                }
+
+                .dev-option-card {
+                  overflow: hidden;
+                  border: 1px solid var(--color-border);
+                  border-radius: 6px;
+                  background: rgba(255, 255, 255, 0.015);
+                }
+
+                .dev-option-header {
+                  display: flex;
+                  align-items: center;
+                  gap: 8px;
+                  padding: 8px 12px;
+                  border-bottom: 1px solid var(--color-border);
+                  background: var(--color-bg-tertiary);
+                  color: var(--color-text-muted);
+                  font-family: var(--font-mono);
+                  font-size: 10px;
+                  font-weight: 800;
+                  letter-spacing: 0.12em;
+                  text-transform: uppercase;
+                }
+
+                .dev-option-body {
+                  padding: 4px 12px 6px;
+                }
+
+                .identity-full-action {
+                  width: 100%;
+                  margin-top: 10px;
+                  justify-content: center;
+                }
+
+                /* Censorship protection row — moved here from the Network DNS
+                   card (2026-07). Same layout/tokens as the card it came from. */
+                .dns-censorship-row {
+                  display: flex;
+                  align-items: flex-start;
+                  gap: 8px;
+                  min-height: 48px;
+                  padding: 7px 9px;
+                  border-radius: var(--radius-lg);
+                  background: var(--color-bg-secondary);
+                  border: 1px solid var(--color-border);
+                }
+
+                .dns-censorship-row__icon {
+                  color: var(--color-text-muted);
+                  flex-shrink: 0;
+                  transition: color 0.15s ease;
+                }
+
+                .dns-censorship-row__icon--on {
+                  color: var(--color-success);
+                }
+
+                .dns-censorship-row__text {
+                  flex: 1;
+                  min-width: 0;
+                }
+
+                .dns-censorship-row__title {
+                  font-family: var(--font-mono);
+                  font-size: 10px;
+                  font-weight: 700;
+                  letter-spacing: 0.5px;
+                  color: var(--color-text-primary);
+                  text-transform: uppercase;
+                }
+
+                .dns-censorship-row__desc {
+                  font-size: 10.5px;
+                  color: var(--color-text-secondary);
+                  line-height: 1.35;
+                  margin-top: 2px;
+                  white-space: normal;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  display: -webkit-box;
+                  -webkit-line-clamp: 2;
+                  line-clamp: 2;
+                  -webkit-box-orient: vertical;
+                }
+
+                .identity-censorship-card .dns-censorship-row__desc {
+                  display: -webkit-box;
+                }
+
+                .auto-apply-pill {
+                  font-family: var(--font-mono);
+                  font-size: 8px;
+                  font-weight: 700;
+                  letter-spacing: 0.5px;
+                  padding: 1px 6px;
+                  border-radius: var(--radius-sm);
+                  white-space: nowrap;
+                  transition: opacity 0.2s ease;
+                }
+
+                .auto-apply-pill--pending {
+                  background: color-mix(in srgb, var(--color-warning) 15%, transparent);
+                  color: var(--color-warning);
+                  border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
+                }
+
+                .auto-apply-pill--applying {
+                  background: color-mix(in srgb, var(--color-info) 15%, transparent);
+                  color: var(--color-info);
+                  border: 1px solid color-mix(in srgb, var(--color-info) 40%, transparent);
+                }
+
+                .auto-apply-pill--applied {
+                  background: color-mix(in srgb, var(--color-success) 15%, transparent);
+                  color: var(--color-success);
+                  border: 1px solid color-mix(in srgb, var(--color-success) 40%, transparent);
+                }
+
+                .decoy-mode-section {
+                  display: flex;
+                  flex-direction: column;
+                  gap: 14px;
+                }
+
+                .decoy-mode-section__borrowed {
+                  margin-top: 0 !important;
+                }
+                
+                .section-subtitle {
+                    font-family: var(--font-mono);
+                    font-size: 10px;
+                    font-weight: 700;
+                    color: var(--color-accent);
+                    letter-spacing: 0.15em;
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                    padding-bottom: 8px;
+                    border-bottom: 1px solid color-mix(in srgb, var(--accent) 10%, transparent);
+                    opacity: 0.8;
+                }
+
+                .card-divider {
+                    height: 1px;
+                    background: linear-gradient(90deg, var(--color-border) 0%, transparent 100%);
+                    width: 100%;
+                }
+
+                .compact-action-btn {
+                    background: color-mix(in srgb, var(--accent) 5%, transparent) !important;
+                    border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent) !important;
+                    color: var(--color-accent) !important;
+                    font-family: var(--font-mono) !important;
+                    text-transform: uppercase !important;
+                    font-size: 10px !important;
+                    letter-spacing: 1px !important;
+                    padding: 4px 12px !important;
+                    min-height: 28px !important;
+                    border-radius: 6px !important;
+                }
+                .compact-action-btn:hover {
+                    background: color-mix(in srgb, var(--accent) 15%, transparent) !important;
+                    border-color: var(--color-accent) !important;
+                }
+
+                /* ════════════════════════════════════════════════════════
+                   Daylight (light) overrides. The stealth/red danger cards
+                   use ~2% red tints tuned for a black field — on white they
+                   read as plain white. Strengthen the tint + border, and flip
+                   the white-baked dev-option card fill to a faint black.
+                   ════════════════════════════════════════════════════════ */
+
+                html.light .red-card-stealth {
+                  background-color: color-mix(in srgb, var(--color-danger) 6%, transparent) !important;
+                  border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent) !important;
+                  box-shadow: 0 4px 16px color-mix(in srgb, var(--color-danger) 8%, transparent);
+                }
+
+                html.light .dev-option-card {
+                  background: rgba(0, 0, 0, 0.015);
+                }
+
+

@@ -1,0 +1,87 @@
+# cargo-deny configuration — WI-4 of the SSOT Foundation spec.
+#
+# Purpose: prove the AV-clean Free binary (and the shared crate it links) never
+# pull in a copyleft or commercial-licensed *dependency*. Run by the `license-gate`
+# CI job: `cargo deny --manifest-path commander-free/Cargo.toml check licenses`.
+#
+# The model is allow-list only: any SPDX license NOT in `allow` fails the check.
+# First-party crates are all AGPL-3.0-or-later (see allow list below) — GPL-* /
+# LGPL-* / BUSL-1.1 and any other copyleft/commercial third-party dependency
+# license are absent from the list, so they fail by construction — which is
+# the whole point.
+#
+# [advisories] added for the nation-state supply-chain review (natsec P1): this
+# workspace had NO [advisories] section, so `cargo deny check advisories` was
+# never gating the build at all. cargo-deny 0.19's advisories check is
+# blocking-by-default once the section exists — RUSTSEC vulnerabilities and
+# unmaintained-crate advisories both fail `check advisories` (no separate
+# per-severity toggle exists in this schema; `unmaintained` below is a scope,
+# not a lint level — "workspace" also walks transitive deps of workspace
+# members, which is what we want). `yanked` explicitly set to deny.
+#
+# Known findings as of 2026-07 (not a config bug — real, currently-unfixed
+# upstream issues; see USER-TASKS.md for the owner follow-up to track/patch):
+#   - RUSTSEC-2026-0119 (hickory-proto, DoS via name-compression O(n^2))
+#   - RUSTSEC-2026-0098/0099/0104 (rustls-webpki 0.101.7, cert-validation bugs)
+#   - RUSTSEC-2026-0194/0195 (quick-xml, DoS via attribute/namespace parsing)
+#   - RUSTSEC-2025-0098/0100/0080/0081/0075 (unic-ucd-*/unic-char-* unmaintained,
+#     via tauri-utils -> urlpattern; no safe upgrade upstream yet)
+#   - RUSTSEC-2024-0384 (instant unmaintained, via wincmd-search's tantivy)
+#   - RUSTSEC-2024-0370 (proc-macro-error unmaintained, via gtk-rs linux tray deps)
+#   - RUSTSEC-2024-0411..0420 (gtk-rs GTK3 bindings unmaintained, linux tray icon)
+#   - RUSTSEC-2025-0134 (rustls-pemfile unmaintained, via hickory-proto)
+#   - RUSTSEC-2026-0192 (ttf-parser unmaintained, dev-dep of wincmd-search)
+[advisories]
+version = 2
+unmaintained = "workspace"
+yanked = "deny"
+ignore = [
+    # rustls-webpki 0.101.7 — known, unfixed upstream. Transitive via
+    # hickory-proto/hickory-resolver -> reqwest -> tauri (DNS resolution
+    # path); no safe upgrade available without bumping rustls 0.21 -> 0.2x
+    # across the tauri/reqwest dependency chain. See deny.toml header above
+    # for the full known-findings list.
+    "RUSTSEC-2026-0098", # Name constraints for URI names were incorrectly accepted
+    "RUSTSEC-2026-0099", # Name constraints accepted for certs asserting a wildcard name
+    "RUSTSEC-2026-0104", # Reachable panic in certificate revocation list parsing
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    # First-party crates (commander-free, wincmd-shared, fleet-proto,
+    # fleet-agent-core, wci-verify, wincmd-search, commander-svc) are all
+    # AGPL-3.0-or-later. Both identifiers allow-listed for safety in case
+    # a crate's Cargo.toml still resolves to the shorter SPDX form.
+    "AGPL-3.0-or-later",
+    "AGPL-3.0",
+    # Third-party dependency licenses — do not remove, deps need these.
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    # webpki-root-certs (transitive via reqwest/tauri) ships CDLA-Permissive-2.0
+    # — a permissive data license; safe to allow for a dependency.
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+    "CC0-1.0",
+    "OpenSSL",
+]
+exceptions = []
+
+[bans]
+# Multiple-version warnings are informational here; the license allow-list above
+# is the enforcing gate for this job.
+multiple-versions = "allow"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

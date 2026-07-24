@@ -1,0 +1,501 @@
+/* ════════════════════════════════════════════════════════════════════
+   WinCommander V2 theme layer  (P0 — V2 frontend migration)
+
+   Loaded AFTER index.css so it overrides the legacy "Vault 007 / cyan"
+   palette at runtime. The legacy --color-* / --radius-* names are
+   REPAINTED to V2 values (so the whole app inherits the V2 look during
+   the incremental migration); V2-native tokens (--surface, --accent,
+   --r …) are added for the shadcn/ui component layer in src/components/ui/.
+
+     Default (dark) theme = "Anduril"  — warm-orange tactical console.
+     Light theme          = "Daylight" — calm paper, teal-green accent.
+
+   Palantir (blue) + Vault (gold) can be added later as extra
+   html[data-theme="…"] blocks for ~free.
+
+   Remove at P5 once index.css is rewritten natively.
+   Spec: docs/superpowers/specs/2026-06-09-v2-frontend-migration-design.md
+   ════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── V2 raw palette — Anduril (dark, default) ── */
+  --bg: #0a0a0a;
+  /* Orange-on-BLACK (not brown): neutral-dark surfaces + a faint orange
+     glow on a black field, instead of the warm-brown #241608 gradient. */
+  --bg-grad: radial-gradient(120% 90% at 80% -10%, rgba(255, 122, 26, 0.10) 0%, #0b0b0b 44%, #050505 100%);
+  --surface: #121212;
+  --surface-2: #1a1a1a;
+  --surface-3: #232323;
+  --border: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text: #f3f2f0;
+  --text-dim: #aeaca8;
+  --text-mute: #76746f;
+  --accent: #ff7a1a;
+  --accent-2: #ffa24d;
+  --accent-soft: rgba(255, 122, 26, 0.14);
+  --accent-line: rgba(255, 162, 77, 0.45);
+  --accent-contrast: #170a02;
+  --switch-off-bg: var(--surface-3);
+  --switch-off-border: var(--border-strong);
+  --switch-off-thumb: var(--text-mute);
+  --ok: #79c98f;
+  --warn: #f5b454;
+  --danger: #ff5a45;
+  --glow: rgba(255, 122, 26, 0.30);
+  --scan: rgba(255, 162, 77, 0.06);
+  --shadow: 0 18px 48px -22px rgba(0, 0, 0, 0.85);
+
+  /* ── Structural (theme-independent) ── */
+  --r-sm: 4px;
+  --r: 6px;
+  --r-lg: 10px;
+  --r-pill: 999px;
+  --gap: 16px;
+  --pad: 22px;
+  --row-h: 60px;
+  --panel-pad: 40px;
+  --motion: 1;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --t-fast: calc(120ms * var(--motion));
+  --t: calc(260ms * var(--motion));
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+
+  /* ── Legacy --color-* repainted to Anduril (kept until P5) ── */
+  --color-bg-primary: var(--bg);
+  --color-bg-secondary: var(--surface);
+  --color-bg-tertiary: var(--surface-2);
+  --color-bg-card: var(--surface);
+  --color-bg-elevated: var(--surface-2);
+  --color-border: var(--border);
+  --color-border-light: var(--border-strong);
+  --color-border-accent: var(--accent-line);
+  --color-text-primary: var(--text);
+  --color-text-secondary: var(--text-dim);
+  --color-text-muted: var(--text-mute);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-2);
+  --color-accent-dim: var(--accent-soft);
+  --color-accent-subtle: rgba(255, 122, 26, 0.08);
+  --color-accent-primary: var(--accent);
+  --color-success: var(--ok);
+  --color-success-dim: rgba(121, 201, 143, 0.15);
+  --color-warning: var(--warn);
+  --color-warning-dim: rgba(245, 180, 84, 0.15);
+  --color-danger: var(--danger);
+  --color-danger-dim: rgba(255, 90, 69, 0.15);
+  --color-error: var(--danger);
+  --color-info: #6fb0e6;
+  --color-info-dim: rgba(111, 176, 230, 0.15);
+  --color-domain-privacy: rgba(111, 176, 230, 0.05);
+  --color-domain-security: rgba(255, 90, 69, 0.05);
+  --color-domain-network: rgba(121, 201, 143, 0.05);
+  --color-domain-tweaks: rgba(245, 180, 84, 0.05);
+  --color-domain-identity: rgba(203, 162, 76, 0.06);
+
+  /* ── Legacy radius repainted to the (rounder) V2 scale ── */
+  --radius-sm: var(--r-sm);   /* 5px — badges/chips/tiles */
+  --radius-md: 6px;           /* inputs/small controls */
+  --radius-lg: var(--r);      /* 8px — buttons/rows */
+  --radius-xl: var(--r-lg);   /* 12px — cards/dialogs/panels */
+  --radius-full: var(--r-pill);
+
+  /* ── Fonts repainted to the V2 families ── */
+  --font-sans: var(--font-ui);
+  --font-mono: "IBM Plex Mono", ui-monospace, "JetBrains Mono", monospace;
+
+  /* ── Privacy Shield repainted warm ── */
+  --shield-bg-running: linear-gradient(160deg, rgba(255, 122, 26, 0.14) 0%, rgba(80, 40, 8, 0.30) 100%);
+  --shield-bg-idle: linear-gradient(160deg, rgba(30, 26, 22, 0.5) 0%, rgba(20, 18, 16, 0.7) 100%);
+  --shield-border-running: 1px solid rgba(255, 162, 77, 0.35);
+  --shield-border-idle: 1px solid rgba(255, 255, 255, 0.10);
+  --shield-shadow-running: 0 8px 32px -8px rgba(255, 122, 26, 0.25);
+  --shield-shadow-idle: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shield-inner-bg: rgba(0, 0, 0, 0.3);
+  --shield-inner-border: rgba(255, 255, 255, 0.06);
+  --shield-text-primary: rgba(242, 236, 225, 0.92);
+  --shield-text-subtle: rgba(242, 236, 225, 0.6);
+  --shield-text-muted: rgba(242, 236, 225, 0.4);
+
+  color-scheme: dark;
+}
+
+/* ── Daylight (light): override the V2 raw tokens; legacy aliases follow ── */
+html.light {
+  --bg: #e9ece7;
+  --bg-grad: radial-gradient(120% 90% at 80% -10%, #f3f5f0 0%, #e9ece7 50%, #e2e6df 100%);
+  --surface: #fbfcfa;
+  --surface-2: #f2f6ef;
+  --surface-3: #e4ebe0;
+  --border: rgba(28, 42, 34, 0.24);
+  --border-strong: rgba(28, 42, 34, 0.36);
+  --text: #18221d;
+  --text-dim: #404a43;
+  /* Daylight muted text was #8a948b (~3:1 on white — failed WCAG AA).
+     Darkened to ~4.7:1 so muted labels/sub-text stay readable on white
+     cards while still reading as visibly dimmer than --text-dim. */
+  --text-mute: #6b766d;
+  --accent: #059669;
+  --accent-2: #10b981;
+  --accent-soft: rgba(5, 150, 105, 0.10);
+  --accent-line: rgba(5, 150, 105, 0.40);
+  --accent-contrast: #ffffff;
+  --switch-off-bg: #cbd5e1;
+  --switch-off-border: rgba(15, 23, 42, 0.28);
+  --switch-off-thumb: #ffffff;
+  --ok: #059669;
+  --warn: #b9802a;
+  --danger: #c8423a;
+  --glow: rgba(5, 150, 105, 0.20);
+  --scan: rgba(5, 150, 105, 0.04);
+  --shadow: 0 16px 40px -24px rgba(28, 42, 34, 0.32);
+
+  /* Authoritative muted alias for the legacy --color-* consumers (this V2
+     layer loads after index.css, so this wins over index.css's html.light). */
+  --color-text-muted: var(--text-mute);
+  --color-accent-subtle: rgba(5, 150, 105, 0.07);
+  --color-success-dim: rgba(5, 150, 105, 0.14);
+  --color-warning-dim: rgba(185, 128, 42, 0.14);
+  --color-danger-dim: rgba(200, 66, 58, 0.14);
+  --color-info: #059669;
+  --color-info-dim: rgba(5, 150, 105, 0.14);
+  --color-domain-privacy: rgba(5, 150, 105, 0.07);
+  --color-domain-security: rgba(200, 66, 58, 0.07);
+  --color-domain-network: rgba(5, 150, 105, 0.07);
+  --color-domain-tweaks: rgba(185, 128, 42, 0.07);
+  --color-domain-identity: rgba(147, 51, 234, 0.07);
+
+  --shield-bg-running: linear-gradient(160deg, rgba(5, 150, 105, 0.10) 0%, rgba(255, 255, 255, 0.85) 100%);
+  --shield-bg-idle: linear-gradient(160deg, #f5f7f2 0%, #e2e6df 100%);
+  --shield-border-idle: 1px solid #d6ddd3;
+  --shield-shadow-idle: 0 4px 12px rgba(0, 0, 0, 0.05);
+  --shield-inner-bg: rgba(255, 255, 255, 0.5);
+  --shield-inner-border: rgba(0, 0, 0, 0.05);
+  --shield-text-primary: #18221d;
+  --shield-text-subtle: #404a43;
+  --shield-text-muted: #6b766d;
+
+  color-scheme: light;
+}
+
+/* ── Ambient backdrop: the signature V2 glassy radial gradient.
+   Skip the transparent search-overlay window (it must stay see-through). ── */
+html:not(.search-overlay-window) body {
+  background-color: var(--bg);
+  background-image: var(--bg-grad);
+  background-attachment: fixed;
+  font-family: var(--font-ui);
+}
+
+/* ── Ambient scanline overlay on the main content stage (CRT/HUD texture).
+   Subtle (--scan ~6% alpha), pointer-transparent, gated by --motion so the
+   Appearance drawer's motion toggle disables it. ── */
+html:not(.search-overlay-window) .app-content::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  /* Behind the panel content (which is positioned relative, so it paints
+     above this z-index:0 pseudo). Was z-index:3 — that painted the scanline
+     OVER the cards. */
+  z-index: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent 0 3px, var(--scan) 3px 4px);
+  opacity: calc(0.6 * var(--motion));
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   V2 compat styling for residual Blueprint class names still emitted in
+   markup (cleanup + vault tables, setup inputs, panel-search
+   results, runtime-visibility readouts). Blueprint's own stylesheet is
+   gone, so without this these surfaces render UNSTYLED. Tracked for
+   incremental conversion to the ui/* components; until then they read
+   as proper V2 surfaces. (.bp6-heading + .wc-dialog .bp6-* are styled
+   in index.css and left as-is.)
+   ════════════════════════════════════════════════════════════════════ */
+.wc-muted {
+  color: var(--color-text-muted);
+}
+
+.wc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.wc-table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.wc-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.wc-table--striped tbody tr:nth-child(odd) {
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+.wc-input {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.wc-input:focus {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 1px var(--accent-line), 0 0 16px -3px var(--glow);
+}
+
+.wc-input::placeholder {
+  color: var(--text-mute);
+}
+
+.wc-menu-header {
+  padding: 6px 8px;
+  color: var(--text-mute);
+}
+
+/* Dialog body/footer for surfaces that render the class names directly rather
+   than the DialogBody/DialogFooter
+   components. Blueprint's Classes.DIALOG_* resolve to "" in the compat shim,
+   so these elements were left UNSTYLED post-migration — these defaults restore
+   padding + a right-aligned, bordered footer. Per-dialog CSS and inline styles
+   are more specific and still win. */
+.wc-dialog-body {
+  padding: 16px 20px;
+}
+
+.wc-dialog-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.wc-dialog-footer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   V2 reference micro-animation library.
+   Ports the signature live motion from ref/WinCommander (standalone)_V2.html
+   — the small "novelty" cues that make the UI feel alive: blinking status
+   dots, an indeterminate scan sweep, a one-shot pop on freshly-actioned
+   rows, and a gentle breathing metric bar.
+
+   These are the SHARED utilities (one keyframe, many call sites). Area-
+   specific motion lives with its component:
+     · radar  → SovereigntyRadar.css  (node-pop / ping / ringspin / fixed-pop)
+     · panel  → App.tsx               (panel-in slide via framer-motion)
+     · dialog → ui/dialog.tsx         (scrim-in / modal-in)
+
+   All cadence is scaled by --motion (Appearance drawer motion toggle) and
+   fully disabled under prefers-reduced-motion.
+   ════════════════════════════════════════════════════════════════════ */
+
+@keyframes wc-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@keyframes wc-scan {
+  0% { margin-left: -40%; }
+  100% { margin-left: 100%; }
+}
+
+@keyframes wc-app-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.015); }
+  100% { transform: scale(1); }
+}
+
+@keyframes wc-cpu-breathe {
+  0%, 100% { transform: scaleX(0.965); }
+  50% { transform: scaleX(1); }
+}
+
+/* Blinking live/status dot. Default = calm "ok" cadence; --armed = faster
+   for an active/danger state (matches the reference's .live vs .armed dots). */
+.wc-blink {
+  animation: wc-blink calc(2200ms * var(--motion)) infinite;
+}
+
+.wc-blink--armed {
+  animation-duration: calc(1400ms * var(--motion));
+}
+
+/* Indeterminate scan sweep. Markup: <div class="wc-scan-bar"><i /></div> */
+.wc-scan-bar {
+  overflow: hidden;
+}
+
+.wc-scan-bar > i {
+  display: block;
+  height: 100%;
+  width: 40%;
+  border-radius: var(--r-pill, 999px);
+  background: var(--accent-2, var(--accent));
+  animation: wc-scan calc(1.4s / var(--motion, 1)) var(--ease) infinite;
+}
+
+/* One-shot pop when a row just became active/installed. */
+.wc-app-pop {
+  animation: wc-app-pop calc(400ms * var(--motion)) var(--ease);
+}
+
+/* Gentle live breathing for a DECORATIVE metric bar (anchored at its left
+   edge so it reads as a pulse, not a value change — never apply to a bar
+   whose width encodes real data). */
+.wc-cpu-breathe {
+  transform-origin: left center;
+  animation: wc-cpu-breathe calc(3.6s / var(--motion, 1)) var(--ease) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:not(.wc-motion-enabled) .wc-blink,
+  html:not(.wc-motion-enabled) .wc-scan-bar > i,
+  html:not(.wc-motion-enabled) .wc-app-pop,
+  html:not(.wc-motion-enabled) .wc-cpu-breathe,
+  html:not(.wc-motion-enabled) .wc-status-ping::after,
+  html:not(.wc-motion-enabled) .wc-collapsible-content {
+    animation: none !important;
+  }
+}
+
+/* ── Success sweep ───────────────────────────────────────────────────────────
+   Green wash that sweeps L→R across a row/card to confirm task completion.
+   Apply .wc-success-sweep to any element with position:relative + overflow:hidden.
+   The ::after pseudo carries the fill so no extra DOM nodes are needed.
+   Caller opts in explicitly — this never auto-fires. ── */
+@keyframes wc-success-sweep {
+  0%   { transform: scaleX(0); opacity: 0.9; }
+  70%  { transform: scaleX(1); opacity: 0.7; }
+  100% { transform: scaleX(1); opacity: 0;   }
+}
+
+.wc-success-sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--ok);
+  transform-origin: left center;
+  pointer-events: none;
+  /* Forwards: leave at opacity:0 so the element doesn't flicker back. */
+  animation: wc-success-sweep var(--dur-slow, 300ms) var(--ease) forwards;
+}
+
+/* ── Compositing fix ─────────────────────────────────────────────────────────
+   Prevents Tauri's WKWebView/WebView2 corner-bleed on scale transforms
+   (ref: SovereigntyRing pattern). Add to any framer-motion wrapper that
+   applies scale. isolation:isolate creates a new stacking context; will-change
+   hints the compositor to promote the layer. ── */
+.gpu-clip {
+  isolation: isolate;
+  will-change: transform;
+}
+
+/* ── Reduced-motion: collapse shared utility animations ─────────────────────
+   Consolidated block — applies to the full wc-no-motion class path (set by
+   AppShell from localStorage, or by useMotionPreference when posture is
+   low-profile). The .wc-anim-essential carve-out lets essential loaders
+   (spinners, indeterminate progress) keep running even under this block. ── */
+html.wc-no-motion *:not(.wc-anim-essential) {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* Revert restores the cascade value (the element's own declarations) rather
+   than UA default — so essential loaders re-enable their own keyframes. */
+html.wc-no-motion .wc-anim-essential,
+html.wc-no-motion .wc-anim-essential * {
+  animation-duration: revert !important;
+  transition-duration: revert !important;
+}
+
+/* ── Duration tokens ─────────────────────────────────────────────────────────
+   CSS counterparts to the DURATION scale in motion.ts.  Used by .wc-success-sweep
+   and any future CSS-only animations that need a named cadence. ── */
+:root {
+  --dur-instant:   100ms;
+  --dur-fast:      150ms;
+  --dur-normal:    200ms;
+  --dur-slow:      300ms;
+  --dur-celebrate: 500ms;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Interaction polish layer (2026-06).
+   High-craft micro-interactions for the shared component surface. Every
+   utility here is COSMETIC, token-driven (no hardcoded hex), --motion-
+   scaled, and collapses to instant under the wc-no-motion / reduced-motion
+   blocks above. Nothing fakes interactivity on a static element — these are
+   opt-in from genuinely clickable / live surfaces only.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Live status ping — a soft expanding halo behind a status dot, for
+   states that are actively "on watch" (armed monitors, live capture). The
+   ring is drawn on ::after (currentColor) so no extra DOM node is needed;
+   the host element must set `color` to the dot's tone. ── */
+@keyframes wc-status-ping {
+  0%   { transform: scale(1);   opacity: 0.55; }
+  70%  { transform: scale(2.4); opacity: 0;    }
+  100% { transform: scale(2.4); opacity: 0;    }
+}
+
+.wc-status-ping {
+  position: relative;
+}
+
+.wc-status-ping::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-pill, 999px);
+  background: currentColor;
+  transform-origin: center;
+  pointer-events: none;
+  animation: wc-status-ping calc(1800ms * var(--motion, 1)) var(--ease) infinite;
+}
+
+/* ── Collapsible (Radix) height reveal — the one previously un-animated
+   primitive. Mirrors the accordion treatment but reads the collapsible
+   CSS var. fill-mode forwards holds height:0 after close so content
+   doesn't flash back before Radix unmounts it. ── */
+@keyframes wc-collapsible-down {
+  from { height: 0; opacity: 0; }
+  to   { height: var(--radix-collapsible-content-height); opacity: 1; }
+}
+
+@keyframes wc-collapsible-up {
+  from { height: var(--radix-collapsible-content-height); opacity: 1; }
+  to   { height: 0; opacity: 0; }
+}
+
+.wc-collapsible-content {
+  overflow: hidden;
+}
+
+.wc-collapsible-content[data-state="open"] {
+  animation: wc-collapsible-down var(--dur-normal, 200ms) var(--ease);
+}
+
+.wc-collapsible-content[data-state="closed"] {
+  animation: wc-collapsible-up var(--dur-fast, 150ms) var(--ease) forwards;
+}

@@ -1,0 +1,27 @@
+.crypto-erase-section { display: flex; flex-direction: column; gap: 10px; }
+.crypto-erase-header { display: flex; align-items: center; gap: 8px; }
+.crypto-erase-header h3 { margin: 0; }
+.crypto-erase-list { display: flex; flex-direction: column; gap: 6px; }
+.crypto-erase-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 10px; border: 1px solid var(--color-border, currentColor);
+  border-radius: var(--radius-lg, 6px); background: var(--color-surface, transparent);
+}
+.crypto-erase-row.is-ineligible { opacity: 0.55; }
+.crypto-erase-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.crypto-erase-row-label { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.crypto-erase-row-reason { font-size: 12px; opacity: 0.8; }
+.crypto-erase-receipt { font-size: 12px; }
+.crypto-erase-receipt--erased { color: var(--color-success, currentColor); }
+.crypto-erase-receipt--erased_with_caveat { color: var(--color-warning, currentColor); }
+.crypto-erase-receipt--failed { color: var(--color-danger, currentColor); }
+.crypto-erase-badge {
+  font-size: 10px; text-transform: uppercase; padding: 1px 6px;
+  border-radius: var(--radius-sm, 2px); border: 1px solid currentColor;
+}
+.crypto-erase-badge--os { color: var(--color-danger, currentColor); }
+.crypto-erase-badge--escrow { color: var(--color-warning, currentColor); }
+.crypto-erase-empty { padding: 16px; text-align: center; opacity: 0.75; }
+.crypto-erase-confirm { display: flex; flex-direction: column; gap: 12px; }
+.crypto-erase-warn { margin: 0; }
+.crypto-erase-warn--nuclear { color: var(--color-danger, currentColor); font-weight: 600; }

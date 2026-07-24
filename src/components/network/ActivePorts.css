@@ -1,0 +1,67 @@
+/* Active Ports — filter bar directly under the section heading, plus a
+   consistent WCSwitch-based toggle row (2026-07 redesign). */
+
+.active-ports-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.active-ports-filter-bar__label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+}
+
+.active-ports-search {
+    flex: 1;
+    min-width: 220px;
+}
+
+.active-ports-toggle-bar {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-secondary);
+}
+
+.active-ports-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.3px;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    border-radius: var(--radius-md);
+}
+
+.active-ports-toggle:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+.active-ports-table {
+    font-size: 12px;
+}
+
+.active-ports-table thead th {
+    padding: 8px 8px !important;
+    color: var(--color-text-primary);
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 0.9px;
+    text-transform: uppercase;
+    background: var(--color-bg-elevated);
+    border-bottom: 1px solid var(--color-border-light);
+}

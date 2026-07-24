@@ -1,0 +1,337 @@
+// src/panels/privacy/DriverHealthSection.tsx
+//
+// "Device & Driver Health" — a read-only check that answers the question a
+// user would otherwise open Device Manager for: is anything missing a driver
+// or malfunctioning? It enumerates PnP devices in the Pro sidecar
+// (`Get-DriverHealth`), surfaces only the unhealthy set, maps the raw
+// Device-Manager problem code to plain-English text + severity, and lists
+// them sorted critical → warning → info.
+//
+// Conservative false-positive posture: user-disabled (code 22) and
+// not-connected (code 45) devices are `info` — shown but visually muted,
+// excluded from the headline problem count, and never toasted.
+//
+// The optional "Watch" switch (expert density only) starts a low-frequency
+// re-scan in the sidecar that fires a native toast the first time a NEW
+// critical device appears. The toggle persists in settings so
+// BackgroundPollers can auto-start it at launch.
+//
+// Re-homed 2026-06-09 from the retired Intelligence panel into Privacy ▸
+// Alerts & Monitoring (redesign IA-02 "Device health"). The only change from
+// the original is that the expert gate now comes in as an `isAdvanced` prop
+// from the parent's density resolver instead of the removed
+// `app.experienceLevel` field.
+
+import { useCallback, useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { Button, Spinner, Switch, Tag } from '@/components/ui/bp';
+import type { Intent } from '@/components/ui/bp';
+import SectionCard from '../../components/shared/SectionCard';
+import { useAppState } from '../../context/AppContext';
+import './DriverHealthSection.css';
+
+type Severity = 'critical' | 'warning' | 'info';
+
+interface DriverProblem {
+  name: string;
+  class: string;
+  status: string;
+  problemCode: number | null;
+  problemText: string;
+  severity: Severity;
+  instanceId: string;
+  manufacturer: string;
+}
+
+interface DriverHealthSummary {
+  total: number;
+  critical: number;
+  warning: number;
+  info: number;
+  ok: boolean;
+}
+
+interface DriverHealthReport {
+  devices: DriverProblem[];
+  summary: DriverHealthSummary;
+}
+
+// ── BYOVD types ──────────────────────────────────────────────────────
+
+interface VulnerableDriver {
+  filename: string;
+  path: string;
+  state: string;
+  reason: string;
+  matchedBy: string;
+}
+
+interface VulnerableDriversReport {
+  vulnerable: VulnerableDriver[];
+  scanned: number;
+  ok: boolean;
+}
+
+interface DriverHealthSectionProps {
+  /** Expert density unlocks the optional background "Watch" switch. */
+  isAdvanced?: boolean;
+}
+
+const SEVERITY_RANK: Record<Severity, number> = { critical: 0, warning: 1, info: 2 };
+
+function severityIntent(sev: Severity): Intent | undefined {
+  if (sev === 'critical') return 'danger';
+  if (sev === 'warning') return 'warning';
+  return undefined; // info → minimal/muted
+}
+
+/** One-line remediation hint keyed off problem code / severity. */
+function remediation(d: DriverProblem): string {
+  switch (d.problemCode) {
+    case 28:
+      return "Install the driver: Open Device Manager → right-click → Update driver, or get it from the vendor's site.";
+    case 43:
+    case 10:
+    case 31:
+      return 'Try Open Device Manager → Disable then Enable the device, or reinstall its driver. A reboot often clears code 43.';
+    case 22:
+      return 'You disabled this device. Re-enable it in Device Manager if you want it back.';
+    case 45:
+      return "Device isn't connected right now.";
+    default:
+      if (d.severity === 'info') return 'No action needed — this is an expected or transient state.';
+      return 'Open Device Manager for details and to update/reinstall the driver.';
+  }
+}
+
+export default function DriverHealthSection({ isAdvanced = false }: DriverHealthSectionProps) {
+  const { appSettings, patchAppSettings } = useAppState();
+  const watchEnabled = appSettings?.ideal?.security?.drivers?.watchEnabled ?? false;
+
+  const [report, setReport] = useState<DriverHealthReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [watchBusy, setWatchBusy] = useState(false);
+
+  // ── BYOVD state ───────────────────────────────────────────────────
+  const [vulnReport, setVulnReport] = useState<VulnerableDriversReport | null>(null);
+  const [vulnLoading, setVulnLoading] = useState(false);
+  const [vulnError, setVulnError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await invoke<DriverHealthReport>('get_driver_health');
+      setReport(r);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const refreshVuln = useCallback(async () => {
+    setVulnLoading(true);
+    setVulnError(null);
+    try {
+      const r = await invoke<VulnerableDriversReport>('get_vulnerable_drivers');
+      setVulnReport(r);
+    } catch (err) {
+      setVulnError(String(err));
+    } finally {
+      setVulnLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    void refreshVuln();
+  }, [refresh, refreshVuln]);
+
+  const handleOpenDeviceManager = useCallback(async () => {
+    try {
+      await invoke('open_device_manager');
+    } catch (err) {
+      setError(String(err));
+    }
+  }, []);
+
+  const handleWatchToggle = useCallback(
+    async (next: boolean) => {
+      setWatchBusy(true);
+      setError(null);
+      try {
+        if (next) {
+          await invoke('start_driver_watch', { intervalSecs: null });
+        } else {
+          await invoke('stop_driver_watch');
+        }
+        await patchAppSettings({
+          ideal: { security: { drivers: { watchEnabled: next } } },
+        }).catch(() => {});
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setWatchBusy(false);
+      }
+    },
+    [patchAppSettings],
+  );
+
+  const summary = report?.summary;
+  const problemCount = summary ? summary.critical + summary.warning : 0;
+
+  const headerTag = summary ? (
+    summary.ok || problemCount === 0 ? (
+      <Tag minimal intent="success" className="font-mono">
+        ALL DEVICES OK
+      </Tag>
+    ) : (
+      <Tag minimal intent={summary.critical > 0 ? 'danger' : 'warning'} className="font-mono">
+        {problemCount} PROBLEM{problemCount === 1 ? '' : 'S'}
+      </Tag>
+    )
+  ) : null;
+
+  const sortedDevices = report
+    ? [...report.devices].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
+    : [];
+
+  return (
+    <SectionCard title="Device & Driver Health" icon="pulse" headerRight={headerTag}>
+      <div className="driver-health-body">
+        <div className="driver-health-intro">
+          Queries Windows PnP / Device Manager for hardware that is missing a driver or
+          malfunctioning. Devices you intentionally disabled are shown but not flagged.
+        </div>
+
+        <div className="driver-health-controls">
+          <Button icon="refresh" minimal small onClick={refresh} disabled={loading}>
+            Refresh
+          </Button>
+          <Button icon="cog" minimal small onClick={handleOpenDeviceManager}>
+            Open Device Manager
+          </Button>
+          {loading && <Spinner size={14} />}
+          {isAdvanced && (
+            <Switch
+              checked={watchEnabled}
+              disabled={watchBusy}
+              onChange={(e) => handleWatchToggle((e.target as HTMLInputElement).checked)}
+              label="Watch for new driver problems"
+              className="driver-health-watch-switch"
+            />
+          )}
+        </div>
+
+        {error && <div className="driver-health-error">{error}</div>}
+
+        {!loading && summary && (summary.ok || sortedDevices.length === 0) && (
+          <div className="driver-health-empty">No driver problems detected.</div>
+        )}
+
+        {sortedDevices.length > 0 && (
+          <div className="driver-health-list">
+            {sortedDevices.map((d) => (
+              <div
+                key={d.instanceId || `${d.name}-${d.problemCode}`}
+                className={`driver-health-row is-${d.severity}`}
+              >
+                <div className="driver-health-row-head">
+                  <span className="driver-health-row-name">{d.name || 'Unknown device'}</span>
+                  {d.class && (
+                    <Tag minimal className="font-mono">
+                      {d.class}
+                    </Tag>
+                  )}
+                  <Tag minimal={d.severity === 'info'} intent={severityIntent(d.severity)} className="font-mono">
+                    {d.severity.toUpperCase()}
+                    {d.problemCode != null ? ` · CODE ${d.problemCode}` : ''}
+                  </Tag>
+                </div>
+                <div className="driver-health-row-problem">{d.problemText}</div>
+                <div className="driver-health-row-meta">
+                  <span className="driver-health-instance">{d.instanceId || '—'}</span>
+                  {d.manufacturer && <span>{d.manufacturer}</span>}
+                </div>
+                <div className="driver-health-row-hint">{remediation(d)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── BYOVD subsection ─────────────────────────────────────── */}
+        <div className="driver-health-byovd">
+          <div className="driver-health-byovd-header">
+            <div className="driver-health-byovd-heading">
+              <span className="driver-health-byovd-eyebrow">Kernel exposure check</span>
+              <span className="driver-health-byovd-title">Vulnerable drivers (BYOVD)</span>
+            </div>
+            <div className="driver-health-byovd-actions">
+              {vulnLoading && <Spinner size={14} />}
+              {vulnReport && (
+                <Tag
+                  minimal={vulnReport.ok}
+                  intent={vulnReport.ok ? 'success' : 'danger'}
+                  className="font-mono"
+                >
+                  {vulnReport.ok ? 'NO EXPOSURE FOUND' : `${vulnReport.vulnerable.length} FOUND`}
+                </Tag>
+              )}
+              <Button icon="refresh" minimal small onClick={refreshVuln} disabled={vulnLoading}>
+                Refresh scan
+              </Button>
+            </div>
+          </div>
+
+          <div className="driver-health-byovd-desc">
+            Checks loaded kernel drivers against a curated subset of <span className="font-mono">loldrivers.io</span> — signed but known-abusable drivers used in BYOVD / EDR-killer attacks.
+            {vulnReport && (
+              <span className="driver-health-byovd-scanned">
+                {vulnReport.scanned} drivers scanned
+              </span>
+            )}
+          </div>
+
+          {vulnError && (
+            <div className="driver-health-error">{vulnError}</div>
+          )}
+
+          {!vulnLoading && vulnReport && vulnReport.ok && (
+            <div className="driver-health-byovd-empty">No known-vulnerable drivers are loaded.</div>
+          )}
+
+          {vulnReport && vulnReport.vulnerable.length > 0 && (
+            <div className="driver-health-list">
+              {vulnReport.vulnerable.map((v) => (
+                <div key={v.filename} className="driver-health-row is-critical driver-health-byovd-row">
+                  <div className="driver-health-row-head">
+                    <span className="driver-health-row-name font-mono">{v.filename}</span>
+                    <Tag intent="danger" className="font-mono">
+                      BYOVD
+                    </Tag>
+                    <Tag minimal className="font-mono">
+                      {v.state}
+                    </Tag>
+                  </div>
+                  <div className="driver-health-row-problem">{v.reason}</div>
+                  {v.path && (
+                    <div className="driver-health-row-meta">
+                      <span className="driver-health-instance">{v.path}</span>
+                    </div>
+                  )}
+                  <div className="driver-health-row-hint">
+                    This driver is loaded and known to expose kernel primitives abused by
+                    ransomware and EDR-killers. Investigate whether it is legitimately required;
+                    if not, unload it and remove the associated software.
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </SectionCard>
+  );
+}

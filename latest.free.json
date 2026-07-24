@@ -1,0 +1,11 @@
+{
+  "notes": "WinCommander Free v3.0.43",
+  "version": "3.0.43",
+  "platforms": {
+    "windows-x86_64": {
+      "url": "https://winupdates.servalabs.com/free/v3.0.43/WinCommander_3.0.43_x64_en-US.msi",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSYUw1dWVrWUtHdUVLQkVsTEozMC9yZ0tPN2VaNmNsTitpUExOajRXZHNBZHdmSE1NVHN3Lyt1SHg0a3pYUjZ0Rk1nOGtHMHBwdG5yOU8yb3FkcjlCQldYSGZsb0pma3cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0ODk3Nzg3CWZpbGU6V2luQ29tbWFuZGVyXzMuMC40M194NjRfZW4tVVMubXNpCnNwYWFPRzdLMVYvOEFHWG5yK1NDeEJHMzhveVdlNmp5ejFCdWE5V1M0R2FvL2toNzhmL1lES3pRdGpiblE0MmhXUDl1YlVVQ1J0WndOQkRWQjI1K0R3PT0K"
+    }
+  },
+  "pub_date": "2026-07-24T18:26:29Z"
+}

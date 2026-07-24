@@ -1,0 +1,38 @@
+# No blanket owner — deliberate. In the autonomous PR + auto-merge model, non-danger
+# changes merge hands-free once the invariants CI checks pass (and the advisory
+# ai-review has run). Only the security-critical paths listed below pull in a human
+# (owner) sign-off, so scarce review attention is spent only where it's load-bearing.
+#
+# To require your review on EVERY PR instead, restore the blanket rule:
+#   * @servalabs
+
+# Security-sensitive Rust files — require owner review on every PR.
+src-tauri/commander-free/src/license.rs         @servalabs
+src-tauri/commander-free/src/sidecar.rs         @servalabs
+src-tauri/commander-free/src/pro_install.rs     @servalabs
+src-tauri/commander-free/src/backend.rs         @servalabs
+
+# Tauri config + capabilities — widening fs:scope or shell:allow-execute is a security finding.
+src-tauri/commander-free/tauri.conf.json        @servalabs
+src-tauri/commander-free/capabilities/          @servalabs
+
+# CI/CD workflows — any change here affects the release pipeline and supply chain.
+.github/workflows/                              @servalabs
+
+# Licence worker — revenue-critical backend.
+cloudflare-license-worker/                      @servalabs
+
+# natsec P1 (2026-07): shared crypto/IPC crates consumed as path deps by both
+# wincommander-pro (fleet-server) and TuxCommander (tc-agent) — this is the
+# SSOT, so a compromise here propagates to every downstream consumer.
+# @servalabs-owner is a placeholder — replace with the real GitHub handle/team
+# before branch protection can require code-owner review on these paths.
+src-tauri/fleet-proto/                          @servalabs-owner
+src-tauri/fleet-agent-core/                     @servalabs-owner
+src-tauri/wincmd-shared/                        @servalabs-owner
+
+# Supply-chain guardrail config itself.
+src-tauri/deny.toml                             @servalabs-owner
+
+# CODEOWNERS itself.
+.github/CODEOWNERS                              @servalabs

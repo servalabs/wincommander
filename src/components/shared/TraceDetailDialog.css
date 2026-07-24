@@ -1,0 +1,155 @@
+.trace-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: start center;
+  /* Keep modal content below the title bar (52px header) with breathing room. */
+  padding: 76px 24px 24px;
+  /* Neutral dimming scrim (works in both themes). */
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.trace-dialog__panel {
+  width: min(680px, 100%);
+  max-height: min(720px, calc(100vh - 120px));
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  /* Was var(--color-surface, #111827) — that token is undefined, so the
+     panel stayed dark in light mode. Use the real card token. */
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow, 0 24px 80px rgba(0, 0, 0, 0.38));
+}
+
+.trace-dialog__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 18px;
+  border-bottom: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+}
+
+.trace-dialog__icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+}
+
+.trace-dialog__icon--warning {
+  color: var(--color-warning, #f59e0b);
+}
+
+.trace-dialog__icon--danger {
+  color: var(--color-danger, #ef4444);
+}
+
+.trace-dialog__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trace-dialog h2,
+.trace-dialog p {
+  margin: 0;
+}
+
+.trace-dialog h2 {
+  font-size: 16px;
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+
+.trace-dialog p {
+  margin-top: 4px;
+  color: var(--color-text-secondary, #a7b0bf);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.trace-dialog__summary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 16px 18px 0;
+}
+
+.trace-dialog__summary strong {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.trace-dialog__summary span {
+  color: var(--color-text-secondary, #a7b0bf);
+  font-size: 12px;
+}
+
+.trace-dialog__items {
+  display: grid;
+  gap: 6px;
+  padding: 14px 18px 18px;
+}
+
+.trace-dialog__group {
+  display: grid;
+  gap: 8px;
+  padding: 12px 0 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.trace-dialog__group:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.trace-dialog__group-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.trace-dialog__group-header strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.trace-dialog__group-header span {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.trace-dialog__group-items {
+  display: grid;
+  gap: 6px;
+}
+
+.trace-dialog__items code,
+.trace-dialog__empty {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 8px 9px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.trace-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 18px 18px;
+  border-top: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+}

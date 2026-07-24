@@ -1,0 +1,1247 @@
+        .rdp-sidebar-container {
+          background: var(--color-bg-tertiary);
+          border: 1px solid var(--color-border);
+          border-radius: 6px;
+          padding: 6px;
+          margin-bottom: 6px;
+        }
+
+        .node-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 4px;
+        }
+
+        .node-info {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .node-icon {
+          color: var(--color-text-muted);
+          opacity: 0.7;
+        }
+
+        .node-label {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 1.5px;
+          color: var(--color-text-muted);
+          font-weight: 600;
+          text-transform: uppercase;
+        }
+
+        .rdp-multi-list {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          max-height: 160px;
+          overflow-y: auto;
+        }
+
+        .rdp-endpoint-item {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          width: 100%;
+          padding: 4px 6px;
+          background: var(--color-bg-primary);
+          border: 1px solid var(--color-border);
+          border-radius: 4px;
+          cursor: pointer;
+          /* hover changes: background, border-color, color */
+          transition: background-color var(--dur-instant, 100ms) var(--ease),
+                      border-color var(--dur-instant, 100ms) var(--ease),
+                      color var(--dur-instant, 100ms) var(--ease);
+          text-align: left;
+          color: var(--color-text-secondary);
+        }
+
+        .rdp-endpoint-item:hover {
+          background: color-mix(in srgb, var(--accent) 5%, transparent);
+          border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+          color: var(--color-accent);
+        }
+
+        .endpoint-icon {
+          color: var(--color-accent);
+          opacity: 0.6;
+        }
+
+        .endpoint-name {
+          font-family: var(--font-mono);
+          font-size: 11px;
+          font-weight: 600;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .node-setup-btn {
+          border: 1px dashed var(--color-border) !important;
+          font-family: var(--font-mono) !important;
+          font-size: 10px !important;
+          height: 28px !important;
+        }
+
+        .rdp-manage-dialog {
+          background: var(--color-bg-secondary) !important;
+          color: var(--color-text-primary) !important;
+          box-shadow: 0 0 32px rgba(0, 0, 0, 0.5);
+        }
+
+
+        .rdp-manage-dialog .bp5-dialog-body {
+          padding: 24px !important;
+          color: var(--color-text-primary) !important;
+          background: var(--color-bg-secondary) !important;
+        }
+
+
+        .rdp-manage-dialog .bp5-input-group input {
+          background: var(--color-bg-primary) !important;
+          border: 1px solid var(--color-border) !important;
+          color: var(--color-text-primary) !important;
+          box-shadow: none !important;
+        }
+
+        .rdp-endpoint-input input {
+          min-height: 40px;
+          border-radius: 10px !important;
+          background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, var(--color-bg-primary) 100%) !important;
+          border-color: color-mix(in srgb, var(--accent) 14%, transparent) !important;
+          padding-right: 12px !important;
+        }
+
+        .rdp-endpoint-input input::placeholder {
+          color: rgba(255, 255, 255, 0.42);
+        }
+
+        .rdp-endpoint-input input:focus {
+          border-color: color-mix(in srgb, var(--accent) 45%, transparent) !important;
+          box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent), 0 0 18px color-mix(in srgb, var(--accent) 8%, transparent) !important;
+        }
+
+        .rdp-manage-dialog .bp5-input-group input:focus {
+          border-color: var(--color-accent) !important;
+          box-shadow: 0 0 0 1px var(--color-accent) !important;
+          outline: none !important;
+        }
+
+
+        .node-list-item {
+          min-width: 0;
+          overflow: visible;
+          gap: 8px;
+        }
+
+        .node-list-item .node-item-info {
+          /* hover changes: opacity only */
+          transition: opacity var(--dur-normal, 200ms) var(--ease);
+          opacity: 1;
+          flex: 1 1 auto;
+          min-width: 0;
+          overflow: visible;
+        }
+
+        .node-list-item .node-item-label,
+        .node-list-item .node-item-host {
+          display: block;
+          max-width: 100%;
+          white-space: normal;
+          overflow-wrap: anywhere;
+          line-height: 1.3;
+        }
+
+        .node-list-item .node-item-label {
+          margin-bottom: 3px;
+        }
+
+        .node-list-item .node-item-actions {
+          flex: 0 0 auto;
+          align-items: center;
+        }
+
+        .node-list-item .node-action-btn {
+          width: 32px;
+          min-width: 32px;
+          height: 32px;
+          padding: 0;
+        }
+
+        /* Columns wrap/shrink to the dialog's own width so the two-column
+           layout never forces a min-width wider than the dialog card. */
+        .rdp-manage-dialog .rdp-manage-columns {
+          flex-wrap: wrap;
+        }
+
+        .rdp-manage-dialog .rdp-node-form {
+          flex: 1 1 340px !important;
+        }
+
+        @media (max-width: 760px) {
+          .rdp-manage-dialog .rdp-manage-columns {
+            flex-direction: column;
+          }
+
+          .rdp-manage-dialog .rdp-nodes-list {
+            min-width: 0 !important;
+            padding-right: 0 !important;
+            padding-bottom: 20px;
+            border-right: 0 !important;
+            border-bottom: 1px solid var(--color-border);
+          }
+
+          .rdp-manage-dialog .rdp-node-form {
+            flex-basis: auto !important;
+          }
+        }
+
+        .rdp-node-menu {
+          min-width: 220px;
+          background: var(--color-bg-secondary) !important;
+          border: 1px solid var(--color-border);
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        }
+
+
+
+        .sidebar {
+          display: flex;
+          flex-direction: column;
+          width: 248px;
+          height: 100%;
+          overflow: hidden;
+          /* positioning context for the collapse toggle, which floats over
+             the nav's top-right corner instead of reserving its own row */
+          position: relative;
+          background-color: var(--color-bg-secondary);
+          background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, transparent 100%);
+          /* No backdrop-filter: the background is opaque so the blur was
+             invisible but still forced a full-page GPU recomposite every
+             frame on always-visible chrome (perf regression fix 2026-06-09). */
+          border-right: 1px solid var(--color-border);
+          flex-shrink: 0;
+          padding: 20px 12px;
+          /* collapse animation: width + padding animate */
+          transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+                      padding 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+                      filter var(--dur-normal, 200ms) var(--ease);
+        }
+
+        /* Blurred/inert while Fix Everything runs — mirrors dashboard/index.css's
+           .dash-blur-target treatment (filter: blur, not backdrop-filter, so it
+           only costs a repaint while this transient class is applied — see the
+           2026-06-09 perf note above about permanent backdrop-filter on this
+           always-visible chrome). */
+        .sidebar.fix-blurred {
+          filter: blur(5px);
+          pointer-events: none;
+          user-select: none;
+        }
+
+        /* Ghost icon button — matches .sidebar-item / .sidebar-power-btn
+           (transparent, no border/fill until hovered) instead of standing
+           out as a bordered card against the flat sidebar (2026-07-09 fix). */
+        .sidebar-collapse-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 24px;
+          height: 24px;
+          border-radius: 6px;
+          border: none;
+          background: transparent;
+          color: var(--color-text-muted);
+          cursor: pointer;
+          flex-shrink: 0;
+          /* hover changes: color, background */
+          transition: color var(--dur-fast, 150ms) var(--ease),
+                      background-color var(--dur-fast, 150ms) var(--ease);
+        }
+
+        .sidebar-collapse-btn:hover {
+          color: var(--color-text-primary);
+          background: rgba(255, 255, 255, 0.06);
+        }
+
+        .sidebar.collapsed .sidebar-collapse-btn {
+          margin: 0;
+        }
+
+        .sidebar.collapsed {
+          width: 72px;
+          padding: 12px;
+          align-items: center;
+        }
+
+        /* Floats over the nav's top-right corner instead of reserving its
+           own row, so it sits inline with the first group label ("MONITOR")
+           rather than leaving empty space above it (2026-07-09 fix). */
+        .sidebar-header {
+          position: absolute;
+          top: 20px;
+          right: 12px;
+          margin: 0;
+          z-index: 2;
+        }
+
+        .sidebar.collapsed .sidebar-header {
+          position: static;
+          display: flex;
+          margin-bottom: 0;
+          justify-content: center;
+          width: 100%;
+          padding: 8px 0;
+        }
+
+        .sidebar-item.active .item-icon {
+          color: var(--color-accent);
+          filter: drop-shadow(0 0 5px var(--glow));
+        }
+
+        .sidebar-item.active .sidebar-label {
+          color: var(--color-text-primary);
+          font-weight: 600;
+          letter-spacing: 0.3px;
+        }
+
+        .sidebar-nav {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          flex: 1;
+          min-height: 0;
+          overflow-y: auto;
+          overflow-x: hidden;
+        }
+
+        /* V2 nav groups (Monitor / Protect / Secure / System) */
+        .sidebar-group {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .sidebar-group + .sidebar-group {
+          margin-top: 14px;
+        }
+
+        .sidebar-group-label {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 1.6px;
+          text-transform: uppercase;
+          color: var(--color-text-muted);
+          font-weight: 600;
+          padding: 0 12px 5px;
+          opacity: 0.85;
+        }
+
+        .sidebar.collapsed .sidebar-group-label {
+          display: none;
+        }
+
+        .sidebar.collapsed .sidebar-nav {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          width: 100%;
+          gap: 2px;
+          flex: 1;
+          min-height: 0;
+          overflow-y: auto;
+          overflow-x: hidden;
+        }
+
+        .sidebar-item {
+          display: flex;
+          align-items: center;
+          gap: 14px;
+          padding: 8px 12px;
+          margin: 1px 0;
+          min-height: 40px;
+          border-radius: 8px;
+          color: var(--color-text-secondary);
+          font-family: var(--font-sans);
+          font-size: 13px;
+          font-weight: 500;
+          text-align: left;
+          cursor: pointer;
+          background: transparent;
+          border: none;
+          /* hover/active changes: color, background */
+          transition: color var(--dur-normal, 200ms) cubic-bezier(0.2, 0, 0, 1),
+                      background-color var(--dur-normal, 200ms) cubic-bezier(0.2, 0, 0, 1);
+          position: relative;
+        }
+
+        .sidebar-item:hover {
+          color: var(--color-text-primary);
+          background: rgba(255, 255, 255, 0.05);
+        }
+
+        .sidebar-item.active {
+          color: var(--color-accent);
+          background: linear-gradient(90deg, var(--color-accent-subtle), transparent);
+        }
+
+        .sidebar-active-bar {
+          position: absolute;
+          left: 0;
+          top: 15%;
+          bottom: 15%;
+          width: 3px;
+          background: var(--color-accent);
+          border-radius: 0 4px 4px 0;
+          box-shadow: 0 0 10px var(--color-accent);
+          z-index: 2;
+        }
+
+        .sidebar-item--module-off {
+          opacity: 0.58;
+        }
+
+        .sidebar-item--module-off .sidebar-label {
+          color: var(--color-text-muted);
+          font-size: 12px;
+          letter-spacing: 0.1px;
+        }
+
+        .sidebar-power-btn {
+          margin-left: auto;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 20px;
+          height: 20px;
+          border-radius: 6px;
+          background: transparent;
+          color: var(--color-text-muted);
+          cursor: pointer;
+          /* hover changes: opacity, transform, background, color, box-shadow */
+          transition: opacity var(--dur-normal, 200ms) cubic-bezier(0.4, 0, 0.2, 1),
+                      transform var(--dur-normal, 200ms) cubic-bezier(0.4, 0, 0.2, 1),
+                      background-color var(--dur-normal, 200ms) cubic-bezier(0.4, 0, 0.2, 1),
+                      color var(--dur-normal, 200ms) cubic-bezier(0.4, 0, 0.2, 1),
+                      box-shadow var(--dur-normal, 200ms) cubic-bezier(0.4, 0, 0.2, 1);
+          opacity: 0;
+          transform: scale(0.9);
+          flex-shrink: 0;
+        }
+
+        .sidebar-item:hover .sidebar-power-btn {
+          opacity: 0.4;
+          transform: scale(1);
+        }
+
+        .sidebar-power-btn:hover {
+          opacity: 1 !important;
+          background: rgba(255, 255, 255, 0.1);
+          color: var(--color-text-primary);
+        }
+
+        .sidebar-power-btn.on:hover {
+          background: rgba(255, 107, 107, 0.15);
+          color: var(--color-danger);
+          box-shadow: 0 0 8px rgba(255, 107, 107, 0.3);
+        }
+
+        .sidebar-power-btn.off {
+          opacity: 0.8;
+          transform: scale(1);
+        }
+
+        .sidebar-power-btn.off:hover {
+          background: color-mix(in srgb, var(--accent) 15%, transparent);
+          color: var(--color-accent);
+          box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 30%, transparent);
+        }
+
+        /* KT: dim text & icon (not the row's children) so the inline install
+           button stays vivid even when the row is in the "dep-missing" state. */
+        .sidebar-item--dep-missing {
+          position: relative;
+        }
+
+        .sidebar-item--dep-missing .item-icon,
+        .sidebar-item--dep-missing .sidebar-label {
+          opacity: 0.42;
+          transition: opacity 0.2s;
+        }
+
+        .sidebar-item--dep-missing:hover .item-icon,
+        .sidebar-item--dep-missing:hover .sidebar-label {
+          opacity: 0.65;
+        }
+
+        .sidebar-item--dep-missing.active .item-icon,
+        .sidebar-item--dep-missing.active .sidebar-label {
+          opacity: 0.7;
+        }
+
+        /* Dev-only sidebar entry — subtle amber tint so it reads as "diagnostic" */
+        .sidebar-item--dev .item-icon,
+        .sidebar-item--dev .sidebar-label {
+          color: var(--color-warning, #f5b454);
+          opacity: 0.7;
+        }
+        .sidebar-item--dev:hover .item-icon,
+        .sidebar-item--dev:hover .sidebar-label {
+          opacity: 1;
+        }
+        .sidebar-item--dev.active .item-icon,
+        .sidebar-item--dev.active .sidebar-label {
+          opacity: 1;
+          color: var(--color-warning, #f5b454);
+        }
+
+        .dep-badge {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          margin-left: auto;
+          flex-shrink: 0;
+        }
+        .dep-cross {
+          color: var(--color-danger);
+          opacity: 0.8;
+        }
+        .dep-tick {
+          color: var(--color-success);
+          opacity: 0.6;
+        }
+
+        .dep-install-btn,
+        .dep-install-spinner {
+          width: 22px;
+          height: 22px;
+          border-radius: 6px;
+          color: var(--color-accent);
+          background: color-mix(in srgb, var(--accent) 8%, transparent);
+          border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+          cursor: pointer;
+          /* hover changes: opacity, background, border-color, box-shadow */
+          transition: opacity var(--dur-fast, 150ms) var(--ease),
+                      background-color var(--dur-fast, 150ms) var(--ease),
+                      border-color var(--dur-fast, 150ms) var(--ease),
+                      box-shadow var(--dur-fast, 150ms) var(--ease);
+          opacity: 0.85;
+        }
+
+        .dep-install-btn:hover {
+          opacity: 1;
+          background: color-mix(in srgb, var(--accent) 18%, transparent);
+          border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+          box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 25%, transparent);
+        }
+
+        .dep-install-spinner {
+          cursor: default;
+          opacity: 1;
+        }
+
+        /* Don't dim the install action just because the row is "dep-missing" */
+        .sidebar-item--dep-missing .dep-install-btn,
+        .sidebar-item--dep-missing .dep-install-spinner {
+          opacity: 1;
+        }
+
+        .sidebar.collapsed .dep-badge {
+          display: none;
+        }
+
+        .sidebar.collapsed .sidebar-power-btn {
+          display: none;
+        }
+
+        .sidebar.collapsed .sidebar-item {
+          justify-content: center;
+          padding: 12px;
+          gap: 0;
+          width: 48px;
+        }
+
+        .sidebar.collapsed .sidebar-item.active {
+          border-left: none;
+          background: color-mix(in srgb, var(--accent) 10%, transparent);
+        }
+
+        .sidebar-label {
+          transition: opacity 0.2s;
+        }
+
+        .sidebar.collapsed .sidebar-label {
+          display: none;
+        }
+
+        .sidebar-footer {
+          margin-top: auto;
+          padding-top: 12px;
+          border-top: 1px solid var(--color-border);
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        /* Consistent footer items: each control (endpoints / interface / license)
+           sits in a same-width column with even spacing — no mismatched borders. */
+        .sidebar-footer > * {
+          width: 100%;
+        }
+
+        .sidebar.collapsed .sidebar-footer {
+          border-top: none;
+          padding-top: 0;
+          gap: 0;
+          justify-content: center;
+          align-items: center;
+          max-height: 48px;
+          overflow: hidden;
+        }
+
+        .sidebar.collapsed .experience-switch,
+        .sidebar.collapsed .preferences-row,
+        .sidebar.collapsed .license-quick-panel,
+        .sidebar.collapsed .updater-status {
+          display: none !important;
+          visibility: hidden !important;
+          height: 0 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+        }
+
+        .license-quick-panel {
+          background: var(--color-bg-tertiary);
+          border: 1px solid var(--color-border);
+          border-radius: 6px;
+          padding: 6px;
+          /* tighter panel padding to fit three columns */
+          font-family: var(--font-mono);
+        }
+
+        .license-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 6px;
+        }
+
+        .license-title {
+          font-size: 10px;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+          color: var(--color-text-secondary);
+        }
+
+        .license-pill {
+          font-size: 9px;
+          padding: 2px 6px;
+          border: 1px solid var(--color-border-light);
+          color: var(--color-text-muted);
+        }
+
+        .license-pill.ok {
+          color: var(--color-success);
+          border-color: rgba(63, 185, 80, 0.5);
+        }
+
+        .license-pill.warn {
+          color: #f0a030;
+          border-color: rgba(240, 160, 48, 0.5);
+        }
+
+        .license-pill.trial {
+          color: #7c6af7;
+          border-color: rgba(124, 106, 247, 0.5);
+        }
+
+        /* Scoped to the quick panel to avoid clashes with other panels that
+           also use the `.license-meta` class. */
+        .license-quick-panel .license-meta {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+          gap: 0;
+          align-items: stretch;
+          font-size: 10px;
+          color: var(--color-text-muted);
+          margin-bottom: 6px;
+        }
+
+        .license-meta-item {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 2px 4px;
+          color: var(--color-text-primary);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          text-align: center;
+          line-height: 1.35;
+          white-space: nowrap;
+          min-width: 0;
+        }
+
+        .license-meta-item + .license-meta-item {
+          border-left: 1px solid var(--color-border);
+        }
+
+        .license-quick-panel:hover .license-meta-item {
+          color: var(--color-text-primary) !important;
+        }
+
+        /* ── Light Mode Overrides ── */
+        html.light .license-quick-panel {
+          background: var(--color-bg-secondary);
+        }
+
+        html.light .license-meta-item {
+          color: var(--color-text-primary);
+        }
+
+        html.light .license-meta-item + .license-meta-item {
+          border-color: rgba(0, 0, 0, 0.1);
+        }
+
+
+        .license-btn-row {
+          display: flex;
+          gap: 6px;
+          margin-top: 8px;
+        }
+
+        .license-btn {
+          flex: 1;
+          height: 24px;
+          border: 1px solid var(--color-accent);
+          background: color-mix(in srgb, var(--accent) 8%, transparent);
+          color: var(--color-accent);
+          font-family: var(--font-mono);
+          font-size: 9px;
+          letter-spacing: 0.6px;
+          cursor: pointer;
+        }
+
+        .license-btn.ghost {
+          border-color: var(--color-border);
+          background: var(--color-bg-primary);
+          color: var(--color-text-muted);
+        }
+
+        .license-btn:disabled {
+          opacity: 0.6;
+          cursor: default;
+        }
+        /* Keyboard ring — matches shadcn ui/button pattern */
+        .license-btn:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--accent-line);
+        }
+
+        .license-btn.danger {
+          border-color: rgba(255, 107, 107, 0.45);
+          background: rgba(255, 107, 107, 0.12);
+          color: var(--color-danger);
+        }
+
+        .license-msg {
+          margin-top: 6px;
+          font-size: 9px;
+          color: var(--color-warning);
+          line-height: 1.3;
+        }
+
+        .updater-status {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          color: var(--color-text-muted);
+          padding: 8px 4px;
+          max-width: 100%;
+          min-width: 0;
+          overflow: hidden;
+        }
+
+        .error-text {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          min-width: 0;
+          max-width: 100%;
+        }
+
+        .updater-status.update-available {
+          flex-direction: column;
+          align-items: flex-start;
+          background: rgba(255, 185, 0, 0.05);
+          border-radius: 8px;
+          padding: 12px;
+          border: 1px solid rgba(255, 185, 0, 0.1);
+          color: var(--color-warning);
+        }
+
+        .update-text {
+          font-weight: 600;
+          letter-spacing: 0.5px;
+        }
+
+        /* ── Experience Level Switch ── */
+        .experience-switch {
+          background: var(--color-bg-tertiary);
+          border: 1px solid var(--color-border);
+          border-radius: 8px;
+          padding: 10px;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        /* ── Preferences row: Interface + Persona side by side, ~90px per
+           column. Buttons stack icon-over-label (not side by side) so the
+           label only needs to fit the column width, not share it with the
+           icon (2026-07-09 fix). ── */
+        .preferences-row {
+          background: var(--color-bg-tertiary);
+          border: 1px solid var(--color-border);
+          border-radius: 8px;
+          padding: 8px;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          gap: 6px;
+        }
+
+        .exp-col {
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          min-width: 0;
+        }
+
+        .preferences-row > .exp-col:first-child {
+          padding-right: 6px;
+          border-right: 1px solid var(--color-border);
+        }
+
+        .exp-header--compact .exp-label {
+          font-size: 8px;
+          letter-spacing: 0.4px;
+        }
+
+        .exp-header--compact .exp-level-badge {
+          font-size: 8px;
+          padding: 1px 3px;
+        }
+
+        .exp-track--compact {
+          gap: 2px;
+          padding: 2px;
+        }
+
+        .exp-btn--compact {
+          padding: 6px 1px;
+        }
+
+        /* Combined-class selector (not just .exp-btn-label--compact) so this
+           beats the base .exp-btn-label rule below regardless of source
+           order/specificity ties. */
+        .exp-btn-label.exp-btn-label--compact {
+          font-size: 7px;
+          line-height: 1.15;
+          letter-spacing: 0;
+          /* Full word (Guided/Expert/Casual/Secure) doesn't fit on one line
+             at this column width even at the smallest legible size — wrap
+             it onto two lines instead of truncating so every character
+             stays visible (2026-07-09 fix). */
+          white-space: normal;
+          overflow: visible;
+          text-overflow: clip;
+          word-break: break-word;
+          text-align: center;
+        }
+
+        .exp-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 4px;
+          min-width: 0;
+        }
+
+        .exp-label {
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 1.5px;
+          text-transform: uppercase;
+          color: var(--color-text-muted);
+          font-weight: 600;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          min-width: 0;
+        }
+
+        .exp-level-badge {
+          font-family: var(--font-mono);
+          font-size: 9px;
+          padding: 1px 6px;
+          border-radius: 3px;
+          letter-spacing: 0.5px;
+          color: var(--color-accent);
+          background: color-mix(in srgb, var(--accent) 8%, transparent);
+          border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+          flex-shrink: 0;
+        }
+
+        .exp-track {
+          display: flex;
+          gap: 2px;
+          background: var(--color-bg-primary);
+          border-radius: 6px;
+          padding: 2px;
+          border: 1px solid var(--color-border);
+        }
+
+        .exp-btn {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 2px;
+          padding: 6px 4px;
+          background: transparent;
+          border: 1px solid transparent;
+          border-radius: 5px;
+          cursor: pointer;
+          /* active/hover changes: background, border-color, box-shadow */
+          transition: background-color var(--dur-normal, 200ms) var(--ease),
+                      border-color var(--dur-normal, 200ms) var(--ease),
+                      box-shadow var(--dur-normal, 200ms) var(--ease);
+          position: relative;
+          /* min-width:0 lets the flex item shrink below its label's natural
+             width instead of forcing the track (and its column) wider than
+             the sidebar; overflow:hidden + the label's own ellipsis (below)
+             then contain any leftover overflow inside the button itself
+             instead of spilling into the sidebar edge. */
+          min-width: 0;
+          overflow: hidden;
+        }
+
+        .exp-btn:hover {
+          background: rgba(255, 255, 255, 0.04);
+        }
+
+        .exp-btn.active {
+          background: color-mix(in srgb, var(--accent) 10%, transparent);
+          border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+          box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 10%, transparent);
+        }
+
+        .exp-icon {
+          font-size: 14px;
+          line-height: 1;
+        }
+
+        .exp-btn-label {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.5px;
+          color: var(--color-text-muted);
+          text-transform: uppercase;
+          transition: color 0.2s;
+          max-width: 100%;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .exp-btn.active .exp-btn-label {
+          color: var(--color-accent);
+          font-weight: 600;
+        }
+
+        .exp-capabilities {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 4px;
+        }
+
+        .exp-capability-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          width: 100%;
+          min-height: 28px;
+          padding: 5px 4px;
+          background: var(--color-bg-primary);
+          border: 1px solid var(--color-border);
+          border-radius: 6px;
+          cursor: pointer;
+          /* hover/on changes: border-color, background, color */
+          transition: border-color var(--dur-slow, 300ms) var(--ease),
+                      background-color var(--dur-slow, 300ms) var(--ease),
+                      color var(--dur-slow, 300ms) var(--ease);
+          font-family: var(--font-mono);
+          font-size: 9px;
+          letter-spacing: 0.5px;
+          color: var(--color-text-muted);
+        }
+
+        .exp-capability-btn:hover {
+          border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+          background: color-mix(in srgb, var(--accent) 4%, transparent);
+        }
+
+        .exp-capability-btn.on {
+          border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+          background: color-mix(in srgb, var(--accent) 8%, transparent);
+          color: var(--color-accent);
+        }
+
+        .right-sidebar-toggle-btn {
+          width: 100%;
+          margin-top: 8px;
+          opacity: 0.6;
+          transition: opacity 0.2s;
+        }
+
+        .right-sidebar-toggle-btn:hover {
+          opacity: 1;
+        }
+
+        @keyframes cleanup-pulse {
+
+          0%,
+          100% {
+            box-shadow: 0 0 4px rgba(255, 107, 107, 0.3);
+          }
+
+          50% {
+            box-shadow: 0 0 10px rgba(255, 107, 107, 0.6);
+          }
+        }
+
+        /* ── Module Toggles ── */
+        .module-toggles {
+          background: var(--color-bg-tertiary);
+          border: 1px solid var(--color-border);
+          border-radius: 8px;
+          overflow: hidden;
+        }
+
+        .sidebar.collapsed .module-toggles {
+          display: none !important;
+        }
+
+        .mod-header {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          width: 100%;
+          padding: 8px 10px;
+          background: transparent;
+          border: none;
+          cursor: pointer;
+          font-family: var(--font-mono);
+          transition: background 0.15s;
+        }
+
+        .mod-header:hover {
+          background: rgba(255, 255, 255, 0.03);
+        }
+
+        .mod-label {
+          font-size: 11px;
+          letter-spacing: 1.5px;
+          text-transform: uppercase;
+          color: var(--color-text-muted);
+          font-weight: 600;
+          flex: 1;
+          text-align: left;
+        }
+
+        .mod-count {
+          font-size: 10px;
+          color: var(--color-text-muted);
+          opacity: 0.7;
+          font-family: var(--font-mono);
+        }
+
+        .mod-chevron {
+          color: var(--color-text-muted);
+          opacity: 0.5;
+        }
+
+        .mod-grid {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+          padding: 0 8px 8px;
+        }
+
+        .mod-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 3px 8px;
+          background: var(--color-bg-primary);
+          border: 1px solid var(--color-border);
+          border-radius: 4px;
+          cursor: pointer;
+          /* hover/on changes: opacity, border-color, background, color */
+          transition: opacity var(--dur-fast, 150ms) var(--ease),
+                      border-color var(--dur-fast, 150ms) var(--ease),
+                      background-color var(--dur-fast, 150ms) var(--ease),
+                      color var(--dur-fast, 150ms) var(--ease);
+          font-family: var(--font-mono);
+          color: var(--color-text-muted);
+          opacity: 0.55;
+        }
+
+        .mod-pill:hover {
+          opacity: 0.85;
+          border-color: var(--color-border-light);
+        }
+
+        .mod-pill.on {
+          opacity: 1;
+          border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+          background: color-mix(in srgb, var(--accent) 6%, transparent);
+          color: var(--color-accent);
+        }
+
+        .mod-pill-label {
+          font-size: 9px;
+          letter-spacing: 0.3px;
+          white-space: nowrap;
+        }
+
+        /* ════════════════════════════════════════════════════════════════
+           Daylight (light) overrides. The sidebar is always visible, so the
+           dark-baked white tints below render as near-white on the light
+           surface and must be flipped to dark-on-light.
+           ════════════════════════════════════════════════════════════════ */
+
+        /* Faint white top-gradient overlay → faint black so it still reads as
+           a subtle highlight strip on the light surface (was invisible). */
+        html.light .sidebar {
+          background-image: linear-gradient(180deg, rgba(0, 0, 0, 0.02) 0%, transparent 100%);
+        }
+
+        html.light .sidebar-item:hover {
+          color: var(--color-text-primary);
+          background: rgba(0, 0, 0, 0.05);
+        }
+
+        html.light .sidebar-power-btn:hover {
+          background: rgba(0, 0, 0, 0.08);
+          color: var(--color-text-primary);
+        }
+
+        html.light .exp-btn:hover {
+          background: rgba(0, 0, 0, 0.04);
+        }
+
+        html.light .mod-header:hover {
+          background: rgba(0, 0, 0, 0.03);
+        }
+
+        /* RDP manage dialog: white close-btn hover, input gradient/border/
+           placeholder all assumed a dark backdrop. */
+        html.light .rdp-manage-dialog .bp5-dialog-close-button:hover {
+          background: rgba(0, 0, 0, 0.06) !important;
+        }
+
+        html.light .rdp-endpoint-input .bp5-input,
+        html.light .rdp-endpoint-input input {
+          background: linear-gradient(180deg, rgba(0, 0, 0, 0.03) 0%, var(--color-bg-primary) 100%) !important;
+        }
+
+        html.light .rdp-endpoint-input .bp5-input-left-container {
+          border-right: 1px solid var(--color-border);
+        }
+
+        html.light .rdp-endpoint-input .bp5-input::placeholder,
+        html.light .rdp-endpoint-input input::placeholder {
+          color: var(--color-text-muted);
+        }
+
+        @media (max-height: 700px) {
+          .sidebar {
+            width: 220px;
+            padding: 10px 8px;
+          }
+          .sidebar-header {
+            margin-bottom: 12px;
+          }
+          .sidebar-item {
+            min-height: 32px;
+            font-size: 11px;
+            padding: 6px 8px;
+            gap: 8px;
+            border-radius: 6px;
+          }
+          .sidebar-item .item-icon {
+            font-size: 14px;
+          }
+          .sidebar-footer {
+            padding-top: 6px;
+            gap: 2px;
+          }
+          .experience-switch {
+            padding: 6px;
+            gap: 4px;
+          }
+          .preferences-row {
+            padding: 6px;
+            gap: 6px;
+          }
+          .exp-track {
+            padding: 1px;
+          }
+          .exp-btn {
+            padding: 4px 2px;
+          }
+          .exp-btn-label {
+            font-size: 8px;
+            letter-spacing: 0.2px;
+          }
+          .license-quick-panel {
+            padding: 4px;
+          }
+          .license-quick-panel .license-meta {
+            font-size: 9px;
+            margin-bottom: 4px;
+          }
+          .license-meta-item {
+            font-size: 9px;
+            padding: 1px 2px;
+          }
+
+          .license-btn {
+            height: 20px;
+            font-size: 8px;
+          }
+          .rdp-sidebar-container {
+            padding: 4px;
+            margin-bottom: 4px;
+          }
+          .rdp-multi-list {
+            max-height: 100px;
+          }
+          .rdp-endpoint-item {
+            padding: 2px 4px;
+          }
+          .endpoint-name {
+            font-size: 10px;
+          }
+        }
+
+

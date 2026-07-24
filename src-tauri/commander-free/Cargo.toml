@@ -1,0 +1,170 @@
+[package]
+name = "commander-free"
+version = "3.0.43"
+description = "WinCommander Free — open-source primary (AGPL-3.0-or-later)"
+authors = ["ServaLabs"]
+license = "AGPL-3.0-or-later"
+repository = ""
+edition = "2021"
+rust-version = "1.93.1"
+
+[lib]
+# Tauri-mobile expects the lib name "wincommander_lib" — keep it stable
+# even though the package was renamed. Decoupled deliberately.
+name = "wincommander_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Cargo binary explicitly named to match commander-pro's `wincommander-pro.exe`
+# convention. Without this, `cargo build -p commander-free` would output
+# `commander-free.exe` (named after the package) which mismatches the
+# shipped + documented `wincommander-free.exe` everywhere else.
+[[bin]]
+name = "wincommander-free"
+path = "src/main.rs"
+# The bin embeds app.manifest with requestedExecutionLevel=requireAdministrator,
+# so `cargo test` cannot LAUNCH its (empty) test harness on a non-elevated CI
+# runner — it fails with os error 740 (requires elevation) even though main.rs
+# has zero tests. All tests live in the lib; skip building/running the bin
+# harness so `cargo test --workspace` stays green on UAC-limited runners.
+test = false
+
+[features]
+# Portable single-exe edition. Gates the trial out (the most-copyable build has
+# nothing to farm) and packaging differences. Persistent state is already
+# machine-wide (%ProgramData%) regardless of this flag.
+portable = []
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+futures = "0.3"
+tauri = { version = "^2.11", features = ["tray-icon", "unstable", "devtools", "image-png"] }
+tauri-plugin-shell = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-process = "2"
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Native SQLite validation/VACUUM for the preview-first database optimizer.
+# Bundled keeps the feature independent of a machine-wide sqlite3 install.
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+aes-gcm = "0.10"
+sha2 = "0.11"
+# F-1 paste monitor dependencies — clipboard polling + regex patterns
+# for credential detection (AWS keys, JWT, BIP-39, etc).
+clipboard-win = "5"
+regex = "1"
+# F-2 decoy file monitor — cross-platform filesystem watcher; uses
+# ReadDirectoryChangesW on Windows under the hood.
+notify = "8"
+tauri-plugin-updater = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-opener = "2"
+# F-1: Windows toast notifications for paste monitor detections — needed
+# because the user has typically already alt-tabbed to a paste target by
+# the time the watcher fires, so an in-app toast wouldn't be seen.
+tauri-plugin-notification = "2"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+# Cloudflare DoH resolver to circumvent ISP-level DNS blocks of our update
+# host. Pinned to a major because tauri-plugin-updater pulls reqwest 0.13
+# transitively and we need binary-compatible TLS roots.
+hickory-resolver = { version = "0.24", default-features = false, features = ["dns-over-https-rustls", "tokio-runtime"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core"] }
+# `rand_core` feature on ed25519-dalek above pulls in the trait;
+# the OsRng implementation lives in `rand_core` with `getrandom`.
+# Used by `flow_bundle::generate_signing_key` to seed a per-bundle Ed25519
+# keypair on export.
+rand_core = { version = "0.6", features = ["getrandom"] }
+base64 = "0.22"
+minisign-verify = "0.2.5"
+# Per-install key derivation for the app-data store (datastore.rs).
+# argon2id params: 64 MiB / 2 iterations / 1 lane — interactive tuning.
+argon2 = { version = "0.5", features = ["std"] }
+dotenvy = "0.15"
+# In-memory passphrase zeroization on lock — profile session lifecycle (P1).
+zeroize = { version = "1", features = ["alloc"] }
+raw-window-handle = "0.6"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+# Flows ScheduleTrigger — real cron parser (replaces the legacy
+# "*/N * * * *" interval-only string parsing). Supports standard 5-field
+# cron + the 6-field seconds variant; computes next-fire-time so the
+# listener sleeps exactly until the next match instead of fixed
+# intervals.
+cron = "0.17"
+# Flows WebhookTrigger — minimal hyper-only HTTP listener bound to the
+# Tailscale interface. Already present transitively via reqwest; pulled
+# in directly so we can drive `hyper::server::conn::http1::Builder`.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+# HMAC-SHA256 for signing webhook bodies (paired with subtle's
+# ConstantTimeEq for the verify side).
+hmac = "0.13"
+# KT: Explicit tokio dep for spawn_blocking + timeout in backend.rs.
+# Tauri uses tokio internally but doesn't re-export time/rt features.
+tokio = { version = "1", features = ["time", "rt", "process", "io-util", "sync", "net", "macros"] }
+wincmd-shared = { path = "../wincmd-shared" }
+wincmd-search = { path = "../wincmd-search" }
+hex = "0.4"
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+# KT: sysinfo for Rust-native CPU/RAM/Disk metrics — replaces 3s PowerShell spawn poll.
+# once_cell for lazy-init System singleton (sysinfo needs persistent state for accurate CPU deltas).
+sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "component", "network"] }
+once_cell = "1"
+# Used by the updater command to parse cache-busted endpoint URLs
+# before handing them to tauri-plugin-updater. Already in the dep
+# tree transitively via tauri / reqwest; pinned here so the version
+# stays binary-compatible with what the updater plugin expects.
+url = "2"
+
+[dev-dependencies]
+# Used by services/fs_watcher integration tests for tempdir creation.
+tempfile = "3"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = "=0.38.2"
+windows = "=0.61.3"
+windows-sys = { version = "0.61", features = [
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  # GetTickCount — paired with GetLastInputInfo for the native idle probe
+  # (get_system_idle_seconds) the RDP-idle hook polls once per second.
+  "Win32_System_SystemInformation",
+  "Win32_Foundation",
+  # SHGetKnownFolderPath returns a CoTaskMemAlloc'd string we must free.
+  "Win32_System_Com",
+  "Win32_System_Registry",
+  "Win32_System_Threading",
+  "Win32_System_RemoteDesktop",
+  "Win32_Storage_FileSystem",
+  # Privacy-shield orphan killer: assign the shield Python process to a
+  # Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so end-tasking
+  # WinCommander tears down every jobbed child too.
+  "Win32_System_JobObjects",
+  # F6 Phase-1 Piece 2: GetFirmwareEnvironmentVariableW + SetFirmwareEnvironmentVariableW
+  # for reading/writing the UEFI BootNext EFI global variable.
+  "Win32_System_WindowsProgramming",
+  # DPAPI (CryptProtectData/CryptUnprotectData, CRYPTPROTECT_LOCAL_MACHINE):
+  # machine-bind the settings-store salt so the decoy/destroy/self-destruct
+  # config it protects can't be read from a raw disk image. (LocalFree, used to
+  # free the DPAPI output blob, lives in the already-enabled Win32_Foundation.)
+  "Win32_Security_Cryptography",
+  # storage_probe.rs — READ-ONLY drive capability detection. DeviceIoControl
+  # (Win32_System_IO); IOCTL_STORAGE_QUERY_PROPERTY + STORAGE_DEVICE_DESCRIPTOR
+  # + STORAGE_PROTOCOL_*_DATA (Win32_System_Ioctl); ATA_PASS_THROUGH_EX +
+  # IOCTL_ATA_PASS_THROUGH for the non-destructive ATA IDENTIFY (Win32_Storage_IscsiDisc).
+  # STORAGE_BUS_TYPE lives under the already-enabled Win32_Storage_FileSystem.
+  "Win32_System_IO",
+  "Win32_System_Ioctl",
+  "Win32_Storage_IscsiDisc",
+] }
+# F-5 coercion code-phrase trigger — constant-time hash compare to
+# defeat timing-based guessing. (hex moved to main deps because the
+# investigator subsystem also uses it.)
+subtle = "2"

@@ -1,0 +1,317 @@
+/* ────────────────────────────────────────────────────────────────────────────
+   HowItWorks.css  —  Full-screen modal popup for Private Mesh VPN explainer
+   Dark + light mode via CSS custom properties.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* ── Overlay ── */
+.hiw-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    animation: hiw-overlay-in 0.25s ease;
+}
+
+@keyframes hiw-overlay-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+/* ── Modal card ── */
+.hiw-modal {
+    position: relative;
+    width: min(1080px, 96vw);
+    /* Fixed height so the box never resizes between slides */
+    height: min(660px, 92vh);
+    /* Accent colour — CSS picks the right variant, no JS detection needed */
+    --hiw-accent: var(--hiw-accent-dk, var(--accent));
+    background: var(--color-bg-secondary, #0f1117);
+    border: 1px solid var(--color-border, #1f2937);
+    border-radius: 20px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow:
+        0 0 0 1px rgba(255,255,255,0.04),
+        0 40px 100px rgba(0,0,0,0.75),
+        0 8px 32px rgba(0,0,0,0.5);
+    animation: hiw-modal-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes hiw-modal-in {
+    from { opacity: 0; transform: scale(0.9) translateY(16px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Light-mode: switch accent to the readable mapped colour — CSS handles this,
+   no JavaScript theme-detection needed */
+html.light .hiw-modal,
+[data-theme="light"] .hiw-modal {
+    --hiw-accent: var(--hiw-accent-lt, var(--hiw-accent-dk));
+}
+
+/* ── Close button ── */
+.hiw-x {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    z-index: 10;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-bg-card, #1f2937);
+    border: 1px solid var(--color-border, #374151);
+    border-radius: 10px;
+    color: var(--color-text-muted, #6b7280);
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.hiw-x:hover {
+    background: var(--color-bg-tertiary, #374151);
+    color: var(--color-text-primary, #f9fafb);
+    border-color: var(--color-text-muted, #6b7280);
+}
+
+/* ── Top bar ── */
+.hiw-topbar {
+    display: flex;
+    align-items: center;
+    padding: 20px 28px 16px;
+    border-bottom: 1px solid var(--color-border, #1f2937);
+    gap: 20px;
+}
+
+.hiw-counter {
+    font-family: monospace;
+    font-size: 14px;
+    font-weight: 900;
+    color: var(--color-text-primary, #f9fafb);
+    white-space: nowrap;
+}
+.hiw-counter-of {
+    color: var(--color-text-muted, #6b7280);
+}
+
+.hiw-dots {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    justify-content: center;
+}
+.hiw-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    background: var(--color-border, #374151);
+    transition: background 0.25s, box-shadow 0.25s, width 0.3s, border-radius 0.3s;
+}
+.hiw-dot:hover { transform: scale(1.4); }
+.hiw-dot.active {
+    width: 28px;
+    border-radius: 5px;
+}
+
+
+/* ── Main content ── */
+.hiw-content {
+    flex: 1;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    min-height: 0;   /* lets flex children shrink below their natural size */
+    overflow: hidden;
+}
+
+/* ── SVG visual panel (left) ── */
+.hiw-visual-wrap {
+    flex: 0 0 56%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 20px 32px 36px;
+    background: var(--color-bg-primary, #0a0d14);
+    border-right: 1px solid var(--color-border, #1f2937);
+}
+
+.hiw-svg {
+    width: 100%;
+    max-width: 480px;
+    height: auto;
+    overflow: visible;
+}
+
+/* ── Text panel (right) ── */
+.hiw-text-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 40px 44px 40px 36px;
+    gap: 18px;
+    overflow-y: auto;
+}
+
+.hiw-chip {
+    display: inline-block;
+    font-family: monospace;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.25em;
+    padding: 5px 14px;
+    border-radius: 20px;
+    border: 1px solid;
+    width: fit-content;
+    color: var(--hiw-accent);
+    border-color: color-mix(in srgb, var(--hiw-accent) 33%, transparent);
+    background:    color-mix(in srgb, var(--hiw-accent)  8%, transparent);
+}
+
+.hiw-title {
+    margin: 0;
+    font-size: 32px;
+    font-weight: 900;
+    line-height: 1.2;
+    color: var(--color-text-primary, #f9fafb);
+    letter-spacing: -0.02em;
+    white-space: pre-line;  /* honours \n in the string */
+}
+
+.hiw-subtitle {
+    margin: 0;
+    font-size: 15px;
+    font-style: italic;
+    color: var(--color-text-muted, #6b7280);
+    line-height: 1.55;
+}
+
+.hiw-body {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.68;
+    color: var(--color-text-secondary, #9ca3af);
+    white-space: pre-line;
+}
+
+/* ── Navigation ── */
+.hiw-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 28px;
+    border-top: 1px solid var(--color-border, #1f2937);
+    gap: 16px;
+    background: var(--color-bg-secondary, #0f1117);
+}
+
+.hiw-nav-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: monospace;
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 0.15em;
+    padding: 11px 24px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border, #374151);
+    background: var(--color-bg-card, #1f2937);
+    color: var(--color-text-muted, #6b7280);
+    cursor: pointer;
+    /* hover changes: background, color */
+    transition: background-color var(--dur-fast, 150ms) var(--ease),
+                color var(--dur-fast, 150ms) var(--ease);
+}
+.hiw-nav-btn:hover:not(:disabled) {
+    background: var(--color-bg-tertiary, #374151);
+    color: var(--color-text-primary, #f9fafb);
+}
+.hiw-nav-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+.hiw-nav-primary {
+    font-size: 14px;
+    color: var(--hiw-accent);
+    border-color: color-mix(in srgb, var(--hiw-accent) 40%, transparent);
+    box-shadow: 0 0 16px color-mix(in srgb, var(--hiw-accent) 13%, transparent);
+}
+.hiw-nav-primary:hover {
+    filter: brightness(1.12);
+}
+
+/* ── Progress bar — absolute overlay at the very bottom of the modal ── */
+.hiw-progress-track {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 7px;
+    background: color-mix(in srgb, var(--color-border, #374151) 70%, transparent);
+    z-index: 200;                    /* above nav bar and everything else */
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1);
+}
+.hiw-progress-fill {
+    height: 100%;
+    border-radius: 0 3px 3px 0;
+    box-shadow: 0 0 14px color-mix(in srgb, var(--hiw-accent) 38%, transparent);
+    /* No CSS transition — rAF at 60fps is already smooth, transition adds lag */
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+   Light mode
+   ──────────────────────────────────────────────────────────────────────────── */
+html.light .hiw-overlay,
+[data-theme="light"] .hiw-overlay {
+    background: rgba(0, 0, 0, 0.5);
+}
+html.light .hiw-modal,
+[data-theme="light"] .hiw-modal {
+    background: var(--color-bg-secondary);
+    border-color: var(--color-border);
+    box-shadow: 0 32px 80px rgba(0,0,0,0.2), 0 8px 24px rgba(0,0,0,0.1);
+}
+html.light .hiw-visual-wrap,
+[data-theme="light"] .hiw-visual-wrap {
+    background: var(--color-bg-tertiary);
+}
+html.light .hiw-title,
+[data-theme="light"] .hiw-title { color: var(--color-text-primary); }
+html.light .hiw-body,
+[data-theme="light"] .hiw-body { color: var(--color-text-secondary); }
+html.light .hiw-subtitle,
+[data-theme="light"] .hiw-subtitle { color: var(--color-text-muted); }
+html.light .hiw-topbar,
+html.light .hiw-nav,
+[data-theme="light"] .hiw-topbar,
+[data-theme="light"] .hiw-nav {
+    background: var(--color-bg-card);
+    border-color: var(--color-border);
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+   Responsive — stack vertically on narrow windows
+   ──────────────────────────────────────────────────────────────────────────── */
+@media (max-width: 700px) {
+    .hiw-content { flex-direction: column; }
+    .hiw-visual-wrap {
+        flex: 0 0 auto;
+        border-right: none;
+        border-bottom: 1px solid var(--color-border, #1f2937);
+        padding: 24px;
+    }
+    .hiw-text-wrap { padding: 24px; }
+    .hiw-title { font-size: 24px; }
+    .hiw-body { font-size: 14px; }
+    .hiw-subtitle { font-size: 13px; }
+}

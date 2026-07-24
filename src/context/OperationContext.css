@@ -1,0 +1,121 @@
+.op-overlay {
+                    position: fixed;
+                    right: 80px;
+                    bottom: 20px;
+                    width: 230px;
+                    background: var(--color-bg-secondary);
+                    border-radius: 4px;
+                    z-index: 20000;
+                    padding: 10px 12px 12px;
+                    animation: op-overlay-in 0.22s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+                    backdrop-filter: blur(16px);
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+                }
+                .op-overlay.light {
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.14);
+                }
+
+                @keyframes op-overlay-in {
+                    from { opacity: 0; transform: translateX(16px) scale(0.96); }
+                    to   { opacity: 1; transform: translateX(0) scale(1); }
+                }
+
+                .op-overlay-header {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    margin-bottom: 8px;
+                }
+
+                .op-overlay-icon {
+                    font-size: 12px;
+                    flex-shrink: 0;
+                }
+
+                .op-overlay-title {
+                    font-family: var(--font-mono);
+                    font-size: 10px;
+                    font-weight: 700;
+                    letter-spacing: 1.5px;
+                    flex: 1;
+                }
+
+                @keyframes op-title-morph {
+                    0%   { transform: scale(1);    }
+                    40%  { transform: scale(1.02); }
+                    100% { transform: scale(1);    }
+                }
+
+                .op-overlay-title.completing {
+                    animation: op-title-morph 250ms ease-out forwards;
+                    transform-origin: left center;
+                }
+
+                .op-overlay-progress {
+                    font-family: var(--font-mono);
+                    font-size: 9px;
+                    flex-shrink: 0;
+                }
+
+                .op-overlay-bar-track {
+                    height: 2px;
+                    border-radius: 2px;
+                    margin-bottom: 8px;
+                    overflow: hidden;
+                }
+
+                .op-overlay-bar-fill {
+                    height: 100%;
+                    border-radius: 2px;
+                    transition: width 0.3s ease;
+                }
+
+                .op-overlay-tasks {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 3px;
+                    max-height: 320px;
+                    overflow-y: auto;
+                }
+
+                .op-task {
+                    display: flex;
+                    align-items: center;
+                    gap: 7px;
+                    padding: 2px 0;
+                    transition: opacity 0.2s;
+                }
+
+                .op-task-icon {
+                    flex-shrink: 0;
+                    width: 14px;
+                    text-align: center;
+                    font-size: 11px;
+                    line-height: 1;
+                }
+
+                .op-icon-idle    { color: var(--color-text-muted); opacity: 0.6; }
+                .op-icon-running {
+                    color: var(--color-warning);
+                    display: inline-block;
+                    animation: op-spin 0.7s linear infinite;
+                }
+                .op-icon-done    { color: var(--color-success); }
+                .op-icon-error   { color: var(--color-danger); }
+
+                @keyframes op-spin {
+                    from { transform: rotate(0deg); }
+                    to   { transform: rotate(360deg); }
+                }
+
+                .op-task-label {
+                    font-family: var(--font-mono);
+                    font-size: 9.5px;
+                    color: var(--color-text-secondary);
+                    letter-spacing: 0.3px;
+                }
+
+                .op-task-idle    { opacity: 0.4; }
+                .op-task-running { opacity: 1; }
+                .op-task-done    { opacity: 0.7; }
+                .op-task-error   { opacity: 0.9; }

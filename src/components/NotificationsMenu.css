@@ -1,0 +1,69 @@
+/*
+ * One-shot badge pulse: fires ONCE when badgeCount transitions 0 -> positive
+ * (a new notification arrived while the menu was closed). SPRING.gentle physics
+ * expressed as a CSS keyframe so it stays in the CSS token SSOT without a framer
+ * wrapper. Duration anchored to --dur-slow (300ms). The html.wc-no-motion block
+ * in v2-theme.css collapses it to 0.01ms automatically.
+ */
+@keyframes wc-badge-arrive {
+  0%   { transform: scale(0.6); opacity: 0; }
+  55%  { transform: scale(1.25);            }
+  75%  { transform: scale(0.92);            }
+  100% { transform: scale(1);   opacity: 1; }
+}
+.wc-badge-pulse {
+  animation: wc-badge-arrive var(--dur-slow, 300ms) var(--ease, cubic-bezier(0.22, 0.61, 0.36, 1)) both;
+}
+
+/*
+ * Two-tab toggle (System Alerts vs Notifications) atop the notifications
+ * panel. Segmented container matches the ui/segmented.tsx look (surface well
+ * + inset border) without pulling in that component.
+ */
+.wc-notif-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+
+.wc-notif-tab {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border-radius: var(--r);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-mute);
+  background: transparent;
+  transition: background-color 150ms var(--ease), color 150ms var(--ease);
+}
+
+.wc-notif-tab:hover {
+  color: var(--text-dim);
+}
+
+.wc-notif-tab-active {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.wc-notif-tab-count {
+  display: grid;
+  place-items: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+}

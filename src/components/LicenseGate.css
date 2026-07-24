@@ -1,0 +1,889 @@
+/* ── Overlay entrance (fade + scale) ──────────────────────────────────────
+   Framer-motion drives the animation via overlayVariants / cardVariants
+   defined in LicenseGate.tsx (uses DURATION_S.slow + EASE.enter from motion.ts).
+   This block adds a CSS fallback for the .wc-no-motion global flag so that
+   the static state (fully visible, scale 1) is enforced without JS dependency.
+   The @media prefers-reduced-motion mirror is handled globally by <MotionConfig>
+   in App.tsx — no duplicate declaration needed here. */
+.wc-no-motion .license-gate-overlay,
+.wc-no-motion .license-gate-card {
+  /* Ensure instant-display when the CSS-only no-motion class is set */
+  animation: none !important;
+  transition: none !important;
+}
+
+.license-gate-overlay {
+          position: fixed;
+          inset: 0;
+          /* Must sit above app chrome so on-demand purchase prompts are
+             visible regardless of the triggering surface. */
+          z-index: 10500;
+          background: rgba(2, 6, 10, 0.97);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+          color: var(--color-text-primary);
+        }
+
+        /* Spinner */
+        .license-gate-spinner {
+          text-align: center;
+          font-family: var(--font-mono);
+        }
+        .license-gate-spinner-icon {
+          font-size: 22px;
+          margin-bottom: 12px;
+          opacity: 0.6;
+          animation: license-spin 1.2s linear infinite;
+          display: inline-block;
+        }
+        .license-gate-spinner-text {
+          font-size: 12px;
+          letter-spacing: 2px;
+          color: rgba(255,255,255,0.4);
+          text-transform: uppercase;
+        }
+        @keyframes license-spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+
+        /* Card */
+.license-gate-card {
+          width: min(560px, 94vw);
+          max-height: 90vh;
+          overflow-y: auto;
+          border-radius: var(--radius-xl);
+          border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+          background: var(--color-bg-primary);
+          box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7);
+          padding: 22px 24px;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+          /* Anchor for the modal-mode close button (×) injected at top-right */
+          position: relative;
+}
+
+.license-gate-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font: 14px/1 var(--font-mono);
+}
+
+        /* ── Inline mode ─────────────────────────────────────────────────
+           When LicenseGate is rendered inside another container, the overlay drops out of the
+           fixed full-screen layer and flows inline in the parent. The
+           backdrop and z-index are suppressed so the parent's chrome
+           remains intact. */
+        .license-gate-overlay.license-gate-overlay--inline {
+          position: relative;
+          inset: auto;
+          padding: 0;
+          background: transparent;
+          z-index: auto;
+          display: block;
+          color: var(--color-text-primary);
+        }
+
+        .license-gate-card.license-gate-card--inline {
+          width: 100%;
+          max-width: 100%;
+          max-height: none;
+          border: none;
+          background: transparent;
+          box-shadow: none;
+          padding: 0;
+          gap: 12px;
+          overflow: visible;
+        }
+
+        /* Close (×) button — inline-styled; ring targets it by position in card */
+        /* Keyboard ring — close button inherits the accent-line ring like all others */
+        .license-gate-card > button:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--accent-line);
+        }
+
+        /* Header */
+        .license-gate-header {
+          border-bottom: 1px solid rgba(255,255,255,0.08);
+          padding-bottom: 14px;
+        }
+        .license-gate-title {
+          font-family: var(--font-mono);
+          letter-spacing: 2px;
+          font-size: 12px;
+          color: var(--color-accent);
+          font-weight: 700;
+          text-transform: uppercase;
+          margin-bottom: 6px;
+        }
+        .license-gate-subtitle {
+          color: rgba(255,255,255,0.5);
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        /* Field */
+        .license-gate-field {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .license-gate-label {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 1.5px;
+          color: rgba(255,255,255,0.35);
+          text-transform: uppercase;
+        }
+        .license-gate-input {
+          background: color-mix(in srgb, var(--accent) 4%, transparent);
+          border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+          color: var(--color-text-primary);
+          padding: 9px 12px;
+          border-radius: var(--radius-md);
+          font-family: var(--font-mono);
+          font-size: 14px;
+          letter-spacing: 1px;
+          outline: none;
+          width: 100%;
+        }
+        .license-gate-input:focus {
+          border-color: var(--color-accent);
+          background: color-mix(in srgb, var(--accent) 6%, transparent);
+        }
+
+        /* Message */
+        .license-gate-message {
+          font-size: 12px;
+          color: var(--color-warning);
+          background: rgba(252,211,77,0.08);
+          border: 1px solid rgba(252,211,77,0.2);
+          padding: 8px 12px;
+          border-radius: var(--radius-md);
+          line-height: 1.5;
+        }
+
+        /* Device hash */
+        .license-gate-device {
+          font-size: 10px;
+          color: rgba(255,255,255,0.25);
+          font-family: var(--font-mono);
+        }
+
+        /* Buttons */
+        .license-gate-buttons {
+          display: flex;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .license-gate-btn-primary {
+          flex: 1;
+          padding: 9px 16px;
+          background: color-mix(in srgb, var(--accent) 12%, transparent);
+          border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+          color: var(--color-accent);
+          border-radius: var(--radius-lg);
+          font-family: var(--font-mono);
+          text-transform: uppercase;
+          font-size: 11px;
+          letter-spacing: 1.5px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+        .license-gate-btn-primary:hover:not(:disabled) {
+          background: color-mix(in srgb, var(--accent) 20%, transparent);
+          box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 25%, transparent);
+        }
+        /* Keyboard ring — matches shadcn ui/button (ring-2 ring-[var(--accent-line)]) */
+        .license-gate-btn-primary:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--accent-line);
+        }
+        .license-gate-btn-primary.disabled,
+        .license-gate-btn-primary:disabled {
+          background: rgba(255,255,255,0.04);
+          border-color: transparent;
+          color: #444;
+          cursor: not-allowed;
+        }
+        .license-gate-btn-retry {
+          padding: 9px 16px;
+          background: transparent;
+          border: 1px solid rgba(255,255,255,0.15);
+          color: rgba(255,255,255,0.6);
+          border-radius: var(--radius-lg);
+          font-family: var(--font-mono);
+          text-transform: uppercase;
+          font-size: 11px;
+          letter-spacing: 1px;
+          cursor: pointer;
+        }
+        .license-gate-btn-retry:disabled {
+          cursor: not-allowed;
+          opacity: 0.4;
+        }
+        /* Keyboard ring */
+        .license-gate-btn-retry:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--accent-line);
+        }
+        /* ── Tab switcher ──────────────────────────────────────────── */
+        .license-gate-tabs {
+          display: flex;
+          border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .license-gate-tab {
+          flex: 1;
+          padding: 8px 12px;
+          background: transparent;
+          border: none;
+          border-bottom: 2px solid transparent;
+          color: rgba(255,255,255,0.4);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 1.5px;
+          text-transform: uppercase;
+          cursor: pointer;
+          transition: color 0.15s, border-color 0.15s;
+          margin-bottom: -1px;
+        }
+        .license-gate-tab.active {
+          color: var(--color-accent);
+          border-bottom-color: var(--color-accent);
+        }
+        .license-gate-tab:hover:not(.active) { color: rgba(255,255,255,0.65); }
+        /* Keyboard ring */
+        .license-gate-tab:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--accent-line);
+        }
+
+        /* ── Tab content ───────────────────────────────────────────── */
+        .license-gate-buy,
+        .license-gate-activate {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+        }
+
+        .license-gate-offers {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+        .license-gate-free {
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+          padding: 10px 12px;
+          border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+          border-radius: var(--radius-md);
+          background: color-mix(in srgb, var(--accent) 5%, transparent);
+          font-size: 11px;
+          line-height: 1.5;
+          color: var(--color-text-muted);
+        }
+        .license-gate-free strong {
+          color: var(--color-text-primary);
+          font-family: var(--font-mono);
+          font-size: 11px;
+        }
+        .license-gate-offer {
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          min-height: 118px;
+          padding: 12px;
+          text-align: left;
+          color: var(--color-text-primary);
+          background: color-mix(in srgb, var(--accent) 3%, transparent);
+          border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+          border-radius: var(--radius-lg);
+          cursor: pointer;
+        }
+        .license-gate-offer:hover,
+        .license-gate-offer.active {
+          border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+          background: color-mix(in srgb, var(--accent) 10%, transparent);
+        }
+        .license-gate-offer:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--accent-line);
+        }
+        .license-gate-offer-heading {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 8px;
+          min-width: 0;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          color: var(--color-accent);
+        }
+        .license-gate-offer-heading span {
+          flex: 1 1 150px;
+          min-width: 0;
+          white-space: normal;
+          overflow-wrap: anywhere;
+          text-align: right;
+          line-height: 1.35;
+          color: var(--color-text-primary);
+        }
+        .license-gate-offer-detail {
+          font-size: 11px;
+          line-height: 1.4;
+          color: rgba(255,255,255,0.58);
+        }
+        .license-gate-offer-badges {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+        }
+        .license-gate-offer-badges > span {
+          padding: 2px 5px;
+          border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+          border-radius: var(--radius-sm);
+          color: color-mix(in srgb, var(--accent) 78%, var(--color-text-muted));
+          font-family: var(--font-mono);
+          font-size: 9px;
+        }
+        .license-gate-offer-device {
+          margin-top: auto;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          color: rgba(255,255,255,0.4);
+        }
+        .license-gate-server-quote {
+          padding: 9px 12px;
+          border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+          border-radius: var(--radius-md);
+          color: rgba(255,255,255,0.62);
+          background: color-mix(in srgb, var(--accent) 3%, transparent);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          line-height: 1.5;
+        }
+        .license-gate-plan-promise {
+          padding: 10px 12px;
+          border-left: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+          background: color-mix(in srgb, var(--accent) 4%, transparent);
+          color: var(--color-text-muted);
+          font-size: 11px;
+          line-height: 1.55;
+        }
+        .license-gate-error-detail {
+          display: block;
+          margin-top: 4px;
+          color: var(--color-text-muted);
+          font-family: var(--font-mono);
+          font-size: 9px;
+          line-height: 1.45;
+          overflow-wrap: anywhere;
+        }
+        .license-gate-checkout-btn {
+          width: 100%;
+          padding: 12px 16px;
+        }
+
+        /* Trial callout — actionable block with button */
+        .license-gate-trial {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          padding: 14px 16px;
+          background: color-mix(in srgb, var(--accent) 6%, transparent);
+          border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+          font-size: 12px;
+          line-height: 1.5;
+          color: rgba(255,255,255,0.75);
+        }
+        .license-gate-trial-left {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          flex: 1;
+          min-width: 0;
+        }
+        .license-gate-trial-icon { font-size: 20px; line-height: 1.2; flex-shrink: 0; }
+        .license-gate-trial strong { color: var(--color-accent); font-size: 13px; }
+        .license-gate-trial-sub {
+          font-size: 11px;
+          color: rgba(255,255,255,0.45);
+          margin-top: 2px;
+        }
+        .license-gate-trial-btn {
+          flex-shrink: 0;
+          padding: 8px 18px;
+          background: color-mix(in srgb, var(--accent) 12%, transparent);
+          border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+          color: var(--color-accent);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 1.5px;
+          text-transform: uppercase;
+          font-weight: 700;
+          cursor: pointer;
+          border-radius: var(--radius-lg);
+          transition: background 0.15s, box-shadow 0.15s;
+          white-space: nowrap;
+        }
+        .license-gate-trial-btn:hover:not(:disabled) {
+          background: color-mix(in srgb, var(--accent) 22%, transparent);
+          box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 30%, transparent);
+        }
+        .license-gate-trial-btn:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
+        /* Keyboard ring */
+        .license-gate-trial-btn:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--accent-line);
+        }
+
+        /* Divider between trial and purchase */
+        .license-gate-divider {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          color: rgba(255,255,255,0.2);
+          font-size: 10px;
+          letter-spacing: 1.5px;
+          text-transform: uppercase;
+          font-family: var(--font-mono);
+        }
+        .license-gate-divider::before,
+        .license-gate-divider::after {
+          content: '';
+          flex: 1;
+          height: 1px;
+          background: rgba(255,255,255,0.1);
+        }
+
+        /* Config rows */
+        .license-gate-config-row {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+        .license-gate-config-row > .license-gate-label { min-width: 56px; }
+        .license-gate-config-hint {
+          font-size: 10px;
+          color: rgba(255,255,255,0.3);
+          font-family: var(--font-mono);
+          margin-left: auto;
+        }
+
+        /* Stepper */
+        .license-gate-stepper {
+          display: flex;
+          align-items: center;
+          border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+        }
+        .license-gate-stepper-btn {
+          width: 28px;
+          height: 28px;
+          background: color-mix(in srgb, var(--accent) 6%, transparent);
+          border: none;
+          color: var(--color-accent);
+          font-size: 16px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: background 0.1s;
+          font-family: var(--font-mono);
+          line-height: 1;
+        }
+        .license-gate-stepper-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+        .license-gate-stepper-btn:disabled { opacity: 0.25; cursor: not-allowed; }
+        /* Keyboard ring */
+        .license-gate-stepper-btn:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--accent-line);
+        }
+        .license-gate-stepper-val {
+          min-width: 32px;
+          text-align: center;
+          font-family: var(--font-mono);
+          font-size: 14px;
+          color: var(--color-text-primary);
+          padding: 0 4px;
+        }
+
+        /* Duration toggle */
+        .license-gate-toggle {
+          display: flex;
+          border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+        }
+        .license-gate-toggle-btn {
+          padding: 5px 14px;
+          background: color-mix(in srgb, var(--accent) 4%, transparent);
+          border: none;
+          color: rgba(255,255,255,0.45);
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 0.5px;
+          cursor: pointer;
+          transition: background 0.12s, color 0.12s;
+        }
+        .license-gate-toggle-btn + .license-gate-toggle-btn {
+          border-left: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+        }
+        .license-gate-toggle-btn.active {
+          background: color-mix(in srgb, var(--accent) 15%, transparent);
+          color: var(--color-accent);
+        }
+        .license-gate-toggle-btn:hover:not(.active) {
+          background: color-mix(in srgb, var(--accent) 8%, transparent);
+          color: rgba(255,255,255,0.7);
+        }
+        /* Keyboard ring */
+        .license-gate-toggle-btn:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--accent-line);
+        }
+
+        /* Amount display */
+        .license-gate-amount-row {
+          display: flex;
+          align-items: baseline;
+          gap: 12px;
+          padding: 4px 0;
+        }
+        .license-gate-amount {
+          font-family: var(--font-mono);
+          font-size: 26px;
+          font-weight: 700;
+          color: var(--color-accent);
+          letter-spacing: 1px;
+        }
+        .license-gate-amount-meta {
+          font-size: 11px;
+          color: rgba(255,255,255,0.35);
+          font-family: var(--font-mono);
+        }
+
+        .license-gate-purchase-state {
+          display: flex;
+          gap: 18px;
+          align-items: flex-start;
+          padding: 14px;
+          background: color-mix(in srgb, var(--accent) 3%, transparent);
+          border: 1px solid color-mix(in srgb, var(--accent) 15%, transparent);
+        }
+        .license-gate-purchase-state-artwork {
+          flex-shrink: 0;
+          padding: 8px;
+          background: #02060a;
+          border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+          line-height: 0;
+          position: relative;
+        }
+        .license-gate-purchase-state-artwork.is-obscured svg {
+          filter: blur(8px);
+          pointer-events: none;
+          user-select: none;
+        }
+        .license-gate-purchase-state-obscured-message {
+          position: absolute;
+          inset: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+          color: color-mix(in srgb, var(--accent) 85%, transparent);
+          padding: 8px;
+          line-height: 1.4;
+          pointer-events: none;
+        }
+        .license-gate-purchase-state-info {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          padding-top: 4px;
+        }
+        .license-gate-license-key {
+          font-family: var(--font-mono);
+          font-size: 12px;
+          color: var(--color-accent);
+          letter-spacing: 0.5px;
+          font-weight: 600;
+          word-break: break-all;
+        }
+        .license-gate-purchase-state-hint {
+          font-size: 11px;
+          color: rgba(255,255,255,0.4);
+          line-height: 1.5;
+        }
+        .license-gate-purchase-note-preview {
+          font-size: 10px;
+          color: color-mix(in srgb, var(--accent) 70%, transparent);
+          font-family: var(--font-mono);
+          letter-spacing: 0.5px;
+          word-break: break-all;
+          line-height: 1.5;
+          padding: 5px 7px;
+          background: color-mix(in srgb, var(--accent) 5%, transparent);
+          border: 1px solid color-mix(in srgb, var(--accent) 15%, transparent);
+        }
+        .license-gate-buy-note {
+          font-size: 11px;
+          color: rgba(255,255,255,0.55);
+          line-height: 1.6;
+          padding-top: 6px;
+          border-top: 1px solid rgba(255,255,255,0.07);
+          margin-top: 4px;
+        }
+
+        @media (max-width: 520px) {
+          .license-gate-offers { grid-template-columns: 1fr; }
+        }
+        /* Error state on email input */
+        .license-gate-input.input-error {
+          border-color: rgba(255, 80, 80, 0.6);
+          background: rgba(255, 80, 80, 0.04);
+        }
+        .license-gate-input.input-error:focus {
+          border-color: rgba(255, 80, 80, 0.9);
+        }
+        .license-gate-field-error {
+          font-size: 10px;
+          color: rgba(255, 100, 100, 0.9);
+          font-family: var(--font-mono);
+          letter-spacing: 0.5px;
+        }
+
+        /* ══════════════════════════════════════════════════════════════════
+         * LIGHT-MODE OVERRIDES
+         * ---------------------------------------------------------------
+         * The base styles were written dark-only — every text color is a
+         * hardcoded rgba(255,255,255,α) which disappears on the light card
+         * background. The overlay itself is near-opaque dark, which blanks
+         * the whole app in light mode. Mirror every white-text and dark-
+         * backdrop rule here with the corresponding light-mode value.
+         * ══════════════════════════════════════════════════════════════════ */
+
+        html.light .license-gate-overlay {
+          background: rgba(240, 243, 248, 0.97);
+          color: var(--color-text-primary);
+        }
+
+        html.light .license-gate-spinner-text {
+          color: rgba(0, 0, 0, 0.55);
+        }
+
+        html.light .license-gate-card {
+          border-color: rgba(14, 165, 233, 0.35);
+          background: #ffffff;
+          box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
+        }
+
+        /* Header */
+        html.light .license-gate-header {
+          border-bottom-color: rgba(0, 0, 0, 0.1);
+        }
+        html.light .license-gate-subtitle {
+          color: rgba(0, 0, 0, 0.65);
+        }
+
+        /* Field labels + inputs */
+        html.light .license-gate-label {
+          color: rgba(0, 0, 0, 0.55);
+        }
+        html.light .license-gate-input {
+          background: rgba(14, 165, 233, 0.05);
+          border-color: rgba(14, 165, 233, 0.35);
+          color: var(--color-text-primary);
+        }
+        html.light .license-gate-input::placeholder {
+          color: rgba(0, 0, 0, 0.35);
+        }
+        html.light .license-gate-input:focus {
+          border-color: #0284c7;
+          background: rgba(14, 165, 233, 0.08);
+        }
+
+        /* Device hash */
+        html.light .license-gate-device {
+          color: rgba(0, 0, 0, 0.4);
+        }
+
+        /* Buttons */
+        html.light .license-gate-btn-primary {
+          background: rgba(14, 165, 233, 0.12);
+          border-color: rgba(14, 165, 233, 0.5);
+          color: #0369a1;
+        }
+        html.light .license-gate-btn-primary:hover:not(:disabled) {
+          background: rgba(14, 165, 233, 0.22);
+          box-shadow: 0 0 14px rgba(14, 165, 233, 0.28);
+        }
+        html.light .license-gate-btn-primary:disabled {
+          background: rgba(0, 0, 0, 0.04);
+          color: rgba(0, 0, 0, 0.3);
+          border-color: transparent;
+        }
+        html.light .license-gate-btn-retry {
+          border-color: rgba(0, 0, 0, 0.2);
+          color: rgba(0, 0, 0, 0.65);
+        }
+
+        /* Tabs */
+        html.light .license-gate-tabs {
+          border-bottom-color: rgba(0, 0, 0, 0.12);
+        }
+        html.light .license-gate-tab {
+          color: rgba(0, 0, 0, 0.5);
+        }
+        html.light .license-gate-tab.active {
+          color: #0284c7;
+          border-bottom-color: #0284c7;
+        }
+        html.light .license-gate-tab:hover:not(.active) {
+          color: rgba(0, 0, 0, 0.78);
+        }
+
+        /* Trial callout */
+        html.light .license-gate-trial {
+          background: rgba(14, 165, 233, 0.06);
+          border-color: rgba(14, 165, 233, 0.35);
+          color: rgba(0, 0, 0, 0.78);
+        }
+        html.light .license-gate-trial strong {
+          color: #0284c7;
+        }
+        html.light .license-gate-trial-sub {
+          color: rgba(0, 0, 0, 0.5);
+        }
+        html.light .license-gate-trial-btn {
+          background: rgba(14, 165, 233, 0.14);
+          border-color: rgba(14, 165, 233, 0.5);
+          color: #0369a1;
+        }
+        html.light .license-gate-trial-btn:hover:not(:disabled) {
+          background: rgba(14, 165, 233, 0.24);
+          box-shadow: 0 0 16px rgba(14, 165, 233, 0.32);
+        }
+
+        /* Divider */
+        html.light .license-gate-divider {
+          color: rgba(0, 0, 0, 0.35);
+        }
+        html.light .license-gate-divider::before,
+        html.light .license-gate-divider::after {
+          background: rgba(0, 0, 0, 0.12);
+        }
+
+        /* Config row */
+        html.light .license-gate-config-hint {
+          color: rgba(0, 0, 0, 0.4);
+        }
+
+        /* Stepper */
+        html.light .license-gate-stepper {
+          border-color: rgba(14, 165, 233, 0.35);
+        }
+        html.light .license-gate-stepper-btn {
+          background: rgba(14, 165, 233, 0.08);
+          color: #0369a1;
+        }
+        html.light .license-gate-stepper-btn:hover:not(:disabled) {
+          background: rgba(14, 165, 233, 0.22);
+        }
+        html.light .license-gate-stepper-val {
+          color: var(--color-text-primary);
+        }
+
+        /* Duration toggle */
+        html.light .license-gate-toggle {
+          border-color: rgba(14, 165, 233, 0.35);
+        }
+        html.light .license-gate-toggle-btn {
+          background: rgba(14, 165, 233, 0.05);
+          color: rgba(0, 0, 0, 0.55);
+        }
+        html.light .license-gate-toggle-btn + .license-gate-toggle-btn {
+          border-left-color: rgba(14, 165, 233, 0.25);
+        }
+        html.light .license-gate-toggle-btn.active {
+          background: rgba(14, 165, 233, 0.18);
+          color: #0369a1;
+        }
+        html.light .license-gate-toggle-btn:hover:not(.active) {
+          background: rgba(14, 165, 233, 0.1);
+          color: rgba(0, 0, 0, 0.78);
+        }
+
+        /* Amount */
+        html.light .license-gate-amount {
+          color: #0369a1;
+        }
+        html.light .license-gate-amount-meta {
+          color: rgba(0, 0, 0, 0.5);
+        }
+
+        html.light .license-gate-purchase-state {
+          background: rgba(14, 165, 233, 0.05);
+          border-color: rgba(14, 165, 233, 0.28);
+        }
+        html.light .license-gate-purchase-state-artwork {
+          background: #ffffff;
+          border-color: rgba(14, 165, 233, 0.35);
+        }
+        html.light .license-gate-purchase-state-obscured-message {
+          color: #0369a1;
+          background: rgba(14, 165, 233, 0.08);
+        }
+        html.light .license-gate-license-key {
+          color: #0369a1;
+        }
+        html.light .license-gate-purchase-state-hint {
+          color: rgba(0, 0, 0, 0.55);
+        }
+        html.light .license-gate-purchase-note-preview {
+          color: #0369a1;
+          background: rgba(14, 165, 233, 0.07);
+          border-color: rgba(14, 165, 233, 0.28);
+        }
+        html.light .license-gate-buy-note {
+          color: rgba(0, 0, 0, 0.65);
+          border-top-color: rgba(0, 0, 0, 0.1);
+        }
+
+        /* Input error state */
+        html.light .license-gate-input.input-error {
+          border-color: rgba(200, 50, 50, 0.6);
+          background: rgba(200, 50, 50, 0.05);
+        }
+        html.light .license-gate-input.input-error:focus {
+          border-color: rgba(200, 50, 50, 0.85);
+        }
+        html.light .license-gate-field-error {
+          color: rgba(180, 40, 40, 0.95);
+        }
+
+        /* Message / warning callout */
+        html.light .license-gate-message {
+          color: #92400e;
+          background: rgba(252, 211, 77, 0.15);
+          border-color: rgba(252, 211, 77, 0.4);
+        }

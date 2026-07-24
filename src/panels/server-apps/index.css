@@ -1,0 +1,234 @@
+.server-apps-panel {
+                    display: flex;
+                    flex-direction: column;
+                    height: 100%;
+                    overflow: hidden;
+                    background: transparent;
+                    padding: 0 !important;
+                }
+
+                /* ── Tab Bar ──────────────────────────────────────── */
+                .server-tabs-bar {
+                    display: flex;
+                    flex-shrink: 0;
+                    background: var(--color-bg-secondary);
+                    border-bottom: 1px solid var(--color-border);
+                    padding: 0 4px;
+                    gap: 2px;
+                    overflow-x: auto;
+                    scrollbar-width: none;
+                    height: 40px;
+                    align-items: flex-end;
+                }
+                .server-tabs-bar::-webkit-scrollbar { display: none; }
+
+                .server-tab {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 6px 16px;
+                    height: 34px;
+                    border: none;
+                    border-radius: 6px 6px 0 0;
+                    background: transparent;
+                    color: var(--color-text-secondary);
+                    cursor: pointer;
+                    font-family: var(--font-mono);
+                    font-size: 11px;
+                    font-weight: 600;
+                    letter-spacing: 0.5px;
+                    text-transform: uppercase;
+                    white-space: nowrap;
+                    /* hover/active changes: background, color */
+                    transition: background-color var(--dur-fast, 150ms) var(--ease),
+                                color var(--dur-fast, 150ms) var(--ease);
+                    position: relative;
+                    flex-shrink: 0;
+                }
+
+                .server-tab:hover {
+                    background: var(--color-bg-tertiary);
+                    color: var(--color-text-primary);
+                }
+
+                .server-tab.active {
+                    background: var(--color-bg-primary);
+                    color: var(--color-accent);
+                    border: 1px solid var(--color-border);
+                    border-bottom: 1px solid var(--color-bg-primary);
+                    margin-bottom: -1px;
+                }
+
+                .server-tab-label {
+                    max-width: 140px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
+
+                /* ── Manage button (right-pinned) ─────────────────── */
+                .server-tab-manage {
+                    margin-left: auto;
+                    color: var(--color-text-secondary);
+                    opacity: 0.65;
+                    border-radius: 6px 6px 0 0;
+                    flex-shrink: 0;
+                }
+                .server-tab-manage:hover {
+                    opacity: 1;
+                    color: var(--color-accent);
+                }
+
+                /* ══════════════════════════════════════════════
+                   Manage Apps Dialog
+                ══════════════════════════════════════════════ */
+
+                .manage-app-row {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 10px;
+                    padding: 10px 0;
+                    border-bottom: 1px solid var(--color-border);
+                }
+                .manage-app-row:last-of-type {
+                    border-bottom: none;
+                }
+
+                .manage-app-order {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 2px;
+                    flex-shrink: 0;
+                    padding-top: 2px;
+                }
+                .manage-app-order-btn {
+                    background: none;
+                    border: none;
+                    color: var(--color-text-secondary);
+                    cursor: pointer;
+                    font-size: 9px;
+                    padding: 2px 4px;
+                    border-radius: 3px;
+                    line-height: 1;
+                    transition: background 0.1s;
+                }
+                .manage-app-order-btn:hover:not(:disabled) {
+                    background: var(--color-bg-tertiary);
+                    color: var(--color-text-primary);
+                }
+                .manage-app-order-btn:disabled {
+                    opacity: 0.25;
+                    cursor: default;
+                }
+                .manage-app-num {
+                    font-family: var(--font-mono);
+                    font-size: 10px;
+                    color: var(--color-text-secondary);
+                    min-width: 14px;
+                    text-align: center;
+                }
+
+                .manage-app-icon-preview {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 6px;
+                    background: var(--color-bg-tertiary);
+                    border: 1px solid var(--color-border);
+                    flex-shrink: 0;
+                    margin-top: 2px;
+                    color: var(--color-accent);
+                }
+
+                .manage-app-fields {
+                    flex: 1;
+                    min-width: 0;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                }
+
+                .manage-app-row-top {
+                    display: flex;
+                    gap: 8px;
+                }
+
+                .manage-app-form-group {
+                    margin-bottom: 0 !important;
+                    flex: 1;
+                }
+
+                .manage-app-icon-select {
+                    max-width: 130px;
+                    flex: 0 0 130px;
+                }
+                .manage-app-icon-select select {
+                    font-size: 11px;
+                }
+
+                .manage-app-url {
+                    flex: 1;
+                }
+
+                .manage-app-css-toggle {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                }
+                .manage-app-css-btn {
+                    background: none;
+                    border: none;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                    font-family: var(--font-mono);
+                    font-size: 10px;
+                    color: var(--color-text-secondary);
+                    padding: 2px 0;
+                    text-transform: uppercase;
+                    letter-spacing: 0.4px;
+                    width: fit-content;
+                }
+                .manage-app-css-btn:hover {
+                    color: var(--color-text-primary);
+                }
+                .manage-app-css-area {
+                    font-family: var(--font-mono) !important;
+                    font-size: 11px !important;
+                    resize: vertical;
+                }
+
+                .manage-app-delete {
+                    flex-shrink: 0;
+                    margin-top: 2px;
+                }
+
+                .manage-apps-add-btn {
+                    margin-top: 10px;
+                    width: 100%;
+                    justify-content: center;
+                    border: 1px dashed var(--color-border) !important;
+                    border-radius: 6px !important;
+                    color: var(--color-accent) !important;
+                    font-family: var(--font-mono);
+                    font-size: 11px;
+                    letter-spacing: 0.4px;
+                }
+                .manage-apps-add-btn:hover {
+                    border-color: var(--color-accent) !important;
+                    background: var(--color-bg-tertiary) !important;
+                }
+
+                .manage-apps-empty {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 10px;
+                    padding: 30px 0;
+                    color: var(--color-text-secondary);
+                    font-size: 12px;
+                    text-align: center;
+                }
