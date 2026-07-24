@@ -113,14 +113,8 @@ export default function DashboardPanel() {
   const isFixEverythingRunning = activeTasks.some(
     (t) => t.status === "running" && t.label === "Fix Everything"
   );
-  // KT: isFixEverythingRunning (above, derived from TaskStatusContext) wasn't
-  // reliably flipping true in testing — DevTools showed the blur classes
-  // never gaining is-blurred during a real run even with visible per-item
-  // spinners. Rather than chase the TaskStatusContext indirection further,
-  // this is a directly-owned, synchronous local flag: set the instant Fix
-  // All is clicked (in handleFixAll below), cleared only once fixFindings'
-  // returned promise settles. Declared up here (not next to handleFixAll)
-  // so it's in scope for activeFindings' filter too.
+  // This directly-owned flag covers the interval before TaskStatusContext
+  // registers the operation, preventing duplicate Fix All submissions.
   const [isFixAllRunning, setIsFixAllRunning] = useState(false);
   const fixAllInProgress = isFixEverythingRunning || isFixAllRunning;
   // App-update ids claimed by any in-flight upgrade (marked synchronously at
@@ -626,10 +620,8 @@ export default function DashboardPanel() {
     // when Fix Everything is already running (e.g. rapid double-click).
     if (fixAllInProgress) return;
     setIsFixAllRunning(true);
-    window.dispatchEvent(new CustomEvent("fix-everything-running", { detail: { running: true } }));
     void fixFindings(activeFindings, "Fix Everything").finally(() => {
       setIsFixAllRunning(false);
-      window.dispatchEvent(new CustomEvent("fix-everything-running", { detail: { running: false } }));
     });
   }, [fixFindings, activeFindings, fixAllInProgress]);
   const handleHealDrift = useCallback(() => fixFindings(driftFindings, "Heal Drift"), [fixFindings, driftFindings]);
@@ -731,7 +723,7 @@ export default function DashboardPanel() {
   // The actions that live INSIDE Needs-Attention while it's expanded (and
   // below the radar when it's collapsed): the disk-cleanup chip + Update All Apps.
   const fixFooterActions = (cleanLabel || pendingAppUpdateCount > 0) ? (
-    <div className={`na-footer-actions dash-blur-target${fixAllInProgress ? " is-blurred" : ""}`}>
+    <div className="na-footer-actions">
       {cleanLabel && !borrowedActive && (
         <button
           type="button"
@@ -780,9 +772,7 @@ export default function DashboardPanel() {
             Collapses to w-0 on non-map views so the center takes full width.
             On small screens, constrains to max-w-[20vw] to preserve center space. */}
         <div className={`dashboard-top-bar transition-all duration-300 ${effectiveViewMode !== "map" ? "w-0 opacity-0 pointer-events-none" : "w-[260px] opacity-100"}`}>
-          <div className={`dash-blur-target${fixAllInProgress ? " is-blurred" : ""}`}>
-            <RecentDownloadsCard />
-          </div>
+          <RecentDownloadsCard />
           <div data-tour="dashboard-privacy-toggles">
             <PrivacyTogglesCard
               cameraBlocked={cameraBlocked}
@@ -793,7 +783,6 @@ export default function DashboardPanel() {
               internetCut={internetCut}
               internetPending={internetPending}
               onToggleInternet={handleToggleInternet}
-              isFixEverythingRunning={fixAllInProgress}
             />
           </div>
         </div>
@@ -801,7 +790,7 @@ export default function DashboardPanel() {
         {/* ── Left: Radar / Risk / Products ─────────────────────── */}
         <div className="dash-left">
           {!(effectiveViewMode === "map" && hideCenterChrome) && (
-            <div className={`dash-blur-target${fixAllInProgress ? " is-blurred" : ""}`}>
+            <div>
               <ViewToggle
                 viewMode={effectiveViewMode}
                 setViewMode={setViewMode}
@@ -871,13 +860,13 @@ export default function DashboardPanel() {
                     onNodeClick={setCategoryFilter}
                   />
                   {!hideCenterChrome && (
-                    <div className={`dashboard-radar-updates dash-blur-target${fixAllInProgress ? " is-blurred" : ""}`}>
+                    <div className="dashboard-radar-updates">
                       <UpdaterStatus />
                     </div>
                   )}
                   </div>
                   {driftFindings.length > 0 && (
-                    <div className={`dashboard-drift-oneshot dash-blur-target${fixAllInProgress ? " is-blurred" : ""}`}>
+                    <div className="dashboard-drift-oneshot">
                       <button
                         type="button"
                         className="dashboard-heal-drift-btn"
@@ -922,7 +911,7 @@ export default function DashboardPanel() {
             KT: Was position:absolute (same problem as left sidebar above).
             Now a real flex-column sibling; collapses to w-0 on non-map views.
             On small screens, constrains to max-w-[22vw] to preserve center space. */}
-        <div className={`dashboard-right-bar dash-blur-target transition-all duration-300 ${fixAllInProgress ? "is-blurred " : ""}${effectiveViewMode !== "map" ? "w-0 opacity-0 pointer-events-none" : "w-[320px] opacity-100"}`}>
+        <div className={`dashboard-right-bar transition-all duration-300 ${effectiveViewMode !== "map" ? "w-0 opacity-0 pointer-events-none" : "w-[320px] opacity-100"}`}>
           <div data-tour="dashboard-hardware-specs">
             <HardwareSpecsCard
               isLoading={isLoading}

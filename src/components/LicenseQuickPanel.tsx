@@ -193,16 +193,18 @@ export default function LicenseQuickPanel() {
     }
   };
 
-      // We consider the panel collapsed if days > 14 and NOT hovered.
-  // We want to show everything if there are <= 14 days left, or if hovered.
-  // But wait, what if there's an error message or the license isn't active? We should show the form.
-  const initialExpanded = status ? (!isActive || (daysRemaining !== null && daysRemaining <= 14)) : false;
+  // Keep licensing controls opt-in. A fresh Free install must open directly
+  // to the dashboard, not an activation prompt; the panel expands when its
+  // header is intentionally selected.
+  const initialExpanded = status
+    ? isActive && daysRemaining !== null && daysRemaining <= 14
+    : false;
   const [isExpanded, setIsExpanded] = useState(initialExpanded);
   const [hasAutoSet, setHasAutoSet] = useState(false);
 
   useEffect(() => {
     if (status && !hasAutoSet) {
-        setIsExpanded(!isActive || (daysRemaining !== null && daysRemaining <= 14));
+        setIsExpanded(isActive && daysRemaining !== null && daysRemaining <= 14);
         setHasAutoSet(true);
     }
   }, [status, isActive, daysRemaining, hasAutoSet]);

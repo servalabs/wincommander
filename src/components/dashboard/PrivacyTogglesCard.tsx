@@ -13,10 +13,6 @@ interface PrivacyTogglesCardProps {
   /** True while a kill-switch toggle is in flight (disables the button). */
   internetPending?: boolean;
   onToggleInternet?: (cut: boolean) => void;
-  /** True while "Fix Everything" is running — blurs the Cam/Mic/Internet
-   *  toggles (everything in this card except RadarControlStrip, which is
-   *  exempted alongside the radar itself). */
-  isFixEverythingRunning?: boolean;
 }
 
 /**
@@ -34,11 +30,10 @@ export default function PrivacyTogglesCard({
   internetCut = false,
   internetPending = false,
   onToggleInternet,
-  isFixEverythingRunning = false,
 }: PrivacyTogglesCardProps) {
   return (
     <div className="privacy-toggles-card">
-      <div className={`ptc-toggles dash-blur-target${isFixEverythingRunning ? " is-blurred" : ""}`}>
+      <div className="ptc-toggles">
         <div className="ptc-title">PRIVACY</div>
         <div className="dashboard-capability-toggles">
           {cameraAvailable ? (

@@ -165,22 +165,6 @@ html.light .tech-grid.armed {
     margin: auto 0;
 }
 
-/* ── Fix Everything busy-blur ───────────────────────────────────────
-   While `isFixEverythingRunning` (dashboard/index.tsx) is true, every
-   dashboard surface is blurred + inert EXCEPT SovereigntyRadar,
-   RadarControlStrip, and the NeedsAttention findings list — so the user
-   can watch the run land without queuing an overlapping fix on a control
-   mid-update. */
-.dash-blur-target {
-    transition: filter var(--dur-normal) var(--ease);
-}
-
-.dash-blur-target.is-blurred {
-    filter: blur(5px);
-    pointer-events: none;
-    user-select: none;
-}
-
 /* System Card — flat tokened surface (unified with SectionCard 2026-06) */
 .system-status-card {
     background: var(--color-bg-card);
@@ -1196,8 +1180,7 @@ html.light .tech-grid.armed {
 }
 
 /* Wraps Cam/Mic/Internet (everything except RadarControlStrip, which sits
-   outside as a sibling so it's exempt from the Fix Everything busy-blur —
-   see .dash-blur-target). Reproduces the flex-column gap that used to come
+   outside as a sibling). Reproduces the flex-column gap that used to come
    from .privacy-toggles-card's own layout before this wrapper existed. */
 .privacy-toggles-card .ptc-toggles {
     display: flex;

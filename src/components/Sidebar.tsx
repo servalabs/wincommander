@@ -14,7 +14,6 @@ import { getModuleForPanel, getModuleDef, isModuleEnabled } from "../types/modul
 import type { ModuleConfig } from "../types/modules";
 import { executeBackendCommand } from "../hooks/useBackend";
 import { runOperation } from "../context/OperationContext";
-import { useTaskStatus } from "../context/TaskStatusContext";
 import useVisibility from "../hooks/useVisibility";
 import useBorrowedActive from "../hooks/useBorrowedActive";
 import { DEFAULT_ALWAYS_PANELS, DEFAULT_BORROWED_PANELS } from "../lib/visibilityDefaults";
@@ -75,26 +74,6 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
   const visibility = useVisibility();
   const score = useSovereigntyScore();
   const isDevBuild = useIsDevBuild();
-  // Blurred/inert while Fix Everything runs — same treatment as the rest of
-  // the dashboard chrome (dashboard/index.tsx's fixAllInProgress). The
-  // TaskStatusContext signal alone wasn't reliably flipping true in testing,
-  // so dashboard/index.tsx also broadcasts a plain window event the instant
-  // it starts/stops Fix All — Sidebar isn't a descendant of the dashboard
-  // panel, so this (not a prop) is how it stays in sync.
-  const { tasks: activeTasks } = useTaskStatus();
-  const isFixEverythingRunning = activeTasks.some(
-    (t) => t.status === "running" && t.label === "Fix Everything"
-  );
-  const [fixAllRunningEvent, setFixAllRunningEvent] = useState(false);
-  useEffect(() => {
-    const onFixAllRunning = (e: Event) => {
-      setFixAllRunningEvent(Boolean((e as CustomEvent<{ running?: boolean }>).detail?.running));
-    };
-    window.addEventListener("fix-everything-running", onFixAllRunning);
-    return () => window.removeEventListener("fix-everything-running", onFixAllRunning);
-  }, []);
-  const fixAllInProgress = isFixEverythingRunning || fixAllRunningEvent;
-
   const { mode: authMode } = useAuthMode();
   const { appSettings, dependencyStatus, patchAppSettings, refreshDependencies } = useAppState();
   const [installingDeps, setInstallingDeps] = useState<Record<string, boolean>>({});
@@ -362,7 +341,7 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
   };
 
   return (
-    <nav className={`sidebar ${score.isArmed ? 'armed' : ''} ${collapsed ? 'collapsed' : ''} ${fixAllInProgress ? 'fix-blurred' : ''}`} data-tour="sidebar">
+    <nav className={`sidebar ${score.isArmed ? 'armed' : ''} ${collapsed ? 'collapsed' : ''}`} data-tour="sidebar">
       <div className="sidebar-header">
         <button
           className="sidebar-collapse-btn"

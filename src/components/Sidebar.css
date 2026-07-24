@@ -231,17 +231,6 @@
                       filter var(--dur-normal, 200ms) var(--ease);
         }
 
-        /* Blurred/inert while Fix Everything runs — mirrors dashboard/index.css's
-           .dash-blur-target treatment (filter: blur, not backdrop-filter, so it
-           only costs a repaint while this transient class is applied — see the
-           2026-06-09 perf note above about permanent backdrop-filter on this
-           always-visible chrome). */
-        .sidebar.fix-blurred {
-          filter: blur(5px);
-          pointer-events: none;
-          user-select: none;
-        }
-
         /* Ghost icon button — matches .sidebar-item / .sidebar-power-btn
            (transparent, no border/fill until hovered) instead of standing
            out as a bordered card against the flat sidebar (2026-07-09 fix). */
