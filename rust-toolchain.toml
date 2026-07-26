@@ -6,6 +6,6 @@
 # To upgrade: change `channel` to the new stable version, commit, and the
 # next CI run will pick it up.  Dependabot can automate this.
 [toolchain]
-channel  = "1.96.0"
+channel  = "1.97.1"
 targets  = ["x86_64-pc-windows-msvc"]
 components = ["rustfmt", "clippy"]

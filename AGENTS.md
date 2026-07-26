@@ -50,9 +50,9 @@
 
 All commands run from the repo root in PowerShell on Windows 11 (Administrator for most runtime operations).
 
-- **Setup:** `bun install`
-- **Run / dev:** `bun x tauri dev --config src-tauri/commander-free/tauri.conf.json`
-  - canonical entry; runs `beforeDevCommand` (fetch icons → `bun run dev`: kill stale dev procs → `encrypt-backend` → build Pro debug → Vite). Use `bun run dev:reset` to erase `%APPDATA%\WinCommander\settings.json` and test first-launch Help & Setup.
+- **Setup:** first run `powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\dev.ps1` — installs Bun when absent and the exact Rust toolchain from `rust-toolchain.toml`; Visual Studio C++ Build Tools remain a manual prerequisite. Afterwards, `bun install` is sufficient.
+- **Run / dev:** `bun run dev:tauri`
+  - canonical entry; runs `beforeDevCommand` (verify pinned toolchain → fetch icons → `bun run dev:server`: kill stale dev procs → `encrypt-backend` → build Pro debug → Vite). Use `bun run dev:reset` to erase `%APPDATA%\WinCommander\settings.json` and test first-launch Help & Setup.
 - **Build (release):** `bun run build` (salt rotate → Pro release build → `tsc` → `vite build` → bundle).
 - **Pro sidecar:** `bun run build:pro` / `build:pro:release` (auto-discovers the sibling Pro workspace; override with `WINCOMMANDER_PRO_WORKSPACE` if your local checkout lives elsewhere).
 - **Fleet server:** `cargo test -p fleet-server` (from `../commander-pro/`); no Postgres required — memory store impls handle all tests. Set `DATABASE_URL` to run Postgres integration tests.
@@ -60,7 +60,7 @@ All commands run from the repo root in PowerShell on Windows 11 (Administrator f
 - **Re-encrypt PS modules:** `bun run encrypt-backend` — **required after any edit to `scripts/**/*.ps1`** (rotates the per-build AES salt; `build.rs` picks it up next `cargo build`).
 - **Type-check:** `bun x tsc --noEmit`
 - **Lint (frontend):** `bun run lint` (`eslint . --max-warnings=0`) — **blocking CI gate**
-- **Lint (Rust):** `cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings` — **blocking CI gate**; toolchain pinned to 1.96.0 (`rust-toolchain.toml`) so local == CI
+- **Lint (Rust):** `cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings` — **blocking CI gate**; toolchain pinned to 1.97.1 (`rust-toolchain.toml`) so local == CI
 - **Tier + risk invariants:** `bun run lint:tiers`
 - **Regenerate Rust→TS wire types:** `bun run gen:types` — **required after editing the fleet/IPC wire types** in `fleet-proto` (reachable as `wincmd_shared::fleet`) or the IPC envelope in `lib.rs`; rewrites `src/types/generated/*`. CI's `codegen-drift` job (`bun run gen:types:check`) blocks the merge if you forget. `src-tauri/wincmd-shared/bindings/` is gitignored ts-rs scratch — never hand-edit `generated/`
 - **Free-binary AV-clean strings gate:** `bun run lint:strings-free` — reads forbidden tokens from `tools/strings-grep-forbidden.txt` (edit there, not the script); runs locally as a **hard gate** (`-HardGate`, exits 1 on any hit); the CI `strings-grep-free` job runs the same scan as a **blocking** gate (no `continue-on-error`), so a forbidden token fails the merge

@@ -43,10 +43,6 @@ and [OPEN_CORE.md](OPEN_CORE.md).
 Prerequisites:
 
 - Windows 11 (Admin account)
-- [Bun](https://bun.sh) (the repo standardises on Bun; other lockfiles
-  are gitignored)
-- Rust toolchain (MSVC) — `rustup default stable` + `rustup target add
-  x86_64-pc-windows-msvc`
 - Visual Studio Build Tools 2026 with **Desktop development with C++**,
   **MSVC v143**, and **Windows 11 SDK (10.0.26100)**
 - Optional: Python 3.12 if you're touching the AI / Privacy Shield
@@ -55,13 +51,16 @@ Prerequisites:
 Install + run:
 
 ```powershell
-bun install
-bun x tauri dev      # canonical: launches the full Tauri window lifecycle
+# First run — installs Bun when absent and the Rust version pinned by this repo.
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\dev.ps1
+
+# Subsequent runs
+bun run dev:tauri    # canonical: launches the full Tauri window lifecycle
 bun run dev:reset    # erases %APPDATA%\WinCommander\settings.json first
 ```
 
-`bun x tauri dev` invokes the `beforeDevCommand` from
-`tauri.conf.json`, which runs `bun run dev` (encrypt-backend → build
+`bun run dev:tauri` invokes the `beforeDevCommand` from
+`tauri.conf.json`, which verifies the pinned toolchain, then runs `bun run dev:server` (encrypt-backend → build
 Pro sidecar in debug → launch Vite) and then opens the Tauri window.
 The bare `bun run dev` only runs the frontend pipeline without the
 Tauri window — useful for frontend-only iteration but you won't see
@@ -116,7 +115,7 @@ bun run dev:tauri:free
 ```
 
 `bun run dev:tauri:free` is an alias for `bun run dev:tauri` (both
-invoke the same `bun x tauri dev --config src-tauri/commander-free/tauri.conf.json`).
+invoke the same bootstrap, which runs `bun x tauri dev --config src-tauri/commander-free/tauri.conf.json`).
 The `beforeDevCommand` will error when it hits `build:pro` and there is
 no `../commander-pro` sibling, but by that point Vite is already
 serving from terminal 1, and Tauri connects to it successfully. The

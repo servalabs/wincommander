@@ -46,9 +46,12 @@ Or run from source:
 ```powershell
 git clone https://github.com/servalabs/wincommander.git
 cd wincommander
-bun install
-bun x tauri dev --config src-tauri/commander-free/tauri.conf.json
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\dev.ps1
 ```
+
+`tools/dev.ps1` installs Bun 1.3.14 when absent, installs the exact Rust
+toolchain/components pinned in `rust-toolchain.toml`, then starts Tauri. The
+Visual Studio C++ Build Tools and Windows SDK remain manual prerequisites.
 
 ## Free vs Pro
 
