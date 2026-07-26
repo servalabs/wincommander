@@ -3,6 +3,7 @@ import { useSearchQuery } from "../../context/SearchContext";
 import { useAppState } from "../../context/AppContext";
 import useVisibility from "../../hooks/useVisibility";
 import useEntitlements from "../../hooks/useEntitlements";
+import { useTourActive } from "../../lib/tourActive";
 import { argus } from "../../hooks/useArgus";
 import { authAnomalyStatus, sessionMonitorStatus } from "../../hooks/monitorStatus";
 import ToggleSection from "../../components/shared/ToggleSection";
@@ -45,6 +46,7 @@ export default function PrivacyPanel() {
     const { canUse } = useEntitlements();
 
     const isAdvanced = density === "expert";
+    const tourActive = useTourActive();
 
     // Accordion for the Alerts & Monitoring cards: only one expandable card open
     // at a time. Opening one collapses the rest so the grid reorganizes cleanly.
@@ -55,7 +57,12 @@ export default function PrivacyPanel() {
     });
 
     const showPrivacyControls = visibility.isVisible({ capability: ["privacy"] });
-    const showExpertPrivacy = density === "expert";
+    // Revealed during a tour as well as in Expert: the walkthrough anchors a
+    // step to Browser Hardening (and, via showMonitoring below, to Privacy
+    // Shield and RDP Idle), and a Guided user got a broken step where the
+    // anchor never mounted (2026-07-26 fix). `isAdvanced` stays density-only,
+    // so the section keeps its Guided wording — only its presence changes.
+    const showExpertPrivacy = density === "expert" || tourActive;
     const showMonitoring = visibility.isVisible({ capability: ["monitoring"] }) || showExpertPrivacy;
 
     const privacyToggles = PRIVACY_TOGGLES;

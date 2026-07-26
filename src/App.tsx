@@ -73,6 +73,7 @@ import { PANEL_MANIFESTS, type PanelId } from "./types/panels";
 import { getModuleForPanel, isModuleEnabled } from "./types/modules";
 import { setSoundEnabled } from "./utils/sound";
 import { importPanelWithRetry } from "./lib/panelLoading";
+import { isTourActive } from "./lib/tourActive";
 
 // INACTIVITY TIMER: After this amount of no mouse or keyboard activity, 
 // we pause all active panel polling to save resources on Rust sysinfo calls,
@@ -801,7 +802,12 @@ function AppContent() {
       return;
     }
     const moduleId = getModuleForPanel(panel);
-    if (moduleId && !isModuleEnabled(appSettings?.app?.modules, moduleId)) {
+    // A running tour navigates itself and must be allowed through: System
+    // Cleanup's module is off by default for the Casual persona, so the Scan
+    // All step's `navigate-panel` was dropped here and its anchor never
+    // mounted, breaking the tour from that step on (2026-07-26 fix). Only
+    // navigation is relaxed — the module stays off.
+    if (moduleId && !isModuleEnabled(appSettings?.app?.modules, moduleId) && !isTourActive()) {
       return;
     }
     if (panel === activePanel) {

@@ -365,10 +365,13 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     body: "Disk Clean-Up shows a live running total of reclaimable space as you select categories, before you clear anything.",
     tour: {
       // Whole card highlighted as usual, PLUS a bolder secondary ring
-      // nested around the live MB counter specifically — "highlighted, but
-      // double highlighted with another rectangle" (2026-07-10 fix).
+      // nested around the action row — "highlighted, but double highlighted
+      // with another rectangle" (2026-07-10 fix). The secondary ring covers
+      // the whole row, not just the MB counter <span>, so the Clean button the
+      // copy refers to sits inside it too (2026-07-26 fix: "only size is
+      // highlighted, not clean button").
       anchor: '[data-tour="maintenance-disk-cleanup"]',
-      secondaryAnchor: '[data-tour="maintenance-disk-cleanup-mb"]',
+      secondaryAnchor: '[data-tour="maintenance-disk-cleanup-actions"]',
       navigateTo: "maintenance",
       openEvent: "open-maintenance-storage",
       placement: "right",

@@ -226,7 +226,11 @@ export default function DiskCleanupGranular() {
 
     return (
         <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
+            {/* Tour anchor: the whole action row, so the secondary ring covers
+                the Clean button together with the live MB counter it feeds.
+                Ringing the counter <span> alone highlighted the number and left
+                Clean outside the box (2026-07-26 fix). */}
+            <div data-tour="maintenance-disk-cleanup-actions" className="flex flex-wrap items-center gap-2">
                 <Button size="icon" variant="primary" disabled={loading} onClick={() => void refresh()} title={scanLabel} aria-label={scanLabel}>
                     <Icon icon={loading || cats.length ? "refresh" : "search"} className={loading ? "animate-spin" : undefined} />
                 </Button>
@@ -237,10 +241,7 @@ export default function DiskCleanupGranular() {
                     title="Run the built-in Windows cleanup sweep (cleanmgr) across every system category">
                     <Icon icon="eraser" />{cleaningAll ? "Sweeping…" : "Windows sweep"}
                 </Button>
-                {/* Tour anchor: the live reclaimable-MB counter specifically,
-                    not the whole card — this is the number the tour step is
-                    actually pointing at (2026-07-10 fix). */}
-                <span data-tour="maintenance-disk-cleanup-mb" className="font-mono text-[11px] font-semibold whitespace-nowrap text-[var(--text-mute)]">
+                <span className="font-mono text-[11px] font-semibold whitespace-nowrap text-[var(--text-mute)]">
                     {`${totalSelectedMb.toFixed(0)} MB selected`}
                 </span>
                 {schedulesEnabled ? (

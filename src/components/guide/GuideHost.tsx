@@ -15,6 +15,7 @@ import { GUIDE_TOPICS } from "../../content/guide";
 import { resolveTourSteps } from "../../lib/tour";
 import type { TourStep } from "../../content/guide/types";
 import { getDensityForSettings } from "../../lib/personaMigration";
+import { setTourActive } from "../../lib/tourActive";
 import useBraveInstalled from "../../hooks/useBraveInstalled";
 
 // The full onboarding sequence — Dashboard's hero moments (Fix all, Scrub,
@@ -75,6 +76,16 @@ export default function GuideHost() {
     }, 500);
     return () => window.clearTimeout(timer);
   }, [appSettings, startupComplete, density, braveInstalled]);
+
+  // Publish "a tour is running" for the surfaces that hide a step's anchor
+  // outside Expert density or behind a disabled module — see lib/tourActive.ts.
+  // Driven off `steps` (not the start/close callbacks) so an unmount mid-tour
+  // still clears it.
+  const tourRunning = steps !== null && steps.length > 0;
+  useEffect(() => {
+    setTourActive(tourRunning);
+    return () => setTourActive(false);
+  }, [tourRunning]);
 
   const handleClose = useCallback((completed: boolean) => {
     // The mandatory run can only reach onClose via natural completion (its
