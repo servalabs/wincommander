@@ -26,7 +26,6 @@ import {
 import {
   ACTION_LABELS,
   GAZE_KIND_LABELS,
-  SETTING_PATH_CATALOG,
   TOGGLE_CATALOG,
   TRIGGER_LABELS,
   defaultAction,
@@ -40,10 +39,17 @@ import {
   type Trigger,
   type TriggerType,
 } from "./rules";
+import {
+  DEFAULT_FLOW_SETTING_OPTIONS,
+  formatFlowSettingValue,
+  parseFlowSettingValue,
+  type FlowSettingOption,
+} from "./settingsCatalog";
 
 interface Props {
   rule: Rule;
   commands: string[];
+  settingOptions: FlowSettingOption[];
   onSave(rule: Rule): Promise<void>;
   onClose(): void;
 }
@@ -77,7 +83,7 @@ function Sel<T extends string>({
   );
 }
 
-export default function RuleEditor({ rule, commands, onSave, onClose }: Props) {
+export default function RuleEditor({ rule, commands, settingOptions, onSave, onClose }: Props) {
   const [draft, setDraft] = useState<Rule>(rule);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +117,14 @@ export default function RuleEditor({ rule, commands, onSave, onClose }: Props) {
         )}
 
         <div className="flow-editor__body">
+          <datalist id="flow-setting-path-list">
+            {settingOptions.map((setting) => (
+              <option key={setting.path} value={setting.path}>
+                {setting.label}
+              </option>
+            ))}
+          </datalist>
+
           <label className="flow-field">
             <span className="flow-field__label">Name</span>
             <Input
@@ -131,6 +145,7 @@ export default function RuleEditor({ rule, commands, onSave, onClose }: Props) {
               <BlockRow key={i} onRemove={locked || draft.triggers.length === 1 ? undefined : () => patch({ triggers: draft.triggers.filter((_, j) => j !== i) })}>
                 <TriggerEditor
                   trigger={t}
+                  settingOptions={settingOptions}
                   disabled={locked}
                   onChange={(nt) => patch({ triggers: draft.triggers.map((x, j) => (j === i ? nt : x)) })}
                 />
@@ -151,6 +166,7 @@ export default function RuleEditor({ rule, commands, onSave, onClose }: Props) {
               <BlockRow key={i} onRemove={locked ? undefined : () => patch({ conditions: draft.conditions.filter((_, j) => j !== i) })}>
                 <ConditionEditor
                   condition={c}
+                  settingOptions={settingOptions}
                   disabled={locked}
                   onChange={(nc) => patch({ conditions: draft.conditions.map((x, j) => (j === i ? nc : x)) })}
                 />
@@ -239,7 +255,17 @@ function BlockRow({ children, onRemove }: { children: React.ReactNode; onRemove?
   );
 }
 
-function TriggerEditor({ trigger, disabled, onChange }: { trigger: Trigger; disabled: boolean; onChange: (t: Trigger) => void }) {
+function TriggerEditor({
+  trigger,
+  disabled,
+  settingOptions,
+  onChange,
+}: {
+  trigger: Trigger;
+  disabled: boolean;
+  settingOptions: FlowSettingOption[];
+  onChange: (t: Trigger) => void;
+}) {
   const types: TriggerType[] = [
     "SettingChangedTrigger",
     "GazeTrigger",
@@ -258,15 +284,42 @@ function TriggerEditor({ trigger, disabled, onChange }: { trigger: Trigger; disa
         options={types.map((t) => ({ value: t, label: TRIGGER_LABELS[t] }))}
       />
       {trigger.type === "SettingChangedTrigger" && (
-        <Sel
-          ariaLabel="Setting"
-          value={trigger.path}
-          onChange={(path) => {
-            const known = SETTING_PATH_CATALOG.find((s) => s.path === path);
-            onChange({ type: "SettingChangedTrigger", path, to: known?.onValue });
-          }}
-          options={SETTING_PATH_CATALOG.map((s) => ({ value: s.path, label: `${s.label} turns on` }))}
-        />
+        <>
+          <SettingPathInput
+            value={trigger.path}
+            disabled={disabled}
+            onChange={(path) => {
+              const known = settingOptions.find((setting) => setting.path === path);
+              onChange({ type: "SettingChangedTrigger", path, to: known?.value });
+            }}
+          />
+          <Sel
+            ariaLabel="Setting change match"
+            disabled={disabled}
+            value={trigger.to === undefined ? "any" : "equals"}
+            onChange={(mode) =>
+              onChange({
+                ...trigger,
+                to:
+                  mode === "any"
+                    ? undefined
+                    : (settingOptions.find((setting) => setting.path === trigger.path)?.value ?? true),
+              })
+            }
+            options={[
+              { value: "any", label: "changes to any value" },
+              { value: "equals", label: "changes to value" },
+            ]}
+          />
+          {trigger.to !== undefined && (
+            <SettingValueInput
+              key={`${trigger.path}:${formatFlowSettingValue(trigger.to)}`}
+              value={trigger.to}
+              disabled={disabled}
+              onChange={(to) => onChange({ ...trigger, to })}
+            />
+          )}
+        </>
       )}
       {trigger.type === "GazeTrigger" && (
         <Sel
@@ -292,7 +345,17 @@ function TriggerEditor({ trigger, disabled, onChange }: { trigger: Trigger; disa
   );
 }
 
-function ConditionEditor({ condition, disabled, onChange }: { condition: Condition; disabled: boolean; onChange: (c: Condition) => void }) {
+function ConditionEditor({
+  condition,
+  disabled,
+  settingOptions,
+  onChange,
+}: {
+  condition: Condition;
+  disabled: boolean;
+  settingOptions: FlowSettingOption[];
+  onChange: (c: Condition) => void;
+}) {
   return (
     <div className="flow-block__grid">
       <Sel
@@ -301,7 +364,10 @@ function ConditionEditor({ condition, disabled, onChange }: { condition: Conditi
         onChange={(v) => {
           if (v === "TimeCondition") onChange({ type: "TimeCondition", startHour: 22, endHour: 6 });
           else if (v === "BatteryCondition") onChange({ type: "BatteryCondition", operator: "<", percentage: 20 });
-          else onChange({ type: "SettingCondition", path: SETTING_PATH_CATALOG[0].path, operator: "==", value: true });
+          else {
+            const first = settingOptions[0] ?? DEFAULT_FLOW_SETTING_OPTIONS[0];
+            onChange({ type: "SettingCondition", path: first.path, operator: "==", value: first.value });
+          }
         }}
         options={[
           { value: "TimeCondition", label: "Time of day is between" },
@@ -324,7 +390,79 @@ function ConditionEditor({ condition, disabled, onChange }: { condition: Conditi
           <span className="flow-hint">%</span>
         </span>
       )}
+      {condition.type === "SettingCondition" && (
+        <>
+          <SettingPathInput
+            value={condition.path}
+            disabled={disabled}
+            onChange={(path) => {
+              const known = settingOptions.find((setting) => setting.path === path);
+              onChange({ ...condition, path, value: known?.value ?? condition.value });
+            }}
+          />
+          <Sel
+            ariaLabel="Setting comparison"
+            disabled={disabled}
+            value={condition.operator}
+            onChange={(operator) => onChange({ ...condition, operator })}
+            options={[
+              { value: "==", label: "equals" },
+              { value: "!=", label: "does not equal" },
+            ]}
+          />
+          <SettingValueInput
+            key={`${condition.path}:${formatFlowSettingValue(condition.value)}`}
+            value={condition.value}
+            disabled={disabled}
+            onChange={(value) => onChange({ ...condition, value })}
+          />
+        </>
+      )}
     </div>
+  );
+}
+
+function SettingPathInput({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  disabled: boolean;
+  onChange(path: string): void;
+}) {
+  return (
+    <Input
+      list="flow-setting-path-list"
+      aria-label="Setting path"
+      placeholder="Search or enter any setting path…"
+      disabled={disabled}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
+function SettingValueInput({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: unknown;
+  disabled: boolean;
+  onChange(value: unknown): void;
+}) {
+  const [text, setText] = useState(() => formatFlowSettingValue(value));
+
+  return (
+    <Input
+      aria-label="Setting value"
+      placeholder='Value, e.g. true, 42, or "Allow"'
+      disabled={disabled}
+      value={text}
+      onChange={(event) => setText(event.target.value)}
+      onBlur={() => onChange(parseFlowSettingValue(text))}
+    />
   );
 }
 

@@ -4,6 +4,8 @@
 // the field names / serde tags here MUST match `flow-core`'s schema.rs. The UI
 // builds a Rule, the Free bridge stores it in `app.proFlows`, and Pro parses it.
 
+import { DEFAULT_FLOW_SETTING_OPTIONS } from "./settingsCatalog";
+
 export type RiskLevel = "low" | "medium" | "high";
 
 export type GazeKind = "look_away" | "no_face" | "multiple_faces" | "secondary_device";
@@ -74,14 +76,6 @@ export const TOGGLE_CATALOG: { id: string; label: string; onMeans: string; offMe
   { id: "cap-microphone", label: "Microphone", onMeans: "mic denied", offMeans: "mic allowed" },
 ];
 
-/** Common settings paths surfaced by name for the SettingChanged trigger. */
-export const SETTING_PATH_CATALOG: { path: string; label: string; onValue: unknown; offValue: unknown }[] = [
-  { path: "ideal.privacy.telemetry.windowsDisabled", label: "Telemetry protection", onValue: true, offValue: false },
-  { path: "ideal.privacy.telemetry.locationTrackingDisabled", label: "Location protection", onValue: true, offValue: false },
-  { path: "ideal.privacy.appCapabilities.webcam", label: "Camera capability", onValue: "Allow", offValue: "Deny" },
-  { path: "ideal.privacy.appCapabilities.microphone", label: "Microphone capability", onValue: "Allow", offValue: "Deny" },
-];
-
 export const GAZE_KIND_LABELS: Record<GazeKind, string> = {
   look_away: "Looked away from screen",
   no_face: "No face detected (walked away)",
@@ -137,7 +131,11 @@ export function emptyRule(): Rule {
 export function defaultTrigger(type: TriggerType): Trigger {
   switch (type) {
     case "SettingChangedTrigger":
-      return { type, path: SETTING_PATH_CATALOG[0].path, to: SETTING_PATH_CATALOG[0].onValue };
+      return {
+        type,
+        path: DEFAULT_FLOW_SETTING_OPTIONS[0].path,
+        to: DEFAULT_FLOW_SETTING_OPTIONS[0].value,
+      };
     case "GazeTrigger":
       return { type, kind: "look_away" };
     case "USBTrigger":
@@ -175,7 +173,7 @@ export function defaultAction(type: ActionType): Action {
 export function triggerSummary(t: Trigger): string {
   switch (t.type) {
     case "SettingChangedTrigger": {
-      const known = SETTING_PATH_CATALOG.find((s) => s.path === t.path);
+      const known = DEFAULT_FLOW_SETTING_OPTIONS.find((s) => s.path === t.path);
       const name = known?.label ?? t.path;
       return `${name} changes`;
     }

@@ -52,6 +52,13 @@ the legacy engine never had:
 | `SettingChangedTrigger` | A settings JSON path transitions (optionally to a specific value). Backed by a diff emitted at the single settings write choke point (`write_settings_internal`); DECOY_MODE-gated (nothing emits during a coerced session). Makes "telemetry turned on → location off"-style rules possible — the legacy engine could only gate on a setting, never trigger from one. |
 | `GazeTrigger` | Privacy Shield's gaze/attention detector fires `look_away` / `no_face` / `multiple_faces` / `secondary_device`. Replaces the legacy engine's dead `CameraTrigger` (which had no producer and was permanently `Disabled`) — the gaze event is now real, wired from Pro's `attention_collector::handle_episode_line` through `send_notification("privacy-shield-event", {kind})`. |
 
+The editor discovers scalar and array leaves from the live settings tree instead of limiting
+rules to a small hard-coded preset list. Trigger and `Setting` condition fields are searchable
+and also accept a custom dot path. Secret-bearing paths (PINs, hashes, seeds, passwords,
+phrases, tokens, private keys), stored flow payloads, contingency configuration, and
+high-frequency internal bookkeeping paths are excluded from suggestions. A setting trigger can
+match any transition or one exact JSON value; setting conditions expose `==` and `!=`.
+
 The legacy trigger vocabulary's `CameraTrigger` survives in the v2 schema only as a
 deserialize-only legacy variant — an old `settings.json` with a rule using it loads without
 erroring, but the rule is disabled on migration, never executed.

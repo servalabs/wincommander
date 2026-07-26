@@ -14,7 +14,9 @@ import { Switch } from "@/components/ui/switch";
 import { Icon } from "@/components/ui/icon";
 import useEntitlements from "@/hooks/useEntitlements";
 import { useFlowsV2 } from "@/hooks/useFlowsV2";
+import { useSettingsQuery } from "@/hooks/queries/useSettingsQuery";
 import RuleEditor from "./RuleEditor";
+import { buildFlowSettingOptions } from "./settingsCatalog";
 import {
   RULE_TEMPLATES,
   emptyRule,
@@ -27,7 +29,9 @@ import "./index.css";
 export default function FlowsPanel() {
   const { hasPaid } = useEntitlements();
   const { rules, commands, loading, error, log, saveRule, deleteRule, setEnabled, fireNow } = useFlowsV2(hasPaid);
+  const { data: settings } = useSettingsQuery();
   const [editing, setEditing] = useState<Rule | null>(null);
+  const settingOptions = useMemo(() => buildFlowSettingOptions(settings), [settings]);
 
   const sorted = useMemo(
     () => [...rules].sort((a, b) => Number(isFleetLocked(a)) - Number(isFleetLocked(b))),
@@ -169,6 +173,7 @@ export default function FlowsPanel() {
         <RuleEditor
           rule={editing}
           commands={commands}
+          settingOptions={settingOptions}
           onSave={saveRule}
           onClose={() => setEditing(null)}
         />
