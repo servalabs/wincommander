@@ -267,7 +267,7 @@ export default function VisibilityTable() {
                 <div className="vis-table-row">
                     <span className="vis-row-label">
                         <Icon icon="notifications" size={12} />
-                        Notification bell
+                        Alerts &amp; Processes icons
                     </span>
                     <VisSegment
                         value={notifHidden ? "always" : borrowedHidden.includes("notif-bell") ? "borrowed" : "visible"}

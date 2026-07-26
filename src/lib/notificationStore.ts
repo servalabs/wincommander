@@ -14,9 +14,15 @@
 
 export type NotifSeverity = "info" | "warn" | "danger";
 
-// Which bell tab an item belongs to. "alert" = genuine security alerts the user
-// MUST see; "notification" = WinCommander operational/app items (updates, toggle
-// results, mounts, license notices). See notifKind() for the default routing.
+// Which section of the title-bar Alerts popover an item belongs to. "alert" =
+// genuine security alerts the user MUST see; "notification" = WinCommander
+// operational/app items (updates, toggle results, mounts, license notices).
+// Both render in AlertsMenu (see notifKind() for the default routing); this
+// no longer selects between two SEPARATE surfaces (there used to be a
+// Processes tab that mixed "notification"-kind items with running tasks —
+// Processes is now its own icon backed solely by TaskStatusContext, see
+// ProcessesMenu.tsx) — it only decides the Alerts-badge count (alert-kind
+// only) vs. which of AlertsMenu's two in-panel sections an item lands in.
 export type NotifKind = "alert" | "notification";
 
 export interface AppNotification {
@@ -24,14 +30,14 @@ export interface AppNotification {
   severity: NotifSeverity;
   message: string;
   detail?: string;
-  /** Explicit tab override; absent falls back to the severity-based default. */
+  /** Explicit section override; absent falls back to the severity-based default. */
   kind?: NotifKind;
   /** ISO-8601 timestamp. */
   time: string;
 }
 
 /**
- * Classify a notification into a bell tab. Explicit `kind` wins; otherwise
+ * Classify a notification for AlertsMenu. Explicit `kind` wins; otherwise
  * info → notification (operational), warn|danger → alert (security).
  * KT: shared by the menu and the toast callers so routing can't drift.
  */

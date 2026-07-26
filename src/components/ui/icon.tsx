@@ -185,6 +185,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   "pulse": Activity,
   "diagnosis": Stethoscope,
   "notifications": Bell,
+  "processes": ListChecks,
 
   // ── Security / privacy ──
   "shield": Shield,

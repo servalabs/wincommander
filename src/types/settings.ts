@@ -251,11 +251,16 @@ export interface AppPreferences {
   /** Panel IDs that are hidden until the unlock keyword is typed.
    *  Defaults to ["cleanup", "vault", "private-mesh"] when absent. */
   lockedPanelIds?: string[];
-  /** When true, the notifications bell is hidden while panels are locked. */
+  /** When true, the title-bar Alerts + Processes icons (formerly one
+   *  notifications bell — see AlertsMenu.tsx/ProcessesMenu.tsx) are hidden
+   *  while panels are locked. */
   muteNotificationsWhenLocked?: boolean;
-  /** When true, the notifications bell is hidden from the title bar at all
-   *  times (not just while locked) AND popup toasts are suppressed. Standalone
-   *  concealment toggle surfaced in the Secret Settings panel. */
+  /** When true, the title-bar Alerts + Processes icons (formerly one
+   *  notifications bell) are hidden from the title bar at all times (not just
+   *  while locked) AND popup toasts are suppressed. Standalone concealment
+   *  toggle surfaced in the Secret Settings panel. Field name kept as-is
+   *  (pre-dates the Alerts/Processes icon split) so existing persisted
+   *  settings keep working unchanged. */
   hideNotificationBell?: boolean;
   /** When true, the floating desktop-alert overlay window is suppressed.
    *  Does not affect the in-app bell or Sonner toasts. */
@@ -267,9 +272,11 @@ export interface AppPreferences {
    *  Distinct from lockedPanelIds which only hide while Borrowed-PC is active. */
   permanentlyHiddenPanels?: string[];
   /** Non-panel surface keys hidden only while Borrowed Mode is active.
-   *  Recognised keys: "notif-bell", "risk-matrix", "more-products",
-   *  "popup-alerts", "desktop-alerts", "engines-section", "license-panel",
-   *  "action:ai-advisor", "action:search",
+   *  Recognised keys: "notif-bell" (hides BOTH the Alerts and Processes
+   *  title-bar icons — key name kept from before the two-icon split so
+   *  existing persisted settings keep working), "risk-matrix",
+   *  "more-products", "popup-alerts", "desktop-alerts", "engines-section",
+   *  "license-panel", "action:ai-advisor", "action:search",
    *  "action:dismount", "action:delete", "action:scrubMeta", "action:lockdown". */
   borrowedHidden?: string[];
   /** When true, the License quick-panel in the sidebar footer is hidden

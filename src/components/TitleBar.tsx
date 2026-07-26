@@ -11,7 +11,9 @@ import { useTheme } from "../context/ThemeContext";
 import { logo as brandLogo } from "@/assets";
 import { Icon } from "./ui/icon";
 import { Badge } from "./ui/badge";
-import NotificationsMenu from "./NotificationsMenu";
+import AlertsMenu from "./AlertsMenu";
+import ProcessesMenu from "./ProcessesMenu";
+import { TITLEBAR_ICON_BTN } from "./ui/titleBarButtonClass";
 import { setNotificationsHidden, setPopupAlertsSuppressed } from "../lib/notificationStore";
 import useBorrowedActive from "../hooks/useBorrowedActive";
 import { useAuthMode } from "../context/AuthModeContext";
@@ -100,18 +102,21 @@ function TitleBar({ activePanel }: TitleBarProps) {
   const panelsLocked = !panelsUnlocked && (appSettings?.app?.lockedPanelIds?.length ?? 0) > 0;
   const borrowedActive = useBorrowedActive();
   const borrowedHidden = appSettings?.app?.borrowedHidden ?? [];
-  // Bell is hidden when: the standalone "always" toggle is set, OR the
-  // legacy mute-while-locked flag fires, OR Borrowed Mode is active and
-  // "notif-bell" is in the borrowedHidden set.
-  const hideNotifications =
+  // Alerts + Processes share ONE visibility toggle (still the "notif-bell"
+  // key/hideNotificationBell field — this was one bell before the
+  // Alerts/Processes icon split, and splitting the icon didn't change the
+  // owner's ask for a single hide switch). Hidden when: the standalone
+  // "always" toggle is set, OR the legacy mute-while-locked flag fires, OR
+  // Borrowed Mode is active and "notif-bell" is in the borrowedHidden set.
+  const hideNotificationIcons =
     appSettings?.app?.hideNotificationBell === true ||
     (panelsLocked && appSettings?.app?.muteNotificationsWhenLocked === true) ||
     (borrowedActive && borrowedHidden.includes("notif-bell"));
   // Mirror the hidden state into the notification store so toast popups stay
-  // suppressed while the bell is hidden (toast helpers can't read AppContext).
+  // suppressed while Alerts is hidden (toast helpers can't read AppContext).
   useEffect(() => {
-    setNotificationsHidden(hideNotifications);
-  }, [hideNotifications]);
+    setNotificationsHidden(hideNotificationIcons);
+  }, [hideNotificationIcons]);
 
   // Mirror popup-alerts borrowed suppression so toast helpers (non-React) see it.
   const popupAlertsBorrowed = borrowedActive && borrowedHidden.includes("popup-alerts");
@@ -154,8 +159,6 @@ function TitleBar({ activePanel }: TitleBarProps) {
   const contextualTourLabel = contextualTourId === "welcome"
     ? "Replay tour"
     : `${PANEL_MANIFESTS.find((m) => m.id === activePanel)?.label ?? ""} tour`;
-
-  const winBtn = "grid place-items-center w-8 h-8 rounded-[var(--r-sm)] text-[var(--text-mute)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] transition-colors duration-150";
 
   return (
     <header
@@ -231,13 +234,18 @@ function TitleBar({ activePanel }: TitleBarProps) {
         </button>
       </div>
 
-      {/* ── Notifications (bell-anchored dropdown) — hidden when muted+locked ── */}
-      {!hideNotifications && <NotificationsMenu className={winBtn} />}
+      {/* ── Alerts + Processes (two icons, split from one bell+tabs) — hidden when muted+locked ── */}
+      {!hideNotificationIcons && (
+        <>
+          <AlertsMenu />
+          <ProcessesMenu />
+        </>
+      )}
       {/* ── Take the tour — single title-bar entry point for onboarding;
           also the tour's own anchor for its "find help later" stop ── */}
       <button
         onClick={() => window.dispatchEvent(new CustomEvent("start-tour", { detail: { tourId: contextualTourId } }))}
-        className={winBtn}
+        className={TITLEBAR_ICON_BTN}
         title={contextualTourLabel}
         data-tour="help"
         data-tauri-drag-region={false}
@@ -247,8 +255,8 @@ function TitleBar({ activePanel }: TitleBarProps) {
 
       {/* ── Window controls ── */}
       <div className="ml-1 flex items-center gap-0.5" data-tauri-drag-region={false}>
-        <button onClick={handleMinimize} className={winBtn} title="Minimize"><Icon icon="minus" size={14} /></button>
-        <button onClick={handleMaximize} className={winBtn} title="Maximize"><Icon icon="square" size={12} /></button>
+        <button onClick={handleMinimize} className={TITLEBAR_ICON_BTN} title="Minimize"><Icon icon="minus" size={14} /></button>
+        <button onClick={handleMaximize} className={TITLEBAR_ICON_BTN} title="Maximize"><Icon icon="square" size={12} /></button>
         <button
           onClick={handleClose}
           className="grid h-8 w-8 place-items-center rounded-[var(--r-sm)] text-[var(--text-mute)] transition-colors duration-150 hover:bg-[var(--danger)] hover:text-white"

@@ -1031,15 +1031,17 @@ html.light body {
   transform-origin: top right;
 }
 
-/* Shared notification caret — a rotated-square "diamond" whose two bordered
-   edges form a ^ pointing up at the title-bar bell. Used by BOTH the bell
-   dropdown (NotificationsMenu → .wc-notif-caret) and the near-bell toast so
-   the two popups connect to the bell with ONE identical shape (they used to
-   use different carets — a diamond here, a double-triangle in the dropdown —
-   which is what felt inconsistent). The per-surface `right` offsets below aim
-   each caret at the bell from its own anchor position. */
+/* Shared popover caret — a rotated-square "diamond" whose two bordered edges
+   form a ^ pointing up at its title-bar trigger icon. Used by the near-bell
+   toast AND both title-bar popovers (AlertsMenu + ProcessesMenu, split from
+   the old single-bell NotificationsMenu → .wc-notif-caret) so every popup
+   connects to its icon with ONE identical shape. Works for both popovers
+   unmodified: each Popover positions independently against its own trigger
+   (align="end"), and both triggers are the same w-8 icon-button size, so the
+   `right` offset needed to land the diamond under the icon is identical
+   regardless of which button opened it. */
 .wc-toast-near-bell::before,
-.wc-notif-caret::before {
+.wc-popover-caret::before {
   content: "";
   position: absolute;
   top: -7px;
@@ -1052,7 +1054,7 @@ html.light body {
 }
 
 .wc-toast-near-bell::before { right: 12px; }
-.wc-notif-caret::before { right: 18px; }
+.wc-popover-caret::before { right: 18px; }
 
 /* ========================================
    Universal Button Classes
