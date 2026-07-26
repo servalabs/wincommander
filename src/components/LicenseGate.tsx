@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import useBackend from "../hooks/useBackend";
 import { useAppState } from "../context/AppContext";
 import { useInvalidateLicense, useLicenseQuery } from "../hooks/queries/useLicenseQuery";
@@ -22,6 +23,10 @@ const cardVariants = {
 } as const;
 
 const gateTransition = { duration: DURATION_S.slow, ease: EASE.enter } as const;
+
+/** Keeps the pill tabs in the gate's mono/uppercase register. */
+const TAB_TRIGGER_CLASS =
+  "flex-1 font-[family-name:var(--font-mono)] text-[11px] uppercase tracking-[1.5px]";
 
 interface LicenseGateProps {
   inline?: boolean;
@@ -207,13 +212,15 @@ export default function LicenseGate({
               </div>
             </div>
 
-            <div className="license-gate-tabs">
-              <button className={`license-gate-tab ${activeTab === "buy" ? "active" : ""}`} onClick={() => setActiveTab("buy")}>Buy License</button>
-              <button className={`license-gate-tab ${activeTab === "activate" ? "active" : ""}`} onClick={() => setActiveTab("activate")}>Enter Key</button>
-            </div>
+            {/* ui/tabs supplies the animated sliding pill (framer layoutId) that the
+                hand-rolled underline lacked. */}
+            <Tabs value={activeTab} onValueChange={(next) => setActiveTab(next as "buy" | "activate")}>
+              <TabsList className="w-full">
+                <TabsTrigger value="buy" className={TAB_TRIGGER_CLASS}>Buy License</TabsTrigger>
+                <TabsTrigger value="activate" className={TAB_TRIGGER_CLASS}>Enter Key</TabsTrigger>
+              </TabsList>
 
-            {activeTab === "buy" && (
-              <>
+              <TabsContent value="buy" className="mt-2">
                 <LicensePurchasePanel
                   licenseStatus={licenseStatus ?? null}
                   onActivated={() => void afterActivation("WinCommander Pro is now active!")}
@@ -221,46 +228,46 @@ export default function LicenseGate({
                   isLicenseBusy={licenseBusy}
                 />
                 {licenseMessage && <div className="license-gate-message">{licenseMessage}</div>}
-              </>
-            )}
+              </TabsContent>
 
-            {activeTab === "activate" && (
-              <div className="license-gate-activate">
-                <div className="license-gate-field">
-                  <label className="license-gate-label">License Key</label>
-                  <input
-                    type="text"
-                    className="license-gate-input"
-                    placeholder="WC-PRO-XXXX-XXXX-XXXX-XXXX-XXXX"
-                    value={licenseKey}
-                    onChange={(event) => setLicenseKey(event.target.value)}
-                    onKeyDown={(event) => event.key === "Enter" && void handleActivate()}
-                    disabled={licenseBusy}
-                    autoFocus
-                  />
+              <TabsContent value="activate" className="mt-2">
+                <div className="license-gate-activate">
+                  <div className="license-gate-field">
+                    <label className="license-gate-label">License Key</label>
+                    <input
+                      type="text"
+                      className="license-gate-input"
+                      placeholder="WC-PRO-XXXX-XXXX-XXXX-XXXX-XXXX"
+                      value={licenseKey}
+                      onChange={(event) => setLicenseKey(event.target.value)}
+                      onKeyDown={(event) => event.key === "Enter" && void handleActivate()}
+                      disabled={licenseBusy}
+                      autoFocus
+                    />
+                  </div>
+                  {licenseMessage && <div className="license-gate-message">{licenseMessage}</div>}
+                  <div className="license-gate-buttons">
+                    <button className="license-gate-btn-primary" disabled={licenseBusy || !licenseKey.trim()} onClick={() => void handleActivate()}>
+                      {licenseBusy ? "Activating…" : "Activate"}
+                    </button>
+                    <button
+                      className="license-gate-btn-retry"
+                      disabled={licenseBusy}
+                      onClick={async () => {
+                        try {
+                          await refreshAppLicense();
+                          invalidateLicense();
+                        } catch (error) {
+                          setLicenseMessage(String(error));
+                        }
+                      }}
+                    >
+                      Refresh
+                    </button>
+                  </div>
                 </div>
-                {licenseMessage && <div className="license-gate-message">{licenseMessage}</div>}
-                <div className="license-gate-buttons">
-                  <button className="license-gate-btn-primary" disabled={licenseBusy || !licenseKey.trim()} onClick={() => void handleActivate()}>
-                    {licenseBusy ? "Activating…" : "Activate"}
-                  </button>
-                  <button
-                    className="license-gate-btn-retry"
-                    disabled={licenseBusy}
-                    onClick={async () => {
-                      try {
-                        await refreshAppLicense();
-                        invalidateLicense();
-                      } catch (error) {
-                        setLicenseMessage(String(error));
-                      }
-                    }}
-                  >
-                    Refresh
-                  </button>
-                </div>
-              </div>
-            )}
+              </TabsContent>
+            </Tabs>
           </motion.div>
         </motion.div>
       )}

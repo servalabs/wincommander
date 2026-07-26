@@ -238,43 +238,14 @@
           outline: none;
           box-shadow: 0 0 0 2px var(--accent-line);
         }
-        /* ── Tab switcher ──────────────────────────────────────────── */
-        .license-gate-tabs {
-          display: flex;
-          border-bottom: 1px solid rgba(255,255,255,0.08);
-        }
-        .license-gate-tab {
-          flex: 1;
-          padding: 8px 12px;
-          background: transparent;
-          border: none;
-          border-bottom: 2px solid transparent;
-          color: rgba(255,255,255,0.4);
-          font-family: var(--font-mono);
-          font-size: 11px;
-          letter-spacing: 1.5px;
-          text-transform: uppercase;
-          cursor: pointer;
-          transition: color 0.15s, border-color 0.15s;
-          margin-bottom: -1px;
-        }
-        .license-gate-tab.active {
-          color: var(--color-accent);
-          border-bottom-color: var(--color-accent);
-        }
-        .license-gate-tab:hover:not(.active) { color: rgba(255,255,255,0.65); }
-        /* Keyboard ring */
-        .license-gate-tab:focus-visible {
-          outline: none;
-          box-shadow: 0 0 0 2px var(--accent-line);
-        }
-
         /* ── Tab content ───────────────────────────────────────────── */
+        /* 10px (was 14px): the buy panel is a single no-scroll column now, so
+           every gap is height taken from the offer cards and the CTA. */
         .license-gate-buy,
         .license-gate-activate {
           display: flex;
           flex-direction: column;
-          gap: 14px;
+          gap: 10px;
         }
 
         .license-gate-offers {
@@ -282,106 +253,121 @@
           grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 8px;
         }
-        .license-gate-free {
-          display: flex;
-          flex-direction: column;
-          gap: 3px;
-          padding: 10px 12px;
-          border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-          border-radius: var(--radius-md);
-          background: color-mix(in srgb, var(--accent) 5%, transparent);
-          font-size: 11px;
-          line-height: 1.5;
-          color: var(--color-text-muted);
-        }
-        .license-gate-free strong {
-          color: var(--color-text-primary);
-          font-family: var(--font-mono);
-          font-size: 11px;
-        }
         .license-gate-offer {
+          position: relative;
           display: flex;
           flex-direction: column;
-          gap: 5px;
-          min-height: 118px;
-          padding: 12px;
+          justify-content: space-between;
+          gap: 6px;
+          min-height: 68px;
+          padding: 10px;
           text-align: left;
           color: var(--color-text-primary);
           background: color-mix(in srgb, var(--accent) 3%, transparent);
           border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
           border-radius: var(--radius-lg);
           cursor: pointer;
+          transition: background var(--t-fast, 120ms) var(--ease),
+                      border-color var(--t-fast, 120ms) var(--ease);
         }
-        .license-gate-offer:hover,
+        .license-gate-offer:hover {
+          border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+          background: color-mix(in srgb, var(--accent) 8%, transparent);
+        }
         .license-gate-offer.active {
-          border-color: color-mix(in srgb, var(--accent) 60%, transparent);
           background: color-mix(in srgb, var(--accent) 10%, transparent);
         }
         .license-gate-offer:focus-visible {
           outline: none;
           box-shadow: 0 0 0 2px var(--accent-line);
         }
+        /* Selection ring — a framer-motion shared element that slides from the
+           previously selected card, so the border itself stays neutral. */
+        .license-gate-offer-ring {
+          position: absolute;
+          inset: -1px;
+          border: 1px solid var(--accent);
+          border-radius: var(--radius-lg);
+          box-shadow: 0 0 0 1px var(--accent-line), 0 6px 18px -10px var(--glow);
+          pointer-events: none;
+        }
         .license-gate-offer-heading {
           display: flex;
           flex-wrap: wrap;
           justify-content: space-between;
-          align-items: flex-start;
-          gap: 8px;
+          align-items: baseline;
+          gap: 4px 8px;
           min-width: 0;
           font-family: var(--font-mono);
           font-size: 11px;
-          color: var(--color-accent);
+          color: var(--text);
         }
+        /* Price: accented and the last thing read on the card. `flex: 0 1 auto`
+           (not a 150px basis) keeps it on the name's line unless it genuinely
+           cannot fit — server price labels vary in length. */
         .license-gate-offer-heading span {
-          flex: 1 1 150px;
+          flex: 0 1 auto;
           min-width: 0;
           white-space: normal;
           overflow-wrap: anywhere;
           text-align: right;
           line-height: 1.35;
-          color: var(--color-text-primary);
-        }
-        .license-gate-offer-detail {
-          font-size: 11px;
-          line-height: 1.4;
-          color: rgba(255,255,255,0.58);
+          font-weight: 700;
+          color: var(--accent);
         }
         .license-gate-offer-badges {
           display: flex;
           flex-wrap: wrap;
           gap: 4px;
         }
+        /* ui/badge sets its own type scale; 9px keeps two badges on one line
+           inside a half-width card. */
         .license-gate-offer-badges > span {
-          padding: 2px 5px;
-          border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-          border-radius: var(--radius-sm);
-          color: color-mix(in srgb, var(--accent) 78%, var(--color-text-muted));
-          font-family: var(--font-mono);
           font-size: 9px;
-        }
-        .license-gate-offer-device {
-          margin-top: auto;
-          font-family: var(--font-mono);
-          font-size: 10px;
-          color: rgba(255,255,255,0.4);
+          padding: 1px 4px;
+          letter-spacing: 0.5px;
         }
         .license-gate-server-quote {
           padding: 9px 12px;
           border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
           border-radius: var(--radius-md);
-          color: rgba(255,255,255,0.62);
+          /* Token, not rgba(255,255,255,…): this rule had no light-mode override,
+             so the catalogue-loading line was white-on-white in light mode. */
+          color: var(--text-dim);
           background: color-mix(in srgb, var(--accent) 3%, transparent);
           font-family: var(--font-mono);
           font-size: 10px;
           line-height: 1.5;
         }
-        .license-gate-plan-promise {
-          padding: 10px 12px;
-          border-left: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
-          background: color-mix(in srgb, var(--accent) 4%, transparent);
-          color: var(--color-text-muted);
+        /* Selected plan's terms as points. Token-only colours, so light mode
+           needs no override block. */
+        .license-gate-points {
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+          margin: 0;
+          padding: 8px 12px 8px 10px;
+          list-style: none;
+          border-left: 2px solid var(--accent);
+          background: var(--accent-soft);
+          border-radius: 0 var(--r) var(--r) 0;
+          color: var(--text-dim);
           font-size: 11px;
-          line-height: 1.55;
+          line-height: 1.4;
+        }
+        .license-gate-points > li {
+          position: relative;
+          padding-left: 12px;
+        }
+        .license-gate-points > li::before {
+          content: '';
+          position: absolute;
+          left: 2px;
+          top: 6px;
+          width: 4px;
+          height: 4px;
+          border-radius: 50%;
+          background: var(--accent);
         }
         .license-gate-error-detail {
           display: block;
@@ -392,9 +378,91 @@
           line-height: 1.45;
           overflow-wrap: anywhere;
         }
-        .license-gate-checkout-btn {
-          width: 100%;
-          padding: 12px 16px;
+        /* ── Pay row: live total on the left, terms disclosure on the right ──
+           The "Free stays free" box, the price-confirmation disclaimer and the
+           footer note all moved into the LicensePurchaseTerms popover; their
+           wording is unchanged, they just no longer cost vertical space. */
+        .license-gate-pay-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+        }
+        .license-gate-quote {
+          min-width: 0;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          line-height: 1.4;
+          color: var(--text-dim);
+        }
+        .license-gate-terms-trigger {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          flex-shrink: 0;
+          padding: 3px 8px;
+          background: transparent;
+          border: 1px solid var(--border);
+          border-radius: var(--r-pill, 999px);
+          color: var(--text-dim);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.5px;
+          cursor: pointer;
+          transition: color var(--t-fast, 120ms) var(--ease),
+                      border-color var(--t-fast, 120ms) var(--ease);
+        }
+        .license-gate-terms-trigger:hover {
+          color: var(--accent);
+          border-color: var(--accent-line);
+        }
+        .license-gate-terms-trigger:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--accent-line);
+        }
+        .license-gate-terms-glyph {
+          display: grid;
+          place-items: center;
+          width: 12px;
+          height: 12px;
+          border: 1px solid currentColor;
+          border-radius: 50%;
+          font-size: 8px;
+          line-height: 1;
+        }
+        .license-gate-terms > p {
+          margin: 0 0 8px;
+          font-size: 11px;
+          line-height: 1.5;
+          color: var(--text-dim);
+        }
+        .license-gate-terms > p:last-child { margin-bottom: 0; }
+        .license-gate-terms strong {
+          display: block;
+          color: var(--text);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+        }
+
+        /* Reveals the optional phone field; only the required email is inline. */
+        .license-gate-inline-toggle {
+          align-self: flex-start;
+          padding: 0;
+          background: none;
+          border: none;
+          color: var(--accent);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.5px;
+          text-transform: uppercase;
+          cursor: pointer;
+        }
+        .license-gate-inline-toggle:hover { text-decoration: underline; }
+        .license-gate-inline-toggle:focus-visible {
+          outline: none;
+          box-shadow: 0 0 0 2px var(--accent-line);
         }
 
         /* Trial callout — actionable block with button */
@@ -403,7 +471,7 @@
           align-items: center;
           justify-content: space-between;
           gap: 14px;
-          padding: 14px 16px;
+          padding: 10px 14px;
           background: color-mix(in srgb, var(--accent) 6%, transparent);
           border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
           font-size: 12px;
@@ -645,15 +713,6 @@
           background: color-mix(in srgb, var(--accent) 5%, transparent);
           border: 1px solid color-mix(in srgb, var(--accent) 15%, transparent);
         }
-        .license-gate-buy-note {
-          font-size: 11px;
-          color: rgba(255,255,255,0.55);
-          line-height: 1.6;
-          padding-top: 6px;
-          border-top: 1px solid rgba(255,255,255,0.07);
-          margin-top: 4px;
-        }
-
         @media (max-width: 520px) {
           .license-gate-offers { grid-template-columns: 1fr; }
         }
@@ -745,21 +804,6 @@
         html.light .license-gate-btn-retry {
           border-color: rgba(0, 0, 0, 0.2);
           color: rgba(0, 0, 0, 0.65);
-        }
-
-        /* Tabs */
-        html.light .license-gate-tabs {
-          border-bottom-color: rgba(0, 0, 0, 0.12);
-        }
-        html.light .license-gate-tab {
-          color: rgba(0, 0, 0, 0.5);
-        }
-        html.light .license-gate-tab.active {
-          color: #0284c7;
-          border-bottom-color: #0284c7;
-        }
-        html.light .license-gate-tab:hover:not(.active) {
-          color: rgba(0, 0, 0, 0.78);
         }
 
         /* Trial callout */
@@ -864,11 +908,6 @@
           background: rgba(14, 165, 233, 0.07);
           border-color: rgba(14, 165, 233, 0.28);
         }
-        html.light .license-gate-buy-note {
-          color: rgba(0, 0, 0, 0.65);
-          border-top-color: rgba(0, 0, 0, 0.1);
-        }
-
         /* Input error state */
         html.light .license-gate-input.input-error {
           border-color: rgba(200, 50, 50, 0.6);

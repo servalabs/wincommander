@@ -5,10 +5,10 @@ import useInvestigatorInstall from "../hooks/useInvestigatorInstall";
 import { showSuccess } from "../utils/toast";
 import { fireLicenseCelebration } from "./shared/LicenseCelebrationListener";
 import useProInstall from "../hooks/useProInstall";
+import LicenseQuickStats from "./LicenseQuickStats";
 import {
   activeLicenseServices,
   licenseAccessSummary,
-  licensePlanLabel,
   licenseStateLabel,
 } from "../utils/licensePresentation";
 
@@ -222,17 +222,12 @@ export default function LicenseQuickPanel() {
         <>
           {/* Stat row — hide for trial users (no seats, no days countdown). */}
           {isActive && !isTrialActive && (
-            <div className="license-meta">
-              <span className="license-meta-item">
-                {status?.plan === "pro_lifetime" ? "Pro LFT" : licensePlanLabel(status?.plan)}
-              </span>
-              <span className="license-meta-item">
-                {daysRemaining === null ? "∞ expiry" : `${daysRemaining}d expiry`}
-              </span>
-              <span className="license-meta-item">
-                {`${status?.seats_used ?? "?"}/${status?.seat_limit ?? 3} devices`}
-              </span>
-            </div>
+            <LicenseQuickStats
+              plan={status?.plan}
+              daysRemaining={daysRemaining}
+              seatsUsed={status?.seats_used}
+              seatLimit={status?.seat_limit}
+            />
           )}
           {isActive && !isTrialActive && accessSummary && <div className="license-msg">{accessSummary}</div>}
           {isActive && !isTrialActive && activeServices.length > 0 && (
@@ -315,8 +310,13 @@ export default function LicenseQuickPanel() {
           {isActive && !isTrialActive && (
             <div className="license-btn-row">
               {hasInvestigator && (
-                <button className="license-btn" disabled={loading || investigator.isBusy} onClick={() => void installOrLaunchInvestigator()}>
-                  Open Investigator
+                <button
+                  className="license-btn"
+                  title="Open Investigator"
+                  disabled={loading || investigator.isBusy}
+                  onClick={() => void installOrLaunchInvestigator()}
+                >
+                  Investigator
                 </button>
               )}
               {/* "Install Pro" only when the licence is active but the
