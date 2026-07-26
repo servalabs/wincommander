@@ -1,27 +1,202 @@
-.crypto-erase-section { display: flex; flex-direction: column; gap: 10px; }
-.crypto-erase-header { display: flex; align-items: center; gap: 8px; }
-.crypto-erase-header h3 { margin: 0; }
-.crypto-erase-list { display: flex; flex-direction: column; gap: 6px; }
+/* Crypto-Erase section — vault panel.
+   Uses the legacy --color-* token family (same as the rest of panels/vault) so
+   both themes track automatically. No hardcoded accent: --color-accent is
+   orange in dark and green in light. */
+
+.crypto-erase-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.crypto-erase-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.crypto-erase-header h3 {
+    margin: 0;
+}
+
+/* Push the action cluster to the right edge of the header. */
+.crypto-erase-header .vault-card-title-area {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.crypto-erase-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 20px;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+
+.crypto-erase-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
 .crypto-erase-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 8px 10px; border: 1px solid var(--color-border, currentColor);
-  border-radius: var(--radius-lg, 6px); background: var(--color-surface, transparent);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg, 6px);
+    background: var(--color-bg-card);
+    transition: border-color 150ms ease, background 150ms ease;
 }
-.crypto-erase-row.is-ineligible { opacity: 0.55; }
-.crypto-erase-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.crypto-erase-row-label { display: flex; align-items: center; gap: 8px; font-weight: 600; }
-.crypto-erase-row-reason { font-size: 12px; opacity: 0.8; }
-.crypto-erase-receipt { font-size: 12px; }
-.crypto-erase-receipt--erased { color: var(--color-success, currentColor); }
-.crypto-erase-receipt--erased_with_caveat { color: var(--color-warning, currentColor); }
-.crypto-erase-receipt--failed { color: var(--color-danger, currentColor); }
+
+.crypto-erase-row:hover {
+    border-color: var(--color-border-light);
+    background: var(--color-bg-elevated);
+}
+
+.crypto-erase-row.is-ineligible {
+    opacity: 0.72;
+}
+
+.crypto-erase-row.is-ineligible:hover {
+    border-color: var(--color-border);
+    background: var(--color-bg-card);
+}
+
+.crypto-erase-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.crypto-erase-row-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+/* Which engine owns this volume — a BitLocker D: and a VeraCrypt container on
+   D: were previously distinguishable only by a label prefix. */
+.crypto-erase-kind {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border: 1px solid var(--color-border-light);
+    border-radius: var(--radius-sm, 2px);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+}
+
+.crypto-erase-row-name {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.crypto-erase-row-method,
+.crypto-erase-row-reason {
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+}
+
+.crypto-erase-row-reason {
+    color: var(--color-warning);
+}
+
+.crypto-erase-row-done {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--color-success);
+}
+
 .crypto-erase-badge {
-  font-size: 10px; text-transform: uppercase; padding: 1px 6px;
-  border-radius: var(--radius-sm, 2px); border: 1px solid currentColor;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm, 2px);
+    border: 1px solid currentColor;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: help;
 }
-.crypto-erase-badge--os { color: var(--color-danger, currentColor); }
-.crypto-erase-badge--escrow { color: var(--color-warning, currentColor); }
-.crypto-erase-empty { padding: 16px; text-align: center; opacity: 0.75; }
-.crypto-erase-confirm { display: flex; flex-direction: column; gap: 12px; }
-.crypto-erase-warn { margin: 0; }
-.crypto-erase-warn--nuclear { color: var(--color-danger, currentColor); font-weight: 600; }
+
+.crypto-erase-badge--os {
+    color: var(--color-danger);
+}
+
+.crypto-erase-badge--escrow {
+    color: var(--color-warning);
+}
+
+
+.crypto-erase-history {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--color-border);
+}
+
+.crypto-erase-history-title {
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+}
+
+
+.crypto-erase-explainer {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 380px;
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--color-text-secondary);
+}
+
+.crypto-erase-explainer strong {
+    margin-top: 4px;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-text-primary);
+}
+
+.crypto-erase-explainer strong:first-child {
+    margin-top: 0;
+}
+
+.crypto-erase-explainer p {
+    margin: 0;
+}
+
+.crypto-erase-explainer em {
+    font-style: normal;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}

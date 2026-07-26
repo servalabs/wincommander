@@ -1969,3 +1969,114 @@ html.light .blocklist-count {
         grid-template-columns: 1fr;
     }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Network maintenance tables (neighbour cache + firewall audit)
+   Both tables can run to dozens of rows of monospace addresses, so they get
+   their own scroll container. WHY the container and not the page: a wide MAC
+   or a long program path must never push the panel into horizontal overflow.
+   ───────────────────────────────────────────────────────────────────────── */
+
+.wc-net-table-scroll {
+    max-height: 340px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    background: var(--surface);
+}
+
+.wc-net-table {
+    width: 100%;
+    min-width: 520px;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12px;
+    color: var(--text);
+    /* Digits line up column-to-column so IPs and ports are scannable. */
+    font-variant-numeric: tabular-nums;
+}
+
+.wc-net-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 6px 10px;
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border-strong);
+    white-space: nowrap;
+}
+
+.wc-net-table tbody td {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+
+.wc-net-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.wc-net-table tbody tr:nth-child(even) {
+    background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+.wc-net-mono {
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+
+.wc-net-dim {
+    color: var(--text-dim);
+}
+
+.wc-net-truncate {
+    max-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A MAC answering for several IPs on one adapter — the ARP-spoof tell. */
+.wc-net-table tbody tr.is-flagged {
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    box-shadow: inset 2px 0 0 var(--warn);
+}
+
+.wc-net-row-selectable {
+    cursor: pointer;
+}
+
+.wc-net-row-selectable:hover {
+    background: var(--surface-2);
+}
+
+.wc-net-table tbody tr.is-selected,
+.wc-net-table tbody tr.is-selected:nth-child(even) {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Column sizing. Fixed minimums for the address columns so nothing wraps;
+   the wide text columns absorb the remaining width and truncate. */
+.wc-net-col-check { width: 30px; }
+.wc-net-col-ip { width: 130px; }
+.wc-net-col-mac { width: 175px; }
+.wc-net-col-type { width: 120px; }
+.wc-net-col-adapter { width: auto; }
+.wc-net-col-rule { width: 38%; }
+.wc-net-col-state { width: 190px; }
+.wc-net-col-program { width: auto; }
+
+@media (max-width: 760px) {
+    .wc-net-table-scroll {
+        max-height: 300px;
+    }
+}

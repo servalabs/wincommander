@@ -1,45 +1,78 @@
 // Secure-persona "Crypto-Erase" surface inside the vault panel. Lists eligible
-// encrypted containers (VeraCrypt mounted + BitLocker volumes), shows the
-// BitLocker escrow-risk badge, and runs a single-target crypto-erase behind a
-// confirm ceremony. OS/system volumes escalate to a typed "won't boot" gate.
-// No "anti-forensic" wording. All logic lives in useCryptoErase / cryptoEraseTargets.
-import { useState, useCallback } from "react";
-import { Button, Checkbox, Dialog, Icon, InputGroup, Spinner } from "@/components/ui/bp";
+// encrypted containers (VeraCrypt mounted + BitLocker volumes) with the method
+// that will be applied and the escrow-risk / system badges, and runs a
+// single-target crypto-erase behind the ceremony in CryptoEraseConfirmDialog.
+// No "anti-forensic" wording. All logic lives in useCryptoErase /
+// cryptoEraseTargets / cryptoEraseReceipt.
+//
+// BACKEND GAP (frontend cannot fix): `erase_encrypted_container` is one
+// request/response Tauri command with no progress events, so the dialog can only
+// report the two client-observable phases (destroy, then re-read). Per-step
+// progress would need the command to emit events.
+import { useCallback, useState } from "react";
+import { Button, Callout, Icon, Popover, Spinner } from "@/components/ui/bp";
 import { open } from "@tauri-apps/plugin-dialog";
+import EmptyState from "../../components/shared/EmptyState";
 import { useCryptoErase } from "../../hooks/useCryptoErase";
-import { requiresNuclear, isVeraCryptDevicePath, type EncryptedTarget } from "../../lib/cryptoEraseTargets";
-import { showSuccess, showError } from "../../utils/toast";
+import { isVeraCryptDevicePath, type EncryptedTarget } from "../../lib/cryptoEraseTargets";
+import { showError, showSuccess } from "../../utils/toast";
+import CryptoEraseConfirmDialog from "./CryptoEraseConfirmDialog";
+import CryptoEraseReceiptPanel from "./CryptoEraseReceiptPanel";
+import CryptoEraseTargetRow from "./CryptoEraseTargetRow";
 import "./CryptoEraseSection.css";
 
 type VeraVolume = { letter: string; path: string | null; type: string };
 
+function HowItWorks() {
+  return (
+    <Popover
+      position="bottom-end"
+      content={
+        <div className="crypto-erase-explainer">
+          <strong>What crypto-erase does</strong>
+          <p>
+            An encrypted volume is unreadable without its key. Crypto-erase destroys the key instead
+            of the data: seconds rather than hours, no overwriting, and it works on SSDs — where
+            overwriting is unreliable because the controller quietly keeps copies in spare blocks.
+          </p>
+          <strong>The two methods differ</strong>
+          <p>
+            <em>VeraCrypt</em> — the volume header holds the only copy of the master key. It gets
+            overwritten with random bytes, so the password can never derive the key again.
+            <br />
+            <em>BitLocker</em> — every key protector (TPM, PIN, recovery key) is removed and the
+            volume is locked so Windows drops its key from memory.
+          </p>
+          <strong>Escrow risk</strong>
+          <p>
+            If a BitLocker recovery key was ever backed up to Entra/Active Directory or a Microsoft
+            account, that copy survives everything done here. The volume stays recoverable until you
+            delete the saved key there too. A row marked <em>escrow risk</em> is telling you exactly
+            that, and the receipt will report{" "}
+            <em>erased — but recovery is still possible</em> rather than claiming success.
+          </p>
+          <strong>Receipt statuses</strong>
+          <p>
+            <em>Keys destroyed</em> — verified, nothing left to unlock it.
+            <br />
+            <em>Recovery still possible</em> — the destruction ran, but an escrowed key or a key
+            still in memory means the data is not yet unrecoverable.
+            <br />
+            <em>Failed</em> — nothing was destroyed.
+          </p>
+        </div>
+      }
+    >
+      <Button minimal small icon="info-sign" text="How it works" />
+    </Popover>
+  );
+}
+
 export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolumes: VeraVolume[] }) {
-  const { targets, loading, refreshing, receipts, refresh, erase } = useCryptoErase(veracryptVolumes);
+  const { targets, systemDrive, loading, refreshing, loadError, receipts, history, refresh, erase } =
+    useCryptoErase(veracryptVolumes);
   const [active, setActive] = useState<EncryptedTarget | null>(null);
-  const [ack, setAck] = useState(false);
-  const [typed, setTyped] = useState("");
-  const [busy, setBusy] = useState(false);
   const [adhoc, setAdhoc] = useState<EncryptedTarget[]>([]);
-
-  const nuclear = active ? requiresNuclear(active) : false;
-  const resolvedId = active?.mountPoint ? active.mountPoint.replace(/\\+$/, "").toUpperCase() : "C:";
-  const canFire = active
-    ? nuclear
-      ? typed.trim().toUpperCase() === resolvedId
-      : ack
-    : false;
-
-  const openConfirm = useCallback((t: EncryptedTarget) => {
-    setActive(t);
-    setAck(false);
-    setTyped("");
-  }, []);
-
-  const closeConfirm = useCallback(() => {
-    setActive(null);
-    setAck(false);
-    setTyped("");
-  }, []);
 
   const eraseByPath = useCallback(async () => {
     const selected = await open({
@@ -47,110 +80,119 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
       filters: [{ name: "Container File", extensions: ["hc", "tc", "*"] }],
     });
     if (selected && typeof selected === "string") {
-      openConfirm({
+      const target: EncryptedTarget = {
         id: `vcfile:${selected}`,
         kind: "veracrypt",
         label: `VeraCrypt container ${selected}`,
         path: selected,
         isOsVolume: isVeraCryptDevicePath(selected),
         eligible: true,
-      });
+      };
+      // Pin it into the list up front so its receipt has somewhere to live once
+      // the dialog closes, whatever the outcome.
+      setAdhoc((prev) => (prev.some((a) => a.id === target.id) ? prev : [...prev, target]));
+      setActive(target);
     }
-  }, [openConfirm]);
+  }, []);
 
-  const confirmErase = useCallback(async () => {
-    if (!active) return;
-    setBusy(true);
-    try {
-      const receipt = await erase(active, nuclear ? typed.trim() : undefined);
-      if (active.id.startsWith("vcfile:")) {
-        setAdhoc((prev) => (prev.some((a) => a.id === active.id) ? prev : [...prev, active]));
-      }
-      if (receipt) {
-        if (receipt.status === "erased") showSuccess(`${receipt.label}: crypto-erased.`);
-        else if (receipt.status === "erased_with_caveat") showError(`${receipt.label}: erased, but a recovery key may survive.`);
-        else showError(`${receipt.label}: erase failed.`);
-      }
-      closeConfirm();
-    } catch (e) {
-      showError(e instanceof Error ? e.message : "Crypto-erase failed");
-    } finally {
-      setBusy(false);
-    }
-  }, [active, nuclear, typed, erase, closeConfirm]);
+  // The dialog owns the visible result; the notification bell keeps the record,
+  // so the operation still shows up in the app's notification history.
+  const eraseAndNotify = useCallback<typeof erase>(
+    async (target, osAck, onPhase) => {
+      const receipt = await erase(target, osAck, onPhase);
+      if (receipt.status === "erased") showSuccess(`${receipt.label}: crypto-erased.`);
+      else if (receipt.status === "erased_with_caveat")
+        showError(`${receipt.label}: erased, but a recovery key may survive.`);
+      else showError(`${receipt.label}: erase failed.`);
+      return receipt;
+    },
+    [erase],
+  );
 
   const displayTargets = [...targets, ...adhoc.filter((a) => !targets.some((t) => t.id === a.id))];
+  // Receipts whose target has since dropped out of the volume list — a BitLocker
+  // volume can vanish from Get-BitLockerVolumes the moment its protectors go.
+  const orphanRecords = history.filter(
+    (record) => !displayTargets.some((t) => t.id === record.targetId),
+  );
 
   return (
     <div className="crypto-erase-section">
       <div className="crypto-erase-header">
-        <div className="vault-card-icon"><Icon icon="key" size={16} /></div>
+        <div className="vault-card-icon">
+          <Icon icon="key" size={16} />
+        </div>
         <div className="vault-card-title-area">
           <h3>Crypto-Erase</h3>
           <span>Destroy an encrypted container's keys — permanent, in place, no reboot</span>
         </div>
+        <HowItWorks />
         <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
-        <Button minimal small icon="refresh" loading={refreshing} onClick={refresh} aria-label="Refresh" />
+        <Button
+          minimal
+          small
+          icon="refresh"
+          loading={refreshing}
+          onClick={refresh}
+          aria-label="Refresh the encrypted-volume list"
+          title="Refresh the encrypted-volume list"
+        />
       </div>
 
+      {loadError && (
+        <Callout intent="warning" title="Couldn't read the BitLocker volume list">
+          {loadError} VeraCrypt volumes are still listed below, and you can always erase a container
+          by picking its file.
+        </Callout>
+      )}
+
       {loading ? (
-        <div className="crypto-erase-empty"><Spinner size={20} /></div>
+        <div className="crypto-erase-loading">
+          <Spinner size={16} />
+          Looking for encrypted volumes…
+        </div>
       ) : displayTargets.length === 0 ? (
-        <div className="crypto-erase-empty">No encrypted containers detected.</div>
+        <EmptyState
+          icon="key"
+          title="No encrypted containers detected"
+          hint="Mount a VeraCrypt volume or enable BitLocker to see it here. An unmounted container can still be erased directly from its file."
+          action={
+            <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
+          }
+        />
       ) : (
         <div className="crypto-erase-list">
-          {displayTargets.map((t) => {
-            const r = receipts[t.id];
-            return (
-              <div key={t.id} className={`crypto-erase-row${t.eligible ? "" : " is-ineligible"}`}>
-                <div className="crypto-erase-row-main">
-                  <span className="crypto-erase-row-label">
-                    {t.label}
-                    {t.isOsVolume && <span className="crypto-erase-badge crypto-erase-badge--os">SYSTEM</span>}
-                    {t.escrowRisk && <span className="crypto-erase-badge crypto-erase-badge--escrow">escrow risk</span>}
-                  </span>
-                  {t.reason && <span className="crypto-erase-row-reason">{t.reason}</span>}
-                  {r && <span className={`crypto-erase-receipt crypto-erase-receipt--${r.status}`}>{r.detail}</span>}
-                </div>
-                <Button
-                  small
-                  intent="danger"
-                  icon="trash"
-                  text="Crypto-Erase"
-                  disabled={!t.eligible}
-                  onClick={() => openConfirm(t)}
-                />
-              </div>
-            );
-          })}
+          {displayTargets.map((target) => (
+            <CryptoEraseTargetRow
+              key={target.id}
+              target={target}
+              record={receipts[target.id]}
+              busy={active !== null}
+              onErase={setActive}
+            />
+          ))}
         </div>
       )}
 
-      <Dialog isOpen={!!active} onClose={closeConfirm} title={nuclear ? "Erase system volume" : "Crypto-erase volume"}>
-        <div className="wc-dialog-body crypto-erase-confirm">
-          {nuclear ? (
-            <>
-              <p className="crypto-erase-warn crypto-erase-warn--nuclear">
-                This will remove the keys for <strong>{active?.label}</strong>. THIS MACHINE WILL NOT BOOT
-                AFTER RESTART. Type <strong>{resolvedId}</strong> to confirm.
-              </p>
-              <InputGroup value={typed} autoComplete="off" placeholder={resolvedId} onChange={(e) => setTyped(e.target.value)} />
-            </>
-          ) : (
-            <>
-              <p className="crypto-erase-warn">
-                Permanently destroy the encryption keys for <strong>{active?.label}</strong>. The data cannot
-                be recovered. The rest of the system is unaffected.
-              </p>
-              <Checkbox checked={ack} onChange={() => setAck((v) => !v)} label="I understand this is irreversible" />
-            </>
-          )}
+      {orphanRecords.length > 0 && (
+        <div className="crypto-erase-history">
+          <span className="crypto-erase-history-title">Earlier results</span>
+          {orphanRecords.map((record) => (
+            <CryptoEraseReceiptPanel
+              key={`${record.targetId}-${record.at}`}
+              receipt={record.receipt}
+              at={record.at}
+            />
+          ))}
         </div>
-        <div className="mount-dialog-footer">
-          <Button minimal icon="cross" text="CANCEL" onClick={closeConfirm} />
-          <Button intent="danger" icon="trash" text="CRYPTO-ERASE" loading={busy} disabled={!canFire || busy} onClick={confirmErase} />
-        </div>
-      </Dialog>
+      )}
+
+      <CryptoEraseConfirmDialog
+        target={active}
+        systemDrive={systemDrive}
+        onClose={() => setActive(null)}
+        onErase={eraseAndNotify}
+      />
     </div>
   );
 }

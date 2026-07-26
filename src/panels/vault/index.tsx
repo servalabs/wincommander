@@ -318,8 +318,13 @@ function VaultPanel() {
         <div className="vault-stacked-sections">
           <StegoBackupSection />
 
+          {/* erase_encrypted_container is require_paid on the Rust side, so gate
+              the UI too — a free Secure-persona user previously filled in the
+              whole ceremony and got a raw licence error in the bell. */}
           {getPersona(appSettings) === "secure" && (
-            <CryptoEraseSection veracryptVolumes={volumes} />
+            <TierGate tier="paid" featureLabel="Crypto-Erase">
+              <CryptoEraseSection veracryptVolumes={volumes} />
+            </TierGate>
           )}
         </div>
 

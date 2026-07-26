@@ -1,0 +1,121 @@
+/* Crypto-Erase receipt block — the structured proof panel.
+   Split out of CryptoEraseSection.css so each file stays one responsibility.
+   Imported by CryptoEraseReceiptPanel.tsx. */
+
+
+.crypto-erase-receipt {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 4px;
+    padding: 8px 10px;
+    border-left: 2px solid var(--color-border);
+    border-radius: var(--radius-md, 4px);
+    background: color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent);
+}
+
+.crypto-erase-receipt--success {
+    border-left-color: var(--color-success);
+    color: var(--color-success);
+}
+
+.crypto-erase-receipt--warning {
+    border-left-color: var(--color-warning);
+    color: var(--color-warning);
+}
+
+.crypto-erase-receipt--danger {
+    border-left-color: var(--color-danger);
+    color: var(--color-danger);
+}
+
+.crypto-erase-receipt-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.crypto-erase-receipt-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    /* Inherits the status colour from the receipt wrapper. */
+}
+
+.crypto-erase-receipt-target {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.crypto-erase-receipt-time {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--color-text-muted);
+}
+
+.crypto-erase-receipt-facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 6px;
+}
+
+.crypto-erase-fact {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 5px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 4px);
+    background: var(--color-bg-secondary);
+}
+
+.crypto-erase-fact-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+}
+
+.crypto-erase-fact-value {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.crypto-erase-fact--success .crypto-erase-fact-value {
+    color: var(--color-success);
+}
+
+.crypto-erase-fact--warning .crypto-erase-fact-value {
+    color: var(--color-warning);
+}
+
+.crypto-erase-fact--danger .crypto-erase-fact-value {
+    color: var(--color-danger);
+}
+
+.crypto-erase-receipt-detail {
+    margin: 0;
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--color-text-secondary);
+}
+
+.crypto-erase-info-icon {
+    opacity: 0.6;
+    cursor: help;
+}
+
+.crypto-erase-info-icon:hover {
+    opacity: 1;
+    color: var(--color-accent);
+}

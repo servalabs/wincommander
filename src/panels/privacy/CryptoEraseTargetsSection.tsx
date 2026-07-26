@@ -23,9 +23,11 @@
 // that intent is configured ahead of time, not where it's fired.
 
 import { useCallback, useEffect, useState } from "react";
-import { Button, Checkbox, Icon, Spinner } from "@/components/ui/bp";
+import { Button, Callout, Checkbox, Icon, Popover, Spinner, Tooltip } from "@/components/ui/bp";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import useBackend, { type BitLockerVolume } from "../../hooks/useBackend";
+import EmptyState from "../../components/shared/EmptyState";
+import { escrowRiskOf } from "../../lib/cryptoEraseTargets";
 import { showError } from "../../utils/toast";
 import {
   toggleBitlockerDrive,
@@ -34,6 +36,43 @@ import {
   removeVeracryptPath,
 } from "./cryptoEraseCascadeUtils";
 import "./LockdownConfigSection.css";
+import "./CryptoEraseTargetsSection.css";
+
+const SYSTEM_TIP =
+  "The volume Windows boots from. If the cascade erases its keys this machine will not start again — and unlike the manual Crypto-Erase picker there is no confirmation at trigger time.";
+const ESCROW_TIP =
+  "A recovery key for this volume is backed up to Entra/Active Directory or a Microsoft account. That copy survives the erase, so the volume stays recoverable until you delete the saved key there as well.";
+
+function HowItWorks() {
+  return (
+    <Popover
+      position="bottom-end"
+      content={
+        <div className="ce-cascade-explainer">
+          <strong>What gets destroyed</strong>
+          <p>
+            Crypto-erase destroys the key that makes an encrypted volume readable, not the data
+            itself. It takes seconds instead of hours and works on SSDs, where overwriting is
+            unreliable.
+          </p>
+          <strong>When it fires</strong>
+          <p>
+            Only when the cascade runs — the sidebar button, the hotkey, a distress phrase, the
+            dead-man&rsquo;s switch, or the Calculator gate&rsquo;s destroy PIN — and only if the
+            matching destruct step above is enabled.
+          </p>
+          <strong>No second confirmation</strong>
+          <p>
+            Selecting a volume here IS the confirmation. The trigger fires immediately with no
+            further prompt, which is the point of a panic control.
+          </p>
+        </div>
+      }
+    >
+      <Button className="sd-bulk-btn" minimal small icon="info-sign" text="How it works" />
+    </Popover>
+  );
+}
 
 interface Props {
   bitlockerDrives: string[];
@@ -108,6 +147,7 @@ export default function CryptoEraseTargetsSection({
         <div className="sd-shred-folders-text">
           <div className="sd-shred-folders-label">Encrypted Volumes to Crypto-Erase on Lockdown</div>
         </div>
+        <HowItWorks />
         <Button
           className="sd-bulk-btn"
           minimal
@@ -129,10 +169,17 @@ export default function CryptoEraseTargetsSection({
         drive, means it WILL be targeted next time.
       </p>
 
-      {loading && volumes.length === 0 && <Spinner size={20} />}
+      {loading && volumes.length === 0 && (
+        <div className="sd-remove-users-empty">
+          <Spinner size={16} /> Looking for BitLocker volumes…
+        </div>
+      )}
 
       {!loading && volumes.length === 0 && (
-        <div className="sd-remove-users-empty">No BitLocker volumes detected.</div>
+        <EmptyState
+          compact
+          title="No BitLocker volumes detected — nothing to select here."
+        />
       )}
 
       {volumes.length > 0 && (
@@ -159,7 +206,22 @@ export default function CryptoEraseTargetsSection({
                 <div className="sd-row-content">
                   <div className="sd-row-label">
                     BitLocker {v.mountPoint}
-                    {isOs && <span className="crypto-erase-badge crypto-erase-badge--os">SYSTEM</span>}
+                    {isOs && (
+                      <Tooltip content={SYSTEM_TIP}>
+                        <span className="ce-cascade-badge ce-cascade-badge--os">
+                          SYSTEM
+                          <Icon icon="info-sign" size={9} />
+                        </span>
+                      </Tooltip>
+                    )}
+                    {escrowRiskOf(v) && (
+                      <Tooltip content={ESCROW_TIP}>
+                        <span className="ce-cascade-badge ce-cascade-badge--escrow">
+                          ESCROW RISK
+                          <Icon icon="info-sign" size={9} />
+                        </span>
+                      </Tooltip>
+                    )}
                   </div>
                 </div>
               </label>
@@ -186,7 +248,7 @@ export default function CryptoEraseTargetsSection({
         Unmounted VeraCrypt containers leave no trace for the cascade to auto-discover
         (that&rsquo;s the point of their deniability), so they must be added here by path.
       </p>
-      {veracryptPaths.length > 0 && (
+      {veracryptPaths.length > 0 ? (
         <div className="sd-shred-folders-list">
           {veracryptPaths.map((p) => (
             <div key={p} className="sd-shred-folder-row">
@@ -202,6 +264,21 @@ export default function CryptoEraseTargetsSection({
             </div>
           ))}
         </div>
+      ) : (
+        <EmptyState
+          compact
+          title="No containers listed — the VeraCrypt Header Destroy step will skip cleanly."
+        />
+      )}
+
+      {(bitlockerDrives.length > 0 || veracryptPaths.length > 0) && (
+        <Callout intent="danger" title="Armed">
+          {bitlockerDrives.length > 0 && `${bitlockerDrives.length} BitLocker volume${bitlockerDrives.length === 1 ? "" : "s"}`}
+          {bitlockerDrives.length > 0 && veracryptPaths.length > 0 && " and "}
+          {veracryptPaths.length > 0 && `${veracryptPaths.length} VeraCrypt container${veracryptPaths.length === 1 ? "" : "s"}`}
+          {" "}will have their keys destroyed the next time the cascade fires. There is no prompt at
+          that moment.
+        </Callout>
       )}
     </div>
   );

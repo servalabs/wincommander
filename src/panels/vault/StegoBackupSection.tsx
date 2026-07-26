@@ -1,130 +1,239 @@
 // src/panels/vault/StegoBackupSection.tsx
 //
 // Stego backup — hide an encrypted volume inside a playable MP4.
-// "Create" makes a container and embeds it in a carrier video; "Extract" pulls
+// "Create" makes a container and appends it to a carrier video; "Restore" pulls
 // the container back out so it can be mounted from the Volumes list. Routes to
 // the paid Pro handlers Create-StegoMp4 / Extract-StegoMp4.
+//
+// Rules live in src/lib/stegoBackup*.ts, state in ./useStegoBackup, pieces in
+// ./StegoBackupParts — this file is the layout only.
 
+import { Button, Callout, FormGroup, HTMLSelect, InputGroup } from "@/components/ui/bp";
 import { useState } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { Button, InputGroup, FormGroup } from "@/components/ui/bp";
 import SectionCard from "../../components/shared/SectionCard";
-import useBackend from "../../hooks/useBackend";
-import { showSuccess, showError } from "../../utils/toast";
-
-const VIDEO_FILTER = [{ name: "Video", extensions: ["mp4", "mov", "m4v"] }];
-
-function FilePick({ label, value, onPick }: { label: string; value: string; onPick: () => void }) {
-  return (
-    <div className="flex items-center gap-2">
-      <Button minimal small icon="folder-open" onClick={onPick}>
-        {label}
-      </Button>
-      <span className="truncate text-xs text-[var(--color-text-secondary)]" title={value}>
-        {value || "—"}
-      </span>
-    </div>
-  );
-}
+import TierGate from "../../components/shared/TierGate";
+import type { SizeUnit } from "../../lib/stegoBackup";
+import { useStegoBackup } from "./useStegoBackup";
+import {
+  BusyBar,
+  CapacityEmpty,
+  CapacityPanel,
+  FailureCallout,
+  FilePick,
+  INFO,
+  InfoDot,
+  IssueLine,
+  SuccessCallout,
+} from "./StegoBackupParts";
+import "./StegoBackupSection.css";
 
 export default function StegoBackupSection() {
-  const { createStegoMp4, extractStegoMp4 } = useBackend();
-
-  const [carrier, setCarrier] = useState("");
-  const [outPath, setOutPath] = useState("");
-  const [size, setSize] = useState("20");
-  const [password, setPassword] = useState("");
-
-  const [inPath, setInPath] = useState("");
-  const [exOut, setExOut] = useState("");
-
-  const [busy, setBusy] = useState<"create" | "extract" | null>(null);
-
-  const pickCarrier = async () => {
-    const f = await open({ multiple: false, filters: VIDEO_FILTER });
-    if (typeof f === "string") setCarrier(f);
-  };
-  const pickOut = async () => {
-    const f = await save({ defaultPath: "backup.mp4", filters: VIDEO_FILTER });
-    if (f) setOutPath(f);
-  };
-  const pickIn = async () => {
-    const f = await open({ multiple: false, filters: VIDEO_FILTER });
-    if (typeof f === "string") setInPath(f);
-  };
-  const pickExOut = async () => {
-    const f = await save({ defaultPath: "recovered.hc" });
-    if (f) setExOut(f);
-  };
-
-  const doCreate = async () => {
-    if (!carrier || !outPath || !password || !size) {
-      showError("Carrier video, output, size and password are all required");
-      return;
-    }
-    setBusy("create");
-    try {
-      await createStegoMp4({ carrierMp4: carrier, outputPath: outPath, size, password });
-      showSuccess("Hidden backup created inside the video");
-      setPassword("");
-    } catch (e) {
-      showError(String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const doExtract = async () => {
-    if (!inPath || !exOut) {
-      showError("Stego video and output path are required");
-      return;
-    }
-    setBusy("extract");
-    try {
-      await extractStegoMp4({ inputPath: inPath, outputPath: exOut });
-      showSuccess("Hidden container recovered — mount it from the Volumes list");
-    } catch (e) {
-      showError(String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
+  const stego = useStegoBackup();
+  const [showPassword, setShowPassword] = useState(false);
+  // Destructured so the narrowed result types survive into the reveal callbacks.
+  const { fields, set, busy, createErrors, extractErrors, createResult, extractResult } = stego;
+  const locked = busy !== null;
 
   return (
-    <SectionCard title="Stego Backup" icon="film">
-      <div className="flex flex-col gap-4 p-1">
-        <p className="text-xs text-[var(--color-text-secondary)]">
-          Hide an encrypted volume inside a normal-looking MP4 that still plays. The video
-          carries your backup; only your password unlocks it.
+    <SectionCard title="Stego Backup" icon="video" headerRight={<InfoDot content={INFO.what} />}>
+      <div className="stego-section">
+        <p className="stego-intro">
+          Hide an encrypted volume inside a normal-looking video that still plays. The video carries
+          your backup; only your password opens it.
         </p>
 
-        <div className="flex flex-col gap-2">
-          <span className="text-sm font-semibold">Create</span>
-          <FilePick label="Carrier MP4…" value={carrier} onPick={() => void pickCarrier()} />
-          <FilePick label="Output video…" value={outPath} onPick={() => void pickOut()} />
-          <FormGroup label="Volume size (MB)">
-            <InputGroup value={size} onChange={(e) => setSize(e.currentTarget.value)} />
-          </FormGroup>
-          <FormGroup label="Password">
-            <InputGroup
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.currentTarget.value)}
-            />
-          </FormGroup>
-          <Button intent="primary" disabled={busy !== null} onClick={() => void doCreate()}>
-            {busy === "create" ? "Creating…" : "Create hidden backup"}
-          </Button>
-        </div>
+        <Callout intent="warning" title="Before you rely on this">
+          <ul className="stego-warnings">
+            <li>Lose the password and the backup is gone — there is no recovery.</li>
+            <li>
+              Any re-encode destroys the hidden volume. Messaging apps, YouTube and Google Photos all
+              re-encode on upload, so move the file as a file.
+            </li>
+            <li>
+              Keep the original carrier away from the stego copy — two near-identical videos give it
+              away.
+            </li>
+          </ul>
+        </Callout>
 
-        <div className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-3">
-          <span className="text-sm font-semibold">Extract</span>
-          <FilePick label="Stego MP4…" value={inPath} onPick={() => void pickIn()} />
-          <FilePick label="Recover container to…" value={exOut} onPick={() => void pickExOut()} />
-          <Button disabled={busy !== null} onClick={() => void doExtract()}>
-            {busy === "extract" ? "Extracting…" : "Recover container"}
-          </Button>
-        </div>
+        <TierGate tier="paid" featureLabel="Stego Backup">
+          <div className="stego-block">
+            <span className="stego-block__title">Create a hidden backup</span>
+
+            <FilePick
+              label="Carrier video…"
+              value={fields.carrier}
+              onPick={() => void stego.pickCarrier()}
+              onClear={() => set.setCarrier("")}
+              disabled={locked}
+            />
+            <IssueLine issues={createErrors} field="carrier" />
+            <IssueLine issues={stego.createWarnings} field="carrier" tone="warn" />
+
+            <FilePick
+              label="Save video as…"
+              value={fields.outPath}
+              onPick={() => void stego.pickOutput()}
+              onClear={() => set.setOutPath("")}
+              disabled={locked}
+            />
+            <IssueLine issues={createErrors} field="output" />
+            <IssueLine issues={stego.createWarnings} field="output" tone="warn" />
+
+            <div className="stego-size-row">
+              <FormGroup
+                label={
+                  <span className="stego-label">
+                    Hidden volume size <InfoDot content={INFO.size} />
+                  </span>
+                }
+              >
+                <InputGroup
+                  type="number"
+                  min={1}
+                  value={fields.sizeRaw}
+                  disabled={locked}
+                  onChange={(e) => set.setSizeRaw(e.currentTarget.value)}
+                />
+              </FormGroup>
+              <FormGroup label="Unit">
+                <HTMLSelect
+                  value={fields.sizeUnit}
+                  disabled={locked}
+                  onChange={(e) => set.setSizeUnit(e.currentTarget.value as SizeUnit)}
+                  options={[
+                    { value: "M", label: "MB" },
+                    { value: "G", label: "GB" },
+                    { value: "T", label: "TB" },
+                  ]}
+                />
+              </FormGroup>
+            </div>
+            <IssueLine issues={createErrors} field="size" />
+
+            {fields.carrier ? (
+              <CapacityPanel
+                plan={stego.capacity}
+                freeBytes={stego.destinationFreeBytes}
+                loading={stego.drivesLoading}
+                hasOutput={!!fields.outPath}
+                freeShare={stego.freeShare}
+              />
+            ) : (
+              <CapacityEmpty />
+            )}
+            <IssueLine issues={createErrors} field="destination" />
+
+            <FormGroup
+              label={
+                <span className="stego-label">
+                  Password <InfoDot content={INFO.password} />
+                </span>
+              }
+              helperText="At least 8 characters. Write it down somewhere safe before you continue."
+            >
+              <InputGroup
+                type={showPassword ? "text" : "password"}
+                value={fields.password}
+                autoComplete="new-password"
+                disabled={locked}
+                onChange={(e) => set.setPassword(e.currentTarget.value)}
+                rightElement={
+                  <Button
+                    minimal
+                    icon={showPassword ? "eye-off" : "eye-open"}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    onClick={() => setShowPassword((prev) => !prev)}
+                  />
+                }
+              />
+            </FormGroup>
+            <FormGroup label="Confirm password">
+              <InputGroup
+                type={showPassword ? "text" : "password"}
+                value={fields.passwordConfirm}
+                autoComplete="new-password"
+                disabled={locked}
+                onChange={(e) => set.setPasswordConfirm(e.currentTarget.value)}
+              />
+            </FormGroup>
+            <IssueLine issues={createErrors} field="password" />
+
+            {busy === "create" && (
+              <BusyBar label="Formatting the hidden volume, then rebuilding the video around it. Minutes, not seconds." />
+            )}
+
+            {createResult?.kind === "fail" && <FailureCallout failure={createResult.failure} />}
+            {createResult?.kind === "ok" && (
+              <SuccessCallout
+                title="Hidden backup created"
+                path={createResult.path}
+                onReveal={() => void stego.revealFolder(createResult.path)}
+              >
+                Test it before you delete anything: recover it below, then mount the result.
+              </SuccessCallout>
+            )}
+
+            <Button
+              intent="primary"
+              loading={busy === "create"}
+              disabled={locked || stego.createBlocked}
+              onClick={() => void stego.runCreate()}
+            >
+              Create hidden backup
+            </Button>
+          </div>
+
+          <div className="stego-block stego-block--restore">
+            <span className="stego-block__title">
+              Restore from a video <InfoDot content={INFO.restore} />
+            </span>
+            <p className="stego-intro">
+              Copies the hidden container back out as a file. This step needs no password — you enter
+              it when you mount the container from the Volumes list above.
+            </p>
+
+            <FilePick
+              label="Video with a backup…"
+              value={fields.inPath}
+              onPick={() => void stego.pickStegoInput()}
+              onClear={() => set.setInPath("")}
+              disabled={locked}
+            />
+            <IssueLine issues={extractErrors} field="carrier" />
+
+            <FilePick
+              label="Recover container to…"
+              value={fields.exOut}
+              onPick={() => void stego.pickContainerOutput()}
+              onClear={() => set.setExOut("")}
+              disabled={locked}
+            />
+            <IssueLine issues={extractErrors} field="output" />
+            <IssueLine issues={stego.extractWarnings} field="output" tone="warn" />
+
+            {busy === "extract" && <BusyBar label="Reading the video and copying the hidden container out." />}
+
+            {extractResult?.kind === "fail" && <FailureCallout failure={extractResult.failure} />}
+            {extractResult?.kind === "ok" && (
+              <SuccessCallout
+                title="Container recovered"
+                path={extractResult.path}
+                onReveal={() => void stego.revealFolder(extractResult.path)}
+              >
+                Mount it from the Volumes list above, with the password you used when you created it.
+              </SuccessCallout>
+            )}
+
+            <Button
+              loading={busy === "extract"}
+              disabled={locked || stego.extractBlocked}
+              onClick={() => void stego.runExtract()}
+            >
+              Recover container
+            </Button>
+          </div>
+        </TierGate>
       </div>
     </SectionCard>
   );
