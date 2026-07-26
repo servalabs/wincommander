@@ -1,6 +1,7 @@
 // src/panels/privacy/PrivacyShieldCard.tsx
 // Self-contained Privacy Gaze Shield card — no props needed.
 import { Button, Slider, Switch, Tooltip, Icon } from "@/components/ui/bp";
+import { Segmented } from "@/components/ui/segmented";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -24,15 +25,21 @@ let _shieldRunningCache: boolean | null = null;
 // user clicks them but before the debounced save fires.
 let _toggleHydratedFromSettings = false;
 
+// Dedicated (i) icon next to the label rather than wrapping the whole label
+// in a hover target — matches the app-wide info-icon idiom (see
+// VpnKillSwitchSection's .vpn-ks-info-icon) instead of a bespoke cursor-help span.
 function ShieldOption({ label, tooltip, checked, onChange, disabled }: {
     label: string; tooltip: string; checked: boolean;
     onChange: (v: boolean) => void; disabled: boolean;
 }) {
     return (
         <div className="flex items-center justify-between gap-2 py-1">
-            <Tooltip content={tooltip} position="right">
-                <span className="text-[13px] text-[var(--shield-text-primary)] cursor-help">{label}</span>
-            </Tooltip>
+            <span className="flex items-center gap-1.5 text-[13px] text-[var(--shield-text-primary)]">
+                {label}
+                <Tooltip content={tooltip} position="right">
+                    <Icon icon="info-sign" size={11} className="physical-shield-info-icon" />
+                </Tooltip>
+            </span>
             <Switch checked={checked} onChange={(e) => onChange(e.currentTarget.checked)} disabled={disabled} />
         </div>
     );
@@ -72,7 +79,11 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const isAdvanced = density === 'expert';
     const [localLoading, setLocalLoading] = useState(false);
     const [showShieldIntro, setShowShieldIntro] = useState(false);
-    const [showParams, setShowParams] = useState(false);
+    // Single disclosure for every non-essential control (was split across a
+    // header row, two always-visible mini-grids, and this chevron — now one
+    // toggle covers Auto start, Camera Seen, Record Proof, Detection Mode,
+    // and the processing-parameter sliders).
+    const [showAdvanced, setShowAdvanced] = useState(false);
 
     const openShieldPaywall = useCallback(() => {
         window.dispatchEvent(new CustomEvent("license-gate-open", {
@@ -467,79 +478,85 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         >
             <div className="flex flex-col gap-5">
                 <div className="physical-shield-head">
-                    <div className="physical-shield-copy flex flex-col gap-1 min-w-0">
+                    <div className="physical-shield-copy flex flex-col gap-2 min-w-0">
+                        {/* Title row — name + info icon only. "How it works" and
+                            "Auto start" used to crowd this line; the former is now
+                            the (i) icon, the latter lives in the advanced disclosure
+                            below (it's Pro-gated and rarely touched). */}
                         <div className="flex items-center gap-2">
                             <div className={`size-2 rounded-full flex-shrink-0 ${privacyShieldRunning ? 'bg-[var(--color-success)]' : 'bg-[var(--color-text-muted)]'}`} />
                             <span className="text-sm font-semibold text-[var(--shield-text-primary)]">
                                 Privacy Gaze Shield
                             </span>
-                            <Button minimal small text="How it works"
-                                data-tour="privacy-shield-how-it-works"
-                                style={{ fontSize: 10, color: 'var(--color-accent)', letterSpacing: '0.3px', borderRadius: 999, border: '1px solid var(--color-border-accent)', padding: '2px 10px', textTransform: 'none' }}
-                                onClick={() => setShowShieldIntro(true)} />
-                            <Tooltip
-                                content={hasPaid
-                                    ? "Automatically activate Privacy Shield a few seconds after the app launches. Skipped if no camera or the AI runtime isn't installed."
-                                    : "Pro feature - auto-activate Privacy Shield after launch."}
-                                position="right">
-                                <div className="physical-shield-autostart-inline">
-                                    <span className="text-[11px] text-[var(--shield-text-subtle)] whitespace-nowrap">Auto start</span>
-                                    <Switch
-                                        checked={autostart}
-                                        onChange={(e) => {
-                                            const v = e.currentTarget.checked;
-                                            if (v && !hasPaid) { openShieldPaywall(); return; }
-                                            setAutostart(v);
-                                        }}
-                                        disabled={false}
-                                    />
-                                </div>
+                            <Tooltip content="See how the Gaze Shield decides when to blur your screen." position="right">
+                                {/* Unlike the tooltip-only info icons on each toggle
+                                    below, this one is also clickable (opens the intro
+                                    dialog) — cursor:pointer overrides the shared
+                                    cursor:help so the affordance still reads clearly. */}
+                                <Icon icon="info-sign" size={11} className="physical-shield-info-icon"
+                                    style={{ cursor: 'pointer' }}
+                                    data-tour="privacy-shield-how-it-works"
+                                    onClick={() => setShowShieldIntro(true)} />
                             </Tooltip>
-                            {privacyShieldRunning && (
-                                <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-success)]/15 text-[var(--color-success)] border border-[var(--color-success)]/30 flex-shrink-0">Active</span>
-                            )}
-                            {privacyShieldRunning && lookingAway && (
-                                <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-warning)]/15 text-[var(--color-warning)] border border-[var(--color-warning)]/30 flex-shrink-0">Looking away · webcam blocked</span>
-                            )}
                         </div>
-                        {!hasPaid && quota && !quota.is_unlimited && (
-                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                                <span className="text-[10px] px-2 py-0.5 rounded flex-shrink-0 cursor-pointer"
-                                    title={`Free tier — ${quota.hard_cap_minutes} min per day. Upgrade for unlimited use.`}
-                                    onClick={openShieldPaywall}
-                                    style={{ background: 'var(--color-accent-dim, rgba(0,160,255,0.12))', color: 'var(--color-accent)', border: '1px solid var(--color-accent)', fontFamily: 'var(--font-mono)', letterSpacing: '0.5px' }}>
-                                    FREE
-                                </span>
-                                {quota.minutes_remaining > 0 ? (
-                                    <span className="text-[10px] px-2 py-0.5 rounded flex-shrink-0 tabular-nums"
-                                        title={privacyShieldRunning
-                                            ? "Counts down every second while the shield is running."
-                                            : `Daily cap is ${quota.hard_cap_minutes} min. Resets at midnight.`}
-                                        style={{
-                                            background: 'var(--shield-inner-bg)',
-                                            color: liveSecondsLeft !== null && liveSecondsLeft <= 60 ? 'var(--color-warning)' : 'var(--shield-text-subtle)',
-                                            border: `1px solid ${liveSecondsLeft !== null && liveSecondsLeft <= 60 ? 'var(--color-warning)' : 'var(--shield-inner-border)'}`,
-                                            fontFamily: 'var(--font-mono)',
-                                        }}>
-                                        {privacyShieldRunning && liveSecondsLeft !== null
-                                            ? `${formatCountdown(liveSecondsLeft)} left`
-                                            : `${Math.ceil(quota.minutes_remaining)} / ${quota.hard_cap_minutes} min today`}
-                                    </span>
-                                ) : (
-                                    <span className="text-[10px] px-2 py-0.5 rounded flex-shrink-0 cursor-pointer" title="Free-tier daily cap reached." onClick={openShieldPaywall}
-                                        style={{ background: 'var(--color-warning-dim)', color: 'var(--color-warning)', border: '1px solid var(--color-warning)', fontFamily: 'var(--font-mono)', letterSpacing: '0.5px' }}>
-                                        DAILY LIMIT REACHED
+                        {/* Single badge group — Active / Looking away / FREE tier /
+                            quota / Camera unavailable used to be two visually
+                            identical rows 4px apart; now one flex-wrap group. */}
+                        {/* `cameraAvailable === false` alone suffices here (not
+                            `&& privacyShieldRunning !== true` too) — by this point
+                            in the `||` chain, the running check already failed, so
+                            TS correctly flags the extra comparison as redundant. */}
+                        {(privacyShieldRunning || (!hasPaid && quota && !quota.is_unlimited) || cameraAvailable === false) && (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                                {privacyShieldRunning && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-success)]/15 text-[var(--color-success)] border border-[var(--color-success)]/30 flex-shrink-0">Active</span>
+                                )}
+                                {privacyShieldRunning && lookingAway && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-warning)]/15 text-[var(--color-warning)] border border-[var(--color-warning)]/30 flex-shrink-0">Looking away · webcam blocked</span>
+                                )}
+                                {!hasPaid && quota && !quota.is_unlimited && (
+                                    <>
+                                        <span className="text-[10px] px-2 py-0.5 rounded flex-shrink-0 cursor-pointer"
+                                            title={`Free tier — ${quota.hard_cap_minutes} min per day. Upgrade for unlimited use.`}
+                                            onClick={openShieldPaywall}
+                                            style={{ background: 'var(--color-accent-dim, rgba(0,160,255,0.12))', color: 'var(--color-accent)', border: '1px solid var(--color-accent)', fontFamily: 'var(--font-mono)', letterSpacing: '0.5px' }}>
+                                            FREE
+                                        </span>
+                                        {quota.minutes_remaining > 0 ? (
+                                            <span className="text-[10px] px-2 py-0.5 rounded flex-shrink-0 tabular-nums"
+                                                title={privacyShieldRunning
+                                                    ? "Counts down every second while the shield is running."
+                                                    : `Daily cap is ${quota.hard_cap_minutes} min. Resets at midnight.`}
+                                                style={{
+                                                    background: 'var(--shield-inner-bg)',
+                                                    color: liveSecondsLeft !== null && liveSecondsLeft <= 60 ? 'var(--color-warning)' : 'var(--shield-text-subtle)',
+                                                    border: `1px solid ${liveSecondsLeft !== null && liveSecondsLeft <= 60 ? 'var(--color-warning)' : 'var(--shield-inner-border)'}`,
+                                                    fontFamily: 'var(--font-mono)',
+                                                }}>
+                                                {privacyShieldRunning && liveSecondsLeft !== null
+                                                    ? `${formatCountdown(liveSecondsLeft)} left`
+                                                    : `${Math.ceil(quota.minutes_remaining)} / ${quota.hard_cap_minutes} min today`}
+                                            </span>
+                                        ) : (
+                                            <span className="text-[10px] px-2 py-0.5 rounded flex-shrink-0 cursor-pointer" title="Free-tier daily cap reached." onClick={openShieldPaywall}
+                                                style={{ background: 'var(--color-warning-dim)', color: 'var(--color-warning)', border: '1px solid var(--color-warning)', fontFamily: 'var(--font-mono)', letterSpacing: '0.5px' }}>
+                                                DAILY LIMIT REACHED
+                                            </span>
+                                        )}
+                                    </>
+                                )}
+                                {cameraAvailable === false && privacyShieldRunning !== true && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded flex-shrink-0"
+                                        style={{ background: 'var(--color-warning-dim)', color: 'var(--color-warning)', border: '1px solid var(--color-warning)' }}>
+                                        Camera unavailable
                                     </span>
                                 )}
                             </div>
                         )}
-                        {cameraAvailable === false && privacyShieldRunning !== true && (
-                            <div className="text-[10px] px-2 py-1 rounded mt-1 w-fit"
-                                style={{ background: 'var(--color-warning-dim)', color: 'var(--color-warning)', border: '1px solid var(--color-warning)' }}>
-                                Camera unavailable
-                            </div>
-                        )}
-                        <div className="physical-shield-summary-row mt-1">
+                        {/* Description + trust line flow by content length now —
+                            was a rigid 2-col grid forcing both onto equal-width
+                            columns regardless of text length. */}
+                        <div className="physical-shield-summary-row">
                             <p className="text-xs text-[var(--shield-text-subtle)] text-pretty">
                                 Blurs screen when unauthorized presence or threats are detected.
                             </p>
@@ -561,40 +578,65 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 )}
 
                 <div className="rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] p-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="flex flex-col gap-3">
-                            <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Blur triggers" : "Activation Triggers"}</span>
-                            <ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true} />
-                            <ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true} />
-                            <ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: detects phones or cameras pointed at screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true} />
-                        </div>
-                        <div className="flex flex-col gap-3">
-                            <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Capture on incident" : "Record Proof"}</span>
-                            <ShieldOption label={isAdvanced ? "Phone Detected" : "Save Camera Proof"} tooltip="Saves screenshot and webcam when phone/camera is detected." checked={privacyConfig.captureOnDevice} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnDevice: v }))} disabled={privacyShieldRunning === true} />
-                            <ShieldOption label={isAdvanced ? "Multiple faces" : "Save Person Proof"} tooltip="Saves screenshot and webcam when multiple faces detected." checked={privacyConfig.captureOnMultiFace} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnMultiFace: v }))} disabled={privacyShieldRunning === true} />
-                        </div>
+                    {/* Essential: only the two primary blur triggers stay
+                        always-visible. "Camera Seen" (experimental), Record
+                        Proof, Detection Mode, Auto start, and the parameter
+                        sliders all moved into the single disclosure below. */}
+                    <div className="flex flex-col gap-3">
+                        <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Blur triggers" : "Activation Triggers"}</span>
+                        <ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true} />
+                        <ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true} />
                     </div>
+
                     <div className="mt-4 pt-4 border-t border-[var(--shield-inner-border)]">
-                        <span className="text-[10px] font-medium text-[var(--shield-text-muted)] block mb-2">{isAdvanced ? "Model" : "Detection Mode"}</span>
-                        <div className="flex flex-wrap gap-1">
-                            {(["nano", "small", "medium", "large"] as const).map((m) => (
-                                <button key={m} type="button"
-                                    onClick={() => !privacyShieldRunning && setPrivacyConfig(p => ({ ...p, modelLevel: m }))}
-                                    disabled={privacyShieldRunning === true}
-                                    className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${privacyConfig.modelLevel === m ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border border-[var(--color-accent)]/40' : 'bg-transparent text-[var(--shield-text-subtle)] border border-transparent hover:bg-white/5 hover:text-[var(--shield-text-primary)]'} ${privacyShieldRunning ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                                    {m}
-                                </button>
-                            ))}
+                        <div className="flex items-center justify-between cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setShowAdvanced(!showAdvanced)}>
+                            <span className="text-[10px] font-medium text-[var(--shield-text-muted)] block">{isAdvanced ? "Processing parameters" : "Advanced Settings"}</span>
+                            <Icon icon={showAdvanced ? "chevron-up" : "chevron-down"} size={12} color="var(--shield-text-muted)" />
                         </div>
-                    </div>
-                    {cameraAvailable !== false && (
-                        <div className="mt-4 pt-4 border-t border-[var(--shield-inner-border)]">
-                            <div className="flex items-center justify-between cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setShowParams(!showParams)}>
-                                <span className="text-[10px] font-medium text-[var(--shield-text-muted)] block">{isAdvanced ? "Processing parameters" : "Advanced Settings"}</span>
-                                <Icon icon={showParams ? "chevron-up" : "chevron-down"} size={12} color="var(--shield-text-muted)" />
-                            </div>
-                            {showParams && (
-                                <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {showAdvanced && (
+                            <div className="mt-4 flex flex-col gap-4">
+                                <ShieldOption
+                                    label={isAdvanced ? "Auto start" : "Auto start on launch"}
+                                    tooltip={hasPaid
+                                        ? "Automatically activate Privacy Shield a few seconds after the app launches. Skipped if no camera or the AI runtime isn't installed."
+                                        : "Pro feature - auto-activate Privacy Shield after launch."}
+                                    checked={autostart}
+                                    onChange={(v) => {
+                                        if (v && !hasPaid) { openShieldPaywall(); return; }
+                                        setAutostart(v);
+                                    }}
+                                    disabled={false}
+                                />
+                                <ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: detects phones or cameras pointed at screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true} />
+
+                                <div className="flex flex-col gap-3 pt-3 border-t border-[var(--shield-inner-border)]">
+                                    <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Capture on incident" : "Record Proof"}</span>
+                                    <ShieldOption label={isAdvanced ? "Phone Detected" : "Save Camera Proof"} tooltip="Saves screenshot and webcam when phone/camera is detected." checked={privacyConfig.captureOnDevice} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnDevice: v }))} disabled={privacyShieldRunning === true} />
+                                    <ShieldOption label={isAdvanced ? "Multiple faces" : "Save Person Proof"} tooltip="Saves screenshot and webcam when multiple faces detected." checked={privacyConfig.captureOnMultiFace} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnMultiFace: v }))} disabled={privacyShieldRunning === true} />
+                                </div>
+
+                                <div className="pt-3 border-t border-[var(--shield-inner-border)]">
+                                    <span className="text-[10px] font-medium text-[var(--shield-text-muted)] block mb-2">{isAdvanced ? "Model" : "Detection Mode"}</span>
+                                    {/* Segmented has no disabled prop — pointer-events-none
+                                        blocks interaction visually, the onValueChange guard
+                                        below blocks it programmatically (matches the old
+                                        hand-rolled buttons' disabled + guarded onClick). */}
+                                    <div className={privacyShieldRunning === true ? 'opacity-50 pointer-events-none' : ''}>
+                                        <Segmented
+                                            value={privacyConfig.modelLevel}
+                                            onValueChange={(v) => { if (!privacyShieldRunning) setPrivacyConfig(p => ({ ...p, modelLevel: v })); }}
+                                            options={[
+                                                { value: 'nano', label: 'nano' },
+                                                { value: 'small', label: 'small' },
+                                                { value: 'medium', label: 'medium' },
+                                                { value: 'large', label: 'large' },
+                                            ]}
+                                            size="sm"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-[var(--shield-inner-border)]">
                                     <ShieldSlider label={isAdvanced ? "Confidence" : "Sensitivity"} value={`${(privacyConfig.confidence * 100).toFixed(0)}%`} min={0.1} max={0.9} step={0.05} val={privacyConfig.confidence} onChange={(v) => setPrivacyConfig(p => ({ ...p, confidence: v }))} disabled={privacyShieldRunning === true} />
                                     <ShieldSlider label={isAdvanced ? "Overlay opacity" : "Blur Strength"} value={`${((privacyConfig.overlayOpacity / 255) * 100).toFixed(0)}%`} min={50} max={255} step={5} val={privacyConfig.overlayOpacity} onChange={(v) => setPrivacyConfig(p => ({ ...p, overlayOpacity: v }))} disabled={privacyShieldRunning === true} />
                                     <ShieldSlider label={isAdvanced ? "Wake delay" : "Wake Delay"} value={`${privacyConfig.wakeDelayMs}ms`} min={50} max={1500} step={50} val={privacyConfig.wakeDelayMs} onChange={(v) => setPrivacyConfig(p => ({ ...p, wakeDelayMs: v }))} disabled={privacyShieldRunning === true} />
@@ -603,9 +645,9 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                     <ShieldSlider label={isAdvanced ? "Detection buffer (frames)" : "Blur Stability"} value={`${privacyConfig.bufferFrames}`} min={1} max={8} step={1} val={privacyConfig.bufferFrames} onChange={(v) => setPrivacyConfig(p => ({ ...p, bufferFrames: v }))} disabled={privacyShieldRunning === true} />
                                     <ShieldSlider label={isAdvanced ? "Capture speed (playback)" : "Playback Speed"} value={`${privacyConfig.captureSpeed}x`} min={1} max={4} step={1} val={privacyConfig.captureSpeed} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureSpeed: v }))} disabled={privacyShieldRunning === true} />
                                 </div>
-                            )}
-                        </div>
-                    )}
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
             <PrivacyShieldIntro isOpen={showShieldIntro} onClose={() => setShowShieldIntro(false)} />

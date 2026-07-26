@@ -152,17 +152,22 @@
 
 /* Top row of the monitoring section — Privacy Shield + RDP idle side by side.
    padding-right clears the scrollbar gutter so the rightmost card's border
-   doesn't sit flush against it. */
+   doesn't sit flush against it.
+   Asymmetric, not 1fr/1fr: Privacy Shield carries roughly 3x the content of
+   RDP Idle (status/quota badges, trigger toggles, an advanced disclosure)
+   but was permanently squeezed into the same 50% column. minmax floors keep
+   RDP Idle's controls (selects, timeout inputs) from getting crushed if the
+   window narrows before the stack breakpoint kicks in. */
 .privacy-monitor-toprow {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(340px, 1.5fr) minmax(260px, 1fr);
     gap: 12px;
     align-items: stretch;
     margin-bottom: 12px;
     padding-right: 4px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 760px) {
     .privacy-monitor-toprow {
         grid-template-columns: 1fr;
     }
@@ -350,9 +355,11 @@
     min-width: 0;
 }
 
-.physical-shield-copy > .flex:first-child {
-    flex-wrap: wrap;
-}
+/* NOTE: the title row (dot + name + info icon) and the badge row (Active /
+   Looking away / FREE / quota / Camera unavailable) are now separate flex
+   children, each with its own flex-wrap applied directly in the TSX — this
+   selector used to force-wrap the single crowded title+badges row and is no
+   longer needed. */
 
 .physical-shield-actions {
     display: flex;
@@ -380,22 +387,20 @@
     background: var(--shield-inner-bg);
 }
 
-.physical-shield-autostart-inline {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 2px 8px;
-    border: 1px solid var(--shield-inner-border);
-    border-radius: 999px;
-    background: var(--shield-inner-bg);
-    flex-shrink: 0;
-}
+/* Auto start moved into the advanced disclosure as a plain ShieldOption row,
+   so the standalone header pill this backed is gone (orphaned by that move —
+   removed here per "delete what you orphan"). */
 
+/* Was a rigid 2-col grid forcing the description and the on-device trust
+   line onto equal-width columns regardless of how long either text is. Flex
+   + wrap lets each flow at its natural width and only wrap when the row
+   actually runs out of room. */
 .physical-shield-summary-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 18px;
+    column-gap: 18px;
+    row-gap: 4px;
 }
 
 .physical-shield-summary-row p {
@@ -422,11 +427,13 @@
     }
 }
 
-@media (max-width: 900px) {
-    .physical-shield-summary-row {
-        grid-template-columns: 1fr;
-        gap: 6px;
-    }
+/* Dedicated (i) icon used both next to the card title and inside every
+   ShieldOption row — same treatment as VpnKillSwitchSection's
+   .vpn-ks-info-icon so the affordance reads identically app-wide. */
+.physical-shield-info-icon {
+    color: var(--color-text-muted);
+    opacity: 0.7;
+    cursor: help;
 }
 
 /* ── Stats strip ── */
