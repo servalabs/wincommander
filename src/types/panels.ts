@@ -225,7 +225,12 @@ export const PANEL_MANIFESTS: PanelManifest[] = [
     icon: "wrench",
     importFn: () => import("../panels/maintenance"),
     navTier: "primary",
-    searchKeywords: ["cache", "cleaner", "temporary files", "browser cache", "shader cache", "sqlite", "routine"],
+    searchKeywords: [
+      "cache", "cleaner", "temporary files", "browser cache", "shader cache", "sqlite", "routine",
+      "disk cleanup", "reclaim space", "recycle bin", "windows.old", "duplicates", "disk space analyzer",
+      "repair", "sfc", "dism", "windows update repair", "defrag", "trim", "shortcuts", "path", "leftovers",
+      "registry", "context menu", "malware", "defender", "startup", "driver", "performance", "processes",
+    ],
     order: 31,
   },
   {

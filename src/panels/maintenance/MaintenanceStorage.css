@@ -1,17 +1,3 @@
-.maintenance-cleanup-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr));
-  gap: 1rem;
-  align-items: stretch;
-}
-
-.maintenance-cleanup-card,
-.maintenance-cache-cleaner,
-.maintenance-cache-card {
-  min-width: 0;
-  height: 100%;
-}
-
 .maintenance-cache-idle {
   position: relative;
   isolation: isolate;

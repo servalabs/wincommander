@@ -1,7 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import { Button, ButtonGroup, Checkbox, Spinner, Icon, Popover, Menu, MenuItem, MenuDivider, InputGroup } from "@/components/ui/bp";
-import SectionCard from "../../shared/SectionCard";
+import { useCallback, useEffect, useState } from "react";
+import { Badge } from "../../ui/badge";
+import { Button } from "../../ui/button";
+import { Icon } from "../../ui/icon";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
+import { Spinner } from "../../ui/spinner";
 import useBackend, { executeBackendCommand } from "../../../hooks/useBackend";
+import useEntitlements from "../../../hooks/useEntitlements";
 import { useAppState } from "../../../context/AppContext";
 import { runOperation } from "../../../context/OperationContext";
 import { showSuccess, showError } from "../../../utils/toast";
@@ -17,13 +21,16 @@ interface CleanupCategory {
     SizeMb: number;
 }
 
+// Auto-clean presets. 60 minutes is the floor the scheduler enforces — a
+// cleanmgr sweep is too heavy to run more often than hourly.
 const SCHEDULE_PRESETS = [
-    { minutes: 60,    label: "Every hour" },
-    { minutes: 360,   label: "Every 6 hours" },
-    { minutes: 720,   label: "Every 12 hours" },
-    { minutes: 1440,  label: "Daily" },
+    { minutes: 60, label: "Every hour" },
+    { minutes: 360, label: "Every 6 hours" },
+    { minutes: 720, label: "Every 12 hours" },
+    { minutes: 1440, label: "Daily" },
     { minutes: 10080, label: "Weekly" },
 ];
+const SCHEDULE_OFF = "off";
 
 function formatInterval(minutes: number): string {
     if (minutes < 60) return `${minutes}m`;
@@ -32,27 +39,12 @@ function formatInterval(minutes: number): string {
     return `${minutes / 10080}w`;
 }
 
-function containWheelInScroller(e: React.WheelEvent<HTMLDivElement>) {
-    const el = e.currentTarget;
-    const canScroll = el.scrollHeight > el.clientHeight;
-    if (!canScroll) return;
-
-    const atTop = el.scrollTop <= 0;
-    const atBottom = Math.ceil(el.scrollTop + el.clientHeight) >= el.scrollHeight;
-    const movingUp = e.deltaY < 0;
-    const movingDown = e.deltaY > 0;
-
-    if ((movingUp && !atTop) || (movingDown && !atBottom)) {
-        e.stopPropagation();
-    }
-}
-
 // ── Module-level cache ───────────────────────────────────────────────
 // Persists the scan result across DiskCleanupGranular mount/unmount so
 // navigating away and back shows the "MB selected" counter instantly, and
 // lets an app-startup pre-load (see preloadDiskCleanupScan, wired from
 // App.tsx right after splash) populate it before the user ever opens
-// Secure Storage — no loading flash on first visit. Mirrors the
+// Maintenance — no loading flash on first visit. Mirrors the
 // cache/subscriber convention used by src/panels/cleanup/useCleanupScan.ts
 // (_cleanupCache / updateCacheEntry).
 let _diskCleanupCache: CleanupCategory[] | null = null;
@@ -63,13 +55,10 @@ export type DiskCleanupScanResult =
     | { success: true; categories: CleanupCategory[] }
     | { success: false; error?: string };
 
-// Standalone scan fetch, independent of any mounted component — callable
-// both from DiskCleanupGranular's own refresh() and from the app-startup
-// pre-load below. Concurrent callers share one in-flight PowerShell scan
-// (Get-DiskCleanupScan walks Temp/Windows Update cache/Prefetch/
-// Windows.old/etc, which can take a few seconds — not cheap) instead of
-// spawning parallel ones. Writes the result into the module cache and
-// notifies whichever instance (if any) is currently mounted/subscribed.
+// Concurrent callers share one in-flight PowerShell scan — Get-DiskCleanupScan
+// walks Temp/Windows Update cache/Prefetch/Windows.old and can take seconds, so
+// parallel scans are expensive. Writes the module cache and notifies whichever
+// instance (if any) is currently mounted/subscribed.
 export function fetchDiskCleanupScan(): Promise<DiskCleanupScanResult> {
     if (_diskCleanupInFlight) return _diskCleanupInFlight;
     const run = async (): Promise<DiskCleanupScanResult> => {
@@ -87,22 +76,19 @@ export function fetchDiskCleanupScan(): Promise<DiskCleanupScanResult> {
     return p;
 }
 
-// Fire-and-forget app-startup pre-load. Called once, early in the app
-// lifecycle (App.tsx, right after splash) so the scan is already in
-// flight — or already cached — by the time the user navigates to Secure
-// Storage. Non-blocking: never awaited by the caller. Swallows failures
-// silently; a failed pre-load just leaves the panel to scan normally on
-// first open, same as before this change.
+// Fire-and-forget pre-load called once from App.tsx right after splash, so the
+// scan is in flight before the user reaches Maintenance. Failures are swallowed:
+// the panel just scans normally on first open.
 export function preloadDiskCleanupScan(): void {
     if (_diskCleanupCache) return; // already populated by an earlier call
     fetchDiskCleanupScan().catch(() => {});
 }
 
+const defaultSelection = (cats: CleanupCategory[]) =>
+    new Set(cats.filter(c => c.FileCount > 0 && c.Id !== "windowsOld").map(c => c.Id));
+
+/** Windows-owned storage scope of the Maintenance "Reclaim disk space" card. */
 export default function DiskCleanupGranular() {
-    // Dedicated Cleanup-panel section. Open by default so disk cleanup is a
-    // first-class surface rather than feeling like a pop-up/hidden utility.
-    const [isOpen, setIsOpen] = useState(true);
-    const cardRef = useRef<HTMLDivElement>(null);
     // Seed from the module-level cache (already populated by the app-startup
     // pre-load, or a previous mount) so a returning/first-time visit renders
     // the live data immediately instead of an empty grid + loading flash.
@@ -110,22 +96,21 @@ export default function DiskCleanupGranular() {
     const [loading, setLoading] = useState(false);
     const [cleaning, setCleaning] = useState(false);
     const [cleaningAll, setCleaningAll] = useState(false);
-    const [selected, setSelected] = useState<Set<string>>(() => _diskCleanupCache
-        ? new Set(_diskCleanupCache.filter(c => c.FileCount > 0 && c.Id !== "windowsOld").map(c => c.Id))
-        : new Set());
+    const [selected, setSelected] = useState<Set<string>>(() => _diskCleanupCache ? defaultSelection(_diskCleanupCache) : new Set());
     const [scheduleMinutes, setScheduleMinutes] = useState<number | null>(null);
     const [scheduleBusy, setScheduleBusy] = useState(false);
-    const [customMinutes, setCustomMinutes] = useState("");
     const { invokeDiskCleanup, setAutoEraseSchedule, removeAutoEraseSchedule, getAutoEraseSchedules } = useBackend();
     const { appSettings, patchAppSettings } = useAppState();
+    // Scheduling is a paid capability everywhere else (System Cleanup gates it
+    // on `hasPaid && !isInvestigator`). This surface writes the SAME
+    // Set-AutoEraseSchedule record, so it must honour the same rule or the free
+    // tier could register an auto-erase task the paid gate forbids.
+    const { hasPaid, isInvestigator } = useEntitlements();
+    const schedulesEnabled = hasPaid && !isInvestigator;
 
-    // Always performs a fresh scan (no cache short-circuit here) — this is
-    // the explicit refresh path used by the refresh button and after a
-    // clean, and must reflect the real post-clean state. Result propagation
-    // into `cats`/`selected` happens via the module-level subscriber below,
-    // which fetchDiskCleanupScan() notifies on every successful scan
-    // regardless of which mounted instance (or the startup pre-load)
-    // triggered it.
+    // No cache short-circuit: this is the explicit refresh path (refresh button,
+    // post-clean) and must reflect real post-clean state. Results reach
+    // `cats`/`selected` through the module subscriber below.
     const refresh = useCallback(async () => {
         setLoading(true);
         const res = await fetchDiskCleanupScan();
@@ -141,42 +126,26 @@ export default function DiskCleanupGranular() {
             setCats(freshCats);
             // Pre-select non-empty safe categories on first load; leaves an
             // existing user selection untouched on subsequent refreshes.
-            setSelected(prev => prev.size > 0 ? prev : new Set(
-                freshCats.filter(c => c.FileCount > 0 && c.Id !== "windowsOld").map(c => c.Id)
-            ));
+            setSelected(prev => prev.size > 0 ? prev : defaultSelection(freshCats));
         };
         return () => { _diskCleanupSubscriber = null; };
     }, []);
 
-    // Load existing schedule for the diskCleanup category on mount.
+    // Load the existing schedule for the diskCleanup category on mount.
     useEffect(() => {
         (async () => {
             const res = await getAutoEraseSchedules();
-            if (res.success && res.data?.schedules) {
-                const s = res.data.schedules.find((x: any) => x.categoryId === 'diskCleanup');
-                setScheduleMinutes(s ? s.intervalMinutes : null);
-            }
+            if (!res.success || !res.data?.schedules) return;
+            const existing = res.data.schedules.find((entry) => entry.categoryId === "diskCleanup");
+            setScheduleMinutes(existing ? existing.intervalMinutes : null);
         })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
-        if (isOpen && cats.length === 0 && !loading) refresh();
+        if (cats.length === 0 && !loading) refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isOpen]);
-
-    // Fired by the dashboard "≈ X to clean" button to jump directly here.
-    useEffect(() => {
-        const handler = () => {
-            setIsOpen(true);
-            // Refresh scan data if not yet loaded (e.g. first navigation to vault).
-            if (cats.length === 0 && !loading) refresh();
-            setTimeout(() => cardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
-        };
-        window.addEventListener("open-disk-cleanup", handler);
-        return () => window.removeEventListener("open-disk-cleanup", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [cats.length, loading]);
+    }, []);
 
     const toggle = (id: string) => setSelected(prev => {
         const next = new Set(prev);
@@ -184,26 +153,18 @@ export default function DiskCleanupGranular() {
         return next;
     });
 
-    const totalSelectedMb = cats
-        .filter(c => selected.has(c.Id))
-        .reduce((s, c) => s + (c.SizeMb || 0), 0);
+    const totalSelectedMb = cats.filter(c => selected.has(c.Id)).reduce((sum, c) => sum + (c.SizeMb || 0), 0);
 
-    // "Clean All" — the one-shot disk-cleanup that used to live in the
-    // System Maintenance card. Calls Invoke-DiskCleanup (tweaks/maintenance)
-    // and records the run timestamp so the maintenance ageing UI still
-    // works. The per-category controls below are the granular flow.
+    // One-shot cleanmgr sweep (Invoke-DiskCleanup). Covers Windows-managed
+    // categories the per-row scan does not enumerate — memory dumps, servicing
+    // leftovers — and records the run so the ageing labels stay accurate.
     const cleanAll = useCallback(async () => {
         setCleaningAll(true);
-        let captured: any = null;
-        const wrapped = async () => {
-            const r = await invokeDiskCleanup();
-            captured = r;
-            return r;
-        };
+        let captured: unknown = null;
         try {
             await runOperation(
                 "Disk Cleanup",
-                [{ label: "Running disk cleanup...", fn: wrapped }],
+                [{ label: "Running disk cleanup...", fn: async () => { const r = await invokeDiskCleanup(); captured = r; return r; } }],
                 { mode: "sequential", accent: "neutral" },
             );
             const previous = appSettings?.ideal?.tweaks?.maintenanceRuns?.["cleanup"];
@@ -241,178 +202,92 @@ export default function DiskCleanupGranular() {
         }
     }, [selected, refresh]);
 
-    const handleSetSchedule = async (minutes: number) => {
+    const changeSchedule = async (value: string) => {
         setScheduleBusy(true);
         try {
-            const res = await setAutoEraseSchedule('diskCleanup', minutes, false);
-            if (res.success) {
-                setScheduleMinutes(minutes);
-                showSuccess(`Disk cleanup scheduled every ${formatInterval(minutes)}`);
-            } else {
-                showError(res.error || "Failed to set schedule");
-            }
-        } finally {
-            setScheduleBusy(false);
-        }
-    };
-
-    const handleRemoveSchedule = async () => {
-        setScheduleBusy(true);
-        try {
-            const res = await removeAutoEraseSchedule('diskCleanup');
-            if (res.success) {
+            if (value === SCHEDULE_OFF) {
+                const res = await removeAutoEraseSchedule("diskCleanup");
+                if (!res.success) { showError(res.error || "Failed to remove schedule"); return; }
                 setScheduleMinutes(null);
                 showSuccess("Disk cleanup schedule removed");
-            } else {
-                showError(res.error || "Failed to remove schedule");
+                return;
             }
+            const minutes = Math.max(60, Number.parseInt(value, 10));
+            const res = await setAutoEraseSchedule("diskCleanup", minutes, false);
+            if (!res.success) { showError(res.error || "Failed to set schedule"); return; }
+            setScheduleMinutes(minutes);
+            showSuccess(`Disk cleanup scheduled every ${formatInterval(minutes)}`);
         } finally {
             setScheduleBusy(false);
         }
     };
 
-    const isScheduled = scheduleMinutes !== null;
+    const scanLabel = cats.length ? "Rescan Windows storage" : "Scan Windows storage";
 
     return (
-        <div ref={cardRef}>
-        <SectionCard
-            title="Disk Clean-Up"
-            icon="trash"
-            className="disk-cleanup-section"
-            headerRight={
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    {/* Tour anchor: the live reclaimable-MB counter specifically,
-                        not the whole card — this is the number the tour step is
-                        actually pointing at (2026-07-10 fix). */}
-                    <span className="font-mono" data-tour="maintenance-disk-cleanup-mb" style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-text-muted)', whiteSpace: 'nowrap' }}>
-                        {`${totalSelectedMb.toFixed(0)} MB selected`}
-                    </span>
-
-                    {/* Split button: Clean (primary) + chevron dropdown → Windows Cleanup */}
-                    <ButtonGroup>
-                        <Button small intent="danger" icon="clean" loading={cleaning} disabled={selected.size === 0}
-                            onClick={(e) => { e.stopPropagation(); clean(); }}>
-                            Clean
-                        </Button>
-                        <Popover
-                            minimal
-                            placement="bottom-end"
-                            popoverClassName="disk-cleanup-popover"
-                            content={
-                                <Menu>
-                                    <MenuItem icon="eraser" text="Windows Cleanup" labelElement={<span style={{ fontSize: 9, opacity: 0.6 }}>system-wide</span>} disabled={cleaningAll} onClick={() => cleanAll()} />
-                                </Menu>
-                            }
-                            renderTarget={({ ref, isOpen: _io, onClick: popoverClick, ...ariaProps }) => (
-                                <span ref={ref as React.Ref<HTMLSpanElement>}>
-                                    <Button small intent="danger" icon="chevron-down" loading={cleaningAll}
-                                        disabled={cleaning || cleaningAll}
-                                        {...ariaProps}
-                                        onClick={(e) => { e.stopPropagation(); (popoverClick as React.MouseEventHandler)?.(e); }} />
-                                </span>
-                            )}
-                        />
-                    </ButtonGroup>
-
-                    {/* Schedule — icon only; green tint signals an active schedule */}
-                    <Popover
-                        minimal
-                        placement="bottom-end"
-                        interactionKind="click"
-                        popoverClassName="disk-cleanup-popover"
-                        content={
-                            <Menu>
-                                <MenuDivider title={isScheduled ? `Currently every ${formatInterval(scheduleMinutes!)}` : "Auto-run interval"} />
-                                {SCHEDULE_PRESETS.map(p => (
-                                    <MenuItem
-                                        key={p.minutes}
-                                        icon={isScheduled && scheduleMinutes === p.minutes ? "tick" : "blank"}
-                                        text={p.label}
-                                        disabled={scheduleBusy}
-                                        onClick={() => handleSetSchedule(p.minutes)}
-                                    />
-                                ))}
-                                <MenuDivider />
-                                <li className="bp5-menu-item-custom" style={{ padding: "6px 8px" }}>
-                                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                                        <InputGroup
-                                            small
-                                            type="number"
-                                            placeholder="Custom (min 60)"
-                                            value={customMinutes}
-                                            onChange={(e) => setCustomMinutes(e.target.value)}
-                                            style={{ width: 140 }}
-                                        />
-                                        <Button
-                                            small minimal icon="tick"
-                                            disabled={scheduleBusy || !customMinutes}
-                                            onClick={() => {
-                                                const n = parseInt(customMinutes, 10);
-                                                if (!Number.isFinite(n)) return;
-                                                handleSetSchedule(Math.max(60, n));
-                                                setCustomMinutes("");
-                                            }}
-                                        />
-                                    </div>
-                                    <div style={{ fontSize: 9, color: "var(--color-text-muted)", marginTop: 4 }}>minutes · min 60</div>
-                                </li>
-                                {isScheduled && (
-                                    <>
-                                        <MenuDivider />
-                                        <MenuItem icon="disable" text="Remove schedule" intent="danger" disabled={scheduleBusy} onClick={handleRemoveSchedule} />
-                                    </>
-                                )}
-                            </Menu>
-                        }
-                        renderTarget={({ ref, isOpen: _io, onClick: popoverClick, ...ariaProps }) => (
-                            <span ref={ref as React.Ref<HTMLSpanElement>}>
-                                <Button
-                                    small minimal icon="time"
-                                    {...ariaProps}
-                                    onClick={(e) => { e.stopPropagation(); (popoverClick as React.MouseEventHandler)?.(e); }}
-                                    style={isScheduled ? { background: 'rgba(72,187,120,0.13)', color: '#48bb78' } : undefined}
-                                    title={isScheduled ? `Auto-clean every ${formatInterval(scheduleMinutes!)} — needs Administrator` : 'Schedule auto disk cleanup (needs Administrator)'}
-                                />
-                            </span>
-                        )}
-                    />
-
-                    <Button small minimal icon="refresh" loading={loading}
-                        onClick={(e) => { e.stopPropagation(); refresh(); }} />
-                </div>
-            }
-        >
-            {loading && cats.length === 0 && <Spinner size={20} />}
-            <div className="disk-cleanup-category-scroll custom-scrollbar" onWheel={containWheelInScroller}>
-            <div className="disk-cleanup-category-grid">
-                {cats.map(c => (
-                    <div key={c.Id}
-                        style={{
-                            display: "flex", alignItems: "center", gap: 8,
-                            padding: "8px 10px", borderRadius: 4,
-                            background: "var(--color-bg-elevated, rgba(255,255,255,0.02))",
-                            opacity: c.FileCount === 0 ? 0.5 : 1,
-                        }}>
-                        <Checkbox
-                            checked={selected.has(c.Id)}
-                            disabled={c.FileCount === 0}
-                            onChange={() => toggle(c.Id)}
-                            style={{ marginBottom: 0 }}
-                        />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: 600, fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                                {c.Id === "windowsOld" && <Icon icon="warning-sign" size={11} intent="warning" />}
-                                {c.Label}
-                            </div>
-                            <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
-                                {c.FileCount} files · {c.SizeMb.toFixed(1)} MB
-                            </div>
-                        </div>
-                    </div>
-                ))}
+        <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+                <Button size="icon" variant="primary" disabled={loading} onClick={() => void refresh()} title={scanLabel} aria-label={scanLabel}>
+                    <Icon icon={loading || cats.length ? "refresh" : "search"} className={loading ? "animate-spin" : undefined} />
+                </Button>
+                <Button variant="danger" size="sm" disabled={cleaning || !selected.size} onClick={() => void clean()}>
+                    <Icon icon="clean" />{cleaning ? "Cleaning…" : `Clean ${selected.size} selected`}
+                </Button>
+                <Button variant="outline" size="sm" disabled={cleaning || cleaningAll} onClick={() => void cleanAll()}
+                    title="Run the built-in Windows cleanup sweep (cleanmgr) across every system category">
+                    <Icon icon="eraser" />{cleaningAll ? "Sweeping…" : "Windows sweep"}
+                </Button>
+                {/* Tour anchor: the live reclaimable-MB counter specifically,
+                    not the whole card — this is the number the tour step is
+                    actually pointing at (2026-07-10 fix). */}
+                <span data-tour="maintenance-disk-cleanup-mb" className="font-mono text-[11px] font-semibold whitespace-nowrap text-[var(--text-mute)]">
+                    {`${totalSelectedMb.toFixed(0)} MB selected`}
+                </span>
+                {schedulesEnabled ? (
+                    <Select value={scheduleMinutes === null ? SCHEDULE_OFF : String(scheduleMinutes)} onValueChange={(value) => void changeSchedule(value)} disabled={scheduleBusy}>
+                        <SelectTrigger className="ml-auto h-8 w-auto gap-1.5 text-xs" aria-label="Auto-clean interval">
+                            <Icon icon="time" className={scheduleMinutes === null ? "text-[var(--text-mute)]" : "text-[var(--accent)]"} />
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={SCHEDULE_OFF}>Auto-clean off</SelectItem>
+                            {SCHEDULE_PRESETS.map(preset => <SelectItem key={preset.minutes} value={String(preset.minutes)}>{preset.label}</SelectItem>)}
+                        </SelectContent>
+                    </Select>
+                ) : !isInvestigator && (
+                    <Button size="sm" variant="ghost" className="ml-auto" onClick={() => window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Scheduled Auto-Clean" } }))}
+                        title="Scheduled auto-clean is a paid feature">
+                        <Icon icon="time" /><Icon icon="lock" />
+                    </Button>
+                )}
             </div>
+
+            {loading && cats.length === 0 && <div className="flex justify-center py-6"><Spinner size={20} className="text-[var(--accent)]" /></div>}
+            <div className="grid max-h-[22rem] gap-2 overflow-auto overscroll-contain pr-1 sm:grid-cols-2">
+                {cats.map(c => <CategoryRow key={c.Id} category={c} checked={selected.has(c.Id)} onToggle={() => toggle(c.Id)} />)}
             </div>
-        </SectionCard>
         </div>
+    );
+}
+
+function CategoryRow({ category, checked, onToggle }: { category: CleanupCategory; checked: boolean; onToggle: () => void }) {
+    const empty = category.FileCount === 0;
+    return (
+        <button type="button" disabled={empty} onClick={onToggle}
+            className={`flex items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-left transition-colors hover:bg-[var(--surface-3)] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[var(--surface-2)] ${checked ? "border-[var(--border-strong)]" : ""}`}>
+            <span className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[var(--r-sm)] border ${checked ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]" : "border-[var(--border-strong)]"}`}>
+                {checked && <Icon icon="tick" />}
+            </span>
+            <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text)]">
+                    {category.Id === "windowsOld" && <Icon icon="warning-sign" className="text-[var(--warn)]" />}
+                    {category.Label}
+                </span>
+                <span className="mt-0.5 block font-mono text-[10.5px] text-[var(--text-mute)]">
+                    {category.FileCount.toLocaleString()} files · {category.SizeMb.toFixed(1)} MB
+                </span>
+            </span>
+            {category.SizeMb >= 1024 && <Badge tone="warning">{(category.SizeMb / 1024).toFixed(1)} GB</Badge>}
+        </button>
     );
 }

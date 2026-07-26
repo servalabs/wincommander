@@ -70,15 +70,20 @@ describe("redesign surface copy guardrails", () => {
   test("System Maintenance owns Disk Cleanup and application caches, not Secure Storage or Packages & Apps", async () => {
     const vault = await read("src/panels/vault/index.tsx");
     const maintenance = await read("src/panels/maintenance/index.tsx");
+    const reclaim = await read("src/panels/maintenance/ReclaimSpaceCard.tsx");
     const apps = await read("src/panels/apps/index.tsx");
 
     expect(vault).not.toContain("DiskCleanupGranular");
     expect(vault).not.toContain("DiskSpaceAnalyzerDialog");
-    expect(maintenance).toContain("<DiskCleanupGranular />");
     expect(maintenance).toContain("<DiskSpaceAnalyzerDialog inline");
-    expect(maintenance).toContain("WINDOWS_DISK_CLEANUP_CATEGORIES");
     expect(apps).not.toContain("RoutineCleanerPanel");
     expect(maintenance).not.toContain('TabsTrigger value="updates"');
+
+    // Both engines live behind ONE scope switch: two side-by-side cards used to
+    // clean the same nine Windows paths through two different backends.
+    expect(reclaim).toContain("<DiskCleanupGranular />");
+    expect(reclaim).toContain("APP_CACHE_CLEANUP_CATEGORIES");
+    expect(maintenance).not.toContain("<DiskCleanupGranular />");
   });
 
   test("Secure Storage shows RAM-disk action buttons above active disks", async () => {
@@ -352,7 +357,7 @@ describe("redesign surface copy guardrails", () => {
   });
 
   test("Disk Space Analyzer keeps scan session state outside the mounted panel", async () => {
-    const analyzer = await read("src/panels/tweaks/DiskSpaceAnalyzerDialog.tsx");
+    const analyzer = await read("src/panels/maintenance/DiskSpaceAnalyzerDialog.tsx");
 
     expect(analyzer).toContain("diskAnalyzerSession");
     expect(analyzer).toContain("subscribeDiskAnalyzerSession");

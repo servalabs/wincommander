@@ -170,10 +170,16 @@ mode and Investigator mode refuse state mutation in every new backend module.
 Routine cache targets are compiled from the attributed JSON catalog under
 `src-tauri/commander-free/resources/maintenance-rules/win32/`; a strict
 allowlist excludes security and audit-history cleaning from the Free binary.
-The Storage & files UI presents Windows disk cleanup and application-cache
-cleanup in one responsive, equal-height row. Before the application scan has
-results, its card keeps the full row height and renders a motion-policy-aware
-idle/scanning visual instead of collapsing.
+
+Storage & files presents a single "Reclaim disk space" card
+(`ReclaimSpaceCard.tsx`) whose segmented control picks *whose* storage is being
+cleared, because the two engines behind it overlap on nine paths otherwise:
+every path `Get-DiskCleanupScan` enumerates except the Recycle Bin is also a
+`cleanTargets` entry in `maintenance-rules/win32/system.json`. Windows-owned
+storage is `Get-DiskCleanupScan`/`Invoke-DiskCleanupCategories`; app-owned
+regenerable data is `routine_cleaner` with the `system` category withheld
+(`APP_CACHE_CLEANUP_CATEGORIES`). Before the application scan has results the
+scope renders a motion-policy-aware idle/scanning visual.
 File, shortcut, environment, uninstall-residue, registry, Explorer-menu, ARP,
 and Game Mode tools follow the same preview/revalidate pattern. Malware paths
 remain entirely in `wincommander-pro.exe`: Free constructs trusted session
@@ -308,6 +314,8 @@ Standard PII protection (§2.8.9); no SQL engine in the store.
 
 ## Key decisions & trade-offs
 
+- **One auto-erase schedule rule, not one per surface** — `Set-AutoEraseSchedule('diskCleanup', …)` has two callers' worth of history: System Cleanup gates every auto-erase timer on `hasPaid && !isInvestigator`, while Maintenance's disk-cleanup clock offered the same backend write with no gate, letting the free tier register a schedule the paid gate forbids. Both surfaces now apply the identical rule and read the same `Get-AutoEraseSchedules` record; free users get the `license-gate-open` upsell instead of a working control, and Investigator mode hides it outright (registering an erase task contradicts evidence preservation). Trade-off: a control that used to work for free users no longer does — deliberate, since the backend `require_paid()` check was the only thing standing behind it.
+- **Space reclamation vs trace erasure** — Maintenance owns space reclamation and OS repair; System Cleanup owns privacy and forensic trace erasure. The boundary is why `routine_cleaner`'s `system` rule set (which reaches event-log archives, Defender scan history, and firewall logs) is not exposed in Maintenance's app-cache scope: those are erasure targets, not reclamation targets.
 - **Encrypted PowerShell modules** — modules are AES-256-GCM `.enc` blobs `include_bytes!`-bundled, decrypted in memory per command, with a per-build XOR-obfuscated salt (`build.rs`). Keeps the operation set out of plaintext on disk and lets the salt rotate per build; trade-off is a re-encrypt step (`bun run encrypt-backend`) after any `.ps1` edit.
 - **Windows AI controls reuse existing surfaces** — the canonical policy switch remains `Remove-CopilotAIComponents` in Windows Settings → Security & Apps. It composes narrowly scoped helpers from `ai-control-common`, `ai-control-policies`, `ai-control-shell`, and `ai-control-apps`. The fixed `Invoke-AIControlOperation` dispatcher exposes only non-duplicative advanced component, maintenance, and classic-app operations; its `ValidateSet` rejects arbitrary operation names. Packages & Apps consumes the classic-app operations through its existing category UI, while System Maintenance consumes Windows Update repair.
 - **Windows AI rollback data** — exact registry snapshots, task exports, file manifests, and app-setting backups live below `%ProgramData%\WinCommander\AIControl`, with inheritance removed and access restricted to SYSTEM and Administrators. Deep CBS/AppX restoration remains best effort because Windows servicing can replace or supersede the original payload.

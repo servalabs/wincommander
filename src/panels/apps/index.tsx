@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import AppInstallerPanel from "./components/AppInstallerPanel";
 import SectionCard from "../../components/shared/SectionCard";
 import DebloatPanel from "./DebloatPanel";
-import { PackageUpdateTools } from "../maintenance/PackageUpdateTools";
+import { PackageUpdateTools } from "./PackageUpdateTools";
 import './index.css';
 
 declare global {

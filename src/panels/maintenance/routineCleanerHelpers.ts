@@ -8,9 +8,14 @@ export const ROUTINE_CLEANER_CATEGORIES: Array<{ id: RoutineCleanerCategory; lab
   { id: "databases", label: "Databases", description: "Safe SQLite optimization targets" },
 ];
 
-/** All reclaimable local caches belong beside Windows Disk Cleanup. */
-export const WINDOWS_DISK_CLEANUP_CATEGORIES: RoutineCleanerCategory[] = [
-  "system",
+/**
+ * Categories the app-cache scope of "Reclaim disk space" owns. "system" is
+ * deliberately excluded: every path Get-DiskCleanupScan offers is already a
+ * clean target in maintenance-rules/win32/system.json, so exposing both put
+ * two engines on the same nine paths. Windows-owned storage is the granular
+ * cleanup scope's job; this scope only touches app-owned regenerable data.
+ */
+export const APP_CACHE_CLEANUP_CATEGORIES: RoutineCleanerCategory[] = [
   "browsers",
   "applications",
   "gaming",

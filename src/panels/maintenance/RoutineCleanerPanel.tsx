@@ -11,7 +11,7 @@ import {
 } from "../../components/ui/alert-dialog";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Card, CardContent } from "../../components/ui/card";
 import { Chip } from "../../components/ui/chip";
 import { Icon } from "../../components/ui/icon";
 import type { RoutineCleanerCategory, RoutineCleanerCleanResult } from "../../hooks/useBackend";
@@ -22,12 +22,14 @@ import { useRoutineCleaner } from "./useRoutineCleaner";
 
 interface RoutineCleanerPanelProps {
   categories: RoutineCleanerCategory[];
-  title: string;
-  description: string;
 }
 
-/** Reusable preview-and-confirm cache cleaner. The caller explicitly owns its categories. */
-export function RoutineCleanerPanel({ categories: allowedCategories, title, description }: RoutineCleanerPanelProps) {
+/**
+ * Preview-and-confirm cache cleaner. Renders bare (no card chrome of its own)
+ * because it is one scope inside the "Reclaim disk space" card — the caller
+ * owns the heading and the categories.
+ */
+export function RoutineCleanerPanel({ categories: allowedCategories }: RoutineCleanerPanelProps) {
   const cleaner = useRoutineCleaner(allowedCategories);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const { categories, operation, scan, selectedItems, result, error } = cleaner;
@@ -50,26 +52,16 @@ export function RoutineCleanerPanel({ categories: allowedCategories, title, desc
     await cleaner.cleanSelected();
   };
 
-  return <div className="maintenance-cache-cleaner flex flex-col gap-4">
-    <Card className="maintenance-cache-card flex flex-1 flex-col">
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-1 flex-col gap-4">
-        {categoryOptions.length > 1 && <div className="flex flex-wrap gap-2">
-          {categoryOptions.map((category) => <Chip key={category.id} active={categories.includes(category.id)} onClick={() => cleaner.setCategory(category.id)} className="text-left">{category.label}</Chip>)}
-        </div>}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="icon" variant="primary" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={scanLabel} aria-label={scanLabel}>
-            <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} />
-          </Button>
-          {isRunning && <Button size="icon" variant="outline" onClick={() => void cleaner.cancel()} title="Cancel cache operation" aria-label="Cancel cache operation"><Icon icon="stop" /></Button>}
-          {!categories.length && <span className="text-xs text-[var(--warn)]">Choose at least one category.</span>}
-        </div>
-        {!scan && <CacheScanIdleState isScanning={operation === "scanning"} />}
-      </CardContent>
-    </Card>
+  return <div className="flex flex-col gap-4">
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="icon" variant="primary" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={scanLabel} aria-label={scanLabel}>
+        <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} />
+      </Button>
+      {isRunning && <Button size="icon" variant="outline" onClick={() => void cleaner.cancel()} title="Cancel cache operation" aria-label="Cancel cache operation"><Icon icon="stop" /></Button>}
+      {categoryOptions.map((category) => <Chip key={category.id} active={categories.includes(category.id)} onClick={() => cleaner.setCategory(category.id)} className="text-left">{category.label}</Chip>)}
+      {!categories.length && <span className="text-xs text-[var(--warn)]">Choose at least one category.</span>}
+    </div>
+    {!scan && <CacheScanIdleState isScanning={operation === "scanning"} />}
     {operation === "cleaning" && <Card><CardContent className="flex items-center gap-3 py-4 text-sm text-[var(--text-dim)]"><Icon icon="clean" className="animate-spin text-[var(--accent)]" /> Cleaning selected items. You can cancel while the current target completes.</CardContent></Card>}
     {error && <ResultNotice tone="danger" title="Operation failed" message={error} />}
     {result && <CleanResult result={result} />}

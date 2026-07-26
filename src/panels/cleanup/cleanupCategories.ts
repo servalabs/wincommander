@@ -1573,7 +1573,10 @@ export const SUPPORTED_AUTOERASE_IDS = new Set<string>([
   'printSpooler', 'webCache', 'notificationDb', 'branchCache',
   'eventTranscript', 'activitiesTimeline', 'rdpBitmapCache', 'servicingLogs',
   'deviceInstallLogs', 'usageTraceLogs',
-  // Disk cleanup (scheduled via cleanmgr — runs as current user)
+  // Disk cleanup (scheduled via cleanmgr — runs as current user). No
+  // CleanupCategory carries this id, so applyScheduling() never surfaces it
+  // here; its only UI is Maintenance's "Reclaim disk space" card, which gates
+  // the control on the same `hasPaid && !isInvestigator` rule this panel uses.
   'diskCleanup',
 ]);
 

@@ -173,10 +173,10 @@ export default function SystemCleanupPanel() {
                             </SectionCard>
                         )}
 
-                        {/* Disk Clean-Up moved to the Secure Storage panel
-                            (owner request) so all storage-management tools live
-                            together. The old `<DiskCleanupGranular />` render
-                            used to live here. */}
+                        {/* Space reclamation lives in Maintenance → Storage &
+                            files ("Reclaim disk space"). This panel owns privacy
+                            and forensic trace erasure only. The old
+                            `<DiskCleanupGranular />` render used to be here. */}
 
                         {hasSafeguards && (
                             <CleanupCategoryGrid

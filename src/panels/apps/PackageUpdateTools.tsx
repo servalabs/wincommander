@@ -8,8 +8,10 @@ import { useBackend } from "../../hooks/useBackend";
 import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/packageOperationLock";
 
 /**
- * The single multi-manager update executor. It is rendered in Packages & Apps;
- * Maintenance deliberately exposes a handoff instead of another executor.
+ * The single multi-manager update executor. Packages & Apps is its only
+ * renderer; Maintenance deliberately exposes a handoff instead of a second
+ * executor. The file used to live under src/panels/maintenance/, which made it
+ * read like duplicated update UI — moved here to sit with its renderer.
  */
 export function PackageUpdateTools() {
   const backend = useBackend();

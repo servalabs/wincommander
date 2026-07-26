@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { RoutineCleanerItem, RoutineCleanerScan } from "../../hooks/useBackend";
-import { getRecommendedItemIds, getRoutineCleanerCategories, getScanAfterClean, getSelectedItems, groupRoutineCleanerItems, WINDOWS_DISK_CLEANUP_CATEGORIES } from "./routineCleanerHelpers";
+import { APP_CACHE_CLEANUP_CATEGORIES, getRecommendedItemIds, getRoutineCleanerCategories, getScanAfterClean, getSelectedItems, groupRoutineCleanerItems } from "./routineCleanerHelpers";
 
 const items: RoutineCleanerItem[] = [
   { id: "system-1", category: "system", label: "Temp", path: "C:\\Temp", bytes: 200, fileCount: 2, recommended: true, operation: "delete", truncated: false },
@@ -30,7 +30,8 @@ test("clean reconciliation retains failed items and recomputes preview totals", 
   expect(remaining.totalFiles).toBe(2);
 });
 
-test("Windows Disk Cleanup owns all local cache categories", () => {
-  expect(WINDOWS_DISK_CLEANUP_CATEGORIES).toEqual(["system", "browsers", "applications", "gaming", "databases"]);
-  expect(getRoutineCleanerCategories(WINDOWS_DISK_CLEANUP_CATEGORIES).map((category) => category.id)).toEqual(WINDOWS_DISK_CLEANUP_CATEGORIES);
+test("app-cache cleanup excludes the system category that Windows disk cleanup already owns", () => {
+  expect(APP_CACHE_CLEANUP_CATEGORIES).toEqual(["browsers", "applications", "gaming", "databases"]);
+  expect(APP_CACHE_CLEANUP_CATEGORIES).not.toContain("system");
+  expect(getRoutineCleanerCategories(APP_CACHE_CLEANUP_CATEGORIES).map((category) => category.id)).toEqual(APP_CACHE_CLEANUP_CATEGORIES);
 });

@@ -265,95 +265,6 @@ html.light .tweaks-panel .panel-columns > .column-stack:last-child .section-card
 }
 
 
-/* ── Maintenance Run State ── */
-.maintenance-action {
-    position: relative;
-}
-
-.maintenance-action::after {
-    content: "";
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--color-text-muted);
-    opacity: 0.5;
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-muted) 28%, transparent);
-}
-
-.maintenance-action.maintenance-running {
-    overflow: hidden;
-    background:
-        linear-gradient(90deg, color-mix(in srgb, var(--color-info) 14%, transparent), transparent 48%),
-        var(--color-bg-card);
-    border-color: color-mix(in srgb, var(--color-info) 55%, var(--color-border)) !important;
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-info) 18%, transparent);
-}
-
-.maintenance-action.maintenance-running::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-        110deg,
-        transparent 0%,
-        transparent 34%,
-        color-mix(in srgb, var(--color-info) 18%, transparent) 48%,
-        transparent 62%,
-        transparent 100%
-    );
-    transform: translateX(-100%);
-    animation: maintenance-scan 1.1s linear infinite;
-    pointer-events: none;
-}
-
-.maintenance-action.maintenance-running::after {
-    background: var(--color-info);
-    opacity: 1;
-    box-shadow:
-        0 0 0 4px color-mix(in srgb, var(--color-info) 12%, transparent),
-        0 0 16px color-mix(in srgb, var(--color-info) 78%, transparent);
-    animation: maintenance-pulse 0.85s ease-in-out infinite;
-}
-
-.maintenance-action.maintenance-fresh {
-    background:
-        linear-gradient(90deg, color-mix(in srgb, var(--color-success) 10%, transparent), transparent 46%),
-        var(--color-bg-card);
-    border-color: color-mix(in srgb, var(--color-success) 45%, var(--color-border)) !important;
-}
-
-.maintenance-action.maintenance-fresh::after {
-    background: var(--color-success);
-    opacity: 1;
-    box-shadow: 0 0 12px color-mix(in srgb, var(--color-success) 72%, transparent);
-}
-
-.maintenance-action.maintenance-stale {
-    background:
-        linear-gradient(90deg, color-mix(in srgb, var(--color-warning) 10%, transparent), transparent 46%),
-        var(--color-bg-card);
-    border-color: color-mix(in srgb, var(--color-warning) 45%, var(--color-border)) !important;
-}
-
-.maintenance-action.maintenance-stale::after {
-    background: var(--color-warning);
-    opacity: 1;
-    box-shadow: 0 0 12px color-mix(in srgb, var(--color-warning) 70%, transparent);
-}
-
-.maintenance-action.maintenance-never {
-    border-color: color-mix(in srgb, var(--color-danger) 30%, var(--color-border)) !important;
-}
-
-.maintenance-action.maintenance-never::after {
-    background: var(--color-danger);
-    opacity: 0.85;
-    box-shadow: 0 0 10px color-mix(in srgb, var(--color-danger) 55%, transparent);
-}
-
 /* ── Power Plan Switch ── */
 .power-plan-switch {
     --power-plan-slot: 0;
@@ -523,11 +434,6 @@ html.light .tweaks-panel .panel-columns > .column-stack:last-child .section-card
 /* Local scroll surfaces inside settings cards need stable geometry. Opt these
    out of SectionCard's content-visibility measurement so nested scroll and
    portaled menus do not jump while the main panel is scrolling. */
-.disk-cleanup-section {
-    content-visibility: visible;
-    contain-intrinsic-size: none;
-}
-
 .defender-exclusion-auditor-card {
     content-visibility: visible;
     contain-intrinsic-size: none;
@@ -548,30 +454,6 @@ html.light .tweaks-panel .panel-columns > .column-stack:last-child .section-card
     height: 1px;
     margin: 14px -16px -6px;
     background: var(--color-border-light);
-}
-
-.disk-cleanup-category-scroll {
-    max-height: min(44vh, 420px);
-    overflow-y: auto;
-    overflow-x: hidden;
-    overscroll-behavior: contain;
-    padding-right: 4px;
-    scrollbar-gutter: stable;
-    touch-action: pan-y;
-}
-
-.disk-cleanup-category-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    align-items: start;
-}
-
-.disk-cleanup-popover {
-    z-index: calc(var(--z-modal, 1000) + 20);
-    width: max-content;
-    min-width: 220px;
-    max-width: min(360px, 92vw);
 }
 
 .defender-exclusion-auditor-table-wrap {
@@ -595,8 +477,3 @@ html.light .tweaks-panel .panel-columns > .column-stack:last-child .section-card
     background: linear-gradient(to bottom, transparent, var(--color-bg-card));
 }
 
-@media (max-width: 720px) {
-    .disk-cleanup-category-grid {
-        grid-template-columns: 1fr;
-    }
-}

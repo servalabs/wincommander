@@ -76,28 +76,13 @@
   margin: 0;
 }
 
-/* Stacked sections below the two-card grid (SystemEncryption + Disk
-   Cleanup + Disk Space Analyzer). Without this, the SectionCards touch
-   their siblings — the owner flagged the missing gap. */
+/* Stacked sections below the two-card grid. Without this, the SectionCards
+   touch their siblings — the owner flagged the missing gap. */
 .vault-stacked-sections {
   display: flex;
   flex-direction: column;
   gap: 14px;
   margin-top: 14px;
-}
-
-/* Disk Cleanup + File Statistics side by side, then DSA full-width below. */
-.vault-cleanup-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  align-items: start;
-}
-
-@media (max-width: 860px) {
-  .vault-cleanup-row {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* Modal layout for the RAM-disk autostart config — clean vertical stack

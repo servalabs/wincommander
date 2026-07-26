@@ -8,7 +8,6 @@ import ToggleSection, { type ExternalToggleConflict } from "../../components/sha
 import DefenderExclusionAuditor from "../../components/tweaks/DefenderExclusionAuditor";
 import ExploitProtectionExtras from "../../components/tweaks/ExploitProtectionExtras";
 import PowerPlanCard from "../../components/tweaks/PowerPlanCard";
-import SystemMaintenanceCard from "../../components/tweaks/SystemMaintenanceCard";
 import WindowsAiAdvancedActions from "../../components/tweaks/WindowsAiAdvancedActions";
 import VmSandboxSection from "./VmSandboxSection";
 import ContextMenuIntegrationCard from "../../components/tweaks/ContextMenuIntegrationCard";
@@ -34,7 +33,6 @@ function detectGpuVendor(gpu: string | null | undefined): "amd" | "nvidia" | "in
 }
 
 export default function TweaksPanel() {
-    const [localLoadingMap, setLocalLoadingMap] = useState<Record<string, boolean>>({});
     const [managerTab, setManagerTab] = useState<"users" | "tasks" | "services" | "conceal">("users");
     const { searchQuery } = useSearchQuery();
     const visibility = useVisibility();
@@ -201,16 +199,10 @@ export default function TweaksPanel() {
                         />
                     )}
 
-                    {/* Windows maintenance shortcuts */}
-                    {noSearch && (
-                        <div className="flex flex-col gap-4">
-                            <SystemMaintenanceCard
-                                isAdvanced={isAdvanced}
-                                localLoadingMap={localLoadingMap}
-                                setLocalLoadingMap={setLocalLoadingMap}
-                            />
-                        </div>
-                    )}
+                    {/* SFC/DISM repair, Windows Update repair, and defrag moved to
+                        Maintenance → Repair & hygiene (OsRepairCard). They were
+                        "System Maintenance"/"Deep Fix" here, colliding with
+                        Maintenance's unrelated "System repair" tab. */}
                 </div>
             </div>
 
