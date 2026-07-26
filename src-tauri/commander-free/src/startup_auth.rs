@@ -139,8 +139,16 @@ pub async fn verify_startup_pin(pin: String) -> Result<String, String> {
 /// calculator with no way into the full app.
 #[tauri::command]
 pub async fn startup_pin_is_configured() -> Result<bool, String> {
-    let s = crate::settings::read_settings().map_err(|e| format!("read settings: {e}"))?;
-    Ok(gate_enabled(&s.ideal.privacy.startup_pin))
+    // Off the async worker: read_settings() is blocking disk IO, and the frontend
+    // renders nothing until this resolves — a stalled worker pool would leave the
+    // window shown but blank.
+    tokio::task::spawn_blocking(|| {
+        crate::settings::read_settings()
+            .map(|s| gate_enabled(&s.ideal.privacy.startup_pin))
+            .map_err(|e| format!("read settings: {e}"))
+    })
+    .await
+    .map_err(|e| format!("startup pin check failed: {e}"))?
 }
 
 /// Synchronous version used by lib.rs setup() before the async runtime is active.
@@ -514,6 +522,19 @@ fn wincommander_hidden_mode_active() -> bool {
 /// Also shows the window in the taskbar with the calc icon and hides the tray.
 #[tauri::command]
 pub fn enter_calculator_mode(window: tauri::WebviewWindow) -> Result<(), String> {
+    enter_calculator_mode_with(window, true)
+}
+
+/// `reveal = false` arms the calculator gate but leaves the window dark (startup
+/// paths); `true` puts it on screen (every user-triggered reveal).
+///
+/// KT: this used to derive "stay dark" from `std::env::args()` containing
+/// `--minimized`. argv is process-lifetime state and the autostart Scheduled Task
+/// always passes that flag, so an autostarted process latched "stay dark" forever
+/// and every later tray/hotkey reveal called hide() instead of show() — the
+/// "clicking the tray does nothing" bug. Show-vs-hide is per-call intent, never
+/// a property of how the process was launched.
+pub fn enter_calculator_mode_with(window: tauri::WebviewWindow, reveal: bool) -> Result<(), String> {
     use tauri::{Emitter, Manager};
 
     // Mark the runtime state as locked and tell the frontend to show the
@@ -524,16 +545,10 @@ pub fn enter_calculator_mode(window: tauri::WebviewWindow) -> Result<(), String>
     crate::set_calc_mode_active(window.app_handle(), true);
     let _ = window.emit("calculator-mode-entered", ());
 
-    let hidden_autostart =
-        wincommander_hidden_mode_active() && std::env::args().any(|arg| arg == "--minimized");
-
     crate::log_message_src(
         "info",
         "core",
-        &format!(
-            "[Calculator] enter_calculator_mode hidden_autostart={}",
-            hidden_autostart
-        ),
+        &format!("[Calculator] enter_calculator_mode reveal={}", reveal),
     );
     // Set AUMID BEFORE any window.show() call so taskbar sees "Calculator" from frame 1.
     write_calculator_process_identity();
@@ -557,19 +572,23 @@ pub fn enter_calculator_mode(window: tauri::WebviewWindow) -> Result<(), String>
         .map_err(|e| e.to_string())?;
     let _ = window.set_icon(calc_icon.clone());
 
-    // Calculator mode never exposes a tray icon. Hidden autostart still stays
+    // Calculator mode never exposes a tray icon. A non-revealing entry stays
     // fully dark until the peek hotkey shows this calculator window.
     if let Some(tray) = window.app_handle().tray_by_id("tray") {
         let _ = tray.set_icon(Some(calc_icon));
         let _ = tray.set_visible(false);
     }
-    if hidden_autostart {
-        let _ = window.set_skip_taskbar(true);
-        let _ = window.hide();
-    } else {
+    if reveal {
         let _ = window.unminimize();
         let _ = window.show();
+        // Foreground synchronously here: the reveal usually originates from a
+        // background process (tray/hotkey), where show()+set_focus() alone is
+        // silently refused by Windows' foreground-activation lock.
+        crate::force_window_foreground(&window);
         let _ = window.set_focus();
+    } else {
+        let _ = window.set_skip_taskbar(true);
+        let _ = window.hide();
     }
     Ok(())
 }

@@ -1085,8 +1085,18 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
       },
     ).then((un) => { unlistenDestruct = un; }).catch(() => {});
 
+    // Fail open if the configured-check never settles. A rejection is already
+    // handled below, but a HANG (stalled IPC / blocked settings read) resolves
+    // neither path and leaves `authDone` false — the window is shown and paints
+    // nothing, which reads to the user as "the tray click did nothing".
+    const failOpenTimer = setTimeout(() => {
+      setMode("real");
+      setAuthDone(true);
+    }, 5000);
+
     invoke<boolean>("startup_pin_is_configured")
       .then((configured) => {
+        clearTimeout(failOpenTimer);
         if (configured) {
           // Enter calculator window mode, then show the calc UI
           invoke("enter_calculator_mode")
@@ -1097,9 +1107,10 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
           setAuthDone(true);
         }
       })
-      .catch(() => { setMode("real"); setAuthDone(true); });
+      .catch(() => { clearTimeout(failOpenTimer); setMode("real"); setAuthDone(true); });
 
     return () => {
+      clearTimeout(failOpenTimer);
       window.removeEventListener("wincommander:calculator-lock-engaged", handleCalculatorLockEngaged);
       unlistenCalc?.();
       unlistenDestruct?.();

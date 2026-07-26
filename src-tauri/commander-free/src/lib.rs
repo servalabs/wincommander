@@ -215,8 +215,7 @@ fn register_hide_peek_hotkey(app: &tauri::AppHandle, hotkey: &str) -> Result<(),
                 return;
             }
             if let Some(window) = app.get_webview_window("main") {
-                let visible = window.is_visible().unwrap_or(false);
-                if visible {
+                if window.is_visible().unwrap_or(false) {
                     // Hide: remove from taskbar and screen; tray stays invisible in
                     // hidden/calc mode (the user re-peeks via the hotkey again).
                     let _ = window.set_skip_taskbar(true);
@@ -225,50 +224,12 @@ fn register_hide_peek_hotkey(app: &tauri::AppHandle, hotkey: &str) -> Result<(),
                     // hidden/shown correctly at startup or apply_wincommander_hide_mode.
                     log_message_src("info", "core", "[Hotkey] peek/hide: hiding window");
                 } else {
-                    // Show: while locked as a calculator enter_calculator_mode handles
-                    // AUMID, icon, tray, and the actual show/hide. In an authenticated
-                    // session restore skip_taskbar + show directly. Keyed on the runtime
-                    // lock flag so peeking back into an authenticated session shows the
-                    // real window, while peeking a locked calculator re-shows the calc UI.
-                    let calculator_mode = calc_mode_active(app);
-                    log_message_src(
-                        "info",
-                        "core",
-                        &format!(
-                            "[Hotkey] peek/hide: showing window (calc_mode={})",
-                            calculator_mode
-                        ),
-                    );
-                    if calculator_mode {
-                        // enter_calculator_mode sets AUMID, resizes, shows the window
-                        // in taskbar with calc icon, and hides the tray.
-                        let _ = startup_auth::enter_calculator_mode(window.clone());
-                    } else {
-                        let _ = window.set_skip_taskbar(false);
-                        let _ = window.show();
-                        let _ = window.unminimize();
-                        if let Some(tray) = app.tray_by_id("tray") {
-                            let _ = tray.set_visible(!wincommander_is_hidden());
-                        }
-                        // KT: force_window_foreground must be deferred — calling it
-                        // synchronously right after show()/unminimize() fires before
-                        // the Windows message pump processes WM_SHOWWINDOW/SW_RESTORE.
-                        // SetForegroundWindow is then rejected silently (the target
-                        // window isn't visible yet from Windows' perspective), leaving
-                        // the window unactivated so WebView2 renders a black frame
-                        // until the user clicks. 50 ms gives the pump one full
-                        // message-dispatch cycle on any hardware; set_focus follows
-                        // 150 ms later (total 200 ms, same as before).
-                        // KT: deferred set_focus only in non-calc path;
-                        // enter_calculator_mode handles focus internally.
-                        let window_clone = window.clone();
-                        tauri::async_runtime::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                            force_window_foreground(&window_clone);
-                            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-                            let _ = window_clone.set_focus();
-                        });
-                    }
+                    log_message_src("info", "core", "[Hotkey] peek/hide: revealing window");
+                    // Single shared reveal implementation — it handles calc-mode
+                    // re-entry, the unminimize-before-show ordering, the visible-flag
+                    // resync, and the deferred foreground workaround. This branch used
+                    // to re-implement all of that with show() before unminimize().
+                    reveal_main_window(app);
                 }
             }
         })
@@ -397,28 +358,58 @@ pub(crate) fn force_window_foreground(_window: &tauri::WebviewWindow) {}
 /// used for restored windows — makes that first click reliably bring the window up.
 pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
+        log_message_src("warn", "core", "[Reveal] main window not found");
         return;
     };
     // Keyed on the runtime lock flag, not "PIN configured": a locked calculator
     // re-enters calc mode; an authenticated session restores the full window.
-    if calc_mode_active(app) {
-        let _ = startup_auth::enter_calculator_mode(window);
+    let calculator_mode = calc_mode_active(app);
+    log_message_src(
+        "info",
+        "core",
+        &format!(
+            "[Reveal] start: label={} calc_mode={} hidden={} visible={}",
+            window.label(),
+            calculator_mode,
+            wincommander_is_hidden(),
+            window.is_visible().unwrap_or(false)
+        ),
+    );
+    if calculator_mode {
+        let _ = startup_auth::enter_calculator_mode_with(window.clone(), true);
     } else {
         let _ = window.set_skip_taskbar(false);
         let _ = window.unminimize();
         let _ = window.show();
+        // KT: tao caches WindowFlags::VISIBLE and only ever writes that cache from
+        // set_visible — it is never re-synced from Windows, and apply_diff
+        // early-returns when the cached flag already matches the request. Our own
+        // force_window_foreground calls raw ShowWindow(SW_SHOW), so the cache can
+        // drift to "visible" while the window is actually hidden, and show() then
+        // emits no ShowWindow at all. A hide()→show() pair forces a real flag
+        // transition when the OS disagrees with the cache.
+        if !window.is_visible().unwrap_or(false) {
+            log_message_src(
+                "warn",
+                "core",
+                "[Reveal] show() left the window invisible — forcing a hide/show transition",
+            );
+            let _ = window.hide();
+            let _ = window.show();
+        }
         set_wincommander_window_icon(&window);
         let _ = window.set_focus();
         // KT: tray callbacks run on the shell message pump.  Foregrounding
         // synchronously from that callback races WM_SHOWWINDOW and can leave a
         // live WinCommander process with no reachable UI.  Yield one cycle so
         // Windows has registered the restored window before the Win32 focus
-        // workaround runs.
+        // workaround runs. KT: a plain OS thread, not the Tokio pool — a saturated
+        // pool would strand window activation with the window already on screen.
         let window_for_foreground = window.clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
             force_window_foreground(&window_for_foreground);
-            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            std::thread::sleep(std::time::Duration::from_millis(150));
             let _ = window_for_foreground.set_focus();
         });
         // Signal the (authenticated) app was revealed so the frontend re-arms the
@@ -427,6 +418,14 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
         // reveal of the real app.
         let _ = app.emit("wincommander://window-revealed", ());
     }
+    log_message_src(
+        "info",
+        "core",
+        &format!(
+            "[Reveal] done: visible={}",
+            window.is_visible().unwrap_or(false)
+        ),
+    );
 }
 
 fn set_wincommander_window_icon(window: &tauri::WebviewWindow) {
@@ -1334,7 +1333,7 @@ fn lock_to_calculator(app: tauri::AppHandle) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
     // enter_calculator_mode handles resize, icon, tray visibility, and show/hide.
-    startup_auth::enter_calculator_mode(window)
+    startup_auth::enter_calculator_mode_with(window, true)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1606,16 +1605,28 @@ pub fn run() {
                     }
                     _ => {}
                 })
-                .on_tray_icon_event(|tray, event| if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event {
-                    // Same reveal path as the "Show" menu — see reveal_main_window:
-                    // the foreground-lock workaround is what makes a cold
-                    // --minimized autostart open on the FIRST click (the bug where
-                    // the tray "does nothing" until you quit and relaunch).
-                    reveal_main_window(tray.app_handle());
+                .on_tray_icon_event(|tray, event| {
+                    // A double-click never reports as two Click events on Windows —
+                    // without its own arm, an impatient double-click on the tray icon
+                    // reveals nothing.
+                    let is_reveal_click = matches!(
+                        event,
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } | TrayIconEvent::DoubleClick {
+                            button: MouseButton::Left,
+                            ..
+                        }
+                    );
+                    if is_reveal_click {
+                        // Same reveal path as the "Show" menu — see reveal_main_window:
+                        // the foreground-lock workaround is what makes a cold
+                        // --minimized autostart open on the FIRST click (the bug where
+                        // the tray "does nothing" until you quit and relaunch).
+                        reveal_main_window(tray.app_handle());
+                    }
                 });
 
             let calculator_mode_on_startup = startup_auth::startup_pin_is_configured_sync();

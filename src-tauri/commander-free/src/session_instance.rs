@@ -575,7 +575,7 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
             // Reveal branch: explicit user intent to see the window.
             if calculator_mode {
                 // enter_calculator_mode handles AUMID, icon, tray hide, and show.
-                let _ = crate::startup_auth::enter_calculator_mode(win.clone());
+                let _ = crate::startup_auth::enter_calculator_mode_with(win.clone(), true);
             } else {
                 // KT: set_skip_taskbar(false) before show() so the window immediately
                 // appears in the taskbar. Without it the window shows visually but
@@ -596,10 +596,10 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
                 // leaving the window unactivated and black until the user clicks.
                 // 50 ms lets the pump drain; set_focus follows 150 ms later.
                 let win_clone = win.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                     crate::force_window_foreground(&win_clone);
-                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                    std::thread::sleep(std::time::Duration::from_millis(150));
                     let _ = win_clone.set_focus();
                 });
             }
