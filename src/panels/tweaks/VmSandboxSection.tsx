@@ -22,6 +22,14 @@ interface VmCapabilities {
 
 type IsolationFeature = "hyperv" | "sandbox";
 
+interface EnableFeatureResult {
+  ok: boolean;
+  alreadyEnabled: boolean;
+  restartRequired: boolean;
+  state: string;
+  message: string;
+}
+
 interface VmInfo {
   Name: string;
   State: string;
@@ -34,6 +42,7 @@ export default function VmSandboxSection() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [confirmDestroy, setConfirmDestroy] = useState<string | null>(null);
 
   const [name, setName] = useState('');
@@ -67,6 +76,7 @@ export default function VmSandboxSection() {
     async (fn: () => Promise<unknown>) => {
       setBusy(true);
       setError(null);
+      setMessage(null);
       try {
         await fn();
         await refresh();
@@ -95,7 +105,10 @@ export default function VmSandboxSection() {
     run(() => invoke('sandbox_launch', { args: { networking: false, readOnly: true } }));
   const closeSandbox = () => run(() => invoke('sandbox_close'));
   const enableFeature = (feature: IsolationFeature) =>
-    run(() => invoke('vm_enable_feature', { args: { feature } }));
+    run(async () => {
+      const result = await invoke<EnableFeatureResult>('vm_enable_feature', { args: { feature } });
+      setMessage(result.message);
+    });
 
   const headerRight = caps ? (
     <Tag minimal intent={caps.hyperv || caps.sandbox ? 'success' : undefined} className="font-mono">
@@ -124,6 +137,7 @@ export default function VmSandboxSection() {
         </div>
 
         {error && <div className="font-mono text-sm text-red-400">{error}</div>}
+        {!error && message && <div className="font-mono text-sm text-green-400">{message}</div>}
 
         {caps && (!caps.hyperv || !caps.sandbox) && (
           <div className="flex flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 text-sm">
