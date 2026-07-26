@@ -132,7 +132,6 @@ export default function ShredConfirmationDialog({ isOpen, paths, onClose }: Shre
                     <Icon icon="warning-sign" size={13} />
                     <span>
                         Permanently destroys {targets.length || paths.length} item{(targets.length || paths.length) !== 1 ? 's' : ''}.
-                        Recovery is impossible after completion.
                         {hasFolders && " Folders are destroyed recursively."}
                     </span>
                 </div>

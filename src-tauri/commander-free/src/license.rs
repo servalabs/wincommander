@@ -395,9 +395,11 @@ fn features_from_verified_claims(
         } else {
             &claims.service_features
         };
-        return (claims.exp > now)
-            .then(|| trial_features.clone())
-            .unwrap_or_default();
+        return if claims.exp > now {
+            trial_features.clone()
+        } else {
+            Default::default()
+        };
     }
 
     let has_split_features = !claims.base_features.is_empty()

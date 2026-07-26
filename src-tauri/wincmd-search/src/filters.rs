@@ -174,10 +174,9 @@ fn parse_size(value: &str) -> Option<(Option<u64>, Option<u64>)> {
         (SizeOp::Le, r)
     } else if let Some(r) = value.strip_prefix('>') {
         (SizeOp::Gt, r)
-    } else if let Some(r) = value.strip_prefix('<') {
-        (SizeOp::Lt, r)
     } else {
-        return None;
+        let r = value.strip_prefix('<')?;
+        (SizeOp::Lt, r)
     };
     let bytes = parse_bytes(rest)?.round() as u64;
     match op {

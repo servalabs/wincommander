@@ -275,7 +275,7 @@ pub fn init(app: &AppHandle) {
 
             let mut down: u64 = 0;
             let mut up: u64 = 0;
-            for (_iface, data) in networks.iter() {
+            for data in networks.values() {
                 down += data.received();
                 up += data.transmitted();
             }

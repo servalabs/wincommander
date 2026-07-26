@@ -501,13 +501,10 @@ fn parse_temp_output(output: &str) -> Option<f32> {
         return None;
     }
 
-    trimmed.parse::<f32>().ok().and_then(|t| {
-        if (20.0..=120.0).contains(&t) {
-            Some(t)
-        } else {
-            None
-        }
-    })
+    trimmed
+        .parse::<f32>()
+        .ok()
+        .filter(|&t| (20.0..=120.0).contains(&t))
 }
 
 /// CPU temperature, throttled. The WMI probe spawns a (windowless) PowerShell
