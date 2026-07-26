@@ -114,6 +114,78 @@ export function runOperation(
     });
 }
 
+// ── beginOperation ───────────────────────────────────────────────────────────
+//
+// Same task row as runOperation, but held OPEN so more steps can be added to it
+// after it started. runOperation fixes its step list at creation, so work the
+// user asks for mid-flight (queueing a second app onto a running install) could
+// only ever open a competing second row — or, if it reused the title,
+// silently overwrite the first row's steps by index via addOperationTask's
+// exact-label dedup. This is the one surface where the step list genuinely is
+// not known up front.
+//
+//   const op = beginOperation("Installing apps", { accent: 'blue' });
+//   await op.add(firstBatch);   // more batches may be added while this awaits
+//   op.finish();
+
+export interface GrowingOperation {
+    /** Append these steps to the live row and run them in parallel. */
+    add: (steps: OperationStep[]) => Promise<{ anyError: boolean }>;
+    /** Close the row: completed, or failed if any step so far errored. */
+    finish: () => { anyError: boolean };
+}
+
+export function beginOperation(
+    title: string,
+    opts?: { accent?: 'red' | 'blue' | 'neutral' },
+): GrowingOperation {
+    const accent = opts?.accent ?? 'neutral';
+    // null covers BOTH "TaskStatusProvider not mounted yet" and
+    // addOperationTask's SUPPRESSED_TASK_ID — in either case the steps still
+    // run, they just do not report into a row.
+    const id = _getOperationHandlers().addOperationTask?.(title, [], accent) ?? null;
+    let anyError = false;
+
+    const add = async (steps: OperationStep[]): Promise<{ anyError: boolean }> => {
+        if (steps.length === 0) return { anyError };
+        // Re-read the handlers per call: TaskStatusProvider re-registers them
+        // whenever its callbacks change identity, so a set captured at
+        // beginOperation time can go stale mid-operation.
+        const h = _getOperationHandlers();
+        const base = id !== null && h.appendOperationSteps
+            ? h.appendOperationSteps(id, steps.map(s => s.label))
+            : -1;
+        await Promise.allSettled(
+            steps.map(async (step, i) => {
+                if (base >= 0) h.updateOperationStep?.(id!, base + i, 'running');
+                try {
+                    await step.fn();
+                    if (base >= 0) h.updateOperationStep?.(id!, base + i, 'done');
+                } catch {
+                    anyError = true;
+                    if (base >= 0) h.updateOperationStep?.(id!, base + i, 'error');
+                }
+            })
+        );
+        return { anyError };
+    };
+
+    const finish = (): { anyError: boolean } => {
+        const h = _getOperationHandlers();
+        if (id !== null) {
+            if (anyError) {
+                h.failTask?.(id, "Completed with errors");
+            } else {
+                playSound('complete');
+                h.completeTask?.(id);
+            }
+        }
+        return { anyError };
+    };
+
+    return { add, finish };
+}
+
 // ── OperationOverlay ─────────────────────────────────────────────────────────
 // No longer renders its own UI — TaskStatusBar handles everything.
 // Kept as a no-op export so App.tsx does not need changes.

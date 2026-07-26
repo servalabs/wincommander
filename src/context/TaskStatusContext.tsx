@@ -41,6 +41,11 @@ interface TaskStatusContextValue {
   // because a superset task is already running — callers must not touch task state in that case.
   addOperationTask: (label: string, steps: string[], accent?: 'red' | 'blue' | 'neutral') => string | null;
   updateOperationStep: (id: string, stepIndex: number, status: StepStatus) => void;
+  // Grows a still-running task's step list. Returns the index the first new
+  // step landed at, or -1 if the task is gone or no longer running — needed so
+  // work discovered AFTER a task started (a second app queued onto a running
+  // install) reports into the SAME row instead of opening a second one.
+  appendOperationSteps: (id: string, labels: string[]) => number;
 }
 
 // ── Context ──────────────────────────────────────────────────────────────────
@@ -150,6 +155,19 @@ export function TaskStatusProvider({ children }: { children: ReactNode }) {
     return id;
   }, []);
 
+  const appendOperationSteps = useCallback((id: string, labels: string[]): number => {
+    // Same reason addOperationTask reads taskMapRef: the caller needs the base
+    // index back synchronously, which a setTasks updater cannot provide.
+    const existing = taskMapRef.current.get(id);
+    if (!existing || existing.status !== "running") return -1;
+    if (labels.length === 0) return existing.steps.length;
+    const base = existing.steps.length;
+    const added: TaskStep[] = labels.map(label => ({ label, status: 'idle' as StepStatus }));
+    taskMapRef.current.set(id, { ...existing, steps: [...existing.steps, ...added] });
+    setTasks(prev => prev.map(t => (t.id === id ? { ...t, steps: [...t.steps, ...added] } : t)));
+    return base;
+  }, []);
+
   const updateOperationStep = useCallback((id: string, stepIndex: number, status: StepStatus) => {
     setTasks(prev => prev.map(t => {
       if (t.id !== id || !t.steps) return t;
@@ -160,17 +178,18 @@ export function TaskStatusProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    _registerGlobalHandlers(completeTask, failTask, addOperationTask, updateOperationStep);
+    _registerGlobalHandlers(completeTask, failTask, addOperationTask, updateOperationStep, appendOperationSteps);
     return () => {
       _globalCompleteTask = null;
       _globalFailTask = null;
       _globalAddOperationTask = null;
       _globalUpdateOperationStep = null;
+      _globalAppendOperationSteps = null;
     };
-  }, [completeTask, failTask, addOperationTask, updateOperationStep]);
+  }, [completeTask, failTask, addOperationTask, updateOperationStep, appendOperationSteps]);
 
   return (
-    <TaskStatusContext.Provider value={{ tasks, completeTask, failTask, dismissTask, clearCompleted, addOperationTask, updateOperationStep }}>
+    <TaskStatusContext.Provider value={{ tasks, completeTask, failTask, dismissTask, clearCompleted, addOperationTask, updateOperationStep, appendOperationSteps }}>
       {children}
     </TaskStatusContext.Provider>
   );
@@ -190,23 +209,27 @@ let _globalCompleteTask: ((id: string, message?: string) => void) | null = null;
 let _globalFailTask: ((id: string, message?: string) => void) | null = null;
 let _globalAddOperationTask: ((label: string, steps: string[], accent?: 'red' | 'blue' | 'neutral') => string | null) | null = null;
 let _globalUpdateOperationStep: ((id: string, stepIndex: number, status: StepStatus) => void) | null = null;
+let _globalAppendOperationSteps: ((id: string, labels: string[]) => number) | null = null;
 
 export function _registerGlobalHandlers(
   complete: (id: string, message?: string) => void,
   fail: (id: string, message?: string) => void,
   addOperation: (label: string, steps: string[], accent?: 'red' | 'blue' | 'neutral') => string | null,
   updateStep: (id: string, stepIndex: number, status: StepStatus) => void,
+  appendSteps: (id: string, labels: string[]) => number,
 ) {
   _globalCompleteTask = complete;
   _globalFailTask = fail;
   _globalAddOperationTask = addOperation;
   _globalUpdateOperationStep = updateStep;
+  _globalAppendOperationSteps = appendSteps;
 }
 
 export function _getOperationHandlers() {
   return {
     addOperationTask: _globalAddOperationTask,
     updateOperationStep: _globalUpdateOperationStep,
+    appendOperationSteps: _globalAppendOperationSteps,
     completeTask: _globalCompleteTask,
     failTask: _globalFailTask,
   };

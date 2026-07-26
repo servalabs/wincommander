@@ -3,7 +3,7 @@ import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import useBackend from "../../../hooks/useBackend";
 import { useAppState } from "../../../context/AppContext";
-import { runOperation } from "../../../context/OperationContext";
+import { beginOperation, runOperation } from "../../../context/OperationContext";
 import { claimFreeAppUpdates, clearAppUpdatesQueued, isAppUpdateQueued } from "../../../lib/appUpdateQueue";
 import { releasePackageOperation, tryAcquirePackageOperation } from "../../../lib/packageOperationLock";
 import { showWarning, showError, showSuccess } from "../../../utils/toast";
@@ -569,23 +569,62 @@ function AppInstallerPanel() {
     return false;
   }, [installWinget, wingetStatus]);
 
+  // ── Install queue ─────────────────────────────────────────────────
+  // One worker owns the package lock for as long as anything is left to
+  // install, and drains a shared pending list. Asking to install more while a
+  // run is in flight APPENDS to that same run and the same task row — there is
+  // no separate "schedule" step to press (2026-07-26 fix: the old FIFO batch
+  // queue needed an explicit SCHEDULE click, and a single-card install during a
+  // run was refused outright by the package lock, so the second app silently
+  // never installed).
+  //
+  // coveredIds is the SYNCHRONOUS source of truth for "the running worker
+  // already has this id". installingIds is state and two clicks landing in the
+  // same tick would both read its pre-click value, enqueueing the app twice.
+  const coveredIdsRef = useRef<Set<string>>(new Set());
+  const pendingInstallRef = useRef<string[]>([]);
+  const installWorkerRef = useRef(false);
+
   const installApps = useCallback(async (appIds: string[]) => {
-    const uniqueIds = Array.from(new Set(appIds)).filter(id => !installedApps.has(id));
+    const uniqueIds = Array.from(new Set(appIds))
+      .filter(id => !installedApps.has(id) && !coveredIdsRef.current.has(id));
     if (uniqueIds.length === 0) {
-      showWarning("All selected apps are already installed.");
-      return;
-    }
-    if (!tryAcquirePackageOperation()) {
-      showWarning("Another package-manager operation is already running.");
+      showWarning("Those apps are already installed, or already in the running install.");
       return;
     }
 
+    uniqueIds.forEach(id => coveredIdsRef.current.add(id));
+    pendingInstallRef.current.push(...uniqueIds);
     setSelectedApps(new Set());
     setInstallingIds(prev => {
       const next = new Set(prev);
       uniqueIds.forEach(id => next.add(id));
       return next;
     });
+
+    // A run is already in flight — its drain loop picks these up next.
+    if (installWorkerRef.current) {
+      showSuccess(`Added ${uniqueIds.length} app${uniqueIds.length === 1 ? "" : "s"} to the running install.`);
+      return;
+    }
+
+    // A DIFFERENT package-manager surface (Update All / Update Selected) holds
+    // the lock. That work isn't ours to append to, so this one really does have
+    // to wait — roll the enqueue back rather than leaving ids stuck "installing".
+    if (!tryAcquirePackageOperation()) {
+      showWarning("Another package-manager operation is already running.");
+      uniqueIds.forEach(id => coveredIdsRef.current.delete(id));
+      pendingInstallRef.current = pendingInstallRef.current.filter(id => !uniqueIds.includes(id));
+      setInstallingIds(prev => {
+        const next = new Set(prev);
+        uniqueIds.forEach(id => next.delete(id));
+        return next;
+      });
+      return;
+    }
+
+    installWorkerRef.current = true;
+    const op = beginOperation("Installing apps", { accent: 'blue' });
     try {
       // ── Pre-flight (sequential) — package manager must be present
       // before we can spawn any parallel install workers.
@@ -598,10 +637,12 @@ function AppInstallerPanel() {
       // the operation bar shows all rows progressing at once instead
       // of one-at-a-time. Per-id loading flag flips off as each app
       // finishes so its card stops spinning while siblings continue.
-      const steps = uniqueIds.map(id => {
-        const name = apps.find(a => a.id === id)?.name || id;
-        return {
-          label: `Installing ${name}`,
+      // The loop re-checks the pending list after every batch, so apps added
+      // mid-run are installed by this same worker under this same row.
+      while (pendingInstallRef.current.length > 0) {
+        const batch = pendingInstallRef.current.splice(0);
+        await op.add(batch.map(id => ({
+          label: `Installing ${apps.find(a => a.id === id)?.name || id}`,
           fn: async () => {
             const response = await installWingetApps([id]);
             if (!response.success) throw new Error(response.error || `Install failed.`);
@@ -621,60 +662,33 @@ function AppInstallerPanel() {
                 return next;
               });
             }, 600);
-          }
-        };
-      });
-      await runOperation(`Install ${uniqueIds.length} app(s)`, steps, { mode: 'parallel', failFast: false, accent: 'blue' });
+          },
+        })));
+      }
 
       // Refresh both the packages list and the engine dependency status so the
       // Engines section reflects newly installed CLI tools (e.g. es.exe for search).
       await Promise.all([runAppInventoryScan(true), forceRefreshDeps()]);
-    } catch {
-      // error shown in status bar by runOperation
+    } catch (err) {
+      // Pre-flight failures never reached a task row under the old code, so
+      // "winget is missing" failed completely silently. Per-step failures are
+      // still reported by the row itself.
+      showError(err instanceof Error ? err.message : "Install failed.");
     } finally {
-      // Clear any ids still marked as installing (in case a step threw before
-      // its per-step delete ran).
-      setInstallingIds(prev => {
-        const next = new Set(prev);
-        uniqueIds.forEach(id => next.delete(id));
-        return next;
-      });
+      op.finish();
+      installWorkerRef.current = false;
+      pendingInstallRef.current = [];
+      coveredIdsRef.current.clear();
+      // Clears any id still marked installing because its step threw before
+      // the per-step delete ran.
+      setInstallingIds(new Set());
       releasePackageOperation();
     }
   }, [ensureWinget, installWingetApps, installedApps, runAppInventoryScan, forceRefreshDeps, apps]);
 
-  // ── Schedule queue ────────────────────────────────────────────────
-  // FIFO queue of batches. Each entry is the list of app IDs that the
-  // user clicked SCHEDULE on while a different batch was still running.
-  // When the current batch finishes (installing flips false), the
-  // useEffect below dequeues the head batch and starts it. New
-  // Schedule clicks during a queued batch's run just append.
-  const [scheduledQueue, setScheduledQueue] = useState<string[][]>([]);
-
-  useEffect(() => {
-    if (installing) return;
-    if (scheduledQueue.length === 0) return;
-    const [nextBatch, ...rest] = scheduledQueue;
-    setScheduledQueue(rest);
-    void installApps(nextBatch);
-  }, [installing, scheduledQueue, installApps]);
-
   const handleInstall = async () => {
     await installApps(Array.from(selectedApps).filter(id => !installedApps.has(id)));
   };
-
-  const handleSchedule = () => {
-    const ids = Array.from(selectedApps).filter(id => !installedApps.has(id));
-    if (ids.length === 0) {
-      showWarning("All selected apps are already installed.");
-      return;
-    }
-    setScheduledQueue(prev => [...prev, ids]);
-    setSelectedApps(new Set());
-    showSuccess(`Queued ${ids.length} app(s) — will install after current batch finishes.`);
-  };
-
-  const queuedAppCount = scheduledQueue.reduce((n, b) => n + b.length, 0);
 
   const handleUpgradeSingle = async (appId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -960,41 +974,23 @@ function AppInstallerPanel() {
                 loading={localLoadingMap["removeTeams"]}
                 />
               )}
+              {/* Stays enabled during a run: the label switches to ADD TO
+                  INSTALL because that is what a click now does — the apps join
+                  the in-flight install instead of being refused or needing a
+                  separate SCHEDULE press. Deliberately NOT `loading`, which
+                  would disable it and take that away; the per-card spinners and
+                  the Processes row already show the run. */}
               {selectedInstallIds.length > 0 && (
                 <Button
-                  icon={installing ? undefined : "download"}
-                  text={`INSTALL APPS (${selectedInstallIds.length})`}
+                  icon="download"
+                  text={`${installing ? "ADD TO INSTALL" : "INSTALL APPS"} (${selectedInstallIds.length})`}
                   intent="success"
                   minimal
                   small
                   className="app-install-btn font-mono text-[10px]! tracking-wide"
                   onClick={handleInstall}
-                  loading={installing}
-                  disabled={installing || wingetStatus === "failed" || appsLoading}
-                />
-              )}
-              {/* SCHEDULE — only shown while a batch is already running,
-                  so users see it exactly when it's useful. Adds the
-                  current selection to the FIFO queue; the next batch
-                  starts automatically once the current one finishes. */}
-              {selectedInstallIds.length > 0 && installing && (
-                <Button
-                  icon="time"
-                  text={`SCHEDULE (${selectedInstallIds.length})`}
-                  minimal
-                  small
-                  className="font-mono text-[10px]! tracking-wide"
-                  onClick={handleSchedule}
                   disabled={wingetStatus === "failed" || appsLoading}
                 />
-              )}
-              {queuedAppCount > 0 && (
-                <span
-                  className="font-mono text-[10px] tracking-wide text-[var(--color-text-muted)]"
-                  title={`${scheduledQueue.length} batch(es) queued, ${queuedAppCount} app(s) total`}
-                >
-                  QUEUED: {queuedAppCount}
-                </span>
               )}
               </div>
               </div>
