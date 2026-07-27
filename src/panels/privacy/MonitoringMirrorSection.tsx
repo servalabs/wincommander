@@ -18,9 +18,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Icon, Spinner, Switch } from '@/components/ui/bp';
-import useEntitlements from '@/hooks/useEntitlements';
 import argus from '@/hooks/useArgus';
 import { getFleetStatus } from '@/hooks/fleetStatus';
+import { useLicenseQuery } from '@/hooks/queries/useLicenseQuery';
 import {
   authAnomalyStatus,
   sessionMonitorStatus,
@@ -101,7 +101,13 @@ function MonitorStatusCard({
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function MonitoringMirrorSection() {
-  const { canUse } = useEntitlements();
+  const { data: license, isLoading: licenseLoading } = useLicenseQuery();
+  // The mirror is a Fleet surface, not a generic Pro surface. Calling
+  // `fleet_status` for a normal-Pro licence asks the backend for a service the
+  // user has not purchased, which used to produce a repeated entitlement error
+  // every time this section mounted or refreshed.
+  const fleetEntitled = license?.valid === true &&
+    (license.active_service_features ?? license.features ?? []).includes('fleet');
 
   const [monitorStates, setMonitorStates] = useState<MonitorStates>(INITIAL_MONITOR_STATES);
   const [fleetConnected, setFleetConnected] = useState<boolean | null>(null);
@@ -110,6 +116,11 @@ export default function MonitoringMirrorSection() {
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!fleetEntitled) {
+      setFleetConnected(false);
+      setMonitorStates(INITIAL_MONITOR_STATES);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -119,8 +130,7 @@ export default function MonitoringMirrorSection() {
         setMonitorStates(INITIAL_MONITOR_STATES);
         return;
       }
-      const [, sessionAssurance, accessSession, appUsage] = await Promise.all([
-        argus.monitoringMirror(),
+      const [sessionAssurance, accessSession, appUsage] = await Promise.all([
         sessionMonitorStatus().catch(() => ({ running: false })),
         authAnomalyStatus().catch(() => ({ running: false })),
         argus.appUsageStatus().catch(() => ({ running: false })),
@@ -137,17 +147,18 @@ export default function MonitoringMirrorSection() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [fleetEntitled]);
 
   useEffect(() => {
-    if (!canUse('paid')) {
+    if (licenseLoading || !fleetEntitled) {
       setFleetConnected(false);
+      setMonitorStates(INITIAL_MONITOR_STATES);
       return;
     }
     void refresh();
     const id = setInterval(() => void refresh(), 30_000);
     return () => clearInterval(id);
-  }, [canUse, refresh]);
+  }, [fleetEntitled, licenseLoading, refresh]);
 
   const toggleMonitor = useCallback(async (monitor: MonitorKey, enabled: boolean) => {
     setBusyMonitor(monitor);
@@ -170,7 +181,7 @@ export default function MonitoringMirrorSection() {
 
   // ── Entitlement gate ─────────────────────────────────────────────────────
 
-  if (!canUse('paid') || !fleetConnected) return null;
+  if (!fleetEntitled || !fleetConnected) return null;
 
   const activeStatusCount = Object.values(monitorStates).filter(Boolean).length;
   const monitoringActive = activeStatusCount > 0;

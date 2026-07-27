@@ -1229,12 +1229,12 @@ async function normalizeBackendError(err: unknown): Promise<string> {
       window.dispatchEvent(new CustomEvent("pro-install-open"));
       return detail;
     }
-    window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy" } }));
     return "WinCommander Pro entitlement required. Activate a license or start the 16-day free trial.";
   }
-  if (message.includes("WinCommander Pro entitlement required")) {
-    window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy" } }));
-  }
+  // Paid background work can fail while entitlement state is still resolving
+  // or after a service entitlement lapses. A backend error is not an explicit
+  // request to buy, so it must never repeatedly reopen the global paywall.
+  // Interactive locked controls dispatch `license-gate-open` themselves.
   return message;
 }
 

@@ -5,13 +5,18 @@ import path from "path";
 
 const tauriDevHost = process.env.TAURI_DEV_HOST;
 const host = tauriDevHost || "localhost";
-const sharedAssetsRoot = path.resolve(__dirname, "./assets");
+// The workspace-level assets checkout is the canonical asset source shared by
+// WinCommander and the other products. The local `assets` submodule is a
+// compatibility snapshot and doesn't contain product or blocklist artwork.
+const sharedAssetsRoot = path.resolve(__dirname, "../assets");
 
 export default defineConfig(({ command }): UserConfig => ({
   plugins: [...react(), ...tailwindcss()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // `@assets` also exposes the local React RiskMatrix component, which
+      // resolves its own React dependency through this app's node_modules.
       "@assets": path.resolve(__dirname, "./assets"),
     },
   },
