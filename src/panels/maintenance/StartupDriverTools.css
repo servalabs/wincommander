@@ -1,0 +1,96 @@
+/* ── Manager tab switch (Startup / Users / Tasks / Services / Conceal) ──
+   Same mechanic as .power-plan-switch / .power-plan-switch__thumb in
+   src/panels/tweaks/index.css: a --tab-slot custom property (set per
+   active index via a modifier class) drives an absolutely-positioned
+   thumb's translateX, with the buttons rendered transparent on top so
+   the thumb reads as the selection. Unlike that switch's calm glide,
+   this one uses a "back"-style overshoot curve for a bouncier, more
+   tab-like snap between slots. */
+.manager-tab-switch {
+  --tab-slot: 0;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  overflow: hidden;
+}
+
+.manager-tab-switch--0 { --tab-slot: 0; }
+.manager-tab-switch--1 { --tab-slot: 1; }
+.manager-tab-switch--2 { --tab-slot: 2; }
+.manager-tab-switch--3 { --tab-slot: 3; }
+.manager-tab-switch--4 { --tab-slot: 4; }
+
+.manager-tab-switch__thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 20px) / 5);
+  border-radius: var(--r);
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-line), 0 6px 18px -8px var(--glow);
+  transform: translateX(calc(var(--tab-slot) * (100% + 4px)));
+  transition: transform 480ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.manager-tab-switch__btn {
+  position: relative;
+  z-index: 1;
+  justify-content: center;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  color: var(--text-mute);
+  transition: color 180ms ease;
+}
+
+.manager-tab-switch__btn:hover {
+  background: transparent !important;
+  color: var(--text-dim);
+}
+
+.manager-tab-switch__btn--active,
+.manager-tab-switch__btn--active:hover {
+  color: var(--accent-contrast);
+}
+
+@media (max-width: 640px) {
+  .manager-tab-switch {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .manager-tab-switch__thumb {
+    display: none;
+  }
+
+  .manager-tab-switch__btn--active,
+  .manager-tab-switch__btn--active:hover {
+    background: color-mix(in srgb, var(--accent) 16%, transparent) !important;
+    color: var(--text) !important;
+  }
+}
+
+/* ── Startup impact scan section ──
+   Separates the one-shot signature/impact scan results from
+   StartupManager's live enable/disable list above, so the two distinct
+   datasets (registry state vs. Authenticode scan) don't read as a
+   duplicated list. */
+.startup-impact-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.startup-impact-section__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

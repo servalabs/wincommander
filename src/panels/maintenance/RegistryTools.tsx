@@ -30,8 +30,8 @@ export function RegistryTools() {
             <TabsList><TabsTrigger value="orphans">Registry orphans</TabsTrigger><TabsTrigger value="context">Context menu</TabsTrigger></TabsList>
           </Tabs>
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="primary" disabled={tools.busy} onClick={() => void tools.scan()} title={scanLabel} aria-label={scanLabel}><Icon icon={tools.busy || entries ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} />{scanLabel}</Button>
             {entries && <Badge tone="accent">{entries.length} candidate{entries.length === 1 ? "" : "s"}</Badge>}
+            <Button size="sm" variant="primary" className="ml-auto" disabled={tools.busy} onClick={() => void tools.scan()} title={scanLabel} aria-label={scanLabel}><Icon icon={tools.busy || entries ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} />{scanLabel}</Button>
           </div>
         </CardContent>
       </Card>

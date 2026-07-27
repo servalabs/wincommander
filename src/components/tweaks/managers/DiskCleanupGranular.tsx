@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
 import { Icon } from "../../ui/icon";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Spinner } from "../../ui/spinner";
 import useBackend, { executeBackendCommand } from "../../../hooks/useBackend";
 import useEntitlements from "../../../hooks/useEntitlements";
@@ -231,9 +231,6 @@ export default function DiskCleanupGranular() {
                 Ringing the counter <span> alone highlighted the number and left
                 Clean outside the box (2026-07-26 fix). */}
             <div data-tour="maintenance-disk-cleanup-actions" className="flex flex-wrap items-center gap-2">
-                <Button size="icon" variant="primary" disabled={loading} onClick={() => void refresh()} title={scanLabel} aria-label={scanLabel}>
-                    <Icon icon={loading || cats.length ? "refresh" : "search"} className={loading ? "animate-spin" : undefined} />
-                </Button>
                 <Button variant="danger" size="sm" disabled={cleaning || !selected.size} onClick={() => void clean()}>
                     <Icon icon="clean" />{cleaning ? "Cleaning…" : `Clean ${selected.size} selected`}
                 </Button>
@@ -241,26 +238,37 @@ export default function DiskCleanupGranular() {
                     title="Run the built-in Windows cleanup sweep (cleanmgr) across every system category">
                     <Icon icon="eraser" />{cleaningAll ? "Sweeping…" : "Windows sweep"}
                 </Button>
-                <span className="font-mono text-[11px] font-semibold whitespace-nowrap text-[var(--text-mute)]">
-                    {`${totalSelectedMb.toFixed(0)} MB selected`}
+                <span className="whitespace-nowrap">
+                    <span className="font-mono text-base font-bold text-[var(--accent)]">{totalSelectedMb.toFixed(0)} MB</span>
+                    <span className="ml-1 text-xs text-[var(--text-mute)]">selected</span>
                 </span>
-                {schedulesEnabled ? (
-                    <Select value={scheduleMinutes === null ? SCHEDULE_OFF : String(scheduleMinutes)} onValueChange={(value) => void changeSchedule(value)} disabled={scheduleBusy}>
-                        <SelectTrigger className="ml-auto h-8 w-auto gap-1.5 text-xs" aria-label="Auto-clean interval">
-                            <Icon icon="time" className={scheduleMinutes === null ? "text-[var(--text-mute)]" : "text-[var(--accent)]"} />
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={SCHEDULE_OFF}>Auto-clean off</SelectItem>
-                            {SCHEDULE_PRESETS.map(preset => <SelectItem key={preset.minutes} value={String(preset.minutes)}>{preset.label}</SelectItem>)}
-                        </SelectContent>
-                    </Select>
-                ) : !isInvestigator && (
-                    <Button size="sm" variant="ghost" className="ml-auto" onClick={() => window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Scheduled Auto-Clean" } }))}
-                        title="Scheduled auto-clean is a paid feature">
-                        <Icon icon="time" /><Icon icon="lock" />
+                <div className="ml-auto flex items-center gap-2">
+                    {schedulesEnabled ? (
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button size="icon" variant="ghost" disabled={scheduleBusy} aria-label="Auto-clean schedule"
+                                    title={scheduleMinutes === null ? "Schedule auto-clean" : `Auto-clean every ${formatInterval(scheduleMinutes)}`}>
+                                    <Icon icon="time" className={scheduleMinutes === null ? "text-[var(--text-mute)]" : "text-[var(--accent)]"} />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                                <DropdownMenuLabel>Auto-clean interval</DropdownMenuLabel>
+                                <DropdownMenuRadioGroup value={scheduleMinutes === null ? SCHEDULE_OFF : String(scheduleMinutes)} onValueChange={(value) => void changeSchedule(value)}>
+                                    <DropdownMenuRadioItem value={SCHEDULE_OFF}>Auto-clean off</DropdownMenuRadioItem>
+                                    {SCHEDULE_PRESETS.map(preset => <DropdownMenuRadioItem key={preset.minutes} value={String(preset.minutes)}>{preset.label}</DropdownMenuRadioItem>)}
+                                </DropdownMenuRadioGroup>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                    ) : !isInvestigator && (
+                        <Button size="sm" variant="ghost" onClick={() => window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Scheduled Auto-Clean" } }))}
+                            title="Scheduled auto-clean is a paid feature">
+                            <Icon icon="time" /><Icon icon="lock" />
+                        </Button>
+                    )}
+                    <Button size="icon" variant="primary" disabled={loading} onClick={() => void refresh()} title={scanLabel} aria-label={scanLabel}>
+                        <Icon icon={loading || cats.length ? "refresh" : "search"} className={loading ? "animate-spin" : undefined} />
                     </Button>
-                )}
+                </div>
             </div>
 
             {loading && cats.length === 0 && <div className="flex justify-center py-6"><Spinner size={20} className="text-[var(--accent)]" /></div>}

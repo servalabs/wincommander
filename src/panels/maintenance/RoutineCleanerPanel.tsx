@@ -54,12 +54,22 @@ export function RoutineCleanerPanel({ categories: allowedCategories }: RoutineCl
 
   return <div className="flex flex-col gap-4">
     <div className="flex flex-wrap items-center gap-2">
-      <Button size="icon" variant="primary" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={scanLabel} aria-label={scanLabel}>
-        <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} />
-      </Button>
-      {isRunning && <Button size="icon" variant="outline" onClick={() => void cleaner.cancel()} title="Cancel cache operation" aria-label="Cancel cache operation"><Icon icon="stop" /></Button>}
-      {categoryOptions.map((category) => <Chip key={category.id} active={categories.includes(category.id)} onClick={() => cleaner.setCategory(category.id)} className="text-left">{category.label}</Chip>)}
+      {/* Chips share the surface-2 bar background with their inactive state,
+          so the row reads as one tab bar with a single accent-soft "active"
+          pill — the same visual language as TabsList/TabsTrigger (see
+          src/components/ui/tabs.tsx) — even though selection here stays
+          multi-select (cleaner.setCategory toggles membership, unlike a
+          true single-value Tabs root). */}
+      <div className="inline-flex flex-wrap items-center gap-1 rounded-[var(--r)] bg-[var(--surface-2)] p-1">
+        {categoryOptions.map((category) => <Chip key={category.id} active={categories.includes(category.id)} onClick={() => cleaner.setCategory(category.id)} className="rounded-[var(--r-sm)] border-0 text-left">{category.label}</Chip>)}
+      </div>
       {!categories.length && <span className="text-xs text-[var(--warn)]">Choose at least one category.</span>}
+      <div className="ml-auto flex items-center gap-2">
+        {isRunning && <Button size="icon" variant="outline" onClick={() => void cleaner.cancel()} title="Cancel cache operation" aria-label="Cancel cache operation"><Icon icon="stop" /></Button>}
+        <Button size="icon" variant="primary" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={scanLabel} aria-label={scanLabel}>
+          <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} />
+        </Button>
+      </div>
     </div>
     {!scan && (
       <CacheScanIdleState

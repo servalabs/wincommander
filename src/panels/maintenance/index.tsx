@@ -10,7 +10,6 @@ import { SecurityData } from "./SecurityData";
 import { SystemHygieneTools } from "./SystemHygieneTools";
 import { PerformanceTools } from "./PerformanceTools";
 import { StartupDriverTools } from "./StartupDriverTools";
-import OsRepairCard from "./OsRepairCard";
 import ReclaimSpaceCard from "./ReclaimSpaceCard";
 import DiskSpaceAnalyzerDialog from "./DiskSpaceAnalyzerDialog";
 import "./DiskSpaceAnalyzerDialog.css";
@@ -45,21 +44,19 @@ export default function MaintenancePanel() {
       <PanelHeader
         panelId="maintenance"
         title="System Maintenance"
-        description="Reclaim space, repair Windows, and check how it starts and performs. Privacy and trace erasure live in System Cleanup; software updates live in Packages & Apps."
+        description="Reclaim space and check how it starts and performs. Windows repair, privacy, and trace erasure live in System Cleanup; software updates live in Packages & Apps."
       />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="w-full flex-wrap justify-start">
           <TabsTrigger value="files">Storage &amp; files</TabsTrigger>
-          <TabsTrigger value="system">Repair &amp; hygiene</TabsTrigger>
-          <TabsTrigger value="registry">Registry &amp; Explorer</TabsTrigger>
+          <TabsTrigger value="registry">Registry &amp; cleanup</TabsTrigger>
           <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="startup">Startup &amp; drivers</TabsTrigger>
           <TabsTrigger value="security">Security Center</TabsTrigger>
         </TabsList>
         <TabsContent value="files"><StorageAndFileTools cleanupRef={diskCleanupRef} analyzerRef={diskAnalyzerRef} /></TabsContent>
-        <TabsContent value="registry"><RegistryTools /></TabsContent>
-        <TabsContent value="system"><RepairAndHygieneTools /></TabsContent>
+        <TabsContent value="registry"><RegistryAndHygieneTools /></TabsContent>
         <TabsContent value="performance"><PerformanceTools /></TabsContent>
         <TabsContent value="startup"><StartupDriverTools /></TabsContent>
         <TabsContent value="security"><SecurityCenter /></TabsContent>
@@ -80,11 +77,11 @@ function StorageAndFileTools({ cleanupRef, analyzerRef }: { cleanupRef: React.Re
   );
 }
 
-function RepairAndHygieneTools() {
+function RegistryAndHygieneTools() {
   return (
     <div className="flex flex-col gap-4">
-      <RepairSectionLabel>OS repair</RepairSectionLabel>
-      <OsRepairCard />
+      <RepairSectionLabel>Registry &amp; Explorer</RepairSectionLabel>
+      <RegistryTools />
       <div className="h-px bg-[var(--border)]" />
       <RepairSectionLabel>Cleanup &amp; hygiene</RepairSectionLabel>
       <SystemHygieneTools />
@@ -92,9 +89,10 @@ function RepairAndHygieneTools() {
   );
 }
 
-// Distinguishes SFC/DISM/defrag (OsRepairCard) from shortcuts/environment/
-// uninstall-leftover audits (SystemHygieneTools) -- both sat under one
-// ambiguous "Repair & hygiene" tab and read as duplicates of each other.
+// Distinguishes registry/context-menu audits (RegistryTools) from shortcuts/
+// environment/uninstall-leftover audits (SystemHygieneTools) -- both are
+// scan-then-select-then-fix workflows grouped into one tab, but they inspect
+// different things and read as duplicates of each other without a label.
 function RepairSectionLabel({ children }: { children: React.ReactNode }) {
   return <span className="font-[family-name:var(--font-mono)] text-[10.5px] uppercase tracking-wider text-[var(--text-mute)]">{children}</span>;
 }

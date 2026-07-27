@@ -1,8 +1,10 @@
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import type { RoutineCleanerCategory } from "../../hooks/useBackend";
-import { formatBytes, groupRoutineCleanerItems, ROUTINE_CLEANER_CATEGORIES } from "./routineCleanerHelpers";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import type { RoutineCleanerCategory, RoutineCleanerItem } from "../../hooks/useBackend";
+import { formatBytes, getPopulatedRoutineCleanerCategories, getRecommendedItemIds } from "./routineCleanerHelpers";
 import type { useRoutineCleaner } from "./useRoutineCleaner";
 
 type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
@@ -14,8 +16,26 @@ interface RoutineCleanerPreviewProps {
 
 export function RoutineCleanerPreview({ cleaner, onRequestClean }: RoutineCleanerPreviewProps) {
   const { scan, selectedIds, selectedItems, operation, selectRecommended, toggleItem } = cleaner;
+  const categoryGroups = useMemo(() => getPopulatedRoutineCleanerCategories(scan?.items ?? []), [scan?.items]);
+  const [activeCategory, setActiveCategory] = useState<RoutineCleanerCategory | undefined>(categoryGroups[0]?.id);
+
+  // Results are re-grouped on every scan; keep the active tab pointed at a
+  // category that still has matches instead of rendering an empty pane.
+  useEffect(() => {
+    if (!categoryGroups.length) return;
+    if (!categoryGroups.some((group) => group.id === activeCategory)) setActiveCategory(categoryGroups[0].id);
+  }, [categoryGroups, activeCategory]);
+
   if (!scan) return null;
-  const groups = groupRoutineCleanerItems(scan.items);
+
+  // Scoped to this tab's category only: recomputes selection for just these
+  // items so switching tabs never touches another category's selection.
+  const selectRecommendedInCategory = (items: RoutineCleanerItem[]) => {
+    const recommendedIds = new Set(getRecommendedItemIds(items));
+    items.forEach((item) => {
+      if (recommendedIds.has(item.id) !== selectedIds.has(item.id)) toggleItem(item.id);
+    });
+  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -45,59 +65,68 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: RoutineCleane
         <Card>
           <CardContent className="py-6 text-center text-sm text-[var(--text-dim)]">No cleanable cache data found in the selected categories.</CardContent>
         </Card>
-      ) : ROUTINE_CLEANER_CATEGORIES.map((category) => (
-        <ItemGroup
-          key={category.id}
-          label={category.label}
-          items={groups[category.id] ?? []}
-          selectedIds={selectedIds}
-          disabled={operation !== "idle"}
-          onToggle={toggleItem}
-        />
-      ))}
+      ) : (
+        <Tabs value={activeCategory} onValueChange={(value) => setActiveCategory(value as RoutineCleanerCategory)}>
+          <TabsList className="flex-wrap">
+            {categoryGroups.map((group) => (
+              <TabsTrigger key={group.id} value={group.id} className="gap-1.5">
+                {group.label}
+                <Badge tone="neutral">{group.items.length}</Badge>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {categoryGroups.map((group) => (
+            <TabsContent key={group.id} value={group.id}>
+              <div className="mb-3">
+                <Button size="sm" variant="outline" onClick={() => selectRecommendedInCategory(group.items)} disabled={operation !== "idle"}>
+                  Select recommended
+                </Button>
+              </div>
+              {/* Max- (not fixed-) height: mirrors the Windows-storage column's
+                  own max-h-[22rem] scroll cap (DiskCleanupGranular.tsx) so the
+                  two equal-height grid columns still line up, without forcing
+                  a short single-category tab to pad out to the old stacked-view
+                  height. */}
+              <div className="flex max-h-[22rem] flex-col gap-2 overflow-y-auto overscroll-contain pr-1">
+                {group.items.map((item) => (
+                  <ItemRow key={item.id} item={item} selected={selectedIds.has(item.id)} disabled={operation !== "idle"} onToggle={toggleItem} />
+                ))}
+              </div>
+            </TabsContent>
+          ))}
+        </Tabs>
+      )}
     </div>
   );
 }
 
-interface ItemGroupProps {
-  label: string;
-  items: ReturnType<typeof groupRoutineCleanerItems>[RoutineCleanerCategory];
-  selectedIds: Set<string>;
+interface ItemRowProps {
+  item: RoutineCleanerItem;
+  selected: boolean;
   disabled: boolean;
   onToggle: (id: string) => void;
 }
 
-function ItemGroup({ label, items = [], selectedIds, disabled, onToggle }: ItemGroupProps) {
-  if (!items.length) return null;
+function ItemRow({ item, selected, disabled, onToggle }: ItemRowProps) {
   return (
-    <Card>
-      <CardHeader className="flex-row items-center gap-3">
-        <CardTitle>{label}</CardTitle>
-        <Badge tone="neutral">{items.length}</Badge>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        {items.map((item) => (
-          <label key={item.id} className="flex cursor-pointer items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 hover:border-[var(--border-strong)] has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60">
-            <input
-              className="mt-0.5 wc-check"
-              type="checkbox"
-              checked={selectedIds.has(item.id)}
-              disabled={disabled}
-              onChange={() => onToggle(item.id)}
-            />
-            <span className="min-w-0 flex-1">
-              <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-[var(--text)]">
-                {item.label}
-                {item.recommended && <Badge tone="success">Recommended</Badge>}
-                {item.operation === "vacuum" && <Badge tone="warning">Optimize</Badge>}
-                {item.truncated && <Badge tone="warning">Large target</Badge>}
-              </span>
-              <span className="mt-1 block truncate font-mono text-[11px] text-[var(--text-dim)]" title={item.path}>{item.path}</span>
-            </span>
-            <span className="shrink-0 font-mono text-xs text-[var(--text-dim)]">{formatBytes(item.bytes)}</span>
-          </label>
-        ))}
-      </CardContent>
-    </Card>
+    <label className="flex cursor-pointer items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 hover:border-[var(--border-strong)] has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60">
+      <input
+        className="mt-0.5 wc-check"
+        type="checkbox"
+        checked={selected}
+        disabled={disabled}
+        onChange={() => onToggle(item.id)}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-[var(--text)]">
+          {item.label}
+          {item.recommended && <Badge tone="success">Recommended</Badge>}
+          {item.operation === "vacuum" && <Badge tone="warning">Optimize</Badge>}
+          {item.truncated && <Badge tone="warning">Large target</Badge>}
+        </span>
+        <span className="mt-1 block truncate font-mono text-[11px] text-[var(--text-dim)]" title={item.path}>{item.path}</span>
+      </span>
+      <span className="shrink-0 font-mono text-xs text-[var(--text-dim)]">{formatBytes(item.bytes)}</span>
+    </label>
   );
 }

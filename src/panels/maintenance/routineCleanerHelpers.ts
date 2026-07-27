@@ -38,6 +38,24 @@ export function groupRoutineCleanerItems(items: RoutineCleanerItem[]): RoutineCl
   }, {});
 }
 
+export interface RoutineCleanerCategoryGroup {
+  id: RoutineCleanerCategory;
+  label: string;
+  items: RoutineCleanerItem[];
+}
+
+/**
+ * Categories that actually matched something in the latest scan, in the
+ * canonical category order — drives the per-category results tabs. Categories
+ * with zero matches are skipped entirely rather than rendered as an empty tab.
+ */
+export function getPopulatedRoutineCleanerCategories(items: RoutineCleanerItem[]): RoutineCleanerCategoryGroup[] {
+  const groups = groupRoutineCleanerItems(items);
+  return ROUTINE_CLEANER_CATEGORIES
+    .map((category) => ({ id: category.id, label: category.label, items: groups[category.id] ?? [] }))
+    .filter((category) => category.items.length > 0);
+}
+
 export function getRecommendedItemIds(items: RoutineCleanerItem[]): string[] {
   return items.filter((item) => item.recommended).map((item) => item.id);
 }
