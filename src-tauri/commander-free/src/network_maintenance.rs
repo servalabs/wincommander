@@ -114,10 +114,15 @@ fn ensure_mutation_allowed() -> Result<(), String> {
 }
 
 #[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(windows)]
 fn read_arp_cache() -> Result<Vec<ArpEntry>, String> {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
     let output = Command::new("arp.exe")
         .arg("-a")
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|error| format!("could not run arp.exe: {error}"))?;
     if !output.status.success() {
@@ -133,9 +138,11 @@ fn read_arp_cache() -> Result<Vec<ArpEntry>, String> {
 
 #[cfg(windows)]
 fn clear_arp_cache() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
     let status = Command::new("arp.exe")
         .args(["-d", "*"])
+        .creation_flags(CREATE_NO_WINDOW)
         .status()
         .map_err(|error| format!("could not run arp.exe: {error}"))?;
     status

@@ -1,8 +1,12 @@
+use std::os::windows::process::CommandExt;
 use std::process::Command;
+
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub(super) fn run(args: &[&str]) -> Result<String, String> {
     let output = Command::new("netsh.exe")
         .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("netsh.exe unavailable: {e}"))?;
     result(output)
@@ -11,6 +15,7 @@ pub(super) fn run(args: &[&str]) -> Result<String, String> {
 pub(super) fn run_owned(args: &[String]) -> Result<String, String> {
     let output = Command::new("netsh.exe")
         .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("netsh.exe unavailable: {e}"))?;
     result(output)

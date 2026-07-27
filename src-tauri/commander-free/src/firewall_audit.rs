@@ -325,7 +325,12 @@ struct Signature {
 }
 
 #[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(windows)]
 fn read_signatures(paths: &[String]) -> Result<HashMap<String, Signature>, String> {
+    use std::os::windows::process::CommandExt;
+
     if paths.is_empty() {
         return Ok(HashMap::new());
     }
@@ -336,6 +341,7 @@ fn read_signatures(paths: &[String]) -> Result<HashMap<String, Signature>, Strin
             "WINCOMMANDER_FIREWALL_SIGN_PATHS",
             serde_json::to_string(paths).map_err(|error| error.to_string())?,
         )
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
     {
         Ok(output) => output,
