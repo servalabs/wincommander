@@ -16,33 +16,15 @@
 // CreateWipeUsbDialog.tsx's pattern for the same feature family.
 
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Button, Dialog, DialogBody, DialogFooter } from "@/components/ui/bp";
 import { showError, showSuccess } from "../../utils/toast";
+import {
+  verifyUsbBoot,
+  type VerifyUsbBootArmResult as ArmResult,
+  type VerifyUsbBootCheckResult as CheckResult,
+} from "../../hooks/useVerifyUsbBoot";
 
 const CONFIRM_PHRASE = "THIS IS A DISPOSABLE TEST MACHINE";
-
-interface ArmResult {
-  usbRoot: string;
-  bootEntryId: string;
-  nonceHex: string;
-  expiresAtUnix: number;
-  warning: string;
-}
-
-interface CheckResult {
-  consumed: boolean;
-  reason?: string;
-  bootNextCleared?: boolean;
-}
-
-interface StatusResult {
-  armed: boolean;
-  usbRoot?: string;
-  bootEntryId?: string;
-  nonceHex?: string;
-  expiresAtUnix?: number;
-}
 
 interface Props {
   open: boolean;
@@ -75,7 +57,7 @@ export default function VerifyUsbBootDialog({ open, onClose }: Props) {
     // React state -- but the marker file does. Without this, "Check result"
     // would be permanently unreachable after the one thing this tool exists
     // to validate: an actual reboot.
-    invoke<StatusResult>("f6_verify_usb_boot_status")
+    verifyUsbBoot.status()
       .then((status) => {
         if (status.armed && status.usbRoot && status.nonceHex) {
           setArmResult({
@@ -113,7 +95,7 @@ export default function VerifyUsbBootDialog({ open, onClose }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const result = await invoke<ArmResult>("f6_verify_usb_boot_arm");
+      const result = await verifyUsbBoot.arm();
       setArmResult(result);
       setStage("armed");
       showSuccess("Armed. Reboot this machine manually to continue the test.");
@@ -130,7 +112,7 @@ export default function VerifyUsbBootDialog({ open, onClose }: Props) {
     setLoading(true);
     setError(null);
     try {
-      await invoke("f6_verify_usb_boot_disarm");
+      await verifyUsbBoot.disarm();
       showSuccess("Disarmed — BootNext cleared, token invalidated.");
       setStage("confirm");
       setConfirmText("");
@@ -149,10 +131,7 @@ export default function VerifyUsbBootDialog({ open, onClose }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const result = await invoke<CheckResult>("f6_verify_usb_boot_check", {
-        usbRoot: armResult.usbRoot,
-        nonceHex: armResult.nonceHex,
-      });
+      const result = await verifyUsbBoot.check(armResult.usbRoot, armResult.nonceHex);
       setCheckResult(result);
       setStage("checked");
       if (result.consumed) {

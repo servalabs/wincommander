@@ -2073,6 +2073,10 @@ export function useBackend() {
     setWinCommanderCalculatorShortcuts: (hidden: boolean) =>
       execute<{ status: string; itemsChanged: number; warnings?: string[] }>("Set-WinCommanderCalculatorShortcuts", { Hidden: hidden }),
     restartExplorer: () => execute("Restart-Explorer"),
+    /** Opens a file/folder path in Explorer via the Rust `open_path` command
+     *  (not a PowerShell dispatch — same underlying command every "Open in
+     *  Explorer" / "Open folder" button in the app should route through). */
+    openPath: (path: string) => execute("open_path", { path }),
 
     // Startup Manager
     getStartupItems: () => execute<{ items: StartupItem[] }>("Get-StartupItems"),

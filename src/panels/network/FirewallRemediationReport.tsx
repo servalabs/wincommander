@@ -6,7 +6,7 @@
 //     touches anything, and the path was never surfaced, leaving the most
 //     reassuring part of a destructive feature invisible.
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import useBackend from "../../hooks/useBackend";
 import { Button } from "../../components/ui/button";
 import { Icon } from "../../components/ui/icon";
 import { backupFolderOf } from "../../lib/firewallAuditCopy";
@@ -14,6 +14,7 @@ import { MaintenanceNotice } from "./MaintenanceNotice";
 import type { RemediationReport } from "./useFirewallAudit";
 
 export function FirewallRemediationReport({ report }: { report: RemediationReport }) {
+  const { openPath } = useBackend();
   const [copied, setCopied] = useState(false);
   const backupPath = report.backupPath;
 
@@ -65,9 +66,7 @@ export function FirewallRemediationReport({ report }: { report: RemediationRepor
             <Button
               variant="ghost"
               size="sm"
-              onClick={() =>
-                void invoke("open_path", { path: backupFolderOf(backupPath) }).catch(() => {})
-              }
+              onClick={() => void openPath(backupFolderOf(backupPath)).catch(() => {})}
             >
               <Icon icon="folder-open" />
               Open folder

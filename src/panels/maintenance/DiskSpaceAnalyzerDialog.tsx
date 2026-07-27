@@ -1,5 +1,4 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Classes, Dialog, Spinner, Icon, Button, Alert } from "@/components/ui/bp";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import useBackend from "../../hooks/useBackend";
@@ -381,7 +380,7 @@ function SquarifiedTreemap({ items, totalSize, onDrill, onOpen }: {
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode = "space", inline = false }: Props) {
-    const { runDiskScan, getDiskChildren, getLargeDiskItems, diskDeleteItem } = useBackend();
+    const { runDiskScan, getDiskChildren, getLargeDiskItems, diskDeleteItem, openPath: openPathBackend } = useBackend();
 
     // Tree state
     const [scanning, setScanning] = useState(diskAnalyzerSession.scanning);
@@ -542,8 +541,8 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
     }, [diskDeleteItem]);
 
     const openPath = useCallback(async (path: string) => {
-        try { await invoke("open_path", { path }); } catch { }
-    }, []);
+        try { await openPathBackend(path); } catch { }
+    }, [openPathBackend]);
 
     const openParentFolder = useCallback(async (path: string) => {
         const clean = path.replace(/\\+$/, "");

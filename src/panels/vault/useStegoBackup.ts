@@ -6,7 +6,6 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
 import useBackend from "../../hooks/useBackend";
 import { showSuccess, showError } from "../../utils/toast";
 import {
@@ -31,7 +30,7 @@ const CONTAINER_FILTER = [{ name: "Encrypted container", extensions: ["hc", "tc"
 export type StegoResult = { kind: "ok"; path: string } | { kind: "fail"; failure: StegoFailure } | null;
 
 export function useStegoBackup() {
-  const { createStegoMp4, extractStegoMp4, getWipeDriveList } = useBackend();
+  const { createStegoMp4, extractStegoMp4, getWipeDriveList, openPath } = useBackend();
 
   const [carrier, setCarrier] = useState("");
   const [outPath, setOutPath] = useState("");
@@ -158,6 +157,16 @@ export function useStegoBackup() {
     }
   };
 
+  const revealFolder = useCallback(async (path: string) => {
+    const normalized = path.replace(/\//g, "\\");
+    const cut = normalized.lastIndexOf("\\");
+    try {
+      await openPath(cut > 0 ? normalized.slice(0, cut) : normalized);
+    } catch {
+      // Explorer failing to launch is not worth interrupting the user over.
+    }
+  }, [openPath]);
+
   return {
     fields: { carrier, outPath, sizeRaw, sizeUnit, password, passwordConfirm, inPath, exOut },
     set: { setCarrier, setOutPath, setSizeRaw, setSizeUnit, setPassword, setPasswordConfirm, setInPath, setExOut },
@@ -205,14 +214,4 @@ function report(raw: string | undefined, operation: "create" | "extract"): Stego
   const failure = explainStegoFailure(raw ?? "", operation);
   showError(failure.headline);
   return failure;
-}
-
-async function revealFolder(path: string) {
-  const normalized = path.replace(/\//g, "\\");
-  const cut = normalized.lastIndexOf("\\");
-  try {
-    await invoke("open_path", { path: cut > 0 ? normalized.slice(0, cut) : normalized });
-  } catch {
-    // Explorer failing to launch is not worth interrupting the user over.
-  }
 }
