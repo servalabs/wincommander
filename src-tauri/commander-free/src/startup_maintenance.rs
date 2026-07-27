@@ -207,7 +207,12 @@ struct Signature {
 }
 
 #[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(windows)]
 fn read_signatures(paths: &[String]) -> Result<HashMap<String, Signature>, String> {
+    use std::os::windows::process::CommandExt;
+
     if paths.is_empty() {
         return Ok(HashMap::new());
     }
@@ -218,6 +223,9 @@ fn read_signatures(paths: &[String]) -> Result<HashMap<String, Signature>, Strin
             "WINCOMMANDER_STARTUP_SIGN_PATHS",
             serde_json::to_string(paths).map_err(|error| error.to_string())?,
         )
+        // KT: PowerShell is an implementation detail; never flash a console
+        // window while the desktop app performs a read-only signature check.
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
     {
         Ok(output) => output,
