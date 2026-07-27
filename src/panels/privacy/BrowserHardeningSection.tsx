@@ -245,16 +245,23 @@ export default function BrowserHardeningSection({ isAdvanced, searchQuery }: Bro
             <TabsList className="w-full flex-wrap justify-start">
               {detectedBrowsers?.map((browser) => (
                 <TabsTrigger key={browser.Name} value={browser.Name} className="gap-2">
-                  {resolveBrowserIconUrl(browser.Name, browserLogos) && (
-                    <img
-                      src={resolveBrowserIconUrl(browser.Name, browserLogos)}
-                      alt=""
-                      width={18}
-                      height={18}
-                      className="shrink-0 object-contain"
-                    />
-                  )}
-                  {browser.Name}
+                  {/* Tailwind's preflight sets img to display:block, which
+                      breaks it onto its own anonymous block box when it's a
+                      bare child alongside inline text — stacking the logo
+                      above the name instead of beside it. Wrapping both in
+                      one inline-flex row keeps them horizontal. */}
+                  <span className="inline-flex items-center gap-1.5">
+                    {resolveBrowserIconUrl(browser.Name, browserLogos) && (
+                      <img
+                        src={resolveBrowserIconUrl(browser.Name, browserLogos)}
+                        alt=""
+                        width={18}
+                        height={18}
+                        className="shrink-0 object-contain"
+                      />
+                    )}
+                    <span>{browser.Name}</span>
+                  </span>
                 </TabsTrigger>
               ))}
             </TabsList>

@@ -8,10 +8,12 @@ import { argus } from "../../hooks/useArgus";
 import { authAnomalyStatus, sessionMonitorStatus } from "../../hooks/monitorStatus";
 import ToggleSection from "../../components/shared/ToggleSection";
 import SectionCard from "../../components/shared/SectionCard";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { PRIVACY_SECTIONS, PRIVACY_TOGGLES } from "../../registry/privacy.toggles";
 import { CAPABILITY_SECTIONS, CAPABILITY_TOGGLES } from "../../registry/capabilities.toggles";
 import GlobalSearchNoResults from "../../components/shared/GlobalSearchNoResults";
 import { resolveToggleText, getByPath } from "../../types/toggles";
+import { usePrivacySessionState } from "./privacySessionState";
 import BrowserHardeningSection from "./BrowserHardeningSection";
 import PrivacyShieldCard from "./PrivacyShieldCard";
 import ScreenCaptureSection from "./ScreenCaptureSection";
@@ -56,6 +58,16 @@ export default function PrivacyPanel() {
     // so the section keeps its Guided wording — only its presence changes.
     const showExpertPrivacy = density === "expert" || tourActive;
     const showMonitoring = visibility.isVisible({ capability: ["monitoring"] }) || showExpertPrivacy;
+
+    const [activeTab, setActiveTab] = usePrivacySessionState("privacy.active-tab", "tracking");
+
+    // The guide tour anchors three in-panel steps (Browser Hardening, Privacy
+    // Shield, RDP Idle) inside the Monitor tab. Tabs unmount inactive content,
+    // so without forcing the tab here the anchors never mount and the tour
+    // silently stalls on whichever tab the user last had open.
+    useEffect(() => {
+        if (tourActive) setActiveTab("monitor");
+    }, [tourActive, setActiveTab]);
 
     const privacyToggles = PRIVACY_TOGGLES;
 
@@ -251,112 +263,128 @@ export default function PrivacyPanel() {
                     </div>
                 )}
 
-                {showPrivacyControls && (
-                    <ToggleSection
-                        section={{
-                            ...PRIVACY_SECTIONS[0],
-                            title: isAdvanced ? PRIVACY_SECTIONS[0].title : "Privacy basics",
-                        }}
-                        toggles={privacyToggles}
-                        gridClassName="privacy-3col-grid privacy-compact-grid"
-                        searchQuery={searchQuery}
-                    />
-                )}
+                <Tabs value={activeTab} onValueChange={setActiveTab}>
+                    <TabsList className="w-full flex-wrap justify-start">
+                        {showPrivacyControls && <TabsTrigger value="tracking">Privacy &amp; Tracking</TabsTrigger>}
+                        {showPrivacyControls && <TabsTrigger value="capabilities">App Capabilities</TabsTrigger>}
+                        {showMonitoring && <TabsTrigger value="monitor">Monitor</TabsTrigger>}
+                    </TabsList>
 
-                {showExpertPrivacy && (
-                    <BrowserHardeningSection
-                        isAdvanced={isAdvanced}
-                        searchQuery={searchQuery}
-                    />
-                )}
+                    {showPrivacyControls && (
+                        <TabsContent value="tracking">
+                            <ToggleSection
+                                section={{
+                                    ...PRIVACY_SECTIONS[0],
+                                    title: isAdvanced ? PRIVACY_SECTIONS[0].title : "Privacy basics",
+                                }}
+                                toggles={privacyToggles}
+                                gridClassName="privacy-3col-grid privacy-compact-grid"
+                                searchQuery={searchQuery}
+                            />
+                        </TabsContent>
+                    )}
 
-                {showPrivacyControls && (
-                    <ToggleSection
-                        section={{
-                            ...CAPABILITY_SECTIONS[0],
-                            title: isAdvanced ? CAPABILITY_SECTIONS[0].title : "App permissions",
-                        }}
-                        toggles={CAPABILITY_TOGGLES}
-                        gridClassName="privacy-compact-grid capability-grid"
-                        searchQuery={searchQuery}
-                    />
-                )}
+                    {showPrivacyControls && (
+                        <TabsContent value="capabilities">
+                            <ToggleSection
+                                section={{
+                                    ...CAPABILITY_SECTIONS[0],
+                                    title: isAdvanced ? CAPABILITY_SECTIONS[0].title : "App permissions",
+                                }}
+                                toggles={CAPABILITY_TOGGLES}
+                                gridClassName="privacy-compact-grid capability-grid"
+                                searchQuery={searchQuery}
+                            />
+                        </TabsContent>
+                    )}
 
-                {showMonitoring && monitoringMatchesSearch && (
-                    <SectionCard title="Alerts & Monitoring">
-                        {/* Top row — Privacy Shield (left) and RDP Idle (right)
-                          * sit side-by-side as the headline monitoring controls. */}
-                        <div className="privacy-monitor-toprow">
-                            <PrivacyShieldCard />
-                            <div data-tour="privacy-rdp-idle">
-                                <RdpIdleCard />
-                            </div>
-                        </div>
+                    {showMonitoring && (
+                        <TabsContent value="monitor" className="flex flex-col gap-4">
+                            {showExpertPrivacy && (
+                                <BrowserHardeningSection
+                                    isAdvanced={isAdvanced}
+                                    searchQuery={searchQuery}
+                                />
+                            )}
 
-                        {/* Keep monitor ordering stable. The previous expanded-card
-                          * reflow moved cards between columns, which left large blank
-                          * areas and made controls appear to jump around. */}
-                        <div className="panel-grid privacy-monitoring-grid" style={{ marginTop: 12 }}>
-                            <div className="privacy-monitor-cell">
-                                <ScreenCaptureSection
-                                    detectionEnabled={screenCaptureDetectionEnabled}
-                                    protectWindow={screenCaptureProtectWindow}
-                                    onPatch={patchScreenCapture}
-                                />
-                            </div>
-                            <div className="privacy-monitor-cell">
-                                <DecoyMonitorSection
-                                    isAdvanced={isAdvanced}
-                                    searchQuery=""
-                                    enabled={decoyEnabled}
-                                    enrolledPaths={decoyEnrolledPaths}
-                                    onPatchDecoy={patchDecoy}
-                                />
-                            </div>
-                            <div className="privacy-monitor-cell">
-                                <RemoteAccessMonitorSection
-                                    isAdvanced={isAdvanced}
-                                    searchQuery=""
-                                    enabled={remoteAccessEnabled}
-                                    toolOverrides={remoteAccessTools}
-                                    onPatch={patchRemoteAccess}
-                                />
-                            </div>
-                            <div className="privacy-monitor-cell"><MonitoringMirrorSection /></div>
-                            <div className="privacy-monitor-cell"><ArgusDlpSection /></div>
-                            <div className="privacy-monitor-cell"><ArgusTamperSection /></div>
-                            <div className="privacy-monitor-cell"><ArgusPrintUsbSection /></div>
-                            <div className="privacy-monitor-cell"><CanaryTokensSection /></div>
-                            <div className="privacy-monitor-cell"><UsbDevicesSection /></div>
-                            <div className="privacy-monitor-cell">
-                                <PasteMonitorSection
-                                    isAdvanced={isAdvanced}
-                                    searchQuery=""
-                                    enabled={pasteMonitorEnabled}
-                                    categories={pasteMonitorCategories}
-                                    cryptoSwapEnabled={pasteCryptoSwapEnabled}
-                                    autoClearEnabled={pasteAutoClearEnabled}
-                                    autoClearSeconds={pasteAutoClearSeconds}
-                                    autoClearOnLock={pasteAutoClearOnLock}
-                                    onPatchClipboard={patchClipboard}
-                                />
-                            </div>
-                            <div className="privacy-monitor-cell">
-                                <RansomwareMonitorSection
-                                    isAdvanced={isAdvanced}
-                                    searchQuery=""
-                                    enabled={ransomwareEnabled}
-                                    threshold={ransomwareThreshold}
-                                    windowSeconds={ransomwareWindowSeconds}
-                                    customWatchDirs={ransomwareCustomDirs}
-                                    action={ransomwareAction}
-                                    onPatchRansomware={patchRansomware}
-                                />
-                            </div>
-                            <div className="privacy-monitor-cell"><PrintActivitySection /></div>
-                        </div>
-                    </SectionCard>
-                )}
+                            {monitoringMatchesSearch && (
+                                <SectionCard title="Alerts & Monitoring">
+                                    {/* Top row — Privacy Shield (left) and RDP Idle (right)
+                                      * sit side-by-side as the headline monitoring controls. */}
+                                    <div className="privacy-monitor-toprow">
+                                        <PrivacyShieldCard />
+                                        <div data-tour="privacy-rdp-idle">
+                                            <RdpIdleCard />
+                                        </div>
+                                    </div>
+
+                                    {/* Keep monitor ordering stable. The previous expanded-card
+                                      * reflow moved cards between columns, which left large blank
+                                      * areas and made controls appear to jump around. */}
+                                    <div className="panel-grid privacy-monitoring-grid" style={{ marginTop: 12 }}>
+                                        <div className="privacy-monitor-cell">
+                                            <ScreenCaptureSection
+                                                detectionEnabled={screenCaptureDetectionEnabled}
+                                                protectWindow={screenCaptureProtectWindow}
+                                                onPatch={patchScreenCapture}
+                                            />
+                                        </div>
+                                        <div className="privacy-monitor-cell">
+                                            <DecoyMonitorSection
+                                                isAdvanced={isAdvanced}
+                                                searchQuery=""
+                                                enabled={decoyEnabled}
+                                                enrolledPaths={decoyEnrolledPaths}
+                                                onPatchDecoy={patchDecoy}
+                                            />
+                                        </div>
+                                        <div className="privacy-monitor-cell">
+                                            <RemoteAccessMonitorSection
+                                                isAdvanced={isAdvanced}
+                                                searchQuery=""
+                                                enabled={remoteAccessEnabled}
+                                                toolOverrides={remoteAccessTools}
+                                                onPatch={patchRemoteAccess}
+                                            />
+                                        </div>
+                                        <div className="privacy-monitor-cell"><MonitoringMirrorSection /></div>
+                                        <div className="privacy-monitor-cell"><ArgusDlpSection /></div>
+                                        <div className="privacy-monitor-cell"><ArgusTamperSection /></div>
+                                        <div className="privacy-monitor-cell"><ArgusPrintUsbSection /></div>
+                                        <div className="privacy-monitor-cell"><CanaryTokensSection /></div>
+                                        <div className="privacy-monitor-cell"><UsbDevicesSection /></div>
+                                        <div className="privacy-monitor-cell">
+                                            <PasteMonitorSection
+                                                isAdvanced={isAdvanced}
+                                                searchQuery=""
+                                                enabled={pasteMonitorEnabled}
+                                                categories={pasteMonitorCategories}
+                                                cryptoSwapEnabled={pasteCryptoSwapEnabled}
+                                                autoClearEnabled={pasteAutoClearEnabled}
+                                                autoClearSeconds={pasteAutoClearSeconds}
+                                                autoClearOnLock={pasteAutoClearOnLock}
+                                                onPatchClipboard={patchClipboard}
+                                            />
+                                        </div>
+                                        <div className="privacy-monitor-cell">
+                                            <RansomwareMonitorSection
+                                                isAdvanced={isAdvanced}
+                                                searchQuery=""
+                                                enabled={ransomwareEnabled}
+                                                threshold={ransomwareThreshold}
+                                                windowSeconds={ransomwareWindowSeconds}
+                                                customWatchDirs={ransomwareCustomDirs}
+                                                action={ransomwareAction}
+                                                onPatchRansomware={patchRansomware}
+                                            />
+                                        </div>
+                                        <div className="privacy-monitor-cell"><PrintActivitySection /></div>
+                                    </div>
+                                </SectionCard>
+                            )}
+                        </TabsContent>
+                    )}
+                </Tabs>
 
                 {/* Calculator Mode moved to the Secret Settings panel (2026-06-12). */}
 

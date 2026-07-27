@@ -375,7 +375,7 @@ export default function CanaryTokensSection() {
             <div className="text-sm opacity-60">No tokens generated yet.</div>
           )}
           {tokens.length > 0 && (
-            <div className="flex flex-col gap-1 max-h-[220px] overflow-y-auto">
+            <div className="grid grid-cols-2 gap-2 max-h-[220px] overflow-y-auto">
               {tokens.map((t) => (
                 <div
                   key={t.id}
