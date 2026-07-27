@@ -260,4 +260,74 @@ export const RULE_TEMPLATES: RuleTemplate[] = [
       };
     },
   },
+  {
+    key: "usb-inserted-notify",
+    name: "USB inserted → Notify",
+    blurb: "Get a heads-up the moment any USB device is plugged in.",
+    build(): Rule {
+      return {
+        ...emptyRule(),
+        id: newRuleId(),
+        name: "USB inserted → Notify",
+        triggers: [{ type: "USBTrigger", mode: "insert" }],
+        conditions: [],
+        actions: [{ type: "NotifyAction", message: "USB device inserted", severity: "info" }],
+        notes: "Showcase rule: USB insert → notification.",
+      };
+    },
+  },
+  {
+    key: "rogue-wifi-notify",
+    name: "Rogue Wi-Fi detected → Notify",
+    blurb: "Wi-Fi Guard spots a new access point or a downgraded connection to a trusted network — get notified immediately.",
+    build(): Rule {
+      return {
+        ...emptyRule(),
+        id: newRuleId(),
+        name: "Rogue Wi-Fi detected → Notify",
+        triggers: [{ type: "WifiGuardTrigger" }],
+        conditions: [],
+        actions: [{ type: "NotifyAction", message: "Rogue Wi-Fi access point detected", severity: "warning" }],
+        notes: "Showcase rule: WifiGuard fire → notification.",
+      };
+    },
+  },
+  {
+    key: "ransomware-signal-admins",
+    name: "Ransomware activity → Notify + signal admins",
+    blurb: "Mass-encryption activity trips the Ransomware Monitor — notify this device and signal fleet admins in the same beat.",
+    build(): Rule {
+      return {
+        ...emptyRule(),
+        id: newRuleId(),
+        name: "Ransomware activity → Notify + signal admins",
+        triggers: [{ type: "RansomwareMonitorTrigger" }],
+        conditions: [],
+        actions: [
+          { type: "NotifyAction", message: "Ransomware activity detected", severity: "danger" },
+          { type: "SignalAction", targetRole: "admins", signalType: "distress" },
+        ],
+        notes: "Showcase rule: ransomware monitor fire → notify + signal admins.",
+      };
+    },
+  },
+  {
+    key: "decoy-signal-admins",
+    name: "Decoy file accessed → Notify + signal admins",
+    blurb: "Someone touched a honeypot file — notify this device and signal fleet admins right away.",
+    build(): Rule {
+      return {
+        ...emptyRule(),
+        id: newRuleId(),
+        name: "Decoy file accessed → Notify + signal admins",
+        triggers: [{ type: "DecoyMonitorTrigger" }],
+        conditions: [],
+        actions: [
+          { type: "NotifyAction", message: "Decoy file accessed", severity: "danger" },
+          { type: "SignalAction", targetRole: "admins", signalType: "distress" },
+        ],
+        notes: "Showcase rule: decoy monitor fire → notify + signal admins.",
+      };
+    },
+  },
 ];
