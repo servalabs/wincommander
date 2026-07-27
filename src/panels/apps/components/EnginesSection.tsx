@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Button, Icon, Spinner } from "@/components/ui/bp";
 import { cn } from "../../../lib/utils";
 import { executeBackendCommand } from "../../../hooks/useBackend";
@@ -127,8 +127,18 @@ function EngineCard({ dep, importance, isBusy, onInstall }: CardProps) {
   );
 }
 
+// Packages & Apps is itself built on winget — listing "Package Manager" as
+// just another optional engine card here reads as redundant/circular, so it's
+// excluded from this grid. It's still a real dependency elsewhere (DependencyGate,
+// Install-Dependency, etc.) — only this display is filtered.
+const HIDDEN_FROM_ENGINES_GRID = new Set(["winget"]);
+
 export default function EnginesSection() {
-  const { dependencyStatus, forceRefreshDeps, runAppInventoryScan } = useAppState();
+  const { dependencyStatus: allDependencyStatus, forceRefreshDeps, runAppInventoryScan } = useAppState();
+  const dependencyStatus = useMemo(
+    () => allDependencyStatus?.filter((d) => !HIDDEN_FROM_ENGINES_GRID.has(d.id)) ?? null,
+    [allDependencyStatus]
+  );
   const [installingIds, setInstallingIds] = useState<Set<string>>(new Set());
   const [installingAll, setInstallingAll] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
