@@ -12,6 +12,7 @@ import PanelHeader from "@/components/shared/PanelHeader";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Icon } from "@/components/ui/icon";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import useEntitlements from "@/hooks/useEntitlements";
 import { useFlowsV2 } from "@/hooks/useFlowsV2";
 import { useSettingsQuery } from "@/hooks/queries/useSettingsQuery";
@@ -26,12 +27,39 @@ import {
 } from "./rules";
 import "./index.css";
 
+function TemplateGrid({ onSelect }: { onSelect: (rule: Rule) => void }) {
+  return (
+    <div className="flows-templates__grid">
+      {RULE_TEMPLATES.map((t) => (
+        <button
+          key={t.key}
+          type="button"
+          className="flows-template"
+          onClick={() => onSelect(t.build())}
+        >
+          <span className="flows-template__name">{t.name}</span>
+          <span className="flows-template__blurb">{t.blurb}</span>
+          <span className="flows-template__cta">
+            <Icon icon="plus" size={12} /> Use template
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function FlowsPanel() {
   const { hasPaid } = useEntitlements();
   const { rules, commands, loading, error, log, saveRule, deleteRule, setEnabled, fireNow } = useFlowsV2(hasPaid);
   const { data: settings } = useSettingsQuery();
   const [editing, setEditing] = useState<Rule | null>(null);
+  const [showTemplates, setShowTemplates] = useState(false);
   const settingOptions = useMemo(() => buildFlowSettingOptions(settings), [settings]);
+
+  const chooseTemplate = (rule: Rule) => {
+    setEditing(rule);
+    setShowTemplates(false);
+  };
 
   const sorted = useMemo(
     () => [...rules].sort((a, b) => Number(isFleetLocked(a)) - Number(isFleetLocked(b))),
@@ -49,9 +77,14 @@ export default function FlowsPanel() {
           panelId="flows"
         />
         {hasPaid && (
-          <Button className="flows-panel__new" onClick={() => setEditing(emptyRule())}>
-            <Icon icon="plus" size={14} /> New flow
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setShowTemplates(true)}>
+              <Icon icon="layout-grid" size={14} /> Browse templates
+            </Button>
+            <Button className="flows-panel__new" onClick={() => setEditing(emptyRule())}>
+              <Icon icon="plus" size={14} /> New flow
+            </Button>
+          </div>
         )}
       </div>
 
@@ -70,22 +103,7 @@ export default function FlowsPanel() {
           {rules.length === 0 && !loading && (
             <div className="flows-templates">
               <p className="flows-templates__lead">Start from a template:</p>
-              <div className="flows-templates__grid">
-                {RULE_TEMPLATES.map((t) => (
-                  <button
-                    key={t.key}
-                    type="button"
-                    className="flows-template"
-                    onClick={() => setEditing(t.build())}
-                  >
-                    <span className="flows-template__name">{t.name}</span>
-                    <span className="flows-template__blurb">{t.blurb}</span>
-                    <span className="flows-template__cta">
-                      <Icon icon="plus" size={12} /> Use template
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <TemplateGrid onSelect={chooseTemplate} />
             </div>
           )}
 
@@ -167,6 +185,19 @@ export default function FlowsPanel() {
             </div>
           )}
         </>
+      )}
+
+      {showTemplates && (
+        <Dialog open onOpenChange={(o) => !o && setShowTemplates(false)}>
+          <DialogContent className="flow-editor">
+            <DialogHeader>
+              <DialogTitle>Browse templates</DialogTitle>
+            </DialogHeader>
+            <div className="flow-editor__body">
+              <TemplateGrid onSelect={chooseTemplate} />
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {editing && (
