@@ -11,6 +11,7 @@ import {
   type FirewallOutcome,
 } from "../../lib/firewallAuditView";
 import type { ErrorAdvice } from "../../lib/arpDiagnostics";
+import { useNetworkSessionState } from "./networkSessionState";
 
 export interface RemediationReport {
   action: FirewallAction;
@@ -28,8 +29,12 @@ export function useFirewallAudit() {
   const backendRef = useRef(backend);
   backendRef.current = backend;
 
-  const [audit, setAudit] = useState<FirewallAudit>();
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // audit/selected live in the cross-tab/cross-navigation session-state map
+  // (not useState): switching away from the Diagnostics tab unmounts this
+  // hook, and a plain useState would force a re-audit every time the user
+  // came back — see networkSessionState.ts.
+  const [audit, setAudit] = useNetworkSessionState<FirewallAudit | undefined>("network.firewall.audit", undefined);
+  const [selected, setSelected] = useNetworkSessionState<Set<string>>("network.firewall.selected", new Set());
   const [auditing, setAuditing] = useState(false);
   const [applying, setApplying] = useState<FirewallAction | null>(null);
   const [error, setError] = useState<ErrorAdvice>();

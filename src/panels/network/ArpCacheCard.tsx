@@ -56,7 +56,12 @@ export function ArpCacheCard({ arp }: { arp: ReturnType<typeof useArpMaintenance
               Neighbour cache (ARP)
               <InfoTip
                 label="What the neighbour cache is"
-                content="Windows' short-term map of which IP address belongs to which piece of hardware on this network. Every PC keeps one; it is not a setting you configure."
+                content={
+                  <span>
+                    <strong>What it is:</strong> Windows' short-term map of which IP address
+                    belongs to which device on this network — not a setting you configure.
+                  </span>
+                }
               />
             </CardTitle>
             <CardDescription className="mt-1">
@@ -92,22 +97,26 @@ export function ArpCacheCard({ arp }: { arp: ReturnType<typeof useArpMaintenance
             ) : null}
             <InfoPopover title="Neighbour cache (ARP)">
               <p>
-                Before this PC can send a packet to another device on the same network it has to know
-                that device's hardware (MAC) address. It asks once, then remembers the answer here.
-                That remembered list is the ARP cache — also called the neighbour cache.
+                <strong className="text-[var(--text)]">What it is:</strong> before this PC can talk
+                to another device on the network it asks for that device's hardware (MAC) address
+                once and remembers the answer — that memory is the ARP cache.
               </p>
               <p>
-                <strong className="text-[var(--text)]">Learned</strong> entries were discovered
-                automatically and expire on their own.{" "}
-                <strong className="text-[var(--text)]">Static</strong> entries are Windows' own
-                multicast and broadcast plumbing and are never removed.
+                <strong className="text-[var(--text)]">Learned:</strong> discovered automatically;
+                expires on its own.
               </p>
               <p>
-                Clearing the learned entries is safe and self-healing — Windows re-asks and rebuilds
-                the list within seconds. It is worth doing when a device is stuck on an old IP after
-                a router swap, when Windows reports a duplicate IP, or when one machine on the
-                network is unreachable while the internet still works. Live connections may pause for
-                a moment while the list rebuilds.
+                <strong className="text-[var(--text)]">Static:</strong> Windows' own multicast and
+                broadcast plumbing — never removed, never touched by Clear.
+              </p>
+              <p>
+                <strong className="text-[var(--text)]">When to clear:</strong> a device stuck on an
+                old IP after a router swap, a reported duplicate IP, or one machine unreachable while
+                the internet still works.
+              </p>
+              <p>
+                <strong className="text-[var(--text)]">Safe to clear:</strong> self-healing — Windows
+                re-asks and rebuilds within seconds; live connections may pause for a moment.
               </p>
             </InfoPopover>
           </div>

@@ -39,7 +39,14 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
               Firewall audit
               <InfoTip
                 label="What this audit looks for"
-                content="Third-party firewall rules that either let traffic through for everything, or are switched off when they were meant to block something. Windows, Microsoft, Defender and WinCommander rules are never listed or changed."
+                content={
+                  <span>
+                    <strong>What it flags:</strong> third-party rules that allow all traffic, or
+                    are switched off when they should be blocking something.{" "}
+                    <strong>Never touched:</strong> Windows, Microsoft, Defender, and WinCommander's
+                    own rules.
+                  </span>
+                }
               />
             </CardTitle>
             <CardDescription className="mt-1">
@@ -56,25 +63,24 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
             ) : null}
             <InfoPopover title="Firewall audit">
               <p>
-                A firewall rule tells Windows to allow or block a particular kind of network traffic.
-                Installers add them freely, and nothing ever cleans them up, so a typical PC
-                accumulates rules nobody remembers approving.
+                <strong className="text-[var(--text)]">What it flags:</strong> rules that allow
+                traffic for every program, and rules meant to block something but switched off — a
+                disabled block rule is protection that silently stopped working.
               </p>
               <p>
-                This audit lists only the ones that deserve a look:{" "}
-                <strong className="text-[var(--text)]">rules that allow traffic</strong> (especially
-                the ones that apply to every program rather than one executable) and{" "}
-                <strong className="text-[var(--text)]">rules that are switched off</strong> — a
-                disabled block rule is protection that silently stopped working. Rules belonging to
-                Windows, Microsoft, Defender or WinCommander itself are excluded and can never be
-                touched from here.
+                <strong className="text-[var(--text)]">Never touched:</strong> rules belonging to
+                Windows, Microsoft, Defender, or WinCommander itself are excluded and can never be
+                changed from here.
               </p>
               <p>
-                Prefer <strong className="text-[var(--text)]">Disable</strong> over{" "}
-                <strong className="text-[var(--text)]">Remove</strong>: disabling is reversible with
-                one click, removing is not. Either way, WinCommander exports a complete firewall
-                backup (<span className="font-[family-name:var(--font-mono)]">.wfw</span>) before it
-                changes anything, so the whole rule set can be restored.
+                <strong className="text-[var(--text)]">Disable vs. Remove:</strong> disabling is
+                reversible with one click; removing is not — prefer Disable.
+              </p>
+              <p>
+                <strong className="text-[var(--text)]">Backup first:</strong> WinCommander exports a
+                complete firewall backup (
+                <span className="font-[family-name:var(--font-mono)]">.wfw</span>) before it changes
+                anything, so the whole rule set can be restored.
               </p>
             </InfoPopover>
           </div>

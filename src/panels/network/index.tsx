@@ -17,6 +17,8 @@ import { BLOCKLISTS, blocklistBackendId } from "../../registry/features";
 import { DNS_CATEGORIES, DNS_CATEGORY_DEFAULT_IDS, buildControldSlug, parseControldSlug } from "../../registry/dnsCategories";
 import { blocklistLogos, companyLogos, software } from "@/assets";
 import PanelHeader from "../../components/shared/PanelHeader";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { useNetworkSessionState } from "./networkSessionState";
 import './index.css';
 
 // Free tier is capped at this many ControlD Simple-Firewall categories.
@@ -1282,15 +1284,38 @@ function NetworkSecurityControls() {
     );
 }
 
-// ─── Panel ────────────────────────────────────────────────────────────────────
+// ─── Tab: Ports & connections ─────────────────────────────────────────────────
 
-function NetworkPanel() {
+function PortsAndConnectionsTab() {
     const visibility = useVisibility();
+    const showActivePorts = visibility.isVisible({ minDensity: "expert", capability: ["network"] });
+
+    return (
+        <div className="network-panel-sections">
+            <div className="network-control-row network-control-row--active">
+                <div className="ncr-main">
+                    <PortGuardSection />
+                </div>
+            </div>
+
+            {showActivePorts && (
+                <div className="network-control-row network-control-row--active">
+                    <div className="ncr-main">
+                        <ActivePorts />
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ─── Tab: Adapters & Wi-Fi Guard ───────────────────────────────────────────────
+
+function AdaptersAndWifiGuardTab() {
     const { getPhysicalNetworkAdapters, setAdapterRandomMAC, restoreAdapterMAC } = useBackend();
 
-    const showNetwork = visibility.isVisible({ capability: ["network"] });
-
-    // Adapter state
+    // Adapter state — lives here (not at the panel level) since nothing outside
+    // this tab needs it.
     const [adapters, setAdapters] = useState<PhysicalNetworkAdapter[] | null>(null);
     const [adaptersLoading, setAdaptersLoading] = useState(false);
     const [adapterBusyId, setAdapterBusyId] = useState<string | null>(null);
@@ -1331,6 +1356,63 @@ function NetworkPanel() {
     }, [restoreAdapterMAC, setAdapterRandomMAC, refreshAdapters]);
 
     return (
+        <SectionCard
+            title={"Adapters & Wi-Fi Guard"}
+            icon="globe-network"
+            className="ncr-stretch-card"
+        >
+            <div className="merged-adapters-wifi-guard">
+                {/* Segment 1 — Adapters. Shown to every density (was
+                    expert-only) — MAC randomization is a useful privacy
+                    control for Guided users too, not just power users. */}
+                <section className="merged-segment merged-segment--adapters">
+                    <header className="merged-segment__header">
+                        <Icon icon="globe-network" size={11} />
+                        <span className="merged-segment__title">Network Adapters</span>
+                        <span className="merged-segment__count">
+                            {adapters ? `${(adapters ?? []).filter(a => a.status === 'Up').length} up` : '—'}
+                        </span>
+                    </header>
+                    <p className="merged-segment__blurb">
+                        Randomize a MAC address so the adapter can't be tracked by hardware ID.
+                    </p>
+                    <div className="merged-segment__body">
+                        <AdaptersList
+                            adapters={adapters}
+                            adaptersLoading={adaptersLoading}
+                            adapterBusyId={adapterBusyId}
+                            modeOverrides={modeOverrides}
+                            showInactiveAdapters={showInactiveAdapters}
+                            onModeChange={handleAdapterModeChange}
+                            onShowInactiveToggle={setShowInactiveAdapters}
+                            embedded
+                        />
+                    </div>
+                </section>
+                {/* Segment 2 — Wi-Fi Guard (fake hotspot / rogue AP detector) */}
+                <section className="merged-segment merged-segment--wifi">
+                    <div className="merged-segment__body">
+                        <WifiGuardSection embedded />
+                    </div>
+                </section>
+            </div>
+        </SectionCard>
+    );
+}
+
+// ─── Panel ────────────────────────────────────────────────────────────────────
+
+function NetworkPanel() {
+    const visibility = useVisibility();
+    const showNetwork = visibility.isVisible({ capability: ["network"] });
+    // Default tab is 'dns' (DNS & blocklists) — a guide-tour step anchors
+    // data-tour="network-security-controls" (inside NetworkSecurityControls,
+    // rendered by this tab) with no openEvent, so it must be visible the
+    // instant the panel mounts or the tour polls for an anchor that never
+    // appears. See content/guide/topics.ts: network-tour-security-controls.
+    const [activeTab, setActiveTab] = useNetworkSessionState("network.active-tab", "dns");
+
+    return (
         <div className="h-full flex flex-col items-start">
             <div className="w-full max-w-7xl p-6 network-panel-stack">
                 <PanelHeader
@@ -1339,76 +1421,26 @@ function NetworkPanel() {
                     description="See and control what your PC talks to — DNS, firewall rules, blocklists, and saved Wi-Fi networks."
                 />
 
-                <div className="network-panel-sections">
-                    <NetworkSecurityControls />
+                <Tabs value={activeTab} onValueChange={setActiveTab}>
+                    <TabsList className="w-full flex-wrap justify-start">
+                        <TabsTrigger value="dns">DNS &amp; blocklists</TabsTrigger>
+                        {showNetwork && <TabsTrigger value="ports">Ports &amp; connections</TabsTrigger>}
+                        {showNetwork && <TabsTrigger value="adapters">Adapters &amp; Wi-Fi Guard</TabsTrigger>}
+                        {showNetwork && <TabsTrigger value="diagnostics">Diagnostics &amp; audit</TabsTrigger>}
+                    </TabsList>
+                    <TabsContent value="dns"><NetworkSecurityControls /></TabsContent>
+                    {showNetwork && (
+                        <TabsContent value="ports"><PortsAndConnectionsTab /></TabsContent>
+                    )}
+                    {showNetwork && (
+                        <TabsContent value="adapters"><AdaptersAndWifiGuardTab /></TabsContent>
+                    )}
+                    {showNetwork && (
+                        <TabsContent value="diagnostics"><NetworkMaintenanceTools /></TabsContent>
+                    )}
+                </Tabs>
 
-                    {showNetwork && <NetworkMaintenanceTools />}
-
-                    {/* Row 1: Port Watch (75% left) | Adapters + Wi-Fi Guard merged (25% right) */}
-                    <div className="network-control-row network-control-row--port">
-                        {showNetwork && (
-                            <div className="ncr-main">
-                                <PortGuardSection />
-                            </div>
-                        )}
-                        {showNetwork && (
-                            <div className="ncr-side">
-                                <SectionCard
-                                    title={"Adapters & Wi-Fi Guard"}
-                                    icon="globe-network"
-                                    className="ncr-stretch-card"
-                                >
-                                    <div className="merged-adapters-wifi-guard">
-                                        {/* Segment 1 — Adapters. Shown to every density (was
-                                            expert-only) — MAC randomization is a useful privacy
-                                            control for Guided users too, not just power users. */}
-                                        <section className="merged-segment merged-segment--adapters">
-                                            <header className="merged-segment__header">
-                                                <Icon icon="globe-network" size={11} />
-                                                <span className="merged-segment__title">Network Adapters</span>
-                                                <span className="merged-segment__count">
-                                                    {adapters ? `${(adapters ?? []).filter(a => a.status === 'Up').length} up` : '—'}
-                                                </span>
-                                            </header>
-                                            <p className="merged-segment__blurb">
-                                                Randomize a MAC address so the adapter can't be tracked by hardware ID.
-                                            </p>
-                                            <div className="merged-segment__body">
-                                                <AdaptersList
-                                                    adapters={adapters}
-                                                    adaptersLoading={adaptersLoading}
-                                                    adapterBusyId={adapterBusyId}
-                                                    modeOverrides={modeOverrides}
-                                                    showInactiveAdapters={showInactiveAdapters}
-                                                    onModeChange={handleAdapterModeChange}
-                                                    onShowInactiveToggle={setShowInactiveAdapters}
-                                                    embedded
-                                                />
-                                            </div>
-                                        </section>
-                                        {/* Segment 2 — Wi-Fi Guard (fake hotspot / rogue AP detector) */}
-                                        <section className="merged-segment merged-segment--wifi">
-                                            <div className="merged-segment__body">
-                                                <WifiGuardSection embedded />
-                                            </div>
-                                        </section>
-                                    </div>
-                                </SectionCard>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Row 2: Active Ports */}
-                    <div className="network-control-row network-control-row--active">
-                        {visibility.isVisible({ minDensity: "expert", capability: ["network"] }) && (
-                            <div className="ncr-main">
-                                <ActivePorts />
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="h-12"></div>
-                </div>
+                <div className="h-12"></div>
             </div>
         </div>
     );

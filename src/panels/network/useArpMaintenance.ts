@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBackend, type ArpClearResult, type ArpScan } from "../../hooks/useBackend";
 import { ARP_SCAN_TTL_MS, classifyArpError, type ErrorAdvice } from "../../lib/arpDiagnostics";
+import { useNetworkSessionState } from "./networkSessionState";
 
 /** How often the age readout re-evaluates. The server-side snapshot expires at
  *  ARP_SCAN_TTL_MS, so the UI has to notice on its own — the user gets no event. */
@@ -10,8 +11,12 @@ export function useArpMaintenance() {
   const backend = useBackend();
   const backendRef = useRef(backend);
   backendRef.current = backend;
-  const [scan, setScan] = useState<ArpScan>();
-  const [scannedAt, setScannedAt] = useState<number>();
+  // scan/scannedAt live in the cross-tab/cross-navigation session-state map
+  // (not useState): switching away from the Diagnostics tab unmounts this
+  // hook, and a plain useState would force a rescan every time the user came
+  // back — see networkSessionState.ts.
+  const [scan, setScan] = useNetworkSessionState<ArpScan | undefined>("network.arp.scan", undefined);
+  const [scannedAt, setScannedAt] = useNetworkSessionState<number | undefined>("network.arp.scannedAt", undefined);
   const [result, setResult] = useState<ArpClearResult>();
   const [inspecting, setInspecting] = useState(false);
   const [clearing, setClearing] = useState(false);

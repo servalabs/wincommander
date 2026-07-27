@@ -1758,67 +1758,26 @@ html.light .blocklist-count {
     color: var(--color-text-secondary);
 }
 
-/* ─── Network control: 2-row asymmetric layout ─────────────────────
-   Row 1: Port Watch & Firewall (65% left)   | Adapters + Evil-Twin (35% right)
-   Row 2: Encrypted DNS (35% left) | Active Ports        (65% right)
-   Owner 2026-06-11: shifted 10% from the main columns into the side
-   columns so the dense secondary cards (Adapters/Evil-Twin + DNS
-   provider grid) read properly. */
+/* ─── Network control: single-column tab rows ───────────────────────
+   Each tab now hosts at most one card per row (Port Watch and Active
+   Ports moved to separate tabs from the merged Adapters/Wi-Fi Guard
+   card), so the former --port 13fr/7fr split has no remaining use —
+   removed along with the .ncr-side wrapper it justified. */
 .network-control-row {
     display: grid;
     gap: 24px;
 }
 
-/* Row 1: Port Watch and the merged Adapters/Rogue AP card stretch to equal height. */
-.network-control-row--port {
-    grid-template-columns: 13fr 7fr;
-    align-items: start;
-}
-
-/* Row 2: DNS and Active Ports stretch to equal height. */
 .network-control-row--active {
     grid-template-columns: 1fr;
     align-items: stretch;
 }
 
-.network-control-row .ncr-main,
-.network-control-row .ncr-side {
+.network-control-row .ncr-main {
     display: flex;
     flex-direction: column;
     gap: 16px;
     min-width: 0;
-}
-
-/* Port row: each card stretches to match the row's tallest sibling, so
-   the asymmetric grid never leaves a gap below the shorter card. */
-.network-control-row--port .ncr-main > .section-card,
-.network-control-row--port .ncr-side > .section-card {
-    height: auto;
-    min-height: 0;
-}
-
-/* Port row inner Blueprint Collapse scrolls internally when content exceeds
-   the cap. The 720 px ceiling keeps long probe lists from running off-screen. */
-.network-control-row--port .ncr-main > .section-card > .bp6-collapse,
-.network-control-row--port .ncr-side > .section-card > .bp6-collapse {
-    flex: 0 1 auto;
-    min-height: 0;
-    overflow: hidden;
-    max-height: 720px;
-    display: flex;
-    flex-direction: column;
-}
-
-.network-control-row--port .ncr-main > .section-card > .bp6-collapse .bp6-collapse-body,
-.network-control-row--port .ncr-side > .section-card > .bp6-collapse .bp6-collapse-body {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow: auto;
-}
-
-.network-control-row--port .ncr-main > .section-card > .bp6-collapse .section-content,
-.network-control-row--port .ncr-side > .section-card > .bp6-collapse .section-content {
-    height: auto;
 }
 
 /* Active row: cards take their natural height (start-aligned). The DNS
@@ -1964,7 +1923,6 @@ html.light .blocklist-count {
 
 
 @media (max-width: 1100px) {
-    .network-control-row--port,
     .network-control-row--active {
         grid-template-columns: 1fr;
     }
