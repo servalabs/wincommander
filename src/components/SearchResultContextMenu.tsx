@@ -68,7 +68,7 @@ export default function SearchResultContextMenu({ target, onAction, onClose }: P
 
   return (
     <div
-      className="esb-context-menu"
+      className="esb-context-menu custom-scrollbar"
       style={{ left: target.x, top: target.y }}
       role="menu"
       aria-label={`Actions for ${target.label}`}

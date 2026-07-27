@@ -39,7 +39,10 @@ export function useSearchResultContextMenu({ openPath, closeSearch, reportError 
       label,
       canUseFileActions: /^[a-zA-Z]:\\|^\\\\/.test(path),
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - 244)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 320)),
+      // ~10 action rows + separator + label now render taller than the old menu;
+      // the estimate just needs to keep the menu mostly on-screen — esb-context-menu's
+      // max-height + overflow-y:auto (EverythingSearchBar.css) is the real safety net.
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 420)),
     });
   }, []);
 
