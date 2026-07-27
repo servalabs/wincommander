@@ -9,21 +9,19 @@
     gap: 10px;
 }
 
-.crypto-erase-header {
+/* Action cluster passed as SectionCard's headerRight. */
+.crypto-erase-header-actions {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
 }
 
-.crypto-erase-header h3 {
+.crypto-erase-intro {
     margin: 0;
-}
-
-/* Push the action cluster to the right edge of the header. */
-.crypto-erase-header .vault-card-title-area {
-    flex: 1 1 auto;
-    min-width: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-text-secondary);
 }
 
 .crypto-erase-loading {

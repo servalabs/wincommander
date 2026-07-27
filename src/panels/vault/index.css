@@ -76,15 +76,6 @@
   margin: 0;
 }
 
-/* Stacked sections below the two-card grid. Without this, the SectionCards
-   touch their siblings — the owner flagged the missing gap. */
-.vault-stacked-sections {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  margin-top: 14px;
-}
-
 /* Modal layout for the RAM-disk autostart config — clean vertical stack
    instead of the cramped 3-column grid used in the inline form. The
    bp.tsx Classes.DIALOG_BODY shim returns "" (no Blueprint padding), so
@@ -468,14 +459,6 @@
   border-radius: var(--radius-lg) !important;
 }
 
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 32px;
-  color: var(--color-text-muted);
-}
-
 .empty-icon {
   margin-bottom: 12px;
   opacity: 0.5;
@@ -557,50 +540,6 @@
   padding: 24px;
   color: var(--color-text-muted);
   text-align: center;
-}
-
-.mount-type-selector {
-  display: flex;
-  background: rgba(0, 0, 0, 0.2);
-  padding: 4px;
-  border: 1px solid var(--color-border);
-  margin-bottom: 20px;
-}
-
-.mount-type-selector .bp6-button {
-  flex: 1;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  border-radius: var(--radius-lg);
-  background: transparent !important;
-  color: var(--color-text-muted);
-  /* active changes: background, color */
-  transition: background-color var(--dur-normal, 200ms) var(--ease),
-              color var(--dur-normal, 200ms) var(--ease);
-}
-
-.mount-type-selector .bp6-button.bp6-active {
-  background: var(--color-bg-tertiary) !important;
-  color: var(--color-accent);
-  box-shadow: inset 0 0 10px var(--color-accent-dim) !important;
-}
-
-/* Light Mode Overrides */
-.mount-dialog.light .mount-type-selector {
-  background: rgba(0, 0, 0, 0.05);
-  border-color: rgba(0, 0, 0, 0.1);
-}
-
-.mount-dialog.light .mount-type-selector .bp6-button {
-  color: var(--color-text-secondary);
-}
-
-.mount-dialog.light .mount-type-selector .bp6-button.bp6-active {
-  background: var(--color-bg-card) !important;
-  color: var(--color-accent);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08) !important;
 }
 
 .mount-dialog .wc-dialog-body {
@@ -1004,71 +943,28 @@ input::-webkit-credentials-auto-fill-button {
    Vault V2 Card Layout
    ===================================================================== */
 
-.vault-main-grid {
+/* Backup & Erase tab: Stego Backup and Crypto-Erase side by side (each a
+   SectionCard). Collapses to one column when Crypto-Erase is hidden
+   (Casual persona) or the viewport is narrow. */
+.vault-backup-erase-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
-  margin-bottom: 14px;
+  align-items: start;
 }
 
-.vault-card-new {
-  background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  /* Radius applies to the card shell; clip the volumes-table's sticky
-     header + scroll body so square inner content doesn't peek past the
-     rounded corners. */
-  overflow: hidden;
+.vault-backup-erase-grid--single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.vault-card-new-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.vault-card-icon {
-  width: 36px;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  color: var(--color-accent);
-  flex-shrink: 0;
-}
-
-.vault-card-title-area {
-  flex: 1;
-  min-width: 0;
-}
-
-.vault-card-title-area h3 {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 800;
-  color: var(--color-text-primary);
-  letter-spacing: 0.03em;
+/* Dynamic one-line status under a SectionCard title (e.g. RAM Disks' mounted
+   count / free-space note) — replaces the old vault-card-title-area subtitle
+   now that headers come from SectionCard itself. */
+.vault-card-status-line {
   margin: 0;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.vault-card-title-area span {
   font-size: 11px;
   color: var(--color-text-muted);
   font-weight: 500;
-  display: block;
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .vault-status-badge {
@@ -1332,18 +1228,9 @@ input::-webkit-credentials-auto-fill-button {
   color: var(--color-danger, #ff6b6b);
 }
 
-/* Inside vault-card-new the gap handles spacing already */
-.vault-card-new .vault-content {
-  margin-top: 0;
-}
-
-.vault-card-new .vault-action-grid {
-  margin-bottom: 0;
-}
-
 @media (max-width: 860px) {
-  .vault-main-grid {
-    grid-template-columns: 1fr;
+  .vault-backup-erase-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

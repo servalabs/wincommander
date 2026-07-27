@@ -10,9 +10,10 @@
 // report the two client-observable phases (destroy, then re-read). Per-step
 // progress would need the command to emit events.
 import { useCallback, useState } from "react";
-import { Button, Callout, Icon, Popover, Spinner } from "@/components/ui/bp";
+import { Button, Callout, Popover, Spinner } from "@/components/ui/bp";
 import { open } from "@tauri-apps/plugin-dialog";
 import EmptyState from "../../components/shared/EmptyState";
+import SectionCard from "../../components/shared/SectionCard";
 import { useCryptoErase } from "../../hooks/useCryptoErase";
 import { isVeraCryptDevicePath, type EncryptedTarget } from "../../lib/cryptoEraseTargets";
 import { showError, showSuccess } from "../../utils/toast";
@@ -117,82 +118,85 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
   );
 
   return (
-    <div className="crypto-erase-section">
-      <div className="crypto-erase-header">
-        <div className="vault-card-icon">
-          <Icon icon="key" size={16} />
+    <SectionCard
+      title="Crypto-Erase"
+      icon="key"
+      headerRight={
+        <div className="crypto-erase-header-actions">
+          <HowItWorks />
+          <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
+          <Button
+            minimal
+            small
+            icon="refresh"
+            loading={refreshing}
+            onClick={refresh}
+            aria-label="Refresh the encrypted-volume list"
+            title="Refresh the encrypted-volume list"
+          />
         </div>
-        <div className="vault-card-title-area">
-          <h3>Crypto-Erase</h3>
-          <span>Destroy an encrypted container's keys — permanent, in place, no reboot</span>
-        </div>
-        <HowItWorks />
-        <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
-        <Button
-          minimal
-          small
-          icon="refresh"
-          loading={refreshing}
-          onClick={refresh}
-          aria-label="Refresh the encrypted-volume list"
-          title="Refresh the encrypted-volume list"
+      }
+    >
+      <div className="crypto-erase-section">
+        <p className="crypto-erase-intro">
+          Destroy an encrypted container's keys — permanent, in place, no reboot.
+        </p>
+
+        {loadError && (
+          <Callout intent="warning" title="Couldn't read the BitLocker volume list">
+            {loadError} VeraCrypt volumes are still listed below, and you can always erase a container
+            by picking its file.
+          </Callout>
+        )}
+
+        {loading ? (
+          <div className="crypto-erase-loading">
+            <Spinner size={16} />
+            Looking for encrypted volumes…
+          </div>
+        ) : displayTargets.length === 0 ? (
+          <EmptyState
+            icon="key"
+            title="No encrypted containers detected"
+            hint="Mount a VeraCrypt volume or enable BitLocker to see it here. An unmounted container can still be erased directly from its file."
+            action={
+              <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
+            }
+          />
+        ) : (
+          <div className="crypto-erase-list">
+            {displayTargets.map((target) => (
+              <CryptoEraseTargetRow
+                key={target.id}
+                target={target}
+                record={receipts[target.id]}
+                busy={active !== null}
+                onErase={setActive}
+              />
+            ))}
+          </div>
+        )}
+
+        {orphanRecords.length > 0 && (
+          <div className="crypto-erase-history">
+            <span className="crypto-erase-history-title">Earlier results</span>
+            {orphanRecords.map((record) => (
+              <CryptoEraseReceiptPanel
+                key={`${record.targetId}-${record.at}`}
+                receipt={record.receipt}
+                at={record.at}
+              />
+            ))}
+          </div>
+        )}
+
+        <CryptoEraseConfirmDialog
+          target={active}
+          systemDrive={systemDrive}
+          onClose={() => setActive(null)}
+          onErase={eraseAndNotify}
         />
       </div>
-
-      {loadError && (
-        <Callout intent="warning" title="Couldn't read the BitLocker volume list">
-          {loadError} VeraCrypt volumes are still listed below, and you can always erase a container
-          by picking its file.
-        </Callout>
-      )}
-
-      {loading ? (
-        <div className="crypto-erase-loading">
-          <Spinner size={16} />
-          Looking for encrypted volumes…
-        </div>
-      ) : displayTargets.length === 0 ? (
-        <EmptyState
-          icon="key"
-          title="No encrypted containers detected"
-          hint="Mount a VeraCrypt volume or enable BitLocker to see it here. An unmounted container can still be erased directly from its file."
-          action={
-            <Button minimal small icon="folder-open" text="Erase container file…" onClick={eraseByPath} />
-          }
-        />
-      ) : (
-        <div className="crypto-erase-list">
-          {displayTargets.map((target) => (
-            <CryptoEraseTargetRow
-              key={target.id}
-              target={target}
-              record={receipts[target.id]}
-              busy={active !== null}
-              onErase={setActive}
-            />
-          ))}
-        </div>
-      )}
-
-      {orphanRecords.length > 0 && (
-        <div className="crypto-erase-history">
-          <span className="crypto-erase-history-title">Earlier results</span>
-          {orphanRecords.map((record) => (
-            <CryptoEraseReceiptPanel
-              key={`${record.targetId}-${record.at}`}
-              receipt={record.receipt}
-              at={record.at}
-            />
-          ))}
-        </div>
-      )}
-
-      <CryptoEraseConfirmDialog
-        target={active}
-        systemDrive={systemDrive}
-        onClose={() => setActive(null)}
-        onErase={eraseAndNotify}
-      />
-    </div>
+    </SectionCard>
   );
 }

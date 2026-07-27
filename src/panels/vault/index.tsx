@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { DURATION_S, EASE } from "../../components/shared/motion";
 import { staggerDelay } from "../../components/shared/AnimatedList";
 import useBackend from "../../hooks/useBackend";
+import type { EncryptionStatus } from "../../hooks/useBackend";
 import { useAppState } from "../../context/AppContext";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../../context/ThemeContext";
@@ -14,19 +15,72 @@ import RamDisksSection from "./RamDisksSection";
 import StegoBackupSection from "./StegoBackupSection";
 import CryptoEraseSection from "./CryptoEraseSection";
 import { getPersona } from "../../types/settings";
+import type { AppSettings } from "../../types/settings";
 import { showSuccess, showError } from "../../utils/toast";
 import type { EncryptionPartition } from "../../hooks/useBackend";
 import PanelHeader from "../../components/shared/PanelHeader";
 import TierGate from "../../components/shared/TierGate";
+import SectionCard from "../../components/shared/SectionCard";
 import useEntitlements from "../../hooks/useEntitlements";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { useVaultSessionState } from "./vaultSessionState";
 import './index.css';
 
+type VaultVolume = NonNullable<EncryptionStatus["volumes"]>[number];
+
 function VaultPanel() {
-  const {
-    encryptionStatus,
-    refreshVault,
-    appSettings,
-  } = useAppState();
+  // Sourced here (not inside a tab) because Crypto-Erase, over on the
+  // Backup & Erase tab, needs the live mounted-volumes list too — see
+  // BackupAndEraseTab below.
+  const { encryptionStatus, refreshVault, appSettings } = useAppState();
+  const [activeTab, setActiveTab] = useVaultSessionState("vault.active-tab", "volumes");
+
+  const volumes = encryptionStatus?.volumes || [];
+  const isEncryptionEngineInstalled = encryptionStatus?.installed ?? true;
+
+  return (
+    <div className="vault-panel">
+      <PanelHeader
+        panelId="vault"
+        title="Secure Storage"
+        description="Create encrypted volumes and RAM disks to keep sensitive files locked away."
+      />
+
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="w-full flex-wrap justify-start">
+          <TabsTrigger value="volumes">Encrypted volumes</TabsTrigger>
+          <TabsTrigger value="ramdisks">RAM disks</TabsTrigger>
+          <TabsTrigger value="backup-erase">Backup &amp; Erase</TabsTrigger>
+        </TabsList>
+        <TabsContent value="volumes">
+          <EncryptedVolumesTab
+            volumes={volumes}
+            isEncryptionEngineInstalled={isEncryptionEngineInstalled}
+            refreshVault={refreshVault}
+          />
+        </TabsContent>
+        <TabsContent value="ramdisks">
+          <RamDisksSection />
+        </TabsContent>
+        <TabsContent value="backup-erase">
+          <BackupAndEraseTab volumes={volumes} appSettings={appSettings} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+interface EncryptedVolumesTabProps {
+  volumes: VaultVolume[];
+  isEncryptionEngineInstalled: boolean;
+  refreshVault: (silent?: boolean) => Promise<void>;
+}
+
+// Encrypted Volumes tab: the card body (header, install-prompt, action row,
+// volumes table) plus the Mount Encrypted Volume dialog — its state/handlers
+// used to live on the whole panel; they now live here with the tab that
+// owns them.
+function EncryptedVolumesTab({ volumes, isEncryptionEngineInstalled, refreshVault }: EncryptedVolumesTabProps) {
   const { theme } = useTheme();
 
   const [mountDialogOpen, setMountDialogOpen] = useState(false);
@@ -40,9 +94,6 @@ function VaultPanel() {
   const [availableLetters, setAvailableLetters] = useState<string[]>([]);
   const [mountType, setMountType] = useState<'file' | 'partition'>('file');
   const [partitions, setPartitions] = useState<EncryptionPartition[]>([]);
-
-  const volumes = encryptionStatus?.volumes || [];
-  const isEncryptionEngineInstalled = encryptionStatus?.installed ?? true;
 
   const {
     mountVolume,
@@ -171,162 +222,124 @@ function VaultPanel() {
     if (error) showError(error);
   }, [error]);
 
-  const renderVaultBody = () => {
-    return (
-      <>
-        <PanelHeader
-          panelId="vault"
-          title="Secure Storage"
-          description="Create encrypted volumes and RAM disks to keep sensitive files locked away."
-        />
-        {/* Two-card layout: encrypted volumes (with their actions inline) on
-            the LEFT, RAM disks on the RIGHT. Windows disk maintenance lives
-            in System Maintenance > Storage & files. */}
-        <div className="vault-main-grid">
-          {/* Left: Encrypted Volumes — list + status stay visible to
-              everyone; create/mount/dismount are gated on entitlement via
-              TierGate (see below), not on engine-install status. The Pro
-              engine self-extracts + self-loads its driver, so there is no
-              separate install step to gate on. */}
-          <div className="vault-card-new">
-            <div className="vault-card-new-header">
-              <div className="vault-card-icon">
-                <Icon icon="lock" size={16} />
-              </div>
-              <div className="vault-card-title-area">
-                <h3>Encrypted Volumes</h3>
-                <span>Mounted containers</span>
-              </div>
-              {volumes.length > 0 && (
-                <span className="vault-status-badge vault-status-badge--mounted">
-                  <i />{volumes.length} mounted
-                </span>
-              )}
-              <SystemEncryptionSection installed={isEncryptionEngineInstalled} compact />
-              <Tooltip content="Refresh status" position="top">
-                <Button
-                  icon="refresh"
-                  minimal
-                  small
-                  onClick={() => refreshVault(true)}
-                  aria-label="Refresh encryption volume status"
-                />
-              </Tooltip>
-            </div>
-
-            {!canUse("paid") && (
-              <div className="vault-card install-prompt">
-                <Icon icon="lock" size={48} className="install-icon" />
-                <h2>Encrypted Volumes is a Pro Feature</h2>
-                <p>Unlock WinCommander Pro to create, mount and dismount encrypted volumes.</p>
-              </div>
+  return (
+    <>
+      <SectionCard
+        title="Encrypted Volumes"
+        icon="lock"
+        headerRight={
+          <div className="flex items-center gap-2">
+            {volumes.length > 0 && (
+              <span className="vault-status-badge vault-status-badge--mounted">
+                <i />{volumes.length} mounted
+              </span>
             )}
-
-            {/* Keep the storage actions above the mounted-volumes area so
-                create/mount controls stay reachable before the empty/table
-                body claims the card height. */}
-            <div className="vault-card-action-row">
-              <TierGate tier="paid" featureLabel="Encrypted volumes">
-                <Button
-                  icon="add"
-                  text="Create Volume"
-                  intent="primary"
-                  onClick={() => setCreateWizardOpen(true)}
-                  className="vault-action-btn vault-action-btn--primary"
-                />
-                <Button
-                  minimal
-                  icon="folder-open"
-                  text="Mount Volume"
-                  onClick={() => openMountDialog()}
-                  className="vault-action-btn"
-                />
-              </TierGate>
-            </div>
-
-            <div className={`vault-content ${volumes.length === 0 ? "vault-content--empty" : ""}`}>
-              {volumes.length > 0 ? (
-                <table className="volumes-table wc-table wc-table--striped">
-                  <thead>
-                    <tr>
-                      <th>DRIVE</th>
-                      <th>TYPE</th>
-                      <th>PATH</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  {/* AnimatePresence lets newly-mounted volumes fade in with a
-                      staggered delay, and lets dismounted rows exit before DOM
-                      removal. No celebration/success flourish — enter/exit only.
-                      staggerDelay caps per-row delay so long lists never animate
-                      over seconds. motion.tr uses opacity only — no width/height
-                      reflow. MotionConfig in App.tsx handles reduced-motion. */}
-                  <tbody>
-                    <AnimatePresence initial={false}>
-                      {volumes.map((vol: any, idx: number) => (
-                        <motion.tr
-                          key={vol.letter}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          transition={{
-                            delay: staggerDelay(idx),
-                            duration: DURATION_S.fast,
-                            ease: EASE.enter,
-                          }}
-                        >
-                          <td className="mono-cell">
-                            {/* Active-mount indicator — pulsing green dot makes
-                                live volumes obvious at a glance, matching the
-                                status-badge styling above. */}
-                            <span className="vault-active-dot" aria-hidden />
-                            <strong>{vol.letter}</strong>
-                          </td>
-                          <td><span className={`type-badge${vol.type === "Hidden" ? " hidden" : ""}`}>{vol.type}</span></td>
-                          <td className="path-cell">
-                            <span className="truncate-path" title={vol.path}>{vol.path}</span>
-                          </td>
-                          <td className="actions-cell">
-                            <VolumeActionsMenu
-                              letter={vol.letter}
-                              path={vol.path}
-                              type={vol.type}
-                              onDismounted={() => refreshVault(true)}
-                            />
-                          </td>
-                        </motion.tr>
-                      ))}
-                    </AnimatePresence>
-                  </tbody>
-                </table>
-              ) : (
-                <div className="empty-state">
-                  <Icon icon="clean" className="empty-icon" size={32} />
-                  <p>No encrypted volumes mounted</p>
-                </div>
-              )}
-            </div>
+            <SystemEncryptionSection installed={isEncryptionEngineInstalled} compact />
+            <Tooltip content="Refresh status" position="top">
+              <Button
+                icon="refresh"
+                minimal
+                small
+                onClick={() => refreshVault(true)}
+                aria-label="Refresh encryption volume status"
+              />
+            </Tooltip>
           </div>
+        }
+      >
+        {!canUse("paid") && (
+          <div className="vault-card install-prompt">
+            <Icon icon="lock" size={48} className="install-icon" />
+            <h2>Encrypted Volumes is a Pro Feature</h2>
+            <p>Unlock WinCommander Pro to create, mount and dismount encrypted volumes.</p>
+          </div>
+        )}
 
-          {/* Right: RAM Disks — moved up from below SystemEncryption so the
-              two storage kinds (encrypted volumes / RAM disks) sit side by
-              side at the top of the panel. RamDisksSection now renders its
-              own .vault-card-new shell, so no outer wrapper here. */}
-          <RamDisksSection />
+        {/* Keep the storage actions above the mounted-volumes area so
+            create/mount controls stay reachable before the empty/table
+            body claims the card height. */}
+        <div className="vault-card-action-row">
+          <TierGate tier="paid" featureLabel="Encrypted volumes">
+            <Button
+              icon="add"
+              text="Create Volume"
+              intent="primary"
+              onClick={() => setCreateWizardOpen(true)}
+              className="vault-action-btn vault-action-btn--primary"
+            />
+            <Button
+              minimal
+              icon="folder-open"
+              text="Mount Volume"
+              onClick={() => openMountDialog()}
+              className="vault-action-btn"
+            />
+          </TierGate>
         </div>
 
-        <div className="vault-stacked-sections">
-          <StegoBackupSection />
-
-          {/* erase_encrypted_container is require_paid on the Rust side, so gate
-              the UI too — a free Secure-persona user previously filled in the
-              whole ceremony and got a raw licence error in the bell. */}
-          {getPersona(appSettings) === "secure" && (
-            <TierGate tier="paid" featureLabel="Crypto-Erase">
-              <CryptoEraseSection veracryptVolumes={volumes} />
-            </TierGate>
+        <div className={`vault-content ${volumes.length === 0 ? "vault-content--empty" : ""}`}>
+          {volumes.length > 0 ? (
+            <table className="volumes-table wc-table wc-table--striped">
+              <thead>
+                <tr>
+                  <th>DRIVE</th>
+                  <th>TYPE</th>
+                  <th>PATH</th>
+                  <th></th>
+                </tr>
+              </thead>
+              {/* AnimatePresence lets newly-mounted volumes fade in with a
+                  staggered delay, and lets dismounted rows exit before DOM
+                  removal. No celebration/success flourish — enter/exit only.
+                  staggerDelay caps per-row delay so long lists never animate
+                  over seconds. motion.tr uses opacity only — no width/height
+                  reflow. MotionConfig in App.tsx handles reduced-motion. */}
+              <tbody>
+                <AnimatePresence initial={false}>
+                  {volumes.map((vol: any, idx: number) => (
+                    <motion.tr
+                      key={vol.letter}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{
+                        delay: staggerDelay(idx),
+                        duration: DURATION_S.fast,
+                        ease: EASE.enter,
+                      }}
+                    >
+                      <td className="mono-cell">
+                        {/* Active-mount indicator — pulsing green dot makes
+                            live volumes obvious at a glance, matching the
+                            status-badge styling above. */}
+                        <span className="vault-active-dot" aria-hidden />
+                        <strong>{vol.letter}</strong>
+                      </td>
+                      <td><span className={`type-badge${vol.type === "Hidden" ? " hidden" : ""}`}>{vol.type}</span></td>
+                      <td className="path-cell">
+                        <span className="truncate-path" title={vol.path}>{vol.path}</span>
+                      </td>
+                      <td className="actions-cell">
+                        <VolumeActionsMenu
+                          letter={vol.letter}
+                          path={vol.path}
+                          type={vol.type}
+                          onDismounted={() => refreshVault(true)}
+                        />
+                      </td>
+                    </motion.tr>
+                  ))}
+                </AnimatePresence>
+              </tbody>
+            </table>
+          ) : (
+            <div className="empty-state">
+              <Icon icon="clean" className="empty-icon" size={32} />
+              <p>No encrypted volumes mounted</p>
+            </div>
           )}
         </div>
+      </SectionCard>
 
       <CreateVolumeWizard
         isOpen={createWizardOpen}
@@ -531,16 +544,32 @@ function VaultPanel() {
           />
         </div>
       </Dialog>
-      </>
-    );
-  };
+    </>
+  );
+}
+
+interface BackupAndEraseTabProps {
+  volumes: VaultVolume[];
+  appSettings: AppSettings | null;
+}
+
+// Backup & Erase tab: Stego Backup and Crypto-Erase side by side. Crypto-Erase
+// is Secure-persona-only (erase_encrypted_container is require_paid on the
+// Rust side, and this feature is Secure-persona-only) — when persona isn't
+// "secure", Stego Backup renders alone at full width instead of leaving an
+// empty second column.
+function BackupAndEraseTab({ volumes, appSettings }: BackupAndEraseTabProps) {
+  const isSecurePersona = getPersona(appSettings) === "secure";
 
   return (
-    <div className="vault-panel">
-      {/* PanelHeader rendered inside renderVaultBody (see line 211) — the
-          duplicate inline <header> here was a leftover that produced two
-          stacked titles in the panel. */}
-      {renderVaultBody()}
+    <div className={`vault-backup-erase-grid${isSecurePersona ? "" : " vault-backup-erase-grid--single"}`}>
+      <StegoBackupSection />
+
+      {isSecurePersona && (
+        <TierGate tier="paid" featureLabel="Crypto-Erase">
+          <CryptoEraseSection veracryptVolumes={volumes} />
+        </TierGate>
+      )}
     </div>
   );
 }

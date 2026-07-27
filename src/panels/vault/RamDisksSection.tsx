@@ -2,6 +2,7 @@ import { Button, Icon, Tooltip, Switch, FormGroup, HTMLSelect, InputGroup, Dialo
 import { useCallback, useEffect, useState } from "react";
 import useBackend from "../../hooks/useBackend";
 import UniversalToggle from "../../components/shared/UniversalToggle";
+import SectionCard from "../../components/shared/SectionCard";
 import { useAppState } from "../../context/AppContext";
 import { showSuccess, showError } from "../../utils/toast";
 import type { RamDisk, RamDiskStatus, SystemRamInfo } from "../../hooks/useBackend";
@@ -162,20 +163,22 @@ function RamDisksSection() {
 
   if (!isInstalled) {
     return (
-      <div className="vault-card install-prompt">
-        <Icon icon="database" size={48} className="install-icon" />
-        <h2>RAM Disk Engine Not Installed</h2>
-        <p>RAM disk support is required for this feature. Install the engine to enable it.</p>
-        <UniversalToggle
-          label="Install Engine"
-          description="Download and install the RAM disk engine."
-          checked={installing}
-          onChange={handleInstall}
-          isAction
-          severity="primary"
-          loading={installing}
-        />
-      </div>
+      <SectionCard title="RAM Disks" icon="database">
+        <div className="vault-card install-prompt">
+          <Icon icon="database" size={48} className="install-icon" />
+          <h2>RAM Disk Engine Not Installed</h2>
+          <p>RAM disk support is required for this feature. Install the engine to enable it.</p>
+          <UniversalToggle
+            label="Install Engine"
+            description="Download and install the RAM disk engine."
+            checked={installing}
+            onChange={handleInstall}
+            isAction
+            severity="primary"
+            loading={installing}
+          />
+        </div>
+      </SectionCard>
     );
   }
 
@@ -193,53 +196,49 @@ function RamDisksSection() {
 
   return (
     <>
-      {/* Single RAM Disks card — mirrors the Encrypted Volumes card layout
-          (header + table + action row + collapsible autostart) so both
-          storage kinds read the same way in the two-column Secure Storage
-          grid. Was previously a two-card grid with config on the left and
-          the active list on the right. */}
-      <div className="vault-card-new">
-        <div className="vault-card-new-header">
-          <div className="vault-card-icon">
-            <Icon icon="database" size={16} />
+      {/* Single RAM Disks card — header + table + action row + collapsible
+          autostart, on the RAM disks tab. */}
+      <SectionCard
+        title="RAM Disks"
+        icon="database"
+        headerRight={
+          <div className="flex items-center gap-1">
+            {sysRam && (
+              <span className="vault-status-badge" style={{ background: 'var(--color-bg-tertiary)', color: 'var(--color-text-muted)', borderRadius: '2px', fontSize: '9px' }}>
+                {(sysRam.freeMB / 1024).toFixed(1)} GB free
+              </span>
+            )}
+            <Tooltip content="Dismount all RAM disks (data will be lost)" position="top">
+              <Button
+                icon="eject"
+                intent="danger"
+                minimal
+                small
+                loading={dismountingAll}
+                disabled={disks.length === 0 || dismountingAll}
+                onClick={handleDismountAll}
+                aria-label="Dismount all RAM disks"
+              />
+            </Tooltip>
+            <Tooltip content="Refresh RAM-disk status" position="top">
+              <Button
+                icon="refresh"
+                minimal
+                small
+                loading={loading}
+                disabled={loading}
+                onClick={() => void refresh()}
+                aria-label="Refresh RAM-disk status"
+              />
+            </Tooltip>
           </div>
-          <div className="vault-card-title-area">
-            <h3>RAM Disks</h3>
-            <span>
-              {disks.length > 0
-                ? `${disks.length} mounted · ${totalUsedMB >= 1024 ? `${(totalUsedMB / 1024).toFixed(1)} GB` : `${totalUsedMB} MB`} used`
-                : "Memory-only — vanishes on shutdown"}
-            </span>
-          </div>
-          {sysRam && (
-            <span className="vault-status-badge" style={{ background: 'var(--color-bg-tertiary)', color: 'var(--color-text-muted)', borderRadius: '2px', fontSize: '9px' }}>
-              {(sysRam.freeMB / 1024).toFixed(1)} GB free
-            </span>
-          )}
-          <Tooltip content="Dismount all RAM disks (data will be lost)" position="top">
-            <Button
-              icon="eject"
-              intent="danger"
-              minimal
-              small
-              loading={dismountingAll}
-              disabled={disks.length === 0 || dismountingAll}
-              onClick={handleDismountAll}
-              aria-label="Dismount all RAM disks"
-            />
-          </Tooltip>
-          <Tooltip content="Refresh RAM-disk status" position="top">
-            <Button
-              icon="refresh"
-              minimal
-              small
-              loading={loading}
-              disabled={loading}
-              onClick={() => void refresh()}
-              aria-label="Refresh RAM-disk status"
-            />
-          </Tooltip>
-        </div>
+        }
+      >
+        <p className="vault-card-status-line">
+          {disks.length > 0
+            ? `${disks.length} mounted · ${totalUsedMB >= 1024 ? `${(totalUsedMB / 1024).toFixed(1)} GB` : `${totalUsedMB} MB`} used`
+            : "Memory-only — vanishes on shutdown"}
+        </p>
 
         <div className="vault-card-action-row ramdisk-create-row">
           <Button
@@ -329,7 +328,7 @@ function RamDisksSection() {
           )}
         </div>
 
-      </div>
+      </SectionCard>
 
       {/* Autostart config — modal popup. Keeps the card height stable
           (the inline form previously made the card grow and left a blank
