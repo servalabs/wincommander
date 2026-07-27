@@ -1580,6 +1580,23 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
       items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
     }),
   },
+  {
+    id: 'searchPersonalization',
+    label: 'Search Personalization Data',
+    description: 'Per-app search jumplist/launch tracking and the inking/typing personalization store',
+    icon: 'search-template',
+    color: '#65a30d',
+    severity: 'danger',
+    group: 'deep-dfir',
+    scopeAware: true,
+    regeneratesNote: 'Windows rebuilds per-app search jumplist entries as you use apps and rebuilds inking personalization data as you type.',
+    getDataKey: 'getSearchPersonalizationInfo',
+    clearDataKey: 'clearSearchPersonalizationData',
+    extractPreview: (data) => ({
+      count: data?.total ?? 0,
+      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
+    }),
+  },
 ];
 
 // Action-only categories (no viewer data)

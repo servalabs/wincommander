@@ -1643,6 +1643,7 @@ export function useBackend() {
     getP2PUpdateCacheInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-P2PUpdateCacheInfo"),
     getReliabilityHistoryInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-ReliabilityHistoryInfo"),
     getExplorerSearchHistoryInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-ExplorerSearchHistoryInfo"),
+    getSearchPersonalizationInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-SearchPersonalizationInfo"),
     // GROUP I-A: Advanced DFIR — erases
     clearAmcache: () => execute<{ status: string; clearedKeys: number; bootPurgeScheduled: boolean }>(clearCommand("Amcache")),
     clearRecycleBinMetadata: () => execute<{ ok: boolean; stdout: string }>(clearCommand("RecycleBinMetadata")),
@@ -1708,6 +1709,7 @@ export function useBackend() {
     clearP2PUpdateCache: () => execute<{ ok: boolean; stdout: string }>(clearCommand("P2PUpdateCache")),
     clearReliabilityHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("ReliabilityHistory")),
     clearExplorerSearchHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("ExplorerSearchHistory")),
+    clearSearchPersonalizationData: () => execute<{ ok: boolean; stdout: string }>(clearCommand("SearchPersonalizationData")),
     invokeUnallocatedSpaceErase: (driveLetter?: string, mediaType?: string) =>
       execute<{ status: string; pid: number; drive: string; message: string }>(
         invokeCommand("UnallocatedSpaceErase"),
