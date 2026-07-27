@@ -1935,6 +1935,24 @@ html.light .blocklist-count {
    or a long program path must never push the panel into horizontal overflow.
    ───────────────────────────────────────────────────────────────────────── */
 
+/* ArpCacheCard + FirewallAuditCard side by side — reuses the panel's
+   established 2-col → 1-col breakpoint (max-width: 1100px, same as
+   .security-split-row / .network-adapters-side-grid above) rather than a
+   new one. Each card's own .wc-net-table-scroll still caps/scrolls its
+   table internally, so a narrower column here never clips a row. */
+.network-maintenance-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    align-items: start;
+}
+
+@media (max-width: 1100px) {
+    .network-maintenance-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 .wc-net-table-scroll {
     max-height: 340px;
     overflow: auto;

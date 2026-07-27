@@ -17,7 +17,7 @@ export function NetworkMaintenanceTools() {
   const firewall = useFirewallAudit();
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="network-maintenance-grid">
       <ArpCacheCard arp={arp} />
       <FirewallAuditCard firewall={firewall} />
     </div>
