@@ -1,8 +1,8 @@
 // src/panels/secret/index.tsx
 //
 // Secret Settings — rebuilt 2026-06-13, retabbed 2026-07-27.
-// 5 tabs: Disguise & branding · Borrowed mode & visibility ·
-// Lockdown & self-destruct · Licensing · Diagnostics.
+// 4 tabs: Disguise & branding (incl. licensing) · Borrowed mode & visibility ·
+// Lockdown & self-destruct · Diagnostics.
 // Each tab composes one or two of the section components below. Business
 // logic stays in callbacks here; the VisibilityTable for the panel-visibility
 // grid lives in VisibilityTable.tsx.
@@ -376,71 +376,77 @@ function LockDisguiseSection() {
                             </button>
                         )}
                     </div>
+
+                    {/* Disguise & hide — tiles, stacked below the peek hotkey in this column */}
+                    <div className="dgz-tiles">
+                        <DgzTile
+                            icon="lock"
+                            title="Lock panel on close"
+                            desc={lockArmed
+                                ? "Closing shows the calculator only. Turn off to hide to the tray (Borrowed Mode) on close instead."
+                                : "Set a Real PIN to enable calculator-on-close; closing currently hides to the tray."}
+                            checked={lockOnCloseChecked}
+                            loading={!lockArmed}
+                            onChange={(v) => patchAppSettings({ app: { lockPanelOnClose: v } }).catch(() => {})}
+                        />
+                        <TierGate tier="paid" featureLabel="Cover Identity">
+                            <DgzTile
+                                icon="people"
+                                title="Cover identity"
+                                desc={
+                                    coverEnabled ? `Appears as "${coverName}"`
+                                    : coverArming ? "Enter a name, then press Apply"
+                                    : "Disguise the app name in taskbar, Task Manager & tray"
+                                }
+                                checked={coverOn}
+                                warn
+                                loading={coverBusy}
+                                onChange={handleCoverToggle}
+                            >
+                                {coverOn && (
+                                    <div className="dgz-tile-extra">
+                                        <input
+                                            ref={coverNameRef}
+                                            className="sec-input"
+                                            placeholder="Choose a cover name…"
+                                            value={coverName}
+                                            disabled={coverBusy}
+                                            onChange={e => setCoverName(e.target.value)}
+                                            onKeyDown={e => { if (e.key === "Enter") commitCover(); }}
+                                        />
+                                        <button className="sec-btn" disabled={coverBusy} onClick={commitCover}>
+                                            Apply
+                                        </button>
+                                    </div>
+                                )}
+                            </DgzTile>
+                        </TierGate>
+
+                        <DgzTile
+                            icon="eye-off"
+                            title="Hide WinCommander"
+                            desc="Remove from taskbar, tray, Start & installed apps. Peek via the hotkey below."
+                            checked={wcHidden}
+                            warn
+                            loading={wcBusy}
+                            onChange={handleToggleWc}
+                        />
+                        <DgzTile
+                            icon="application"
+                            title="Hide backend apps"
+                            desc="Encryption/ RAMDISK Engine, Mesh VPN & other bundled tools."
+                            checked={allBackendHidden}
+                            loading={backendBusy}
+                            onChange={handleToggleBackend}
+                        />
+                    </div>
                 </div>
             </div>
 
-            {/* Disguise & hide — tiles */}
-            <div className="dgz-tiles">
-                <DgzTile
-                    icon="lock"
-                    title="Lock panel on close"
-                    desc={lockArmed
-                        ? "Closing shows the calculator only. Turn off to hide to the tray (Borrowed Mode) on close instead."
-                        : "Set a Real PIN to enable calculator-on-close; closing currently hides to the tray."}
-                    checked={lockOnCloseChecked}
-                    loading={!lockArmed}
-                    onChange={(v) => patchAppSettings({ app: { lockPanelOnClose: v } }).catch(() => {})}
-                />
-                <TierGate tier="paid" featureLabel="Cover Identity">
-                    <DgzTile
-                        icon="people"
-                        title="Cover identity"
-                        desc={
-                            coverEnabled ? `Appears as "${coverName}"`
-                            : coverArming ? "Enter a name, then press Apply"
-                            : "Disguise the app name in taskbar, Task Manager & tray"
-                        }
-                        checked={coverOn}
-                        warn
-                        loading={coverBusy}
-                        onChange={handleCoverToggle}
-                    >
-                        {coverOn && (
-                            <div className="dgz-tile-extra">
-                                <input
-                                    ref={coverNameRef}
-                                    className="sec-input"
-                                    placeholder="Choose a cover name…"
-                                    value={coverName}
-                                    disabled={coverBusy}
-                                    onChange={e => setCoverName(e.target.value)}
-                                    onKeyDown={e => { if (e.key === "Enter") commitCover(); }}
-                                />
-                                <button className="sec-btn" disabled={coverBusy} onClick={commitCover}>
-                                    Apply
-                                </button>
-                            </div>
-                        )}
-                    </DgzTile>
-                </TierGate>
-
-                <DgzTile
-                    icon="eye-off"
-                    title="Hide WinCommander"
-                    desc="Remove from taskbar, tray, Start & installed apps. Peek via the hotkey below."
-                    checked={wcHidden}
-                    warn
-                    loading={wcBusy}
-                    onChange={handleToggleWc}
-                />
-                <DgzTile
-                    icon="application"
-                    title="Hide backend apps"
-                    desc="Encryption/ RAMDISK Engine, Mesh VPN & other bundled tools."
-                    checked={allBackendHidden}
-                    loading={backendBusy}
-                    onChange={handleToggleBackend}
-                />
+            {/* Row 2 — OS Personalization/Whitelabeling and App Licensing, side by side */}
+            <div className="dgz-licensing-row">
+                <BrandingLicensingSection />
+                <AppLicensingSection />
             </div>
         </div>
     );
@@ -665,13 +671,11 @@ export default function SecretPanel() {
                     <TabsTrigger value="disguise">Disguise &amp; branding</TabsTrigger>
                     <TabsTrigger value="borrowed">Borrowed mode &amp; visibility</TabsTrigger>
                     <TabsTrigger value="lockdown">Lockdown &amp; self-destruct</TabsTrigger>
-                    <TabsTrigger value="licensing">Licensing</TabsTrigger>
                     <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
                 </TabsList>
                 <TabsContent value="disguise">
                     <div className="secret-grid">
                         <LockDisguiseSection />
-                        <BrandingLicensingSection />
                     </div>
                 </TabsContent>
                 <TabsContent value="borrowed">
@@ -682,11 +686,6 @@ export default function SecretPanel() {
                 <TabsContent value="lockdown">
                     <div className="secret-grid">
                         <SelfDestructSection />
-                    </div>
-                </TabsContent>
-                <TabsContent value="licensing">
-                    <div className="secret-grid">
-                        <AppLicensingSection />
                     </div>
                 </TabsContent>
                 <TabsContent value="diagnostics">
