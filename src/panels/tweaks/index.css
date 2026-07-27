@@ -254,6 +254,16 @@
     line-height: 1.2;
 }
 
+/* Each plan keeps its own hue even at rest — dimmed to ~55% toward the muted
+   text color when inactive, full brightness only once selected. Previously
+   every inactive option shared one flat grey (--color-text-muted) and only
+   the active one picked up its real color, so the picker gave no hint which
+   option was which until you'd already clicked one. */
+.power-plan-option.powersaver { color: color-mix(in srgb, #eab308 55%, var(--color-text-muted)); }
+.power-plan-option.balanced { color: color-mix(in srgb, var(--color-success) 55%, var(--color-text-muted)); }
+.power-plan-option.performance { color: color-mix(in srgb, #f97316 55%, var(--color-text-muted)); }
+.power-plan-option.ultimate { color: color-mix(in srgb, var(--color-danger) 55%, var(--color-text-muted)); }
+
 .power-plan-option.powersaver.active { color: #eab308; }
 .power-plan-option.balanced.active { color: var(--color-success); }
 .power-plan-option.performance.active { color: #f97316; }

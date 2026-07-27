@@ -22,17 +22,17 @@ import { commandId } from "../lib/commandIds";
 // ── Section Definitions ──────────────────────────────────────────────
 
 export const TWEAKS_SECTIONS: SectionDef[] = [
-  { id: "ui",          title: "UI Tweaks",              icon: "style",       columns: 2 },
-  { id: "security",    title: "Security & Apps",        icon: "shield",      columns: 2 },
-  { id: "os",          title: "OS / Hardware Tweaks",   icon: "cog",         columns: 2 },
-  { id: "boot",        title: "Boot & Kernel",          icon: "power",       columns: 2 },
-  { id: "performance", title: "Performance & Gaming",    icon: "rocket",      columns: 2 },
+  { id: "ui",          title: "UI Tweaks",              icon: "style",       columns: 4 },
+  { id: "security",    title: "Security & Apps",        icon: "shield",      columns: 3 },
+  { id: "os",          title: "OS / Hardware Tweaks",   icon: "cog",         columns: 3 },
+  { id: "boot",        title: "Boot & Kernel",          icon: "power",       columns: 3 },
+  { id: "performance", title: "Performance & Gaming",    icon: "rocket",      columns: 3 },
   { id: "gpu",         title: "GPU Vendor Tweaks",      icon: "desktop",     columns: 2 },
   { id: "power",       title: "Power Management",       icon: "offline",     columns: 2 },
   // NOTE: the tweaks panel references TWEAKS_SECTIONS by numeric index, so new
   // sections MUST be appended here (never inserted mid-array). Exploit Protection
   // is rendered explicitly in src/panels/tweaks/index.tsx (index 7).
-  { id: "exploitProtection", title: "Exploit Protection", icon: "shield",   columns: 2 },
+  { id: "exploitProtection", title: "Exploit Protection", icon: "shield",   columns: 3 },
 ];
 
 // ── Toggle Definitions ───────────────────────────────────────────────

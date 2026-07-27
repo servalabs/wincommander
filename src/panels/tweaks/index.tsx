@@ -253,13 +253,6 @@ function PerformancePowerTab({ isAdvanced, noSearch, searchQuery, handlePostTogg
                 <PowerPlanCard titleOverride={isAdvanced ? "Power Plan" : "Energy & Speed"} />
             )}
 
-            <ToggleSection
-                section={TWEAKS_SECTIONS[6]}
-                toggles={TWEAKS_TOGGLES}
-                onToggled={handlePostToggle}
-                searchQuery={searchQuery}
-            />
-
             {/* Performance & Gaming — fully defined in the registry but not
                 previously rendered anywhere; wiring it up here is intentional. */}
             <ToggleSection
@@ -269,11 +262,29 @@ function PerformancePowerTab({ isAdvanced, noSearch, searchQuery, handlePostTogg
                 searchQuery={searchQuery}
             />
 
-            {/* GPU Vendor Tweaks (advanced only) */}
-            {isAdvanced && (
+            {/* Power Management pairs with GPU Vendor Tweaks (advanced only) so
+                Power Management's 2 toggles don't sit alone in a full-width,
+                mostly-empty section. Non-advanced users still get Power
+                Management full width since GPU Vendor Tweaks is hidden. */}
+            {isAdvanced ? (
+                <div className="grid grid-cols-2 gap-4">
+                    <ToggleSection
+                        section={TWEAKS_SECTIONS[6]}
+                        toggles={TWEAKS_TOGGLES}
+                        onToggled={handlePostToggle}
+                        searchQuery={searchQuery}
+                    />
+                    <ToggleSection
+                        section={TWEAKS_SECTIONS[5]}
+                        toggles={gpuFilteredToggles}
+                        onToggled={handlePostToggle}
+                        searchQuery={searchQuery}
+                    />
+                </div>
+            ) : (
                 <ToggleSection
-                    section={TWEAKS_SECTIONS[5]}
-                    toggles={gpuFilteredToggles}
+                    section={TWEAKS_SECTIONS[6]}
+                    toggles={TWEAKS_TOGGLES}
                     onToggled={handlePostToggle}
                     searchQuery={searchQuery}
                 />
