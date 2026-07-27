@@ -1,8 +1,8 @@
 {
-  "pub_date": "2026-07-24T18:33:19Z",
-  "size": 13363200,
-  "notes": "WinCommander Fleet Server v3.0.43 (self-hosted, console embedded)",
-  "sha256": "0969d0bb0f42b59381e841d51e2c0216df60c5e6f0d20f89a90269e2d0c3e3fb",
-  "version": "3.0.43",
-  "url": "https://winupdates.servalabs.com/fleet/v3.0.43/fleet-server.exe"
+  "notes": "WinCommander Fleet Server v3.1.0 (self-hosted, console embedded)",
+  "pub_date": "2026-07-27T11:05:04Z",
+  "version": "3.1.0",
+  "url": "https://winupdates.servalabs.com/fleet/v3.1.0/fleet-server.exe",
+  "sha256": "4dc0ba4228b059b44df835fb893cc08d677eebf9673de709342254eb5417e058",
+  "size": 13312000
 }

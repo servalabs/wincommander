@@ -1,8 +1,8 @@
 {
-  "pub_date": "2026-07-24T18:08:05Z",
-  "size": 690176,
-  "notes": "WinCommander Investigator independent verifier v3.0.43",
-  "sha256": "b76833008770134ef56d99091eb51002f0b3f6b81d21c67db13e6e317e645591",
-  "version": "3.0.43",
-  "url": "https://winupdates.servalabs.com/investigator/verifier/v3.0.43/wci-verify.exe"
+  "notes": "WinCommander Investigator independent verifier v3.1.0",
+  "pub_date": "2026-07-27T10:38:05Z",
+  "version": "3.1.0",
+  "url": "https://winupdates.servalabs.com/investigator/verifier/v3.1.0/wci-verify.exe",
+  "sha256": "1ee71e2b0b3077604724326b33c07a8d54e1d53778e891cbd73324d50ef8e57c",
+  "size": 689664
 }
