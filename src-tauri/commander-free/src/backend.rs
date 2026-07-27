@@ -1092,6 +1092,57 @@ const SENSITIVE_COMMANDS: &[SensitiveCommand] = &[
         tier: CommandTier::Paid,
     },
     SensitiveCommand {
+<<<<<<< Updated upstream
+=======
+        parts: &["Clear~-", "App~", "Launch~", "History~"],
+        frontend_module: Some("cleanup"),
+        backend_module: Some("privacy/cleanup"),
+        tier: CommandTier::Paid,
+    },
+    SensitiveCommand {
+        parts: &["Clear~-", "Office~", "Mru~"],
+        frontend_module: Some("cleanup"),
+        backend_module: Some("privacy/cleanup"),
+        tier: CommandTier::Paid,
+    },
+    SensitiveCommand {
+        parts: &["Clear~-", "Embedded~", "Web~", "Cache~"],
+        frontend_module: Some("cleanup"),
+        backend_module: Some("privacy/cleanup"),
+        tier: CommandTier::Paid,
+    },
+    SensitiveCommand {
+        parts: &["Clear~-", "P2P~", "Update~", "Cache~"],
+        frontend_module: Some("cleanup"),
+        backend_module: Some("privacy/cleanup"),
+        tier: CommandTier::Paid,
+    },
+    SensitiveCommand {
+        parts: &["Clear~-", "Reliability~", "History~"],
+        frontend_module: Some("cleanup"),
+        backend_module: Some("privacy/cleanup"),
+        tier: CommandTier::Paid,
+    },
+    SensitiveCommand {
+        parts: &["Clear~-", "Explorer~", "Search~", "History~"],
+        frontend_module: Some("cleanup"),
+        backend_module: Some("privacy/cleanup"),
+        tier: CommandTier::Paid,
+    },
+    SensitiveCommand {
+        parts: &["Clear~-", "Search~", "Personalization~", "Data~"],
+        frontend_module: Some("cleanup"),
+        backend_module: Some("privacy/cleanup"),
+        tier: CommandTier::Paid,
+    },
+    SensitiveCommand {
+        parts: &["Invoke~-", "Previous~", "Windows~", "Install~", "Erase~"],
+        frontend_module: Some("cleanup"),
+        backend_module: Some("privacy/cleanup"),
+        tier: CommandTier::Paid,
+    },
+    SensitiveCommand {
+>>>>>>> Stashed changes
         parts: &["Invoke~-", "Crash~", "Dump~", "Erase~"],
         frontend_module: Some("cleanup"),
         backend_module: Some("privacy/cleanup"),
@@ -1838,6 +1889,17 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Get-DeviceInstallLogsInfo" => Some("privacy/cleanup"),
         "Get-UsageTraceLogsInfo" => Some("privacy/cleanup"),
         "Get-DefenderHistoryInfo" => Some("privacy/cleanup"),
+<<<<<<< Updated upstream
+=======
+        "Get-AppLaunchHistoryInfo" => Some("privacy/cleanup"),
+        "Get-OfficeMruInfo" => Some("privacy/cleanup"),
+        "Get-EmbeddedWebCacheInfo" => Some("privacy/cleanup"),
+        "Get-P2PUpdateCacheInfo" => Some("privacy/cleanup"),
+        "Get-ReliabilityHistoryInfo" => Some("privacy/cleanup"),
+        "Get-ExplorerSearchHistoryInfo" => Some("privacy/cleanup"),
+        "Get-SearchPersonalizationInfo" => Some("privacy/cleanup"),
+        "Get-PreviousWindowsInstallInfo" => Some("privacy/cleanup"),
+>>>>>>> Stashed changes
 
         "Disable-ConsumerFeatures" => Some("tweaks/system"),
         "Enable-ConsumerFeatures" => Some("tweaks/system"),
