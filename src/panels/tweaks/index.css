@@ -16,46 +16,6 @@
     align-items: start;
 }
 
-/* Two independent stacked columns for the Windows Settings sections. Each
-   column packs its own sections tightly with a consistent gap (no blank space
-   BETWEEN sections), which the row-major grid and column masonry both failed at
-   (see UI_problem screenshots). Any leftover blank is only at the bottom of the
-   shorter column. */
-.panel-columns {
-    display: flex;
-    flex-direction: row;
-    align-items: flex-start;
-    gap: 14px;
-    padding-right: 8px;
-}
-
-.column-stack {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    min-width: 0;
-}
-
-.tweaks-panel .panel-columns > .column-stack:last-child {
-    padding-right: 4px;
-}
-
-.tweaks-panel .panel-columns > .column-stack:last-child .section-card {
-    border-right-color: var(--color-border-light) !important;
-    box-shadow:
-        inset -1px 0 0 var(--color-border-light),
-        0 8px 24px -20px rgba(0, 0, 0, 0.7);
-}
-
-html.light .tweaks-panel .panel-columns > .column-stack:last-child .section-card {
-    border-right-color: var(--border-strong) !important;
-    box-shadow:
-        inset -1px 0 0 var(--border-strong),
-        0 10px 28px -22px rgba(28, 42, 34, 0.45),
-        0 1px 3px rgba(28, 42, 34, 0.12);
-}
-
 /* Sub-label dividers within combined cards (e.g. System Hardware) */
 .tweaks-sublabel {
     font-size: 9px;
@@ -87,9 +47,6 @@ html.light .tweaks-panel .panel-columns > .column-stack:last-child .section-card
 @media(max-width: 1000px) {
     .panel-grid {
         grid-template-columns: 1fr;
-    }
-    .panel-columns {
-        flex-direction: column;
     }
 }
 
