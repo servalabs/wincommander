@@ -7,7 +7,8 @@
 
 import { useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { Button, Alert } from "@/components/ui/bp";
+import { Button, Alert, Icon } from "@/components/ui/bp";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import SectionCard from "../shared/SectionCard";
 import UniversalCallout from "../shared/UniversalCallout";
 import {
@@ -73,41 +74,43 @@ export default function ImportExportSettingsCard() {
     return (
         <SectionCard title="Backup & Restore" icon="import" className="import-export-settings-card">
             <div className="import-export-stack">
-                <div className="import-export-row">
-                    <div className="import-export-row__text">
-                        <div className="import-export-row__title">Export settings</div>
-                        <div className="import-export-row__desc">
-                            Save your full configuration to a JSON file you choose.
-                        </div>
+                <div className="import-export-actions">
+                    <div className="import-export-actions__buttons">
+                        <Button
+                            icon="export"
+                            text="Export"
+                            loading={exporting}
+                            onClick={runExport}
+                            aria-label="Export settings"
+                        />
+                        <Button
+                            icon="import"
+                            text="Import"
+                            loading={importing}
+                            onClick={pickImportFile}
+                            aria-label="Import settings"
+                        />
                     </div>
-                    <Button
-                        icon="export"
-                        text="Export"
-                        loading={exporting}
-                        onClick={runExport}
-                        aria-label="Export settings"
-                    />
-                </div>
 
-                <div className="import-export-row">
-                    <div className="import-export-row__text">
-                        <div className="import-export-row__title">Import settings</div>
-                        <div className="import-export-row__desc">
-                            Load a previously exported JSON file and apply it to this device.
-                        </div>
-                    </div>
-                    <Button
-                        icon="import"
-                        text="Import"
-                        loading={importing}
-                        onClick={pickImportFile}
-                        aria-label="Import settings"
-                    />
+                    <Popover>
+                        <PopoverTrigger className="import-export-info-trigger" aria-label="What Export and Import do">
+                            <Icon icon="info-sign" size={14} />
+                        </PopoverTrigger>
+                        <PopoverContent align="end" className="import-export-info">
+                            <div className="import-export-info__item">
+                                <strong>Export</strong> — save your full configuration to a JSON file you choose.
+                            </div>
+                            <div className="import-export-info__item">
+                                <strong>Import</strong> — load a previously exported JSON file and apply it to this device.
+                            </div>
+                        </PopoverContent>
+                    </Popover>
                 </div>
 
                 <UniversalCallout
                     message="Importing REPLACES your current configuration — every toggle and preference is overwritten. This device's identity (device ID, activation) is preserved automatically, so a backup from another machine is safe to restore."
                     intent="warning"
+                    className="import-export-callout-compact"
                 />
             </div>
 
