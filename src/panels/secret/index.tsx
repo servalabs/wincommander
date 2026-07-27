@@ -1,9 +1,11 @@
 // src/panels/secret/index.tsx
 //
-// Secret Settings — rebuilt 2026-06-13.
-// 5 sections: Access · Triggers · Identity · Borrowed Mode · Self-Destruct.
-// Each section is a SectionCard. Business logic stays in callbacks here;
-// the VisibilityTable for the panel-visibility grid lives in VisibilityTable.tsx.
+// Secret Settings — rebuilt 2026-06-13, retabbed 2026-07-27.
+// 5 tabs: Disguise & branding · Borrowed mode & visibility ·
+// Lockdown & self-destruct · Licensing · Diagnostics.
+// Each tab composes one or two of the section components below. Business
+// logic stays in callbacks here; the VisibilityTable for the panel-visibility
+// grid lives in VisibilityTable.tsx.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -24,11 +26,13 @@ import PanicHotkeyTrigger from "../privacy/PanicHotkeyTrigger";
 import FileWatchTriggerSection from "../privacy/FileWatchTriggerSection";
 import { Icon, type IconName } from "@/components/ui/bp";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { showError, showSuccess } from "../../utils/toast";
 import VisibilityTable from "./VisibilityTable";
 import AppLicensingSection from "./AppLicensingSection";
 import BrandingLicensingSection from "./BrandingLicensingSection";
 import ManagedPolicyBanner from "../../components/shared/ManagedPolicyBanner";
+import { useSecretSessionState } from "./secretSessionState";
 import "./index.css";
 import "../privacy/index.css";
 
@@ -636,6 +640,17 @@ function SelfDestructSection() {
 // ── Panel ──────────────────────────────────────────────────────────────────────
 
 export default function SecretPanel() {
+    const [activeTab, setActiveTab] = useSecretSessionState("secret.active-tab", "disguise");
+
+    // Deep link from PanelErrorBoundary's "Open Error Center" button (every
+    // panel's crash screen navigates here via navigate-panel/"secret" first,
+    // then fires this once Secret Settings has mounted) — land on Diagnostics.
+    useEffect(() => {
+        const openDiagnostics = () => setActiveTab("diagnostics");
+        window.addEventListener("open-secret-error-center", openDiagnostics);
+        return () => window.removeEventListener("open-secret-error-center", openDiagnostics);
+    }, [setActiveTab]);
+
     return (
         <div className="panel-container secret-panel">
             <PanelHeader
@@ -645,16 +660,43 @@ export default function SecretPanel() {
             />
             {/* F9: show when AD admin has pushed policy via commander.admx */}
             <ManagedPolicyBanner />
-            <div className="secret-grid">
-                <AppLicensingSection />
-                <BrandingLicensingSection />
-                <LockDisguiseSection />
-                <BorrowedModeSection />
-                <SelfDestructSection />
-                <SectionCard title="Error Center" icon="document" className="secret-grid__wide">
-                    <LogViewer />
-                </SectionCard>
-            </div>
+            <Tabs value={activeTab} onValueChange={setActiveTab}>
+                <TabsList className="w-full flex-wrap justify-start">
+                    <TabsTrigger value="disguise">Disguise &amp; branding</TabsTrigger>
+                    <TabsTrigger value="borrowed">Borrowed mode &amp; visibility</TabsTrigger>
+                    <TabsTrigger value="lockdown">Lockdown &amp; self-destruct</TabsTrigger>
+                    <TabsTrigger value="licensing">Licensing</TabsTrigger>
+                    <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
+                </TabsList>
+                <TabsContent value="disguise">
+                    <div className="secret-grid">
+                        <LockDisguiseSection />
+                        <BrandingLicensingSection />
+                    </div>
+                </TabsContent>
+                <TabsContent value="borrowed">
+                    <div className="secret-grid">
+                        <BorrowedModeSection />
+                    </div>
+                </TabsContent>
+                <TabsContent value="lockdown">
+                    <div className="secret-grid">
+                        <SelfDestructSection />
+                    </div>
+                </TabsContent>
+                <TabsContent value="licensing">
+                    <div className="secret-grid">
+                        <AppLicensingSection />
+                    </div>
+                </TabsContent>
+                <TabsContent value="diagnostics">
+                    <div className="secret-grid">
+                        <SectionCard title="Error Center" icon="document" className="secret-grid__wide">
+                            <LogViewer />
+                        </SectionCard>
+                    </div>
+                </TabsContent>
+            </Tabs>
         </div>
     );
 }

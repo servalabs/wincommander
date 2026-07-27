@@ -116,7 +116,13 @@ export default class PanelErrorBoundary extends Component<Props, State> {
   };
 
   handleOpenErrorCenter = () => {
+    // Navigate first, then fire the sub-tab deep link once Secret Settings
+    // has mounted — mirrors the dashboard's navigate-panel + delayed
+    // open-* event pattern (src/panels/dashboard/index.tsx's disk-cleanup
+    // deep link). Firing the sub-event before the panel exists is a no-op:
+    // Secret Settings only starts listening for it in its own mount effect.
     window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "secret" }));
+    window.setTimeout(() => window.dispatchEvent(new CustomEvent("open-secret-error-center")), 300);
   };
 
   render() {
