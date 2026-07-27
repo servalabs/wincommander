@@ -273,6 +273,7 @@ function AppContent() {
   useEffect(() => {
     let unlistenUnlock: (() => void) | undefined;
     let unlistenLock: (() => void) | undefined;
+    let unlistenShred: (() => void) | undefined;
 
     listen("hidden-panels-unlock", () => {
       window.dispatchEvent(new Event("hidden-panels-unlock"));
@@ -280,10 +281,19 @@ function AppContent() {
     listen("hidden-panels-lock", () => {
       window.dispatchEvent(new Event("hidden-panels-lock"));
     }).then((fn) => { unlistenLock = fn; }).catch(() => {});
+    // Shred can also be triggered from the search-overlay window's context
+    // menu (see useSearchResultContextMenu.ts) — that window's own
+    // window.dispatchEvent never reaches this one, so it also emits this
+    // Tauri cross-window event, rebroadcast here as the same local event
+    // the useEffect above already listens for.
+    listen("open-shred-dialog", () => {
+      window.dispatchEvent(new Event("open-shred-dialog"));
+    }).then((fn) => { unlistenShred = fn; }).catch(() => {});
 
     return () => {
       unlistenUnlock?.();
       unlistenLock?.();
+      unlistenShred?.();
     };
   }, []);
 

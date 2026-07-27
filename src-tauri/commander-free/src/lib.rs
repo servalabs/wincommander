@@ -2560,6 +2560,9 @@ pub fn run() {
             search_actions::search_set_file_clipboard,
             search_actions::search_open_containing_folder,
             search_actions::search_open_in_vscode,
+            search_actions::search_delete_to_recycle_bin,
+            search_actions::search_rename_file,
+            search_actions::search_show_properties,
             backend::is_path_dir,
             // ── Disk Space Analyzer ──
             disk_analyzer::run_disk_scan,

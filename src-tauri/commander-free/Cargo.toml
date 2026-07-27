@@ -56,6 +56,9 @@ sha2 = "0.11"
 # for credential detection (AWS keys, JWT, BIP-39, etc).
 clipboard-win = "5"
 regex = "1"
+# Search context-menu "Delete" — cross-platform move-to-Recycle-Bin/Trash,
+# used by search_actions::search_delete_to_recycle_bin.
+trash = "5"
 # F-2 decoy file monitor — cross-platform filesystem watcher; uses
 # ReadDirectoryChangesW on Windows under the hood.
 notify = "8"

@@ -84,6 +84,60 @@ pub fn search_open_in_vscode(path: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn search_delete_to_recycle_bin(path: String) -> Result<(), String> {
+    let target = existing_path(&path)?;
+    trash::delete(target).map_err(|error| format!("Failed to move to the Recycle Bin: {error}"))
+}
+
+fn validate_file_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("The new name cannot be empty.".to_string());
+    }
+    if name.contains('\\') || name.contains('/') {
+        return Err("The new name cannot contain path separators.".to_string());
+    }
+    if name == "." || name == ".." {
+        return Err("That name isn't allowed.".to_string());
+    }
+    const RESERVED_CHARS: [char; 8] = ['<', '>', ':', '"', '|', '?', '*', '\0'];
+    if name.chars().any(|c| RESERVED_CHARS.contains(&c)) {
+        return Err("The new name contains characters Windows doesn't allow in file names.".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn search_rename_file(path: String, new_name: String) -> Result<String, String> {
+    let target = existing_path(&path)?;
+    validate_file_name(&new_name)?;
+    let new_path = target
+        .parent()
+        .ok_or_else(|| "The selected item has no parent folder.".to_string())?
+        .join(&new_name);
+    if new_path.exists() {
+        return Err("An item with that name already exists.".to_string());
+    }
+    std::fs::rename(target, &new_path).map_err(|error| format!("Failed to rename: {error}"))?;
+    Ok(new_path.to_string_lossy().into_owned())
+}
+
+// KT: A true native "Properties" dialog needs ShellExecuteW with the
+// "properties" verb, which has no precedent anywhere in this codebase and
+// couldn't be build-verified in this environment (no cargo toolchain).
+// Fall back to revealing the item in Explorer (same as
+// search_open_containing_folder) until that's implemented and checked.
+#[tauri::command]
+pub fn search_show_properties(path: String) -> Result<(), String> {
+    existing_path(&path)?;
+    Command::new("explorer.exe")
+        .arg("/select,")
+        .arg(&path)
+        .spawn()
+        .map_err(|error| format!("Failed to reveal the item in Explorer: {error}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +151,16 @@ mod tests {
     fn search_actions_reject_missing_paths() {
         let missing = std::env::temp_dir().join("wincommander-search-action-missing");
         assert!(existing_path(&missing.to_string_lossy()).is_err());
+    }
+
+    #[test]
+    fn rename_rejects_empty_or_path_like_names() {
+        assert!(validate_file_name("").is_err());
+        assert!(validate_file_name("   ").is_err());
+        assert!(validate_file_name("sub\\name.txt").is_err());
+        assert!(validate_file_name("sub/name.txt").is_err());
+        assert!(validate_file_name(".").is_err());
+        assert!(validate_file_name("..").is_err());
+        assert!(validate_file_name("name.txt").is_ok());
     }
 }

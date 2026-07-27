@@ -1,7 +1,18 @@
 import { useCallback, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 
-export type SearchContextAction = "open" | "open-folder" | "copy" | "cut" | "copy-path" | "vscode";
+export type SearchContextAction =
+  | "open"
+  | "open-folder"
+  | "copy"
+  | "cut"
+  | "copy-path"
+  | "vscode"
+  | "rename"
+  | "properties"
+  | "delete"
+  | "shred";
 
 export interface SearchContextTarget {
   path: string;
@@ -34,7 +45,7 @@ export function useSearchResultContextMenu({ openPath, closeSearch, reportError 
 
   const closeMenu = useCallback(() => setTarget(null), []);
 
-  const runAction = useCallback(async (action: SearchContextAction) => {
+  const runAction = useCallback(async (action: SearchContextAction, payload?: string) => {
     if (!target) return;
     try {
       switch (action) {
@@ -55,6 +66,28 @@ export function useSearchResultContextMenu({ openPath, closeSearch, reportError 
           break;
         case "vscode":
           await invoke("search_open_in_vscode", { path: target.path });
+          break;
+        case "rename":
+          if (!payload) return;
+          await invoke("search_rename_file", { path: target.path, newName: payload });
+          break;
+        case "properties":
+          await invoke("search_show_properties", { path: target.path });
+          break;
+        case "delete":
+          await invoke("search_delete_to_recycle_bin", { path: target.path });
+          break;
+        case "shred":
+          // Reuses the existing multi-pass confirmation dialog (irreversible,
+          // so a one-click shred here would be a dangerous UX regression)
+          // instead of calling a secure-delete command directly. This context
+          // menu also renders inside the separate "search-overlay" Tauri
+          // window (global hotkey quick-search) — a plain window.dispatchEvent
+          // there never reaches the main window's App.tsx listener, so this
+          // also emits the Tauri cross-window event, same dual-dispatch
+          // pattern already used for hidden-panels-lock/unlock.
+          window.dispatchEvent(new CustomEvent("open-shred-dialog"));
+          emit("open-shred-dialog").catch(() => {});
           break;
       }
       closeSearch();
