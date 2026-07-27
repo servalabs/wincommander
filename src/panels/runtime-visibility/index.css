@@ -1,0 +1,12 @@
+.runtime-signal-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 130px;
+}
+
+.runtime-signal-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}

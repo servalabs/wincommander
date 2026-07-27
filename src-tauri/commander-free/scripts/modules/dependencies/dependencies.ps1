@@ -118,6 +118,22 @@ function Get-DependencyRegistry {
             canHide  = $false
         },
         @{
+            id       = 'chocolatey'
+            name     = 'Chocolatey'
+            wingetId = $null    # Installed via its own bootstrap script, not winget
+            panelId  = 'apps'
+            canStart = $false
+            canHide  = $false
+        },
+        @{
+            id       = 'scoop'
+            name     = 'Scoop'
+            wingetId = $null    # Installed via its own bootstrap script, not winget
+            panelId  = 'apps'
+            canStart = $false
+            canHide  = $false
+        },
+        @{
             id       = 'powershell7'
             name     = 'PowerShell 7'
             wingetId = 'Microsoft.PowerShell'
@@ -327,6 +343,51 @@ function Test-WingetDependencyInstalled {
     }
 
     return @{ installed = $installed; version = $version; missing = @() }
+}
+
+function Get-LocalChocolateyPath {
+    $cmd = Get-Command choco.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    $root = if ($env:ChocolateyInstall) { $env:ChocolateyInstall } else { "$env:ProgramData\chocolatey" }
+    $candidate = Join-Path $root "bin\choco.exe"
+    if (Test-Path $candidate) { return $candidate }
+    return $null
+}
+
+function Test-ChocolateyInstalled {
+    $chocoCmd = Get-LocalChocolateyPath
+    $installed = $null -ne $chocoCmd
+    $version = $null
+    if ($installed) {
+        $version = try { (& $chocoCmd --version 2>$null | Select-Object -First 1) } catch { $null }
+    }
+    return @{ installed = $installed; version = $version }
+}
+
+function Get-LocalScoopPath {
+    $cmd = Get-Command scoop.cmd -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    $roots = @()
+    if ($env:SCOOP) { $roots += $env:SCOOP }
+    $roots += "$env:USERPROFILE\scoop"
+    $roots += "$env:ProgramData\scoop"
+    foreach ($root in $roots) {
+        $candidate = Join-Path $root "shims\scoop.cmd"
+        if (Test-Path $candidate) { return $candidate }
+    }
+    return $null
+}
+
+function Test-ScoopInstalled {
+    $scoopCmd = Get-LocalScoopPath
+    $installed = $null -ne $scoopCmd
+    $version = $null
+    if ($installed) {
+        $version = try { (& $scoopCmd --version 2>$null | Select-Object -First 1) } catch { $null }
+    }
+    return @{ installed = $installed; version = $version }
 }
 
 function Find-Python312Exe {
@@ -920,6 +981,48 @@ function Install-WingetDependency {
     Repair-WinGetPackageManager -ErrorAction SilentlyContinue
 
     return @{ success = $true; message = "Winget installed." }
+}
+
+function Install-Chocolatey {
+    Assert-IsAdmin
+    $status = Test-ChocolateyInstalled
+    if ($status.installed) { return @{ success = $true; message = "Chocolatey already installed." } }
+
+    try {
+        Set-ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+    } catch {
+        throw "Failed to install Chocolatey: $($_.Exception.Message)"
+    }
+
+    $status = Test-ChocolateyInstalled
+    if (-not $status.installed) {
+        throw "Chocolatey installer finished but choco.exe was not detected."
+    }
+    return @{ success = $true; message = "Chocolatey installed." }
+}
+
+function Install-Scoop {
+    $status = Test-ScoopInstalled
+    if ($status.installed) { return @{ success = $true; message = "Scoop already installed." } }
+
+    try {
+        Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction SilentlyContinue
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        $installer = Invoke-RestMethod -Uri 'https://get.scoop.sh' -UseBasicParsing
+        # This app runs elevated (requireAdministrator); scoop's own installer
+        # refuses to run as admin unless told to via -RunAsAdmin.
+        Invoke-Expression "& { $installer } -RunAsAdmin"
+    } catch {
+        throw "Failed to install Scoop: $($_.Exception.Message)"
+    }
+
+    $status = Test-ScoopInstalled
+    if (-not $status.installed) {
+        throw "Scoop installer finished but scoop.cmd was not detected."
+    }
+    return @{ success = $true; message = "Scoop installed." }
 }
 
 function Install-PowerShell7 {
@@ -1649,6 +1752,8 @@ function Get-DependencyStatus {
             'meshVpn' { Test-MeshVpnInstalled }
             'productivityEngine' { Test-ProductivityEngineInstalled }
             'winget' { Test-WingetDependencyInstalled }
+            'chocolatey' { Test-ChocolateyInstalled }
+            'scoop' { Test-ScoopInstalled }
             'privacyShieldAI' { Test-PrivacyShieldAIInstalled }
             'powershell7' { Test-PowerShell7Installed }
             'vcredist' { Test-VCRedistInstalled }
@@ -1687,8 +1792,8 @@ function Install-Dependency {
         Install a single dependency by ID.
         After installing, automatically hides and starts the app if applicable.
     .PARAMETER Id
-        One of: encryptionEngine, meshVpn, productivityEngine, winget, privacyShieldAI,
-        powershell7, vcredist, systemCleaner, instantSearch, diskHealthEngine
+        One of: encryptionEngine, meshVpn, productivityEngine, winget, chocolatey, scoop,
+        privacyShieldAI, powershell7, vcredist, systemCleaner, instantSearch, diskHealthEngine
     .PARAMETER Target
         Optional sub-target (for privacyShieldAI: specific package name)
     #>
@@ -1716,6 +1821,8 @@ function Install-Dependency {
             'meshVpn' { Install-MeshVpn }
             'productivityEngine' { Install-ProductivityEngine }
             'winget' { Install-WingetDependency }
+            'chocolatey' { Install-Chocolatey }
+            'scoop' { Install-Scoop }
             'privacyShieldAI' { Install-PrivacyShieldAI -Target $Target }
             'powershell7' { Install-PowerShell7 }
             'vcredist' { Install-VCRedist }

@@ -2,6 +2,22 @@ use super::{CachedUpdate, Manager, PackageUpdateResult, CANCELLED};
 use std::process::Command;
 use std::sync::atomic::Ordering;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+// CREATE_NO_WINDOW: without it, every spawned console executable (winget,
+// choco, scoop, npm) briefly flashes its own console window because this app
+// is a GUI-subsystem process with no console of its own for children to
+// attach to.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+fn command(executable: &str) -> Command {
+    let mut cmd = Command::new(executable);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
 pub(super) fn apply_updates(updates: Vec<CachedUpdate>) -> Result<PackageUpdateResult, String> {
     let mut result = PackageUpdateResult {
         updated: 0,
@@ -27,7 +43,7 @@ pub(super) fn apply_updates(updates: Vec<CachedUpdate>) -> Result<PackageUpdateR
             Manager::Scoop => vec!["update", &update.package],
             Manager::Npm => vec!["update", "-g", &update.package],
         };
-        match run(update.manager.executable(), &args) {
+        match run(&update.manager.resolve(), &args) {
             Ok(_) => result.updated += 1,
             Err(error) => result.errors.push(format!(
                 "{} {}: {error}",
@@ -40,7 +56,7 @@ pub(super) fn apply_updates(updates: Vec<CachedUpdate>) -> Result<PackageUpdateR
 }
 
 pub(super) fn run(executable: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(executable)
+    let output = command(executable)
         .args(args)
         .output()
         .map_err(|e| format!("{executable} unavailable: {e}"))?;
@@ -55,7 +71,7 @@ pub(super) fn run(executable: &str, args: &[&str]) -> Result<String, String> {
 }
 
 pub(super) fn run_npm_outdated() -> Result<String, String> {
-    let output = Command::new("npm.cmd")
+    let output = command(&Manager::Npm.resolve())
         .args(["outdated", "-g", "--json"])
         .output()
         .map_err(|e| format!("npm.cmd unavailable: {e}"))?;

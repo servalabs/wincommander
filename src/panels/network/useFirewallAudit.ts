@@ -35,7 +35,7 @@ export function useFirewallAudit() {
   const [error, setError] = useState<ErrorAdvice>();
   const [report, setReport] = useState<RemediationReport>();
 
-  const rules = useMemo(() => audit?.rules ?? [], [audit]);
+  const rules = useMemo<FirewallRule[]>(() => audit?.rules ?? [], [audit]);
 
   const inspect = useCallback(async () => {
     setAuditing(true);

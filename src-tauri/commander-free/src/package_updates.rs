@@ -45,6 +45,59 @@ impl Manager {
     fn version_args(self) -> &'static [&'static str] {
         &["--version"]
     }
+    /// Absolute fallback locations, tried when a PATH lookup for
+    /// `executable()` comes up empty. Elevated processes (this app runs
+    /// `requireAdministrator`) don't reliably resolve App Execution Aliases
+    /// under `%LOCALAPPDATA%\Microsoft\WindowsApps` — the same limitation the
+    /// PowerShell side works around in `Resolve-WingetPath` /
+    /// `Get-LocalWingetPath` — so winget needs explicit candidates even though
+    /// it's genuinely installed.
+    fn fallback_paths(self) -> Vec<String> {
+        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let program_data = std::env::var("ProgramData").unwrap_or_default();
+        let user_profile = std::env::var("USERPROFILE").unwrap_or_default();
+        match self {
+            Self::Winget => vec![
+                format!("{local_app_data}\\Microsoft\\WindowsApps\\winget.exe"),
+                format!("{local_app_data}\\Microsoft\\WinGet\\Links\\winget.exe"),
+            ],
+            Self::Chocolatey => {
+                let root = std::env::var("ChocolateyInstall")
+                    .unwrap_or_else(|_| format!("{program_data}\\chocolatey"));
+                vec![format!("{root}\\bin\\choco.exe")]
+            }
+            Self::Scoop => {
+                let mut paths = Vec::new();
+                if let Ok(scoop_root) = std::env::var("SCOOP") {
+                    paths.push(format!("{scoop_root}\\shims\\scoop.cmd"));
+                }
+                paths.push(format!("{user_profile}\\scoop\\shims\\scoop.cmd"));
+                paths.push(format!("{program_data}\\scoop\\shims\\scoop.cmd"));
+                paths
+            }
+            Self::Npm => Vec::new(),
+        }
+    }
+    /// Resolve to a runnable path: a PATH lookup first, then the fallback
+    /// candidates above. Returns the bare executable name as a last resort so
+    /// callers still get the manager's own "not found" error message.
+    fn resolve(self) -> String {
+        let name = self.executable();
+        if let Ok(path_var) = std::env::var("PATH") {
+            for dir in std::env::split_paths(&path_var) {
+                let candidate = dir.join(name);
+                if candidate.is_file() {
+                    return candidate.to_string_lossy().into_owned();
+                }
+            }
+        }
+        for candidate in self.fallback_paths() {
+            if std::path::Path::new(&candidate).is_file() {
+                return candidate;
+            }
+        }
+        name.to_string()
+    }
 }
 
 #[derive(Clone)]
@@ -165,7 +218,7 @@ fn scan_managers() -> (PackageUpdateInventory, HashMap<String, CachedUpdate>) {
         if CANCELLED.load(Ordering::Acquire) {
             break;
         }
-        match process::run(manager.executable(), manager.version_args()) {
+        match process::run(&manager.resolve(), manager.version_args()) {
             Err(error) => managers.push(ManagerInventory {
                 manager: manager.label().into(),
                 available: false,
@@ -220,9 +273,10 @@ fn scan_managers() -> (PackageUpdateInventory, HashMap<String, CachedUpdate>) {
 }
 
 fn inventory_for(manager: Manager) -> Result<Vec<(String, String, String)>, String> {
+    let resolved = manager.resolve();
     let output = match manager {
         Manager::Winget => process::run(
-            "winget.exe",
+            &resolved,
             &[
                 "upgrade",
                 "--include-unknown",
@@ -231,9 +285,9 @@ fn inventory_for(manager: Manager) -> Result<Vec<(String, String, String)>, Stri
             ],
         )?,
         Manager::Chocolatey => {
-            process::run("choco.exe", &["outdated", "--limit-output", "--no-color"])?
+            process::run(&resolved, &["outdated", "--limit-output", "--no-color"])?
         }
-        Manager::Scoop => process::run("scoop.cmd", &["status"])?,
+        Manager::Scoop => process::run(&resolved, &["status"])?,
         Manager::Npm => process::run_npm_outdated()?,
     };
     let rows = if manager == Manager::Npm {

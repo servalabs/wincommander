@@ -18,6 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { staggerDelay } from "../../components/shared/AnimatedList";
 import { DURATION_S, EASE } from "../../components/shared/motion";
 import PanelHeader from "../../components/shared/PanelHeader";
+import "./index.css";
 
 // ─── Types mirrored from the Rust side ────────────────────────────────
 
@@ -219,10 +220,11 @@ export function RuntimeVisibilityManager({ embedded = false }: { embedded?: bool
     }
   }, [refreshState]);
 
-  // Embedded view (System Managers → Conceal tab): show only the running
-  // processes, with a compact toolbar above. The HKCU-only / manifest-path
-  // chrome only renders in the standalone Runtime Visibility panel where
-  // power users want that detail; the embedded tab kept it as noise.
+  // Embedded view (Maintenance → Startup & drivers → System Managers →
+  // Conceal tab): show only the running processes, with a compact toolbar
+  // above. The HKCU-only / manifest-path chrome only renders in the
+  // standalone Runtime Visibility panel where power users want that detail;
+  // the embedded tab kept it as noise.
   const toolbar = (
     <div className="flex items-center justify-end gap-3 flex-wrap">
       {stateView && stateView.state.entries.length > 0 && (
@@ -309,8 +311,9 @@ export function RuntimeVisibilityManager({ embedded = false }: { embedded?: bool
 
         {/* Concealment is purely about hiding running backend runtimes. The
             standalone Services and Scheduled-Tasks managers (own tabs in the
-            System Managers card) own those domains, so the old read-only
-            Services / Tasks sub-tabs were removed from here as duplicates. */}
+            System Managers card, now under Maintenance → Startup & drivers)
+            own those domains, so the old read-only Services / Tasks sub-tabs
+            were removed from here as duplicates. */}
         <RuntimesPanel
           hiddenKeys={hiddenKeys}
           onHide={onHide}

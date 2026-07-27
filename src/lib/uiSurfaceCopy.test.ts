@@ -347,6 +347,21 @@ describe("redesign surface copy guardrails", () => {
     expect(network).toContain("NetworkMaintenanceTools");
   });
 
+  test("System Managers workbench (Users/Tasks/Services/Conceal) lives in Startup & drivers, not Windows Settings", async () => {
+    const startupDrivers = await read("src/panels/maintenance/StartupDriverTools.tsx");
+    const tweaks = await read("src/panels/tweaks/index.tsx");
+
+    expect(startupDrivers).toContain("<LocalUsersManager embedded />");
+    expect(startupDrivers).toContain("<ScheduledTasksManager embedded />");
+    expect(startupDrivers).toContain("<ServiceManager embedded />");
+    expect(startupDrivers).toContain("<RuntimeVisibilityManager embedded />");
+    expect(tweaks).not.toContain("LocalUsersManager");
+    expect(tweaks).not.toContain("ScheduledTasksManager");
+    expect(tweaks).not.toContain("ServiceManager");
+    expect(tweaks).not.toContain("RuntimeVisibilityManager");
+    expect(tweaks).not.toContain("System Managers");
+  });
+
   test("Private Network VPN kill switch reads as a card-level toggle", async () => {
     const source = await read("src/panels/mesh/VpnKillSwitchSection.tsx");
     const css = await read("src/panels/mesh/VpnKillSwitchSection.css");

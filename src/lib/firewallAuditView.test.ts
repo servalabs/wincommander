@@ -20,6 +20,7 @@ const rule = (over: Partial<FirewallRule>): FirewallRule => ({
   enabled: true,
   action: "Allow",
   program: "C:\\Program Files\\App\\app.exe",
+  signed: null,
   ...over,
 });
 

@@ -3,6 +3,7 @@ import { useAppState } from "../../context/AppContext";
 import useBackend from "../../hooks/useBackend";
 import SectionCard from "../../components/shared/SectionCard";
 import VersionManagementCard from "../../components/settings/VersionManagementCard";
+import ImportExportSettingsCard from "../../components/settings/ImportExportSettingsCard";
 import UniversalCallout from "../../components/shared/UniversalCallout";
 import UniversalToggle from "../../components/shared/UniversalToggle";
 import TierGate from "../../components/shared/TierGate";
@@ -254,6 +255,8 @@ export default function IdentityPanel() {
                 </SectionCard>
 
                 <VersionManagementCard />
+
+                <ImportExportSettingsCard />
             </div>{/* /identity-col-right */}
             </div>{/* /identity-cols */}
 

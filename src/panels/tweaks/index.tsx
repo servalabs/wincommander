@@ -1,5 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { Button } from "@/components/ui/bp";
+import { useEffect, useCallback, useMemo } from "react";
 import { useSearchQuery } from "../../context/SearchContext";
 import useBackend from "../../hooks/useBackend";
 import useVisibility from "../../hooks/useVisibility";
@@ -11,10 +10,6 @@ import PowerPlanCard from "../../components/tweaks/PowerPlanCard";
 import WindowsAiAdvancedActions from "../../components/tweaks/WindowsAiAdvancedActions";
 import VmSandboxSection from "./VmSandboxSection";
 import ContextMenuIntegrationCard from "../../components/tweaks/ContextMenuIntegrationCard";
-import LocalUsersManager from "../../components/tweaks/managers/LocalUsersManager";
-import ScheduledTasksManager from "../../components/tweaks/managers/ScheduledTasksManager";
-import ServiceManager from "../../components/tweaks/managers/ServiceManager";
-import { RuntimeVisibilityManager } from "../runtime-visibility";
 import { TWEAKS_SECTIONS, TWEAKS_TOGGLES } from "../../registry/tweaks.toggles";
 import GlobalSearchNoResults from "../../components/shared/GlobalSearchNoResults";
 import { resolveToggleText } from "../../types/toggles";
@@ -33,7 +28,6 @@ function detectGpuVendor(gpu: string | null | undefined): "amd" | "nvidia" | "in
 }
 
 export default function TweaksPanel() {
-    const [managerTab, setManagerTab] = useState<"users" | "tasks" | "services" | "conceal">("users");
     const { searchQuery } = useSearchQuery();
     const visibility = useVisibility();
     const { systemInfo } = useAppState();
@@ -206,26 +200,9 @@ export default function TweaksPanel() {
                 </div>
             </div>
 
-            {/* System Managers workbench — always below columns */}
-            {noSearch && (
-                <SectionCard
-                    title="System Managers"
-                    className="system-managers-card"
-                    headerRight={
-                        <div className="system-managers-tabs" role="tablist" aria-label="System managers">
-                            <Button small minimal icon="people" active={managerTab === "users"} onClick={() => setManagerTab("users")}>Users</Button>
-                            <Button small minimal icon="time" active={managerTab === "tasks"} onClick={() => setManagerTab("tasks")}>Tasks</Button>
-                            <Button small minimal icon="settings" active={managerTab === "services"} onClick={() => setManagerTab("services")}>Services</Button>
-                            <Button small minimal icon="eye-off" active={managerTab === "conceal"} onClick={() => setManagerTab("conceal")}>Conceal</Button>
-                        </div>
-                    }
-                >
-                    {managerTab === "users" && <LocalUsersManager embedded />}
-                    {managerTab === "tasks" && <ScheduledTasksManager embedded />}
-                    {managerTab === "services" && <ServiceManager embedded />}
-                    {managerTab === "conceal" && <RuntimeVisibilityManager embedded />}
-                </SectionCard>
-            )}
+            {/* Users/Tasks/Services/Conceal manager workbench moved to
+                Maintenance → Startup & drivers (merged with Startup apps) —
+                see StartupDriverTools.tsx. */}
 
             {(!hasResults && !noSearch) && (
                 <GlobalSearchNoResults searchQuery={searchQuery} currentPanelId="tweaks" />

@@ -211,13 +211,6 @@ export interface SecurityCveSnapshot {
   lookupPerformed: boolean;
 }
 
-export interface SecurityBreachMonitorStatus {
-  status: "requires_explicit_opt_in" | "requires_approved_privacy_provider" | "ready";
-  provider: string;
-  lookupPerformed: false;
-  monitored: false;
-}
-
 export interface BrokenShortcut { id: string; name: string; path: string; target: string }
 export interface ShortcutScan { shortcuts: BrokenShortcut[]; scannedShortcuts: number; cancelled: boolean; truncated: boolean }
 export interface ShortcutRemoveResult { removed: number; cancelled: boolean; errors: string[] }
@@ -234,7 +227,7 @@ export interface PackageUpdate { id: string; manager: string; package: string; c
 export interface ManagerInventory { manager: string; available: boolean; updates: PackageUpdate[]; error: string | null }
 export interface PackageUpdateInventory { managers: ManagerInventory[]; cancelled: boolean }
 export interface PackageUpdateResult { updated: number; cancelled: boolean; errors: string[] }
-export interface FirewallRule { id: string; name: string; enabled: boolean; action: string; program: string }
+export interface FirewallRule { id: string; name: string; enabled: boolean; action: string; program: string; signed: boolean | null }
 export interface FirewallAudit { rules: FirewallRule[]; cancelled: boolean; error: string | null }
 export interface FirewallRemediation { changed: number; cancelled: boolean; errors: string[]; backupPath: string | null }
 export interface PerformanceProcess { pid: number; name: string; cpuUsagePercent: number; memoryBytes: number; diskReadBytes: number; diskWrittenBytes: number }
@@ -2175,8 +2168,6 @@ export function useBackend() {
       invoke<SecurityThreatSnapshot>("security_threat_snapshot"),
     securityCveSnapshot: () =>
       invoke<SecurityCveSnapshot>("security_cve_snapshot"),
-    securityBreachMonitorStatus: (optIn: boolean) =>
-      invoke<SecurityBreachMonitorStatus>("security_breach_monitor_status", { optIn }),
     shortcutCleanerScan: () => invoke<ShortcutScan>("shortcut_cleaner_scan"),
     shortcutCleanerRemove: (ids: string[]) => invoke<ShortcutRemoveResult>("shortcut_cleaner_remove", { ids }),
     shortcutCleanerCancel: () => invoke<void>("shortcut_cleaner_cancel"),

@@ -2516,6 +2516,27 @@ pub fn import_settings_cmd(json: String) -> Result<serde_json::Value, String> {
     serde_json::to_value(&updated).map_err(|e| format!("Serialization error: {}", e))
 }
 
+/// Write the exported settings JSON to a path the user picked via the native
+/// save dialog. Done in Rust (not the frontend `@tauri-apps/plugin-fs` API)
+/// because that plugin's `fs:scope` capability is deliberately locked to
+/// `$APPDATA/WinCommander/**`/`$RESOURCE/**`/`$TEMP/WinCommander-*` — widening
+/// it to cover arbitrary user-chosen paths would let ANY frontend JS read/write
+/// anywhere on disk, not just this one dialog-driven export. Rust file I/O has
+/// no such scope restriction, so the path (already validated by the OS's own
+/// native save dialog, not raw user/webpage input) is safe to write here.
+#[tauri::command]
+pub fn write_settings_export_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| format!("Failed to write {}: {}", path, e))
+}
+
+/// Read a settings JSON file from a path the user picked via the native open
+/// dialog. Mirrors `write_settings_export_file`'s reasoning for doing this in
+/// Rust rather than via the frontend fs plugin.
+#[tauri::command]
+pub fn read_settings_import_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {}", path, e))
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // MIGRATION — Auto-upgrade settings schema across versions
 // ═══════════════════════════════════════════════════════════════════════

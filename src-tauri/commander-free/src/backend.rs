@@ -1422,8 +1422,7 @@ fn get_command_tier(command: &str) -> &'static str {
         | "malware_quarantine_delete"
         | "malware_quarantine_list"
         | "security_threat_snapshot"
-        | "security_cve_snapshot"
-        | "security_breach_monitor_status" => "paid",
+        | "security_cve_snapshot" => "paid",
         // ── Stego backup (paid; VeraCrypt-in-MP4, Pro-Rust handler) ──
         "Create-StegoMp4" | "Extract-StegoMp4" => "paid",
         // ── Two-password volume creation (paid; headless engine, Pro-Rust handler) ──

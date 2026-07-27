@@ -1791,6 +1791,8 @@ const USABILITY_TIER_BY_ID: Record<string, CleanupUsabilityTier> = {
   remoteAccessLogs: 'low-impact',
   gameLauncherLogs: 'low-impact',
   firewallLog: 'low-impact',
+  appLaunchHistory: 'low-impact',
+  reliabilityHistory: 'low-impact',
 
   shellBags: 'history-cache',
   clipboardHistory: 'history-cache',
@@ -1812,6 +1814,9 @@ const USABILITY_TIER_BY_ID: Record<string, CleanupUsabilityTier> = {
   editorHistory: 'history-cache',
   adobeRecent: 'history-cache',
   geolocationCache: 'history-cache',
+  officeMru: 'history-cache',
+  explorerSearchHistory: 'history-cache',
+  searchPersonalization: 'history-cache',
 
   usbHistory: 'rebuilds-apps-connectivity',
   rdpHistory: 'rebuilds-apps-connectivity',
@@ -1825,6 +1830,7 @@ const USABILITY_TIER_BY_ID: Record<string, CleanupUsabilityTier> = {
   neighborCache: 'rebuilds-apps-connectivity',
   netbiosCache: 'rebuilds-apps-connectivity',
   proxyCache: 'rebuilds-apps-connectivity',
+  p2pUpdateCache: 'rebuilds-apps-connectivity',
 
   browserFootprints: 'data-accounts-recovery',
   recycleBin: 'data-accounts-recovery',
@@ -1851,6 +1857,7 @@ const USABILITY_TIER_BY_ID: Record<string, CleanupUsabilityTier> = {
   cloudPlaceholders: 'data-accounts-recovery',
   bitsQueue: 'data-accounts-recovery',
   cellularHistory: 'data-accounts-recovery',
+  embeddedWebCache: 'data-accounts-recovery',
 };
 
 for (const category of [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES]) {

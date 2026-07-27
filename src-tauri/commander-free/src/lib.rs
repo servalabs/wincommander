@@ -2532,6 +2532,8 @@ pub fn run() {
             settings::is_setting_locked,
             settings::export_settings_cmd,
             settings::import_settings_cmd,
+            settings::write_settings_export_file,
+            settings::read_settings_import_file,
             // ── Convergence Engine ──
             settings::get_drift_report,
             settings::update_current_state,
@@ -2591,7 +2593,6 @@ pub fn run() {
             malware_scan::malware_quarantine_list,
             security_data::security_threat_snapshot,
             security_data::security_cve_snapshot,
-            security_data::security_breach_monitor_status,
             // ── Shortcut/environment/uninstall hygiene ──
             shortcut_cleaner::shortcut_cleaner_scan,
             shortcut_cleaner::shortcut_cleaner_remove,

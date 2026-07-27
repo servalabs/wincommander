@@ -38,6 +38,19 @@ export async function importSettings(json: string): Promise<AppSettings> {
   return invoke<AppSettings>('import_settings_cmd', { json });
 }
 
+// Backend file I/O for a user-picked path (via @tauri-apps/plugin-dialog's
+// save()/open()) — done in Rust rather than @tauri-apps/plugin-fs because
+// that plugin's fs:scope capability is locked to WinCommander's own app
+// folders; widening it would let any frontend JS touch arbitrary paths, not
+// just this dialog-driven export/import flow.
+export async function writeSettingsExportFile(path: string, content: string): Promise<void> {
+  return invoke<void>('write_settings_export_file', { path, content });
+}
+
+export async function readSettingsImportFile(path: string): Promise<string> {
+  return invoke<string>('read_settings_import_file', { path });
+}
+
 export async function applyAdminConfig(
   config: SettingsPatch,
   lockedPaths: string[],

@@ -154,7 +154,7 @@ export default function CanaryTokensSection() {
         setError('Port must be 1024–65535.');
         return;
       }
-      await invoke('start_canary_listener', { port });
+      await invoke('start_canary_listener', { args: { port } });
       await refreshStatus();
     } catch (e) {
       setError(String(e));
@@ -205,9 +205,11 @@ export default function CanaryTokensSection() {
     setError(null);
     try {
       await invoke('generate_canary', {
-        tokenType,
-        label: tokenLabel.trim(),
-        outputPath,
+        args: {
+          tokenType,
+          label: tokenLabel.trim(),
+          outputPath,
+        },
       });
       setTokenLabel('');
       await refreshTokens();
@@ -225,7 +227,7 @@ export default function CanaryTokensSection() {
   const deleteToken = useCallback(
     async (id: string) => {
       try {
-        await invoke('delete_canary', { tokenId: id });
+        await invoke('delete_canary', { args: { tokenId: id } });
         setTokens((prev) => prev.filter((t) => t.id !== id));
       } catch (e) {
         showError(String(e));

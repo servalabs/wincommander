@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Conservative, preview-first audit of third-party Windows firewall rules.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -51,6 +51,10 @@ pub struct FirewallRule {
     pub enabled: bool,
     pub action: String,
     pub program: String,
+    /// `Some(true)` = valid Authenticode signature, `Some(false)` = explicitly
+    /// unsigned/invalid, `None` = unknown (no program path, or the batched
+    /// lookup didn't cover it). See `apply_signatures`/`read_signatures`.
+    pub signed: Option<bool>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,8 +144,10 @@ fn scan_rules() -> (FirewallAudit, HashMap<String, CachedRule>) {
                     enabled: rule.enabled,
                     action: rule.action,
                     program: rule.program,
+                    signed: None,
                 });
             }
+            apply_signatures(&mut rules);
             (
                 FirewallAudit {
                     rules,
@@ -286,5 +292,74 @@ fn ensure_mutation_allowed() -> Result<(), String> {
         )
     } else {
         Ok(())
+    }
+}
+
+/// Stamps `signed` on every rule from one batched Authenticode check over the
+/// distinct, non-empty `program` paths (see `read_signatures`) — a rule
+/// pointing at an unsigned binary in a suspicious location is the same class
+/// of signal `startup_maintenance.rs` already surfaces for startup entries.
+/// Fails open: a lookup miss or error just leaves `signed` as `None`.
+fn apply_signatures(rules: &mut [FirewallRule]) {
+    let paths: Vec<String> = rules
+        .iter()
+        .map(|rule| rule.program.clone())
+        .filter(|program| !program.is_empty())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let signatures = read_signatures(&paths).unwrap_or_default();
+    for rule in rules {
+        rule.signed = if rule.program.is_empty() {
+            None
+        } else {
+            signatures.get(&rule.program).map(|sig| sig.status == "Valid")
+        };
+    }
+}
+
+#[derive(Deserialize)]
+struct Signature {
+    path: String,
+    status: String,
+}
+
+#[cfg(windows)]
+fn read_signatures(paths: &[String]) -> Result<HashMap<String, Signature>, String> {
+    if paths.is_empty() {
+        return Ok(HashMap::new());
+    }
+    const SCRIPT: &str = "$ErrorActionPreference='Stop';$p=@($env:WINCOMMANDER_FIREWALL_SIGN_PATHS|ConvertFrom-Json);@($p|ForEach-Object{$s=Get-AuthenticodeSignature -LiteralPath $_;[pscustomobject]@{path=$_;status=$s.Status.ToString()}})|ConvertTo-Json -Compress";
+    let output = match std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env(
+            "WINCOMMANDER_FIREWALL_SIGN_PATHS",
+            serde_json::to_string(paths).map_err(|error| error.to_string())?,
+        )
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return Ok(HashMap::new()),
+    };
+    if !output.status.success() {
+        return Ok(HashMap::new());
+    }
+    let records = parse_signature_records(&output.stdout).unwrap_or_default();
+    Ok(records
+        .into_iter()
+        .map(|record| (record.path.clone(), record))
+        .collect())
+}
+
+#[cfg(not(windows))]
+fn read_signatures(_paths: &[String]) -> Result<HashMap<String, Signature>, String> {
+    Ok(HashMap::new())
+}
+
+fn parse_signature_records(bytes: &[u8]) -> Result<Vec<Signature>, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)?;
+    match value {
+        serde_json::Value::Array(_) => serde_json::from_value(value),
+        value => serde_json::from_value(value).map(|record| vec![record]),
     }
 }

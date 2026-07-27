@@ -113,7 +113,7 @@ export function applyProductAliases(productMap: Record<string, string>): Record<
 }
 
 const softwaresMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../assets/softwares/*", { eager: true, query: "?url", import: "default" })
+  ? import.meta.glob("../assets/softwares/**/*", { eager: true, query: "?url", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const entitiesMods = (CAN_LOAD_BROWSER_ASSET_MAPS
   ? import.meta.glob("../assets/entities/*", { eager: true, query: "?url", import: "default" })
