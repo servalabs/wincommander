@@ -109,6 +109,18 @@ function Find-AIControlLegacyBinary {
     throw "A Microsoft-signed $name source wasn't found. Mount compatible Windows media or place it in the protected WinCommander AIControl sources directory."
 }
 
+function Test-AIControlLegacyBinaryInstalled {
+    # The '.installed' marker only records that an install ran once; it survives
+    # even if the copied binary or shortcut is later removed (AV, manual cleanup),
+    # so status must verify the real files Install-AIControlLegacyBinary writes.
+    param([ValidateSet('paint', 'snipping')][string]$App)
+    $name = if ($App -eq 'paint') { 'mspaint.exe' } else { 'SnippingTool.exe' }
+    $shortcutName = if ($App -eq 'paint') { 'Paint.lnk' } else { 'Accessories\Snipping Tool.lnk' }
+    $binaryPath = Join-Path (Get-AIControlDataRoot) "classic\$App\$name"
+    $shortcutPath = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\$shortcutName"
+    (Test-Path -LiteralPath $binaryPath) -and (Test-Path -LiteralPath $shortcutPath)
+}
+
 function Install-AIControlLegacyBinary {
     param([ValidateSet('paint', 'snipping')][string]$App)
     Assert-AIControlAdmin

@@ -17,6 +17,18 @@ interface ClassicApp {
   note?: string;
 }
 
+// Find-AIControlLegacyBinary (ai-control-maintenance.ps1) throws this when no
+// Microsoft-signed Paint/Snipping Tool source exists to restore from — the
+// normal case on Windows 11, since Microsoft no longer ships these by default
+// and WinCommander does not bundle them. Surface it as an explanation, not a
+// raw PowerShell error dump.
+function isLegacySourceMissingError(error: string): boolean {
+  return error.includes("Microsoft-signed") && error.includes("source wasn't found");
+}
+
+const LEGACY_SOURCE_MISSING_MESSAGE =
+  "Windows 11 no longer includes this app by default, and WinCommander could not find a Microsoft-signed copy on this device or an inserted Windows installation medium to restore it from.";
+
 const CLASSIC_APPS: ClassicApp[] = [
   { operation: "classic-photo-viewer", statusKey: "photoViewer", name: "Windows Photo Viewer", description: "Register the inbox viewer for supported image formats." },
   { operation: "classic-paint", statusKey: "paint", name: "Classic Paint", description: "Restore a Microsoft-signed local Paint binary and Start shortcut.", note: "Requires a compatible signed source if Windows no longer contains it." },
@@ -64,7 +76,11 @@ export default function ClassicWindowsApps() {
           );
         })}
       </div>
-      {tools.error && <p className="text-xs text-[var(--danger)]">{tools.error}</p>}
+      {tools.error && (
+        <p className="text-xs text-[var(--danger)]">
+          {isLegacySourceMissingError(tools.error) ? LEGACY_SOURCE_MISSING_MESSAGE : tools.error}
+        </p>
+      )}
       <AlertDialog open={pending !== undefined} onOpenChange={(open) => { if (!open) setPending(undefined); }}>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>Install {pending?.name}?</AlertDialogTitle><AlertDialogDescription>{pending?.description} {pending?.note}</AlertDialogDescription></AlertDialogHeader>
