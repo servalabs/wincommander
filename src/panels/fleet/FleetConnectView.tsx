@@ -10,7 +10,6 @@ import { Switch } from "@/components/ui/switch";
 import { Icon } from "@/components/ui/icon";
 import { getSettingsOnce } from "@/hooks/useSettings";
 import { useLicenseQuery } from "@/hooks/queries/useLicenseQuery";
-import PanelSkeleton from "@/components/shared/PanelSkeleton";
 
 interface FleetStatus {
   connected: boolean;
@@ -283,7 +282,36 @@ export default function FleetConnectView() {
     }
   }
 
-  if (!loaded || !statusChecked) return <PanelSkeleton rows={3} cards={1} />;
+  // Purpose-built loading state: mirrors the real card's shape (header +
+  // badge + two meta rows) so nothing jumps when the first poll settles,
+  // instead of the generic cross-panel PanelSkeleton.
+  if (!loaded || !statusChecked) {
+    return (
+      <div className="fleet-connect-card" aria-busy="true" aria-label="Loading device enrollment status">
+        <div className="fleet-connect-header">
+          <div className="fleet-connect-title-row">
+            <Icon icon="offline" size={16} className="fleet-connect-icon" />
+            <h3 className="fleet-connect-title">Device Enrollment</h3>
+          </div>
+          <span className="fleet-connect-badge fleet-connect-badge--pending">
+            <span className="fleet-dot is-pending" /> Connecting…
+          </span>
+        </div>
+        <div className="fleet-connect-status">
+          <dl className="fleet-connect-meta" aria-hidden="true">
+            <div className="fleet-meta">
+              <dt className="fleet-shimmer fleet-shimmer-label" />
+              <dd className="fleet-shimmer fleet-shimmer-value" />
+            </div>
+            <div className="fleet-meta">
+              <dt className="fleet-shimmer fleet-shimmer-label" />
+              <dd className="fleet-shimmer fleet-shimmer-value" />
+            </div>
+          </dl>
+        </div>
+      </div>
+    );
+  }
 
   const isConnected = status?.connected ?? false;
   // Surface any Pro-agent error whether connected or not.

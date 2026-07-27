@@ -63,6 +63,7 @@ import { useActivePanelPoller } from "./hooks/useActivePanelPoller";
 import { useNetworkTrafficListener } from "./hooks/useNetworkTraffic";
 import { useHasActiveWork } from "./hooks/useHasActiveWork";
 import PanelSkeleton from "./components/shared/PanelSkeleton";
+import FleetSkeleton from "./components/shared/FleetSkeleton";
 import PanelErrorBoundary from "./components/PanelErrorBoundary";
 import AppToaster from "./components/AppToaster";
 import FlowActivityLogger from "./components/FlowActivityLogger";
@@ -943,7 +944,7 @@ function AppContent() {
             panelId={activePanel}
             onRetry={() => setPanelRecoveryGeneration((generation) => generation + 1)}
           >
-          <Suspense fallback={<PanelSkeleton />}>
+          <Suspense fallback={activePanel === "fleet" ? <FleetSkeleton /> : <PanelSkeleton />}>
             {/* Panel enter: crossfade + rise from the motion SSOT. No exit/
                 AnimatePresence by design (see KT note above) — only initial+
                 animate apply on the keyed remount. */}

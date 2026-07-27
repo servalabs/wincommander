@@ -940,6 +940,35 @@
   margin: 0;
 }
 
+/* ── Device enrollment card — loading skeleton ────────────────────── */
+/* Same shimmer technique as PanelSkeleton.css (gradient sweep via
+   background-position), reskinned with this file's V2 tokens and shaped
+   like this card's own meta rows instead of the generic row/toggle shape. */
+@keyframes fleet-shimmer-sweep {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.fleet-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--surface-3) 50%,
+    var(--surface-2) 75%
+  );
+  background-size: 800px 100%;
+  animation: fleet-shimmer-sweep 1.4s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+.fleet-shimmer-label {
+  height: 9px;
+  width: 64px;
+  margin-bottom: 6px;
+}
+.fleet-shimmer-value {
+  height: 13px;
+  width: 72%;
+}
+
 /* ── Device card — remove action ─────────────────────────────────── */
 .fleet-device-actions {
   margin-top: 10px;
