@@ -1629,7 +1629,8 @@ export const ACTION_CATEGORIES: CleanupCategory[] = [
     actionOnly: true,
     extractPreview: () => ({ count: -1, items: [] }),
   },
-  // Force SSD TRIM moved to the Maintenance panel's Repair & Hygiene tab (2026-07).
+  // Force SSD TRIM lives in OsRepairCard (Maintenance's old "Repair & hygiene"
+  // tab that used to host it is gone, 2026-07) — not one of these categories.
   {
     id: 'previousWindowsInstall',
     label: 'Previous Windows Install',

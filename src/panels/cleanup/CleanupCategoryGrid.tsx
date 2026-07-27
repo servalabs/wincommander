@@ -40,7 +40,6 @@ export default function CleanupCategoryGrid({
         cardDataMap,
         loadingAll,
         orderedScanCategories,
-        summaryStats,
         loadCategoryBatch,
         handleCardLoad,
         handleCardClear,
@@ -208,9 +207,12 @@ export default function CleanupCategoryGrid({
             {isLowImpactTab && (
                 <>
                     {/* ── Summary bar ──────────────────────────────────────────
-                      * Shows at-a-glance counts (needs cleaning / clean) and a
-                      * "Clear Low-Impact" shortcut. Counts update live as cards
-                      * scan. Matches the mockup layout; card designs are unchanged. */}
+                      * The needs-cleaning/clean/scanning counts render once,
+                      * above the tab list, in SystemCleanupPanel.tsx (they must
+                      * survive tab switches, unlike this tab-scoped block) —
+                      * see CleanupSummaryStats there. This block keeps only the
+                      * "Clear Low-Impact" shortcut + the bulk-clear exclude
+                      * picker, which stay low-impact-tab-only by design. */}
                     <div className="flex items-center justify-end">
                         {headerButtons}
                     </div>
@@ -222,47 +224,7 @@ export default function CleanupCategoryGrid({
                             className="flex items-center gap-4 px-3 py-2.5 rounded-lg flex-wrap"
                             style={{ background: 'var(--color-bg-tertiary)', border: '1px solid var(--color-border)' }}
                         >
-                            <div className="flex items-center gap-5 flex-1 flex-wrap">
-                                    <div className="flex min-w-[84px] flex-col items-center gap-0.5">
-                                        <span
-                                            className="font-mono text-[20px] font-bold leading-none"
-                                            style={{ color: 'var(--color-warning)' }}
-                                        >
-                                            {summaryStats.needsCleaning}
-                                        </span>
-                                        <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
-                                            Needs cleaning
-                                        </span>
-                                    </div>
-                                    <div className="flex min-w-[84px] flex-col items-center gap-0.5">
-                                        <span
-                                            className="font-mono text-[20px] font-bold leading-none"
-                                            style={{ color: 'var(--color-success)' }}
-                                        >
-                                            {summaryStats.clean}
-                                        </span>
-                                        <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
-                                            Clean
-                                        </span>
-                                    </div>
-                                    <div className="flex min-w-[72px] flex-col items-center gap-0.5">
-                                        <span className="font-mono text-[20px] font-bold leading-none text-[var(--color-text-muted)]">
-                                            {clearAllExcludes.size}
-                                        </span>
-                                        <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
-                                            Excluded
-                                        </span>
-                                    </div>
-                                    <div className="flex min-w-[72px] flex-col items-center gap-0.5">
-                                        <span className="font-mono text-[20px] font-bold leading-none text-[var(--color-text-muted)]">
-                                            {orderedScanCategories.filter(cat => cardDataMap[cat.id]?.loading).length}
-                                        </span>
-                                        <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
-                                            Scanning
-                                        </span>
-                                    </div>
-                            </div>
-                            <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-2 flex-wrap flex-1">
                                 <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)] mr-1">Exclude from bulk clear:</span>
                                 {Array.from(clearAllExcludes).map(id => (
                                     <button
@@ -290,7 +252,10 @@ export default function CleanupCategoryGrid({
                                         ✕ {orderedScanCategories.find(c => c.id === id)?.label ?? id}
                                     </button>
                                 ))}
-                                {/* Low-impact categories are the only bulk-clear candidates. */}
+                                {/* Exclude candidates span every scan category (Standard + Deep DFIR),
+                                  * not just low-impact ones — Wi-Fi Profiles and Browser Audit in
+                                  * particular need to be excludable even though "Clear Low-Impact"
+                                  * itself only ever touches low-impact categories. */}
                                 <Popover
                                     position="bottom-right"
                                     isOpen={excludePickerOpen}
@@ -301,7 +266,7 @@ export default function CleanupCategoryGrid({
                                         <Menu className="bp5-small" style={{ maxHeight: 260, overflowY: 'auto' }}>
                                             {(() => {
                                                 const available = orderedScanCategories
-                                                    .filter(c => isLowImpactCategory(c) && !clearAllExcludes.has(c.id));
+                                                    .filter(c => !clearAllExcludes.has(c.id));
                                                 if (available.length === 0) {
                                                     return <MenuItem disabled text="No more categories to exclude" />;
                                                 }

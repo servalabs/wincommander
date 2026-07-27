@@ -136,18 +136,23 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(overlayIndex).toBeGreaterThan(tabsIndex);
   });
 
-  // Force SSD TRIM moved to Maintenance's Repair & Hygiene tab — it's a
-  // different parallel workstream's action now, not System Cleanup's.
-  test("Force SSD TRIM moved out of System Cleanup's one-time actions", async () => {
+  // Force SSD TRIM is not one of ACTION_CATEGORIES/useCleanupScan's dispatch
+  // map — it lives in OsRepairCard, which SystemCleanupPanel now renders
+  // directly inside this tab (Maintenance's "Repair & hygiene" tab that used
+  // to host it was removed, 2026-07).
+  test("Force SSD TRIM is not duplicated in System Cleanup's one-time actions", async () => {
     const categories = await read("src/panels/cleanup/cleanupCategories.ts");
     const actionsMonitoring = await read("src/panels/cleanup/CleanupActionsMonitoring.tsx");
     const scan = await read("src/panels/cleanup/useCleanupScan.ts");
+    const panel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
 
     expect(categories).not.toContain("id: 'ssdTrim'");
     expect(categories).not.toContain("invokeSSDTrim");
-    expect(actionsMonitoring).toContain("Force SSD TRIM moved to the Maintenance panel's Repair & Hygiene tab");
+    expect(actionsMonitoring).toContain("Force SSD TRIM lives in OsRepairCard");
     expect(scan).not.toContain("ssdTrim: invokeSSDTrim");
     expect(scan).not.toContain("invokeSSDTrim,");
+    expect(panel).toContain('from "../maintenance/OsRepairCard"');
+    expect(panel).toContain("<OsRepairCard />");
   });
 
   // Each of the four usability tiers renders through the same component,

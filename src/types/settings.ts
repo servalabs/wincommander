@@ -176,13 +176,14 @@ export interface AppPreferences {
   scrubContextMenuEnabled: boolean;
   safeCopyContextMenuEnabled: boolean;
   sidebarCollapsed: boolean;
-  /** True once the user has explicitly touched the Cleanup "Clear All
-   *  Traces" exclude list at least once. Until then, Wi-Fi Profiles and
-   *  Browser Audit are pre-excluded by default every session (new users
-   *  shouldn't lose saved Wi-Fi passwords / browsing footprints to a
-   *  one-click sweep before they've seen the exclude picker) — see
-   *  DEFAULT_EXCLUDE_CATS / useCleanupScan.ts. Absent/false = not yet
-   *  customized, so the default applies. */
+  /** @deprecated Unread by the frontend. Wi-Fi Profiles and Browser Audit
+   *  being pre-excluded from the Cleanup bulk-clear exclude list is now
+   *  seeded unconditionally into `clearAllExcludes`'s initial state in
+   *  useCleanupScan.ts (in-memory only, re-applied every session; users can
+   *  still remove either from the set via the exclude picker) — there is no
+   *  "not yet customized" state to persist. Kept in the schema only because
+   *  settings.rs still writes/reads this field; not consulted by any
+   *  frontend code. */
   cleanupExcludesCustomized?: boolean;
   lastPanel: string;
   dashboardViewMode: string;

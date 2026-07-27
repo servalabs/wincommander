@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/ta
 import DriveWipeDialog from "./DriveWipeDialog";
 import CleanupCategoryGrid from "./CleanupCategoryGrid";
 import CleanupActionsMonitoring from "./CleanupActionsMonitoring";
+import OsRepairCard from "../maintenance/OsRepairCard";
 import { useCleanupScan } from "./useCleanupScan";
 import { useCleanupLegacyDialogs } from "./useCleanupLegacyDialogs";
 import { useCleanupSessionState } from "./cleanupSessionState";
@@ -200,6 +201,8 @@ export default function SystemCleanupPanel() {
                             and forensic trace erasure only. The old
                             `<DiskCleanupGranular />` render used to be here. */}
 
+                        {hasSafeguards && <CleanupSummaryStats scan={scan} />}
+
                         {hasSafeguards && (
                             <Tabs value={activeTab} onValueChange={setActiveTab}>
                                 <TabsList className="w-full flex-wrap justify-start">
@@ -262,16 +265,23 @@ export default function SystemCleanupPanel() {
                                     />
                                 </TabsContent>
                                 <TabsContent value="actions-monitoring">
-                                    {/* One-Time Actions + System Monitoring. Force SSD TRIM
-                                        moved to Maintenance's Repair & Hygiene tab (2026-07). */}
-                                    <CleanupActionsMonitoring
-                                        cardDataMap={cardDataMap}
-                                        isInvestigator={isInvestigator}
-                                        detailOpenerMap={detailOpenerMap}
-                                        handleCardLoad={handleCardLoad}
-                                        handleCardClear={handleCardClear}
-                                        onDriveWipe={() => setDriveWipeOpen(true)}
-                                    />
+                                    {/* One-Time Actions + System Monitoring, plus Windows repair
+                                        (OsRepairCard) -- relocated here from Maintenance's now-removed
+                                        "Repair & hygiene" tab (2026-07), so every one-shot action button
+                                        lives in exactly one place app-wide. The divider below keeps these
+                                        as two distinct action groups rather than one merged list. */}
+                                    <div className="flex flex-col gap-4">
+                                        <CleanupActionsMonitoring
+                                            cardDataMap={cardDataMap}
+                                            isInvestigator={isInvestigator}
+                                            detailOpenerMap={detailOpenerMap}
+                                            handleCardLoad={handleCardLoad}
+                                            handleCardClear={handleCardClear}
+                                            onDriveWipe={() => setDriveWipeOpen(true)}
+                                        />
+                                        <ActionsMonitoringDivider>Windows repair</ActionsMonitoringDivider>
+                                        <OsRepairCard />
+                                    </div>
                                 </TabsContent>
                             </Tabs>
                         )}
@@ -361,6 +371,73 @@ export default function SystemCleanupPanel() {
         </div>
         </div>
         <div data-cleanup-overlay-root="true" className="pointer-events-none absolute inset-0" />
+        </div>
+    );
+}
+
+// Cross-tab summary counts (needs cleaning / clean / excluded / scanning).
+// Rendered once above the tab list so the counts stay visible regardless of
+// the active tab — they used to live inside CleanupCategoryGrid gated to the
+// low-impact tab only, and disappeared on every other tab because Radix Tabs
+// unmounts inactive TabsContent (see CleanupCategoryGrid.tsx's remaining
+// low-impact-only summary block for the "Clear Low-Impact" + exclude picker
+// that stayed behind).
+function CleanupSummaryStats({ scan }: { scan: ReturnType<typeof useCleanupScan> }) {
+    const { summaryStats, clearAllExcludes, orderedScanCategories, cardDataMap } = scan;
+    const scanningCount = orderedScanCategories.filter((cat) => cardDataMap[cat.id]?.loading).length;
+    return (
+        <div
+            className="flex items-center gap-5 flex-wrap px-3 py-2.5 rounded-lg"
+            style={{ background: 'var(--color-bg-tertiary)', border: '1px solid var(--color-border)' }}
+            data-cleanup-summary-stats="true"
+        >
+            <div className="flex min-w-[84px] flex-col items-center gap-0.5">
+                <span className="font-mono text-[20px] font-bold leading-none" style={{ color: 'var(--color-warning)' }}>
+                    {summaryStats.needsCleaning}
+                </span>
+                <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
+                    Needs cleaning
+                </span>
+            </div>
+            <div className="flex min-w-[84px] flex-col items-center gap-0.5">
+                <span className="font-mono text-[20px] font-bold leading-none" style={{ color: 'var(--color-success)' }}>
+                    {summaryStats.clean}
+                </span>
+                <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
+                    Clean
+                </span>
+            </div>
+            <div className="flex min-w-[72px] flex-col items-center gap-0.5">
+                <span className="font-mono text-[20px] font-bold leading-none text-[var(--color-text-muted)]">
+                    {clearAllExcludes.size}
+                </span>
+                <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
+                    Excluded
+                </span>
+            </div>
+            <div className="flex min-w-[72px] flex-col items-center gap-0.5">
+                <span className="font-mono text-[20px] font-bold leading-none text-[var(--color-text-muted)]">
+                    {scanningCount}
+                </span>
+                <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
+                    Scanning
+                </span>
+            </div>
+        </div>
+    );
+}
+
+// Marks the boundary between CleanupActionsMonitoring's own one-shot actions
+// (Virtual Memory Purge / Free Space Cleanup / Previous Windows Install) and
+// OsRepairCard's Windows repair actions below -- mirrors the header-row
+// pattern CleanupActionsMonitoring.tsx already uses to separate its "One-Time
+// Actions" column from "System Monitoring", so this reads as a second,
+// distinct group rather than a merged list.
+function ActionsMonitoringDivider({ children }: { children: React.ReactNode }) {
+    return (
+        <div className="flex items-center gap-3 py-3">
+            <span className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>{children}</span>
+            <div className="flex-1 h-px bg-[var(--color-border)] opacity-50" />
         </div>
     );
 }

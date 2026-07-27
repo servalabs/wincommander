@@ -186,7 +186,13 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
     // Bulk cleanup only targets low-impact categories. These exclusions offer
     // a further opt-out without allowing a bulk action to reach higher tiers.
-    const [clearAllExcludes, setClearAllExcludesRaw] = useState<Set<string>>(new Set());
+    // wlanProfiles (Wi-Fi Profiles) and browserFootprints (Browser Audit) are
+    // pre-excluded every session so a new user can't lose saved Wi-Fi
+    // passwords or browsing footprints to a one-click sweep before they've
+    // seen the exclude picker — still removable from the set via that picker.
+    const [clearAllExcludes, setClearAllExcludesRaw] = useState<Set<string>>(
+        () => new Set(['wlanProfiles', 'browserFootprints'])
+    );
     const setClearAllExcludes = setClearAllExcludesRaw;
 
     // ── Multi-user viewer state ────────────────────────────────────────
@@ -580,7 +586,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         defenderHistory: clearDefenderHistory,
         virtualMemory: invokeVirtualMemoryPurge,
         unallocatedErase: invokeUnallocatedSpaceErase,
-        // Force SSD TRIM moved to the Maintenance panel's Repair & Hygiene tab (2026-07).
+        // Force SSD TRIM lives in OsRepairCard (Maintenance's old "Repair & hygiene"
+        // tab that used to host it is gone, 2026-07) — not dispatched through this map.
     };
 
     // Keep the card dispatcher in lockstep with cleanupCategories.ts. Most
