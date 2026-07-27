@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Icon } from "@/components/ui/icon";
 import { getSettingsOnce } from "@/hooks/useSettings";
+import { useLicenseQuery } from "@/hooks/queries/useLicenseQuery";
 
 interface FleetStatus {
   connected: boolean;
@@ -58,6 +59,12 @@ interface UnenrollInfo {
 type UnenrollResult = { status: string; approvals: number; required_approvals: number };
 
 export default function FleetConnectView() {
+  const { data: license, isLoading: licenseLoading } = useLicenseQuery();
+  // Status polling is not an access request. Limit it to active Fleet service
+  // licences so merely opening this panel does not repeatedly invoke a
+  // service-gated backend command for ordinary Pro/free users.
+  const fleetEntitled = license?.valid === true &&
+    (license.active_service_features ?? license.features ?? []).includes("fleet");
   const [serverUrl, setServerUrl] = useState("");
   const [dispatch, setDispatch] = useState(false);
   const [signingKeyPub, setSigningKeyPub] = useState("");
@@ -119,6 +126,10 @@ export default function FleetConnectView() {
   }
 
   function doPollStatus() {
+    if (!fleetEntitled) {
+      setStatusChecked(true);
+      return;
+    }
     invoke<FleetStatus>("fleet_status")
       .then((s) => {
         setStatus(s);
@@ -158,12 +169,24 @@ export default function FleetConnectView() {
 
   // Steady-state poll on mount — shows status if already enrolled.
   useEffect(() => {
+    if (licenseLoading || !fleetEntitled) {
+      setStatusChecked(!licenseLoading);
+      return;
+    }
     startSteadyPoll();
     return () => { stopPoll(); stopUnenrollPoll(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fleetEntitled, licenseLoading]);
 
   async function connect() {
+    // The Connect button is an explicit request for this paid service. Open the
+    // paywall here (once per click) rather than allowing background status
+    // polling to repeatedly open it for users without Fleet access.
+    if (!fleetEntitled) {
+      window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy" } }));
+      setError("An active Fleet subscription is required for fleet enrollment.");
+      return;
+    }
     setError(null);
     setBusy(true);
     try {
