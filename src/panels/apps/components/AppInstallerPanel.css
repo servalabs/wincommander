@@ -247,20 +247,20 @@
           min-width: 0;
         }
 
+        /* No border here — the outer .installer-card is already the single
+           bordered container around the toolbar (including this search box).
+           A prior partial fix stripped the innermost input's own border but
+           left this box's border alongside .installer-card's, i.e. two nested
+           bordered boxes around the search field. Background-only keeps the
+           field visually distinct without reintroducing that "box inside a
+           box" look. */
         .installer-search-box {
           display: flex;
           align-items: center;
           width: 100%;
           min-height: 42px;
           padding: 0 12px;
-          border: 1px solid var(--color-border);
           background: var(--color-bg-tertiary);
-          transition: border-color 0.15s, box-shadow 0.15s;
-        }
-
-        .installer-search-box:hover,
-        .installer-search-box:focus-within {
-          border-color: var(--color-accent-primary);
         }
 
         .installer-search-icon {
@@ -294,27 +294,6 @@
           font-size: 13px;
           border: none !important;
           box-shadow: none !important;
-        }
-
-        /* Hides sections when the Engines tab is active (replaces inline
-           style={{ display: 'none' }} toggles). */
-        .is-hidden {
-          display: none;
-        }
-
-        .divider-clickable {
-          cursor: pointer;
-        }
-
-        .divider-label--with-icon {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          user-select: none;
-        }
-
-        .display-contents {
-          display: contents;
         }
 
         .installer-filter-row {

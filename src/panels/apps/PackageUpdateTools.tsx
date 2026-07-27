@@ -4,8 +4,13 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import type { ManagerInventory, PackageUpdateInventory } from "../../hooks/useBackend";
-import { useBackend } from "../../hooks/useBackend";
+import { executeBackendCommand, useBackend } from "../../hooks/useBackend";
 import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/packageOperationLock";
+
+// Managers that can be installed on demand from this screen, and the
+// Install-Dependency id each maps to — the exact same id EnginesSection's
+// EngineCard passes for these two engines.
+const INSTALLABLE_MANAGERS: Record<string, string> = { chocolatey: "chocolatey", scoop: "scoop" };
 
 /**
  * The single multi-manager update executor. Packages & Apps is its only
@@ -21,6 +26,7 @@ export function PackageUpdateTools() {
   const [packageIds, setPackageIds] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
+  const [installingManagers, setInstallingManagers] = useState<Set<string>>(new Set());
 
   const inspectPackages = async () => {
     if (!tryAcquirePackageOperation()) { setMessage("Another package-manager operation is already running."); return; }
@@ -42,19 +48,42 @@ export function PackageUpdateTools() {
   };
   const cancel = async () => { await backendRef.current.packageUpdatesCancel(); };
 
+  const installManager = async (manager: string) => {
+    setInstallingManagers((prev) => new Set(prev).add(manager));
+    try {
+      const result = await executeBackendCommand<unknown>("Install-Dependency", { Id: INSTALLABLE_MANAGERS[manager] });
+      setMessage(result.success ? `${manager} installed.` : (result.error || `Failed to install ${manager}.`));
+      if (result.success) await inspectPackages();
+    } finally {
+      setInstallingManagers((prev) => { const next = new Set(prev); next.delete(manager); return next; });
+    }
+  };
+
   return <section id="package-updates" className="flex scroll-mt-4 flex-col gap-4">
     <Card>
       <CardHeader><CardTitle>Updates across package managers</CardTitle><CardDescription>Check and apply explicit updates from Winget, Chocolatey, Scoop, and global npm. Each manager reports availability independently.</CardDescription></CardHeader>
       <CardContent className="flex flex-wrap items-center gap-2"><Button variant="primary" disabled={busy} onClick={() => void inspectPackages()}><Icon icon="search" />{busy ? "Checking…" : "Check updates"}</Button>{busy && <Button variant="outline" onClick={() => void cancel()}><Icon icon="stop" /> Cancel</Button>}{packages && <Badge tone="accent">{packages.managers.reduce((count, manager) => count + manager.updates.length, 0)} available</Badge>}</CardContent>
     </Card>
-    {packages?.managers.map((manager) => <PackageManager key={manager.manager} manager={manager} selected={packageIds} toggle={(id) => setPackageIds(toggle(packageIds, id))} />)}
+    {packages?.managers.map((manager) => <PackageManager key={manager.manager} manager={manager} selected={packageIds} toggle={(id) => setPackageIds(toggle(packageIds, id))} onInstallManager={installManager} installingManagers={installingManagers} />)}
     {!!packageIds.size && <div className="flex justify-end"><Button variant="primary" disabled={busy} onClick={() => void applyPackages()}>Update {packageIds.size} selected</Button></div>}
     {message && <Notice tone={message.includes("failed") ? "warning" : "success"} text={message} />}
   </section>;
 }
 
-function PackageManager({ manager, selected, toggle: onToggle }: { manager: ManagerInventory; selected: Set<string>; toggle: (id: string) => void }) {
-  if (!manager.available) return <Notice tone="warning" text={`${manager.manager}: ${manager.error ?? "not available"}`} />;
+function PackageManager({ manager, selected, toggle: onToggle, onInstallManager, installingManagers }: { manager: ManagerInventory; selected: Set<string>; toggle: (id: string) => void; onInstallManager: (manager: string) => void; installingManagers: Set<string> }) {
+  if (!manager.available) {
+    // Chocolatey/Scoop specifically get an actionable install button — the
+    // same Install-Dependency call EnginesSection's EngineCard uses for these
+    // two engines. Winget/npm keep the passive notice unchanged.
+    if (manager.manager in INSTALLABLE_MANAGERS) {
+      const installing = installingManagers.has(manager.manager);
+      return <Card><CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+        <p className="text-sm text-[var(--text-dim)]">{manager.manager}: {manager.error ?? "not available"}</p>
+        <Button variant="primary" disabled={installing} onClick={() => onInstallManager(manager.manager)}><Icon icon="download" />{installing ? "Installing…" : `Install ${manager.manager}`}</Button>
+      </CardContent></Card>;
+    }
+    return <Notice tone="warning" text={`${manager.manager}: ${manager.error ?? "not available"}`} />;
+  }
   if (manager.error) return <Notice tone="warning" text={`${manager.manager}: ${manager.error}`} />;
   return <Card><CardHeader><CardTitle>{manager.manager}</CardTitle><CardDescription>{manager.updates.length ? "Select the updates to apply." : "No updates reported."}</CardDescription></CardHeader>{!!manager.updates.length && <CardContent className="flex flex-col gap-2">{manager.updates.map((item) => <SelectableRow key={item.id} checked={selected.has(item.id)} onClick={() => onToggle(item.id)} title={item.package} detail={`${item.currentVersion} → ${item.availableVersion}`} />)}</CardContent>}</Card>;
 }

@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { runOperation } from "../../context/OperationContext";
 import useBackend from "../../hooks/useBackend";
 import { showError, showSuccess } from "../../utils/toast";
+import AppIcon from "./components/AppIcon";
 import { CATEGORY_ORDER } from "./debloatLists";
 import { DebloatItem } from "./types";
 import { useDebloatInventory } from "./useDebloatInventory";
@@ -55,6 +56,11 @@ function DebloatChip({ item, selected, onToggle, removing }: {
         className="m-0 shrink-0"
         style={{ marginBottom: 0, pointerEvents: "none" }}
       />
+      {/* Real brand icon alongside the source badge — SourceBadge alone was
+          the only visual identity (a generic 2-3 letter text chip). Reuses
+          the same resolver the app catalog uses; falls back to a category
+          glyph when no bundled asset matches. */}
+      <AppIcon id={item.id} category={item.category} iconData={null} size={16} />
       <span className="debloat-chip-name" title={item.id}>{item.label}</span>
       {item.riskNote && (
         <span title={item.riskNote} style={{ flexShrink: 0, cursor: "help" }}>

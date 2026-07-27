@@ -1,6 +1,6 @@
 import { Card, Button, Checkbox, InputGroup, Icon, Spinner } from "@/components/ui/bp";
 import { useMemo, useState, useEffect, useCallback, useRef } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import useBackend from "../../../hooks/useBackend";
 import { useAppState } from "../../../context/AppContext";
 import { beginOperation, runOperation } from "../../../context/OperationContext";
@@ -8,14 +8,12 @@ import { claimFreeAppUpdates, clearAppUpdatesQueued, isAppUpdateQueued } from ".
 import { releasePackageOperation, tryAcquirePackageOperation } from "../../../lib/packageOperationLock";
 import { showWarning, showError, showSuccess } from "../../../utils/toast";
 import AppIcon from "./AppIcon";
-import EnginesSection from "./EnginesSection";
 import { cn } from "../../../lib/utils";
-import PanelHeader from "../../../components/shared/PanelHeader";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 // staggerDelay caps per-item delay so large lists never animate for seconds.
 import { staggerDelay } from "../../../components/shared/AnimatedList";
 import { DURATION_S, EASE } from "../../../components/shared/motion";
 import SuccessFill from "../../../components/shared/SuccessFill";
-import ClassicWindowsApps from "./ClassicWindowsApps";
 import './AppInstallerPanel.css';
 
 
@@ -55,8 +53,6 @@ const CATEGORY_TABS = [
   { id: "privacy", label: "Privacy" },
   { id: "developer", label: "Developer" },
   { id: "system-info", label: "System" },
-  { id: "windows", label: "Windows" },
-  { id: "engines", label: "Engines" },
 ] as const;
 
 function mapCategoryToTab(category: string): string {
@@ -113,8 +109,10 @@ function AppInstallerPanel() {
   const [wingetStatus, setWingetStatus] = useState<"checking" | "installed" | "not-installed" | "installing" | "failed">("checking");
   const [upgradingApp, setUpgradingApp] = useState<string | null>(null);
   const [localLoadingMap, setLocalLoadingMap] = useState<Record<string, boolean>>({});
-  const [showInstalledApps, setShowInstalledApps] = useState(false);
-  const [showUpdates, setShowUpdates] = useState(true);
+  // Inner sub-tabs for the catalog grid — replaces the old collapsible
+  // "UPDATES AVAILABLE" / "INSTALLED (N)" dividers now that each state is its
+  // own tab (Radix mount/unmount stands in for expand/collapse).
+  const [installerView, setInstallerView] = useState<"not-installed" | "updates" | "installed">("not-installed");
   // Default to false so the REMOVE buttons stay hidden until detection
   // confirms the app is actually installed. Defaulting to true caused a
   // visible flicker on first paint where the buttons appeared, then
@@ -794,13 +792,139 @@ function AppInstallerPanel() {
     };
   }, [appsLoading, installApps]);
 
+  const notInstalledApps = filteredApps.filter(app => !installedApps.has(app.id));
+  const updateApps = filteredApps.filter(app => installedApps.has(app.id) && updateAvailableApps.has(app.id));
+  const noActionApps = filteredApps.filter(app => installedApps.has(app.id) && !updateAvailableApps.has(app.id));
+
+  const renderApp = (app: AppItem, showCheckbox = true) => {
+    const canSelect = showCheckbox && (!installedApps.has(app.id) || updateAvailableApps.has(app.id));
+    return (
+    <div
+      key={app.id}
+      className={cn(
+        "app-card",
+        selectedApps.has(app.id) && "selected",
+        installedApps.has(app.id) && "installed",
+        updateAvailableApps.has(app.id) && "update-available",
+        justInstalledIds.has(app.id) && "wc-app-pop"
+      )}
+      onClick={() => canSelect && toggleApp(app.id)}
+      role={canSelect ? "button" : undefined}
+      tabIndex={canSelect ? 0 : undefined}
+      aria-pressed={canSelect ? selectedApps.has(app.id) : undefined}
+      onKeyDown={(e) => {
+        if (!canSelect) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggleApp(app.id);
+        }
+      }}
+    >
+      {/* Green-sweep confirmation when an app finishes installing this
+          session (justInstalledIds clears after 600ms). Non-erase
+          completion — opt-in per SuccessFill's deniability contract. */}
+      <SuccessFill active={justInstalledIds.has(app.id)} label={`${app.name} installed`} />
+      {showCheckbox && (
+        <span className="app-checkbox-wrap" onClick={(e) => e.stopPropagation()}>
+          <Checkbox
+            checked={selectedApps.has(app.id)}
+            onChange={() => toggleApp(app.id)}
+            className="app-checkbox"
+            disabled={!canSelect}
+          />
+        </span>
+      )}
+      <AppIcon id={app.id} category={app.category} iconData={app.iconData} />
+      <div className="app-info">
+        <span className="app-name">
+          {app.name}
+          {installedApps.has(app.id) && !updateAvailableApps.has(app.id) && (
+            <Icon icon="tick" size={12} className="installed-badge" title="Installed" />
+          )}
+        </span>
+        <span className="app-description">{app.description}</span>
+        {updateAvailableApps.has(app.id) && app.version && app.availableVersion && (
+          <span className="app-version mono">{app.version} → {app.availableVersion}</span>
+        )}
+      </div>
+      {updateAvailableApps.has(app.id) && (
+        <Button
+          icon={upgradingApp === app.id ? undefined : "refresh"}
+          small
+          minimal
+          intent="warning"
+          className="app-update-btn app-card-action--update"
+          onClick={(e) => handleUpgradeSingle(app.id, e)}
+          disabled={upgradingApp !== null || installing}
+        >
+          {upgradingApp === app.id && <Spinner size={12} />}
+        </Button>
+      )}
+      {/* Inline single-app install button stays visible alongside the
+          checkbox so users can either multi-select or one-click install.
+          Loading/disabled is per-id so other cards don't show spinners. */}
+      {!installedApps.has(app.id) && !updateAvailableApps.has(app.id) && (() => {
+        const isThisInstalling = installingIds.has(app.id);
+        return (
+          <Button
+            icon={isThisInstalling ? undefined : "download"}
+            small
+            minimal
+            intent="success"
+            className="app-update-btn app-card-action--download"
+            onClick={(e) => { e.stopPropagation(); void installApps([app.id]); }}
+            disabled={isThisInstalling || wingetStatus === "failed"}
+            loading={isThisInstalling}
+          />
+        );
+      })()}
+    </div>
+    );
+  };
+
+  const renderUpgradeCard = (item: UpgradeItem) => (
+    <div
+      key={item.id}
+      className={`app-card app-card--upgrade update-available ${selectedApps.has(item.id) ? "selected" : ""}`}
+      onClick={() => toggleApp(item.id)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggleApp(item.id);
+        }
+      }}
+    >
+      <span className="app-checkbox-wrap" onClick={(e) => e.stopPropagation()}>
+        <Checkbox
+          checked={selectedApps.has(item.id)}
+          onChange={() => toggleApp(item.id)}
+          className="app-checkbox"
+        />
+      </span>
+      <AppIcon id={item.id} category="misc" iconData={item.iconData} />
+      <div className="app-info">
+        <span className="app-name app-name--truncate" title={item.name || item.id}>{item.name || item.id}</span>
+        <span className="app-description">Detected by Windows package inventory</span>
+        <span className="app-version mono">{item.version || "?"} → {item.availableVersion || "?"}</span>
+      </div>
+      <Button
+        icon={upgradingApp === item.id ? undefined : "refresh"}
+        small
+        minimal
+        intent="warning"
+        className="app-update-btn app-card-action--update"
+        onClick={(e) => handleUpgradeSingle(item.id, e)}
+        disabled={upgradingApp !== null || installing}
+      >
+        {upgradingApp === item.id && <Spinner size={12} />}
+      </Button>
+    </div>
+  );
+
   return (
     <div className="app-installer-panel">
-      <PanelHeader
-        panelId="apps"
-        title="Packages & Apps"
-        description="Install, update, and remove software in bulk — and strip out the bloatware that ships with Windows."
-      />
       <div className="app-installer-status-row">
         <span className={`winget-status ${wingetStatus === "installed" ? "installed" : wingetStatus === "not-installed" ? "not-installed" : ""}`}>
           {wingetStatus === "checking" && <Spinner size={14} />}
@@ -857,7 +981,7 @@ function AppInstallerPanel() {
             )}
           </div>
 
-          <div className={cn("installer-actions-row", (selectedCategory === "engines" || selectedCategory === "windows") && "is-hidden")}>
+          <div className="installer-actions-row">
               <div className="installer-selection-count">
                 <span className={`mono text-xl leading-none transition-all duration-300 font-bold ${selectedApps.size > 0 ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)] opacity-30"}`}>
                   {selectedApps.size}
@@ -996,297 +1120,72 @@ function AppInstallerPanel() {
               </div>
           </div>
         </div>
-        {selectedCategory === "engines" && (
-          <div className="px-4 py-4">
-            <EnginesSection />
-          </div>
-        )}
-        {selectedCategory === "windows" && <ClassicWindowsApps />}
-        <div className={cn("apps-grid", (selectedCategory === "engines" || selectedCategory === "windows") && "is-hidden")} ref={appsGridRef}>
-          {appsLoading ? (
-            <div className="empty-state">
-              <Icon icon="time" size={32} className="scanning-icon" />
-              <p>Loading app catalog...</p>
-            </div>
-          ) : filteredApps.length === 0 ? (
-            <div className="empty-state">
-              <Icon icon="search" size={32} className="empty-icon" />
-              <p>No apps found in this category</p>
-            </div>
-          ) : (() => {
-            const notInstalledApps = filteredApps.filter(app =>
-              !installedApps.has(app.id)
-            );
-            const updateApps = filteredApps.filter(app =>
-              installedApps.has(app.id) && updateAvailableApps.has(app.id)
-            );
-            const noActionApps = filteredApps.filter(app =>
-              installedApps.has(app.id) && !updateAvailableApps.has(app.id)
-            );
+        {/* Inner sub-tabs for the catalog grid, mirroring Browser Hardening's
+            per-item Tabs pattern (Privacy). "Updates" combines what were
+            previously two stacked groups — the collapsible "Updates
+            Available" and the always-shown "Other Updates" — into one tab. */}
+        <div ref={appsGridRef}>
+          <Tabs value={installerView} onValueChange={(value) => setInstallerView(value as typeof installerView)}>
+            <TabsList className="w-full flex-wrap justify-start">
+              <TabsTrigger value="not-installed">Not Installed</TabsTrigger>
+              <TabsTrigger value="updates">Updates</TabsTrigger>
+              <TabsTrigger value="installed">Installed</TabsTrigger>
+            </TabsList>
 
-            const renderApp = (app: AppItem, showCheckbox = true) => {
-              const canSelect = showCheckbox && (!installedApps.has(app.id) || updateAvailableApps.has(app.id));
-              return (
-              <div
-                key={app.id}
-                className={cn(
-                  "app-card",
-                  selectedApps.has(app.id) && "selected",
-                  installedApps.has(app.id) && "installed",
-                  updateAvailableApps.has(app.id) && "update-available",
-                  justInstalledIds.has(app.id) && "wc-app-pop"
-                )}
-                onClick={() => canSelect && toggleApp(app.id)}
-                role={canSelect ? "button" : undefined}
-                tabIndex={canSelect ? 0 : undefined}
-                aria-pressed={canSelect ? selectedApps.has(app.id) : undefined}
-                onKeyDown={(e) => {
-                  if (!canSelect) return;
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    toggleApp(app.id);
-                  }
-                }}
-              >
-                {/* Green-sweep confirmation when an app finishes installing this
-                    session (justInstalledIds clears after 600ms). Non-erase
-                    completion — opt-in per SuccessFill's deniability contract. */}
-                <SuccessFill active={justInstalledIds.has(app.id)} label={`${app.name} installed`} />
-                {showCheckbox && (
-                  <span className="app-checkbox-wrap" onClick={(e) => e.stopPropagation()}>
-                    <Checkbox
-                      checked={selectedApps.has(app.id)}
-                      onChange={() => toggleApp(app.id)}
-                      className="app-checkbox"
-                      disabled={!canSelect}
-                    />
-                  </span>
-                )}
-                <AppIcon id={app.id} category={app.category} iconData={app.iconData} />
-                <div className="app-info">
-                  <span className="app-name">
-                    {app.name}
-                    {installedApps.has(app.id) && !updateAvailableApps.has(app.id) && (
-                      <Icon icon="tick" size={12} className="installed-badge" title="Installed" />
-                    )}
-                  </span>
-                  <span className="app-description">{app.description}</span>
-                  {updateAvailableApps.has(app.id) && app.version && app.availableVersion && (
-                    <span className="app-version mono">{app.version} → {app.availableVersion}</span>
-                  )}
-                </div>
-                {updateAvailableApps.has(app.id) && (
-                  <Button
-                    icon={upgradingApp === app.id ? undefined : "refresh"}
-                    small
-                    minimal
-                    intent="warning"
-                    className="app-update-btn app-card-action--update"
-                    onClick={(e) => handleUpgradeSingle(app.id, e)}
-                    disabled={upgradingApp !== null || installing}
-                  >
-                    {upgradingApp === app.id && <Spinner size={12} />}
-                  </Button>
-                )}
-                {/* Inline single-app install button stays visible alongside the
-                    checkbox so users can either multi-select or one-click install.
-                    Loading/disabled is per-id so other cards don't show spinners. */}
-                {!installedApps.has(app.id) && !updateAvailableApps.has(app.id) && (() => {
-                  const isThisInstalling = installingIds.has(app.id);
-                  return (
-                    <Button
-                      icon={isThisInstalling ? undefined : "download"}
-                      small
-                      minimal
-                      intent="success"
-                      className="app-update-btn app-card-action--download"
-                      onClick={(e) => { e.stopPropagation(); void installApps([app.id]); }}
-                      disabled={isThisInstalling || wingetStatus === "failed"}
-                      loading={isThisInstalling}
-                    />
-                  );
-                })()}
-              </div>
-              );
-            };
-
-            const renderUpgradeCard = (item: UpgradeItem) => (
-              <div
-                key={item.id}
-                className={`app-card app-card--upgrade update-available ${selectedApps.has(item.id) ? "selected" : ""}`}
-                onClick={() => toggleApp(item.id)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    toggleApp(item.id);
-                  }
-                }}
-              >
-                <span className="app-checkbox-wrap" onClick={(e) => e.stopPropagation()}>
-                  <Checkbox
-                    checked={selectedApps.has(item.id)}
-                    onChange={() => toggleApp(item.id)}
-                    className="app-checkbox"
-                  />
-                </span>
-                <AppIcon id={item.id} category="misc" iconData={item.iconData} />
-                <div className="app-info">
-                  <span className="app-name app-name--truncate" title={item.name || item.id}>{item.name || item.id}</span>
-                  <span className="app-description">Detected by Windows package inventory</span>
-                  <span className="app-version mono">{item.version || "?"} → {item.availableVersion || "?"}</span>
-                </div>
-                <Button
-                  icon={upgradingApp === item.id ? undefined : "refresh"}
-                  small
-                  minimal
-                  intent="warning"
-                  className="app-update-btn app-card-action--update"
-                  onClick={(e) => handleUpgradeSingle(item.id, e)}
-                  disabled={upgradingApp !== null || installing}
-                >
-                  {upgradingApp === item.id && <Spinner size={12} />}
-                </Button>
-              </div>
-            );
-
-            return (
-              <>
-                {/* Not installed apps — shown first. Checkboxes enabled so the
-                    user can multi-select and use the "INSTALL APPS (N)" button
-                    at the top, or fall back to the inline single-app install. */}
-                {/* Tour anchor: wraps only the curated/installable catalog
-                    (display:contents, same technique as apps-updates-grid
-                    below) so the highlight stops before "UPDATES AVAILABLE"
-                    instead of spanning the whole apps-grid. */}
-                <div className="display-contents" data-tour="apps-utility-section">
-                  {notInstalledApps.map(app => renderApp(app, true))}
-                </div>
-
-                {/* Tour anchor: wraps the actual per-app update cards (both
-                    manifest apps with updateAvailable and "other" packages
-                    from the winget inventory scan). Uses display:contents
-                    (via the shared .display-contents utility) so it adds a
-                    DOM node without becoming a grid item itself — the
-                    grid-divider / app-group-grid children below stay direct
-                    children of the CSS grid in .apps-grid, preserving layout.
-                    Always mounted (not gated on outdatedInstalledCount) so
-                    its PRESENCE never races the async inventory load that
-                    outdatedInstalledCount depends on — the tour's anchor
-                    resolver already treats "matched but measures to nothing"
-                    as equivalent to "not found" and falls back to the
-                    apps-update-section button anchor, so gating the CONTENT
-                    below (not the wrapper itself) is what actually
-                    represents "nothing to update" now (2026-07-10 fix: "if
-                    apps need an update, show that section... but if no
-                    update, just show the Update All button" — the earlier
-                    DOM-presence-timing approach kept losing this race). */}
-                <div className="display-contents" data-tour="apps-updates-grid">
-                  {outdatedInstalledCount > 0 && (
-                    <>
-                      {/* Updates available — collapsible dropdown.
-                          AnimatePresence keeps the grid mounted until its exit
-                          animation finishes when the user collapses the section. */}
-                      {updateApps.length > 0 && (
-                        <>
-                          <div className="grid-divider divider-clickable" onClick={() => setShowUpdates(prev => !prev)}>
-                            <div className="divider-line"></div>
-                            <div className="divider-label divider-label--with-icon">
-                              <Icon icon={showUpdates ? "chevron-down" : "chevron-right"} size={12} />
-                              UPDATES AVAILABLE ({updateApps.length})
-                            </div>
-                            <div className="divider-line"></div>
-                          </div>
-                          {/* AnimatePresence lets the grid fade out on collapse
-                              instead of snapping away. opacity only — no layout reflow. */}
-                          <AnimatePresence initial={false}>
-                            {showUpdates && (
-                              <motion.div
-                                key="updates-group"
-                                className="app-group-grid app-group-grid--updates"
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                exit={{ opacity: 0 }}
-                                transition={{ duration: DURATION_S.fast, ease: EASE.exit }}
-                              >
-                                {updateApps.map((app, idx) => (
-                                  // Staggered fade+rise on group entrance so items
-                                  // arrive in sequence rather than all at once.
-                                  <motion.div
-                                    key={app.id}
-                                    initial={{ opacity: 0, y: 6 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0 }}
-                                    transition={{
-                                      delay: staggerDelay(idx),
-                                      duration: DURATION_S.normal,
-                                      ease: EASE.enter,
-                                    }}
-                                  >
-                                    {renderApp(app)}
-                                  </motion.div>
-                                ))}
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </>
-                      )}
-
-                      {/* Other system-wide updates rendered as cards */}
-                      {(() => {
-                        if (filteredOtherUpgrades.length === 0) return null;
-                        return (
-                          <>
-                            <div className="grid-divider">
-                              <div className="divider-line"></div>
-                              <div className="divider-label">
-                                OTHER UPDATES ({filteredOtherUpgrades.length})
-                              </div>
-                              <div className="divider-line"></div>
-                            </div>
-                            <div className="app-group-grid app-group-grid--updates">
-                              {filteredOtherUpgrades.map(renderUpgradeCard)}
-                            </div>
-                          </>
-                        );
-                      })()}
-                    </>
-                  )}
+            {/* Tour anchor: wraps only the curated/installable catalog so the
+                highlight targets this tab's grid specifically. */}
+            <TabsContent value="not-installed">
+              <div className="apps-grid" data-tour="apps-utility-section">
+                {appsLoading ? (
+                  <div className="empty-state">
+                    <Icon icon="time" size={32} className="scanning-icon" />
+                    <p>Loading app catalog...</p>
                   </div>
+                ) : notInstalledApps.length === 0 ? (
+                  <div className="empty-state">
+                    <Icon icon="search" size={32} className="empty-icon" />
+                    <p>No apps found in this category</p>
+                  </div>
+                ) : (
+                  notInstalledApps.map(app => renderApp(app, true))
+                )}
+              </div>
+            </TabsContent>
 
-                {/* Installed — no action needed — collapsible.
-                    Same stagger+AnimatePresence treatment as UPDATES above. */}
-                {noActionApps.length > 0 && (
+            {/* Tour anchor: wraps the actual per-app update cards (both
+                manifest apps with updateAvailable and "other" packages from
+                the winget inventory scan). The tour's anchor resolver falls
+                back to the apps-update-section button anchor when this tab
+                isn't the active inner tab, so gating stays correct. */}
+            <TabsContent value="updates">
+              <div className="apps-grid" data-tour="apps-updates-grid">
+                {appsLoading ? (
+                  <div className="empty-state">
+                    <Icon icon="time" size={32} className="scanning-icon" />
+                    <p>Loading app catalog...</p>
+                  </div>
+                ) : outdatedInstalledCount === 0 ? (
+                  <div className="empty-state">
+                    <Icon icon="tick-circle" size={32} className="empty-icon" />
+                    <p>Nothing needs an update</p>
+                  </div>
+                ) : (
                   <>
-                    <div className="grid-divider divider-clickable" onClick={() => setShowInstalledApps(prev => !prev)}>
-                      <div className="divider-line"></div>
-                      <div className="divider-label divider-label--with-icon">
-                        <Icon icon={showInstalledApps ? "chevron-down" : "chevron-right"} size={12} />
-                        INSTALLED ({noActionApps.length})
-                      </div>
-                      <div className="divider-line"></div>
-                    </div>
-                    {/* AnimatePresence keeps the rows alive until fade completes
-                        on collapse — no snap-away. */}
-                    <AnimatePresence initial={false}>
-                      {showInstalledApps && (
-                        <motion.div
-                          key="installed-group"
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          transition={{ duration: DURATION_S.fast, ease: EASE.exit }}
-                          className="display-contents"
-                        >
-                          {noActionApps.map((app, idx) => (
-                            // Staggered fade+rise: items enter in sequence, capped
-                            // by staggerDelay so long lists never drag.
+                    {updateApps.length > 0 && (
+                      <>
+                        <div className="grid-divider">
+                          <div className="divider-line"></div>
+                          <div className="divider-label">FROM THE CATALOG ({updateApps.length})</div>
+                          <div className="divider-line"></div>
+                        </div>
+                        <div className="app-group-grid app-group-grid--updates">
+                          {updateApps.map((app, idx) => (
+                            // Staggered fade+rise on entrance so items arrive
+                            // in sequence rather than all at once.
                             <motion.div
                               key={app.id}
                               initial={{ opacity: 0, y: 6 }}
                               animate={{ opacity: 1, y: 0 }}
-                              exit={{ opacity: 0 }}
                               transition={{
                                 delay: staggerDelay(idx),
                                 duration: DURATION_S.normal,
@@ -1296,14 +1195,62 @@ function AppInstallerPanel() {
                               {renderApp(app)}
                             </motion.div>
                           ))}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                        </div>
+                      </>
+                    )}
+
+                    {/* Other system-wide updates — packages winget reports
+                        outside the curated manifest. */}
+                    {filteredOtherUpgrades.length > 0 && (
+                      <>
+                        <div className="grid-divider">
+                          <div className="divider-line"></div>
+                          <div className="divider-label">OTHER PACKAGES ({filteredOtherUpgrades.length})</div>
+                          <div className="divider-line"></div>
+                        </div>
+                        <div className="app-group-grid app-group-grid--updates">
+                          {filteredOtherUpgrades.map(renderUpgradeCard)}
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
-              </>
-            );
-          })()}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="installed">
+              <div className="apps-grid">
+                {appsLoading ? (
+                  <div className="empty-state">
+                    <Icon icon="time" size={32} className="scanning-icon" />
+                    <p>Loading app catalog...</p>
+                  </div>
+                ) : noActionApps.length === 0 ? (
+                  <div className="empty-state">
+                    <Icon icon="search" size={32} className="empty-icon" />
+                    <p>No apps installed in this category</p>
+                  </div>
+                ) : (
+                  noActionApps.map((app, idx) => (
+                    // Staggered fade+rise: items enter in sequence, capped
+                    // by staggerDelay so long lists never drag.
+                    <motion.div
+                      key={app.id}
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{
+                        delay: staggerDelay(idx),
+                        duration: DURATION_S.normal,
+                        ease: EASE.enter,
+                      }}
+                    >
+                      {renderApp(app)}
+                    </motion.div>
+                  ))
+                )}
+              </div>
+            </TabsContent>
+          </Tabs>
         </div>
 
       </Card >
