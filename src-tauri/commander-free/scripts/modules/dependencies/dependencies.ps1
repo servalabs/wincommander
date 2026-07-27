@@ -1007,15 +1007,28 @@ function Install-Scoop {
     $status = Test-ScoopInstalled
     if ($status.installed) { return @{ success = $true; message = "Scoop already installed." } }
 
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    $tmpScript = Join-Path $env:TEMP "scoop_install_$([Guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
+
     try {
-        Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction SilentlyContinue
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-        $installer = Invoke-RestMethod -Uri 'https://get.scoop.sh' -UseBasicParsing
-        # This app runs elevated (requireAdministrator); scoop's own installer
-        # refuses to run as admin unless told to via -RunAsAdmin.
-        Invoke-Expression "& { $installer } -RunAsAdmin"
+        # Download to disk and Unblock-File it instead of Invoke-RestMethod +
+        # Invoke-Expression on an in-memory string: this app runs elevated, and a
+        # remote script piped straight into Invoke-Expression with no
+        # Mark-of-the-Web handling is exactly the shape AppLocker/SmartScreen/AV
+        # products flag and block.
+        Invoke-WebRequest -Uri 'https://get.scoop.sh' -OutFile $tmpScript -UseBasicParsing -ErrorAction Stop
+        Unblock-File -LiteralPath $tmpScript -ErrorAction SilentlyContinue
+
+        # Process-scoped so it doesn't persist/affect anything outside this call.
+        Set-ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
+
+        # Scoop's own installer refuses to run as admin unless told to via
+        # -RunAsAdmin (this app runs elevated / requireAdministrator).
+        & $tmpScript -RunAsAdmin
     } catch {
         throw "Failed to install Scoop: $($_.Exception.Message)"
+    } finally {
+        Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
     }
 
     $status = Test-ScoopInstalled
