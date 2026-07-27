@@ -79,57 +79,47 @@
     align-items: start;
 }
 
-/* Alerts & Monitoring uses the same stable grid as the rest of the panel.
-   Do not rearrange cards when a control expands: that layout caused large
-   blank areas and moved controls away from their original positions. */
-.panel-grid.privacy-monitoring-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+/* Alerts & Monitoring — two STATIC flex columns, not a grid and not CSS
+   multi-column. A grid's row track is sized to its tallest cell, so a short
+   card next to a tall one leaves a fixed gap that never closes (the
+   recurring "gap" bug). CSS multi-column was tried next and has the
+   opposite problem: the browser recomputes column membership on every
+   height change, so expanding one card can shuffle OTHER cards into a
+   different column — visible jumping, not just a gap. Each cell's column
+   is fixed at author-time in index.tsx (interleaved left/right) and never
+   changes. Each column is plain flex-column flow, so a card's height change
+   only pushes cards below it in that SAME column down by exactly that much
+   — no dead space, and the other column never moves. */
+.privacy-monitoring-columns {
+    display: flex;
+    align-items: flex-start;
     gap: 12px;
-    align-items: start;
-}
-
-/* Top row of the monitoring section — Privacy Shield + RDP idle side by side.
-   padding-right clears the scrollbar gutter so the rightmost card's border
-   doesn't sit flush against it.
-   Asymmetric, not 1fr/1fr: Privacy Shield carries roughly 3x the content of
-   RDP Idle (status/quota badges, trigger toggles, an advanced disclosure)
-   but was permanently squeezed into the same 50% column. minmax floors keep
-   RDP Idle's controls (selects, timeout inputs) from getting crushed if the
-   window narrows before the stack breakpoint kicks in. */
-/* align-items: start (not stretch) — same class of bug as the
-   .privacy-monitoring-grid note above: stretch forced RDP Idle's box to
-   match Privacy Shield's height whenever Privacy Shield's content grew
-   (e.g. its advanced disclosure opened), leaving visible blank space in
-   the shorter card. */
-.privacy-monitor-toprow {
-    display: grid;
-    grid-template-columns: minmax(340px, 1.5fr) minmax(260px, 1fr);
-    gap: 12px;
-    align-items: start;
-    margin-bottom: 12px;
     padding-right: 4px;
 }
 
+.privacy-monitor-col {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    flex: 1 1 0;
+}
+
 @media (max-width: 760px) {
-    .privacy-monitor-toprow {
-        grid-template-columns: 1fr;
+    .privacy-monitoring-columns {
+        flex-direction: column;
     }
 }
 
-.privacy-monitor-toprow .section-card,
 .privacy-monitor-cell .section-card {
     background-color: color-mix(in srgb, var(--color-bg-card) 78%, transparent) !important;
 }
 
-.privacy-monitor-toprow .section-card .section-header-text,
-.privacy-monitor-toprow .section-card .section-icon,
 .privacy-monitor-cell .section-card .section-header-text,
 .privacy-monitor-cell .section-card .section-icon {
     color: var(--color-accent);
 }
 
-.privacy-monitor-toprow .section-card .section-content,
 .privacy-monitor-cell .section-card .section-content {
     gap: 12px;
     padding: 16px;
@@ -138,22 +128,18 @@
     background: var(--shield-bg-idle);
 }
 
-.privacy-monitor-toprow .section-card.armed .section-content,
 .privacy-monitor-cell .section-card.armed .section-content {
     background: var(--shield-bg-running);
     border-color: var(--accent-line);
 }
 
-.privacy-monitor-toprow .section-card .section-content .section-content,
 .privacy-monitor-cell .section-card .section-content .section-content {
     padding: 0;
     border: 0;
     background: transparent;
 }
 
-.privacy-monitor-toprow .section-card .section-content [class*="bg-[var(--color-bg-secondary)]"],
 .privacy-monitor-cell .section-card .section-content [class*="bg-[var(--color-bg-secondary)]"],
-.privacy-monitor-toprow .section-card .section-content [class*="bg-[var(--surface-2)]"],
 .privacy-monitor-cell .section-card .section-content [class*="bg-[var(--surface-2)]"] {
     background: var(--shield-inner-bg) !important;
 }

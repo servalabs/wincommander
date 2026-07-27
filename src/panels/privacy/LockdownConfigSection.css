@@ -485,6 +485,22 @@ html.light .sd-bulk-btn.bp6-button.bp6-minimal:hover {
     background: rgba(0, 0, 0, 0.06) !important;
 }
 
+/* ── Target pickers row — Folders to Delete + Users to Remove ────
+ * Side by side on wide viewports; stacks to 1 column below 720px,
+ * matching the breakpoint .sd-rows-grid.is-two-col already uses. */
+.sd-targets-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+}
+
+@media (min-width: 720px) {
+    .sd-targets-row {
+        grid-template-columns: 1fr 1fr;
+        gap: 0 12px;
+    }
+}
+
 /* ── User-folder shred list ───────────────────────────────────── */
 .sd-shred-folders {
     margin: 10px 0 14px;

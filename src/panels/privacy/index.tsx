@@ -309,76 +309,87 @@ export default function PrivacyPanel() {
 
                             {monitoringMatchesSearch && (
                                 <SectionCard title="Alerts & Monitoring">
-                                    {/* Top row — Privacy Shield (left) and RDP Idle (right)
-                                      * sit side-by-side as the headline monitoring controls. */}
-                                    <div className="privacy-monitor-toprow">
-                                        <PrivacyShieldCard />
-                                        <div data-tour="privacy-rdp-idle">
-                                            <RdpIdleCard />
+                                    {/* Two STATIC columns, not a CSS grid and not CSS multi-column.
+                                      * A grid's row track is sized to its tallest cell, so a short
+                                      * card next to a tall one leaves a fixed gap that never closes.
+                                      * CSS multi-column (tried previously) has the opposite problem:
+                                      * the browser recomputes which cells belong to which column on
+                                      * every height change, so expanding one card could shuffle
+                                      * OTHER cards into a different column entirely — cards visibly
+                                      * jumping around, which is exactly the "moved away from their
+                                      * original position" bug this panel's own history already
+                                      * flagged once. A card's column membership must never change:
+                                      * each cell below is permanently assigned to the left or right
+                                      * column at author-time (interleaved so Privacy Shield's much
+                                      * larger footprint doesn't stack against another large card).
+                                      * Each column is plain block/flex flow, so when a card in that
+                                      * column expands, only the cards BELOW IT IN THAT SAME COLUMN
+                                      * move down by exactly that amount — normal document flow,
+                                      * no dead space, and the other column never moves at all. */}
+                                    <div className="privacy-monitoring-columns">
+                                        <div className="privacy-monitor-col">
+                                            <div className="privacy-monitor-cell"><PrivacyShieldCard /></div>
+                                            <div className="privacy-monitor-cell">
+                                                <ScreenCaptureSection
+                                                    detectionEnabled={screenCaptureDetectionEnabled}
+                                                    protectWindow={screenCaptureProtectWindow}
+                                                    onPatch={patchScreenCapture}
+                                                />
+                                            </div>
+                                            <div className="privacy-monitor-cell">
+                                                <RemoteAccessMonitorSection
+                                                    isAdvanced={isAdvanced}
+                                                    searchQuery=""
+                                                    enabled={remoteAccessEnabled}
+                                                    toolOverrides={remoteAccessTools}
+                                                    onPatch={patchRemoteAccess}
+                                                />
+                                            </div>
+                                            <div className="privacy-monitor-cell"><ArgusDlpSection /></div>
+                                            <div className="privacy-monitor-cell"><ArgusPrintUsbSection /></div>
+                                            <div className="privacy-monitor-cell"><UsbDevicesSection /></div>
+                                            <div className="privacy-monitor-cell">
+                                                <RansomwareMonitorSection
+                                                    isAdvanced={isAdvanced}
+                                                    searchQuery=""
+                                                    enabled={ransomwareEnabled}
+                                                    threshold={ransomwareThreshold}
+                                                    windowSeconds={ransomwareWindowSeconds}
+                                                    customWatchDirs={ransomwareCustomDirs}
+                                                    action={ransomwareAction}
+                                                    onPatchRansomware={patchRansomware}
+                                                />
+                                            </div>
                                         </div>
-                                    </div>
-
-                                    {/* Keep monitor ordering stable. The previous expanded-card
-                                      * reflow moved cards between columns, which left large blank
-                                      * areas and made controls appear to jump around. */}
-                                    <div className="panel-grid privacy-monitoring-grid" style={{ marginTop: 12 }}>
-                                        <div className="privacy-monitor-cell">
-                                            <ScreenCaptureSection
-                                                detectionEnabled={screenCaptureDetectionEnabled}
-                                                protectWindow={screenCaptureProtectWindow}
-                                                onPatch={patchScreenCapture}
-                                            />
+                                        <div className="privacy-monitor-col">
+                                            <div className="privacy-monitor-cell" data-tour="privacy-rdp-idle"><RdpIdleCard /></div>
+                                            <div className="privacy-monitor-cell">
+                                                <DecoyMonitorSection
+                                                    isAdvanced={isAdvanced}
+                                                    searchQuery=""
+                                                    enabled={decoyEnabled}
+                                                    enrolledPaths={decoyEnrolledPaths}
+                                                    onPatchDecoy={patchDecoy}
+                                                />
+                                            </div>
+                                            <div className="privacy-monitor-cell"><MonitoringMirrorSection /></div>
+                                            <div className="privacy-monitor-cell"><ArgusTamperSection /></div>
+                                            <div className="privacy-monitor-cell"><CanaryTokensSection /></div>
+                                            <div className="privacy-monitor-cell">
+                                                <PasteMonitorSection
+                                                    isAdvanced={isAdvanced}
+                                                    searchQuery=""
+                                                    enabled={pasteMonitorEnabled}
+                                                    categories={pasteMonitorCategories}
+                                                    cryptoSwapEnabled={pasteCryptoSwapEnabled}
+                                                    autoClearEnabled={pasteAutoClearEnabled}
+                                                    autoClearSeconds={pasteAutoClearSeconds}
+                                                    autoClearOnLock={pasteAutoClearOnLock}
+                                                    onPatchClipboard={patchClipboard}
+                                                />
+                                            </div>
+                                            <div className="privacy-monitor-cell"><PrintActivitySection /></div>
                                         </div>
-                                        <div className="privacy-monitor-cell">
-                                            <DecoyMonitorSection
-                                                isAdvanced={isAdvanced}
-                                                searchQuery=""
-                                                enabled={decoyEnabled}
-                                                enrolledPaths={decoyEnrolledPaths}
-                                                onPatchDecoy={patchDecoy}
-                                            />
-                                        </div>
-                                        <div className="privacy-monitor-cell">
-                                            <RemoteAccessMonitorSection
-                                                isAdvanced={isAdvanced}
-                                                searchQuery=""
-                                                enabled={remoteAccessEnabled}
-                                                toolOverrides={remoteAccessTools}
-                                                onPatch={patchRemoteAccess}
-                                            />
-                                        </div>
-                                        <div className="privacy-monitor-cell"><MonitoringMirrorSection /></div>
-                                        <div className="privacy-monitor-cell"><ArgusDlpSection /></div>
-                                        <div className="privacy-monitor-cell"><ArgusTamperSection /></div>
-                                        <div className="privacy-monitor-cell"><ArgusPrintUsbSection /></div>
-                                        <div className="privacy-monitor-cell"><CanaryTokensSection /></div>
-                                        <div className="privacy-monitor-cell"><UsbDevicesSection /></div>
-                                        <div className="privacy-monitor-cell">
-                                            <PasteMonitorSection
-                                                isAdvanced={isAdvanced}
-                                                searchQuery=""
-                                                enabled={pasteMonitorEnabled}
-                                                categories={pasteMonitorCategories}
-                                                cryptoSwapEnabled={pasteCryptoSwapEnabled}
-                                                autoClearEnabled={pasteAutoClearEnabled}
-                                                autoClearSeconds={pasteAutoClearSeconds}
-                                                autoClearOnLock={pasteAutoClearOnLock}
-                                                onPatchClipboard={patchClipboard}
-                                            />
-                                        </div>
-                                        <div className="privacy-monitor-cell">
-                                            <RansomwareMonitorSection
-                                                isAdvanced={isAdvanced}
-                                                searchQuery=""
-                                                enabled={ransomwareEnabled}
-                                                threshold={ransomwareThreshold}
-                                                windowSeconds={ransomwareWindowSeconds}
-                                                customWatchDirs={ransomwareCustomDirs}
-                                                action={ransomwareAction}
-                                                onPatchRansomware={patchRansomware}
-                                            />
-                                        </div>
-                                        <div className="privacy-monitor-cell"><PrintActivitySection /></div>
                                     </div>
                                 </SectionCard>
                             )}

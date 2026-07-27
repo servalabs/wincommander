@@ -584,8 +584,10 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                         sliders all moved into the single disclosure below. */}
                     <div className="flex flex-col gap-3">
                         <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Blur triggers" : "Activation Triggers"}</span>
-                        <ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true} />
-                        <ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true} />
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true} />
+                            <ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true} />
+                        </div>
                     </div>
 
                     <div className="mt-4 pt-4 border-t border-[var(--shield-inner-border)]">
@@ -595,24 +597,28 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                         </div>
                         {showAdvanced && (
                             <div className="mt-4 flex flex-col gap-4">
-                                <ShieldOption
-                                    label={isAdvanced ? "Auto start" : "Auto start on launch"}
-                                    tooltip={hasPaid
-                                        ? "Automatically activate Privacy Shield a few seconds after the app launches. Skipped if no camera or the AI runtime isn't installed."
-                                        : "Pro feature - auto-activate Privacy Shield after launch."}
-                                    checked={autostart}
-                                    onChange={(v) => {
-                                        if (v && !hasPaid) { openShieldPaywall(); return; }
-                                        setAutostart(v);
-                                    }}
-                                    disabled={false}
-                                />
-                                <ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: detects phones or cameras pointed at screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true} />
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <ShieldOption
+                                        label={isAdvanced ? "Auto start" : "Auto start on launch"}
+                                        tooltip={hasPaid
+                                            ? "Automatically activate Privacy Shield a few seconds after the app launches. Skipped if no camera or the AI runtime isn't installed."
+                                            : "Pro feature - auto-activate Privacy Shield after launch."}
+                                        checked={autostart}
+                                        onChange={(v) => {
+                                            if (v && !hasPaid) { openShieldPaywall(); return; }
+                                            setAutostart(v);
+                                        }}
+                                        disabled={false}
+                                    />
+                                    <ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: detects phones or cameras pointed at screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true} />
+                                </div>
 
                                 <div className="flex flex-col gap-3 pt-3 border-t border-[var(--shield-inner-border)]">
                                     <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Capture on incident" : "Record Proof"}</span>
-                                    <ShieldOption label={isAdvanced ? "Phone Detected" : "Save Camera Proof"} tooltip="Saves screenshot and webcam when phone/camera is detected." checked={privacyConfig.captureOnDevice} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnDevice: v }))} disabled={privacyShieldRunning === true} />
-                                    <ShieldOption label={isAdvanced ? "Multiple faces" : "Save Person Proof"} tooltip="Saves screenshot and webcam when multiple faces detected." checked={privacyConfig.captureOnMultiFace} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnMultiFace: v }))} disabled={privacyShieldRunning === true} />
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <ShieldOption label={isAdvanced ? "Phone Detected" : "Save Camera Proof"} tooltip="Saves screenshot and webcam when phone/camera is detected." checked={privacyConfig.captureOnDevice} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnDevice: v }))} disabled={privacyShieldRunning === true} />
+                                        <ShieldOption label={isAdvanced ? "Multiple faces" : "Save Person Proof"} tooltip="Saves screenshot and webcam when multiple faces detected." checked={privacyConfig.captureOnMultiFace} onChange={(v) => setPrivacyConfig(p => ({ ...p, captureOnMultiFace: v }))} disabled={privacyShieldRunning === true} />
+                                    </div>
                                 </div>
 
                                 <div className="pt-3 border-t border-[var(--shield-inner-border)]">

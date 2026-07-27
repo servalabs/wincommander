@@ -278,43 +278,49 @@ export default function LockdownConfigSection(props: Props = {}) {
             folder goes through the secure shredder command (single
             durable RNG-overwrite pass + GUID rename) — irreversible on
             HDD, best-effort on SSD due to wear-levelling. */}
-        <div className="sd-shred-folders">
-          <div className="sd-shred-folders-header">
-            <Icon icon="folder-close" size={14} className="sd-shred-folders-icon" />
-            <div className="sd-shred-folders-text">
-              <div className="sd-shred-folders-label">Folders to Delete on Lockdown</div>
+        {/* Folders-to-delete and users-to-remove pickers side by side — both are
+            compact target-picker cards, so a 2-column row uses panel width
+            better than stacking them full-width. Collapses to 1 column below
+            the same 720px breakpoint sd-rows-grid.is-two-col already uses. */}
+        <div className="sd-targets-row">
+          <div className="sd-shred-folders">
+            <div className="sd-shred-folders-header">
+              <Icon icon="folder-close" size={14} className="sd-shred-folders-icon" />
+              <div className="sd-shred-folders-text">
+                <div className="sd-shred-folders-label">Folders to Delete on Lockdown</div>
+              </div>
+              <Button
+                className="sd-bulk-btn"
+                minimal
+                small
+                icon="plus"
+                text="Add folder"
+                onClick={addShredFolder}
+              />
             </div>
-            <Button
-              className="sd-bulk-btn"
-              minimal
-              small
-              icon="plus"
-              text="Add folder"
-              onClick={addShredFolder}
-            />
+            {shredFolders.length > 0 && (
+              <div className="sd-shred-folders-list">
+                {shredFolders.map((p) => (
+                  <div key={p} className="sd-shred-folder-row">
+                    <Icon icon="folder-close" size={12} className="sd-shred-folder-icon" />
+                    <span className="sd-shred-folder-path" title={p}>{p}</span>
+                    <Button
+                      minimal
+                      small
+                      icon="cross"
+                      onClick={() => removeShredFolder(p)}
+                      title="Remove from delete list"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          {shredFolders.length > 0 && (
-            <div className="sd-shred-folders-list">
-              {shredFolders.map((p) => (
-                <div key={p} className="sd-shred-folder-row">
-                  <Icon icon="folder-close" size={12} className="sd-shred-folder-icon" />
-                  <span className="sd-shred-folder-path" title={p}>{p}</span>
-                  <Button
-                    minimal
-                    small
-                    icon="cross"
-                    onClick={() => removeShredFolder(p)}
-                    title="Remove from delete list"
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
 
-        {/* Local accounts pre-selected for the remove_users destruct step.
-            Pure prop-driven renderer — see RemoveUsersSection.tsx. */}
-        <RemoveUsersSection usersToRemove={usersToRemove} onPatch={onPatch} />
+          {/* Local accounts pre-selected for the remove_users destruct step.
+              Pure prop-driven renderer — see RemoveUsersSection.tsx. */}
+          <RemoveUsersSection usersToRemove={usersToRemove} onPatch={onPatch} />
+        </div>
 
         {/* Target pickers for the bitlocker_erase / veracrypt_header_destroy
             destruct steps. Pure prop-driven renderer — see
