@@ -9,8 +9,8 @@ import { useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Button, Alert, Icon } from "@/components/ui/bp";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import SectionCard from "../shared/SectionCard";
-import UniversalCallout from "../shared/UniversalCallout";
 import {
     exportSettings,
     importSettings,
@@ -22,6 +22,12 @@ import { showError, showSuccess } from "../../utils/toast";
 import "./ImportExportSettingsCard.css";
 
 const SETTINGS_FILE_FILTER = [{ name: "WinCommander settings", extensions: ["json"] }];
+
+// This exact sentence must stay verbatim (locked in an earlier compaction
+// pass) — it now lives in the hover tooltip; the always-visible line is a
+// short paraphrase so the card doesn't need a full-sentence callout.
+const IMPORT_WARNING_FULL_TEXT =
+    "Importing REPLACES your current configuration — every toggle and preference is overwritten. This device's identity (device ID, activation) is preserved automatically, so a backup from another machine is safe to restore.";
 
 function defaultExportFileName(): string {
     const date = new Date().toISOString().slice(0, 10);
@@ -73,30 +79,30 @@ export default function ImportExportSettingsCard() {
 
     return (
         <SectionCard title="Backup & Restore" icon="import" className="import-export-settings-card">
-            <div className="import-export-stack">
-                <div className="import-export-actions">
-                    <div className="import-export-actions__buttons">
-                        <Button
-                            icon="export"
-                            text="Export"
-                            loading={exporting}
-                            onClick={runExport}
-                            aria-label="Export settings"
-                        />
-                        <Button
-                            icon="import"
-                            text="Import"
-                            loading={importing}
-                            onClick={pickImportFile}
-                            aria-label="Import settings"
-                        />
-                    </div>
+            <div className="import-export-row">
+                <div className="import-export-buttons">
+                    <Button
+                        icon="export"
+                        text="Export"
+                        small
+                        loading={exporting}
+                        onClick={runExport}
+                        aria-label="Export settings"
+                    />
+                    <Button
+                        icon="import"
+                        text="Import"
+                        small
+                        loading={importing}
+                        onClick={pickImportFile}
+                        aria-label="Import settings"
+                    />
 
                     <Popover>
                         <PopoverTrigger className="import-export-info-trigger" aria-label="What Export and Import do">
-                            <Icon icon="info-sign" size={14} />
+                            <Icon icon="info-sign" size={13} />
                         </PopoverTrigger>
-                        <PopoverContent align="end" className="import-export-info">
+                        <PopoverContent align="start" className="import-export-info">
                             <div className="import-export-info__item">
                                 <strong>Export</strong> — save your full configuration to a JSON file you choose.
                             </div>
@@ -107,11 +113,17 @@ export default function ImportExportSettingsCard() {
                     </Popover>
                 </div>
 
-                <UniversalCallout
-                    message="Importing REPLACES your current configuration — every toggle and preference is overwritten. This device's identity (device ID, activation) is preserved automatically, so a backup from another machine is safe to restore."
-                    intent="warning"
-                    className="import-export-callout-compact"
-                />
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <button type="button" className="import-export-warning">
+                            <Icon icon="warning-sign" size={12} className="import-export-warning__icon" />
+                            <span className="import-export-warning__text">Import replaces your current settings</span>
+                        </button>
+                    </TooltipTrigger>
+                    <TooltipContent align="end" className="import-export-warning-tooltip">
+                        {IMPORT_WARNING_FULL_TEXT}
+                    </TooltipContent>
+                </Tooltip>
             </div>
 
             <Alert
