@@ -118,7 +118,6 @@ function EngineCard({ dep, importance, isBusy, onInstall }: CardProps) {
           loading={isBusy}
           disabled={isBusy}
           onClick={() => onInstall(dep)}
-          className="app-update-btn"
         >
           {isBusy ? "" : "Install"}
         </Button>

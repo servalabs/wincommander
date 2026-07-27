@@ -3,6 +3,7 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import type { ManagerInventory, PackageUpdateInventory } from "../../hooks/useBackend";
 import { executeBackendCommand, useBackend } from "../../hooks/useBackend";
 import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/packageOperationLock";
@@ -11,6 +12,18 @@ import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/p
 // Install-Dependency id each maps to — the exact same id EnginesSection's
 // EngineCard passes for these two engines.
 const INSTALLABLE_MANAGERS: Record<string, string> = { chocolatey: "chocolatey", scoop: "scoop" };
+
+// Display labels for the manager ids the backend reports (package_updates.rs
+// `Manager::label`) — always winget/chocolatey/scoop/npm, in that order.
+// npm keeps its lowercase brand casing; the id itself is the tab value.
+const MANAGER_LABELS: Record<string, string> = { winget: "Winget", chocolatey: "Chocolatey", scoop: "Scoop", npm: "npm" };
+
+// Tab that opens by default: whichever manager has the most pending updates,
+// or the first manager (backend order) if none do.
+function pickDefaultManager(managers: ManagerInventory[]): string | undefined {
+  if (!managers.length) return undefined;
+  return managers.reduce((best, manager) => (manager.updates.length > best.updates.length ? manager : best), managers[0]).manager;
+}
 
 /**
  * The single multi-manager update executor. Packages & Apps is its only
@@ -24,6 +37,7 @@ export function PackageUpdateTools() {
   backendRef.current = backend;
   const [packages, setPackages] = useState<PackageUpdateInventory>();
   const [packageIds, setPackageIds] = useState<Set<string>>(new Set());
+  const [activeManager, setActiveManager] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
   const [installingManagers, setInstallingManagers] = useState<Set<string>>(new Set());
@@ -31,7 +45,10 @@ export function PackageUpdateTools() {
   const inspectPackages = async () => {
     if (!tryAcquirePackageOperation()) { setMessage("Another package-manager operation is already running."); return; }
     setBusy(true); setMessage(undefined);
-    try { setPackages(await backendRef.current.packageUpdatesInventory()); setPackageIds(new Set()); }
+    try {
+      const result = await backendRef.current.packageUpdatesInventory();
+      setPackages(result); setPackageIds(new Set()); setActiveManager(pickDefaultManager(result.managers));
+    }
     catch (cause) { setMessage(String(cause)); }
     finally { setBusy(false); releasePackageOperation(); }
   };
@@ -64,7 +81,10 @@ export function PackageUpdateTools() {
       <CardHeader><CardTitle>Updates across package managers</CardTitle><CardDescription>Check and apply explicit updates from Winget, Chocolatey, Scoop, and global npm. Each manager reports availability independently.</CardDescription></CardHeader>
       <CardContent className="flex flex-wrap items-center gap-2"><Button variant="primary" disabled={busy} onClick={() => void inspectPackages()}><Icon icon="search" />{busy ? "Checking…" : "Check updates"}</Button>{busy && <Button variant="outline" onClick={() => void cancel()}><Icon icon="stop" /> Cancel</Button>}{packages && <Badge tone="accent">{packages.managers.reduce((count, manager) => count + manager.updates.length, 0)} available</Badge>}</CardContent>
     </Card>
-    {packages?.managers.map((manager) => <PackageManager key={manager.manager} manager={manager} selected={packageIds} toggle={(id) => setPackageIds(toggle(packageIds, id))} onInstallManager={installManager} installingManagers={installingManagers} />)}
+    {!!packages?.managers.length && <Tabs value={activeManager} onValueChange={setActiveManager}>
+      <TabsList className="w-full flex-wrap justify-start">{packages.managers.map((manager) => <TabsTrigger key={manager.manager} value={manager.manager} className="gap-1.5">{MANAGER_LABELS[manager.manager] ?? manager.manager}<Badge tone={manager.updates.length ? "accent" : "neutral"}>{manager.updates.length}</Badge></TabsTrigger>)}</TabsList>
+      {packages.managers.map((manager) => <TabsContent key={manager.manager} value={manager.manager}><PackageManager manager={manager} selected={packageIds} toggle={(id) => setPackageIds(toggle(packageIds, id))} onInstallManager={installManager} installingManagers={installingManagers} /></TabsContent>)}
+    </Tabs>}
     {!!packageIds.size && <div className="flex justify-end"><Button variant="primary" disabled={busy} onClick={() => void applyPackages()}>Update {packageIds.size} selected</Button></div>}
     {message && <Notice tone={message.includes("failed") ? "warning" : "success"} text={message} />}
   </section>;

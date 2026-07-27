@@ -23,7 +23,7 @@ export default function AppsPanel() {
   useEffect(() => {
     const scrollToUpdates = () => {
       window.__pendingAppsPackageUpdates = undefined;
-      setActiveTab("updates");
+      setActiveTab("updates-tools");
       window.setTimeout(() => document.getElementById("package-updates")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
     };
     // Deep-link: an install request fired while the user is elsewhere must not
@@ -61,15 +61,20 @@ export default function AppsPanel() {
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="w-full flex-wrap justify-start">
             <TabsTrigger value="install">Install software</TabsTrigger>
-            <TabsTrigger value="updates">Package updates</TabsTrigger>
-            <TabsTrigger value="engines">Engines</TabsTrigger>
-            <TabsTrigger value="classic">Classic Windows apps</TabsTrigger>
+            <TabsTrigger value="updates-tools">Updates & Tools</TabsTrigger>
             <TabsTrigger value="debloat">Debloat</TabsTrigger>
           </TabsList>
           <TabsContent value="install"><AppInstallerPanel /></TabsContent>
-          <TabsContent value="updates"><PackageUpdateTools /></TabsContent>
-          <TabsContent value="engines"><EnginesSection /></TabsContent>
-          <TabsContent value="classic"><ClassicWindowsApps /></TabsContent>
+          <TabsContent value="updates-tools">
+            <div className="flex flex-col gap-6">
+              <PackageUpdateTools />
+              <div className="flex flex-col gap-3">
+                <div className="text-xs font-semibold uppercase tracking-widest opacity-60">Engines</div>
+                <EnginesSection />
+              </div>
+              <ClassicWindowsApps />
+            </div>
+          </TabsContent>
           <TabsContent value="debloat"><DebloatPanel /></TabsContent>
         </Tabs>
       </div>
