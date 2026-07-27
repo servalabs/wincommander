@@ -1,3 +1,20 @@
+/* Both reclaim scopes shown side by side instead of behind a toggle --
+   mirrors the pre-Segmented layout: equal-height columns that wrap to a
+   single column below the combined minmax width. */
+.maintenance-reclaim-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr));
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.maintenance-reclaim-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  height: 100%;
+}
+
 .maintenance-cache-idle {
   position: relative;
   isolation: isolate;

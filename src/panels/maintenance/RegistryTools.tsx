@@ -30,7 +30,7 @@ export function RegistryTools() {
             <TabsList><TabsTrigger value="orphans">Registry orphans</TabsTrigger><TabsTrigger value="context">Context menu</TabsTrigger></TabsList>
           </Tabs>
           <div className="flex items-center gap-2">
-            <Button size="icon" variant="primary" disabled={tools.busy} onClick={() => void tools.scan()} title={scanLabel} aria-label={scanLabel}><Icon icon={tools.busy || entries ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} /></Button>
+            <Button size="sm" variant="primary" disabled={tools.busy} onClick={() => void tools.scan()} title={scanLabel} aria-label={scanLabel}><Icon icon={tools.busy || entries ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} />{scanLabel}</Button>
             {entries && <Badge tone="accent">{entries.length} candidate{entries.length === 1 ? "" : "s"}</Badge>}
           </div>
         </CardContent>
@@ -51,9 +51,9 @@ export function RegistryTools() {
 
       {tools.tool === "context" && tools.contextScan && (
         <Card>
-          <CardHeader><CardTitle>Third-party Explorer verbs</CardTitle><CardDescription>Disabled entries remain recoverable; removal keeps an app-owned registry backup.</CardDescription></CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            {tools.contextScan.entries.map((entry) => <EntryRow key={entry.id} checked={tools.selected.has(entry.id)} onClick={() => tools.select(entry.id)} title={entry.label} detail={`${entry.location} · ${entry.command}`} enabled={entry.enabled} />)}
+          <CardHeader><CardTitle>Third-party Explorer verbs</CardTitle><CardDescription>Disabled entries remain recoverable; removal keeps an app-owned registry backup. Hover a row for its full command.</CardDescription></CardHeader>
+          <CardContent className="flex flex-col gap-1">
+            {tools.contextScan.entries.map((entry) => <ContextVerbRow key={entry.id} checked={tools.selected.has(entry.id)} onClick={() => tools.select(entry.id)} label={entry.label} location={entry.location} command={entry.command} enabled={entry.enabled} />)}
             {!tools.contextScan.entries.length && <EmptyState />}
           </CardContent>
         </Card>
@@ -79,6 +79,12 @@ export function RegistryTools() {
 
 function EntryRow({ checked, onClick, title, detail, enabled }: { checked: boolean; onClick: () => void; title: string; detail: string; enabled: boolean }) {
   return <button type="button" onClick={onClick} className="flex w-full items-start gap-3 rounded-[var(--r)] border border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--surface-2)]"><span className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[var(--r-sm)] border ${checked ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]" : "border-[var(--border-strong)]"}`}>{checked && <Icon icon="check" />}</span><span className="min-w-0 flex-1"><span className="block text-sm text-[var(--text)]">{title}</span><span className="block break-all font-mono text-[11px] text-[var(--text-mute)]">{detail}</span></span><Badge tone={enabled ? "success" : "warning"}>{enabled ? "enabled" : "disabled"}</Badge></button>;
+}
+
+// One compact row per verb instead of a wrapping name+location+command block --
+// the full command (which can be long) sits behind the row's title tooltip.
+function ContextVerbRow({ checked, onClick, label, location, command, enabled }: { checked: boolean; onClick: () => void; label: string; location: string; command: string; enabled: boolean }) {
+  return <button type="button" onClick={onClick} title={command} className="grid w-full grid-cols-[auto_1fr_1fr_auto] items-center gap-3 rounded-[var(--r)] border border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--surface-2)]"><span className={`flex size-4 shrink-0 items-center justify-center rounded-[var(--r-sm)] border ${checked ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]" : "border-[var(--border-strong)]"}`}>{checked && <Icon icon="check" />}</span><span className="min-w-0 truncate text-sm text-[var(--text)]">{label}</span><span className="min-w-0 truncate font-mono text-[11px] text-[var(--text-mute)]">{location}</span><Badge tone={enabled ? "success" : "warning"}>{enabled ? "enabled" : "disabled"}</Badge></button>;
 }
 
 function Notice({ tone, text }: { tone: "success" | "danger"; text: string }) { return <Card><CardContent className="flex items-center gap-3 py-4"><Badge tone={tone}>{tone}</Badge><p className="text-sm text-[var(--text-dim)]">{text}</p></CardContent></Card>; }

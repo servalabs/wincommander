@@ -61,7 +61,14 @@ export function RoutineCleanerPanel({ categories: allowedCategories }: RoutineCl
       {categoryOptions.map((category) => <Chip key={category.id} active={categories.includes(category.id)} onClick={() => cleaner.setCategory(category.id)} className="text-left">{category.label}</Chip>)}
       {!categories.length && <span className="text-xs text-[var(--warn)]">Choose at least one category.</span>}
     </div>
-    {!scan && <CacheScanIdleState isScanning={operation === "scanning"} />}
+    {!scan && (
+      <CacheScanIdleState
+        isScanning={operation === "scanning"}
+        onScan={() => void cleaner.scanSelected()}
+        disabled={isRunning || !categories.length}
+        label={scanLabel}
+      />
+    )}
     {operation === "cleaning" && <Card><CardContent className="flex items-center gap-3 py-4 text-sm text-[var(--text-dim)]"><Icon icon="clean" className="animate-spin text-[var(--accent)]" /> Cleaning selected items. You can cancel while the current target completes.</CardContent></Card>}
     {error && <ResultNotice tone="danger" title="Operation failed" message={error} />}
     {result && <CleanResult result={result} />}
@@ -72,7 +79,7 @@ export function RoutineCleanerPanel({ categories: allowedCategories }: RoutineCl
   </div>;
 }
 
-function CacheScanIdleState({ isScanning }: { isScanning: boolean }) {
+function CacheScanIdleState({ isScanning, onScan, disabled, label }: { isScanning: boolean; onScan: () => void; disabled: boolean; label: string }) {
   return (
     <div className="maintenance-cache-idle" role="status" aria-live="polite">
       <div className="maintenance-cache-idle__visual" aria-hidden="true">
@@ -84,6 +91,11 @@ function CacheScanIdleState({ isScanning }: { isScanning: boolean }) {
       <div className="relative text-center">
         <p className="text-sm font-medium text-[var(--text)]">{isScanning ? "Checking application caches…" : "Ready to inspect application caches"}</p>
         <p className="mt-1 max-w-sm text-xs text-[var(--text-dim)]">{isScanning ? "Discovering regenerable data without changing any files." : "Choose the cache groups above, then scan to preview every target before cleaning."}</p>
+        {!isScanning && (
+          <Button size="sm" variant="primary" className="mt-3" onClick={onScan} disabled={disabled}>
+            <Icon icon="search" /> {label}
+          </Button>
+        )}
       </div>
     </div>
   );

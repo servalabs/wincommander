@@ -904,7 +904,7 @@ html.light .da-sq-drag-hint {
   position: sticky;
   top: 0;
   z-index: 5;
-  background: color-mix(in srgb, var(--color-bg-secondary) 94%, #000 6%);
+  background: var(--color-bg-tertiary);
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.18);
 }
 
@@ -914,8 +914,8 @@ html.light .da-sq-drag-hint {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: color-mix(in srgb, var(--color-text-primary) 76%, var(--color-text-muted));
-  border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 20%, var(--color-border));
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
   white-space: nowrap;
   font-weight: 800;
 }
@@ -948,7 +948,7 @@ html.light .da-sq-drag-hint {
 
 /* Rows */
 .da-row {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--color-border);
   transition: background 0.1s;
   cursor: default;
 }
@@ -958,7 +958,7 @@ html.light .da-sq-drag-hint {
 }
 
 .da-row:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-bg-tertiary);
 }
 
 .da-row-dir:hover {
@@ -1492,22 +1492,12 @@ html.light .da-crumb:hover:not(:disabled) {
   color: var(--color-text-primary);
 }
 
+/* .da-table thead/th and .da-row/.da-row:hover now read theme tokens
+   (--color-bg-tertiary / --color-text-muted / --color-border) directly, so
+   only the shadow -- intentionally weaker on a light background -- still
+   needs a per-theme override. */
 html.light .da-table thead {
-  background: #f8fafc;
   box-shadow: 0 8px 14px rgba(15, 23, 42, 0.08);
-}
-
-html.light .da-table th {
-  color: var(--color-text-primary);
-  border-bottom-color: var(--color-border);
-}
-
-html.light .da-row {
-  border-bottom-color: rgba(0,0,0,0.03);
-}
-
-html.light .da-row:hover {
-  background: rgba(0,0,0,0.02);
 }
 
 html.light .da-row-selected {

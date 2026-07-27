@@ -8,6 +8,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import SharedEmptyState from "../../components/shared/EmptyState";
 import { formatBytes } from "./routineCleanerHelpers";
 import { useFileHygiene } from "./useFileHygiene";
 
@@ -38,13 +39,26 @@ export function FileHygieneTools() {
             <Button variant="outline" onClick={() => void tools.chooseRoots()} disabled={tools.busy}>
               <Icon icon="folder-open" /> Choose folders
             </Button>
-            <Button size="icon" variant="primary" onClick={() => void tools.scan()} disabled={tools.busy || !tools.roots.length} title={scanLabel} aria-label={scanLabel}>
-              <Icon icon={tools.busy || hasScan ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} />
+            <Button size="sm" variant="primary" onClick={() => void tools.scan()} disabled={tools.busy || !tools.roots.length} title={scanLabel} aria-label={scanLabel}>
+              <Icon icon={tools.busy || hasScan ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} />{scanLabel}
             </Button>
             {tools.busy && <Button size="icon" variant="outline" onClick={() => void tools.cancel()} title={`Cancel ${tools.tool} scan`} aria-label={`Cancel ${tools.tool} scan`}><Icon icon="stop" /></Button>}
             {!!tools.roots.length && <Badge tone="accent">{tools.roots.length} root{tools.roots.length === 1 ? "" : "s"}</Badge>}
           </div>
-          {!!tools.roots.length && <p className="break-all font-mono text-xs text-[var(--text-mute)]">{tools.roots.join(" · ")}</p>}
+          {tools.roots.length ? (
+            <div className="flex flex-wrap gap-2">
+              {tools.roots.map((root) => (
+                <span key={root} className="flex max-w-full items-center gap-1.5 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] py-1 pl-2.5 pr-1.5 text-xs">
+                  <span className="min-w-0 truncate font-mono text-[var(--text-dim)]" title={root}>{root}</span>
+                  <button type="button" onClick={() => tools.removeRoot(root)} aria-label={`Remove ${root}`} title={`Remove ${root}`} className="shrink-0 rounded-[var(--r-sm)] p-0.5 text-[var(--text-mute)] hover:bg-[var(--surface-3)] hover:text-[var(--danger)]">
+                    <Icon icon="cross" size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <SharedEmptyState icon="folder-open" title="No folders chosen yet" hint="Use Choose folders above to pick one or more folders to inspect." />
+          )}
         </CardContent>
       </Card>
 

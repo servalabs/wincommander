@@ -25,7 +25,15 @@ export function useFileHygiene() {
   const chooseRoots = useCallback(async () => {
     const chosen = await open({ directory: true, multiple: true, title: "Choose folders to inspect" });
     if (!chosen) return;
-    setRoots(Array.isArray(chosen) ? chosen : [chosen]);
+    const picked = Array.isArray(chosen) ? chosen : [chosen];
+    setRoots((current) => [...new Set([...current, ...picked])]);
+    setDuplicateScan(undefined);
+    setEmptyScan(undefined);
+    setSelected(new Set());
+  }, [setDuplicateScan, setEmptyScan, setRoots, setSelected]);
+
+  const removeRoot = useCallback((root: string) => {
+    setRoots((current) => current.filter((existing) => existing !== root));
     setDuplicateScan(undefined);
     setEmptyScan(undefined);
     setSelected(new Set());
@@ -101,6 +109,6 @@ export function useFileHygiene() {
 
   return {
     roots, tool, duplicateScan, emptyScan, selected, result, busy, error,
-    chooseRoots, scan, remove, cancel, select, changeTool,
+    chooseRoots, removeRoot, scan, remove, cancel, select, changeTool,
   };
 }

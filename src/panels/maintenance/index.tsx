@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { Icon } from "../../components/ui/icon";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import PanelHeader from "../../components/shared/PanelHeader";
 import TierGate from "../../components/shared/TierGate";
@@ -20,7 +19,7 @@ import "./MaintenanceStorage.css";
 import { useMaintenanceSessionState } from "./maintenanceSessionState";
 
 export default function MaintenancePanel() {
-  const [activeTab, setActiveTab] = useMaintenanceSessionState("maintenance.active-tab", "overview");
+  const [activeTab, setActiveTab] = useMaintenanceSessionState("maintenance.active-tab", "files");
   const diskCleanupRef = useRef<HTMLDivElement>(null);
   const diskAnalyzerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -51,7 +50,6 @@ export default function MaintenancePanel() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="w-full flex-wrap justify-start">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="files">Storage &amp; files</TabsTrigger>
           <TabsTrigger value="system">Repair &amp; hygiene</TabsTrigger>
           <TabsTrigger value="registry">Registry &amp; Explorer</TabsTrigger>
@@ -59,7 +57,6 @@ export default function MaintenancePanel() {
           <TabsTrigger value="startup">Startup &amp; drivers</TabsTrigger>
           <TabsTrigger value="security">Security Center</TabsTrigger>
         </TabsList>
-        <TabsContent value="overview"><MaintenanceOverview onOpenSection={setActiveTab} /></TabsContent>
         <TabsContent value="files"><StorageAndFileTools cleanupRef={diskCleanupRef} analyzerRef={diskAnalyzerRef} /></TabsContent>
         <TabsContent value="registry"><RegistryTools /></TabsContent>
         <TabsContent value="system"><RepairAndHygieneTools /></TabsContent>
@@ -67,25 +64,6 @@ export default function MaintenancePanel() {
         <TabsContent value="startup"><StartupDriverTools /></TabsContent>
         <TabsContent value="security"><SecurityCenter /></TabsContent>
       </Tabs>
-    </div>
-  );
-}
-type MaintenanceSection = "files" | "system" | "registry" | "performance" | "startup" | "security";
-type MaintenanceIcon = "search" | "wrench" | "cog" | "pulse" | "time" | "shield";
-
-function MaintenanceOverview({ onOpenSection }: { onOpenSection: (section: MaintenanceSection) => void }) {
-  return (
-    <div className="grid gap-4 xl:grid-cols-2">
-      <MaintenanceGroup title="Clean, reclaim, and repair" description="Recover space and correct local clutter or configuration problems." tools={[
-        ["Storage & files", "Reclaim Windows and application storage, then inspect what is actually using the disk.", "files", "search"],
-        ["Repair & hygiene", "Run SFC/DISM, Windows Update repair, and defrag; audit broken shortcuts, stale PATH entries, and uninstall leftovers.", "system", "wrench"],
-        ["Registry & Explorer", "Review orphaned registrations and third-party context-menu entries.", "registry", "cog"],
-      ]} onOpenSection={onOpenSection} />
-      <MaintenanceGroup title="Run and protect Windows" description="Inspect how Windows starts and performs, and check its local security posture." tools={[
-        ["Performance", "Check CPU, memory, disks, adapters, and top processes.", "performance", "pulse"],
-        ["Startup & drivers", "Review startup impact and signed Plug-and-Play driver inventory.", "startup", "time"],
-        ["Security Center", "Microsoft Defender response and local security posture.", "security", "shield"],
-      ]} onOpenSection={onOpenSection} />
     </div>
   );
 }
@@ -105,10 +83,20 @@ function StorageAndFileTools({ cleanupRef, analyzerRef }: { cleanupRef: React.Re
 function RepairAndHygieneTools() {
   return (
     <div className="flex flex-col gap-4">
+      <RepairSectionLabel>OS repair</RepairSectionLabel>
       <OsRepairCard />
+      <div className="h-px bg-[var(--border)]" />
+      <RepairSectionLabel>Cleanup &amp; hygiene</RepairSectionLabel>
       <SystemHygieneTools />
     </div>
   );
+}
+
+// Distinguishes SFC/DISM/defrag (OsRepairCard) from shortcuts/environment/
+// uninstall-leftover audits (SystemHygieneTools) -- both sat under one
+// ambiguous "Repair & hygiene" tab and read as duplicates of each other.
+function RepairSectionLabel({ children }: { children: React.ReactNode }) {
+  return <span className="font-[family-name:var(--font-mono)] text-[10.5px] uppercase tracking-wider text-[var(--text-mute)]">{children}</span>;
 }
 
 function SecurityCenter() {
@@ -124,8 +112,4 @@ function SecurityCenter() {
       <TierGate tier="paid" featureLabel="Security data"><SecurityData /></TierGate>
     </div>
   );
-}
-
-function MaintenanceGroup({ title, description, tools, onOpenSection }: { title: string; description: string; tools: [string, string, MaintenanceSection, MaintenanceIcon][]; onOpenSection: (section: MaintenanceSection) => void }) {
-  return <Card><CardHeader><CardTitle>{title}</CardTitle><CardDescription>{description}</CardDescription></CardHeader><CardContent className="flex flex-col gap-2">{tools.map(([label, detail, section, icon]) => <button key={section} type="button" onClick={() => onOpenSection(section)} className="flex items-start gap-3 rounded-[var(--r)] border border-[var(--border)] p-3 text-left transition-colors hover:bg-[var(--surface-2)]"><Icon icon={icon} className="mt-0.5 text-[var(--accent)]" /><span className="min-w-0"><span className="block text-sm font-medium text-[var(--text)]">{label}</span><span className="block text-xs text-[var(--text-dim)]">{detail}</span></span></button>)}</CardContent></Card>;
 }

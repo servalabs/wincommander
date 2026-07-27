@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import useBackend from "../../hooks/useBackend";
+import TierGate from "../../components/shared/TierGate";
 import { useAppState } from "../../context/AppContext";
 import { runOperation } from "../../context/OperationContext";
 import { showSuccess } from "../../utils/toast";
@@ -20,9 +21,14 @@ import { formatMaintenanceSuccess } from "../../utils/maintenance";
  * users already accumulated under Windows Settings.
  */
 const REPAIR_ACTIONS = [
-  { key: "repair", label: "System repair", operationLabel: "System Repair (SFC + DISM)", description: "Verify and restore Windows system files with SFC, then repair the component store with DISM.", icon: "build" },
-  { key: "updateRepair", label: "Windows Update repair", operationLabel: "Windows Update Repair", description: "Reset update caches, services, Winsock, and proxy state, then re-run DISM and SFC.", icon: "automatic-updates" },
-  { key: "defrag", label: "Defrag / TRIM", operationLabel: "Defrag / Trim Drive", description: "Defragment mechanical drives; issue TRIM on solid-state drives. Windows picks the right operation per disk.", icon: "predictive-analysis" },
+  { key: "repair", label: "System repair", operationLabel: "System Repair (SFC + DISM)", description: "Verify and restore Windows system files with SFC, then repair the component store with DISM.", icon: "build", tier: "free" },
+  { key: "updateRepair", label: "Windows Update repair", operationLabel: "Windows Update Repair", description: "Reset update caches, services, Winsock, and proxy state, then re-run DISM and SFC.", icon: "automatic-updates", tier: "free" },
+  { key: "defrag", label: "Defrag / TRIM", operationLabel: "Defrag / Trim Drive", description: "Defragment mechanical drives; issue TRIM on solid-state drives. Windows picks the right operation per disk.", icon: "predictive-analysis", tier: "free" },
+  // Moved here from System Cleanup per product decision (2026-07): this is the
+  // paid, Pro-sidecar forced retrim, distinct from the free per-volume
+  // Optimize-Volume pass above -- kept alongside it so both TRIM actions live
+  // in one place.
+  { key: "ssdTrim", label: "Force SSD TRIM", operationLabel: "Force SSD TRIM", description: "Force an immediate TRIM pass on every SSD through the Pro sidecar, bypassing Windows' own schedule.", icon: "flash", tier: "paid" },
 ] as const;
 
 // A repair older than this reads as stale. Matches the ageing threshold the
@@ -31,7 +37,7 @@ const FRESH_DAYS = 15;
 
 export default function OsRepairCard() {
   const { appSettings, patchAppSettings } = useAppState();
-  const { invokeSystemRepair, invokeWindowsUpdateRepair, invokeDefrag } = useBackend();
+  const { invokeSystemRepair, invokeWindowsUpdateRepair, invokeDefrag, invokeSSDTrim } = useBackend();
   const [busy, setBusy] = useState<Record<string, boolean>>({});
 
   const maintenanceRuns = useMemo(
@@ -80,6 +86,7 @@ export default function OsRepairCard() {
     repair: invokeSystemRepair,
     updateRepair: invokeWindowsUpdateRepair,
     defrag: invokeDefrag,
+    ssdTrim: invokeSSDTrim,
   };
 
   return (
@@ -92,6 +99,11 @@ export default function OsRepairCard() {
         {REPAIR_ACTIONS.map((action) => {
           const history = getHistory(action.key);
           const isBusy = !!busy[action.key];
+          const runButton = (
+            <Button size="sm" variant="outline" disabled={isBusy} onClick={() => void run(action.key, action.operationLabel, handlers[action.key])}>
+              <Icon icon={isBusy ? "refresh" : "play"} className={isBusy ? "animate-spin" : undefined} />{isBusy ? "Running…" : "Run"}
+            </Button>
+          );
           return (
             <div key={action.key} className="flex flex-wrap items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] p-3">
               <Icon icon={action.icon} className="mt-0.5 shrink-0 text-[var(--accent)]" />
@@ -103,9 +115,7 @@ export default function OsRepairCard() {
                 </div>
                 <p className="mt-1 text-xs text-[var(--text-dim)]">{action.description}</p>
               </div>
-              <Button size="sm" variant="outline" disabled={isBusy} onClick={() => void run(action.key, action.operationLabel, handlers[action.key])}>
-                <Icon icon={isBusy ? "refresh" : "play"} className={isBusy ? "animate-spin" : undefined} />{isBusy ? "Running…" : "Run"}
-              </Button>
+              {action.tier === "paid" ? <TierGate tier="paid" featureLabel={action.label}>{runButton}</TierGate> : runButton}
             </div>
           );
         })}
