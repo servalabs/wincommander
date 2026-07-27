@@ -1128,6 +1128,12 @@ const SENSITIVE_COMMANDS: &[SensitiveCommand] = &[
         tier: CommandTier::Paid,
     },
     SensitiveCommand {
+        parts: &["Clear~-", "Search~", "Personalization~", "Data~"],
+        frontend_module: Some("cleanup"),
+        backend_module: Some("privacy/cleanup"),
+        tier: CommandTier::Paid,
+    },
+    SensitiveCommand {
         parts: &["Invoke~-", "Previous~", "Windows~", "Install~", "Erase~"],
         frontend_module: Some("cleanup"),
         backend_module: Some("privacy/cleanup"),
@@ -1886,6 +1892,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Get-P2PUpdateCacheInfo" => Some("privacy/cleanup"),
         "Get-ReliabilityHistoryInfo" => Some("privacy/cleanup"),
         "Get-ExplorerSearchHistoryInfo" => Some("privacy/cleanup"),
+        "Get-SearchPersonalizationInfo" => Some("privacy/cleanup"),
         "Get-PreviousWindowsInstallInfo" => Some("privacy/cleanup"),
 
         "Disable-ConsumerFeatures" => Some("tweaks/system"),

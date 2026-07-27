@@ -3460,6 +3460,43 @@ function Get-ExplorerSearchHistoryInfo {
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
 
+function Get-SearchPersonalizationInfo {
+    # Returns local Windows Search personalization data: per-app search
+    # jumplist/launch tracking under CurrentVersion\Search (distinct from
+    # Explorer's own WordWheelQuery/TypedPaths, already covered separately),
+    # plus the inking/typing personalization store used to tailor search
+    # suggestions. Cloud-synced query history tied to a Microsoft Account
+    # lives server-side and cannot be reached from local tools.
+    try {
+        $files = @()
+        $searchRoots = @(
+            @{ label = 'JumplistData'; path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData' },
+            @{ label = 'Launch';       path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\Launch' }
+        )
+        foreach ($root in $searchRoots) {
+            if (Test-Path $root.path -ErrorAction SilentlyContinue) {
+                Get-ChildItem -Path $root.path -ErrorAction SilentlyContinue | ForEach-Object {
+                    $files += @{ source = $root.label; name = $_.PSChildName; sizeKB = 0; modified = '' }
+                }
+                $props = Get-ItemProperty -Path $root.path -ErrorAction SilentlyContinue
+                if ($props) {
+                    $props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
+                        $files += @{ source = $root.label; name = $_.Name; sizeKB = 0; modified = '' }
+                    }
+                }
+            }
+        }
+        $trainedDataStore = "$env:LOCALAPPDATA\Microsoft\InputPersonalization\TrainedDataStore"
+        if (Test-Path $trainedDataStore -ErrorAction SilentlyContinue) {
+            Get-ChildItem -Path $trainedDataStore -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                $files += @{ source = 'TrainedDataStore'; name = $_.Name; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+            }
+        }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round((($files | ForEach-Object { $_.sizeKB }) | Measure-Object -Sum).Sum / 1KB, 2) }
+    }
+    catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
 function Get-PreviousWindowsInstallInfo {
     # Returns presence + size of C:\Windows.old (the prior OS + user profiles
     # kept after a feature update). Read-only — does NOT take ownership of
