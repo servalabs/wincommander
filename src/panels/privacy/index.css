@@ -79,70 +79,9 @@
     align-items: start;
 }
 
-/* Alerts & Monitoring — two-state reflow.
-   • No card expanded → every monitor packs into a balanced 2-column CSS
-     multi-column flow (no inter-card gaps).
-   • One card expanded → split into a 2-column grid: the remaining monitors
-     stack down the LEFT column, the expanded card docks to the RIGHT
-     column. No blank space anywhere. */
-.privacy-monitoring-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.privacy-monitor-flow {
-    columns: 2;
-    column-gap: 12px;
-    /* Clears the scrollbar gutter so the rightmost card's border doesn't sit
-       flush against (and visually vanish under) the scrollbar. */
-    padding-right: 4px;
-}
-
-/* CSS multi-column uses margins (not gap) for vertical rhythm; break-inside
-   keeps each card whole within its column. */
-.privacy-monitor-flow .privacy-monitor-cell {
-    break-inside: avoid;
-    margin: 0 0 12px;
-}
-
-/* Split layout (one card expanded). The expanded card on the right hugs the
-   top of the grid row; the left column packs the rest vertically with no
-   trailing gap. align-items: start prevents either side from stretching to
-   match the other, so a tall expanded card doesn't pad blank space below the
-   left stack and vice versa. */
-.privacy-monitor-split {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 12px;
-    align-items: start;
-    padding-right: 4px;
-}
-
-.privacy-monitor-split .privacy-monitor-left {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    min-width: 0;
-}
-
-.privacy-monitor-split .privacy-monitor-right {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-@media (max-width: 900px) {
-    .privacy-monitor-flow {
-        columns: 1;
-    }
-    .privacy-monitor-split {
-        grid-template-columns: 1fr;
-    }
-}
-
-/* Keep the old class in case it's referenced elsewhere — map it to the new pattern */
+/* Alerts & Monitoring uses the same stable grid as the rest of the panel.
+   Do not rearrange cards when a control expands: that layout caused large
+   blank areas and moved controls away from their original positions. */
 .panel-grid.privacy-monitoring-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

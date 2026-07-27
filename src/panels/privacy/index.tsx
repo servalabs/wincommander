@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchQuery } from "../../context/SearchContext";
 import { useAppState } from "../../context/AppContext";
 import useVisibility from "../../hooks/useVisibility";
@@ -47,14 +47,6 @@ export default function PrivacyPanel() {
 
     const isAdvanced = density === "expert";
     const tourActive = useTourActive();
-
-    // Accordion for the Alerts & Monitoring cards: only one expandable card open
-    // at a time. Opening one collapses the rest so the grid reorganizes cleanly.
-    const [openMonitorId, setOpenMonitorId] = useState<string | null>(null);
-    const makeMonitorAccordion = (id: string) => ({
-        expanded: openMonitorId === id,
-        onExpandedChange: (next: boolean) => setOpenMonitorId(next ? id : null),
-    });
 
     const showPrivacyControls = visibility.isVisible({ capability: ["privacy"] });
     // Revealed during a tour as well as in Expert: the walkthrough anchors a
@@ -293,9 +285,7 @@ export default function PrivacyPanel() {
                 {showMonitoring && monitoringMatchesSearch && (
                     <SectionCard title="Alerts & Monitoring">
                         {/* Top row — Privacy Shield (left) and RDP Idle (right)
-                          * sit side-by-side as the headline monitoring controls.
-                          * Below that, all other monitors live in a reflow grid
-                          * that re-balances when one is expanded. */}
+                          * sit side-by-side as the headline monitoring controls. */}
                         <div className="privacy-monitor-toprow">
                             <PrivacyShieldCard />
                             <div data-tour="privacy-rdp-idle">
@@ -303,135 +293,68 @@ export default function PrivacyPanel() {
                             </div>
                         </div>
 
-                        {/* Monitors flow — when NO card is expanded, every monitor
-                          * packs into a balanced 2-column multi-column flow with no
-                          * blank space. When one is expanded, the expanded card
-                          * docks to the right and the remaining cards stack down
-                          * the left column. RDP and Privacy Shield already live in
-                          * the row above, so they're excluded here. */}
-                        {(() => {
-                            const monitorCards: { id: string; node: ReactNode }[] = [
-                                { id: "screen", node: (
-                                    <ScreenCaptureSection
-                                        detectionEnabled={screenCaptureDetectionEnabled}
-                                        protectWindow={screenCaptureProtectWindow}
-                                        onPatch={patchScreenCapture}
-                                        {...makeMonitorAccordion("screen")}
-                                    />
-                                ) },
-                                { id: "decoy", node: (
-                                    <DecoyMonitorSection
-                                        isAdvanced={isAdvanced}
-                                        searchQuery=""
-                                        enabled={decoyEnabled}
-                                        enrolledPaths={decoyEnrolledPaths}
-                                        onPatchDecoy={patchDecoy}
-                                        {...makeMonitorAccordion("decoy")}
-                                    />
-                                ) },
-                                { id: "remote", node: (
-                                    <RemoteAccessMonitorSection
-                                        isAdvanced={isAdvanced}
-                                        searchQuery=""
-                                        enabled={remoteAccessEnabled}
-                                        toolOverrides={remoteAccessTools}
-                                        onPatch={patchRemoteAccess}
-                                        {...makeMonitorAccordion("remote")}
-                                    />
-                                ) },
-                                { id: "monitoring-mirror", node: (
-                                    <MonitoringMirrorSection />
-                                ) },
-                                { id: "argus-dlp", node: (
-                                    <ArgusDlpSection />
-                                ) },
-                                { id: "argus-tamper", node: (
-                                    <ArgusTamperSection />
-                                ) },
-                                { id: "argus-print-usb", node: (
-                                    <ArgusPrintUsbSection />
-                                ) },
-                                { id: "canary", node: (
-                                    <CanaryTokensSection />
-                                ) },
-                                { id: "usb", node: (
-                                    <UsbDevicesSection />
-                                ) },
-                                { id: "paste", node: (
-                                    <PasteMonitorSection
-                                        isAdvanced={isAdvanced}
-                                        searchQuery=""
-                                        enabled={pasteMonitorEnabled}
-                                        categories={pasteMonitorCategories}
-                                        cryptoSwapEnabled={pasteCryptoSwapEnabled}
-                                        autoClearEnabled={pasteAutoClearEnabled}
-                                        autoClearSeconds={pasteAutoClearSeconds}
-                                        autoClearOnLock={pasteAutoClearOnLock}
-                                        onPatchClipboard={patchClipboard}
-                                        {...makeMonitorAccordion("paste")}
-                                    />
-                                ) },
-                                { id: "ransomware", node: (
-                                    <RansomwareMonitorSection
-                                        isAdvanced={isAdvanced}
-                                        searchQuery=""
-                                        enabled={ransomwareEnabled}
-                                        threshold={ransomwareThreshold}
-                                        windowSeconds={ransomwareWindowSeconds}
-                                        customWatchDirs={ransomwareCustomDirs}
-                                        action={ransomwareAction}
-                                        onPatchRansomware={patchRansomware}
-                                        {...makeMonitorAccordion("ransomware")}
-                                    />
-                                ) },
-                                { id: "print", node: <PrintActivitySection /> },
-                            ];
-                            const expanded = openMonitorId
-                                ? monitorCards.find((c) => c.id === openMonitorId)
-                                : undefined;
-                            const others = monitorCards.filter((c) => c.id !== expanded?.id);
-
-                            if (!expanded) {
-                                return (
-                                    <div className="privacy-monitor-flow" style={{ marginTop: 12 }}>
-                                        {others.map((c) => (
-                                            <div key={c.id} className="privacy-monitor-cell">
-                                                {c.node}
-                                            </div>
-                                        ))}
-                                    </div>
-                                );
-                            }
-
-                            // When a card is expanded, dock it to the right and stack the
-                            // others on the left. To kill the trailing blank space below
-                            // the expanded card, lift the LAST remaining card onto the
-                            // right column beneath the expanded one — so both columns
-                            // bottom out close together. Falls back to right-only when
-                            // there's only one extra card to place.
-                            const rightTail = others.length > 1 ? others[others.length - 1] : null;
-                            const leftStack = rightTail ? others.slice(0, -1) : others;
-
-                            return (
-                                <div className="privacy-monitor-split" style={{ marginTop: 12 }}>
-                                    <div className="privacy-monitor-left">
-                                        {leftStack.map((c) => (
-                                            <div key={c.id} className="privacy-monitor-cell">
-                                                {c.node}
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className="privacy-monitor-right">
-                                        {expanded.node}
-                                        {rightTail && (
-                                            <div key={rightTail.id} className="privacy-monitor-cell">
-                                                {rightTail.node}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            );
-                        })()}
+                        {/* Keep monitor ordering stable. The previous expanded-card
+                          * reflow moved cards between columns, which left large blank
+                          * areas and made controls appear to jump around. */}
+                        <div className="panel-grid privacy-monitoring-grid" style={{ marginTop: 12 }}>
+                            <div className="privacy-monitor-cell">
+                                <ScreenCaptureSection
+                                    detectionEnabled={screenCaptureDetectionEnabled}
+                                    protectWindow={screenCaptureProtectWindow}
+                                    onPatch={patchScreenCapture}
+                                />
+                            </div>
+                            <div className="privacy-monitor-cell">
+                                <DecoyMonitorSection
+                                    isAdvanced={isAdvanced}
+                                    searchQuery=""
+                                    enabled={decoyEnabled}
+                                    enrolledPaths={decoyEnrolledPaths}
+                                    onPatchDecoy={patchDecoy}
+                                />
+                            </div>
+                            <div className="privacy-monitor-cell">
+                                <RemoteAccessMonitorSection
+                                    isAdvanced={isAdvanced}
+                                    searchQuery=""
+                                    enabled={remoteAccessEnabled}
+                                    toolOverrides={remoteAccessTools}
+                                    onPatch={patchRemoteAccess}
+                                />
+                            </div>
+                            <div className="privacy-monitor-cell"><MonitoringMirrorSection /></div>
+                            <div className="privacy-monitor-cell"><ArgusDlpSection /></div>
+                            <div className="privacy-monitor-cell"><ArgusTamperSection /></div>
+                            <div className="privacy-monitor-cell"><ArgusPrintUsbSection /></div>
+                            <div className="privacy-monitor-cell"><CanaryTokensSection /></div>
+                            <div className="privacy-monitor-cell"><UsbDevicesSection /></div>
+                            <div className="privacy-monitor-cell">
+                                <PasteMonitorSection
+                                    isAdvanced={isAdvanced}
+                                    searchQuery=""
+                                    enabled={pasteMonitorEnabled}
+                                    categories={pasteMonitorCategories}
+                                    cryptoSwapEnabled={pasteCryptoSwapEnabled}
+                                    autoClearEnabled={pasteAutoClearEnabled}
+                                    autoClearSeconds={pasteAutoClearSeconds}
+                                    autoClearOnLock={pasteAutoClearOnLock}
+                                    onPatchClipboard={patchClipboard}
+                                />
+                            </div>
+                            <div className="privacy-monitor-cell">
+                                <RansomwareMonitorSection
+                                    isAdvanced={isAdvanced}
+                                    searchQuery=""
+                                    enabled={ransomwareEnabled}
+                                    threshold={ransomwareThreshold}
+                                    windowSeconds={ransomwareWindowSeconds}
+                                    customWatchDirs={ransomwareCustomDirs}
+                                    action={ransomwareAction}
+                                    onPatchRansomware={patchRansomware}
+                                />
+                            </div>
+                            <div className="privacy-monitor-cell"><PrintActivitySection /></div>
+                        </div>
                     </SectionCard>
                 )}
 
