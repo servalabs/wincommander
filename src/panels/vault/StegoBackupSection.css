@@ -9,12 +9,33 @@
 .stego-warnings { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; }
 .stego-warnings li { font-size: 12px; line-height: 1.45; }
 
+/* Create / Restore blocks — side by side on wide viewports, stacking to one
+   column below 700px (Backup & Erase already gives Stego Backup half the
+   panel width, so this needs its own narrower breakpoint). */
+.stego-blocks-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
 .stego-block { display: flex; flex-direction: column; gap: 8px; }
-.stego-block--restore { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 4px; }
+.stego-block--restore { border-left: 1px solid var(--border); padding-left: 12px; }
 .stego-block__title {
   display: flex; align-items: center; gap: 6px;
   font-family: var(--font-display, inherit);
   font-size: 13px; font-weight: 600; color: var(--text);
+}
+
+@media (max-width: 700px) {
+  .stego-blocks-row { grid-template-columns: minmax(0, 1fr); }
+  .stego-block--restore {
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+    margin-top: 4px;
+  }
 }
 
 .stego-label { display: inline-flex; align-items: center; gap: 5px; }
@@ -63,6 +84,10 @@
   font-variant-numeric: tabular-nums;
 }
 .stego-capacity__row b.stego-capacity__muted { color: var(--text-mute); font-weight: 400; }
+
+/* ── Password + confirm ─────────────────────────────────────────────────── */
+.stego-password-row { display: flex; gap: 10px; }
+.stego-password-row > * { flex: 1; min-width: 0; }
 
 /* ── Progress + outcomes ────────────────────────────────────────────────── */
 .stego-busy { display: flex; flex-direction: column; gap: 6px; }

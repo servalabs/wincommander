@@ -33,7 +33,7 @@ function VaultPanel() {
   // Backup & Erase tab, needs the live mounted-volumes list too — see
   // BackupAndEraseTab below.
   const { encryptionStatus, refreshVault, appSettings } = useAppState();
-  const [activeTab, setActiveTab] = useVaultSessionState("vault.active-tab", "volumes");
+  const [activeTab, setActiveTab] = useVaultSessionState("vault.active-tab", "volumes-ramdisks");
 
   const volumes = encryptionStatus?.volumes || [];
   const isEncryptionEngineInstalled = encryptionStatus?.installed ?? true;
@@ -48,19 +48,18 @@ function VaultPanel() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="w-full flex-wrap justify-start">
-          <TabsTrigger value="volumes">Encrypted volumes</TabsTrigger>
-          <TabsTrigger value="ramdisks">RAM disks</TabsTrigger>
+          <TabsTrigger value="volumes-ramdisks">Volumes &amp; RAM disks</TabsTrigger>
           <TabsTrigger value="backup-erase">Backup &amp; Erase</TabsTrigger>
         </TabsList>
-        <TabsContent value="volumes">
-          <EncryptedVolumesTab
-            volumes={volumes}
-            isEncryptionEngineInstalled={isEncryptionEngineInstalled}
-            refreshVault={refreshVault}
-          />
-        </TabsContent>
-        <TabsContent value="ramdisks">
-          <RamDisksSection />
+        <TabsContent value="volumes-ramdisks">
+          <div className="vault-volumes-ramdisks-grid">
+            <EncryptedVolumesTab
+              volumes={volumes}
+              isEncryptionEngineInstalled={isEncryptionEngineInstalled}
+              refreshVault={refreshVault}
+            />
+            <RamDisksSection />
+          </div>
         </TabsContent>
         <TabsContent value="backup-erase">
           <BackupAndEraseTab volumes={volumes} appSettings={appSettings} />
@@ -553,16 +552,16 @@ interface BackupAndEraseTabProps {
   appSettings: AppSettings | null;
 }
 
-// Backup & Erase tab: Stego Backup and Crypto-Erase side by side. Crypto-Erase
-// is Secure-persona-only (erase_encrypted_container is require_paid on the
-// Rust side, and this feature is Secure-persona-only) — when persona isn't
-// "secure", Stego Backup renders alone at full width instead of leaving an
-// empty second column.
+// Backup & Erase tab: Stego Backup stacked above Crypto-Erase, each full
+// width and sized to its own content. Crypto-Erase is Secure-persona-only
+// (erase_encrypted_container is require_paid on the Rust side, and this
+// feature is Secure-persona-only) — when persona isn't "secure", Stego
+// Backup renders alone.
 function BackupAndEraseTab({ volumes, appSettings }: BackupAndEraseTabProps) {
   const isSecurePersona = getPersona(appSettings) === "secure";
 
   return (
-    <div className={`vault-backup-erase-grid${isSecurePersona ? "" : " vault-backup-erase-grid--single"}`}>
+    <div className="vault-backup-erase-stack">
       <StegoBackupSection />
 
       {isSecurePersona && (

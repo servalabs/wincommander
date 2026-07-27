@@ -943,18 +943,22 @@ input::-webkit-credentials-auto-fill-button {
    Vault V2 Card Layout
    ===================================================================== */
 
-/* Backup & Erase tab: Stego Backup and Crypto-Erase side by side (each a
-   SectionCard). Collapses to one column when Crypto-Erase is hidden
-   (Casual persona) or the viewport is narrow. */
-.vault-backup-erase-grid {
+/* Volumes & RAM disks tab: Encrypted Volumes and RAM Disks side by side
+   (each a SectionCard). Collapses to one column on narrow viewports. */
+.vault-volumes-ramdisks-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-items: start;
 }
 
-.vault-backup-erase-grid--single {
-  grid-template-columns: minmax(0, 1fr);
+/* Backup & Erase tab: Stego Backup stacked above Crypto-Erase (each a
+   SectionCard), full width, sized to its own content height — no forced
+   equal height, no side-by-side grid. */
+.vault-backup-erase-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 /* Dynamic one-line status under a SectionCard title (e.g. RAM Disks' mounted
@@ -1229,7 +1233,7 @@ input::-webkit-credentials-auto-fill-button {
 }
 
 @media (max-width: 860px) {
-  .vault-backup-erase-grid {
+  .vault-volumes-ramdisks-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }

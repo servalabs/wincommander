@@ -57,181 +57,185 @@ export default function StegoBackupSection() {
         </Callout>
 
         <TierGate tier="paid" featureLabel="Stego Backup">
-          <div className="stego-block">
-            <span className="stego-block__title">Create a hidden backup</span>
+          <div className="stego-blocks-row">
+            <div className="stego-block">
+              <span className="stego-block__title">Create a hidden backup</span>
 
-            <FilePick
-              label="Carrier video…"
-              value={fields.carrier}
-              onPick={() => void stego.pickCarrier()}
-              onClear={() => set.setCarrier("")}
-              disabled={locked}
-            />
-            <IssueLine issues={createErrors} field="carrier" />
-            <IssueLine issues={stego.createWarnings} field="carrier" tone="warn" />
-
-            <FilePick
-              label="Save video as…"
-              value={fields.outPath}
-              onPick={() => void stego.pickOutput()}
-              onClear={() => set.setOutPath("")}
-              disabled={locked}
-            />
-            <IssueLine issues={createErrors} field="output" />
-            <IssueLine issues={stego.createWarnings} field="output" tone="warn" />
-
-            <div className="stego-size-row">
-              <FormGroup
-                label={
-                  <span className="stego-label">
-                    Hidden volume size <InfoDot content={INFO.size} />
-                  </span>
-                }
-              >
-                <InputGroup
-                  type="number"
-                  min={1}
-                  value={fields.sizeRaw}
-                  disabled={locked}
-                  onChange={(e) => set.setSizeRaw(e.currentTarget.value)}
-                />
-              </FormGroup>
-              <FormGroup label="Unit">
-                <HTMLSelect
-                  value={fields.sizeUnit}
-                  disabled={locked}
-                  onChange={(e) => set.setSizeUnit(e.currentTarget.value as SizeUnit)}
-                  options={[
-                    { value: "M", label: "MB" },
-                    { value: "G", label: "GB" },
-                    { value: "T", label: "TB" },
-                  ]}
-                />
-              </FormGroup>
-            </div>
-            <IssueLine issues={createErrors} field="size" />
-
-            {fields.carrier ? (
-              <CapacityPanel
-                plan={stego.capacity}
-                freeBytes={stego.destinationFreeBytes}
-                loading={stego.drivesLoading}
-                hasOutput={!!fields.outPath}
-                freeShare={stego.freeShare}
-              />
-            ) : (
-              <CapacityEmpty />
-            )}
-            <IssueLine issues={createErrors} field="destination" />
-
-            <FormGroup
-              label={
-                <span className="stego-label">
-                  Password <InfoDot content={INFO.password} />
-                </span>
-              }
-              helperText="At least 8 characters. Write it down somewhere safe before you continue."
-            >
-              <InputGroup
-                type={showPassword ? "text" : "password"}
-                value={fields.password}
-                autoComplete="new-password"
+              <FilePick
+                label="Carrier video…"
+                value={fields.carrier}
+                onPick={() => void stego.pickCarrier()}
+                onClear={() => set.setCarrier("")}
                 disabled={locked}
-                onChange={(e) => set.setPassword(e.currentTarget.value)}
-                rightElement={
-                  <Button
-                    minimal
-                    icon={showPassword ? "eye-off" : "eye-open"}
-                    aria-label={showPassword ? "Hide password" : "Show password"}
-                    onClick={() => setShowPassword((prev) => !prev)}
+              />
+              <IssueLine issues={createErrors} field="carrier" />
+              <IssueLine issues={stego.createWarnings} field="carrier" tone="warn" />
+
+              <FilePick
+                label="Save video as…"
+                value={fields.outPath}
+                onPick={() => void stego.pickOutput()}
+                onClear={() => set.setOutPath("")}
+                disabled={locked}
+              />
+              <IssueLine issues={createErrors} field="output" />
+              <IssueLine issues={stego.createWarnings} field="output" tone="warn" />
+
+              <div className="stego-size-row">
+                <FormGroup
+                  label={
+                    <span className="stego-label">
+                      Hidden volume size <InfoDot content={INFO.size} />
+                    </span>
+                  }
+                >
+                  <InputGroup
+                    type="number"
+                    min={1}
+                    value={fields.sizeRaw}
+                    disabled={locked}
+                    onChange={(e) => set.setSizeRaw(e.currentTarget.value)}
                   />
-                }
-              />
-            </FormGroup>
-            <FormGroup label="Confirm password">
-              <InputGroup
-                type={showPassword ? "text" : "password"}
-                value={fields.passwordConfirm}
-                autoComplete="new-password"
+                </FormGroup>
+                <FormGroup label="Unit">
+                  <HTMLSelect
+                    value={fields.sizeUnit}
+                    disabled={locked}
+                    onChange={(e) => set.setSizeUnit(e.currentTarget.value as SizeUnit)}
+                    options={[
+                      { value: "M", label: "MB" },
+                      { value: "G", label: "GB" },
+                      { value: "T", label: "TB" },
+                    ]}
+                  />
+                </FormGroup>
+              </div>
+              <IssueLine issues={createErrors} field="size" />
+
+              {fields.carrier ? (
+                <CapacityPanel
+                  plan={stego.capacity}
+                  freeBytes={stego.destinationFreeBytes}
+                  loading={stego.drivesLoading}
+                  hasOutput={!!fields.outPath}
+                  freeShare={stego.freeShare}
+                />
+              ) : (
+                <CapacityEmpty />
+              )}
+              <IssueLine issues={createErrors} field="destination" />
+
+              <div className="stego-password-row">
+                <FormGroup
+                  label={
+                    <span className="stego-label">
+                      Password <InfoDot content={INFO.password} />
+                    </span>
+                  }
+                  helperText="At least 8 characters. Write it down somewhere safe before you continue."
+                >
+                  <InputGroup
+                    type={showPassword ? "text" : "password"}
+                    value={fields.password}
+                    autoComplete="new-password"
+                    disabled={locked}
+                    onChange={(e) => set.setPassword(e.currentTarget.value)}
+                    rightElement={
+                      <Button
+                        minimal
+                        icon={showPassword ? "eye-off" : "eye-open"}
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                        onClick={() => setShowPassword((prev) => !prev)}
+                      />
+                    }
+                  />
+                </FormGroup>
+                <FormGroup label="Confirm password">
+                  <InputGroup
+                    type={showPassword ? "text" : "password"}
+                    value={fields.passwordConfirm}
+                    autoComplete="new-password"
+                    disabled={locked}
+                    onChange={(e) => set.setPasswordConfirm(e.currentTarget.value)}
+                  />
+                </FormGroup>
+              </div>
+              <IssueLine issues={createErrors} field="password" />
+
+              {busy === "create" && (
+                <BusyBar label="Formatting the hidden volume, then rebuilding the video around it. Minutes, not seconds." />
+              )}
+
+              {createResult?.kind === "fail" && <FailureCallout failure={createResult.failure} />}
+              {createResult?.kind === "ok" && (
+                <SuccessCallout
+                  title="Hidden backup created"
+                  path={createResult.path}
+                  onReveal={() => void stego.revealFolder(createResult.path)}
+                >
+                  Test it before you delete anything: recover it below, then mount the result.
+                </SuccessCallout>
+              )}
+
+              <Button
+                intent="primary"
+                loading={busy === "create"}
+                disabled={locked || stego.createBlocked}
+                onClick={() => void stego.runCreate()}
+              >
+                Create hidden backup
+              </Button>
+            </div>
+
+            <div className="stego-block stego-block--restore">
+              <span className="stego-block__title">
+                Restore from a video <InfoDot content={INFO.restore} />
+              </span>
+              <p className="stego-intro">
+                Copies the hidden container back out as a file. This step needs no password — you enter
+                it when you mount the container from the Volumes list above.
+              </p>
+
+              <FilePick
+                label="Video with a backup…"
+                value={fields.inPath}
+                onPick={() => void stego.pickStegoInput()}
+                onClear={() => set.setInPath("")}
                 disabled={locked}
-                onChange={(e) => set.setPasswordConfirm(e.currentTarget.value)}
               />
-            </FormGroup>
-            <IssueLine issues={createErrors} field="password" />
+              <IssueLine issues={extractErrors} field="carrier" />
 
-            {busy === "create" && (
-              <BusyBar label="Formatting the hidden volume, then rebuilding the video around it. Minutes, not seconds." />
-            )}
+              <FilePick
+                label="Recover container to…"
+                value={fields.exOut}
+                onPick={() => void stego.pickContainerOutput()}
+                onClear={() => set.setExOut("")}
+                disabled={locked}
+              />
+              <IssueLine issues={extractErrors} field="output" />
+              <IssueLine issues={stego.extractWarnings} field="output" tone="warn" />
 
-            {createResult?.kind === "fail" && <FailureCallout failure={createResult.failure} />}
-            {createResult?.kind === "ok" && (
-              <SuccessCallout
-                title="Hidden backup created"
-                path={createResult.path}
-                onReveal={() => void stego.revealFolder(createResult.path)}
+              {busy === "extract" && <BusyBar label="Reading the video and copying the hidden container out." />}
+
+              {extractResult?.kind === "fail" && <FailureCallout failure={extractResult.failure} />}
+              {extractResult?.kind === "ok" && (
+                <SuccessCallout
+                  title="Container recovered"
+                  path={extractResult.path}
+                  onReveal={() => void stego.revealFolder(extractResult.path)}
+                >
+                  Mount it from the Volumes list above, with the password you used when you created it.
+                </SuccessCallout>
+              )}
+
+              <Button
+                loading={busy === "extract"}
+                disabled={locked || stego.extractBlocked}
+                onClick={() => void stego.runExtract()}
               >
-                Test it before you delete anything: recover it below, then mount the result.
-              </SuccessCallout>
-            )}
-
-            <Button
-              intent="primary"
-              loading={busy === "create"}
-              disabled={locked || stego.createBlocked}
-              onClick={() => void stego.runCreate()}
-            >
-              Create hidden backup
-            </Button>
-          </div>
-
-          <div className="stego-block stego-block--restore">
-            <span className="stego-block__title">
-              Restore from a video <InfoDot content={INFO.restore} />
-            </span>
-            <p className="stego-intro">
-              Copies the hidden container back out as a file. This step needs no password — you enter
-              it when you mount the container from the Volumes list above.
-            </p>
-
-            <FilePick
-              label="Video with a backup…"
-              value={fields.inPath}
-              onPick={() => void stego.pickStegoInput()}
-              onClear={() => set.setInPath("")}
-              disabled={locked}
-            />
-            <IssueLine issues={extractErrors} field="carrier" />
-
-            <FilePick
-              label="Recover container to…"
-              value={fields.exOut}
-              onPick={() => void stego.pickContainerOutput()}
-              onClear={() => set.setExOut("")}
-              disabled={locked}
-            />
-            <IssueLine issues={extractErrors} field="output" />
-            <IssueLine issues={stego.extractWarnings} field="output" tone="warn" />
-
-            {busy === "extract" && <BusyBar label="Reading the video and copying the hidden container out." />}
-
-            {extractResult?.kind === "fail" && <FailureCallout failure={extractResult.failure} />}
-            {extractResult?.kind === "ok" && (
-              <SuccessCallout
-                title="Container recovered"
-                path={extractResult.path}
-                onReveal={() => void stego.revealFolder(extractResult.path)}
-              >
-                Mount it from the Volumes list above, with the password you used when you created it.
-              </SuccessCallout>
-            )}
-
-            <Button
-              loading={busy === "extract"}
-              disabled={locked || stego.extractBlocked}
-              onClick={() => void stego.runExtract()}
-            >
-              Recover container
-            </Button>
+                Recover container
+              </Button>
+            </div>
           </div>
         </TierGate>
       </div>
