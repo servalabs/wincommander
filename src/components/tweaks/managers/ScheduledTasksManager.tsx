@@ -86,7 +86,7 @@ export default function ScheduledTasksManager({ embedded = false }: { embedded?:
         <>
             <div className="scheduled-tasks-manager__toolbar">
                 <InputGroup
-                    placeholder="Filter by name / path..."
+                    placeholder="Search by name / path..."
                     leftIcon="search"
                     value={filter}
                     onChange={e => setFilter(e.currentTarget.value)}

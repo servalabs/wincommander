@@ -81,6 +81,14 @@
   min-width: 0;
 }
 
+/* Search box sharing a toolbar row with another control (e.g. a filter
+   button) — grows to fill the remaining space instead of `fill`'s
+   width:100%, which would force the sibling control onto its own line. */
+.system-manager-toolbar-filter {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
 .system-manager-list {
   display: flex;
   flex-direction: column;
@@ -115,7 +123,7 @@
 }
 
 .system-manager-row--local-user {
-  grid-template-columns: minmax(0, 1fr) auto auto minmax(190px, auto);
+  grid-template-columns: minmax(0, 1fr) auto minmax(190px, auto);
 }
 
 .system-manager-row.is-disabled {

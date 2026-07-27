@@ -79,7 +79,7 @@ function ItemGroup({ label, items = [], selectedIds, disabled, onToggle }: ItemG
         {items.map((item) => (
           <label key={item.id} className="flex cursor-pointer items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 hover:border-[var(--border-strong)] has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60">
             <input
-              className="mt-0.5 size-4 accent-[var(--accent)]"
+              className="mt-0.5 wc-check"
               type="checkbox"
               checked={selectedIds.has(item.id)}
               disabled={disabled}

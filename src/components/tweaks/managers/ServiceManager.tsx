@@ -142,8 +142,8 @@ export default function ServiceManager({ embedded = false }: { embedded?: boolea
     const body = (
         <>
             <div className="system-manager-toolbar">
-                <InputGroup placeholder="Filter services..." leftIcon="search" value={filter}
-                    onChange={e => setFilter(e.currentTarget.value)} fill />
+                <InputGroup placeholder="Search services..." leftIcon="search" value={filter}
+                    onChange={e => setFilter(e.currentTarget.value)} className="system-manager-toolbar-filter" />
                 <Button small minimal active={showOnlyRecommended} icon="filter"
                     onClick={() => setShowOnlyRecommended(v => !v)}>Recommended only</Button>
             </div>

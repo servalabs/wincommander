@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { Button, Tag, Spinner, InputGroup, Switch, Icon } from "@/components/ui/bp";
+import { Button, Tag, Spinner, InputGroup, Switch, Icon, type Intent } from "@/components/ui/bp";
 import SectionCard from "../../shared/SectionCard";
 import { executeBackendCommand } from "../../../hooks/useBackend";
 import { showSuccess, showError } from "../../../utils/toast";
@@ -19,6 +19,16 @@ function disabledReason(user: LocalLoginUser): string | null {
     if (user.currentUser) return "The currently signed-in account cannot be hidden here.";
     if (user.builtIn) return "Built-in Windows accounts cannot be hidden here.";
     return null;
+}
+
+// Single row-status color, checked in this order so a hidden-but-enabled
+// user doesn't show two tags fighting for attention (a green "Enabled" next
+// to a blue "Hidden"): hidden beats current-user beats enabled beats offline.
+function userStatus(user: LocalLoginUser): { intent: Intent; label: string } {
+    if (user.hiddenFromLogin) return { intent: "danger", label: "Hidden" };
+    if (user.currentUser) return { intent: "success", label: "Current" };
+    if (user.enabled) return { intent: "success", label: "Active" };
+    return { intent: "none", label: "Disabled" };
 }
 
 export default function LocalUsersManager({ embedded = false }: { embedded?: boolean }) {
@@ -110,6 +120,7 @@ export default function LocalUsersManager({ embedded = false }: { embedded?: boo
                     const isPending = pending.has(user.name);
                     const reason = disabledReason(user);
                     const canToggle = !isPending && !reason;
+                    const status = userStatus(user);
                     return (
                         <AnimatedTableRow
                             key={user.sid || user.name}
@@ -129,16 +140,13 @@ export default function LocalUsersManager({ embedded = false }: { embedded?: boo
                                         </div>
                                     )}
                                 </div>
-                                <Tag minimal intent={user.hiddenFromLogin ? "primary" : "none"}>
-                                    {user.hiddenFromLogin ? "Hidden" : "Visible"}
-                                </Tag>
-                                <Tag minimal intent={user.enabled ? "success" : "none"}>
-                                    {user.enabled ? "Enabled" : "Disabled"}
+                                <Tag minimal intent={status.intent}>
+                                    {status.label}
                                 </Tag>
                                 <div className="system-manager-local-user__toggle" title={reason || undefined}>
-                                    {(user.builtIn || user.currentUser) && (
-                                        <Tag minimal intent={user.currentUser ? "warning" : "none"}>
-                                            {user.currentUser ? "Current" : "Built-in"}
+                                    {user.builtIn && (
+                                        <Tag minimal intent="none">
+                                            Built-in
                                         </Tag>
                                     )}
                                     <Switch
