@@ -338,6 +338,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     tour: {
       anchor: '[data-tour="cleanup-process-review"]',
       navigateTo: "cleanup",
+      openEvent: "open-cleanup-actions-monitoring",
       placement: "left",
       tours: [{ id: "tour-cleanup", order: 20 }],
     },
@@ -345,12 +346,13 @@ export const GUIDE_TOPICS: GuideTopic[] = [
   {
     id: "cleanup-tour-one-time-actions",
     title: "One-Time Actions",
-    summary: "Three background jobs you kick off once: Free Space Cleanup overwrites unallocated space per drive (SSD gets cipher + TRIM, HDD gets a DoD 3-pass overwrite) so deleted files can't be recovered, Virtual Memory Purge disables hibernation and forces the pagefile to clear on shutdown, and Force SSD TRIM re-optimizes every drive. All three run in the background and can take 30+ minutes.",
-    keywords: ["one-time actions", "free space cleanup", "wipe free space", "virtual memory", "pagefile", "hibernation", "ssd trim", "cleanup tour"],
-    body: "One-Time Actions runs background maintenance you don't need to repeat: overwrite free space, purge virtual memory, or force an SSD TRIM pass.",
+    summary: "Two background jobs you kick off once: Free Space Cleanup overwrites unallocated space per drive (SSD gets cipher + TRIM, HDD gets a DoD 3-pass overwrite) so deleted files can't be recovered, and Virtual Memory Purge disables hibernation and forces the pagefile to clear on shutdown. Both run in the background and can take 30+ minutes. (Force SSD TRIM moved to Maintenance's Repair & Hygiene tab.)",
+    keywords: ["one-time actions", "free space cleanup", "wipe free space", "virtual memory", "pagefile", "hibernation", "cleanup tour"],
+    body: "One-Time Actions runs background maintenance you don't need to repeat: overwrite free space or purge virtual memory.",
     tour: {
       anchor: '[data-tour="cleanup-one-time-actions"]',
       navigateTo: "cleanup",
+      openEvent: "open-cleanup-actions-monitoring",
       placement: "right",
       tours: [{ id: "tour-cleanup", order: 30 }],
     },
@@ -403,6 +405,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
       // inventory-load timing.
       anchor: '[data-tour="apps-updates-grid"], [data-tour="apps-update-section"]',
       navigateTo: "apps",
+      openEvent: "apps-open-install-tab",
       placement: "bottom",
       tours: [
         { id: "tour-apps", order: 10 },
@@ -419,6 +422,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     tour: {
       anchor: '[data-tour="apps-utility-section"]',
       navigateTo: "apps",
+      openEvent: "apps-open-install-tab",
       placement: "bottom",
       tours: [{ id: "tour-apps", order: 20 }],
     },
@@ -432,6 +436,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     tour: {
       anchor: '[data-tour="apps-utility-section"]',
       navigateTo: "apps",
+      openEvent: "apps-open-install-tab",
       placement: "bottom",
       // Deep-links into Packages & Apps' existing install flow rather than
       // requiring a real "Install Brave" element to exist in the DOM yet —

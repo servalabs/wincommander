@@ -57,11 +57,14 @@ describe("redesign surface copy guardrails", () => {
   test("Secure Storage shows system-drive status and action buttons above mounted volumes", async () => {
     const source = await read("src/panels/vault/index.tsx");
 
-    const headerIndex = source.indexOf('className="vault-card-new-header"');
+    // Encrypted Volumes moved onto the shared SectionCard (2026-07); its
+    // title prop is the header, not a bespoke "vault-card-new-header" div.
+    const headerIndex = source.indexOf('title="Encrypted Volumes"');
     const systemStatusIndex = source.indexOf("<SystemEncryptionSection installed={isEncryptionEngineInstalled} compact />");
     const mountedVolumesIndex = source.indexOf('className={`vault-content ${volumes.length === 0 ? "vault-content--empty" : ""}`}');
     const actionRowIndex = source.indexOf('className="vault-card-action-row"');
 
+    expect(headerIndex).toBeGreaterThanOrEqual(0);
     expect(headerIndex < systemStatusIndex).toBe(true);
     expect(systemStatusIndex < actionRowIndex).toBe(true);
     expect(actionRowIndex < mountedVolumesIndex).toBe(true);
@@ -79,8 +82,10 @@ describe("redesign surface copy guardrails", () => {
     expect(apps).not.toContain("RoutineCleanerPanel");
     expect(maintenance).not.toContain('TabsTrigger value="updates"');
 
-    // Both engines live behind ONE scope switch: two side-by-side cards used to
-    // clean the same nine Windows paths through two different backends.
+    // Both engines render side by side in one grid (2026-07): they used to
+    // clean the same nine Windows paths through two different backends, so
+    // ReclaimSpaceCard keeps them reading from one deduped category source
+    // instead of independently re-scanning the same paths twice.
     expect(reclaim).toContain("<DiskCleanupGranular />");
     expect(reclaim).toContain("APP_CACHE_CLEANUP_CATEGORIES");
     expect(maintenance).not.toContain("<DiskCleanupGranular />");
@@ -89,12 +94,16 @@ describe("redesign surface copy guardrails", () => {
   test("Secure Storage shows RAM-disk action buttons above active disks", async () => {
     const source = await read("src/panels/vault/RamDisksSection.tsx");
 
-    const headerIndex = source.indexOf('className="vault-card-new-header"');
+    // RAM Disks moved onto the shared SectionCard (2026-07). `title="RAM Disks"`
+    // appears twice (the early-return "engine not installed" card and the real
+    // one) so `headerRight={` — unique to the real card's header — is the marker.
+    const headerIndex = source.indexOf("headerRight={");
     // Class gained a second token "ramdisk-create-row" when the autostart widget
     // was added to the same row (2026-06). Match by startsWith to stay stable.
     const actionRowIndex = source.indexOf('className="vault-card-action-row ramdisk-create-row"');
     const activeDisksIndex = source.indexOf('className={`vault-content ${disks.length === 0 ? "vault-content--empty" : ""}`}');
 
+    expect(headerIndex).toBeGreaterThanOrEqual(0);
     expect(headerIndex < actionRowIndex).toBe(true);
     expect(actionRowIndex < activeDisksIndex).toBe(true);
   });
@@ -259,9 +268,14 @@ describe("redesign surface copy guardrails", () => {
     expect(css).not.toContain(".cleanup-panel {");
   });
 
+  // The tab split (2026-07) confines the cross-tier summary bar, Scan All,
+  // and account picker to the Low-impact tab (the default/first tab) — they
+  // no longer render once per tier. The counters themselves must still be
+  // unconditional within that gate, not further hidden per-counter.
   test("System Cleanup keeps the summary footprint stable while scan results arrive", async () => {
     const cleanupGrid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
 
+    expect(cleanupGrid).toContain("{isLowImpactTab && (");
     expect(cleanupGrid).toContain('data-cleanup-summary="true"');
     expect(cleanupGrid).not.toContain("{(summaryStats.needsCleaning > 0 || summaryStats.clean > 0) && (");
     expect(cleanupGrid).not.toContain("{summaryStats.needsCleaning > 0 && (");
