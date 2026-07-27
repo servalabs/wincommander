@@ -8,11 +8,13 @@ import SectionCard from "../../components/shared/SectionCard";
 import UniversalCallout from "../../components/shared/UniversalCallout";
 import TraceDetailDialog from "../../components/shared/TraceDetailDialog";
 import PanelHeader from "../../components/shared/PanelHeader";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import DriveWipeDialog from "./DriveWipeDialog";
 import CleanupCategoryGrid from "./CleanupCategoryGrid";
 import CleanupActionsMonitoring from "./CleanupActionsMonitoring";
 import { useCleanupScan } from "./useCleanupScan";
 import { useCleanupLegacyDialogs } from "./useCleanupLegacyDialogs";
+import { useCleanupSessionState } from "./cleanupSessionState";
 
 export default function SystemCleanupPanel() {
     const hasSafeguards = true;
@@ -44,6 +46,16 @@ export default function SystemCleanupPanel() {
     const { cardDataMap, allTraceCategories, handleCardLoad, handleCardClear, handleOtherUserClear, handleCardClearAllUsers, otherUserDataMap, combinedDataMap, allUsersRaw, selectedDisplay, canSwitchUsers } = scan;
 
     const { openers, dialogs: legacyDialogs } = useCleanupLegacyDialogs(cardDataMap);
+
+    const [activeTab, setActiveTab] = useCleanupSessionState("cleanup.active-tab", "low-impact");
+    const onRequestScheduleAccess = isInvestigator
+        ? undefined
+        : () => {
+            if (entitlementsLoading) return;
+            window.dispatchEvent(new CustomEvent("license-gate-open", {
+                detail: { tab: "buy", featureLabel: "Scheduled Auto-Clean" },
+            }));
+        };
 
     // Most cards use the normalized detail dialog. Wi-Fi and Browser Audit
     // retain their bespoke dialogs because they support per-profile erasure.
@@ -114,6 +126,16 @@ export default function SystemCleanupPanel() {
         return () => window.removeEventListener("commander-dismiss-dialogs", closeAll);
     }, []);
 
+    // Guide-tour anchors for Process Review and One-Time Actions live inside
+    // the "One-time actions & monitoring" tab, which Radix unmounts when it
+    // isn't active — this openEvent (dispatched by useTour.ts when the anchor
+    // isn't found yet) switches to that tab before the tour resolver retries.
+    useEffect(() => {
+        const openActionsMonitoring = () => setActiveTab("actions-monitoring");
+        window.addEventListener("open-cleanup-actions-monitoring", openActionsMonitoring);
+        return () => window.removeEventListener("open-cleanup-actions-monitoring", openActionsMonitoring);
+    }, [setActiveTab]);
+
     return (
         <div data-cleanup-panel-root="true" className="relative h-full min-h-0 overflow-hidden">
         <div
@@ -179,36 +201,80 @@ export default function SystemCleanupPanel() {
                             `<DiskCleanupGranular />` render used to be here. */}
 
                         {hasSafeguards && (
-                            <CleanupCategoryGrid
-                                scan={scan}
-                                isInvestigator={isInvestigator}
-                                schedulesEnabled={hasPaid && !isInvestigator}
-                                onRequestScheduleAccess={isInvestigator
-                                    ? undefined
-                                    : () => {
-                                        if (entitlementsLoading) return;
-                                        window.dispatchEvent(new CustomEvent("license-gate-open", {
-                                        detail: { tab: "buy", featureLabel: "Scheduled Auto-Clean" },
-                                        }));
-                                    }}
-                                detailOpenerMap={detailOpenerMap}
-                                onDriveWipe={() => setDriveWipeOpen(true)}
-                                onOpenCombinedDetail={(catId) => setCombinedDetail({ catId })}
-                                onOpenOtherDetail={(detail) => setOtherDetail(detail)}
-                            />
+                            <Tabs value={activeTab} onValueChange={setActiveTab}>
+                                <TabsList className="w-full flex-wrap justify-start">
+                                    <TabsTrigger value="low-impact">Low impact</TabsTrigger>
+                                    <TabsTrigger value="history-cache">History &amp; cache</TabsTrigger>
+                                    <TabsTrigger value="rebuilds-apps-connectivity">Rebuilds apps or connectivity</TabsTrigger>
+                                    <TabsTrigger value="data-accounts-recovery">Data, accounts &amp; recovery</TabsTrigger>
+                                    <TabsTrigger value="actions-monitoring">One-time actions &amp; monitoring</TabsTrigger>
+                                </TabsList>
+                                <TabsContent value="low-impact">
+                                    <CleanupCategoryGrid
+                                        scan={scan}
+                                        tier="low-impact"
+                                        isInvestigator={isInvestigator}
+                                        schedulesEnabled={hasPaid && !isInvestigator}
+                                        onRequestScheduleAccess={onRequestScheduleAccess}
+                                        detailOpenerMap={detailOpenerMap}
+                                        onDriveWipe={() => setDriveWipeOpen(true)}
+                                        onOpenCombinedDetail={(catId) => setCombinedDetail({ catId })}
+                                        onOpenOtherDetail={(detail) => setOtherDetail(detail)}
+                                    />
+                                </TabsContent>
+                                <TabsContent value="history-cache">
+                                    <CleanupCategoryGrid
+                                        scan={scan}
+                                        tier="history-cache"
+                                        isInvestigator={isInvestigator}
+                                        schedulesEnabled={hasPaid && !isInvestigator}
+                                        onRequestScheduleAccess={onRequestScheduleAccess}
+                                        detailOpenerMap={detailOpenerMap}
+                                        onDriveWipe={() => setDriveWipeOpen(true)}
+                                        onOpenCombinedDetail={(catId) => setCombinedDetail({ catId })}
+                                        onOpenOtherDetail={(detail) => setOtherDetail(detail)}
+                                    />
+                                </TabsContent>
+                                <TabsContent value="rebuilds-apps-connectivity">
+                                    <CleanupCategoryGrid
+                                        scan={scan}
+                                        tier="rebuilds-apps-connectivity"
+                                        isInvestigator={isInvestigator}
+                                        schedulesEnabled={hasPaid && !isInvestigator}
+                                        onRequestScheduleAccess={onRequestScheduleAccess}
+                                        detailOpenerMap={detailOpenerMap}
+                                        onDriveWipe={() => setDriveWipeOpen(true)}
+                                        onOpenCombinedDetail={(catId) => setCombinedDetail({ catId })}
+                                        onOpenOtherDetail={(detail) => setOtherDetail(detail)}
+                                    />
+                                </TabsContent>
+                                <TabsContent value="data-accounts-recovery">
+                                    <CleanupCategoryGrid
+                                        scan={scan}
+                                        tier="data-accounts-recovery"
+                                        isInvestigator={isInvestigator}
+                                        schedulesEnabled={hasPaid && !isInvestigator}
+                                        onRequestScheduleAccess={onRequestScheduleAccess}
+                                        detailOpenerMap={detailOpenerMap}
+                                        onDriveWipe={() => setDriveWipeOpen(true)}
+                                        onOpenCombinedDetail={(catId) => setCombinedDetail({ catId })}
+                                        onOpenOtherDetail={(detail) => setOtherDetail(detail)}
+                                    />
+                                </TabsContent>
+                                <TabsContent value="actions-monitoring">
+                                    {/* One-Time Actions + System Monitoring. Force SSD TRIM
+                                        moved to Maintenance's Repair & Hygiene tab (2026-07). */}
+                                    <CleanupActionsMonitoring
+                                        cardDataMap={cardDataMap}
+                                        isInvestigator={isInvestigator}
+                                        detailOpenerMap={detailOpenerMap}
+                                        handleCardLoad={handleCardLoad}
+                                        handleCardClear={handleCardClear}
+                                        onDriveWipe={() => setDriveWipeOpen(true)}
+                                    />
+                                </TabsContent>
+                            </Tabs>
                         )}
-
-                        {/* One-Time Actions + System Monitoring, merged into one card and
-                            placed just before Lockdown (owner). One-shot destructive ops on
-                            top; read-only monitors below. */}
-                        <CleanupActionsMonitoring
-                            cardDataMap={cardDataMap}
-                            isInvestigator={isInvestigator}
-                            detailOpenerMap={detailOpenerMap}
-                            handleCardLoad={handleCardLoad}
-                            handleCardClear={handleCardClear}
-                            onDriveWipe={() => setDriveWipeOpen(true)}
-                        />
 
                 </div>
             </div>

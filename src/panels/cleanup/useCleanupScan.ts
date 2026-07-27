@@ -141,7 +141,6 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         invokeSQLiteWALKiller,
         clearRecallDatabase,
         invokeUnallocatedSpaceErase,
-        invokeSSDTrim,
         getAmcacheEntries,
         getRecycleBinInfo,
         clearRecycleBinMetadata,
@@ -581,7 +580,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         defenderHistory: clearDefenderHistory,
         virtualMemory: invokeVirtualMemoryPurge,
         unallocatedErase: invokeUnallocatedSpaceErase,
-        ssdTrim: invokeSSDTrim,
+        // Force SSD TRIM moved to the Maintenance panel's Repair & Hygiene tab (2026-07).
     };
 
     // Keep the card dispatcher in lockstep with cleanupCategories.ts. Most

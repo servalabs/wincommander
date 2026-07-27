@@ -41,6 +41,22 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(panel).toContain("overflowAnchor: 'none'");
   });
 
+  // The System Cleanup tab split (2026-07) is a viewport-bound, self-scrolling
+  // panel (AppShell's isViewportBoundPanel) — every tab roughly fits one
+  // viewport on its own, so tab-targeting is a plain setActiveTab, never
+  // scrollIntoView/.scrollTo. This covers the two files the split newly
+  // introduced tab content into, which the scroll-discipline test above
+  // (fixed to panel/scheduler/traceCard) doesn't reach.
+  test("the tab split introduces no scrollIntoView-based deep-linking", async () => {
+    const grid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
+    const actionsMonitoring = await read("src/panels/cleanup/CleanupActionsMonitoring.tsx");
+    const sessionState = await read("src/panels/cleanup/cleanupSessionState.ts");
+    const sources = `${grid}\n${actionsMonitoring}\n${sessionState}`;
+
+    expect(sources).not.toContain("scrollIntoView(");
+    expect(sources).not.toContain(".scrollTo(");
+  });
+
   test("card information surfaces cannot create a hover-focus scroll loop", async () => {
     const traceCard = await read("src/components/cleanup/CleanupTraceCard.tsx");
     const infoStart = traceCard.indexOf("const infoTooltip");
@@ -68,6 +84,82 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(panel).toContain("handleCardClearAllUsers");
     expect(panel).toContain("<TraceDetailDialog");
     expect(panel).toContain("<DriveWipeDialog");
+  });
+
+  // Five tabs (2026-07 split), Low impact first/default — no Overview tab.
+  test("the panel builds five tabs with Low impact as the default", async () => {
+    const panel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
+
+    expect(panel).toContain('useCleanupSessionState("cleanup.active-tab", "low-impact")');
+    expect(panel).toContain("<Tabs value={activeTab} onValueChange={setActiveTab}>");
+    const triggerOrder = ['value="low-impact"', 'value="history-cache"', 'value="rebuilds-apps-connectivity"', 'value="data-accounts-recovery"', 'value="actions-monitoring"'];
+    let cursor = -1;
+    for (const trigger of triggerOrder) {
+      const at = panel.indexOf(trigger, cursor + 1);
+      expect(at).toBeGreaterThan(cursor);
+      cursor = at;
+    }
+    expect(panel).not.toContain('value="overview"');
+  });
+
+  // useCleanupScan's module-level cache and useCleanupLegacyDialogs' 28
+  // dialogs both assume exactly one subscriber — splitting cards across tabs
+  // must not spawn a second instantiation inside the per-tier component.
+  test("useCleanupScan and useCleanupLegacyDialogs stay single top-level instantiations across the tab split", async () => {
+    const panel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
+    const grid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
+
+    const scanCalls = (panel.match(/useCleanupScan\(/g) ?? []).length;
+    const dialogCalls = (panel.match(/useCleanupLegacyDialogs\(/g) ?? []).length;
+    expect(scanCalls).toBe(1);
+    expect(dialogCalls).toBe(1);
+    expect(grid).not.toContain("useCleanupScan(");
+    expect(grid).not.toContain("useCleanupLegacyDialogs(");
+    expect(grid).toContain("scan: ReturnType<typeof useCleanupScan>");
+  });
+
+  // The investigator review banner and the scheduler's portal-target
+  // ancestors must stay visible/discoverable regardless of which tab is
+  // active — they must sit outside every TabsContent, not duplicated inside one.
+  test("the investigator banner and root data attributes wrap the whole tab tree", async () => {
+    const panel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
+
+    const bannerIndex = panel.indexOf("REVIEW MODE");
+    const tabsIndex = panel.indexOf("<Tabs value={activeTab}");
+    expect(bannerIndex).toBeGreaterThan(-1);
+    expect(tabsIndex).toBeGreaterThan(bannerIndex);
+
+    const rootIndex = panel.indexOf('data-cleanup-panel-root="true"');
+    const overlayIndex = panel.indexOf('data-cleanup-overlay-root="true"');
+    expect(rootIndex).toBeGreaterThan(-1);
+    expect(tabsIndex).toBeGreaterThan(rootIndex);
+    expect(overlayIndex).toBeGreaterThan(tabsIndex);
+  });
+
+  // Force SSD TRIM moved to Maintenance's Repair & Hygiene tab — it's a
+  // different parallel workstream's action now, not System Cleanup's.
+  test("Force SSD TRIM moved out of System Cleanup's one-time actions", async () => {
+    const categories = await read("src/panels/cleanup/cleanupCategories.ts");
+    const actionsMonitoring = await read("src/panels/cleanup/CleanupActionsMonitoring.tsx");
+    const scan = await read("src/panels/cleanup/useCleanupScan.ts");
+
+    expect(categories).not.toContain("id: 'ssdTrim'");
+    expect(categories).not.toContain("invokeSSDTrim");
+    expect(actionsMonitoring).toContain("Force SSD TRIM moved to the Maintenance panel's Repair & Hygiene tab");
+    expect(scan).not.toContain("ssdTrim: invokeSSDTrim");
+    expect(scan).not.toContain("invokeSSDTrim,");
+  });
+
+  // Each of the four usability tiers renders through the same component,
+  // parameterized by tier — not four forked copies of the grid.
+  test("each usability tier renders in its own tab via a tier prop", async () => {
+    const panel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
+    const grid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
+
+    expect(grid).toContain("tier: CleanupUsabilityTier");
+    for (const tier of ["low-impact", "history-cache", "rebuilds-apps-connectivity", "data-accounts-recovery"]) {
+      expect(panel).toContain(`tier="${tier}"`);
+    }
   });
 
   test("paid scheduling remains gated until entitlement and Pro installation resolve", async () => {

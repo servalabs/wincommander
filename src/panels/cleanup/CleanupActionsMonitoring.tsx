@@ -36,6 +36,7 @@ export default function CleanupActionsMonitoring({
                         <span className="text-[9px] italic opacity-60 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>run on demand</span>
                     </div>
                     <div className="flex flex-col gap-2">
+                        {/* Force SSD TRIM moved to the Maintenance panel's Repair & Hygiene tab (2026-07) — ACTION_CATEGORIES no longer carries it. */}
                         {ACTION_CATEGORIES.map(cat => {
                             const d = cardDataMap[cat.id] || { count: -1, items: [], loading: false, clearing: false };
                             return (

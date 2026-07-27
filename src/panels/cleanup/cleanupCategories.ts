@@ -1629,19 +1629,7 @@ export const ACTION_CATEGORIES: CleanupCategory[] = [
     actionOnly: true,
     extractPreview: () => ({ count: -1, items: [] }),
   },
-  {
-    id: 'ssdTrim',
-    label: 'Force SSD TRIM',
-    description: 'Optimize-Volume -ReTrim on all drives',
-    icon: 'refresh',
-    color: '#991b1b',
-    severity: 'danger',
-    group: 'action-only',
-    getDataKey: '',
-    clearDataKey: 'invokeSSDTrim',
-    actionOnly: true,
-    extractPreview: () => ({ count: -1, items: [] }),
-  },
+  // Force SSD TRIM moved to the Maintenance panel's Repair & Hygiene tab (2026-07).
   {
     id: 'previousWindowsInstall',
     label: 'Previous Windows Install',

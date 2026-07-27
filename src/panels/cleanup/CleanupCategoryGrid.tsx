@@ -1,17 +1,21 @@
 // src/panels/cleanup/CleanupCategoryGrid.tsx
-// The "Privacy Clean" section: summary bar, safe/destructive category grids,
-// and the "User Profiles" sub-section (account picker + per-user cards).
-// Extracted verbatim from src/panels/cleanup/index.tsx — pure move, no
-// behavior change. Pure renderer — all state/IPC lives in useCleanupScan.
+// Renders ONE usability tier's card grid (Low impact / History & cache /
+// Rebuilds apps or connectivity / Data, accounts & recovery) — one instance
+// per System Cleanup tier tab (2026-07 tab split). The Low-impact tier
+// additionally renders the cross-tier controls (Scan All, summary bar,
+// account picker) at its top: it's the panel's default/first tab, so the
+// existing tour anchor and the scan-done tour event (which fires from Scan
+// All) stay reachable without a tab switch. Pure renderer — all state/IPC
+// lives in useCleanupScan.
 import { useState } from "react";
 import { Button, Icon, Popover, Menu, MenuItem } from "@/components/ui/bp";
-import SectionCard from "../../components/shared/SectionCard";
 import CleanupTraceCard from "../../components/cleanup/CleanupTraceCard";
-import { CLEANUP_USABILITY_TIERS, isLowImpactCategory, type CleanupCategory } from "./cleanupCategories";
+import { CLEANUP_USABILITY_TIERS, isLowImpactCategory, type CleanupCategory, type CleanupUsabilityTier } from "./cleanupCategories";
 import { ALL_USERS_KEY, MULTI_USER_CLEANUP_IDS, useCleanupScan } from "./useCleanupScan";
 
 interface Props {
     scan: ReturnType<typeof useCleanupScan>;
+    tier: CleanupUsabilityTier;
     isInvestigator: boolean;
     schedulesEnabled: boolean;
     onRequestScheduleAccess?: () => void;
@@ -23,6 +27,7 @@ interface Props {
 
 export default function CleanupCategoryGrid({
     scan,
+    tier,
     isInvestigator,
     schedulesEnabled,
     onRequestScheduleAccess,
@@ -67,6 +72,12 @@ export default function CleanupCategoryGrid({
         handleClearSchedule,
     } = scan;
 
+    // Scan All, the summary bar, and the account picker are cross-tier
+    // controls — they only render on the Low-impact tab (the default/first
+    // tab) so they stay reachable without a tab switch.
+    const isLowImpactTab = tier === 'low-impact';
+    const tierMeta = CLEANUP_USABILITY_TIERS.find((t) => t.id === tier)!;
+
     const scanAllTourState = loadingAll === 'standard'
         ? 'scanning'
         : Object.values(cardDataMap).some(d => d.count !== -1)
@@ -88,7 +99,7 @@ export default function CleanupCategoryGrid({
         />
     );
 
-    const sysCats = orderedScanCategories.filter(c => !c.scopeAware);
+    const sysCats = orderedScanCategories.filter(c => !c.scopeAware && c.usabilityTier === tier);
     const isClean = (cat: CleanupCategory) => {
         const data = cardDataMap[cat.id];
         return !cat.actionOnly && data?.count === 0 && !data.loading && !data.error;
@@ -136,10 +147,11 @@ export default function CleanupCategoryGrid({
     // confirmed empty category immediately leaves the working grids and is
     // compacted into the collapsed Clean section below.
     const cleanCats = sysCats.filter(isClean);
+    const activeSysCats = orderUnscannedFirst(sysCats.filter((cat) => !isClean(cat)));
     const userViewMap = isViewingAllUsers ? combinedDataMap : isViewingCurrentUser ? cardDataMap : otherUserDataMap;
     const userCardsLoading = !isViewingCurrentUser && otherUserLoading;
     const userCats = orderedScanCategories.filter(
-        (cat) => cat.scopeAware && (isViewingCurrentUser || MULTI_USER_CLEANUP_IDS.has(cat.id)),
+        (cat) => cat.scopeAware && cat.usabilityTier === tier && (isViewingCurrentUser || MULTI_USER_CLEANUP_IDS.has(cat.id)),
     );
     const userCardData = (cat: CleanupCategory) => {
         const rawData = userViewMap[cat.id];
@@ -184,11 +196,6 @@ export default function CleanupCategoryGrid({
     };
     const activeUserCats = userCats.filter((cat) => !isUserClean(cat));
     const cleanUserCats = userCats.filter(isUserClean);
-    const activeTierGroups = CLEANUP_USABILITY_TIERS.map((tier) => ({
-        tier,
-        system: orderUnscannedFirst(sysCats.filter((cat) => cat.usabilityTier === tier.id && !isClean(cat))),
-        user: activeUserCats.filter((cat) => cat.usabilityTier === tier.id),
-    }));
     const lowImpactFindings = orderedScanCategories.filter((cat) =>
         isLowImpactCategory(cat) &&
         (cardDataMap[cat.id]?.count ?? 0) > 0 &&
@@ -197,16 +204,20 @@ export default function CleanupCategoryGrid({
     const totalCleanCards = cleanCats.length + cleanUserCats.length;
 
     return (
-        <SectionCard title="Privacy Clean" headerRight={headerButtons}>
-            <>
-                {/* ── Summary bar ──────────────────────────────────────────
-                  * Shows at-a-glance counts (needs cleaning / clean) and a
-                  * "Clear Low-Impact" shortcut. Counts update live as cards
-                  * scan. Matches the mockup layout; card designs are unchanged. */}
-                <div
-                    className="flex flex-col gap-2 mb-6"
-                    data-cleanup-summary="true"
-                >
+        <div className="flex flex-col gap-3">
+            {isLowImpactTab && (
+                <>
+                    {/* ── Summary bar ──────────────────────────────────────────
+                      * Shows at-a-glance counts (needs cleaning / clean) and a
+                      * "Clear Low-Impact" shortcut. Counts update live as cards
+                      * scan. Matches the mockup layout; card designs are unchanged. */}
+                    <div className="flex items-center justify-end">
+                        {headerButtons}
+                    </div>
+                    <div
+                        className="flex flex-col gap-2 mb-6"
+                        data-cleanup-summary="true"
+                    >
                         <div
                             className="flex items-center gap-4 px-3 py-2.5 rounded-lg flex-wrap"
                             style={{ background: 'var(--color-bg-tertiary)', border: '1px solid var(--color-border)' }}
@@ -352,136 +363,136 @@ export default function CleanupCategoryGrid({
                                 style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.5px' }}
                             />
                         </div>
+                    </div>
+
+                    {/* Account row — visible immediately. With one real user it shows
+                      * the default/current profile as a read-only chip; with multiple
+                      * real users admins get the dropdown. Per-user cards are grouped
+                      * with system cards by usability impact below. */}
+                    {showAccountPicker && (
+                        <div className="cleanup-account-picker">
+                            <div className="cleanup-account-picker__label">
+                                <Icon icon="user" size={12} />
+                                <span>Account</span>
+                            </div>
+                            {hasMultipleAccountChoices ? (
+                                <Popover
+                                    position="bottom-left"
+                                    isOpen={accountPickerOpen}
+                                    onInteraction={setAccountPickerOpen}
+                                    popoverClassName="cleanup-account-select__content"
+                                    content={
+                                        <div onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+                                        <Menu className="bp5-small" style={{ maxHeight: 260, overflowY: 'auto' }}>
+                                            {canSwitchUsers && (
+                                                <MenuItem
+                                                    icon="people"
+                                                    text="All users"
+                                                    label="Combined"
+                                                    active={accountSelectValue === ALL_USERS_KEY}
+                                                    onClick={() => { handleSwitchUser(ALL_USERS_KEY); setAccountPickerOpen(false); }}
+                                                />
+                                            )}
+                                            {availableUsers.map(u => (
+                                                <MenuItem
+                                                    key={u.path ?? u.name}
+                                                    icon={u.isCurrent ? 'user' : 'person'}
+                                                    text={u.displayName ?? u.name}
+                                                    label={u.isCurrent ? "You" : u.name}
+                                                    active={accountSelectValue === u.name}
+                                                    onClick={() => { handleSwitchUser(u.name); setAccountPickerOpen(false); }}
+                                                />
+                                            ))}
+                                        </Menu>
+                                        </div>
+                                    }
+                                    renderTarget={({ ref, onClick: popoverClick, isOpen: _isOpen, ...ariaProps }) => (
+                                        <button
+                                            {...ariaProps}
+                                            ref={ref as React.Ref<HTMLButtonElement>}
+                                            type="button"
+                                            className="cleanup-account-select cleanup-account-select--trigger"
+                                            disabled={!canSwitchUsers || otherUserLoading || availableUsers.length === 0}
+                                            onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                (popoverClick as React.MouseEventHandler)?.(e);
+                                            }}
+                                        >
+                                            <span>
+                                                {otherUserLoading ? "Loading account..." : `${selectedDisplay}${isViewingCurrentUser ? " (you)" : ""}`}
+                                            </span>
+                                            <Icon icon="chevron-down" size={13} />
+                                        </button>
+                                    )}
+                                >
+                                </Popover>
+                            ) : (
+                                <div className="cleanup-account-select cleanup-account-select--readonly">
+                                    <Icon icon="user" size={13} />
+                                    <span>
+                                        {availableUsers.length === 0
+                                            ? "Loading profile..."
+                                            : `${selectedDisplay || availableUsers[0]?.displayName || availableUsers[0]?.name || "Current user"} (you)`}
+                                    </span>
+                                </div>
+                            )}
+                            {!isViewingCurrentUser && (
+                                <>
+                                    <Button small minimal icon="refresh" text="Rescan" loading={otherUserLoading} disabled={otherUserLoading} onClick={() => (isViewingAllUsers ? loadAllUsersView() : loadUserView(selectedUser))} style={{ fontSize: 10 }} />
+                                    <Button small minimal icon="cross" text="Back to you" onClick={() => handleSwitchUser(currentUser)} style={{ fontSize: 10 }} />
+                                </>
+                            )}
+                            {!isAdminUser && (
+                                <div style={{ fontSize: 10, color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <Icon icon="lock" size={11} />
+                                    <span>Run as Administrator to view or clear other accounts.</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </>
+            )}
+
+            {(activeSysCats.length > 0 || activeUserCats.length > 0) && (
+                <section className="mt-12 mb-6">
+                    <div className="flex items-center gap-3 mb-6 py-3">
+                        {tierMeta.id === 'data-accounts-recovery' && <Icon icon="warning-sign" size={11} style={{ color: tierMeta.color }} />}
+                        <span className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: tierMeta.color }}>{tierMeta.label}</span>
+                        <div className="flex-1 h-px opacity-50" style={{ background: tierMeta.color }} />
+                        <span className="text-[9px] italic opacity-60 text-right" style={{ color: 'var(--color-text-muted)' }}>{tierMeta.description}</span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-4">
+                        {activeSysCats.map((cat) => renderCard(cat))}
+                        {activeUserCats.map((cat) => renderUserCard(cat))}
+                    </div>
+                </section>
+            )}
+
+            {/* This tier's clean collection: common and user-profile cards leave
+              * the working grid above once scanned empty, avoiding a sparse
+              * grid. Scoped to this tier only — each tab keeps its own count. */}
+            {totalCleanCards > 0 && (
+                <div className="mt-12 mb-2">
+                    <button
+                        type="button"
+                        className="flex w-full items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-2 text-left"
+                        onClick={() => setCleanCardsOpen((open) => !open)}
+                        aria-expanded={cleanCardsOpen}
+                    >
+                        <Icon icon={cleanCardsOpen ? "chevron-up" : "chevron-down"} size={14} style={{ color: 'var(--color-success)' }} />
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Clean cards</span>
+                        <span className="font-mono text-[10px] text-[var(--color-success)]">{totalCleanCards}</span>
+                        <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">{cleanCardsOpen ? "Hide clean cards" : "Show clean cards"}</span>
+                    </button>
+                    {cleanCardsOpen && (
+                        <div className="mt-3 grid grid-cols-4 gap-2">
+                            {cleanCats.map((cat) => renderCard(cat, true))}
+                            {cleanUserCats.map((cat) => renderUserCard(cat, true))}
+                        </div>
+                    )}
                 </div>
-
-                {/* Account row — visible immediately. With one real user it shows
-                  * the default/current profile as a read-only chip; with multiple
-                  * real users admins get the dropdown. Per-user cards are grouped
-                  * with system cards by usability impact below. */}
-                {showAccountPicker && (
-                    <div className="cleanup-account-picker">
-                        <div className="cleanup-account-picker__label">
-                            <Icon icon="user" size={12} />
-                            <span>Account</span>
-                        </div>
-                        {hasMultipleAccountChoices ? (
-                            <Popover
-                                position="bottom-left"
-                                isOpen={accountPickerOpen}
-                                onInteraction={setAccountPickerOpen}
-                                popoverClassName="cleanup-account-select__content"
-                                content={
-                                    <div onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-                                    <Menu className="bp5-small" style={{ maxHeight: 260, overflowY: 'auto' }}>
-                                        {canSwitchUsers && (
-                                            <MenuItem
-                                                icon="people"
-                                                text="All users"
-                                                label="Combined"
-                                                active={accountSelectValue === ALL_USERS_KEY}
-                                                onClick={() => { handleSwitchUser(ALL_USERS_KEY); setAccountPickerOpen(false); }}
-                                            />
-                                        )}
-                                        {availableUsers.map(u => (
-                                            <MenuItem
-                                                key={u.path ?? u.name}
-                                                icon={u.isCurrent ? 'user' : 'person'}
-                                                text={u.displayName ?? u.name}
-                                                label={u.isCurrent ? "You" : u.name}
-                                                active={accountSelectValue === u.name}
-                                                onClick={() => { handleSwitchUser(u.name); setAccountPickerOpen(false); }}
-                                            />
-                                        ))}
-                                    </Menu>
-                                    </div>
-                                }
-                                renderTarget={({ ref, onClick: popoverClick, isOpen: _isOpen, ...ariaProps }) => (
-                                    <button
-                                        {...ariaProps}
-                                        ref={ref as React.Ref<HTMLButtonElement>}
-                                        type="button"
-                                        className="cleanup-account-select cleanup-account-select--trigger"
-                                        disabled={!canSwitchUsers || otherUserLoading || availableUsers.length === 0}
-                                        onClick={(e) => {
-                                            e.preventDefault();
-                                            e.stopPropagation();
-                                            (popoverClick as React.MouseEventHandler)?.(e);
-                                        }}
-                                    >
-                                        <span>
-                                            {otherUserLoading ? "Loading account..." : `${selectedDisplay}${isViewingCurrentUser ? " (you)" : ""}`}
-                                        </span>
-                                        <Icon icon="chevron-down" size={13} />
-                                    </button>
-                                )}
-                            >
-                            </Popover>
-                        ) : (
-                            <div className="cleanup-account-select cleanup-account-select--readonly">
-                                <Icon icon="user" size={13} />
-                                <span>
-                                    {availableUsers.length === 0
-                                        ? "Loading profile..."
-                                        : `${selectedDisplay || availableUsers[0]?.displayName || availableUsers[0]?.name || "Current user"} (you)`}
-                                </span>
-                            </div>
-                        )}
-                        {!isViewingCurrentUser && (
-                            <>
-                                <Button small minimal icon="refresh" text="Rescan" loading={otherUserLoading} disabled={otherUserLoading} onClick={() => (isViewingAllUsers ? loadAllUsersView() : loadUserView(selectedUser))} style={{ fontSize: 10 }} />
-                                <Button small minimal icon="cross" text="Back to you" onClick={() => handleSwitchUser(currentUser)} style={{ fontSize: 10 }} />
-                            </>
-                        )}
-                        {!isAdminUser && (
-                            <div style={{ fontSize: 10, color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                <Icon icon="lock" size={11} />
-                                <span>Run as Administrator to view or clear other accounts.</span>
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {activeTierGroups.map(({ tier, system, user }) => (system.length > 0 || user.length > 0) && (
-                    <section key={tier.id} className="mt-12 mb-6">
-                        <div className="flex items-center gap-3 mb-6 py-3">
-                            {tier.id === 'data-accounts-recovery' && <Icon icon="warning-sign" size={11} style={{ color: tier.color }} />}
-                            <span className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: tier.color }}>{tier.label}</span>
-                            <div className="flex-1 h-px opacity-50" style={{ background: tier.color }} />
-                            <span className="text-[9px] italic opacity-60 text-right" style={{ color: 'var(--color-text-muted)' }}>{tier.description}</span>
-                        </div>
-                        <div className="grid grid-cols-4 gap-4">
-                            {system.map((cat) => renderCard(cat))}
-                            {user.map((cat) => renderUserCard(cat))}
-                        </div>
-                    </section>
-                ))}
-
-                {/* One global clean collection: common and user-profile cards
-                  * leave their source sections once scanned empty, avoiding
-                  * sparse section grids. It intentionally sits last. */}
-                {totalCleanCards > 0 && (
-                    <div className="mt-12 mb-2">
-                        <button
-                            type="button"
-                            className="flex w-full items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-2 text-left"
-                            onClick={() => setCleanCardsOpen((open) => !open)}
-                            aria-expanded={cleanCardsOpen}
-                        >
-                            <Icon icon={cleanCardsOpen ? "chevron-up" : "chevron-down"} size={14} style={{ color: 'var(--color-success)' }} />
-                            <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Clean cards</span>
-                            <span className="font-mono text-[10px] text-[var(--color-success)]">{totalCleanCards}</span>
-                            <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">{cleanCardsOpen ? "Hide clean cards" : "Show clean cards"}</span>
-                        </button>
-                        {cleanCardsOpen && (
-                            <div className="mt-3 grid grid-cols-4 gap-2">
-                                {cleanCats.map((cat) => renderCard(cat, true))}
-                                {cleanUserCats.map((cat) => renderUserCard(cat, true))}
-                            </div>
-                        )}
-                    </div>
-                )}
-
-            </>
-        </SectionCard>
+            )}
+        </div>
     );
 }
