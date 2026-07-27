@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Icon } from "@/components/ui/icon";
 import { getSettingsOnce } from "@/hooks/useSettings";
 import { useLicenseQuery } from "@/hooks/queries/useLicenseQuery";
+import PanelSkeleton from "@/components/shared/PanelSkeleton";
 
 interface FleetStatus {
   connected: boolean;
@@ -282,7 +283,7 @@ export default function FleetConnectView() {
     }
   }
 
-  if (!loaded || !statusChecked) return null;
+  if (!loaded || !statusChecked) return <PanelSkeleton rows={3} cards={1} />;
 
   const isConnected = status?.connected ?? false;
   // Surface any Pro-agent error whether connected or not.
