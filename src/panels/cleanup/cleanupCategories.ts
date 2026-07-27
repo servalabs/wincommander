@@ -1478,6 +1478,108 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
       items: (data?.files || []).map((f: any) => f.name || '—'),
     }),
   },
+  {
+    id: 'appLaunchHistory',
+    label: 'App Launch History',
+    description: 'Per-user timestamped record of every program launched (Windows BAM service)',
+    icon: 'history',
+    color: '#b45309',
+    severity: 'danger',
+    group: 'deep-dfir',
+    systemWide: true,
+    regeneratesNote: 'The BAM service (bam.sys) writes a fresh launch timestamp every time a program runs — normal use repopulates this within seconds.',
+    getDataKey: 'getAppLaunchHistoryInfo',
+    clearDataKey: 'clearAppLaunchHistory',
+    extractPreview: (data) => ({
+      count: data?.total ?? 0,
+      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
+    }),
+  },
+  {
+    id: 'officeMru',
+    label: 'Office Document History',
+    description: 'Recently-opened file lists and macro-trust records kept by Microsoft Office',
+    icon: 'key',
+    color: '#0e7490',
+    severity: 'danger',
+    group: 'deep-dfir',
+    scopeAware: true,
+    regeneratesNote: 'Office rewrites its MRU and macro-trust records every time a document is opened or a macro is run.',
+    getDataKey: 'getOfficeMruInfo',
+    clearDataKey: 'clearOfficeMru',
+    extractPreview: (data) => ({
+      count: data?.total ?? 0,
+      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
+    }),
+  },
+  {
+    id: 'embeddedWebCache',
+    label: 'Embedded Browser Cache',
+    description: 'Cookies, history and cache kept by apps with their own built-in browser (WebView2/EBWebView)',
+    icon: 'globe',
+    color: '#6d28d9',
+    severity: 'danger',
+    group: 'deep-dfir',
+    scopeAware: true,
+    regeneratesNote: 'Any app embedding WebView2 rebuilds its cookies, history and cache the next time it runs.',
+    getDataKey: 'getEmbeddedWebCacheInfo',
+    clearDataKey: 'clearEmbeddedWebCache',
+    extractPreview: (data) => ({
+      count: data?.total ?? 0,
+      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
+    }),
+  },
+  {
+    id: 'p2pUpdateCache',
+    label: 'Update Sharing Cache',
+    description: 'Locally cached update/app content used for peer-to-peer sharing (Delivery Optimization)',
+    icon: 'cloud',
+    color: '#0369a1',
+    severity: 'danger',
+    group: 'deep-dfir',
+    systemWide: true,
+    regeneratesNote: 'Delivery Optimization repopulates its cache as Windows Update and Store apps download new content.',
+    getDataKey: 'getP2PUpdateCacheInfo',
+    clearDataKey: 'clearP2PUpdateCache',
+    extractPreview: (data) => ({
+      count: data?.total ?? 0,
+      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
+    }),
+  },
+  {
+    id: 'reliabilityHistory',
+    label: 'Stability History',
+    description: 'Dated timeline of app installs, crashes and stability events (Reliability Monitor)',
+    icon: 'dashboard',
+    color: '#9f1239',
+    severity: 'danger',
+    group: 'deep-dfir',
+    systemWide: true,
+    regeneratesNote: 'RACAgent logs a new stability entry roughly once a day and after every app install, crash, or hang.',
+    getDataKey: 'getReliabilityHistoryInfo',
+    clearDataKey: 'clearReliabilityHistory',
+    extractPreview: (data) => ({
+      count: data?.total ?? 0,
+      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
+    }),
+  },
+  {
+    id: 'explorerSearchHistory',
+    label: 'Explorer Search History',
+    description: 'Terms typed into File Explorer search boxes and the address bar',
+    icon: 'search',
+    color: '#4d7c0f',
+    severity: 'danger',
+    group: 'deep-dfir',
+    scopeAware: true,
+    regeneratesNote: 'New entries appear the next time you type a term into File Explorer search or the address bar.',
+    getDataKey: 'getExplorerSearchHistoryInfo',
+    clearDataKey: 'clearExplorerSearchHistory',
+    extractPreview: (data) => ({
+      count: data?.total ?? 0,
+      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
+    }),
+  },
 ];
 
 // Action-only categories (no viewer data)
@@ -1521,6 +1623,20 @@ export const ACTION_CATEGORIES: CleanupCategory[] = [
     getDataKey: '',
     clearDataKey: 'invokeSSDTrim',
     actionOnly: true,
+    extractPreview: () => ({ count: -1, items: [] }),
+  },
+  {
+    id: 'previousWindowsInstall',
+    label: 'Previous Windows Install',
+    description: 'Remove the old Windows installation + user profiles kept after a feature update (Windows.old)',
+    icon: 'folder-close',
+    color: '#7f1d1d',
+    severity: 'danger',
+    group: 'action-only',
+    getDataKey: '',
+    clearDataKey: 'invokePreviousWindowsInstallErase',
+    actionOnly: true,
+    confirmMessage: 'Permanently delete the entire previous Windows installation (Windows.old)? This can free tens of GB but cannot be undone.',
     extractPreview: () => ({ count: -1, items: [] }),
   },
 ];
@@ -1573,6 +1689,8 @@ export const SUPPORTED_AUTOERASE_IDS = new Set<string>([
   'printSpooler', 'webCache', 'notificationDb', 'branchCache',
   'eventTranscript', 'activitiesTimeline', 'rdpBitmapCache', 'servicingLogs',
   'deviceInstallLogs', 'usageTraceLogs',
+  'appLaunchHistory', 'officeMru', 'embeddedWebCache', 'p2pUpdateCache',
+  'explorerSearchHistory',
   // Disk cleanup (scheduled via cleanmgr — runs as current user). No
   // CleanupCategory carries this id, so applyScheduling() never surfaces it
   // here; its only UI is Maintenance's "Reclaim disk space" card, which gates
@@ -1590,12 +1708,16 @@ export const SUPPORTED_AUTOERASE_IDS = new Set<string>([
 //   - servicingLogs: CBS/DISM logs live under %WINDIR%\Logs, TrustedInstaller-ACL'd
 //   - deviceInstallLogs: setupapi logs live under %WINDIR%\INF, SYSTEM-owned
 //   - usageTraceLogs: SleepStudy/WDI/WMI ETW traces live under %WINDIR%\System32, SYSTEM-owned
+//   - appLaunchHistory: BAM data lives under HKLM\SYSTEM\CurrentControlSet\Services\bam\State, a SYSTEM-owned key requiring elevated ACL
+//   - p2pUpdateCache: Delivery Optimization cache lives under %WINDIR%\SoftwareDistribution\DeliveryOptimization, SYSTEM-owned
+//   - reliabilityHistory: Reliability Monitor's RacWmiDatabase lives under a system-level ProgramData path
 // (See commander-anticleanup-protected-keys for the why.) Most of these
 // aren't in SUPPORTED_AUTOERASE_IDS yet because their inline erase scripts
 // are non-trivial — but if they are added later, flag them here.
 const SYSTEM_CONTEXT_IDS = new Set<string>([
   'eventLogs', 'searchIndex', 'amcache', 'recallDb', 'branchCache',
   'eventTranscript', 'servicingLogs', 'deviceInstallLogs', 'usageTraceLogs',
+  'appLaunchHistory', 'p2pUpdateCache', 'reliabilityHistory',
 ]);
 
 // Mutate the existing exported arrays in-place so consumers that imported

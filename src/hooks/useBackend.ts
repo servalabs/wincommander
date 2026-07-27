@@ -1637,6 +1637,12 @@ export function useBackend() {
     getCloudPlaceholdersInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-CloudPlaceholdersInfo"),
     getBITSQueueInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-BITSQueueInfo"),
     getCellularHistoryInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-CellularHistoryInfo"),
+    getAppLaunchHistoryInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-AppLaunchHistoryInfo"),
+    getOfficeMruInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-OfficeMruInfo"),
+    getEmbeddedWebCacheInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-EmbeddedWebCacheInfo"),
+    getP2PUpdateCacheInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-P2PUpdateCacheInfo"),
+    getReliabilityHistoryInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-ReliabilityHistoryInfo"),
+    getExplorerSearchHistoryInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-ExplorerSearchHistoryInfo"),
     // GROUP I-A: Advanced DFIR — erases
     clearAmcache: () => execute<{ status: string; clearedKeys: number; bootPurgeScheduled: boolean }>(clearCommand("Amcache")),
     clearRecycleBinMetadata: () => execute<{ ok: boolean; stdout: string }>(clearCommand("RecycleBinMetadata")),
@@ -1696,6 +1702,12 @@ export function useBackend() {
     clearCloudPlaceholders: () => execute<{ ok: boolean; stdout: string }>(clearCommand("CloudPlaceholders")),
     clearBITSQueue: () => execute<{ ok: boolean; stdout: string }>(clearCommand("BITSQueue")),
     clearCellularHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("CellularHistory")),
+    clearAppLaunchHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("AppLaunchHistory")),
+    clearOfficeMru: () => execute<{ ok: boolean; stdout: string }>(clearCommand("OfficeMru")),
+    clearEmbeddedWebCache: () => execute<{ ok: boolean; stdout: string }>(clearCommand("EmbeddedWebCache")),
+    clearP2PUpdateCache: () => execute<{ ok: boolean; stdout: string }>(clearCommand("P2PUpdateCache")),
+    clearReliabilityHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("ReliabilityHistory")),
+    clearExplorerSearchHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("ExplorerSearchHistory")),
     invokeUnallocatedSpaceErase: (driveLetter?: string, mediaType?: string) =>
       execute<{ status: string; pid: number; drive: string; message: string }>(
         invokeCommand("UnallocatedSpaceErase"),
@@ -1705,6 +1717,8 @@ export function useBackend() {
         }
       ),
     invokeSSDTrim: () => execute<{ status: string; drives: Array<{ drive: string; status: string; reason?: string }> }>(invokeCommand("SSDTrim")),
+    invokePreviousWindowsInstallErase: () => execute<{ status: string; freedMB: number }>(invokeCommand("PreviousWindowsInstallErase")),
+    getPreviousWindowsInstallInfo: () => execute<{ present: boolean; sizeMB: number }>("Get-PreviousWindowsInstallInfo"),
 
     // Encryption Engine
     getEncryptionStatus: () => execute<EncryptionStatus>("Get-EncryptionStatus"),

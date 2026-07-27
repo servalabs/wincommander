@@ -3046,10 +3046,10 @@ function Get-NotificationDatabaseInfo {
     try {
         $notifDir = "$env:LOCALAPPDATA\Microsoft\Windows\Notifications"
         $files = @()
-        if (Test-Path $notifDir) {
+        if (Test-Path $notifDir -ErrorAction SilentlyContinue) {
             foreach ($name in @('wpndatabase.db', 'wpndatabase.db-wal', 'wpndatabase.db-shm')) {
                 $p = Join-Path $notifDir $name
-                if (Test-Path $p) {
+                if (Test-Path $p -ErrorAction SilentlyContinue) {
                     $f = Get-Item -Path $p -Force -ErrorAction SilentlyContinue
                     if ($f) {
                         $files += @{
@@ -3058,6 +3058,18 @@ function Get-NotificationDatabaseInfo {
                             modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
                         }
                     }
+                }
+            }
+        }
+        # Also cover wpnidm — per-app notification icon/data cache alongside wpndatabase.db.
+        $wpnidmDir = Join-Path $notifDir 'wpnidm'
+        if (Test-Path $wpnidmDir -ErrorAction SilentlyContinue) {
+            Get-ChildItem -Path $wpnidmDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                $files += @{
+                    source   = 'wpnidm'
+                    name     = $_.Name
+                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
+                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
                 }
             }
         }
@@ -3113,6 +3125,19 @@ function Get-EventTranscriptInfo {
                     name     = $f.Name
                     sizeKB   = [math]::Round($f.Length / 1KB, 1)
                     modified = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+                }
+            }
+        }
+        # Also cover the raw ETW trace logs (AutoLogger etc.) DiagTrack rotates
+        # under ETLLogs — same diagnostics pipeline as EventTranscript.db.
+        $etlDir = "$env:ProgramData\Microsoft\Diagnosis\ETLLogs"
+        if (Test-Path $etlDir -ErrorAction SilentlyContinue) {
+            Get-ChildItem -Path $etlDir -Recurse -Filter '*.etl' -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                $files += @{
+                    source   = 'ETLLogs'
+                    name     = $_.Name
+                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
+                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
                 }
             }
         }
@@ -3269,6 +3294,185 @@ function Get-DefenderHistoryInfo {
             }
         }
         @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+    }
+    catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
+# --- Additional system/app usage viewers (read-only, no admin required) ---
+
+function Get-AppLaunchHistoryInfo {
+    # Returns per-SID tracked-exe counts from the Background Activity Moderator
+    # (BAM) UserSettings key — metadata only (no file bytes), so totalSizeMB
+    # stays 0 and the real count (tracked exes, not SIDs) lives in `total`.
+    # Reading requires admin; individual SID keys can be ACL-locked even for
+    # admins (SYSTEM-owned) — guarded per-SID so one locked key is skipped
+    # instead of failing the whole scan.
+    try {
+        $bamRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings'
+        $files = @()
+        $total = 0
+        if (Test-Path $bamRoot -ErrorAction SilentlyContinue) {
+            Get-ChildItem -Path $bamRoot -ErrorAction SilentlyContinue | ForEach-Object {
+                $sid = $_.PSChildName
+                $count = 0
+                try {
+                    $keyItem = Get-Item -Path $_.PSPath -ErrorAction SilentlyContinue
+                    if ($keyItem) { $count = @($keyItem.Property).Count }
+                } catch {}
+                $files += @{ source = 'BAM'; name = $sid; sizeKB = 0; modified = ''; count = $count }
+                $total += $count
+            }
+        }
+        @{ files = @($files); total = $total; totalSizeMB = 0 }
+    }
+    catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
+function Get-OfficeMruInfo {
+    # Returns individual entries from Office's File MRU, Place MRU, and
+    # Trusted Documents TrustRecords keys. Office version varies 14.0-16.0
+    # across installs, so both the version and app-name segments are
+    # wildcarded. Each matched key stores its entries as registry VALUES
+    # (not subkeys) — Get-Item resolves the wildcarded key itself, then a
+    # Get-ItemProperty pass over its values enumerates them; Get-ChildItem on
+    # the resolved key would return nothing since there are no subkeys to
+    # descend into. For TrustRecords the value NAME is itself the trusted
+    # document's path, so Split-Path -Leaf yields the filename; for File/Place
+    # MRU the value name is already a plain label ("Item 1") and Split-Path
+    # is a harmless no-op.
+    try {
+        $patterns = @(
+            'HKCU:\Software\Microsoft\Office\*\*\File MRU',
+            'HKCU:\Software\Microsoft\Office\*\*\Place MRU',
+            'HKCU:\Software\Microsoft\Office\*\*\Security\Trusted Documents\TrustRecords'
+        )
+        $files = @()
+        foreach ($pattern in $patterns) {
+            Get-Item -Path $pattern -ErrorAction SilentlyContinue | ForEach-Object {
+                $keyLeaf = Split-Path $_.Name -Leaf
+                $appLeaf = Split-Path (Split-Path $_.Name -Parent) -Leaf
+                $props = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
+                if ($props) {
+                    $props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
+                        $files += @{
+                            source   = "$appLeaf\$keyLeaf"
+                            name     = (Split-Path $_.Name -Leaf)
+                            sizeKB   = 0
+                            modified = ''
+                        }
+                    }
+                }
+            }
+        }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
+    }
+    catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
+function Get-EmbeddedWebCacheInfo {
+    # Returns WebView2 (EBWebView) cache-folder sizes — many modern Win32 apps
+    # embed a Chromium WebView2 runtime whose per-app profile cache lives under
+    # a nested "EBWebView" folder somewhere below LOCALAPPDATA. -Depth 4 caps
+    # the walk so this stays a bounded scan, not a slow full-profile crawl.
+    try {
+        $files = @()
+        if (Test-Path $env:LOCALAPPDATA -ErrorAction SilentlyContinue) {
+            Get-ChildItem -Path $env:LOCALAPPDATA -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -ErrorAction SilentlyContinue | ForEach-Object {
+                $sizeBytes = (Get-ChildItem -Path $_.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                if (-not $sizeBytes) { $sizeBytes = 0 }
+                $files += @{
+                    source   = Split-Path (Split-Path $_.FullName -Parent) -Leaf
+                    name     = 'EBWebView'
+                    sizeKB   = [math]::Round($sizeBytes / 1KB, 1)
+                    modified = ''
+                }
+            }
+        }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+    }
+    catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
+function Get-P2PUpdateCacheInfo {
+    # Returns Delivery Optimization's peer-to-peer Windows Update cache files (DoSvc).
+    try {
+        $doDir = "$env:SystemRoot\SoftwareDistribution\DeliveryOptimization"
+        $files = @()
+        if (Test-Path $doDir -ErrorAction SilentlyContinue) {
+            Get-ChildItem -Path $doDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                $files += @{
+                    source   = 'DeliveryOptimization'
+                    name     = $_.Name
+                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
+                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+                }
+            }
+        }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+    }
+    catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
+function Get-ReliabilityHistoryInfo {
+    # Returns Reliability Monitor's cached scoring data (RAC StateData). Not
+    # present on all machines/builds — guarded like the other Phase E viewers.
+    try {
+        $racDir = "$env:ProgramData\Microsoft\RAC\StateData"
+        $files = @()
+        if (Test-Path $racDir -ErrorAction SilentlyContinue) {
+            Get-ChildItem -Path $racDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                $files += @{
+                    source   = 'RAC'
+                    name     = $_.Name
+                    sizeKB   = [math]::Round($_.Length / 1KB, 1)
+                    modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+                }
+            }
+        }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round(($files | ForEach-Object { $_.sizeKB } | Measure-Object -Sum).Sum / 1KB, 2) }
+    }
+    catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
+function Get-ExplorerSearchHistoryInfo {
+    # Returns Explorer search-box + address-bar typed-path history entries.
+    # WordWheelQuery is present on all supported Windows versions; its
+    # TypedPaths sibling can be absent depending on build — guarded
+    # independently so a missing one doesn't blank out the other.
+    try {
+        $roots = @(
+            @{ label = 'WordWheelQuery'; path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery' },
+            @{ label = 'TypedPaths';     path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths' }
+        )
+        $files = @()
+        foreach ($root in $roots) {
+            if (Test-Path $root.path -ErrorAction SilentlyContinue) {
+                $props = Get-ItemProperty -Path $root.path -ErrorAction SilentlyContinue
+                if ($props) {
+                    $props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
+                        $files += @{ source = $root.label; name = $_.Name; sizeKB = 0; modified = '' }
+                    }
+                }
+            }
+        }
+        @{ files = @($files); total = @($files).Count; totalSizeMB = 0 }
+    }
+    catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
+function Get-PreviousWindowsInstallInfo {
+    # Returns presence + size of C:\Windows.old (the prior OS + user profiles
+    # kept after a feature update). Read-only — does NOT take ownership of
+    # the TrustedInstaller-ACL'd tree, so size may read 0 for subfolders this
+    # process cannot enumerate; the actual erase (Pro) takes ownership first.
+    try {
+        $path = "$env:SystemDrive\Windows.old"
+        if (-not (Test-Path $path -ErrorAction SilentlyContinue)) {
+            return @{ present = $false; sizeMB = 0 }
+        }
+        $sizeBytes = (Get-ChildItem -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue |
+            Measure-Object -Property Length -Sum).Sum
+        @{ present = $true; sizeMB = [math]::Round(($sizeBytes / 1MB), 1) }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -3828,9 +4032,73 @@ function Invoke-CleanupClearForUser {
                     foreach ($name in @('wpndatabase.db', 'wpndatabase.db-wal', 'wpndatabase.db-shm')) {
                         Erase-OneFile (Join-Path $notifDir $name)
                     }
+                    $wpnidmDir = Join-Path $notifDir 'wpnidm'
+                    if (Test-Path $wpnidmDir -ErrorAction SilentlyContinue) {
+                        Get-ChildItem $wpnidmDir -Recurse -File -Force -EA SilentlyContinue | ForEach-Object { Erase-OneFile $_.FullName }
+                    }
                     $leftover = 0
                     foreach ($name in @('wpndatabase.db', 'wpndatabase.db-wal', 'wpndatabase.db-shm')) {
                         if (Test-Path (Join-Path $notifDir $name)) { $leftover++ }
+                    }
+                    if (Test-Path $wpnidmDir -ErrorAction SilentlyContinue) {
+                        $leftover += @(Get-ChildItem $wpnidmDir -Recurse -File -Force -EA SilentlyContinue).Count
+                    }
+                    $catResults[$cat] = if ($leftover -eq 0) { 'cleaned' } else { 'failed' }
+                }
+                'officeMru' {
+                    # Office version varies 14.0-16.0 — wildcard both the version
+                    # and app-name segments. Each matched key is removed whole
+                    # (best-effort per key) rather than value-by-value; Office
+                    # recreates these keys on next use.
+                    $officePatterns = @(
+                        "$HiveRoot\Software\Microsoft\Office\*\*\File MRU",
+                        "$HiveRoot\Software\Microsoft\Office\*\*\Place MRU",
+                        "$HiveRoot\Software\Microsoft\Office\*\*\Security\Trusted Documents\TrustRecords"
+                    )
+                    foreach ($pattern in $officePatterns) {
+                        Get-Item -Path $pattern -ErrorAction SilentlyContinue | ForEach-Object {
+                            try { Remove-Item -Path $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+                        }
+                    }
+                    $leftover = 0
+                    foreach ($pattern in $officePatterns) {
+                        $leftover += @(Get-Item -Path $pattern -ErrorAction SilentlyContinue).Count
+                    }
+                    $catResults[$cat] = if ($leftover -eq 0) { 'cleaned' } else { 'failed' }
+                }
+                'embeddedWebCache' {
+                    $dirs = @(Get-ChildItem -Path $localApp -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -EA SilentlyContinue)
+                    foreach ($d in $dirs) {
+                        try { Remove-Item -Path $d.FullName -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+                    }
+                    $leftover = @(Get-ChildItem -Path $localApp -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -EA SilentlyContinue).Count
+                    $catResults[$cat] = if ($leftover -eq 0) { 'cleaned' } else { 'failed' }
+                }
+                'explorerSearchHistory' {
+                    # Best-effort per VALUE (not whole-key delete) — mirrors the
+                    # $HiveRoot convention used by the other HKCU-based cases above.
+                    $searchKeys = @(
+                        "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery",
+                        "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths"
+                    )
+                    foreach ($k in $searchKeys) {
+                        if (Test-Path $k -ErrorAction SilentlyContinue) {
+                            $props = Get-ItemProperty -Path $k -ErrorAction SilentlyContinue
+                            if ($props) {
+                                $props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
+                                    try { Remove-ItemProperty -Path $k -Name $_.Name -ErrorAction SilentlyContinue } catch {}
+                                }
+                            }
+                        }
+                    }
+                    $leftover = 0
+                    foreach ($k in $searchKeys) {
+                        if (Test-Path $k -ErrorAction SilentlyContinue) {
+                            $props = Get-ItemProperty -Path $k -ErrorAction SilentlyContinue
+                            if ($props) {
+                                $leftover += @($props.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') }).Count
+                            }
+                        }
                     }
                     $catResults[$cat] = if ($leftover -eq 0) { 'cleaned' } else { 'failed' }
                 }
@@ -4202,7 +4470,8 @@ function Invoke-CleanupClearAllUsers {
         'gameCaptures','photosCache','xboxCache',
         'communicationCaches','editorHistory','gitActivity','sshState','remoteAccessLogs',
         'passwordManagerCaches','gameLauncherLogs','adobeRecent','officeTempFiles',
-        'vpnPhonebooks','proxyCache','cloudPlaceholders'
+        'vpnPhonebooks','proxyCache','cloudPlaceholders',
+        'officeMru','embeddedWebCache','explorerSearchHistory'
     )
     $effectiveCats = $categoryArr | Where-Object { $scopeAwareIds -contains $_ }
     if ($effectiveCats.Count -eq 0) {
@@ -4366,7 +4635,7 @@ function Get-CleanupSummaryAllUsers {
     $allCats = @('rdpHistory','recentFiles','jumpLists','psHistory','browserFootprints',
                  'shellBags','execCache','ntUserTraces','notepadState','walFiles',
                  'crashDumps','recallDb','netDrives','webCache','thumbnailDb','notificationDb',
-                 'activitiesTimeline','rdpBitmapCache')
+                 'activitiesTimeline','rdpBitmapCache','officeMru','embeddedWebCache','explorerSearchHistory')
     $requestedCats = if ($CategoryIds -and $CategoryIds.Trim() -ne '') {
         $CategoryIds -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -in $allCats }
     } else { $allCats }
@@ -4552,6 +4821,21 @@ function Get-CleanupSummaryAllUsers {
                             $count = if ($r.total) { [int]$r.total } else { 0 }
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
+                        'officeMru' {
+                            $r = Get-OfficeMruInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
+                        }
+                        'embeddedWebCache' {
+                            $r = Get-EmbeddedWebCacheInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
+                        }
+                        'explorerSearchHistory' {
+                            $r = Get-ExplorerSearchHistoryInfo
+                            $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
+                        }
                         default { $delegated = $false }
                     }
                 }
@@ -4731,6 +5015,12 @@ function Get-CleanupSummaryAllUsers {
                             $items = $f | Select-Object -First $previewMax | ForEach-Object { $_.Name }
                         }
                     }
+                    'embeddedWebCache' {
+                        # Match Get-EmbeddedWebCacheInfo: EBWebView folders under LOCALAPPDATA, depth-capped
+                        $dirs = @(Get-ChildItem -Path $localApp -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -EA SilentlyContinue)
+                        $count = $dirs.Count
+                        $items = $dirs | Select-Object -First $previewMax | ForEach-Object { Split-Path (Split-Path $_.FullName -Parent) -Leaf }
+                    }
                     'rdpHistory' {
                         if ($hiveAvailable) {
                             # Match Get-RDPHistory: Default MRU + per-server UsernameHint entries
@@ -4878,6 +5168,45 @@ function Get-CleanupSummaryAllUsers {
                                 $drives = Get-ChildItem $k -EA SilentlyContinue
                                 $count = @($drives).Count
                                 $items = @($drives) | Select-Object -First $previewMax | ForEach-Object { $_.PSChildName }
+                            }
+                        } else { $items = @("[registry unavailable]") }
+                    }
+                    'officeMru' {
+                        if ($hiveAvailable) {
+                            # Match Get-OfficeMruInfo: File MRU / Place MRU / TrustRecords values, version+app wildcarded
+                            $officePatterns = @(
+                                "$hiveRoot\Software\Microsoft\Office\*\*\File MRU",
+                                "$hiveRoot\Software\Microsoft\Office\*\*\Place MRU",
+                                "$hiveRoot\Software\Microsoft\Office\*\*\Security\Trusted Documents\TrustRecords"
+                            )
+                            foreach ($pattern in $officePatterns) {
+                                Get-Item -Path $pattern -EA SilentlyContinue | ForEach-Object {
+                                    $p2 = Get-ItemProperty -Path $_.PSPath -EA SilentlyContinue
+                                    if ($p2) {
+                                        $p2.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') } | ForEach-Object {
+                                            $count++
+                                            $items += (Split-Path $_.Name -Leaf)
+                                        }
+                                    }
+                                }
+                            }
+                        } else { $items = @("[registry unavailable]") }
+                    }
+                    'explorerSearchHistory' {
+                        if ($hiveAvailable) {
+                            # Match Get-ExplorerSearchHistoryInfo: WordWheelQuery + TypedPaths values
+                            foreach ($k in @(
+                                "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery",
+                                "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths"
+                            )) {
+                                if (Test-Path $k) {
+                                    $p2 = Get-ItemProperty -Path $k -EA SilentlyContinue
+                                    if ($p2) {
+                                        $vals = @($p2.PSObject.Properties | Where-Object { $_.Name -notin @('PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider') })
+                                        $count += $vals.Count
+                                        $items += $vals | Select-Object -First $previewMax | ForEach-Object { $_.Name }
+                                    }
+                                }
                             }
                         } else { $items = @("[registry unavailable]") }
                     }

@@ -325,6 +325,10 @@ Get-Service -Name 'WpnUserService*' -ErrorAction SilentlyContinue | Stop-Service
     `$p = Join-Path `$notifDir `$_
     if (Test-Path `$p) { try { Erase-OneFile `$p } catch {} }
 }
+`$wpnidmDir = Join-Path `$notifDir 'wpnidm'
+if (Test-Path `$wpnidmDir) {
+    Get-ChildItem -Path `$wpnidmDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
+}
 Get-Service -Name 'WpnUserService*' -ErrorAction SilentlyContinue | Start-Service -ErrorAction SilentlyContinue
 "@
     'branchCache'       = @"
@@ -348,6 +352,10 @@ if (Test-Path `$etDir) {
     Get-ChildItem -Path (Join-Path `$etDir 'EventTranscript.db') -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
     Get-ChildItem -Path (Join-Path `$etDir '*.jrs') -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
     Get-ChildItem -Path (Join-Path `$etDir '*.rbs') -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
+}
+`$etlDir = "`$env:ProgramData\Microsoft\Diagnosis\ETLLogs"
+if (Test-Path `$etlDir) {
+    Get-ChildItem -Path `$etlDir -Recurse -Filter '*.etl' -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
 }
 Get-Service DiagTrack -ErrorAction SilentlyContinue | Start-Service -ErrorAction SilentlyContinue
 "@
@@ -390,6 +398,62 @@ if (Test-Path `$infDir) {
 foreach (`$t in `$targets) {
     if (Test-Path `$t) {
         Get-ChildItem -Path (Join-Path `$t '*.etl') -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
+    }
+}
+"@
+
+    # Extended app-usage / office / web-cache / P2P update categories --------
+    'appLaunchHistory'   = @"
+`$bamRoot = 'HKLM:\SYSTEM\CurrentControlSet\Services\bam\State\UserSettings'
+if (Test-Path `$bamRoot) {
+    Get-ChildItem -Path `$bamRoot -ErrorAction SilentlyContinue | ForEach-Object {
+        `$sidKeyPath = `$_.PSPath
+        try {
+            `$sidKey = Get-Item -Path `$sidKeyPath -ErrorAction SilentlyContinue
+            if (`$sidKey) {
+                foreach (`$valueName in @(`$sidKey.Property)) {
+                    Remove-ItemProperty -Path `$sidKeyPath -Name `$valueName -ErrorAction SilentlyContinue
+                }
+            }
+        } catch {}
+    }
+}
+"@
+    'officeMru'          = @"
+`$officePatterns = @(
+    'HKCU:\Software\Microsoft\Office\*\*\File MRU',
+    'HKCU:\Software\Microsoft\Office\*\*\Place MRU',
+    'HKCU:\Software\Microsoft\Office\*\*\Security\Trusted Documents\TrustRecords'
+)
+foreach (`$pattern in `$officePatterns) {
+    Get-Item -Path `$pattern -ErrorAction SilentlyContinue | ForEach-Object {
+        try { Remove-Item -Path `$_.PSPath -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    }
+}
+"@
+    'embeddedWebCache'   = @"
+Get-ChildItem -Path "`$env:LOCALAPPDATA" -Recurse -Directory -Filter 'EBWebView' -Force -Depth 4 -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+"@
+    'p2pUpdateCache'     = @"
+Stop-Service DoSvc -Force -ErrorAction SilentlyContinue
+`$doDir = "`$env:SystemRoot\SoftwareDistribution\DeliveryOptimization"
+if (Test-Path `$doDir) {
+    Get-ChildItem -Path `$doDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { try { Erase-OneFile `$_.FullName } catch {} }
+}
+Start-Service DoSvc -ErrorAction SilentlyContinue
+"@
+    'explorerSearchHistory' = @"
+foreach (`$k in @(
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery',
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths'
+)) {
+    if (Test-Path `$k) {
+        `$props = Get-ItemProperty -Path `$k -ErrorAction SilentlyContinue
+        if (`$props) {
+            `$props.PSObject.Properties | Where-Object { `$_.Name -notin @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider') } | ForEach-Object {
+                try { Remove-ItemProperty -Path `$k -Name `$_.Name -ErrorAction SilentlyContinue } catch {}
+            }
+        }
     }
 }
 "@
