@@ -24,18 +24,17 @@
 //     (else Tauri's Rust compile could embed stale/partial .enc bytes), even
 //     though encrypt-backend and vite have no direct data dependency.
 //
-// Net effect: kill→encrypt→build:pro→vite (4 sequential steps) becomes
-// max(kill, install, encrypt) → vite, with build:pro finishing in the
-// background whenever it finishes — normally well before the first
-// Pro-gated click, and non-fatal to the dev session if it isn't.
+// Once the independent preparation steps finish, build Pro before exposing
+// Vite's dev URL. Tauri starts the desktop app as soon as that URL responds;
+// starting Vite first lets the old sidecar start and lock the exact .exe Cargo
+// is trying to replace, which makes the Pro build fail on Windows.
 //
 // Usage: bun run tools/dev-server.ts [--free]
 //   --free: skip build:pro entirely (matches the old dev:free script, which
 //           never built the Pro sidecar at all).
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
-import type { ChildProcess } from "node:child_process";
 
 const ROOT = resolve(import.meta.dir, "..");
 const FREE_ONLY = process.argv.includes("--free");
@@ -46,6 +45,32 @@ function run(tag: string, cmd: string, args: string[]): Promise<number> {
     child.on("error", reject);
     child.on("exit", (code) => resolvePromise(code ?? 1));
   });
+}
+
+/**
+ * A Pro build can take long enough for another dev invocation to claim Vite's
+ * strict port after the initial kill step. Release only that listener again
+ * immediately before launching Vite; do not kill the freshly built sidecar.
+ */
+function freeVitePort(): void {
+  const netstat = spawnSync("netstat", ["-ano"], { cwd: ROOT, encoding: "utf8", shell: false });
+  if (netstat.status !== 0) {
+    throw new Error(`could not inspect Vite port 1420 (exit ${netstat.status ?? "unknown"})`);
+  }
+  const listener = netstat.stdout
+    .split(/\r?\n/)
+    .map((line) => line.match(/:1420\s+\S+\s+LISTENING\s+(\d+)\s*$/i))
+    .find((match): match is RegExpMatchArray => match !== null);
+  if (listener) {
+    const result = spawnSync("taskkill", ["/PID", listener[1], "/F"], {
+      cwd: ROOT,
+      stdio: "inherit",
+      shell: false,
+    });
+    if (result.status !== 0) {
+      throw new Error(`could not release Vite port 1420 (exit ${result.status ?? "unknown"})`);
+    }
+  }
 }
 
 async function main(): Promise<void> {
@@ -68,38 +93,30 @@ async function main(): Promise<void> {
   console.log(
     FREE_ONLY
       ? "[dev-server] kill:dev/install/encrypt done — starting vite..."
-      : "[dev-server] kill:dev/install/encrypt done — starting build:pro in background + vite in foreground...",
+      : "[dev-server] kill:dev/install/encrypt done — building Pro before starting vite...",
   );
 
-  let buildPro: ChildProcess | null = null;
   if (!FREE_ONLY) {
-    // Background, non-blocking: vite/Tauri's compile step don't need this at
-    // compile time, only at runtime when a Pro-gated feature is exercised —
-    // so a slow or failed Pro build must never hold up frontend dev.
-    buildPro = spawn("bun", ["run", "tools/build-pro.ts"], { cwd: ROOT, env: process.env, stdio: "inherit", shell: false });
-    buildPro.on("exit", (code) => {
-      if (code !== 0) {
-        console.error(
-          `[dev-server] build:pro failed (exit ${code}) — Pro sidecar features won't work until this succeeds; re-run "bun run build:pro" manually.`,
-        );
-      } else {
-        console.log("[dev-server] build:pro finished.");
-      }
-    });
+    const buildProResult = await run("[build:pro]", "bun", ["run", "tools/build-pro.ts"]);
+    if (buildProResult !== 0) {
+      console.error(`[dev-server] build:pro failed (exit ${buildProResult}).`);
+      process.exit(buildProResult);
+    }
+    console.log("[dev-server] build:pro finished — starting vite.");
   }
+
+  freeVitePort();
 
   // vite is long-running/foreground — its exit code becomes this script's.
   const vite = spawn("bun", ["x", "vite"], { cwd: ROOT, env: process.env, stdio: "inherit", shell: false });
 
   const shutdown = (signal: NodeJS.Signals): void => {
     vite.kill(signal);
-    buildPro?.kill(signal);
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 
   vite.on("exit", (code) => {
-    buildPro?.kill();
     process.exit(code ?? 0);
   });
 }
