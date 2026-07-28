@@ -6,11 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  buildBackendSearchQuery,
-  resultMatchesFilters,
-  sfAppSortScore,
-} from "@/lib/fileNameSearch";
+import { buildSearchQuery, sfAppSortScore } from "@/lib/fileNameSearch";
 import type { DateFilter, SearchResponse, SearchResult, SearchType, SizeFilter } from "@/lib/fileNameSearch";
 import { nextResultLimit, RESULT_LIMIT_LADDER } from "@/lib/searchSelection";
 
@@ -78,24 +74,29 @@ export function useFileSearch(): FileSearchState {
     setIsSearching(true);
     setError(null);
     try {
-      // When a text query AND filters combine, the backend gets the bare
-      // query with a widened limit and the filters run client-side —
-      // Everything's operators and a free-text query don't compose reliably.
-      const combinedSearchAndFilters = effectiveQuery.length > 0 && hasActiveFilters;
-      const backendLimit = combinedSearchAndFilters ? Math.min(limit * 5, 5000) : limit;
+      // KT: filters now go to the backend even when a text query is present.
+      // The old code sent the bare query, over-fetched 5x, and filtered
+      // client-side because "Everything's operators and a free-text query
+      // don't compose reliably" — they compose fine; the real cause was
+      // `search_everything` passing the whole query as ONE argv entry, which
+      // es.exe reads as a quoted phrase, so every multi-token query returned
+      // zero rows (see backend.rs::tokenize_es_query). Filtering after a
+      // limit meant "folders named assets" could report NO results while
+      // thousands existed, because the first 50 rows happened to be files.
+      // Client-side re-filtering is deliberately NOT reapplied here: it
+      // disagrees with the engine (its "last 7 days from local midnight" vs
+      // Everything's `dm:thisweek` = since the start of this week) and would
+      // discard rows the backend correctly returned.
       const resp = await invoke<SearchResponse>("search_everything", {
-        query: buildBackendSearchQuery(effectiveQuery, types, size, date),
-        maxResults: backendLimit,
+        query: buildSearchQuery(effectiveQuery, types, size, date),
+        maxResults: limit,
       });
-      const filtered = combinedSearchAndFilters
-        ? resp.results.filter((result) => resultMatchesFilters(result, types, size, date)).slice(0, limit)
-        : resp.results;
-      const sorted = filtered.slice().sort((a, b) => {
+      const sorted = resp.results.slice().sort((a, b) => {
         const diff = sfAppSortScore(a) - sfAppSortScore(b);
         return diff !== 0 ? diff : a.name.length - b.name.length;
       });
       setResults(sorted);
-      setTotalCount(combinedSearchAndFilters ? sorted.length : resp.total);
+      setTotalCount(resp.total);
       setHasSearched(true);
       setResultsQuery(q);
     } catch (err) {

@@ -7,6 +7,16 @@
 //   overlayMode=true:            renders as the sole content of the dedicated
 //                                "search-overlay" transparent Tauri window.
 //                                The window is shown/hidden by the global hotkey in lib.rs.
+//
+// The query is a QueryState (chips + text), not a string. Chips are pills that
+// sit immediately LEFT of the caret, Gmail-recipient style — the spatial link
+// between the word the user typed and the pill that replaced it is what makes
+// Backspace read as undo instead of as something random. All state and IPC live
+// in useChipSearch; this file renders and translates keystrokes.
+//
+// The window lifecycle below (focusInputUntilStuck, the tauri://focus + blur
+// listeners, the 600ms blur guard) encodes real Windows foreground-activation
+// bugs. Do not simplify it.
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -15,44 +25,35 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Icon, Spinner } from "@/components/ui/bp";
 import { AnimatePresence, motion } from "framer-motion";
 import type { AppSettings } from "../types/settings";
-import { buildContentQueryArgs, contentHitToDisplayRow, dedupeContentRows, isNameOnlyMatch } from "@/lib/contentSearch";
-import type { ContentDisplayRow } from "@/lib/contentSearch";
-import type { ContentHit } from "@/types/wincmd-search";
+import { dedupeContentRows, isNameOnlyMatch } from "@/lib/contentSearch";
+import { formatResultSize, isDirectoryResult, isEngineMissingError, sfExtOf } from "@/lib/fileNameSearch";
+import type { SearchResult } from "@/lib/fileNameSearch";
+import { recordOpen } from "@/lib/frecency";
+import { describeQuery } from "@/lib/searchQueryPlan";
+import { chipDef, cycleChipStrict, demoteLastChip, promoteChip, removeChipAt } from "@/lib/searchTokens";
+import type { Chip, QueryState } from "@/lib/searchTokens";
+import { useChipSearch, useReducedMotionPref } from "@/hooks/useChipSearch";
+import type { BrowseResult } from "@/hooks/useChipSearch";
 import SearchResultContextMenu from "./SearchResultContextMenu";
 import { useSearchResultContextMenu } from "@/hooks/useSearchResultContextMenu";
 import "./EverythingSearchBar.css";
 
-interface SearchResult {
-  name: string;
-  directory: string;
-  full_path: string;
-  size: string;
-  modified: string;
-  icon_data?: string | null;
-}
-
-interface SearchResponse {
-  results: SearchResult[];
-  total: number;
-  query: string;
-}
-
 const esbIconCache = new Map<string, string | null>();
 
 function getFallbackSearchIcon(result: SearchResult) {
-  if (result.size === "0" || result.size === "") return { icon: "folder-close" as any, className: "esb-result-icon esb-icon-folder" };
-  const ext = result.name.split(".").pop()?.toLowerCase() || "";
-  if (["exe", "msi", "appx", "appxbundle", "msix", "lnk"].includes(ext)) return { icon: "application" as any, className: "esb-result-icon esb-icon-app" };
-  if (["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "heic"].includes(ext)) return { icon: "media" as any, className: "esb-result-icon esb-icon-image" };
-  if (["mp4", "mkv", "mov", "avi", "wmv", "flv", "webm"].includes(ext)) return { icon: "video" as any, className: "esb-result-icon esb-icon-video" };
-  if (["mp3", "wav", "flac", "m4a", "ogg", "aac"].includes(ext)) return { icon: "music" as any, className: "esb-result-icon esb-icon-audio" };
-  if (["zip", "rar", "7z", "tar", "gz", "iso", "cab"].includes(ext)) return { icon: "compressed" as any, className: "esb-result-icon esb-icon-archive" };
-  if (["js", "ts", "tsx", "jsx", "py", "rs", "go", "java", "cpp", "cs", "html", "css", "json", "yml", "yaml", "ps1", "bat", "cmd"].includes(ext)) return { icon: "code" as any, className: "esb-result-icon esb-icon-code" };
-  return { icon: "document" as any, className: "esb-result-icon esb-icon-doc" };
+  if (isDirectoryResult(result)) return { icon: "folder-close" as const, className: "esb-result-icon esb-icon-folder" };
+  const ext = sfExtOf(result.name);
+  if (["exe", "msi", "appx", "appxbundle", "msix", "lnk"].includes(ext)) return { icon: "application" as const, className: "esb-result-icon esb-icon-app" };
+  if (["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "heic"].includes(ext)) return { icon: "media" as const, className: "esb-result-icon esb-icon-image" };
+  if (["mp4", "mkv", "mov", "avi", "wmv", "flv", "webm"].includes(ext)) return { icon: "video" as const, className: "esb-result-icon esb-icon-video" };
+  if (["mp3", "wav", "flac", "m4a", "ogg", "aac"].includes(ext)) return { icon: "music" as const, className: "esb-result-icon esb-icon-audio" };
+  if (["zip", "rar", "7z", "tar", "gz", "iso", "cab"].includes(ext)) return { icon: "compressed" as const, className: "esb-result-icon esb-icon-archive" };
+  if (["js", "ts", "tsx", "jsx", "py", "rs", "go", "java", "cpp", "cs", "html", "css", "json", "yml", "yaml", "ps1", "bat", "cmd"].includes(ext)) return { icon: "code" as const, className: "esb-result-icon esb-icon-code" };
+  return { icon: "document" as const, className: "esb-result-icon esb-icon-doc" };
 }
 
 function NativeSearchIcon({ result }: { result: SearchResult }) {
-  const isDir = result.size === "0" || result.size === "";
+  const isDir = isDirectoryResult(result);
   const [iconData, setIconData] = useState<string | null>(() => result.icon_data ?? esbIconCache.get(result.full_path) ?? null);
   const fallback = getFallbackSearchIcon(result);
 
@@ -84,126 +85,67 @@ function NativeSearchIcon({ result }: { result: SearchResult }) {
   return <Icon icon={fallback.icon} size={14} className={fallback.className} />;
 }
 
-// Separator chars (space, dash, comma, dot) become * wildcards.
-// A trailing * is always appended so "brave" becomes "brave*" — prefix match
-// that finds BraveBrowser.exe, Brave Setup.exe, etc.
-function normalizeSearchQuery(raw: string): string {
-  const normalized = raw.trim().replace(/[\s\-,\.]+/g, "*");
-  return normalized.endsWith("*") ? normalized : `${normalized}*`;
+// ── Chip presentation ────────────────────────────────────────────────────────
+// A time chip's two states must be legible without a legend, so the LABEL says
+// which one it is: "Today first" ranks, "Only today" removes. The strict form
+// also swaps to the filter glyph, because that is what it is now doing.
+
+function chipLabel(chip: Chip): string {
+  const def = chipDef(chip.kind);
+  if (chip.kind === "in") return `In ${chip.pathLabel ?? chip.path ?? "folder"}`;
+  if (!def.supportsStrict) return def.label;
+  return chip.strict ? `Only ${def.label.toLowerCase()}` : `${def.label} first`;
 }
 
-function extOf(name: string): string {
-  const dot = name.lastIndexOf(".");
-  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+function chipIconName(chip: Chip): string {
+  const def = chipDef(chip.kind);
+  return def.supportsStrict && chip.strict === true ? "filter" : def.icon;
 }
 
-function nameWithoutExt(name: string): string {
-  const dot = name.lastIndexOf(".");
-  return (dot >= 0 ? name.slice(0, dot) : name).toLowerCase();
-}
-
-const APP_EXTS = new Set(["exe", "msi", "appx", "msix", "lnk"]);
-
-// Returns sort priority — lower = shown first.
-// Apps (any .exe/.lnk/.msi/.appx/.msix) ALWAYS beat data files, regardless
-// of where they live on disk. The previous path-based scoring missed apps
-// installed under non-standard locations like %LOCALAPPDATA%\GitHubDesktop,
-// %LOCALAPPDATA%\Discord, etc. Now we trust the extension: if it's an app
-// extension, it ranks above any data file.
-//
-//   0: exact basename match on an app extension (typing "brave" → brave.exe)
-//   1: basename starts with the query, app extension (BraveBeta.exe for "brave")
-//   2: any .lnk (Start Menu shortcuts and similar)
-//   3: any .exe / .msi / .appx / .msix anywhere else
-//   4: everything else (data files, images, logs)
-function appSortScore(result: SearchResult, queryLower: string): number {
-  const ext = extOf(result.name);
-  const isApp = APP_EXTS.has(ext);
-  if (isApp) {
-    const base = nameWithoutExt(result.name);
-    if (base === queryLower) return 0;
-    if (base.startsWith(queryLower)) return 1;
-  }
-  if (ext === "lnk") return 2;
-  if (ext === "exe" || ext === "msi" || ext === "appx" || ext === "msix") return 3;
-  return 4;
-}
-
-// Hard-coded entries for Windows built-in apps that aren't reliably indexed
-// as regular files (UWP apps live in WindowsApps which Everything skips by
-// default; some shell-only entry-points like Settings have no real file at
-// all — they're URI-launchable). When the user's query matches any of an
-// entry's keywords, we inject the entry at the top of results so File
-// Explorer / Settings / Calculator etc. always show up.
-interface BuiltinApp {
-  name: string;       // Display name shown in the result row
-  keywords: string[]; // Lowercase keywords that should match
-  path: string;       // What we hand to open_path (file path or shell URI)
-  iconExt?: string;   // Hint for the fallback icon picker
-}
-const BUILTIN_APPS: BuiltinApp[] = [
-  { name: "File Explorer", keywords: ["file explorer", "explorer", "files"], path: "C:\\Windows\\explorer.exe", iconExt: "exe" },
-  { name: "Settings", keywords: ["settings", "windows settings"], path: "ms-settings:", iconExt: "exe" },
-  { name: "Control Panel", keywords: ["control panel", "control"], path: "C:\\Windows\\System32\\control.exe", iconExt: "exe" },
-  { name: "Task Manager", keywords: ["task manager", "taskmgr"], path: "C:\\Windows\\System32\\Taskmgr.exe", iconExt: "exe" },
-  { name: "Command Prompt", keywords: ["cmd", "command prompt"], path: "C:\\Windows\\System32\\cmd.exe", iconExt: "exe" },
-  { name: "PowerShell", keywords: ["powershell", "pwsh", "ps"], path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", iconExt: "exe" },
-  { name: "Calculator", keywords: ["calc", "calculator"], path: "calculator:", iconExt: "exe" },
-  { name: "Notepad", keywords: ["notepad"], path: "C:\\Windows\\System32\\notepad.exe", iconExt: "exe" },
-  { name: "Paint", keywords: ["paint", "mspaint"], path: "C:\\Windows\\System32\\mspaint.exe", iconExt: "exe" },
-  { name: "Snipping Tool", keywords: ["snip", "snipping tool", "screenshot"], path: "C:\\Windows\\System32\\SnippingTool.exe", iconExt: "exe" },
-  { name: "Registry Editor", keywords: ["regedit", "registry"], path: "C:\\Windows\\regedit.exe", iconExt: "exe" },
-  { name: "Run", keywords: ["run"], path: "C:\\Windows\\System32\\rundll32.exe", iconExt: "exe" },
-  { name: "Device Manager", keywords: ["device manager", "devmgmt"], path: "C:\\Windows\\System32\\devmgmt.msc", iconExt: "exe" },
-  { name: "Disk Management", keywords: ["disk management", "diskmgmt"], path: "C:\\Windows\\System32\\diskmgmt.msc", iconExt: "exe" },
-  { name: "Services", keywords: ["services", "services.msc"], path: "C:\\Windows\\System32\\services.msc", iconExt: "exe" },
-  { name: "System Configuration", keywords: ["msconfig", "system configuration"], path: "C:\\Windows\\System32\\msconfig.exe", iconExt: "exe" },
-];
-
-function builtinMatches(queryLower: string): SearchResult[] {
-  if (!queryLower) return [];
-  return BUILTIN_APPS
-    .filter(app => app.keywords.some(k => k.startsWith(queryLower) || queryLower.startsWith(k)))
-    .map(app => ({
-      name: app.name + (app.iconExt ? "." + app.iconExt : ""),
-      directory: app.path.startsWith("ms-") || app.path.endsWith(":") ? "Windows shell" : (app.path.lastIndexOf("\\") > 0 ? app.path.slice(0, app.path.lastIndexOf("\\")) : ""),
-      full_path: app.path,
-      size: "",
-      modified: "",
-      icon_data: null,
-    }));
+function chipAriaLabel(chip: Chip): string {
+  const def = chipDef(chip.kind);
+  if (!def.supportsStrict) return `${chipLabel(chip)} filter. Activate to remove.`;
+  return chip.strict === true
+    ? `${def.label}: filtering to that date range only. Activate to remove.`
+    : `${def.label}: ranking those first, nothing removed. Activate to filter instead.`;
 }
 
 export default function EverythingSearchBar({ overlayMode = false }: { overlayMode?: boolean }) {
   // In overlay mode the Rust side shows/hides the window — always render.
   // In normal mode we gate rendering via `visible`.
   const [visible, setVisible] = useState(overlayMode);
-  const [query, setQuery] = useState("");
-  const [caseSensitive, setCaseSensitive] = useState(false);
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [error, setError] = useState<string | null>(null);
   const [inputKey, setInputKey] = useState(0);
-  const [contentRows, setContentRows] = useState<ContentDisplayRow[]>([]);
+
+  const search = useChipSearch(visible);
+  const {
+    query, setQuery, suggestion, explorerOffer, acceptExplorerOffer,
+    primary, contentRows, reset: resetSearch, setError,
+  } = search;
+  const reduceMotion = useReducedMotionPref();
 
   const inputRef = useRef<HTMLInputElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const contentDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const focusPollRef = useRef<number | null>(null);
   const lastShowTimeRef = useRef(0);
   const unlockKeywordRef = useRef("unlock");
   const lockKeywordRef = useRef("lock");
+  // Caret position to apply once React has written the demoted text.
+  const pendingCaretRef = useRef<number | null>(null);
+  // Escape is handled by a window-level CAPTURE listener that cannot read state
+  // directly, so the current chip count is mirrored here for it.
+  const chipCountRef = useRef(0);
+  useEffect(() => { chipCountRef.current = query.chips.length; }, [query.chips.length]);
 
+  // KT: depend on `resetSearch` (a stable useCallback), never on the whole
+  // `search` object — that gets a new identity every render, and resetState
+  // feeds the overlay-focus effect's dep list. A per-render identity there
+  // re-registers the tauri listeners and re-triggers the focus poll forever.
   const resetState = useCallback(() => {
-    setQuery("");
-    setResults([]);
-    setContentRows([]);
-    setError(null);
+    resetSearch();
     setSelectedIndex(0);
     setInputKey(k => k + 1);
-  }, []);
+  }, [resetSearch]);
 
   // Focus the input with a polled retry loop. Single .focus() calls race
   // against Windows' foreground-window promotion when the global hotkey
@@ -255,13 +197,23 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     resetState();
   }, [overlayMode, resetState]);
 
+  // Escape is STAGED: the first press drops the chips, the second closes the
+  // bar. A query the user spent time assembling must never die to one keystroke.
+  // Returns true when it consumed the press.
+  const handleEscape = useCallback((): boolean => {
+    if (chipCountRef.current === 0) return false;
+    setSelectedIndex(0);
+    setQuery(prev => ({ chips: [], text: prev.text }));
+    return true;
+  }, [setQuery]);
+
   useEffect(() => {
     if (!overlayMode) return;
     const onWindowKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        close();
+        if (!handleEscape()) close();
         return;
       }
       if (e.key === " " && e.ctrlKey) {
@@ -273,7 +225,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     };
     window.addEventListener("keydown", onWindowKeyDown, true);
     return () => window.removeEventListener("keydown", onWindowKeyDown, true);
-  }, [overlayMode, close]);
+  }, [overlayMode, close, handleEscape]);
 
   // ── OVERLAY MODE: reset & focus whenever the window is shown ──
   // Uses the window-level focus event (fired by Rust's overlay.show() + set_focus()).
@@ -293,13 +245,13 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       lastShowTimeRef.current = Date.now();
       resetState();
       setVisible(true);
-      
+
       // Focus immediately
       if (inputRef.current) {
         inputRef.current.focus();
         inputRef.current.select();
       }
-      
+
       // Focus on next paint
       requestAnimationFrame(() => {
         if (inputRef.current) {
@@ -315,7 +267,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     win.listen("tauri://focus", () => {
       triggerOverlayFocus();
     }).then(fn => { unlistenFocus = fn; });
-    
+
     win.listen("tauri://blur", () => {
       // Ignore blur events that fire during the OS foreground-promotion
       // race (first 600 ms after the overlay is shown). Windows sometimes
@@ -324,7 +276,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       if (Date.now() - lastShowTimeRef.current < 600) return;
       close();
     }).then(fn => { unlistenBlur = fn; });
-    
+
     // Explicit "focus the input" cue from Rust's handle_search_hotkey.
     // tauri://focus can no-op when Windows refuses SetForegroundWindow,
     // so this is the reliable path the global hotkey always fires.
@@ -357,7 +309,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
 
     // Initial mount (first open of the lazy-created overlay window).
     triggerOverlayFocus();
-    
+
     return () => {
       unlistenFocus?.();
       unlistenBlur?.();
@@ -420,13 +372,13 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         unlockKeywordRef.current = "unlock";
         lockKeywordRef.current = "lock";
       });
-    
+
     // Focus immediately
     if (inputRef.current) {
       inputRef.current.focus();
       inputRef.current.select();
     }
-    
+
     // Also focus after a frame
     const raf = requestAnimationFrame(() => {
       if (inputRef.current) {
@@ -462,118 +414,39 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     return () => document.removeEventListener("mousedown", handler, true);
   }, [visible, close, overlayMode]);
 
-  // Search logic
-  //
-  // Two queries in parallel so apps ALWAYS appear at the top, regardless
-  // of Everything's default alphabetical sort. A single query for
-  // "brave*" can return 20 results that are all "brave-icon.png" /
-  // "brave-update.log" (alphabetically before Brave.lnk), pushing the
-  // actual app off the visible list. The first query restricts to app
-  // extensions (.exe / .lnk / .msi / .appx / .msix); the second is the
-  // general query for everything else, deduped by full path.
-  //
-  // The case-sensitive toggle is intentionally ignored: Everything's
-  // case-sensitive mode hides apps with capitalised names when the user
-  // types lowercase ("brave" misses "Brave.lnk"), which would defeat
-  // the priority below. Toggle UI is preserved but does nothing here.
-  const performSearch = useCallback(async (q: string, _cs: boolean) => {
-    if (!q.trim()) {
-      setResults([]);
-      setError(null);
-      setSelectedIndex(0);
-      return;
-    }
-    setIsSearching(true);
-    try {
-      const normalized = normalizeSearchQuery(q.trim());
-      const queryLower = q.trim().toLowerCase();
-      const appsQuery = `${normalized} ext:exe;lnk;msi;appx;msix`;
-
-      const [appsResp, allResp] = await Promise.all([
-        invoke<SearchResponse>("search_everything", {
-          query: appsQuery,
-          maxResults: 30,
-        }).catch(() => ({ results: [], total: 0, query: appsQuery } as SearchResponse)),
-        invoke<SearchResponse>("search_everything", {
-          query: normalized,
-          maxResults: 50,
-        }),
-      ]);
-
-      const sortByScore = (a: SearchResult, b: SearchResult) => {
-        const sd = appSortScore(a, queryLower) - appSortScore(b, queryLower);
-        if (sd !== 0) return sd;
-        return a.name.length - b.name.length;
-      };
-
-      const seen = new Set<string>();
-      const merged: SearchResult[] = [];
-
-      // Built-in Windows apps (File Explorer, Settings, etc.) always lead
-      // when their keywords match — these aren't always indexed by Everything.
-      for (const r of builtinMatches(queryLower)) {
-        if (!seen.has(r.full_path)) { seen.add(r.full_path); merged.push(r); }
-      }
-      for (const r of [...appsResp.results].sort(sortByScore)) {
-        if (!seen.has(r.full_path)) { seen.add(r.full_path); merged.push(r); }
-      }
-      for (const r of [...allResp.results].sort(sortByScore)) {
-        if (!seen.has(r.full_path)) { seen.add(r.full_path); merged.push(r); }
-      }
-
-      setResults(merged.slice(0, 10));
-      setSelectedIndex(0);
-      setError(null);
-    } catch (err: any) {
-      setError(String(err));
-      setResults([]);
-    } finally {
-      setIsSearching(false);
-    }
-  }, []);
-
-  // Best-effort content search alongside the filename search.
-  // Debounced (~275ms) and gated at 2+ chars so it doesn't fire invoke() on
-  // every keystroke. Silent on error — the bar must not break if the search
-  // engine isn't ready.
+  // Backspace-demote restores the chip's source word; the caret belongs at the
+  // END of it so a second Backspace edits that word instead of eating the next
+  // chip. React has not written the new value during the keydown, so the caret
+  // move waits for this post-commit pass.
   useEffect(() => {
-    if (contentDebounceRef.current) clearTimeout(contentDebounceRef.current);
-    const trimmed = query.trim();
-    if (trimmed.length < 2) { setContentRows([]); return; }
-    let cancelled = false;
-    contentDebounceRef.current = setTimeout(() => {
-      invoke<ContentHit[]>("search_content", buildContentQueryArgs(query, 5) as unknown as Record<string, unknown>)
-        .then((hits) => { if (!cancelled) setContentRows(hits.map(contentHitToDisplayRow)); })
-        .catch(() => { /* best-effort */ });
-    }, 275);
-    return () => {
-      cancelled = true;
-      if (contentDebounceRef.current) clearTimeout(contentDebounceRef.current);
-    };
+    const pos = pendingCaretRef.current;
+    if (pos === null) return;
+    pendingCaretRef.current = null;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(pos, pos);
   }, [query]);
 
-  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setQuery(val);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => performSearch(val, caseSensitive), 200);
-  }, [performSearch, caseSensitive]);
+  const applyQuery = useCallback((next: QueryState) => {
+    setSelectedIndex(0);
+    setQuery(next);
+  }, [setQuery]);
 
-  // Re-search when case-sensitive toggle changes (if there's already a query)
-  useEffect(() => {
-    if (query.trim()) performSearch(query, caseSensitive);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [caseSensitive]);
-
-  const openResult = useCallback(async (result: SearchResult) => {
+  const openPath = useCallback(async (path: string) => {
     try {
-      await invoke("open_path", { path: result.full_path });
-    } catch { }
+      await invoke("open_path", { path });
+      // Only real activations feed the frecency ranking. Recording a failed
+      // open would teach the launcher to keep offering a file that cannot be
+      // opened, which is exactly backwards.
+      recordOpen(path);
+    } catch { /* the bar closes either way; a dead path is not worth a toast */ }
     close();
   }, [close]);
 
   const openPathFromMenu = useCallback(async (path: string) => {
     await invoke("open_path", { path });
+    recordOpen(path);
     close();
   }, [close]);
 
@@ -585,26 +458,78 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
 
   // Same file matched by name and content lists once — filename row wins.
   const dedupedContentRows = useMemo(
-    () => dedupeContentRows(contentRows, results.map((r) => r.full_path)),
-    [contentRows, results],
+    () => dedupeContentRows(contentRows, primary.map((r) => r.full_path)),
+    [contentRows, primary],
   );
 
+  const totalRows = primary.length + dedupedContentRows.length;
+  const activeIndex = Math.min(selectedIndex, Math.max(0, totalRows - 1));
+
+  // The ghost is the ONE thing Tab acts on: a trailing-word chip candidate when
+  // there is one, otherwise the folder Explorer was last showing. Nothing else
+  // promotes it, so the plain-text search keeps running underneath and a file
+  // literally named "folder-icons.psd" is never blocked.
+  const ghost = useMemo(() => {
+    if (suggestion) {
+      const def = chipDef(suggestion.chip.kind);
+      return {
+        icon: def.icon,
+        label: def.supportsStrict ? `${def.label} first` : def.label,
+      };
+    }
+    if (explorerOffer) return { icon: "folder-open", label: `In ${explorerOffer.label}` };
+    return null;
+  }, [suggestion, explorerOffer]);
+
+  const promoteGhost = useCallback(() => {
+    setSelectedIndex(0);
+    if (suggestion) { setQuery(promoteChip(query, suggestion)); return; }
+    if (explorerOffer) acceptExplorerOffer();
+  }, [suggestion, query, setQuery, explorerOffer, acceptExplorerOffer]);
+
+  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const text = e.target.value;
+    setSelectedIndex(0);
+    setQuery(prev => ({ chips: prev.chips, text }));
+  }, [setQuery]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Escape") { close(); return; }
-    const totalRows = results.length + dedupedContentRows.length;
+    if (e.key === "Escape") {
+      if (!handleEscape()) close();
+      return;
+    }
+    // Tab promotes the ghost — and ONLY when there is one, so Tab still reaches
+    // the chips' own dismiss buttons when nothing is being offered.
+    if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey && ghost) {
+      e.preventDefault();
+      promoteGhost();
+      return;
+    }
+    if (e.key === "Backspace" && query.chips.length > 0) {
+      const el = e.currentTarget;
+      if (el.selectionStart === 0 && el.selectionEnd === 0) {
+        const next = demoteLastChip(query);
+        if (next) {
+          e.preventDefault();
+          pendingCaretRef.current = next.text.length;
+          applyQuery(next);
+        }
+      }
+      return;
+    }
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSelectedIndex(i => (totalRows > 0 ? Math.min(i + 1, totalRows - 1) : i));
+      setSelectedIndex(totalRows > 0 ? Math.min(activeIndex + 1, totalRows - 1) : 0);
       return;
     }
     if (e.key === "ArrowUp") {
       e.preventDefault();
-      setSelectedIndex(i => Math.max(i - 1, 0));
+      setSelectedIndex(Math.max(activeIndex - 1, 0));
       return;
     }
     if (e.key === "Enter") {
       // Unlock/lock keywords always take priority over row activation.
-      const cmd = query.trim().toLowerCase();
+      const cmd = query.text.trim().toLowerCase();
       if (cmd === unlockKeywordRef.current || cmd === lockKeywordRef.current) {
         e.preventDefault();
         e.stopPropagation();
@@ -614,19 +539,54 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         close();
         return;
       }
-      if (selectedIndex < results.length) {
-        if (results[selectedIndex]) openResult(results[selectedIndex]);
-      } else {
-        // Content row: open path directly then close.
-        const contentIdx = selectedIndex - results.length;
-        const row = dedupedContentRows[contentIdx];
-        if (row) { invoke("open_path", { path: row.path }).catch(() => {}); close(); }
-      }
+      const row = activeIndex < primary.length
+        ? primary[activeIndex]?.full_path
+        : dedupedContentRows[activeIndex - primary.length]?.path;
+      if (row) void openPath(row);
       return;
     }
-  }, [close, query, results, dedupedContentRows, selectedIndex, openResult]);
+  }, [close, handleEscape, ghost, promoteGhost, query, applyQuery, totalRows, activeIndex, primary, dedupedContentRows, openPath]);
 
-  const isDir = (r: SearchResult) => r.size === "0" || r.size === "";
+  const renderChip = (chip: Chip, index: number) => {
+    const label = chipLabel(chip);
+    const aria = chipAriaLabel(chip);
+    const cls = `esb-chip${chip.strict === true ? " esb-chip-strict" : ""}`;
+    // Time chips carry two actions (cycle + remove) so they need two buttons;
+    // every other chip is one button whose only job is to go away.
+    if (!chipDef(chip.kind).supportsStrict) {
+      return (
+        <button type="button" className={`${cls} esb-chip-solo`} onClick={() => applyQuery(removeChipAt(query, index))} aria-label={aria} title={aria}>
+          <Icon icon={chipIconName(chip)} size={12} className="esb-chip-icon" />
+          <span className="esb-chip-label">{label}</span>
+          <span className="esb-chip-x" aria-hidden="true"><Icon icon="cross" size={9} /></span>
+        </button>
+      );
+    }
+    return (
+      <span className={cls}>
+        <button type="button" className="esb-chip-main" onClick={() => applyQuery(cycleChipStrict(query, index))} aria-label={aria} title={aria}>
+          <Icon icon={chipIconName(chip)} size={12} className="esb-chip-icon" />
+          <span className="esb-chip-label">{label}</span>
+        </button>
+        <button type="button" className="esb-chip-x esb-chip-x-btn" onClick={() => applyQuery(removeChipAt(query, index))} aria-label={`Remove the ${label} filter`} title="Remove">
+          <Icon icon="cross" size={9} />
+        </button>
+      </span>
+    );
+  };
+
+  const sectionLabel = search.isBrowse
+    ? (query.chips.length > 0 ? describeQuery(query) : "Recent")
+    : null;
+
+  // Announced on CHIP changes only. handleChange reuses the previous `chips`
+  // array by reference, so typing never invalidates this memo — re-reading the
+  // whole query aloud on every keystroke would make the box unusable with a
+  // screen reader, and the typed text is already announced by the input itself.
+  const liveDescription = useMemo(
+    () => describeQuery({ chips: query.chips, text: "" }),
+    [query.chips],
+  );
 
   // ── Search card (shared between both modes) ──
   // onMouseDown re-asserts focus on the input — if the OS race left the
@@ -644,23 +604,65 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         <div className="esb-search-tile">
           <Icon icon="search" size={14} className="esb-search-icon" />
         </div>
-        <input
-          key={inputKey}
-          ref={inputRef}
-          className="esb-input"
-          placeholder="Search files and contents…"
-          value={query}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          autoComplete="off"
-          spellCheck={false}
-          autoFocus
-        />
-        {isSearching && <Spinner size={14} className="esb-spinner" />}
-        {!isSearching && query && (
+
+        <div className="esb-field">
+          <AnimatePresence initial={false}>
+            {query.chips.map((chip, index) => (
+              <motion.span
+                key={chip.kind}
+                className="esb-chip-wrap"
+                initial={reduceMotion ? false : { opacity: 0, scale: 0.86 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.86 }}
+                transition={{ duration: reduceMotion ? 0 : 0.14, ease: [0.16, 1, 0.3, 1] }}
+              >
+                {renderChip(chip, index)}
+              </motion.span>
+            ))}
+          </AnimatePresence>
+
+          {ghost && (
+            <button
+              type="button"
+              className="esb-ghost"
+              onClick={promoteGhost}
+              aria-label={`Add the ${ghost.label} filter. Press Tab.`}
+              title={`Tab to filter by ${ghost.label}`}
+            >
+              <Icon icon={ghost.icon} size={12} className="esb-chip-icon" />
+              <span className="esb-chip-label">{ghost.label}</span>
+              <kbd className="esb-ghost-kbd" aria-hidden="true">Tab</kbd>
+            </button>
+          )}
+
+          {/* Same scheme as the Search Files panel: focus never leaves the input,
+              rows are role="option" with ids esb-opt-<flatIndex>, and the content
+              rows continue that flat index from primary.length. */}
+          <input
+            key={inputKey}
+            ref={inputRef}
+            className="esb-input"
+            placeholder={query.chips.length > 0 ? "Add a name…" : "Search files and contents…"}
+            value={query.text}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            role="combobox"
+            aria-expanded={totalRows > 0}
+            aria-controls={primary.length > 0 ? "esb-result-list" : undefined}
+            aria-activedescendant={totalRows > 0 ? `esb-opt-${activeIndex}` : undefined}
+            autoComplete="off"
+            spellCheck={false}
+            autoFocus
+          />
+        </div>
+
+        {search.isSearching && <Spinner size={14} className="esb-spinner" />}
+        {!search.isSearching && (query.text || query.chips.length > 0) && (
           <button
             className="esb-clear"
-            onClick={() => { setQuery(""); setResults([]); inputRef.current?.focus(); }}
+            onClick={() => { applyQuery({ chips: [], text: "" }); inputRef.current?.focus(); }}
+            aria-label="Clear the search"
+            title="Clear"
             tabIndex={-1}
           >
             <Icon icon="cross" size={12} />
@@ -668,63 +670,56 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         )}
       </div>
 
+      {/* Announces the assembled query in plain English whenever chips change. */}
+      <div className="esb-live" aria-live="polite">{liveDescription}</div>
+
       <div className="esb-hint">
-        <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+        {search.isJump && (
+          <span className="esb-hint-mode"><Icon icon="folder-open" size={11} /> jump into folder</span>
+        )}
+        <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
         <span><kbd>↵</kbd> open</span>
+        <span><kbd>Tab</kbd> filter</span>
+        <span><kbd>⌫</kbd> undo chip</span>
         <span><kbd>Esc</kbd> close</span>
-        <span className="esb-hint-sep" />
-        <button
-          className={`esb-case-toggle${caseSensitive ? " active" : ""}`}
-          onClick={() => setCaseSensitive(v => !v)}
-          title="Toggle case-sensitive search"
-          tabIndex={-1}
-        >
-          Aa
-        </button>
       </div>
 
-      {error && (() => {
-        // Detect the "search engine not installed / not running" error
-        // so we can show a clean message instead of the raw Rust error
-        // string (which used to leak the underlying tool's name to the
-        // UI). Anything else is shown verbatim — those are usually real
-        // bugs the user should see.
-        const lower = error.toLowerCase();
-        const engineMissing = lower.includes("search engine not installed")
-          || lower.includes("search engine service is not running")
-          || lower.includes("not found")
-          || lower.includes("ipc not found");
-        if (engineMissing) {
-          return (
-            <div className="esb-error">
-              <Icon icon="warning-sign" size={12} />
-              <span>Search engine not available. Install it from the Packages panel to enable file search.</span>
-            </div>
-          );
-        }
-        return (
-          <div className="esb-error">
-            <Icon icon="warning-sign" size={12} />
-            <span>{error}</span>
-          </div>
-        );
-      })()}
+      {search.error && (
+        <div className="esb-error">
+          <Icon icon="warning-sign" size={12} />
+          <span>
+            {isEngineMissingError(search.error)
+              ? "Search engine not available. Install it from the Packages panel to enable file search."
+              : search.error}
+          </span>
+        </div>
+      )}
+
+      {sectionLabel && primary.length > 0 && (
+        <div className="esb-section-label">{sectionLabel}</div>
+      )}
 
       <AnimatePresence initial={false}>
-        {results.length > 0 && (
+        {primary.length > 0 && (
           <motion.div
+            id="esb-result-list"
             className="esb-results"
-            initial={{ opacity: 0, height: 0 }}
+            role="listbox"
+            aria-label="Search results"
+            initial={reduceMotion ? false : { opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.12 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.12 }}
           >
-            {results.map((r, i) => (
+            {primary.map((r: BrowseResult, i) => (
               <div
                 key={r.full_path}
-                className={`esb-result-item${i === selectedIndex ? " esb-selected" : ""}`}
+                id={`esb-opt-${i}`}
+                role="option"
+                aria-selected={i === activeIndex}
+                className={`esb-result-item${i === activeIndex ? " esb-selected" : ""}`}
                 onMouseEnter={() => setSelectedIndex(i)}
-                onClick={() => openResult(r)}
+                onClick={() => void openPath(r.full_path)}
                 onContextMenu={(event) => openMenu(event, r.full_path, r.name)}
               >
                 <NativeSearchIcon result={r} />
@@ -732,17 +727,8 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
                   <span className="esb-result-name">{r.name}</span>
                   <span className="esb-result-path">{r.directory}</span>
                 </div>
-                {!isDir(r) && r.size && r.size !== "0" && (
-                  <span className="esb-result-size">
-                    {(() => {
-                      const n = parseInt(r.size, 10);
-                      if (isNaN(n) || n === 0) return "";
-                      if (n < 1024) return `${n}B`;
-                      if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)}KB`;
-                      if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`;
-                      return `${(n / 1024 / 1024 / 1024).toFixed(2)}GB`;
-                    })()}
-                  </span>
+                {!isDirectoryResult(r) && !r.synthetic && r.size && (
+                  <span className="esb-result-size">{formatResultSize(r.size)}</span>
                 )}
               </div>
             ))}
@@ -755,13 +741,16 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         <div className="esb-content-section">
           <div className="esb-content-divider">Inside files</div>
           {dedupedContentRows.map((row, ci) => {
-            const globalIdx = results.length + ci;
+            const globalIdx = primary.length + ci;
             return (
               <div
                 key={row.docId}
-                className={`esb-content-item${globalIdx === selectedIndex ? " esb-selected" : ""}`}
+                id={`esb-opt-${globalIdx}`}
+                role="option"
+                aria-selected={globalIdx === activeIndex}
+                className={`esb-content-item${globalIdx === activeIndex ? " esb-selected" : ""}`}
                 onMouseEnter={() => setSelectedIndex(globalIdx)}
-                onClick={() => { invoke("open_path", { path: row.path }).catch(() => {}); close(); }}
+                onClick={() => void openPath(row.path)}
                 onContextMenu={(event) => openMenu(event, row.path, row.name)}
               >
                 <NativeSearchIcon result={{ name: row.name, directory: "", full_path: row.path, size: "1", modified: "" }} />
@@ -788,8 +777,21 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         </div>
       )}
 
-      {!isSearching && query.trim() && results.length === 0 && dedupedContentRows.length === 0 && !error && (
-        <div className="esb-no-results">No files found</div>
+      {search.totalCount !== null && search.totalCount > primary.length && (
+        <div className="esb-count">
+          Showing {primary.length} of {search.totalCount.toLocaleString()}
+        </div>
+      )}
+
+      {!search.isSearching && totalRows === 0 && !search.error && (
+        <div className="esb-no-results">
+          <span className="esb-no-results-title">
+            {search.isBrowse ? "Nothing recent to show" : "Nothing matched"}
+          </span>
+          {/* The query in plain English, so an empty list explains itself
+              instead of leaving the user to guess which chip was too tight. */}
+          <span className="esb-no-results-sub">{describeQuery(query)}</span>
+        </div>
       )}
 
       {contextTarget && (

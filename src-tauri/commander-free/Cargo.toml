@@ -131,7 +131,28 @@ tempfile = "3"
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "=0.38.2"
-windows = "=0.61.3"
+# explorer_context.rs — the Ctrl+Space "in this folder" chip asks the shell
+# which Explorer window the user was last in. That needs the COM shell
+# automation surface, which windows-sys cannot express (no vtable wrappers):
+#   Win32_System_Com      — CoInitializeEx/CoUninitialize/CoCreateInstance,
+#                           CoTaskMemFree (the PIDL is CoTaskMemAlloc'd),
+#                           IServiceProvider::QueryService, IDispatch.
+#   Win32_System_Ole      — IOleWindow::GetWindow (IShellBrowser derefs to it)
+#                           and it gates IShellBrowser's whole impl block.
+#   Win32_System_Variant  — IShellWindows::Item takes a VARIANT index.
+#   Win32_UI_Shell        — IShellWindows/IShellBrowser/IFolderView/
+#                           IPersistFolder2, SID_STopLevelBrowser,
+#                           CLSID_ShellWindows, SHGetPathFromIDListEx.
+#   Win32_UI_Shell_Common — ITEMIDLIST, which the two PIDL APIs above take.
+# GetForegroundWindow/GetAncestor/GetTopWindow/GetWindow deliberately stay on
+# windows-sys (already enabled below) so no UI feature is added here.
+windows = { version = "=0.61.3", features = [
+  "Win32_System_Com",
+  "Win32_System_Ole",
+  "Win32_System_Variant",
+  "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
+] }
 windows-sys = { version = "0.61", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",

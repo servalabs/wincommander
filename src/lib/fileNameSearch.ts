@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Pure helpers for the filename (Everything-backed) half of Search Files:
-// query building, client-side filter matching, result sorting, and display
-// formatting. Ported verbatim from the panel component — behaviour is
-// covered by the panel's long-standing semantics; keep changes surgical.
+// query building, result sorting, and display formatting. Ported verbatim
+// from the panel component — behaviour is covered by the panel's
+// long-standing semantics; keep changes surgical.
 
 export interface SearchResult {
   name: string;
@@ -81,6 +81,29 @@ export function sfAppSortScore(result: SearchResult): number {
   return 3;
 }
 
+// KT: this used to be two functions — buildSearchQuery (full tokens) and a
+// buildBackendSearchQuery wrapper that sent ONLY the free-text query to the
+// backend when filters were also active, then re-filtered the raw hits
+// client-side via a since-deleted resultMatchesFilters(). The workaround
+// existed because es.exe (Everything's CLI) joins its non-flag argv entries
+// with spaces, but a single argv entry that CONTAINS a space is treated as a
+// quoted phrase — so passing "folder: assets*" as one shell argument
+// silently returned zero rows. That made a confident empty result the worst
+// failure mode: "folders named assets" could report "no matches" while
+// thousands of matching folders sat in the index, because the first N raw
+// hits (fetched from `assets*` alone) happened to all be files.
+//
+// The backend now tokenizes each `ext:`/`size:`/`dm:`/etc. term into its own
+// argv entry (see search_everything / es_query.rs), so it can honour every
+// filter server-side. This is now the single, always-correct query builder —
+// there is no longer a case where sending fewer tokens is necessary or
+// safer, so the separate buildBackendSearchQuery wrapper and the
+// client-side resultMatchesFilters() re-filter are both deleted rather than
+// kept as redundant (and, per the date-window mismatch below, actively
+// wrong) safety nets. Everything's `dm:thisweek` means "since the start of
+// this calendar week"; the deleted client filter used "last 7 rolling days
+// from local midnight" — those disagree, so running both would have
+// silently dropped backend-correct rows.
 export function buildSearchQuery(q: string, types: Set<SearchType>, size: SizeFilter, date: DateFilter): string {
   const tokens: string[] = [];
   const trimmed = q.trim();
@@ -106,54 +129,6 @@ export function buildSearchQuery(q: string, types: Set<SearchType>, size: SizeFi
   if (date === "month") tokens.push("dm:thismonth");
   if (trimmed) tokens.push(normalizeQuery(trimmed));
   return tokens.filter(Boolean).join(" ");
-}
-
-export function buildBackendSearchQuery(q: string, types: Set<SearchType>, size: SizeFilter, date: DateFilter): string {
-  const trimmed = q.trim();
-  const hasFilters = types.size > 0 || size !== "any" || date !== "any";
-  if (trimmed && hasFilters) return normalizeQuery(trimmed);
-  return buildSearchQuery(trimmed, types, size, date);
-}
-
-export function resultMatchesFilters(result: SearchResult, types: Set<SearchType>, size: SizeFilter, date: DateFilter): boolean {
-  const isDir = isDirectoryResult(result);
-  if (types.has("files") && isDir) return false;
-  if (types.has("folders") && !isDir) return false;
-
-  const extCats = Array.from(types).filter((t) => t !== "files" && t !== "folders");
-  if (extCats.length > 0) {
-    if (isDir) return false;
-    const ext = sfExtOf(result.name);
-    const allowed = new Set<string>();
-    for (const t of extCats) {
-      for (const candidate of FILE_TYPE_EXTENSIONS[t as keyof typeof FILE_TYPE_EXTENSIONS]) {
-        allowed.add(candidate);
-      }
-    }
-    if (!allowed.has(ext)) return false;
-  }
-
-  const bytes = Number.parseInt(result.size, 10);
-  if (size !== "any") {
-    if (!Number.isFinite(bytes) || isDir) return false;
-    if (size === "tiny" && bytes >= 1024 * 1024) return false;
-    if (size === "medium" && (bytes < 1024 * 1024 || bytes > 100 * 1024 * 1024)) return false;
-    if (size === "large" && bytes <= 100 * 1024 * 1024) return false;
-    if (size === "huge" && bytes <= 1024 * 1024 * 1024) return false;
-  }
-
-  if (date !== "any") {
-    const modified = Date.parse(result.modified);
-    if (Number.isNaN(modified)) return false;
-    const now = new Date();
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    if (date === "week") start.setDate(start.getDate() - 7);
-    if (date === "month") start.setMonth(start.getMonth() - 1);
-    if (modified < start.getTime()) return false;
-  }
-
-  return true;
 }
 
 export function formatResultSize(size: string): string {

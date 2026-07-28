@@ -66,8 +66,8 @@ pub struct ExtractedDoc {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContentQuery {
     pub terms: String,
-    /// Reserved for P2 root-scoped query filtering.  Set from config but not
-    /// applied by `search_keyword` today — all indexed roots are searched.
+    /// Folder scope: results are limited to files under one of these roots.
+    /// Empty means unscoped (the whole index).
     pub roots: Vec<std::path::PathBuf>,
     pub limit: usize,
     pub offset: usize,

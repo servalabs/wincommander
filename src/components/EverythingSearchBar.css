@@ -73,8 +73,32 @@
   color: var(--accent);
 }
 
-.esb-input {
+/* Gmail-recipient field: chips, then the ghost, then the input flexing to fill.
+   The input keeps a 110px basis so a full chip row wraps it to the next line
+   instead of squeezing it to nothing, and the field scrolls past ~2 rows so a
+   long query can never push the card taller than the screen. */
+.esb-field {
+  display: flex;
   flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-height: 68px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.esb-field::-webkit-scrollbar {
+  width: 3px;
+}
+.esb-field::-webkit-scrollbar-thumb {
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+}
+
+.esb-input {
+  flex: 1 1 110px;
   background: transparent;
   border: none;
   outline: none;
@@ -145,34 +169,222 @@
   margin-right: 3px;
 }
 
-.esb-hint-sep {
-  flex: 1;
+/* ">assets" mode marker — the hint row is where the user is already looking
+   for "what will Enter do", so the mode belongs there rather than in the field. */
+.esb-hint-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
-.esb-case-toggle {
-  flex-shrink: 0;
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: 1px 6px;
-  font-size: 10.5px;
-  font-weight: 700;
-  font-family: var(--font-mono);
-  color: var(--text-mute);
+/* ── Chips ──────────────────────────────────────────────────────────── */
+
+.esb-chip-wrap {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.esb-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 240px;
+  padding: 0; /* the inner buttons carry the padding */
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.1s, border-color 0.1s, color 0.1s;
-  line-height: 1.4;
 }
 
-.esb-case-toggle:hover {
-  border-color: var(--border-strong);
+/* KT: .esb-chip-solo must NOT reset border/background. It shares its element
+   with .esb-chip (a one-action chip IS the pill), and a `border: none` here
+   would land later in the cascade and erase the pill it is meant to be. Only
+   .esb-chip-main / .esb-chip-x-btn are separate inner buttons, so only they
+   strip their own chrome. */
+.esb-chip-solo {
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 9px;
+}
+
+.esb-chip-main,
+.esb-chip-x-btn {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  border: none;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.esb-chip-main {
+  gap: 5px;
+  padding: 4px 4px 4px 9px;
+}
+
+.esb-chip-icon {
+  flex-shrink: 0;
+  opacity: 0.95;
+}
+
+.esb-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esb-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0.55;
+  transition: opacity 0.1s;
+}
+
+.esb-chip-solo .esb-chip-x {
+  margin-left: 1px;
+  margin-right: -2px;
+}
+
+.esb-chip-x-btn {
+  padding: 4px 8px 4px 3px;
+}
+
+.esb-chip-solo:hover,
+.esb-chip-main:hover,
+.esb-chip-x-btn:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.esb-chip-solo:hover .esb-chip-x,
+.esb-chip-x-btn:hover {
+  opacity: 1;
+}
+
+.esb-chip-solo:focus-visible,
+.esb-chip-main:focus-visible,
+.esb-chip-x-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A STRICT time chip removes rows; a soft one only re-ranks them. The fill goes
+   solid so the difference is legible across the row at a glance, and the label
+   text ("Only today" vs "Today first") carries the meaning without a legend. */
+.esb-chip-strict {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+  font-weight: 600;
+}
+
+.esb-chip-strict .esb-chip-x {
+  opacity: 0.75;
+}
+
+.esb-chip-strict .esb-chip-main:hover,
+.esb-chip-strict .esb-chip-x-btn:hover {
+  background: color-mix(in srgb, var(--surface) 22%, transparent);
+}
+
+/* ── Ghost suggestion ───────────────────────────────────────────────── */
+/* Must read as "not yet real" at a glance: dashed border, no fill, dimmed
+   text, and a Tab cap that names the one key that promotes it. */
+
+.esb-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 240px;
+  padding: 3px 5px 3px 8px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: var(--radius-full);
+  background: transparent;
   color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0.72;
+  cursor: pointer;
+  transition: opacity 0.12s, border-color 0.12s, color 0.12s;
 }
 
-.esb-case-toggle.active {
-  background: var(--accent-soft);
-  border-color: rgba(255, 122, 26, 0.35);
+.esb-ghost:hover,
+.esb-ghost:focus-visible {
+  opacity: 1;
+  border-color: var(--accent);
   color: var(--accent);
+  outline: none;
+}
+
+.esb-ghost-kbd {
+  padding: 1px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.3;
+}
+
+/* ── Section label + result count ───────────────────────────────────── */
+
+.esb-section-label {
+  padding: 6px 14px 3px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esb-count {
+  flex-shrink: 0;
+  padding: 5px 14px 6px;
+  border-top: 1px solid var(--border);
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Announcement-only: read by screen readers, never painted. */
+.esb-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* ── Error ──────────────────────────────────────────────────────────── */
@@ -343,10 +555,30 @@
 /* ── No results ─────────────────────────────────────────────────────── */
 
 .esb-no-results {
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 18px 16px;
   text-align: center;
   font-size: 13px;
   color: var(--text-mute);
+}
+
+.esb-no-results-title {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+/* The plain-English query, so an empty list explains ITSELF rather than
+   leaving the user to guess which chip was too tight. */
+.esb-no-results-sub {
+  max-width: 90%;
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Light mode overrides ───────────────────────────────────────────── */
@@ -396,20 +628,80 @@
   color: var(--text-mute);
 }
 
-.light .esb-case-toggle {
+.light .esb-hint-mode {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Chips / ghost — the accent-derived fills and borders resolve per theme via
+   color-mix, so light mode only has to restate what is hardcoded to a surface:
+   the scrollbar, the strict chip's knocked-out text, and the Tab cap. */
+.light .esb-field::-webkit-scrollbar-thumb {
+  background: var(--accent-soft);
+}
+
+.light .esb-chip {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.light .esb-chip-solo:hover,
+.light .esb-chip-main:hover,
+.light .esb-chip-x-btn:hover {
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+/* Daylight's accent is a mid green: knocked-out text on the raw accent lands at
+   ~4.0:1, under AA for 12px. Pulling the fill toward --text darkens it to ~5.5:1
+   without leaving the palette. The dark theme's orange is already ~7:1. */
+.light .esb-chip-strict {
+  border-color: color-mix(in srgb, var(--accent) 78%, var(--text));
+  background: color-mix(in srgb, var(--accent) 78%, var(--text));
+  color: var(--surface);
+}
+
+.light .esb-chip-strict .esb-chip-main:hover,
+.light .esb-chip-strict .esb-chip-x-btn:hover {
+  background: color-mix(in srgb, var(--surface) 26%, transparent);
+}
+
+.light .esb-ghost {
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  color: var(--text-dim);
+  opacity: 0.78;
+}
+
+.light .esb-ghost:hover,
+.light .esb-ghost:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  opacity: 1;
+}
+
+.light .esb-ghost-kbd {
   border-color: var(--border);
+  background: var(--surface-2);
   color: var(--text-mute);
 }
 
-.light .esb-case-toggle:hover {
-  border-color: var(--border-strong);
+.light .esb-section-label {
+  border-bottom-color: var(--border);
+  color: var(--text-mute);
+}
+
+.light .esb-count {
+  border-top-color: var(--border);
+  color: var(--text-mute);
+}
+
+.light .esb-no-results-title {
   color: var(--text-dim);
 }
 
-.light .esb-case-toggle.active {
-  background: var(--accent-soft);
-  border-color: rgba(5, 150, 105, 0.35);
-  color: var(--accent);
+.light .esb-no-results-sub {
+  color: var(--text-mute);
 }
 
 .light .esb-error {

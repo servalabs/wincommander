@@ -344,12 +344,27 @@ impl SearchEngine {
     }
 
     /// Run a search, blending keyword and (optional) semantic results.
+    ///
+    /// `query.roots` (when non-empty) scopes BOTH rungs to files under one of
+    /// those folders — `search_keyword` enforces it on the keyword side, and the
+    /// semantic side is re-filtered here.
     pub fn search(&self, query: &ContentQuery) -> Result<Vec<ContentHit>> {
         let kw_hits = self.ci.search_keyword(query)?;
         if query.keyword_only || self.semantic.is_none() {
             return Ok(kw_hits);
         }
-        let sem_hits = self.semantic.as_ref().unwrap().search(query, query.limit)?;
+        // KT: a SemanticBackend receives the whole ContentQuery (roots
+        // included) but nothing OBLIGES it to honour the scope — an
+        // implementation that ignores `roots` would blend out-of-scope docs
+        // straight back in and silently defeat the folder scope the keyword
+        // rung just enforced. Re-filter here so the scope can't be bypassed,
+        // and over-fetch first (the filter runs after the backend's own limit)
+        // so scoping doesn't truncate the semantic contribution to nothing.
+        let sem_fetch = index::scoped_fetch(query.limit, &query.roots);
+        let mut sem_hits = self.semantic.as_ref().unwrap().search(query, sem_fetch)?;
+        if !query.roots.is_empty() {
+            sem_hits.retain(|hit| index::path_in_roots(&hit.path, &query.roots));
+        }
         Ok(merge_hits(kw_hits, sem_hits, query.limit))
     }
 
@@ -657,5 +672,109 @@ mod tests {
 
         // Calling stop() a second time must not panic.
         engine.stop();
+    }
+
+    /// A semantic backend that ignores `query.roots` entirely (the realistic
+    /// failure mode) and records the limit it was asked for.
+    struct ScopeBlindSemantic {
+        hits: Vec<ContentHit>,
+        asked_limit: Mutex<usize>,
+    }
+
+    impl backend::SemanticBackend for ScopeBlindSemantic {
+        fn search(&self, _query: &ContentQuery, limit: usize) -> Result<Vec<ContentHit>> {
+            *self.asked_limit.lock().unwrap() = limit;
+            Ok(self.hits.clone())
+        }
+    }
+
+    fn sem_hit(doc_id: u64, path: &str) -> ContentHit {
+        ContentHit {
+            doc_id,
+            path: path.to_owned(),
+            name: "x.txt".into(),
+            ext: "txt".into(),
+            mtime: 0,
+            size: 0,
+            score: 1.0,
+            match_kind: types::MatchKind::Semantic,
+            snippet: String::new(),
+            author: String::new(),
+            doc_title: String::new(),
+            tags: String::new(),
+        }
+    }
+
+    /// Semantic hits must be re-filtered against `query.roots` — otherwise a
+    /// backend that ignores the scope silently reintroduces out-of-scope rows
+    /// that the keyword rung had excluded.
+    #[test]
+    fn hybrid_search_filters_semantic_hits_by_root_scope() {
+        let index_dir = TempDir::new().unwrap();
+        let config = make_config(index_dir.path().to_path_buf(), vec![]);
+        let mut engine = SearchEngine::open(config).unwrap();
+
+        let semantic = Arc::new(ScopeBlindSemantic {
+            hits: vec![
+                sem_hit(1, r"C:\projects\alpha\in.txt"),
+                sem_hit(2, r"C:\projects\alpha-extra\sibling.txt"),
+                sem_hit(3, r"C:\projects\beta\out.txt"),
+            ],
+            asked_limit: Mutex::new(0),
+        });
+        engine.attach_semantic(semantic.clone());
+
+        let q = ContentQuery {
+            terms: "anything".into(),
+            roots: vec![std::path::PathBuf::from(r"C:\projects\alpha")],
+            limit: 10,
+            offset: 0,
+            keyword_only: false, // blend in the semantic rung
+        };
+        let hits = engine.search(&q).unwrap();
+        let ids: Vec<u64> = hits.iter().map(|h| h.doc_id).collect();
+        assert_eq!(
+            ids,
+            vec![1],
+            "only the in-scope semantic hit may survive (the sibling-prefix folder must not leak): {:?}",
+            hits.iter().map(|h| h.path.as_str()).collect::<Vec<_>>()
+        );
+        // And the backend was over-fetched, since the scope is applied after it.
+        assert!(
+            *semantic.asked_limit.lock().unwrap() > q.limit,
+            "a scoped hybrid search must over-fetch the semantic rung"
+        );
+    }
+
+    /// The unscoped hybrid path must be untouched: no filtering, no over-fetch.
+    #[test]
+    fn hybrid_search_unscoped_keeps_every_semantic_hit() {
+        let index_dir = TempDir::new().unwrap();
+        let config = make_config(index_dir.path().to_path_buf(), vec![]);
+        let mut engine = SearchEngine::open(config).unwrap();
+
+        let semantic = Arc::new(ScopeBlindSemantic {
+            hits: vec![
+                sem_hit(1, r"C:\projects\alpha\in.txt"),
+                sem_hit(2, r"C:\projects\beta\out.txt"),
+            ],
+            asked_limit: Mutex::new(0),
+        });
+        engine.attach_semantic(semantic.clone());
+
+        let q = ContentQuery {
+            terms: "anything".into(),
+            roots: vec![],
+            limit: 10,
+            offset: 0,
+            keyword_only: false,
+        };
+        let hits = engine.search(&q).unwrap();
+        assert_eq!(hits.len(), 2, "empty roots must not filter anything");
+        assert_eq!(
+            *semantic.asked_limit.lock().unwrap(),
+            q.limit,
+            "unscoped hybrid search must ask for exactly `limit` as before"
+        );
     }
 }

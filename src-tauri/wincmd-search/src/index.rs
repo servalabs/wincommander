@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 use std::ops::Bound;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tantivy::{
     collector::TopDocs,
     doc,
@@ -229,6 +229,11 @@ impl ContentIndex {
     /// still finds `XXXXXXXX2982.pdf` even though no token boundary exposes
     /// it. Those hits are appended after the BM25 hits with
     /// `MatchKind::NameSubstring`, filtered post-hoc against the same filters.
+    ///
+    /// A non-empty `query.roots` scopes every rung to files under one of those
+    /// folders (`path_in_roots`); empty `roots` searches the whole index. That
+    /// scope is a POST-HOC filter, not a tantivy clause, so `fetch` is
+    /// over-fetched via `scoped_fetch` — see both helpers for why.
     pub fn search_keyword(&self, query: &ContentQuery) -> Result<Vec<ContentHit>> {
         let searcher = self.reader.searcher();
         let (text_terms, filters) = filters::parse_filters(&query.terms);
@@ -245,7 +250,7 @@ impl ContentIndex {
                 self.f_doc_title,
             ],
         );
-        let fetch = query.limit + query.offset;
+        let fetch = scoped_fetch(query.limit + query.offset, &query.roots);
 
         // `text_query` is the TEXT-only sub-query — used both for scoring
         // (wrapped with filters via `filtered_query`) and, unwrapped, as the
@@ -343,8 +348,26 @@ impl ContentIndex {
             None => None,
         };
 
-        for (score, addr) in top_docs.into_iter().skip(query.offset) {
+        // KT: the root scope is applied HERE, not by `.skip(query.offset)` on
+        // the raw ranking — `offset` must count only docs that SURVIVE the
+        // scope, or page 2 of a scoped search would page through out-of-scope
+        // docs and come back empty. Stored-doc retrieval moved above the skip
+        // for the same reason (the path lives in the stored doc); snippets are
+        // still only built for the rows actually returned.
+        let mut skipped = 0usize;
+        for (score, addr) in top_docs {
+            if hits.len() >= query.limit {
+                break;
+            }
             let doc: TantivyDocument = searcher.doc(addr)?;
+            let path = owned_str(&doc, self.f_path);
+            if !path_in_roots(&path, &query.roots) {
+                continue;
+            }
+            if skipped < query.offset {
+                skipped += 1;
+                continue;
+            }
             let snippet = match &snippet_gen {
                 Some(sg) => {
                     let mut snippet = sg.snippet_from_doc(&doc);
@@ -368,7 +391,7 @@ impl ContentIndex {
             seen.insert(doc_id);
             hits.push(ContentHit {
                 doc_id,
-                path: owned_str(&doc, self.f_path),
+                path,
                 name: owned_str(&doc, self.f_name),
                 ext: owned_str(&doc, self.f_ext),
                 mtime: owned_u64(&doc, self.f_mtime),
@@ -391,7 +414,7 @@ impl ContentIndex {
                 &searcher,
                 &text_terms,
                 &filters,
-                query.limit,
+                query,
                 &mut seen,
                 &mut hits,
             );
@@ -486,17 +509,23 @@ impl ContentIndex {
 
     /// Substring rung: for a single-word remaining-text query, regex-scan the
     /// `name_lc` term dictionary for `.*<needle>.*` and append unseen docs
-    /// that also satisfy `filters`. Best-effort — any failure degrades to "no
-    /// extra hits", never an Err.
+    /// that also satisfy `filters` and `query.roots`. Best-effort — any failure
+    /// degrades to "no extra hits", never an Err.
+    ///
+    /// Takes the whole `query` (not just its `limit`) because the root scope
+    /// applies to this rung too: filtering AFTER a `limit`-sized regex fetch
+    /// would silently drop scoped hits that ranked below out-of-scope ones, so
+    /// the fetch is widened by `scoped_fetch` exactly like the BM25 rung's.
     fn append_name_substring_hits(
         &self,
         searcher: &Searcher,
         text_terms: &str,
         filters: &QueryFilters,
-        limit: usize,
+        query: &ContentQuery,
         seen: &mut HashSet<DocId>,
         hits: &mut Vec<ContentHit>,
     ) {
+        let limit = query.limit;
         let raw_needle = text_terms.trim();
         if raw_needle.len() < 2
             || raw_needle.len() > 64
@@ -516,10 +545,14 @@ impl ContentIndex {
         let Ok(rq) = RegexQuery::from_pattern(&pattern, self.f_name_lc) else {
             return;
         };
-        let Ok(top) = searcher.search(&rq, &TopDocs::with_limit(limit).order_by_score()) else {
+        let fetch = scoped_fetch(limit, &query.roots);
+        let Ok(top) = searcher.search(&rq, &TopDocs::with_limit(fetch).order_by_score()) else {
             return;
         };
         for (score, addr) in top {
+            if hits.len() >= limit {
+                break;
+            }
             let Ok(doc) = searcher.doc::<TantivyDocument>(addr) else {
                 continue;
             };
@@ -535,11 +568,15 @@ impl ContentIndex {
             if !hit_passes_filters(filters, &ext, mtime, size) {
                 continue;
             }
+            let path = owned_str(&doc, self.f_path);
+            if !path_in_roots(&path, &query.roots) {
+                continue;
+            }
             seen.insert(doc_id);
             let snippet = self.fallback_snippet(&doc);
             hits.push(ContentHit {
                 doc_id,
-                path: owned_str(&doc, self.f_path),
+                path,
                 name: owned_str(&doc, self.f_name),
                 ext,
                 mtime,
@@ -578,6 +615,92 @@ impl ContentIndex {
             .map(|r| r.searcher().num_docs())
             .unwrap_or(0)
     }
+}
+
+// ── Root scoping ──────────────────────────────────────────────────────────────
+
+/// Over-fetch factor applied when a root scope will be enforced post-hoc.
+/// A scope like "just this one folder" inside a 200k-doc index can easily have
+/// every one of the top-`limit` BM25 hits land outside it, so asking tantivy
+/// for exactly `limit` docs and THEN filtering returns a near-empty page even
+/// though plenty of in-scope matches exist further down the ranking.
+const ROOT_SCOPE_OVERFETCH: usize = 20;
+
+/// Ceiling on the over-fetch so a pathological query can't pull most of the
+/// index into a TopDocs heap. A scope narrow enough that 20× `limit` docs
+/// still misses it will under-report rather than stall the UI.
+const ROOT_SCOPE_MAX_FETCH: usize = 5_000;
+
+/// How many docs to ask tantivy for, given the caller's own `base`
+/// (`limit + offset`) and the root scope that will be applied afterwards.
+///
+/// Unscoped searches fetch exactly `base` — byte-for-byte the pre-scoping
+/// behaviour. Scoped searches widen the fetch (see `ROOT_SCOPE_OVERFETCH`) and
+/// never shrink below `base`.
+///
+/// KT: the result is clamped to at least 1 — `TopDocs::with_limit(0)` panics,
+/// and a `limit: 0` query used to reach it.
+pub fn scoped_fetch(base: usize, roots: &[PathBuf]) -> usize {
+    if roots.is_empty() {
+        return base.max(1);
+    }
+    base.saturating_mul(ROOT_SCOPE_OVERFETCH)
+        .min(ROOT_SCOPE_MAX_FETCH)
+        .max(base)
+        .max(1)
+}
+
+/// Whether an indexed `path` is one of `roots` or lives underneath one.
+///
+/// Empty `roots` means "unscoped" and always matches, so callers can pass the
+/// query's roots through unconditionally.
+///
+/// Matching is deliberately NOT `str::starts_with` on the raw strings:
+///
+/// * Case-insensitive — Windows paths are, and the stored path keeps whatever
+///   casing the crawl saw while the scope comes from the UI's current folder.
+/// * Component-anchored — `C:\Foo` must match `C:\Foo\bar.txt` but NOT
+///   `C:\Foobar\x.txt` or `C:\Foo.txt`. KT: a plain substring/prefix scope is
+///   exactly how the Everything backend leaked results from `wincommander`
+///   into `wincommander-pro`; do not reintroduce it here.
+/// * Separator- and trailing-separator-agnostic (`C:/Foo`, `C:\Foo\`).
+pub fn path_in_roots(path: &str, roots: &[PathBuf]) -> bool {
+    if roots.is_empty() {
+        return true;
+    }
+    let candidate = norm_scope_path(path);
+    roots.iter().any(|root| {
+        let root = norm_scope_path(&root.to_string_lossy());
+        // A root that normalises away (empty string, or nothing but
+        // separators) is treated as matching NOTHING rather than everything —
+        // a degenerate scope must never silently widen into "whole index".
+        if root.is_empty() || !candidate.starts_with(&root) {
+            return false;
+        }
+        // Equal length = the root itself; otherwise the next character must be
+        // a separator, which is what makes this component- rather than
+        // substring-anchored.
+        candidate.len() == root.len() || candidate.as_bytes()[root.len()] == b'\\'
+    })
+}
+
+/// Canonical form for scope comparison: lowercased, forward slashes folded to
+/// backslashes, any `\\?\` verbatim prefix removed (`\\?\UNC\srv\s` becomes
+/// `\\srv\s`), and trailing separators trimmed.
+///
+/// The verbatim strip matters because `Path::canonicalize` hands back `\\?\`
+/// paths on Windows: a scope derived from a canonicalized folder would
+/// otherwise match none of the crawler's plainly-spelled stored paths.
+fn norm_scope_path(raw: &str) -> String {
+    let lowered = raw.to_lowercase().replace('/', "\\");
+    let body = match lowered.strip_prefix(r"\\?\") {
+        Some(rest) => match rest.strip_prefix("unc\\") {
+            Some(share) => format!(r"\\{share}"),
+            None => rest.to_owned(),
+        },
+        None => lowered,
+    };
+    body.trim_end_matches('\\').to_owned()
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -722,6 +845,19 @@ mod tests {
             ext: ext.to_owned(),
             mtime,
             size,
+        }
+    }
+
+    /// Like `make_meta` but with a caller-chosen parent directory — the stored
+    /// `path` field is what root scoping matches against.
+    fn make_meta_in(doc_id: u64, dir: &str, name: &str) -> FileMeta {
+        FileMeta {
+            doc_id,
+            path: std::path::PathBuf::from(format!("{dir}\\{name}")),
+            name: name.to_owned(),
+            ext: "txt".into(),
+            mtime: 1_700_000_000,
+            size: 64,
         }
     }
 
@@ -1821,6 +1957,394 @@ mod tests {
         assert!(
             scores.iter().all(|&s| (s - first).abs() < 1e-6),
             "zero-boosted filter clauses must not perturb ranking via their own IDF: {scores:?}"
+        );
+    }
+
+    // ── Root scoping: path_in_roots ─────────────────────────────────────────
+
+    fn roots(list: &[&str]) -> Vec<PathBuf> {
+        list.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn empty_roots_is_unscoped() {
+        // The whole-index default must stay reachable — every caller that has
+        // no folder scope passes an empty vec.
+        assert!(path_in_roots(r"C:\anywhere\at\all.txt", &[]));
+        assert!(path_in_roots("", &[]));
+    }
+
+    #[test]
+    fn root_matches_itself_and_nested_paths() {
+        let r = roots(&[r"C:\Foo"]);
+        assert!(path_in_roots(r"C:\Foo", &r), "the root itself is in scope");
+        assert!(path_in_roots(r"C:\Foo\bar.txt", &r), "direct child");
+        assert!(
+            path_in_roots(r"C:\Foo\deep\deeper\bar.txt", &r),
+            "arbitrarily nested descendant"
+        );
+    }
+
+    #[test]
+    fn sibling_prefix_folder_is_not_in_scope() {
+        // The exact bug class found in the Everything backend: a substring
+        // scope let `wincommander` leak into `wincommander-pro`.
+        let r = roots(&[r"C:\Foo"]);
+        assert!(
+            !path_in_roots(r"C:\Foobar\x.txt", &r),
+            "C:\\Foobar is a SIBLING of C:\\Foo, not a child"
+        );
+        assert!(
+            !path_in_roots(r"C:\Foo.txt", &r),
+            "a file whose name merely starts with the root is not under it"
+        );
+        let r = roots(&[r"C:\repos\wincommander"]);
+        assert!(!path_in_roots(r"C:\repos\wincommander-pro\src\a.rs", &r));
+        assert!(path_in_roots(r"C:\repos\wincommander\src\a.rs", &r));
+    }
+
+    #[test]
+    fn scope_matching_is_case_insensitive() {
+        // Windows paths are case-insensitive; the stored path keeps the crawl's
+        // casing while the scope comes from the UI.
+        let r = roots(&[r"c:\foo\bar"]);
+        assert!(path_in_roots(r"C:\FOO\BAR\Baz.TXT", &r));
+        let r = roots(&[r"C:\Users\Admin\Documents"]);
+        assert!(path_in_roots(r"c:\users\admin\documents\notes.txt", &r));
+    }
+
+    #[test]
+    fn trailing_separator_on_root_is_tolerated() {
+        for root in [r"C:\Foo\", r"C:\Foo\\", "C:/Foo/"] {
+            let r = roots(&[root]);
+            assert!(
+                path_in_roots(r"C:\Foo\bar.txt", &r),
+                "root {root:?} must still scope to C:\\Foo\\bar.txt"
+            );
+            assert!(
+                !path_in_roots(r"C:\Foobar\x.txt", &r),
+                "root {root:?} must not leak into the sibling folder"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_separators_match_on_both_sides() {
+        let r = roots(&["C:/Foo/Bar"]);
+        assert!(path_in_roots(r"C:\Foo\Bar\baz.txt", &r));
+        let r = roots(&[r"C:\Foo\Bar"]);
+        assert!(path_in_roots("C:/Foo/Bar/baz.txt", &r));
+        assert!(path_in_roots(r"C:/Foo\Bar/baz.txt", &r));
+    }
+
+    #[test]
+    fn verbatim_and_unc_roots_normalize() {
+        // `Path::canonicalize` returns `\\?\`-prefixed paths; a scope derived
+        // from one must still match the crawler's plainly-spelled stored paths.
+        let r = roots(&[r"\\?\C:\Foo"]);
+        assert!(path_in_roots(r"C:\Foo\bar.txt", &r));
+        let r = roots(&[r"C:\Foo"]);
+        assert!(path_in_roots(r"\\?\C:\Foo\bar.txt", &r));
+        // UNC verbatim collapses back to the \\server\share spelling.
+        let r = roots(&[r"\\?\UNC\srv\share\dir"]);
+        assert!(path_in_roots(r"\\srv\share\dir\file.txt", &r));
+        assert!(!path_in_roots(r"\\srv\share\dir2\file.txt", &r));
+    }
+
+    #[test]
+    fn unrelated_paths_are_out_of_scope() {
+        let r = roots(&[r"C:\Foo\Bar"]);
+        assert!(!path_in_roots(r"D:\Foo\Bar\x.txt", &r), "different drive");
+        assert!(
+            !path_in_roots(r"C:\Foo\x.txt", &r),
+            "the PARENT of the root is not inside it"
+        );
+        assert!(!path_in_roots(r"C:\Other\Bar\x.txt", &r));
+    }
+
+    #[test]
+    fn multiple_roots_are_an_or() {
+        let r = roots(&[r"C:\Foo", r"D:\Work\Reports"]);
+        assert!(path_in_roots(r"C:\Foo\a.txt", &r), "matches the first root");
+        assert!(
+            path_in_roots(r"D:\Work\Reports\q3\b.pdf", &r),
+            "matches the second root"
+        );
+        assert!(
+            !path_in_roots(r"D:\Work\Other\b.pdf", &r),
+            "matching NO root is out of scope"
+        );
+    }
+
+    #[test]
+    fn degenerate_root_matches_nothing_rather_than_everything() {
+        // A root that normalises to an empty string must not silently widen
+        // back into "whole index" — that would be a scope leak.
+        for root in ["", "\\", "/", "//"] {
+            let r = roots(&[root]);
+            assert!(
+                !path_in_roots(r"C:\Foo\bar.txt", &r),
+                "degenerate root {root:?} must not match everything"
+            );
+        }
+    }
+
+    // ── Root scoping: scoped_fetch ──────────────────────────────────────────
+
+    #[test]
+    fn scoped_fetch_only_overfetches_when_scoped() {
+        // Unscoped must be byte-for-byte the old behaviour.
+        assert_eq!(scoped_fetch(50, &[]), 50);
+        assert_eq!(scoped_fetch(1, &[]), 1);
+        // Scoped over-fetches, capped, and never shrinks below `base`.
+        let r = roots(&[r"C:\Foo"]);
+        assert_eq!(scoped_fetch(50, &r), 50 * ROOT_SCOPE_OVERFETCH);
+        assert_eq!(
+            scoped_fetch(100_000, &r),
+            100_000,
+            "cap must not shrink base"
+        );
+        assert_eq!(scoped_fetch(1_000, &r), ROOT_SCOPE_MAX_FETCH);
+        // TopDocs::with_limit(0) panics — never hand it a zero.
+        assert_eq!(scoped_fetch(0, &[]), 1);
+        assert_eq!(scoped_fetch(0, &r), 1);
+    }
+
+    // ── Root scoping through search_keyword ─────────────────────────────────
+
+    fn scoped_query(terms: &str, scope: &[&str], limit: usize) -> ContentQuery {
+        ContentQuery {
+            terms: terms.to_owned(),
+            roots: roots(scope),
+            limit,
+            offset: 0,
+            keyword_only: true,
+        }
+    }
+
+    /// Index four docs across `alpha`, the sibling-prefix `alpha-extra`, `beta`,
+    /// and a nested folder under `alpha`.
+    fn index_scope_corpus(ci: &ContentIndex) {
+        let mut w = ci.writer().unwrap();
+        for (id, dir, name) in [
+            (1, r"C:\projects\alpha", "a.txt"),
+            (2, r"C:\projects\alpha-extra", "b.txt"),
+            (3, r"C:\projects\beta", "c.txt"),
+            (4, r"C:\projects\alpha\sub\deep", "d.txt"),
+        ] {
+            ci.upsert(
+                &mut w,
+                &make_meta_in(id, dir, name),
+                "T",
+                "shared_scope_marker in every doc",
+                &DocProps::default(),
+            )
+            .unwrap();
+        }
+        ci.commit(&mut w).unwrap();
+    }
+
+    #[test]
+    fn keyword_search_honours_root_scope() {
+        let dir = TempDir::new().unwrap();
+        let ci = ContentIndex::open_or_create(dir.path()).unwrap();
+        index_scope_corpus(&ci);
+
+        // Unscoped — the pre-existing behaviour, all four docs.
+        let all = ci
+            .search_keyword(&make_query("shared_scope_marker"))
+            .unwrap();
+        assert_eq!(all.len(), 4, "empty roots must still search everything");
+
+        // Scoped to C:\projects\alpha — the nested doc is in, the
+        // sibling-prefix folder and the unrelated folder are out.
+        let hits = ci
+            .search_keyword(&scoped_query(
+                "shared_scope_marker",
+                &[r"C:\projects\alpha"],
+                10,
+            ))
+            .unwrap();
+        let mut ids: Vec<u64> = hits.iter().map(|h| h.doc_id).collect();
+        ids.sort_unstable();
+        assert_eq!(
+            ids,
+            vec![1, 4],
+            "scope must admit the folder + descendants only: {:?}",
+            hits.iter().map(|h| h.path.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn keyword_search_scope_accepts_mixed_and_trailing_separators() {
+        let dir = TempDir::new().unwrap();
+        let ci = ContentIndex::open_or_create(dir.path()).unwrap();
+        index_scope_corpus(&ci);
+
+        for scope in [
+            r"C:\projects\alpha\",
+            "C:/projects/alpha",
+            "c:/PROJECTS/Alpha/",
+        ] {
+            let hits = ci
+                .search_keyword(&scoped_query("shared_scope_marker", &[scope], 10))
+                .unwrap();
+            assert_eq!(hits.len(), 2, "scope {scope:?} should match alpha + nested");
+        }
+    }
+
+    #[test]
+    fn keyword_search_multiple_roots_union() {
+        let dir = TempDir::new().unwrap();
+        let ci = ContentIndex::open_or_create(dir.path()).unwrap();
+        index_scope_corpus(&ci);
+
+        let hits = ci
+            .search_keyword(&scoped_query(
+                "shared_scope_marker",
+                &[r"C:\projects\beta", r"C:\projects\alpha-extra"],
+                10,
+            ))
+            .unwrap();
+        let mut ids: Vec<u64> = hits.iter().map(|h| h.doc_id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn substring_rung_hits_honour_root_scope() {
+        // "982" crosses no token boundary, so only the NameSubstring rung finds
+        // these — that rung must respect the scope too, or the "Inside files"
+        // section would show out-of-scope rows.
+        let dir = TempDir::new().unwrap();
+        let ci = ContentIndex::open_or_create(dir.path()).unwrap();
+        let mut w = ci.writer().unwrap();
+        ci.upsert(
+            &mut w,
+            &make_meta_in(1, r"C:\projects\alpha", "XXXXXXXX2982.txt"),
+            "T",
+            "body text",
+            &DocProps::default(),
+        )
+        .unwrap();
+        ci.upsert(
+            &mut w,
+            &make_meta_in(2, r"C:\projects\alpha-extra", "XXXXXXXX2982.txt"),
+            "T",
+            "body text",
+            &DocProps::default(),
+        )
+        .unwrap();
+        ci.commit(&mut w).unwrap();
+
+        let unscoped = ci.search_keyword(&make_query("982")).unwrap();
+        assert_eq!(unscoped.len(), 2, "both docs match the substring rung");
+
+        let hits = ci
+            .search_keyword(&scoped_query("982", &[r"C:\projects\alpha"], 10))
+            .unwrap();
+        assert_eq!(hits.len(), 1, "scope must drop the sibling-prefix folder");
+        assert_eq!(hits[0].doc_id, 1);
+        assert_eq!(hits[0].match_kind, MatchKind::NameSubstring);
+    }
+
+    #[test]
+    fn scoped_search_overfetches_so_low_ranked_in_scope_hits_survive() {
+        // Regression guard for the "filter after the limit" bug class: the ONE
+        // in-scope doc scores below every out-of-scope doc (long body → small
+        // BM25 contribution), so fetching exactly `limit` docs and filtering
+        // afterwards would return an empty page.
+        let dir = TempDir::new().unwrap();
+        let ci = ContentIndex::open_or_create(dir.path()).unwrap();
+        let mut w = ci.writer().unwrap();
+        for i in 0..60u64 {
+            ci.upsert(
+                &mut w,
+                &make_meta_in(i, r"C:\out", &format!("o{i}.txt")),
+                "T",
+                "overfetchmarker",
+                &DocProps::default(),
+            )
+            .unwrap();
+        }
+        let long_body = format!("{} overfetchmarker", "filler ".repeat(400));
+        ci.upsert(
+            &mut w,
+            &make_meta_in(999, r"C:\in", "deep.txt"),
+            "T",
+            &long_body,
+            &DocProps::default(),
+        )
+        .unwrap();
+        ci.commit(&mut w).unwrap();
+
+        // Precondition: the in-scope doc really is below the unscoped top 5.
+        let mut top5 = make_query("overfetchmarker");
+        top5.limit = 5;
+        let top5 = ci.search_keyword(&top5).unwrap();
+        assert_eq!(top5.len(), 5);
+        assert!(
+            !top5.iter().any(|h| h.doc_id == 999),
+            "test is only meaningful if the in-scope doc ranks below the cut"
+        );
+
+        let hits = ci
+            .search_keyword(&scoped_query("overfetchmarker", &[r"C:\in"], 5))
+            .unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "scoping must not truncate the result set to near-zero: {hits:?}"
+        );
+        assert_eq!(hits[0].doc_id, 999);
+    }
+
+    #[test]
+    fn scoped_offset_pages_through_in_scope_hits_only() {
+        // `offset` must count rows that SURVIVE the scope; if it skipped raw
+        // ranking positions instead, page 2 of a scoped search would come back
+        // empty while in-scope matches were still pending.
+        let dir = TempDir::new().unwrap();
+        let ci = ContentIndex::open_or_create(dir.path()).unwrap();
+        let mut w = ci.writer().unwrap();
+        for i in 0..20u64 {
+            ci.upsert(
+                &mut w,
+                &make_meta_in(i, r"C:\out", &format!("o{i}.txt")),
+                "T",
+                "pagemarker body",
+                &DocProps::default(),
+            )
+            .unwrap();
+        }
+        for i in 100..103u64 {
+            ci.upsert(
+                &mut w,
+                &make_meta_in(i, r"C:\in", &format!("i{i}.txt")),
+                "T",
+                "pagemarker body",
+                &DocProps::default(),
+            )
+            .unwrap();
+        }
+        ci.commit(&mut w).unwrap();
+
+        let page1 = ci
+            .search_keyword(&scoped_query("pagemarker", &[r"C:\in"], 2))
+            .unwrap();
+        assert_eq!(page1.len(), 2, "first scoped page must be full");
+
+        let mut q2 = scoped_query("pagemarker", &[r"C:\in"], 2);
+        q2.offset = 2;
+        let page2 = ci.search_keyword(&q2).unwrap();
+        assert_eq!(page2.len(), 1, "third in-scope doc must appear on page 2");
+
+        let mut ids: Vec<u64> = page1.iter().chain(page2.iter()).map(|h| h.doc_id).collect();
+        ids.sort_unstable();
+        assert_eq!(
+            ids,
+            vec![100, 101, 102],
+            "the two pages must partition the in-scope docs with no overlap"
         );
     }
 }

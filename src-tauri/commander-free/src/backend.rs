@@ -5902,16 +5902,350 @@ fn is_app_like_path(path: &str) -> bool {
     )
 }
 
+// ── es.exe argv construction ─────────────────────────────────────────────────
+//
+// KT: es.exe (v1.1.0.37) joins its non-flag argv entries with spaces to build
+// the query, but a SINGLE argv entry that contains a space is read as a quoted
+// phrase instead. So handing it a whole multi-filter query as one argument
+// silently returns nothing — no error, no rows:
+//     es -no-header -csv "ext:md dm:thisyear"   -> 0 rows   (one argv entry)
+//     es -no-header -csv ext:md dm:thisyear     -> 3 rows   (two argv entries)
+// Every term must therefore be its own argv entry. That is what
+// tokenize_es_query below produces, and every es.exe invocation in this module
+// goes through it.
+
+/// Split a raw Everything query into one argv entry per term.
+///
+/// A double-quoted run stays a single token and KEEPS its quotes — Everything
+/// needs them to do a phrase search, and the quotes are content as far as the
+/// Win32 argv we hand it is concerned. An unterminated quote swallows the rest
+/// of the string and gets its closing quote appended. Empty tokens are never
+/// emitted, so an empty query yields an empty vec.
+fn tokenize_es_query(raw: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in raw.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push('"');
+            }
+            c if c.is_ascii_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if in_quotes {
+        // Unterminated quote: close it so es.exe sees a well-formed phrase.
+        current.push('"');
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Sort fields es.exe accepts after `-sort`. Each pairs with `-ascending` or
+/// `-descending` (e.g. `dm-descending`).
+const ES_SORT_FIELDS: [&str; 6] = ["name", "path", "size", "extension", "dm", "dc"];
+
+/// Reject query tokens that es.exe would read as FLAGS rather than search terms.
+///
+/// KT: this is the flag-injection guard for the tokenizer fix above. Query text
+/// and the pre-split `tokens` param both come from the renderer, and es.exe has
+/// no `--` end-of-flags separator — so a term like `-instance` or `/regex`
+/// stops being a search term and becomes a switch that changes which Everything
+/// instance we talk to or how the whole run behaves. Before the tokenizer fix
+/// the whole query was one argv entry, which accidentally made this impossible;
+/// splitting it opens the hole, so it gets closed here. Users who genuinely
+/// want to search for a leading dash can quote it (`"-final"`) — the tokenizer
+/// keeps those quotes, so the token starts with `"` and es.exe phrase-matches it.
+fn validate_es_tokens(tokens: &[String]) -> Result<(), String> {
+    for token in tokens {
+        if token.trim().is_empty() {
+            return Err("Invalid search term: empty.".to_string());
+        }
+        if token.starts_with('-') || token.starts_with('/') {
+            return Err(format!(
+                "Invalid search term '{token}': terms cannot start with '-' or '/'. Wrap it in quotes to search for it literally."
+            ));
+        }
+        if token.chars().any(char::is_control) {
+            return Err(format!(
+                "Invalid search term '{token}': contains a NUL, newline or other control character."
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Explicit `tokens` win over `query`; otherwise the raw query is tokenized
+/// here, which is how existing callers get the argv fix for free.
+fn resolve_es_tokens(query: &str, tokens: Option<Vec<String>>) -> Result<Vec<String>, String> {
+    let resolved = match tokens {
+        Some(supplied) if !supplied.is_empty() => supplied,
+        _ => tokenize_es_query(query),
+    };
+    validate_es_tokens(&resolved)?;
+    Ok(resolved)
+}
+
+/// Validate a `-sort` key against a strict allowlist and normalise its case.
+/// `None` means "no sort"; an empty string is a caller bug, not a no-op.
+fn validate_es_sort(sort: &str) -> Result<String, String> {
+    let normalized = sort.trim().to_ascii_lowercase();
+    let invalid = || {
+        format!(
+            "Invalid sort '{sort}': expected one of {} with -ascending or -descending.",
+            ES_SORT_FIELDS.join("/")
+        )
+    };
+    let Some((field, direction)) = normalized.rsplit_once('-') else {
+        return Err(invalid());
+    };
+    if !matches!(direction, "ascending" | "descending") || !ES_SORT_FIELDS.contains(&field) {
+        return Err(invalid());
+    }
+    Ok(normalized)
+}
+
+/// Validate a folder scope for the `-path` flag.
+///
+/// KT: `-path <folder>` is the only correct way to scope a search. The `path:`
+/// query token substring-matches (searching under D:\GitHub\wincommander also
+/// returns hits from the sibling wincommander-pro) and breaks on paths with
+/// spaces. As a FLAG value the folder is its own argv entry, so spaces are fine
+/// — but a leading `-`/`/` would turn it into another flag, and an embedded
+/// quote would let it break out of its own argv entry.
+fn validate_es_scope_path(scope: &str) -> Result<String, String> {
+    let trimmed = scope.trim();
+    if trimmed.is_empty() {
+        return Err("Search folder is empty.".to_string());
+    }
+    if trimmed.starts_with('-') || trimmed.starts_with('/') {
+        return Err(format!(
+            "Invalid search folder '{scope}': cannot start with '-' or '/'."
+        ));
+    }
+    if trimmed.contains('"') || trimmed.chars().any(char::is_control) {
+        return Err(format!(
+            "Invalid search folder '{scope}': quotes and control characters are not allowed."
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Build the argv for a result-listing es.exe run.
+///
+/// KT: the first attempt and the daemon-restart retry both call this. The
+/// original single-argv bug survived for so long because the arg list was
+/// written out twice and fixing one copy would have left the other broken.
+fn build_es_search_args(
+    limit: u32,
+    sort: Option<&str>,
+    scope_path: Option<&str>,
+    tokens: &[String],
+) -> Vec<String> {
+    // Flags verified against ES 1.1.0.x CLI help output. -no-header suppresses
+    // the "Name,Path,Size,Date Modified" row so we don't strip it by hand.
+    let mut args: Vec<String> = vec![
+        "-n".to_string(),
+        limit.to_string(),
+        "-name".to_string(),
+        "-path-column".to_string(),
+        "-size".to_string(),
+        "-dm".to_string(),
+        "-date-format".to_string(),
+        "1".to_string(),
+        "-no-header".to_string(),
+        "-csv".to_string(),
+    ];
+    if let Some(sort) = sort {
+        args.push("-sort".to_string());
+        args.push(sort.to_string());
+    }
+    if let Some(scope) = scope_path {
+        args.push("-path".to_string());
+        args.push(scope.to_string());
+    }
+    args.extend(tokens.iter().cloned());
+    args
+}
+
+/// Build the argv for a count-only es.exe run.
+fn build_es_count_args(scope_path: Option<&str>, tokens: &[String]) -> Vec<String> {
+    let mut args: Vec<String> = vec!["-get-result-count".to_string()];
+    if let Some(scope) = scope_path {
+        args.push("-path".to_string());
+        args.push(scope.to_string());
+    }
+    args.extend(tokens.iter().cloned());
+    args
+}
+
+/// Parse the integer printed by `-get-result-count`.
+fn parse_es_count(stdout: &[u8]) -> Result<u64, String> {
+    let raw = String::from_utf8_lossy(stdout);
+    raw.lines()
+        .map(|line| line.trim().trim_start_matches('\u{feff}').trim())
+        .filter(|line| !line.is_empty())
+        // Tolerate a label prefix ("Result count: 42") by taking the last field.
+        .find_map(|line| line.split_whitespace().next_back()?.parse::<u64>().ok())
+        .ok_or_else(|| format!("Search returned an unreadable count: {}", raw.trim()))
+}
+
+// KT: hard timeouts, because an un-indexed operator makes es.exe abandon the
+// index and walk the disk live — `attrib:h` measured over 100 SECONDS on this
+// machine. std::process::Command::output() waits for all of it with no way out,
+// which froze the search overlay. Bounded here so a bad filter degrades into an
+// error message instead of a hang.
+const ES_SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6);
+const ES_COUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+const ES_TIMEOUT_MSG: &str =
+    "Search took too long — that filter isn't indexed. Try a narrower query.";
+
+/// Run es.exe once with a hard timeout, capturing stdout/stderr.
+async fn run_es_once(
+    es_exe: &str,
+    args: &[String],
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    let mut cmd = tokio::process::Command::new(es_exe);
+    cmd.args(args);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    // KT: kill_on_drop is what gives the timeout teeth. wait_with_output()
+    // consumes the Child, so once the future is in flight the only handle we
+    // have on the process is dropping that future — which then kills es.exe
+    // instead of leaving a disk-scanning orphan behind.
+    cmd.kill_on_drop(true);
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to run search: {e}"))?;
+    // Draining both pipes via wait_with_output matters: a large result set can
+    // fill the stdout pipe and wedge es.exe if we only waited on exit.
+    let finished = tokio::time::timeout(timeout, child.wait_with_output()).await;
+    match finished {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(e)) => Err(format!("Failed to run search: {e}")),
+        Err(_) => Err(ES_TIMEOUT_MSG.to_string()),
+    }
+}
+
+/// Run es.exe, auto-starting the Everything daemon and retrying once if the IPC
+/// endpoint isn't there yet. Returns raw stdout bytes on success.
+async fn run_es_with_daemon_retry(
+    es_exe: &str,
+    args: &[String],
+    timeout: std::time::Duration,
+) -> Result<Vec<u8>, String> {
+    let output = run_es_once(es_exe, args, timeout).await?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+
+    // Non-zero exit usually means "IPC not found" (daemon not running).
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let msg = if !stderr.is_empty() { stderr } else { stdout };
+    let lowered = msg.to_lowercase();
+    if lowered.contains("ipc not found") || lowered.contains("error 8") {
+        // Daemon not running — try to auto-start Everything.exe silently, then retry.
+        if try_start_everything_daemon() {
+            // Async sleep: this runs on a Tauri command task, so parking the
+            // runtime worker for 2s with thread::sleep stalled other commands.
+            tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+            let retry = run_es_once(es_exe, args, timeout).await.ok();
+            if let Some(retry_out) = retry.filter(|out| out.status.success()) {
+                return Ok(retry_out.stdout);
+            }
+        }
+        return Err("Search engine service is not running. Launch it (or reinstall from Packages) and try again.".to_string());
+    }
+    Err(format!(
+        "Search failed (exit {}): {}",
+        output.status,
+        msg.trim()
+    ))
+}
+
 /// Search files using Everything's CLI tool (es.exe).
 /// Everything must be installed; es.exe is looked up in common paths and %PATH%.
+///
+/// `tokens` (pre-split argv entries) takes precedence over `query`; `sort` and
+/// `scope_path` are allowlist-validated because they arrive from the renderer.
 #[tauri::command]
 pub async fn search_everything(
     query: String,
     max_results: Option<u32>,
+    tokens: Option<Vec<String>>,
+    sort: Option<String>,
+    scope_path: Option<String>,
 ) -> Result<EsResponse, String> {
     let limit = max_results.unwrap_or(200);
+    let query_tokens = resolve_es_tokens(&query, tokens)?;
+    let sort = match sort {
+        Some(raw) => Some(validate_es_sort(&raw)?),
+        None => None,
+    };
+    let scope = match scope_path {
+        Some(raw) => Some(validate_es_scope_path(&raw)?),
+        None => None,
+    };
 
-    // Locate es.exe — check common install paths and then fall back to PATH.
+    let Some(es_exe_path) = locate_es_exe() else {
+        return Err(
+            "Search engine not installed. Install it from the Packages panel and try again."
+                .to_string(),
+        );
+    };
+    let es_exe = es_exe_path.to_str().unwrap_or("es.exe").to_string();
+
+    let args = build_es_search_args(limit, sort.as_deref(), scope.as_deref(), &query_tokens);
+    let stdout = run_es_with_daemon_retry(&es_exe, &args, ES_SEARCH_TIMEOUT).await?;
+    parse_es_output(stdout, query)
+}
+
+/// Total number of matches for a query, without fetching the rows.
+/// Uses es.exe's `-get-result-count`; same validation and timeout as the search.
+#[tauri::command]
+pub async fn search_everything_count(
+    query: String,
+    tokens: Option<Vec<String>>,
+    scope_path: Option<String>,
+) -> Result<u64, String> {
+    let query_tokens = resolve_es_tokens(&query, tokens)?;
+    let scope = match scope_path {
+        Some(raw) => Some(validate_es_scope_path(&raw)?),
+        None => None,
+    };
+
+    let Some(es_exe_path) = locate_es_exe() else {
+        return Err(
+            "Search engine not installed. Install it from the Packages panel and try again."
+                .to_string(),
+        );
+    };
+    let es_exe = es_exe_path.to_str().unwrap_or("es.exe").to_string();
+
+    let args = build_es_count_args(scope.as_deref(), &query_tokens);
+    let stdout = run_es_with_daemon_retry(&es_exe, &args, ES_COUNT_TIMEOUT).await?;
+    parse_es_count(&stdout)
+}
+
+/// Locate es.exe — common install paths first, then %PATH%.
+fn locate_es_exe() -> Option<std::path::PathBuf> {
     // Build the list dynamically so we honour whatever %ProgramFiles% / %LOCALAPPDATA%
     // the system reports, then append a plain "es.exe" as a %PATH% fallback.
     // Hard-coded defaults
@@ -6006,7 +6340,7 @@ pub async fn search_everything(
         }
     }
 
-    let es_exe_path = candidate_paths
+    candidate_paths
         .iter()
         .find(|p| p.exists())
         .cloned()
@@ -6029,93 +6363,180 @@ pub async fn search_everything(
                         .and_then(|s| s.lines().next().map(|l| std::path::PathBuf::from(l.trim())))
                 })
         })
-        .or_else(resolve_command_via_powershell_es);
+        .or_else(resolve_command_via_powershell_es)
+}
 
-    let Some(es_exe_path) = es_exe_path else {
-        return Err(
-            "Search engine not installed. Install it from the Packages panel and try again."
-                .to_string(),
-        );
+#[cfg(test)]
+mod es_query_tests {
+    use super::{
+        build_es_count_args, build_es_search_args, parse_es_count, tokenize_es_query,
+        validate_es_scope_path, validate_es_sort, validate_es_tokens,
     };
 
-    let es_exe = es_exe_path.to_str().unwrap_or("es.exe").to_string();
+    // ── Tokenizer: one argv entry per term, or es.exe silently returns nothing ──
 
-    // Run: es.exe -n <limit> -name -path-column -size -dm -date-format 1 -no-header -csv "<query>"
-    // Flags verified against ES 1.1.0.x CLI help output.
-    // -no-header suppresses the "Name,Path,Size,Date Modified" header row so we
-    // don't have to strip it manually.
-    let limit_str = limit.to_string();
-    let mut es_cmd = Command::new(&es_exe);
-    es_cmd.args([
-        "-n",
-        &limit_str,
-        "-name",
-        "-path-column",
-        "-size",
-        "-dm",
-        "-date-format",
-        "1",
-        "-no-header",
-        "-csv",
-        &query,
-    ]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        es_cmd.creation_flags(CREATE_NO_WINDOW);
+    #[test]
+    fn tokenize_splits_two_filters_into_two_entries() {
+        // The exact pair measured against es.exe: one entry -> 0 rows, two -> 3 rows.
+        assert_eq!(
+            tokenize_es_query("ext:md dm:thisyear"),
+            vec!["ext:md", "dm:thisyear"]
+        );
     }
-    let output = es_cmd
-        .output()
-        .map_err(|e| format!("Failed to run search: {e}"))?;
 
-    // Non-zero exit usually means "IPC not found" (daemon not running).
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let msg = if !stderr.is_empty() { stderr } else { stdout };
-        if msg.to_lowercase().contains("ipc not found") || msg.to_lowercase().contains("error 8") {
-            // Daemon not running — try to auto-start Everything.exe silently, then retry.
-            let started = try_start_everything_daemon();
-            if started {
-                std::thread::sleep(std::time::Duration::from_millis(2000));
-                let mut retry_cmd = Command::new(&es_exe);
-                retry_cmd.args([
-                    "-n",
-                    &limit_str,
-                    "-name",
-                    "-path-column",
-                    "-size",
-                    "-dm",
-                    "-date-format",
-                    "1",
-                    "-no-header",
-                    "-csv",
-                    &query,
-                ]);
-                #[cfg(target_os = "windows")]
-                {
-                    use std::os::windows::process::CommandExt;
-                    const CREATE_NO_WINDOW: u32 = 0x08000000;
-                    retry_cmd.creation_flags(CREATE_NO_WINDOW);
-                }
-                let retry = retry_cmd.output().ok();
-                if let Some(retry_out) = retry {
-                    if retry_out.status.success() {
-                        return parse_es_output(retry_out.stdout, query);
-                    }
-                }
-            }
-            return Err("Search engine service is not running. Launch it (or reinstall from Packages) and try again.".to_string());
+    #[test]
+    fn tokenize_keeps_quotes_on_phrases() {
+        assert_eq!(tokenize_es_query(r#"a "b c" d"#), vec!["a", "\"b c\"", "d"]);
+    }
+
+    #[test]
+    fn tokenize_closes_unterminated_quote() {
+        assert_eq!(tokenize_es_query(r#"a "b c"#), vec!["a", "\"b c\""]);
+    }
+
+    #[test]
+    fn tokenize_empty_input_yields_no_tokens() {
+        assert!(tokenize_es_query("").is_empty());
+        assert!(tokenize_es_query("   \t  ").is_empty());
+    }
+
+    #[test]
+    fn tokenize_collapses_runs_of_whitespace() {
+        assert_eq!(
+            tokenize_es_query("  ext:md \t\t dm:today   "),
+            vec!["ext:md", "dm:today"]
+        );
+    }
+
+    #[test]
+    fn tokenize_apps_priority_query() {
+        // The real query EverythingSearchBar builds for its apps-first pass.
+        assert_eq!(
+            tokenize_es_query("brave* ext:exe;lnk;msi;appx;msix"),
+            vec!["brave*", "ext:exe;lnk;msi;appx;msix"]
+        );
+    }
+
+    // ── Flag-injection guard ──
+
+    #[test]
+    fn tokens_starting_with_dash_or_slash_are_rejected() {
+        for bad in ["-instance", "/regex", "-n"] {
+            let err = validate_es_tokens(&[bad.to_string()]).unwrap_err();
+            assert!(err.contains(bad), "unexpected message: {err}");
         }
-        return Err(format!(
-            "Search failed (exit {}): {}",
-            output.status,
-            msg.trim()
-        ));
     }
 
-    parse_es_output(output.stdout, query)
+    #[test]
+    fn quoted_dash_term_is_allowed() {
+        // Quoting is the escape hatch for a literal leading dash.
+        let tokens = tokenize_es_query(r#""-final""#);
+        assert_eq!(tokens, vec!["\"-final\""]);
+        assert!(validate_es_tokens(&tokens).is_ok());
+    }
+
+    #[test]
+    fn control_characters_and_empties_are_rejected() {
+        assert!(validate_es_tokens(&["a\nb".to_string()]).is_err());
+        assert!(validate_es_tokens(&["a\0b".to_string()]).is_err());
+        assert!(validate_es_tokens(&[String::new()]).is_err());
+    }
+
+    #[test]
+    fn ordinary_query_tokens_pass() {
+        assert!(validate_es_tokens(&tokenize_es_query(
+            "folder: ext:md;rs size:>100mb !ext:dll a|b"
+        ))
+        .is_ok());
+    }
+
+    // ── Sort allowlist ──
+
+    #[test]
+    fn sort_allowlist_accepts_known_keys() {
+        assert_eq!(validate_es_sort("dm-descending").unwrap(), "dm-descending");
+        assert_eq!(
+            validate_es_sort(" NAME-Ascending ").unwrap(),
+            "name-ascending"
+        );
+        for key in [
+            "path-ascending",
+            "size-descending",
+            "extension-ascending",
+            "dc-descending",
+        ] {
+            assert!(validate_es_sort(key).is_ok(), "rejected {key}");
+        }
+    }
+
+    #[test]
+    fn sort_allowlist_rejects_anything_else() {
+        for bad in [
+            "",
+            "dm",
+            "dm-desc",
+            "da-descending",
+            "dm-descending extra",
+            "-sort",
+            "name-ascending;rm",
+        ] {
+            assert!(validate_es_sort(bad).is_err(), "accepted {bad:?}");
+        }
+    }
+
+    // ── Scope path ──
+
+    #[test]
+    fn scope_path_allows_spaces_and_trims() {
+        assert_eq!(
+            validate_es_scope_path(r"  D:\My Files\notes  ").unwrap(),
+            r"D:\My Files\notes"
+        );
+    }
+
+    #[test]
+    fn scope_path_rejects_flags_quotes_and_empties() {
+        for bad in ["", "   ", "-path", "/etc", "D:\\a\"b", "D:\\a\nb"] {
+            assert!(validate_es_scope_path(bad).is_err(), "accepted {bad:?}");
+        }
+    }
+
+    // ── Arg building ──
+
+    #[test]
+    fn search_args_put_every_term_in_its_own_entry() {
+        let tokens = tokenize_es_query("ext:md dm:thisyear");
+        let args = build_es_search_args(50, Some("dm-descending"), Some(r"D:\My Files"), &tokens);
+        assert_eq!(args[0], "-n");
+        assert_eq!(args[1], "50");
+        // -path takes the folder verbatim as its own entry, spaces and all.
+        let path_at = args.iter().position(|a| a == "-path").unwrap();
+        assert_eq!(args[path_at + 1], r"D:\My Files");
+        let sort_at = args.iter().position(|a| a == "-sort").unwrap();
+        assert_eq!(args[sort_at + 1], "dm-descending");
+        assert_eq!(&args[args.len() - 2..], ["ext:md", "dm:thisyear"]);
+    }
+
+    #[test]
+    fn count_args_are_minimal() {
+        let args = build_es_count_args(None, &tokenize_es_query("ext:md dm:today"));
+        assert_eq!(args, vec!["-get-result-count", "ext:md", "dm:today"]);
+    }
+
+    // ── Count parsing ──
+
+    #[test]
+    fn count_parses_plain_integer() {
+        assert_eq!(parse_es_count(b"1234\r\n").unwrap(), 1234);
+        assert_eq!(parse_es_count("\u{feff}7\r\n".as_bytes()).unwrap(), 7);
+        assert_eq!(parse_es_count(b"Result count: 42\r\n").unwrap(), 42);
+    }
+
+    #[test]
+    fn count_rejects_non_numeric_output() {
+        assert!(parse_es_count(b"").is_err());
+        assert!(parse_es_count(b"ES: IPC not found\r\n").is_err());
+    }
 }
 
 fn resolve_command_via_powershell_es() -> Option<std::path::PathBuf> {
@@ -6264,7 +6685,18 @@ fn parse_es_output(stdout: Vec<u8>, query: String) -> Result<EsResponse, String>
             format!("{}\\{}", dir.trim_end_matches('\\'), name)
         };
 
-        let icon_data = if is_app_like_path(&full_path) {
+        // KT: cap eager icon extraction. get_file_icon_data_sync spawns ONE
+        // PowerShell per app-like row, synchronously, inside this loop — so a
+        // 300-row `ext:exe` response meant ~300 sequential process spawns and a
+        // multi-second stall (now worse than a stall: the search timeout would
+        // abort the whole query). It was also pure waste, because the frontend
+        // already lazy-fetches any missing icon per visible row via
+        // `get_file_icon_data` and memoises it (EverythingSearchBar's
+        // esbIconCache). We eagerly resolve only the first rows — enough to
+        // cover the visible window so the common case paints with no round
+        // trip — and leave the long tail to that lazy path.
+        const EAGER_ICON_LIMIT: usize = 12;
+        let icon_data = if results.len() < EAGER_ICON_LIMIT && is_app_like_path(&full_path) {
             get_file_icon_data_sync(&full_path).ok().flatten()
         } else {
             None

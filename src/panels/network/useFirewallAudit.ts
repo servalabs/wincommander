@@ -59,7 +59,10 @@ export function useFirewallAudit() {
     } finally {
       setAuditing(false);
     }
-  }, []);
+    // KT: setAudit/setSelected come from useNetworkSessionState, whose setter
+    // is itself a useCallback keyed on the (constant) storage key — stable
+    // across renders, safe to list here without recreating this callback.
+  }, [setAudit, setSelected]);
 
   const cancel = useCallback(async () => {
     await backendRef.current.firewallAuditCancel().catch(() => {});
@@ -93,7 +96,7 @@ export function useFirewallAudit() {
         setApplying(null);
       }
     },
-    [selected],
+    [selected, setAudit, setSelected],
   );
 
   const toggle = useCallback((id: string) => {
@@ -103,9 +106,9 @@ export function useFirewallAudit() {
       else next.add(id);
       return next;
     });
-  }, []);
+  }, [setSelected]);
 
-  const setSelection = useCallback((ids: string[]) => setSelected(new Set(ids)), []);
+  const setSelection = useCallback((ids: string[]) => setSelected(new Set(ids)), [setSelected]);
 
   const selectedRules = useMemo<FirewallRule[]>(
     () => rules.filter((rule) => selected.has(rule.id)),

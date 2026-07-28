@@ -42,7 +42,10 @@ export function useArpMaintenance() {
     } finally {
       setInspecting(false);
     }
-  }, []);
+    // KT: setScan/setScannedAt come from useNetworkSessionState, whose setter
+    // is itself a useCallback keyed on the (constant) storage key — stable
+    // across renders, safe to list here without recreating this callback.
+  }, [setScan, setScannedAt]);
 
   const clear = useCallback(async () => {
     if (!scan) return;
@@ -67,7 +70,7 @@ export function useArpMaintenance() {
     } finally {
       setClearing(false);
     }
-  }, [scan]);
+  }, [scan, setScan, setScannedAt]);
 
   const ageMs = scannedAt ? Math.max(0, now - scannedAt) : 0;
 

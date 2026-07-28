@@ -28,6 +28,7 @@ mod empty_folder_cleaner;
 mod environment_cleaner;
 mod evidence;
 mod evidence_vault;
+mod explorer_context;
 mod explorer_context_menu;
 mod f6_keystore;
 mod f6_orchestrator;
@@ -2547,6 +2548,10 @@ pub fn run() {
             update_search_hotkey,
             update_hide_hotkey,
             backend::search_everything,
+            backend::search_everything_count,
+            // Folder the user was last looking at in Explorer — powers the
+            // quick-search overlay's "in this folder" scope suggestion.
+            explorer_context::get_foreground_explorer_folder,
             // ── File-content search (FTS, Free tier) ──
             file_search::search_content,
             file_search::content_index_status,
