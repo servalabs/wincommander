@@ -71,17 +71,23 @@ export const CHIP_DEFS: readonly ChipDef[] = [
   // only the old label overclaimed. See EXCLUSIVE_SETS below for why it can no
   // longer combine with `files`.
   { kind: "empty",      label: "Empty folders", icon: "square",      group: "special", triggers: ["empty"] },
-  // KT: "Duplicates" is REMOVED from the catalogue on purpose (FIX-D,
-  // measured) — the ChipKind itself stays in the union below and
-  // searchQueryPlan.ts keeps its `dupe:` planner code, so a hand-built chip
-  // still plans correctly; there is just no way to reach it through the UI
-  // anymore. Everything's `dupe:` matches filename+size, not content: it
-  // flags same-name-different-content files as dupes and misses the classic
-  // real case (the same file re-downloaded under a new name). Worse, a
-  // whole-disk `dupe:` click with NO other input exceeds the 6-second search
-  // timeout deterministically, every time — a chip that always errors on the
-  // one click it exists for is not a feature. The app's dedicated Duplicate
-  // Finder panel (src/panels/maintenance) does this job for real.
+  // KT: labelled "Same name & size", NOT "Duplicates" — Everything's `dupe:`
+  // matches filename+size, not content. It flags same-name-different-content
+  // files as duplicates and misses the classic real case (the same file
+  // re-downloaded under a new name), so the old label promised content-level
+  // dedup the engine does not perform. The app's dedicated Duplicate Finder
+  // panel (src/panels/maintenance) is the honest home for that.
+  //
+  // This chip was briefly REMOVED on the grounds that `dupe:` "exceeds the
+  // 6-second timeout deterministically". That measurement was wrong and the
+  // removal is reverted: it was taken while seven load-testing agents shared
+  // this machine's single Everything.exe daemon, and the same run separately
+  // documented that one expensive query (its own `attrib:h` probe, a >100s
+  // live disk scan) degrades every other query for minutes. Re-measured on a
+  // quiet machine: `dupe:` 300 rows sorted = 147/149/157/157/161 ms over five
+  // trials, and 210 ms even at 5000 rows. It is one of the FASTEST chips.
+  // Lesson recorded for future runs: latency batteries must run alone.
+  { kind: "duplicates", label: "Same name & size", icon: "duplicate", group: "special", triggers: ["duplicate", "duplicates", "dupe", "dupes"] },
 ];
 
 const DEFS_BY_KIND: Map<ChipKind, ChipDef> = new Map(CHIP_DEFS.map((d) => [d.kind, d]));

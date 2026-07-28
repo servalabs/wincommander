@@ -25,7 +25,7 @@ import type { ContentHit } from "@/types/wincmd-search";
 import { isDirectoryResult, sfExtOf } from "@/lib/fileNameSearch";
 import type { SearchResponse, SearchResult } from "@/lib/fileNameSearch";
 import { resolveMotionDisabled } from "@/lib/motionPolicy";
-import { topPaths } from "@/lib/frecency";
+import { normalizeKey, topPaths } from "@/lib/frecency";
 import { buildContentTerms, buildEverythingPlan, contentSearchApplies } from "@/lib/searchQueryPlan";
 import type { EverythingPlan } from "@/lib/searchQueryPlan";
 import { EMPTY_QUERY, addChip, chipOf, parseFolderJump, suggestChip } from "@/lib/searchTokens";
@@ -128,13 +128,14 @@ export function pathPreference(path: string): number {
   return 0;
 }
 
-// KT: mirrors frecency.ts's module-private normalizeKey. Windows paths are
-// case-insensitive and accept either separator, so "D:/x/Y.txt" and
-// "D:\X\y.TXT" must hash to the same history entry or the ranking silently
-// never matches anything the user actually opened.
-function frecKey(path: string): string {
-  return path.trim().replace(/\\/g, "/").toLowerCase();
-}
+// KT: this was a hand-copied duplicate of frecency.ts's normaliser, and the copy
+// went stale exactly as you would expect — the original grew handling for
+// trailing separators, doubled separators and `\\?\` extended-length prefixes
+// while this one did not, so the two disagreed about whether two spellings of
+// one real path were the same file. A disagreement here is silent: the history
+// lookup simply never matches and frecency contributes nothing to ranking.
+// Import the single source of truth instead of mirroring it.
+const frecKey = normalizeKey;
 
 const APP_EXTS = new Set(["exe", "msi", "appx", "msix", "lnk"]);
 
@@ -540,10 +541,20 @@ export function useChipSearch(active: boolean): ChipSearchApi {
     }
     let cancelled = false;
     const terms = buildContentTerms(searchState);
+    // KT: the `in` chip must scope BOTH result sections. The content index only
+    // started honouring a folder scope recently, and its command gained the
+    // parameter later still — until this call passed it, an "in Downloads" chip
+    // narrowed the filename list while "Inside files" below it kept showing hits
+    // from the whole disk. Two lists visibly disagreeing about the same filter
+    // is worse than having no filter.
+    const contentScope = chipOf(searchState, "in")?.path;
     contentTimerRef.current = setTimeout(() => {
       invoke<ContentHit[]>(
         "search_content",
-        buildContentQueryArgs(terms, 5) as unknown as Record<string, unknown>,
+        {
+          ...buildContentQueryArgs(terms, 5),
+          ...(contentScope ? { scope_path: contentScope } : {}),
+        } as unknown as Record<string, unknown>,
       )
         .then((hits) => { if (!cancelled) setContentRows(hits.map(contentHitToDisplayRow)); })
         .catch(() => { /* the bar must not break when the index is cold */ });

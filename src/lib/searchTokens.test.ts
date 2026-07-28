@@ -42,7 +42,7 @@ const VERIFIED_ICONS = [
 const ALL_KINDS: ChipKind[] = [
   "folders", "files", "images", "videos", "audio", "documents", "code", "archives", "apps",
   "today", "yesterday", "thisWeek", "last30Days", "thisYear", "big", "small",
-  "empty", "in",
+  "empty", "duplicates", "in",
 ];
 
 describe("CHIP_DEFS catalogue", () => {
@@ -276,24 +276,26 @@ describe("empty — relabelled and no longer combinable with files (Defect 2)", 
 // the 6-second search timeout, so the chip is retired from the catalogue.
 // The ChipKind and searchQueryPlan.ts's `dupe:` planning stay intact — only
 // the user-facing route to it (CHIP_DEFS + its trigger words) is gone.
-describe("duplicates — removed from the catalogue on purpose (Defect 3)", () => {
-  it("is not present in CHIP_DEFS", () => {
-    expect(CHIP_DEFS.some((d) => d.kind === "duplicates")).toBe(false);
+// This chip was briefly retired for "exceeding the 6s timeout"; that timing was
+// taken while seven load-testing agents shared one Everything daemon and did not
+// reproduce (147-161ms over five trials on a quiet machine, 210ms at 5000 rows).
+// What IS real and load-independent is the semantics: `dupe:` matches filename +
+// size, never content. So the chip stays and the LABEL carries the caveat.
+describe("duplicates — kept, but labelled for what the engine actually does", () => {
+  it("is present in CHIP_DEFS", () => {
+    expect(CHIP_DEFS.some((d) => d.kind === "duplicates")).toBe(true);
   });
 
-  it("chipDef throws for the retired kind (no def to fake a label from)", () => {
-    let threw = false;
-    try {
-      chipDef("duplicates" as ChipKind);
-    } catch {
-      threw = true;
-    }
-    expect(threw).toBe(true);
+  it("does not claim to find content duplicates", () => {
+    const label = chipDef("duplicates").label;
+    // "Duplicates" alone would promise content-level dedup the engine cannot do.
+    expect(label.toLowerCase()).not.toBe("duplicates");
+    expect(label).toBe("Same name & size");
   });
 
-  it("no former trigger word offers a Duplicates chip anymore", () => {
+  it("still answers its trigger words", () => {
     for (const word of ["duplicate", "duplicates", "dupe", "dupes"]) {
-      expect(suggestChip(q(word))).toBeNull();
+      expect(suggestChip(q(word))?.chip.kind).toBe("duplicates");
     }
   });
 });
