@@ -150,6 +150,54 @@ fn build_content_query(
     }
 }
 
+/// Validate a folder scope for `ContentQuery.roots`.
+///
+/// KT: this is NOT `backend.rs::validate_es_scope_path` reused — that function
+/// rejects a leading `-`/`/` because its value becomes an es.exe argv entry
+/// and would otherwise be read as a command-line switch. This value never
+/// reaches a process argv: it only ever becomes a `PathBuf` fed to
+/// `wincmd_search::index::path_in_roots`, a pure case-insensitive string
+/// prefix comparison (see `index.rs`), so a leading `-`/`/` is inert here —
+/// just a folder name that won't prefix-match any real Windows path. What DOES
+/// still matter, and what this mirrors from `validate_es_scope_path`: reject
+/// empty (an empty scope is a caller bug — "no scope" must be `None`, not
+/// `Some("")`) and reject control characters (can't appear in a real path and
+/// would otherwise flow unmodified into error strings/logs).
+fn validate_content_scope_path(scope: &str) -> Result<String, String> {
+    let trimmed = scope.trim();
+    if trimmed.is_empty() {
+        return Err("Search folder is empty.".to_string());
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err(format!(
+            "Invalid search folder '{scope}': control characters are not allowed."
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Resolve which roots a `search_content` call should scope to.
+///
+/// `scope_path`, when present, REPLACES the configured roots for this one
+/// query — it becomes the sole entry in `ContentQuery.roots`. A scope that
+/// lies outside every currently-indexed root is deliberately not rejected: no
+/// indexed document's path can prefix-match it, so `path_in_roots` naturally
+/// filters the result set down to nothing — the same "legitimately zero hits"
+/// outcome as any other over-narrow scope, not a distinct error. `None` keeps
+/// today's behaviour byte-for-byte: every configured root, i.e. unscoped.
+fn resolve_content_roots(
+    scope_path: Option<String>,
+    configured_roots: Vec<PathBuf>,
+) -> Result<Vec<PathBuf>, String> {
+    match scope_path {
+        Some(raw) => {
+            let validated = validate_content_scope_path(&raw)?;
+            Ok(vec![PathBuf::from(validated)])
+        }
+        None => Ok(configured_roots),
+    }
+}
+
 /// Open the engine if it isn't already open. Idempotent.
 /// Holds the lock only for the duration of open+start_indexing (fast).
 /// The slow background crawl runs in the spawned thread after we release.
@@ -182,12 +230,19 @@ fn open_engine(config: IndexConfig) -> Result<(), String> {
 /// Async so the IPC dispatch doesn't run on the main thread; the actual
 /// engine/settings work is synchronous (file IO + tantivy), so it runs on a
 /// blocking-pool thread via `spawn_blocking`.
+///
+/// `scope_path` (JS sends camelCase `scopePath`; Tauri maps it to this
+/// snake_case parameter) optionally narrows the query to one folder — the
+/// same "in this folder" scope the filename search's `search_everything`
+/// already honours via its own `scope_path`. Omitted/`None` reproduces
+/// exactly today's behaviour: every configured content-search root.
 #[tauri::command]
 pub async fn search_content(
     terms: String,
     limit: Option<usize>,
     offset: Option<usize>,
     keyword_only: Option<bool>,
+    scope_path: Option<String>,
 ) -> Result<Vec<ContentHit>, String> {
     tokio::task::spawn_blocking(move || {
         let settings = ensure_initialized(read_settings()?)?;
@@ -201,7 +256,8 @@ pub async fn search_content(
         };
         let engine = engine.ok_or_else(|| "search engine not initialized".to_string())?;
 
-        let query = build_content_query(terms, config.roots.clone(), limit, offset, keyword_only);
+        let roots = resolve_content_roots(scope_path, config.roots.clone())?;
+        let query = build_content_query(terms, roots, limit, offset, keyword_only);
         engine.search(&query).map_err(|e| e.to_string())
     })
     .await
@@ -486,6 +542,80 @@ mod tests {
 
         // Cleanup — ignore errors (temp dir may already be cleaned up by OS).
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // ── scope_path (FIX-E: content-search folder scoping) ──────────────────
+
+    /// A valid scope path becomes the sole ContentQuery root, replacing —
+    /// not merging with — the configured roots.
+    #[test]
+    fn resolve_content_roots_scope_overrides_configured() {
+        let configured = vec![PathBuf::from(r"C:\Users\test\Desktop"), PathBuf::from(r"C:\Users\test\Documents")];
+        let roots = resolve_content_roots(Some(r"D:\Projects\wincommander".to_string()), configured)
+            .expect("valid scope must resolve");
+        assert_eq!(roots, vec![PathBuf::from(r"D:\Projects\wincommander")]);
+    }
+
+    /// `None` must reproduce today's exact behaviour: every configured root,
+    /// unchanged — this is the no-regression guarantee for existing callers.
+    #[test]
+    fn resolve_content_roots_none_keeps_configured_roots() {
+        let configured = vec![PathBuf::from(r"C:\Users\test\Desktop"), PathBuf::from(r"C:\Users\test\Documents")];
+        let roots = resolve_content_roots(None, configured.clone()).expect("None must never error");
+        assert_eq!(roots, configured);
+    }
+
+    /// A scope outside every indexed root is NOT an error — resolve_content_roots
+    /// passes it through as-is; `path_in_roots` (wincmd-search) naturally yields
+    /// zero hits since no indexed document's path can prefix-match it. This test
+    /// pins that "not our job to detect" choice at the boundary we own.
+    #[test]
+    fn resolve_content_roots_scope_outside_indexed_roots_is_not_an_error() {
+        let configured = vec![PathBuf::from(r"C:\Users\test\Desktop")];
+        let roots = resolve_content_roots(Some(r"Z:\Never\Indexed".to_string()), configured)
+            .expect("an out-of-index scope must resolve, not error");
+        assert_eq!(roots, vec![PathBuf::from(r"Z:\Never\Indexed")]);
+    }
+
+    /// Empty (or all-whitespace) scope is a caller bug, not "no scope" — the
+    /// frontend must send `None` to mean unscoped, matching
+    /// `backend.rs::validate_es_scope_path`'s empty rejection.
+    #[test]
+    fn resolve_content_roots_rejects_empty_scope() {
+        let err = resolve_content_roots(Some("   ".to_string()), vec![]).unwrap_err();
+        assert!(err.contains("empty"), "expected an empty-scope error, got: {err}");
+    }
+
+    /// Control characters can't appear in a real Windows path — reject, same
+    /// as `backend.rs::validate_es_scope_path`.
+    #[test]
+    fn resolve_content_roots_rejects_control_chars() {
+        let err = resolve_content_roots(Some("C:\\Users\\test\u{0007}".to_string()), vec![]).unwrap_err();
+        assert!(
+            err.contains("control characters"),
+            "expected a control-char error, got: {err}"
+        );
+    }
+
+    /// Leading `-`/`/` is inert here (unlike `validate_es_scope_path`, this
+    /// value never becomes an es.exe argv entry) — it must NOT be rejected.
+    #[test]
+    fn resolve_content_roots_allows_leading_dash_and_slash() {
+        let roots = resolve_content_roots(Some("-weird-folder".to_string()), vec![])
+            .expect("leading '-' must not be rejected for content scope");
+        assert_eq!(roots, vec![PathBuf::from("-weird-folder")]);
+
+        let roots = resolve_content_roots(Some("/mnt/data".to_string()), vec![])
+            .expect("leading '/' must not be rejected for content scope");
+        assert_eq!(roots, vec![PathBuf::from("/mnt/data")]);
+    }
+
+    /// Surrounding whitespace is trimmed, mirroring `validate_es_scope_path`.
+    #[test]
+    fn resolve_content_roots_trims_whitespace() {
+        let roots = resolve_content_roots(Some("  D:\\My Files\\notes  ".to_string()), vec![])
+            .expect("whitespace-padded scope must resolve");
+        assert_eq!(roots, vec![PathBuf::from(r"D:\My Files\notes")]);
     }
 
     /// initialized field round-trips through serde correctly.

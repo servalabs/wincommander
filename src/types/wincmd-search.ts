@@ -52,6 +52,12 @@ export interface ContentQueryArgs {
   limit?:        number;
   offset?:       number;
   keyword_only?: boolean;
+  /** Optional folder to scope the search to — mirrors the filename search's
+   *  "in this folder" scope (`search_everything`'s `scope_path`). Absent
+   *  means every configured content-search root (today's behaviour,
+   *  unchanged). An empty/whitespace-only string is rejected by the backend —
+   *  omit the field entirely to mean "no scope". */
+  scope_path?:   string;
 }
 
 /** Which field a chunk came from. */

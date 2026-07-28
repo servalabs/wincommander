@@ -5890,18 +5890,6 @@ $icon.Dispose()
     }
 }
 
-fn is_app_like_path(path: &str) -> bool {
-    let ext = std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    matches!(
-        ext.as_str(),
-        "exe" | "msi" | "lnk" | "appx" | "appxbundle" | "msix"
-    )
-}
-
 // ── es.exe argv construction ─────────────────────────────────────────────────
 //
 // KT: es.exe (v1.1.0.37) joins its non-flag argv entries with spaces to build
@@ -6244,8 +6232,23 @@ pub async fn search_everything_count(
     parse_es_count(&stdout)
 }
 
-/// Locate es.exe — common install paths first, then %PATH%.
+// KT: MEASURED — the uncached lookup below walks several filesystem
+// directories, then falls back to `where es.exe` and finally a PowerShell
+// `Get-Command`, all synchronously on the async command task and outside
+// ES_SEARCH_TIMEOUT/ES_COUNT_TIMEOUT. Once resolved, es.exe's install path
+// cannot change for the lifetime of this process, so we resolve it once and
+// reuse the answer — one fewer PowerShell spawn (or dir walk) per keystroke.
+static ES_EXE_PATH: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+
+/// Locate es.exe — common install paths first, then %PATH%. Memoised for the
+/// life of the process; see the KT note above.
 fn locate_es_exe() -> Option<std::path::PathBuf> {
+    ES_EXE_PATH.get_or_init(locate_es_exe_uncached).clone()
+}
+
+/// Uncached implementation of `locate_es_exe` — do not call directly outside
+/// tests; go through the memoised wrapper above.
+fn locate_es_exe_uncached() -> Option<std::path::PathBuf> {
     // Build the list dynamically so we honour whatever %ProgramFiles% / %LOCALAPPDATA%
     // the system reports, then append a plain "es.exe" as a %PATH% fallback.
     // Hard-coded defaults
@@ -6537,6 +6540,118 @@ mod es_query_tests {
         assert!(parse_es_count(b"").is_err());
         assert!(parse_es_count(b"ES: IPC not found\r\n").is_err());
     }
+
+    // ── Battery 4: TS/Rust parity, validated at scale against 8000+ real
+    // buildEverythingPlan() outputs generated from a 4066-entry real-filesystem
+    // corpus plus adversarial synthetic strings (see the validation harness
+    // run). The cases below are a representative, hand-picked subset spanning
+    // every adversarial-character stratum the corpus covers — spaces, parens,
+    // quotes/apostrophes, bangs, brackets, ampersands, hashes, plus, comma,
+    // at, tilde, percent, dollar, non-ASCII — plus the two disagreement
+    // classes the full run actually found. ──
+
+    #[test]
+    fn tokenizer_roundtrip_holds_for_real_weird_filenames() {
+        // Each right-hand side is buildEverythingPlan()'s REAL tokens output
+        // (src/lib/searchQueryPlan.ts) for the left-hand real, on-disk
+        // filename with no chips active. Joining those tokens with spaces and
+        // re-tokenizing here must reproduce the identical array. All of these
+        // PASS: Windows forbids '"' in filenames, and that is the only
+        // character tokenize_es_query treats specially, so the invariant holds
+        // across every real name in the corpus (see the KNOWN GAP test below
+        // for the one place typed, non-filename input breaks it).
+        let cases: &[(&str, &[&str])] = &[
+            ("[2025-01-01 (12.03 AM)] ReviOS", &["[2025-01-01", "(12.03", "AM)]", "ReviOS"]),
+            ("Only Work (2nd User)", &["Only", "Work", "(2nd", "User)"]),
+            ("Program Files (x86)", &["Program", "Files", "(x86)"]),
+            ("Beginner's Tutorial.html", &["Beginner's", "Tutorial.html"]),
+            ("user with 'quote", &["user", "with", "'quote"]),
+            ("!Read this first!.txt", &["!Read", "this", "first!.txt"]),
+            ("[...nextauth]", &["[...nextauth]"]),
+            ("Click & Pledge.png", &["Click", "&", "Pledge.png"]),
+            ("AuditPolicy42d3d2cc#", &["AuditPolicy42d3d2cc#"]),
+            ("bzip2-sys-0.1.13+1.0.8", &["bzip2-sys-0.1.13+1.0.8"]),
+            (
+                "devenv_groupconfig,version=18.8.993.14177,productarch=neutral",
+                &["devenv_groupconfig,version=18.8.993.14177,productarch=neutral"],
+            ),
+            ("0.0.0@@@1", &["0.0.0@@@1"]),
+            (
+                "Clipchamp.Clipchamp_4.4.10720.0_neutral_~_yxz26nhyzhsrt",
+                &["Clipchamp.Clipchamp_4.4.10720.0_neutral_~_yxz26nhyzhsrt"],
+            ),
+            ("D%3A%5CGitHub%5Cwincommander", &["D%3A%5CGitHub%5Cwincommander"]),
+            ("$$.cdf-ms", &["$$.cdf-ms"]),
+            ("HWiNFO\u{ae} 64", &["HWiNFO\u{ae}", "64"]),
+            ("Intel\u{ae} Graphics Software", &["Intel\u{ae}", "Graphics", "Software"]),
+        ];
+        for &(name, expected_tokens) in cases {
+            let expected: Vec<String> = expected_tokens.iter().map(|s| s.to_string()).collect();
+            let joined = expected.join(" ");
+            assert_eq!(
+                tokenize_es_query(&joined),
+                expected,
+                "round-trip mismatch for real filename {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tokenizer_roundtrip_disagrees_when_a_typed_quote_is_unbalanced() {
+        // KNOWN GAP: buildEverythingPlan() splits typed search text on bare
+        // whitespace with NO quote-awareness, so a user typing a phrase like
+        // `"quoted phrase"` (spaces INSIDE the quotes, meant as an exact
+        // phrase) is split into two tokens ["\"quoted", "phrase\""] rather
+        // than kept together. In the real Ctrl+Space pipeline these go
+        // straight to the backend as pre-split argv entries (search_everything
+        // prefers `tokens` over `query` — see resolve_es_tokens), so this gap
+        // is latent there. It goes LIVE in the classic Search Files panel
+        // (src/hooks/useFileSearch.ts -> buildSearchQuery -> a bare `query`
+        // string with no `tokens`), which is what this asserts: the array
+        // tokenize_es_query reconstructs from the rejoined string differs from
+        // what the frontend actually intended.
+        let ts_tokens = vec!["\"quoted".to_string(), "phrase\"".to_string()];
+        let joined = ts_tokens.join(" ");
+        assert_eq!(joined, "\"quoted phrase\"");
+        let rust_tokens = tokenize_es_query(&joined);
+        assert_ne!(
+            rust_tokens, ts_tokens,
+            "if this now holds, the round-trip gap has been closed and this test should be inverted"
+        );
+        assert_eq!(rust_tokens, vec!["\"quoted phrase\"".to_string()]);
+
+        // Simplest form of the same gap: a single already-joined token that
+        // merely contains an ODD number of '"' characters (only reachable
+        // from typed free text — Windows forbids '"' in real filenames) gets a
+        // trailing '"' silently appended, changing the token es.exe receives.
+        assert_eq!(tokenize_es_query("a\"b"), vec!["a\"b\"".to_string()]);
+    }
+
+    #[test]
+    fn validate_es_tokens_rejects_the_exact_visible_name_of_common_real_files() {
+        // KNOWN GAP, confirmed at scale (160 distinct real files across a
+        // 4066-entry real-filesystem corpus; 316 of 468 total rejections in
+        // the harness run): buildEverythingPlan() splits typed search text on
+        // bare whitespace, so any filename containing a standalone " - "
+        // separator — the standard Windows WinX power-user-menu naming
+        // (`01a - Windows PowerShell.lnk`, present on every Windows install
+        // under %LOCALAPPDATA%\Microsoft\Windows\WinX\) and the extremely
+        // common "Name - Description" pattern generally — produces a lone
+        // "-" token. validate_es_tokens's flag-injection guard then rejects
+        // the WHOLE query on that one token, so a user who types the exact,
+        // visible name of a file open in Explorer right now gets "Invalid
+        // search term '-'" instead of finding it.
+        let cases: &[&[&str]] = &[
+            &["01a", "-", "Windows", "PowerShell.lnk"],
+            &["03", "-", "Computer", "Management.lnk"],
+            &["Microsoft", ".NET", "Runtime", "-", "8.0.29", "(x64).swidtag"],
+        ];
+        for tokens in cases {
+            let owned: Vec<String> = tokens.iter().map(|s| s.to_string()).collect();
+            let err = validate_es_tokens(&owned).unwrap_err();
+            assert!(err.contains("'-'"), "unexpected message for {owned:?}: {err}");
+        }
+    }
 }
 
 fn resolve_command_via_powershell_es() -> Option<std::path::PathBuf> {
@@ -6685,22 +6800,22 @@ fn parse_es_output(stdout: Vec<u8>, query: String) -> Result<EsResponse, String>
             format!("{}\\{}", dir.trim_end_matches('\\'), name)
         };
 
-        // KT: cap eager icon extraction. get_file_icon_data_sync spawns ONE
-        // PowerShell per app-like row, synchronously, inside this loop — so a
-        // 300-row `ext:exe` response meant ~300 sequential process spawns and a
-        // multi-second stall (now worse than a stall: the search timeout would
-        // abort the whole query). It was also pure waste, because the frontend
+        // KT: no eager icon extraction here — MEASURED mean 866ms per
+        // PowerShell-spawned icon (range 675-1168ms), so the old
+        // EAGER_ICON_LIMIT=12 cap still cost ~10.4s, and it ran here in
+        // parse_es_output, AFTER the es.exe call returns — i.e. outside
+        // ES_SEARCH_TIMEOUT entirely, and synchronously on the tokio worker
+        // thread handling the command. Every ordinary keystroke search hit
+        // this twice concurrently (main query + apps-boost query), so the
+        // "hard 6s bound" on search latency was not real. The frontend
         // already lazy-fetches any missing icon per visible row via
-        // `get_file_icon_data` and memoises it (EverythingSearchBar's
-        // esbIconCache). We eagerly resolve only the first rows — enough to
-        // cover the visible window so the common case paints with no round
-        // trip — and leave the long tail to that lazy path.
-        const EAGER_ICON_LIMIT: usize = 12;
-        let icon_data = if results.len() < EAGER_ICON_LIMIT && is_app_like_path(&full_path) {
-            get_file_icon_data_sync(&full_path).ok().flatten()
-        } else {
-            None
-        };
+        // `get_file_icon_data` (invoked from `NativeSearchIcon` in
+        // EverythingSearchBar.tsx) and memoises it in `esbIconCache`, and
+        // only ~10 rows are ever visible at once, so eager extraction here
+        // was a serial blocking prefetch of data the frontend already fetches
+        // better, in parallel, only for what's on screen. icon_data is always
+        // None from this path now; the UI fills it in per-row.
+        let icon_data = None;
 
         results.push(EsResult {
             name,

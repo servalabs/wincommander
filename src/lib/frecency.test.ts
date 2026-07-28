@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { clearFrecency, frecencyScore, recordOpen, sortByFrecency, topPaths } from "./frecency";
+import { clearFrecency, frecencyScore, normalizeKey, recordOpen, sortByFrecency, topPaths } from "./frecency";
 
 // Bun does not guarantee a browser-like `localStorage` global, and frecency.ts
 // must degrade gracefully whether one exists or not — so every test installs
@@ -100,6 +100,56 @@ describe("frecencyScore", () => {
     expect(frecencyScore("d:\\projects\\notes.txt", now)).toBeGreaterThan(0);
     expect(frecencyScore("d:\\projects\\notes.txt", now)).toBe(frecencyScore("D:/Projects/Notes.TXT", now));
   });
+
+  // Defect 1 regression: eviction must be decoupled from the decaying
+  // ranking score, or a heavy-use idle file gets permanently forgotten.
+  test("MEASURED: a 200-open file idle 100 days scores 86.44, below a brand-new single open's 100", () => {
+    const now = 1_700_000_000_000;
+    recordOpen("C:/heavy-use.exe", now - 100 * DAY_MS);
+    for (let i = 1; i < 200; i++) recordOpen("C:/heavy-use.exe", now - 100 * DAY_MS);
+    recordOpen("C:/brand-new.txt", now);
+
+    // RANKING legitimately prefers recency (intentional) — the bug was
+    // letting this same score decide EVICTION too; see the flood test below.
+    // (No toBeCloseTo in this repo's bun:test shim — round explicitly.)
+    const heavyUseScore = Math.round(frecencyScore("C:/heavy-use.exe", now) * 100) / 100;
+    expect(heavyUseScore).toBe(86.44);
+    expect(frecencyScore("C:/brand-new.txt", now)).toBe(100);
+    expect(frecencyScore("C:/brand-new.txt", now)).toBeGreaterThan(frecencyScore("C:/heavy-use.exe", now));
+  });
+});
+
+describe("normalizeKey", () => {
+  test("a trailing separator collapses to the same entry as no trailing separator", () => {
+    expect(normalizeKey("D:/Projects/Notes.txt/")).toBe(normalizeKey("D:/Projects/Notes.txt"));
+    expect(normalizeKey("D:\\Projects\\Notes.txt\\")).toBe(normalizeKey("D:/Projects/Notes.txt"));
+  });
+
+  test("doubled internal separators collapse to the same entry", () => {
+    expect(normalizeKey("D:\\\\Projects\\\\Notes.txt")).toBe(normalizeKey("D:/Projects/Notes.txt"));
+    expect(normalizeKey("D://Projects//Notes.txt")).toBe(normalizeKey("D:/Projects/Notes.txt"));
+  });
+
+  test("a \\\\?\\ extended-length prefix collapses to the plain drive path", () => {
+    expect(normalizeKey("\\\\?\\D:\\Projects\\Notes.txt")).toBe(normalizeKey("D:/Projects/Notes.txt"));
+  });
+
+  test("a \\\\?\\UNC\\ extended-length prefix collapses to the plain UNC path", () => {
+    expect(normalizeKey("\\\\?\\UNC\\server\\share\\file.txt")).toBe(normalizeKey("\\\\server\\share\\file.txt"));
+  });
+
+  test("a doubled separator inside a UNC path still collapses, without losing the leading //", () => {
+    expect(normalizeKey("\\\\server\\\\share\\file.txt")).toBe(normalizeKey("\\\\server\\share\\file.txt"));
+  });
+
+  test("recordOpen + frecencyScore actually match across these variants (not just the raw key fn)", () => {
+    const now = 1_700_000_000_000;
+    recordOpen("D:\\Projects\\Notes.txt", now);
+
+    expect(frecencyScore("D:/Projects/Notes.txt/", now)).toBeGreaterThan(0);
+    expect(frecencyScore("D:\\\\Projects\\\\Notes.txt", now)).toBeGreaterThan(0);
+    expect(frecencyScore("\\\\?\\D:\\Projects\\Notes.txt", now)).toBeGreaterThan(0);
+  });
 });
 
 describe("recordOpen / topPaths", () => {
@@ -131,6 +181,58 @@ describe("recordOpen / topPaths", () => {
     // be the one evicted, not an arbitrary entry.
     expect(frecencyScore("C:/history/file0.txt", now)).toBe(0);
     expect(frecencyScore("C:/history/file500.txt", now)).toBeGreaterThan(0);
+  });
+
+  // Defect 1, the actual reported failure: before the fix, enforceCap sorted
+  // by the decaying ranking score, so a heavy-use file idle past 90 days
+  // (score 86.44) scored below every one-off opened-today entry (score 100)
+  // — it was the FIRST thing evicted by a same-day flood, not the last.
+  test("a heavy-use idle file survives a same-day flood of 3000 one-off opens", () => {
+    const now = 1_700_000_000_000;
+    const idleSince = now - 100 * DAY_MS; // past the 90-day STALE_WEIGHT floor
+
+    // 200 lifetime opens, all idle — the vulnerable shape per the task (any
+    // file under ~512 lifetime opens, idle past 90 days).
+    for (let i = 0; i < 200; i++) recordOpen("C:/heavy-use.exe", idleSince);
+    // Same-day flood of distinct one-off opens, past the 500-entry cap alone.
+    for (let i = 0; i < 3000; i++) recordOpen(`C:/flood/one-off-${i}.txt`, now);
+
+    // History must survive — not silently, permanently erased by entries
+    // that are each individually worth less.
+    expect(frecencyScore("C:/heavy-use.exe", now)).toBeGreaterThan(0);
+
+    const raw = storage.getItem(STORAGE_KEY);
+    const parsed = JSON.parse(raw!) as { entries: Record<string, unknown> };
+    expect(parsed.entries["c:/heavy-use.exe"]).toBeTruthy();
+    expect(Object.keys(parsed.entries)).toHaveLength(500);
+  });
+});
+
+describe("recordOpen performance (Defect 3 — hot path, runs on every file open)", () => {
+  test("recordOpen stays fast with the store already at full 500-entry capacity", () => {
+    const now = 1_700_000_000_000;
+    // Fill the store to the cap first so every timed call below pays the
+    // full readStore/enforceCap/writeStore cost against 500 entries.
+    for (let i = 0; i < 500; i++) recordOpen(`C:/warm/file${i}.txt`, now - i * DAY_MS);
+
+    const iterations = 1000;
+    const start = performance.now();
+    for (let i = 0; i < iterations; i++) {
+      recordOpen(`C:/warm/file${i % 500}.txt`, now + i);
+    }
+    const elapsedMs = performance.now() - start;
+    const perCallMs = elapsedMs / iterations;
+
+    // Reported (measured on this machine, this run): see verification output.
+    // Threshold is generous on purpose — this asserts "not accidentally
+    // quadratic / not blocking a render", not a tight perf budget.
+    // (This repo's bun:test shim has no toBeLessThan — express perCallMs < 5
+    // as "5 is greater than perCallMs" using the matcher that does exist.)
+    expect(5).toBeGreaterThan(perCallMs);
+    // Surfaces the real measured number in test output per the task's
+    // "time it" requirement — not asserted beyond the threshold above
+    // because absolute timing is machine-dependent.
+    console.log(`recordOpen @ 500-entry cap: ${perCallMs.toFixed(4)}ms/call over ${iterations} iterations`);
   });
 });
 

@@ -82,6 +82,54 @@ describe("buildSearchQuery — extension categories dedupe into one ext: token",
   });
 });
 
+describe("buildSearchQuery — Defect 1: previously-missing mainstream extensions (measured)", () => {
+  // Each pair is [category, extension added by FIX-D]. Verified against a
+  // real Everything index with raw `es -n 3 ext:<ext>` before landing this
+  // fix — e.g. `es ext:c` / `ext:h` / `ext:hpp` / `ext:avif` / `ext:apk` all
+  // returned real files on this machine that the old sets could not reach.
+  const additions: [keyof typeof FILE_TYPE_EXTENSIONS, string][] = [
+    ["code", "c"], ["code", "h"], ["code", "hpp"],
+    ["code", "sh"], ["code", "sql"], ["code", "toml"], ["code", "xml"],
+    ["code", "vue"], ["code", "svelte"], ["code", "kt"], ["code", "swift"],
+    ["code", "rb"], ["code", "php"], ["code", "lua"],
+    ["images", "avif"], ["images", "tif"], ["images", "tiff"],
+    ["apps", "apk"],
+    ["documents", "odt"], ["documents", "epub"], ["documents", "pages"],
+    ["documents", "numbers"], ["documents", "djvu"],
+    ["videos", "mpg"], ["videos", "mpeg"], ["videos", "3gp"],
+    ["audio", "m4b"],
+  ];
+
+  for (const [cat, ext] of additions) {
+    test(`${cat} chip's ext: token contains newly added .${ext}`, () => {
+      expect(FILE_TYPE_EXTENSIONS[cat]).toContain(ext);
+    });
+  }
+
+  it("never assigns the same extension to two different category chips", () => {
+    // A shared extension would make one chip silently answer for another
+    // (e.g. Videos surfacing TypeScript source) — guard the whole table, not
+    // just the two-category cases exercised above.
+    const owner = new Map<string, string>();
+    for (const [cat, exts] of Object.entries(FILE_TYPE_EXTENSIONS)) {
+      for (const ext of exts) {
+        const existing = owner.get(ext);
+        expect(existing).toBeUndefined();
+        owner.set(ext, cat);
+      }
+    }
+  });
+
+  it("deliberately excludes .ts from videos — it already means TypeScript in Code", () => {
+    expect(FILE_TYPE_EXTENSIONS.videos).not.toContain("ts");
+    expect(FILE_TYPE_EXTENSIONS.code).toContain("ts");
+  });
+
+  it("deliberately excludes .key from documents — on this OS it overwhelmingly means a private/licence key, not a Keynote file", () => {
+    expect(FILE_TYPE_EXTENSIONS.documents).not.toContain("key");
+  });
+});
+
 describe("buildSearchQuery — size, verified against es.exe (ES_FACTS)", () => {
   it("tiny → size:<1mb", () => {
     expect(buildSearchQuery("", new Set(), "tiny", "any")).toBe("size:<1mb");

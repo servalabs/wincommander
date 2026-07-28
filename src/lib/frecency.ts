@@ -67,12 +67,43 @@ function computeScore(entry: FrecencyEntry, now: number): number {
   return recencyWeight(ageMs) * countFactor;
 }
 
+// KT: 8.3 short-name aliases (e.g. "PROGRA~1" for "Program Files") are NOT
+// handled here and can't practically be — resolving one to its long name
+// requires a filesystem call (GetLongPathNameW), which this pure/sync,
+// storage-only module deliberately has no access to. Everything else
+// MEASURED to create a false-distinct entry is handled below.
+function stripExtendedLengthPrefix(key: string): string {
+  // "\\?\" survives the backslash->slash swap below as "//?/" (case-folded
+  // already). Its UNC variant is "\\?\UNC\server\share", which collapses back
+  // to the plain UNC form "//server/share" so it matches a path written
+  // without the prefix at all.
+  if (key.startsWith("//?/unc/")) return "//" + key.slice("//?/unc/".length);
+  if (key.startsWith("//?/")) return key.slice("//?/".length);
+  return key;
+}
+
+function collapseDoubledSeparators(key: string): string {
+  // A UNC path's leading "//" is meaningful (it's how "\\server\share" reads
+  // after the slash swap) and must survive collapsing — only doubled
+  // separators *after* it, or anywhere in a driveletter path, are accidental.
+  if (key.startsWith("//")) return "//" + key.slice(2).replace(/\/+/g, "/");
+  return key.replace(/\/+/g, "/");
+}
+
 // Windows paths are case-insensitive and accept either separator, so
-// "D:/x/y.txt" and "D:\X\Y.TXT" must resolve to the same history entry. The
+// "D:/x/y.txt" and "D:\X\Y.TXT" must resolve to the same history entry. Also
+// collapses the variants MEASURED to otherwise create a separate, never-
+// matching entry: a trailing separator, doubled internal separators, and a
+// "\\?\" extended-length prefix (with or without the "UNC\" form). The
 // *display* casing (FrecencyEntry.path) is kept as whatever was last passed
 // to recordOpen — only this lookup key is normalised.
-function normalizeKey(path: string): string {
-  return path.trim().replace(/\\/g, "/").toLowerCase();
+export function normalizeKey(path: string): string {
+  let key = path.trim().replace(/\\/g, "/").toLowerCase();
+  key = stripExtendedLengthPrefix(key);
+  key = collapseDoubledSeparators(key);
+  // Strip a trailing separator, but never collapse a bare root ("/") to "".
+  if (key.length > 1) key = key.replace(/\/+$/, "");
+  return key;
 }
 
 function getStorage(): Storage | null {
@@ -145,17 +176,35 @@ function writeStore(store: Record<string, FrecencyEntry>): void {
   }
 }
 
-/** Drops the lowest-scoring entries in place until the store is back at the
- * cap. Score (not recency alone) decides who goes, so a handful of very
- * frequently opened old files survive longer than one-off recent opens. */
+// KT: eviction is deliberately a DIFFERENT metric from ranking (computeScore).
+// MEASURED: a 200-lifetime-open file idle past the 90-day STALE_WEIGHT floor
+// scored 86.44 by computeScore — below a single brand-new open's 100 — so
+// when enforceCap used to sort by computeScore, a same-day flood of one-off
+// opens filling the 500-entry cap would evict that file's entire history
+// permanently. Ranking legitimately wants recency to dominate (that's the
+// whole point of the module); eviction wants the opposite question answered:
+// "is this worth remembering at all", and lifetime open count — which never
+// decays — is the durable signal for that. Age is kept only as a sub-1-open
+// tiebreaker so it can never flip the ordering between different opens counts.
+function evictionValue(entry: FrecencyEntry, now: number): number {
+  const ageMs = Math.max(0, now - entry.lastOpened);
+  const recencyTiebreak = 1 / (1 + ageMs / DAY_MS); // in (0, 1]
+  return entry.opens + recencyTiebreak * 0.5; // weight < 1: never worth a whole open
+}
+
+/** Drops the least-worth-remembering entries in place until the store is back
+ * at the cap. Uses evictionValue (lifetime opens, not the decaying ranking
+ * score) so a handful of very frequently opened old files survive a flood of
+ * one-off recent opens instead of being silently forgotten — see the KT above
+ * evictionValue for the measured failure this replaced. */
 function enforceCap(store: Record<string, FrecencyEntry>, now: number): void {
   const keys = Object.keys(store);
   const overflow = keys.length - MAX_ENTRIES;
   if (overflow <= 0) return;
 
   keys
-    .map((key) => ({ key, score: computeScore(store[key], now) }))
-    .sort((a, b) => a.score - b.score)
+    .map((key) => ({ key, value: evictionValue(store[key], now) }))
+    .sort((a, b) => a.value - b.value)
     .slice(0, overflow)
     .forEach(({ key }) => delete store[key]);
 }

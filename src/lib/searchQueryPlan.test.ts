@@ -11,6 +11,7 @@ import {
   buildEverythingPlan,
   contentSearchApplies,
   describeQuery,
+  toEverythingToken,
 } from "./searchQueryPlan";
 import { EMPTY_QUERY, addChip, cycleChipStrict } from "./searchTokens";
 import type { ChipKind, QueryState } from "./searchTokens";
@@ -41,7 +42,7 @@ describe("buildEverythingPlan — scope and types", () => {
       chips: [{ kind: "files", source: "files" }, { kind: "folders", source: "folders" }],
       text: "x",
     };
-    expect(buildEverythingPlan(both).tokens).toEqual(["x"]);
+    expect(buildEverythingPlan(both).tokens).toEqual(["*x*"]);
   });
 
   it("combines every type chip into ONE semicolon-separated ext: token", () => {
@@ -73,7 +74,7 @@ describe("buildEverythingPlan — scope and types", () => {
 describe("buildEverythingPlan — time chips are sort-biased by default", () => {
   it("emits NO dm: token when soft, but still sorts by recency", () => {
     const plan = buildEverythingPlan(withText(chips("thisWeek"), "budget"));
-    expect(plan.tokens).toEqual(["budget"]);
+    expect(plan.tokens).toEqual(["*budget*"]);
     expect(plan.sort).toBe("dm-descending");
   });
 
@@ -119,7 +120,7 @@ describe("buildEverythingPlan — scopePath", () => {
     const state = withText(addChip(EMPTY_QUERY, "in", { path: "D:\\GitHub\\wincommander", pathLabel: "wincommander" }), "readme");
     const plan = buildEverythingPlan(state);
     expect(plan.scopePath).toBe("D:\\GitHub\\wincommander");
-    expect(plan.tokens).toEqual(["readme"]);
+    expect(plan.tokens).toEqual(["*readme*"]);
     expect(plan.tokens).not.toContain("path:D:\\GitHub\\wincommander");
   });
 
@@ -136,15 +137,15 @@ describe("buildEverythingPlan — scopePath", () => {
 });
 
 describe("buildEverythingPlan — text and browse", () => {
-  it("splits multi-word text into one token per word", () => {
+  it("splits multi-word text into one wrapped token per word (AND-of-substrings preserved)", () => {
     const plan = buildEverythingPlan(q("  budget   report q4 "));
-    expect(plan.tokens).toEqual(["budget", "report", "q4"]);
+    expect(plan.tokens).toEqual(["*budget*", "*report*", "*q4*"]);
     for (const token of plan.tokens) expect(token).not.toContain(" ");
   });
 
   it("never leaks the > folder-jump prefix into a token", () => {
     const plan = buildEverythingPlan(q(">assets"));
-    expect(plan.tokens).toEqual(["assets"]);
+    expect(plan.tokens).toEqual(["*assets*"]);
   });
 
   it("produces a browse plan for the empty query", () => {
@@ -169,7 +170,72 @@ describe("buildEverythingPlan — text and browse", () => {
 
   it("orders filters before the search words", () => {
     const state = withText(strictTime(chips("folders"), "today"), "assets");
-    expect(buildEverythingPlan(state).tokens).toEqual(["folder:", "dm:today", "assets"]);
+    expect(buildEverythingPlan(state).tokens).toEqual(["folder:", "dm:today", "*assets*"]);
+  });
+});
+
+describe("buildEverythingPlan — operator/switch neutralisation and separator tolerance", () => {
+  // Defect 1 (HIGH, 7.7% of the real corpus): a lone "-" from the common
+  // "Name - Description" pattern (e.g. Windows' own WinX shortcuts,
+  // `01a - Windows PowerShell.lnk`) must not survive as its own token — the
+  // Rust guard rejects any token starting with "-" and errors the WHOLE query.
+  it("drops a lone '-' word instead of emitting a token the backend guard rejects", () => {
+    const plan = buildEverythingPlan(q("01a - Windows PowerShell.lnk"));
+    expect(plan.tokens).toEqual(["*01a*", "*Windows*", "*PowerShell*lnk*"]);
+    for (const token of plan.tokens) {
+      expect(token.startsWith("-")).toBe(false);
+      expect(token.startsWith("/")).toBe(false);
+    }
+  });
+
+  it("drops other lone-operator words the same way (surviving '>' from 'A > B.txt', etc.)", () => {
+    expect(toEverythingToken("-")).toBeNull();
+    expect(toEverythingToken(">")).toBeNull();
+    expect(toEverythingToken("<")).toBeNull();
+    expect(toEverythingToken("|")).toBeNull();
+    expect(toEverythingToken("...")).toBeNull();
+    expect(toEverythingToken("___")).toBeNull();
+  });
+
+  // Defect 3 (HIGH, silent wrong answers): a leading "!" (also "|" "<" ">")
+  // is read by es.exe as an operator (NOT/OR/grouping), not literal text.
+  it("neutralises a leading '!' so it is literal text, not the NOT operator", () => {
+    const plan = buildEverythingPlan(q("!Read"));
+    expect(plan.tokens).toEqual(["*!Read*"]);
+    expect(plan.tokens[0].startsWith("!")).toBe(false);
+  });
+
+  it("never emits a token starting with an operator/switch character for any leading symbol", () => {
+    for (const symbol of ["-", "/", "!", "|", "<", ">"]) {
+      const token = toEverythingToken(`${symbol}word`);
+      expect(token).not.toBeNull();
+      expect(token!.startsWith(symbol)).toBe(false);
+      expect(token!.startsWith("*")).toBe(true);
+    }
+  });
+
+  // Defect 2 (HIGH, 0% recall/268 cases): the user does not remember whether
+  // a filename used a space, dash, underscore, or dot. Runs of any of those
+  // WITHIN a word collapse to one wildcard, so all four spellings of
+  // "Docker Desktop" produce an equivalent, separator-tolerant token.
+  it("collapses -/_/. runs within a word into a single wildcard (separator tolerance)", () => {
+    expect(toEverythingToken("Docker-Desktop")).toBe("*Docker*Desktop*");
+    expect(toEverythingToken("Docker_Desktop")).toBe("*Docker*Desktop*");
+    expect(toEverythingToken("Docker.Desktop")).toBe("*Docker*Desktop*");
+    // Typed with a real space: two separate whitespace-split words, each
+    // wrapped independently — still an AND of the two substrings.
+    const plan = buildEverythingPlan(q("docker desktop"));
+    expect(plan.tokens).toEqual(["*docker*", "*desktop*"]);
+  });
+
+  it("wrapping a plain word in */* is a no-op for Everything's default substring match, so it never regresses a query with no punctuation", () => {
+    expect(toEverythingToken("budget")).toBe("*budget*");
+    expect(toEverythingToken("report")).toBe("*report*");
+  });
+
+  it("never emits a token containing a raw space", () => {
+    const plan = buildEverythingPlan(q("My Documents Q4"));
+    for (const token of plan.tokens) expect(token).not.toContain(" ");
   });
 });
 

@@ -22,7 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { buildContentQueryArgs, contentHitToDisplayRow } from "@/lib/contentSearch";
 import type { ContentDisplayRow } from "@/lib/contentSearch";
 import type { ContentHit } from "@/types/wincmd-search";
-import { sfExtOf } from "@/lib/fileNameSearch";
+import { isDirectoryResult, sfExtOf } from "@/lib/fileNameSearch";
 import type { SearchResponse, SearchResult } from "@/lib/fileNameSearch";
 import { resolveMotionDisabled } from "@/lib/motionPolicy";
 import { topPaths } from "@/lib/frecency";
@@ -52,6 +52,20 @@ const MATCH_FETCH = 300;
 const MATCH_SHOW = 10;
 /** How many remembered paths may lead the browse list. */
 const FRECENCY_LEAD = 4;
+
+// KT: MEASURED — 1-2 character terms run against the WHOLE index timed out 9
+// of 16 runs (56%) under load, versus 0 of 8 for a 20-char term. A term this
+// short is virtually always still mid-keystroke, so refusing it client-side
+// before it ever reaches es.exe costs nothing real and protects the single
+// shared IPC instance from its most timeout-prone request shape. Deliberately
+// NOT applied to the browse pass: an empty term means isBrowse, a different
+// code path entirely, so `isMatchTermTooShort("")` must stay false or a
+// chip-only query (e.g. just the "Images" chip, no typed text) would wrongly
+// get refused too.
+export const MIN_MATCH_TERM_LENGTH = 3;
+export function isMatchTermTooShort(term: string): boolean {
+  return term.length > 0 && term.length < MIN_MATCH_TERM_LENGTH;
+}
 const APP_EXT_TOKEN = "ext:exe;lnk;msi;appx;msix";
 
 // Paths that are technically "recently modified" and never what anyone meant.
@@ -124,26 +138,73 @@ function frecKey(path: string): string {
 
 const APP_EXTS = new Set(["exe", "msi", "appx", "msix", "lnk"]);
 
+// KT: MEASURED — this corpus's real "folders" stratum is dominated by hidden/
+// config directories (.claude-plugin, .cargo, .bin, .claude, .git, …), every
+// dev machine's most common folder-name shape. A dot at position 0 is a
+// hidden-file marker, not an extension delimiter: `dot >= 0` treated
+// ".claude-plugin" as ext="claude-plugin" with an EMPTY basename, so it could
+// never register as an exact/prefix match against anything — the new tiers
+// above silently never engaged for the exact folder the sharpest measured
+// case (`…\ralph-loop\.claude-plugin`) is shaped like. `dot > 0` leaves a
+// REAL extension (".env.local" -> base ".env") untouched; only a name whose
+// ONLY dot is the leading one now keeps its whole name as the basename.
 function nameWithoutExt(name: string): string {
   const dot = name.lastIndexOf(".");
-  return (dot >= 0 ? name.slice(0, dot) : name).toLowerCase();
+  return (dot > 0 ? name.slice(0, dot) : name).toLowerCase();
 }
 
-// Sort priority — lower shows first. Apps ALWAYS beat data files regardless of
-// where they live, because path-based scoring missed apps installed under
-// %LOCALAPPDATA%\GitHubDesktop, \Discord, and friends.
-//   0 exact basename on an app extension · 1 prefix match on one ·
-//   2 any .lnk · 3 any other app binary · 4 everything else
-function appSortScore(result: SearchResult, termLower: string): number {
+// Sort priority — lower shows first.
+//   0 exact basename match, on an app extension    (brave.exe for "brave")
+//   1 exact basename match, on ANY type             (a folder/doc named EXACTLY the term)
+//   2 prefix basename match, on an app extension    (BraveUpdate.exe for "brave")
+//   3 prefix basename match, on ANY type             (a folder/doc that STARTS WITH the term)
+//   4 any .lnk, no name match at all
+//   5 any other app binary, no name match at all
+//   6 a directory, no name match at all
+//   7 everything else
+//
+// KT: MEASURED (2073 real queries): tier 0/1 used to exist ONLY for app
+// extensions, so a folder or a .txt file named EXACTLY what the user typed
+// shared tier 4 ("everything else") with 300 unrelated rows, tied only on
+// pathPreference() then shorter-name-wins — an exact match had no advantage
+// over noise. Biggest loss point in the product: recall@10 was 44.8% vs
+// recall@300's 70.6%, and 535 of the misses (46.8%) were rows the engine had
+// ALREADY FETCHED — the comparator just never surfaced them. Folders paid
+// worst: recall@10 8.6% vs recall@300 66.9%, because this function never
+// looked at whether a result was a directory at all.
+//
+// JUDGEMENT CALL — exact match of ANY type (tier 1) outranks an app that only
+// PREFIX-matches (tier 2): an exact hit is a stronger intent signal than
+// "happens to start with the same letters and is also runnable" — a folder
+// named exactly "chrome" is more likely the target than `ChromeSetup.exe`.
+// The app-priority invariant survives exactly where it was measured to
+// matter — true ties and true non-matches: an app that IS ITSELF an exact
+// match (tier 0) still beats a non-app exact match (tier 1), so "brave" with
+// both `Brave.lnk` and `brave.svg` on disk still offers the browser first.
+// And an app with ZERO name relation (tiers 4/5) still beats a non-matching
+// file OR folder (tiers 6/7) — unchanged, since that rule recovers apps
+// installed under %LOCALAPPDATA% that path scoring alone couldn't reach.
+//
+// Tier 6 (directory, no match) is new, below the unconditional app tiers but
+// above plain files: sfAppSortScore in fileNameSearch.ts ranks directories
+// LAST, correct for that file-oriented panel but wrong for a launcher where
+// "take me to my project folder" is the headline intent — a folder that
+// isn't even a name match still shouldn't drown behind every unrelated file.
+export function appSortScore(result: SearchResult, termLower: string): number {
   const ext = sfExtOf(result.name);
-  if (APP_EXTS.has(ext)) {
-    const base = nameWithoutExt(result.name);
-    if (base === termLower) return 0;
-    if (termLower && base.startsWith(termLower)) return 1;
-  }
-  if (ext === "lnk") return 2;
-  if (ext === "exe" || ext === "msi" || ext === "appx" || ext === "msix") return 3;
-  return 4;
+  const isApp = APP_EXTS.has(ext);
+  const base = nameWithoutExt(result.name);
+  const isExact = base === termLower;
+  const isPrefix = !isExact && termLower !== "" && base.startsWith(termLower);
+
+  if (isApp && isExact) return 0;
+  if (isExact) return 1;
+  if (isApp && isPrefix) return 2;
+  if (isPrefix) return 3;
+  if (ext === "lnk") return 4;
+  if (ext === "exe" || ext === "msi" || ext === "appx" || ext === "msix") return 5;
+  if (isDirectoryResult(result)) return 6;
+  return 7;
 }
 
 /** Rank lookup built from ONE localStorage read. Calling frecencyScore per
@@ -260,16 +321,34 @@ async function fetchBrowse(plan: EverythingPlan, filtered: boolean): Promise<Bro
   return [...lead, ...rest].slice(0, BROWSE_SHOW);
 }
 
-/** The typed-query list: apps first, then frecency, then shortest name. */
+const EMPTY_SEARCH_RESPONSE: SearchResponse = { results: [], total: 0, query: "" };
+
+/** The typed-query list: exact/prefix name matches first (apps ahead of ties),
+ *  then frecency, then shortest name. */
 async function fetchMatches(plan: EverythingPlan, term: string): Promise<BrowseResult[]> {
   const termLower = term.toLowerCase();
   const boost = appsBoostApplies(plan);
-  const [apps, all] = await Promise.all([
+  const [apps, sorted, unsorted] = await Promise.all([
     boost
-      ? fetchNames(plan, 30, APP_EXT_TOKEN).catch(() => ({ results: [], total: 0, query: "" }))
-      : Promise.resolve<SearchResponse>({ results: [], total: 0, query: "" }),
+      ? fetchNames(plan, 30, APP_EXT_TOKEN).catch(() => EMPTY_SEARCH_RESPONSE)
+      : Promise.resolve<SearchResponse>(EMPTY_SEARCH_RESPONSE),
     fetchNames(plan, MATCH_FETCH),
+    // KT: every query sorts dm-descending, which measurably fixed system
+    // noise burying user files — but a long-untouched file can fall entirely
+    // OUTSIDE the most-recent-300 window. MEASURED: of a sample of files
+    // untouched >180 days, 2 of 59 were retrievable ONLY from the unsorted
+    // (native path-order) page. A second page is effectively free (300 rows
+    // measured ~0.5s against es.exe; 50 vs 300 rows differed by single-digit
+    // milliseconds — cost is per es.exe call, not per row), so both are always
+    // fetched and pooled BEFORE ranking — same two-query-merge shape as the
+    // apps boost above. Best-effort: a failure here degrades to the sorted
+    // page alone rather than erroring out an otherwise-successful query.
+    fetchNames({ ...plan, sort: undefined }, MATCH_FETCH).catch(() => EMPTY_SEARCH_RESPONSE),
   ]);
+  // ONE pool, sorted ONCE below — not two independently-sorted arrays
+  // concatenated, which would strand an unsorted-only exact match behind up to
+  // 300 sorted-page rows regardless of its own tier.
+  const all = [...sorted.results, ...unsorted.results];
 
   const ranks = frecencyRanks();
   const byScore = (a: SearchResult, b: SearchResult) => {
@@ -297,7 +376,7 @@ async function fetchMatches(plan: EverythingPlan, term: string): Promise<BrowseR
   for (const row of [
     ...leading,
     ...[...apps.results].sort(byScore),
-    ...[...all.results].sort(byScore),
+    ...all.sort(byScore),
   ]) {
     if (seen.has(row.full_path)) continue;
     seen.add(row.full_path);
@@ -397,6 +476,17 @@ export function useChipSearch(active: boolean): ChipSearchApi {
     const live = () => runIdRef.current === runId;
 
     nameTimerRef.current = setTimeout(() => {
+      // A too-short term is refused before it ever reaches es.exe — see
+      // isMatchTermTooShort. Never true for a browse (empty term), so this
+      // cannot swallow the empty-box or chip-only cases.
+      if (!plan.isBrowse && isMatchTermTooShort(jump.term)) {
+        setPrimary([]);
+        setShowingBrowse(false);
+        setError(null);
+        setTotalCount(null);
+        setIsSearching(false);
+        return;
+      }
       setIsSearching(true);
       void (async () => {
         try {

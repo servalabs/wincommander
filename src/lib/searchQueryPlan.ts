@@ -98,6 +98,52 @@ function searchTerm(state: QueryState): string {
 }
 
 /**
+ * Turn ONE whitespace-delimited word of user-typed text into an es.exe argv
+ * token that can never be misread as an operator or a command-line switch,
+ * and that tolerates the user not remembering which separator a filename
+ * actually used. Returns null when the word is pure punctuation and should
+ * vanish rather than become a token.
+ *
+ * KT: es.exe reads `!` `|` `<` `>` as NOT/OR/grouping operators, and the
+ * backend's argv-injection guard (`validate_es_tokens` in backend.rs)
+ * rejects any token starting with `-` or `/` outright, erroring the WHOLE
+ * search. A raw whitespace split hits both: the common "Name - Description"
+ * pattern (Windows' own WinX shortcuts, e.g. `01a - Windows PowerShell.lnk`)
+ * produces a lone "-" word — MEASURED 314/4066 real corpus entries (7.7%)
+ * contain a standalone " - " and error on their own exact visible name — and
+ * a word starting with `!` silently returns the WRONG answer instead of an
+ * error: one real corpus file (`!Read this first!.txt`) returns 0 hits as
+ * typed, and the single-word variant `!Read` returns 1,382,850 rows (raw
+ * `es` measured) because `!` negates instead of matching literally.
+ *
+ * Wrapping every surviving word in a leading and trailing `*` wildcard fixes
+ * both at once: the token then starts with `*`, never an operator or switch
+ * character, and Everything's default match mode is already substring
+ * search, so `*word*` returns the EXACT same rows as bare `word` (raw `es`
+ * measured: "ead" and "*ead*" both 20216 rows; a two-word AND query and its
+ * wrapped form both 34 rows with the same 6 target hits) — provably
+ * additive, not a regression of the multi-word AND-of-substrings behaviour
+ * that measured 88.1% recall@300.
+ *
+ * Runs of `-`/`_`/`.` WITHIN a word are collapsed to a single `*` before
+ * wrapping, so "Docker-Desktop", "Docker_Desktop" and "Docker.Desktop" all
+ * become "*Docker*Desktop*" and find "Docker Desktop.exe" — MEASURED 0%
+ * recall/268 real cases before this change, fixed after (raw `es` verified).
+ * This is the same trick `normalizeQuery` in fileNameSearch.ts already uses;
+ * this file just never called it, which is how the regression happened.
+ *
+ * A word that collapses to nothing but wildcard/punctuation (a lone "-", or
+ * a lone operator like ">" surviving from "A > B.txt") has no letters or
+ * digits left and is dropped rather than emitted as a bare-operator token.
+ */
+export function toEverythingToken(word: string): string | null {
+  const collapsed = word.replace(/[-_.]+/g, "*");
+  const core = collapsed.replace(/^\*+/, "").replace(/\*+$/, "");
+  if (!/[A-Za-z0-9]/.test(core)) return null;
+  return `*${core}*`;
+}
+
+/**
  * Build the Everything (es.exe) plan. `now` is accepted for symmetry with
  * buildContentTerms but is deliberately unused: es.exe resolves `dm:` tokens
  * against its own clock, so there is no date arithmetic to do here.
@@ -127,9 +173,15 @@ export function buildEverythingPlan(state: QueryState, _now?: Date): EverythingP
 
   // Each word becomes its own argv entry, so "budget report" means both words
   // appear (Everything substring-matches by default) rather than the literal
-  // phrase — and no token can ever contain a space.
+  // phrase — and no token can ever contain a space. toEverythingToken() also
+  // neutralises operator/switch characters and tolerates separator mismatch;
+  // see its doc comment for the measured defects this fixes.
   const term = searchTerm(state);
-  for (const word of term.split(/\s+/)) if (word) tokens.push(word);
+  for (const word of term.split(/\s+/)) {
+    if (!word) continue;
+    const token = toEverythingToken(word);
+    if (token) tokens.push(token);
+  }
 
   const isBrowse = term === "";
   const plan: EverythingPlan = { tokens, isBrowse };

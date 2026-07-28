@@ -36,10 +36,13 @@ const VERIFIED_ICONS = [
   "stopwatch", "filter", "cross", "duplicate", "square", "properties", "database", "search",
 ];
 
+// "duplicates" is a valid ChipKind (searchQueryPlan.ts still switches on it)
+// but is deliberately NOT in this list — it has no CHIP_DEFS entry anymore
+// (see the "duplicates — removed from the catalogue" suite below).
 const ALL_KINDS: ChipKind[] = [
   "folders", "files", "images", "videos", "audio", "documents", "code", "archives", "apps",
   "today", "yesterday", "thisWeek", "last30Days", "thisYear", "big", "small",
-  "empty", "duplicates", "in",
+  "empty", "in",
 ];
 
 describe("CHIP_DEFS catalogue", () => {
@@ -90,7 +93,6 @@ describe("suggestChip — trigger words", () => {
       ["doc", "docs", "documents"],
       ["archive", "archives", "archives"],
       ["app", "apps", "apps"],
-      ["duplicate", "duplicates", "duplicates"],
     ];
     for (const [singular, plural, kind] of pairs) {
       expect(mustSuggest(q(singular)).chip.kind).toBe(kind);
@@ -180,7 +182,7 @@ describe("promote / demote round-trip", () => {
   });
 
   it("never corrects the user's wording", () => {
-    for (const typed of ["folders", "dirs", "pics", "songs", "dupes", "Programs"]) {
+    for (const typed of ["folders", "dirs", "pics", "songs", "Programs"]) {
       const after = promoteChip(q(typed), mustSuggest(q(typed)));
       expect(demoteLastChip(after)?.text).toBe(typed);
     }
@@ -207,9 +209,9 @@ describe("promote / demote round-trip", () => {
 
 describe("addChip", () => {
   it("defaults source to a trigger word so a clicked chip still demotes", () => {
-    const state = addChip(EMPTY_QUERY, "duplicates");
-    expect(state.chips[0].source).toBe("duplicate");
-    expect(demoteLastChip(state)?.text).toBe("duplicate");
+    const state = addChip(EMPTY_QUERY, "documents");
+    expect(state.chips[0].source).toBe("doc");
+    expect(demoteLastChip(state)?.text).toBe("doc");
   });
 
   it("carries path + pathLabel for the in chip and labels its source", () => {
@@ -243,6 +245,56 @@ describe("addChip", () => {
 
   it("leaves the text untouched", () => {
     expect(addChip(q("budget"), "documents").text).toBe("budget");
+  });
+});
+
+// Defect 2 (FIX-D, measured): Everything's `empty:` matches empty FOLDERS
+// only, so pairing it with the `files` scope is a guaranteed, permanent zero.
+describe("empty — relabelled and no longer combinable with files (Defect 2)", () => {
+  it("is labelled 'Empty folders', not the old bare 'Empty'", () => {
+    expect(chipDef("empty").label).toBe("Empty folders");
+  });
+
+  it("drops files when empty is added", () => {
+    const state = addChip(addChip(EMPTY_QUERY, "files"), "empty");
+    expect(state.chips.map((c) => c.kind)).toEqual(["empty"]);
+  });
+
+  it("drops empty when files is added", () => {
+    const state = addChip(addChip(EMPTY_QUERY, "empty"), "files");
+    expect(state.chips.map((c) => c.kind)).toEqual(["files"]);
+  });
+
+  it("still combines freely with folders — empty: genuinely only matches folders", () => {
+    const state = addChip(addChip(EMPTY_QUERY, "folders"), "empty");
+    expect(state.chips.map((c) => c.kind)).toEqual(["folders", "empty"]);
+  });
+});
+
+// Defect 3 (FIX-D, measured): Everything's `dupe:` matches filename+size (not
+// content) and a whole-disk click with no other input deterministically blows
+// the 6-second search timeout, so the chip is retired from the catalogue.
+// The ChipKind and searchQueryPlan.ts's `dupe:` planning stay intact — only
+// the user-facing route to it (CHIP_DEFS + its trigger words) is gone.
+describe("duplicates — removed from the catalogue on purpose (Defect 3)", () => {
+  it("is not present in CHIP_DEFS", () => {
+    expect(CHIP_DEFS.some((d) => d.kind === "duplicates")).toBe(false);
+  });
+
+  it("chipDef throws for the retired kind (no def to fake a label from)", () => {
+    let threw = false;
+    try {
+      chipDef("duplicates" as ChipKind);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+  });
+
+  it("no former trigger word offers a Duplicates chip anymore", () => {
+    for (const word of ["duplicate", "duplicates", "dupe", "dupes"]) {
+      expect(suggestChip(q(word))).toBeNull();
+    }
   });
 });
 

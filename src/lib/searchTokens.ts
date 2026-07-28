@@ -63,8 +63,25 @@ export const CHIP_DEFS: readonly ChipDef[] = [
   { kind: "thisYear",   label: "This year",    icon: "calendar",     group: "time",    triggers: ["year", "thisyear"], supportsStrict: true },
   { kind: "big",        label: "Big",          icon: "database",     group: "size",    triggers: ["big", "large", "huge"] },
   { kind: "small",      label: "Small",        icon: "database",     group: "size",    triggers: ["small", "tiny"] },
-  { kind: "empty",      label: "Empty",        icon: "square",       group: "special",  triggers: ["empty"] },
-  { kind: "duplicates", label: "Duplicates",   icon: "duplicate",    group: "special",  triggers: ["duplicate", "duplicates", "dupe", "dupes"] },
+  // KT: relabelled "Empty" -> "Empty folders" (FIX-D, measured). Everything's
+  // `empty:` matches empty FOLDERS only — a whole-disk `empty:` returned 7969
+  // rows, a 300-row sample was 100% folders / 0% files — even though this
+  // machine has 10,373 real 0-byte FILES that chip can never surface. The
+  // query itself is fine (it does what a real "Empty Folder Cleaner" needs);
+  // only the old label overclaimed. See EXCLUSIVE_SETS below for why it can no
+  // longer combine with `files`.
+  { kind: "empty",      label: "Empty folders", icon: "square",      group: "special", triggers: ["empty"] },
+  // KT: "Duplicates" is REMOVED from the catalogue on purpose (FIX-D,
+  // measured) — the ChipKind itself stays in the union below and
+  // searchQueryPlan.ts keeps its `dupe:` planner code, so a hand-built chip
+  // still plans correctly; there is just no way to reach it through the UI
+  // anymore. Everything's `dupe:` matches filename+size, not content: it
+  // flags same-name-different-content files as dupes and misses the classic
+  // real case (the same file re-downloaded under a new name). Worse, a
+  // whole-disk `dupe:` click with NO other input exceeds the 6-second search
+  // timeout deterministically, every time — a chip that always errors on the
+  // one click it exists for is not a feature. The app's dedicated Duplicate
+  // Finder panel (src/panels/maintenance) does this job for real.
 ];
 
 const DEFS_BY_KIND: Map<ChipKind, ChipDef> = new Map(CHIP_DEFS.map((d) => [d.kind, d]));
@@ -82,13 +99,28 @@ export const EMPTY_QUERY: QueryState = { chips: [], text: "" };
 
 export interface ChipSuggestion { chip: Chip; consumed: string; nextText: string; }
 
-/** Chips that cannot coexist — adding one drops its siblings. `file: folder:`
- *  in a single Everything query silently returns zero rows, and "modified today
- *  AND yesterday" / "big AND small" are answerless in the same way. `in` is in
- *  the scope group but combines freely with files/folders. */
+/** Chips that cannot coexist — adding one drops its siblings.
+ *  - `files`/`folders`: `file: folder:` together in one Everything query
+ *    silently returns zero rows, so scope is a true either/or.
+ *  - `big`/`small`: opposite ends of one size axis — "big AND small" is the
+ *    same self-contradiction.
+ *  - `files`/`empty`: Everything's `empty:` only ever matches empty FOLDERS
+ *    (measured: a 300-row sample of a whole-disk `empty:` was 100% folders),
+ *    so `file: empty:` together is guaranteed to return zero rows forever —
+ *    the same answerless case as the two above.
+ *  - the five time chips: this pairing is NOT actually "answerless" the way
+ *    the other three are — `today` is a subset of `thisWeek`, so "today AND
+ *    thisWeek" has a perfectly good answer (today's files); verified this is
+ *    an overgeneralisation of the other pairs' reasoning. They stay mutually
+ *    exclusive anyway because the UI shows ONE "how recent" chip at a time by
+ *    design — a single recency dial, not a set of independently-combinable
+ *    filters — so nesting two would just repeat the narrower chip's rows
+ *    under a second label with no new information.
+ *  `in` is in the scope group but combines freely with files/folders. */
 const EXCLUSIVE_SETS: readonly ChipKind[][] = [
   ["files", "folders"],
   ["big", "small"],
+  ["files", "empty"],
   ["today", "yesterday", "thisWeek", "last30Days", "thisYear"],
 ];
 
