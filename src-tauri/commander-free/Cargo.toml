@@ -130,7 +130,7 @@ tempfile = "3"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 
 [target.'cfg(windows)'.dependencies]
-webview2-com = "=0.38.2"
+webview2-com = "=0.39.1"
 # explorer_context.rs — the Ctrl+Space "in this folder" chip asks the shell
 # which Explorer window the user was last in. That needs the COM shell
 # automation surface, which windows-sys cannot express (no vtable wrappers):
