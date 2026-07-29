@@ -387,10 +387,31 @@ html.light .tech-grid.armed {
 .nettraffic-drawer {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 5px;
     margin-top: 4px;
     padding-top: 8px;
     border-top: 1px solid var(--color-border);
+}
+
+.nettraffic-drawer-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+}
+
+.nettraffic-drawer-heading span:last-child {
+    color: var(--color-text-muted);
+    font-size: 7px;
+    font-weight: 500;
+    letter-spacing: 0.25px;
+    text-align: right;
 }
 
 .nettraffic-drawer-row {
@@ -1110,6 +1131,16 @@ html.light .tech-grid.armed {
     color: var(--color-accent);
 }
 
+@keyframes metric-alert-disabled-shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-2px); }
+    75% { transform: translateX(2px); }
+}
+
+.metric-alert-bell.is-shaking {
+    animation: metric-alert-disabled-shake 180ms ease-in-out;
+}
+
 .metric-alert-label {
     font-family: var(--font-mono);
     font-size: 10px;
@@ -1131,6 +1162,37 @@ html.light .tech-grid.armed {
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: 6px;
+}
+
+.nettraffic-drawer .metric-alert-row {
+    display: grid;
+    grid-template-columns: 24px minmax(52px, 1fr) auto;
+    column-gap: 7px;
+    padding: 3px 0;
+}
+
+.nettraffic-drawer .metric-alert-controls {
+    margin-left: 0;
+    flex-wrap: nowrap;
+    gap: 5px;
+}
+
+.nettraffic-drawer .metric-alert-label {
+    min-width: 0;
+}
+
+@media (max-width: 390px) {
+    .nettraffic-drawer .metric-alert-row {
+        grid-template-columns: 24px minmax(48px, 1fr) auto;
+    }
+
+    .nettraffic-drawer .metric-alert-controls {
+        gap: 3px;
+    }
+
+    .nettraffic-drawer .metric-alert-over {
+        display: none;
+    }
 }
 
 .metric-alert-input {

@@ -93,8 +93,12 @@ export default function NetworkTrafficCard({ expanded = true, onToggle }: Networ
           expand/collapse state (mirrors System Info's alert drawer). */}
       {drawerOpen && (
         <div className="nettraffic-drawer">
-          <MetricAlertRow metric="upload" label="Upload" unit="MB/s" />
-          <MetricAlertRow metric="download" label="Download" unit="MB/s" />
+          <div className="nettraffic-drawer-heading">
+            <span>Traffic alerts</span>
+            <span>{alertsOn ? "Monitoring sustained peaks" : "Both alerts are off"}</span>
+          </div>
+          <MetricAlertRow metric="upload" label="Upload" unit="MB/s" shakeWhenDisabled />
+          <MetricAlertRow metric="download" label="Download" unit="MB/s" shakeWhenDisabled />
         </div>
       )}
 
@@ -136,13 +140,6 @@ export default function NetworkTrafficCard({ expanded = true, onToggle }: Networ
       </div>
 
       <div className="nettraffic-foot">{footText()}</div>
-
-      {drawerOpen && (
-        <div className="nettraffic-drawer">
-          <MetricAlertRow metric="upload" label="Upload" unit="MB/s" />
-          <MetricAlertRow metric="download" label="Download" unit="MB/s" />
-        </div>
-      )}
       </>)}
     </div>
   );

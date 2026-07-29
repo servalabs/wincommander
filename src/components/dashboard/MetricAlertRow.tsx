@@ -6,6 +6,18 @@ interface MetricAlertRowProps {
   metric: MetricKey;
   label: string;
   unit: string;
+  /** Network alerts keep an off bell informational: it confirms the disabled
+   * state without silently turning a notification rule back on. */
+  shakeWhenDisabled?: boolean;
+}
+
+export type MetricAlertBellAction = "toggle" | "shake";
+
+export function getMetricAlertBellAction(
+  enabled: boolean,
+  shakeWhenDisabled: boolean,
+): MetricAlertBellAction {
+  return !enabled && shakeWhenDisabled ? "shake" : "toggle";
 }
 
 /**
@@ -14,12 +26,18 @@ interface MetricAlertRowProps {
  * threshold in the metric's unit. Reads/writes the shared useMetricAlerts
  * store so every instance stays in sync and the backend is the single source.
  */
-export default function MetricAlertRow({ metric, label, unit }: MetricAlertRowProps) {
+export default function MetricAlertRow({
+  metric,
+  label,
+  unit,
+  shakeWhenDisabled = false,
+}: MetricAlertRowProps) {
   const { config, update } = useMetricAlerts();
   const m = config?.[metric];
   const [draft, setDraft] = useState<string>("");
   const [secDraft, setSecDraft] = useState<string>("");
   const [busy, setBusy] = useState(false);
+  const [isShaking, setIsShaking] = useState(false);
 
   useEffect(() => {
     if (m) setDraft(String(m.threshold));
@@ -51,14 +69,30 @@ export default function MetricAlertRow({ metric, label, unit }: MetricAlertRowPr
     else setSecDraft(String(m.sustainedSecs));
   };
 
+  const handleBellClick = () => {
+    if (getMetricAlertBellAction(m.enabled, shakeWhenDisabled) === "shake") {
+      // Restart the short cue on consecutive clicks without changing settings.
+      setIsShaking(false);
+      requestAnimationFrame(() => setIsShaking(true));
+      return;
+    }
+    void commit({ enabled: !m.enabled });
+  };
+
   return (
     <div className="metric-alert-row">
       <button
         type="button"
-        className={`metric-alert-bell ${m.enabled ? "on" : "off"}`}
-        onClick={() => commit({ enabled: !m.enabled })}
+        className={`metric-alert-bell ${m.enabled ? "on" : "off"} ${isShaking ? "is-shaking" : ""}`}
+        onAnimationEnd={() => setIsShaking(false)}
+        onClick={handleBellClick}
         disabled={busy}
-        title={m.enabled ? `${label} alert on — click to mute` : `${label} alert off — click to enable`}
+        title={m.enabled
+          ? `${label} alert on — click to mute`
+          : shakeWhenDisabled
+            ? `${label} alert is off`
+            : `${label} alert off — click to enable`}
+        aria-label={m.enabled ? `Mute ${label} alert` : `${label} alert is off`}
       >
         {m.enabled ? <Bell size={12} /> : <BellOff size={12} />}
       </button>
