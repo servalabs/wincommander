@@ -1,17 +1,18 @@
 /* src/panels/apps/index.css */
 
 /* ── Engines Section (revamped) ───────────────────────────────────── */
-.eng-root { display: flex; flex-direction: column; gap: 10px; }
+.apps-engines-section { padding: 0 12px 12px; }
+.eng-root { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .eng-loading { padding: 12px; display: flex; align-items: center; justify-content: center; }
 
 /* Header row */
 .eng-header {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 2px;
 }
 .eng-health { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .eng-health-track {
   flex: 1; height: 4px; border-radius: 2px;
-  background: var(--color-border);
+  min-width: 64px; background: var(--color-border);
   overflow: hidden; max-width: 120px;
 }
 .eng-health-fill {

@@ -583,10 +583,10 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                         screen is obscured. */}
                     <div className="flex flex-col gap-3">
                         <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Blur triggers" : "Activation Triggers"}</span>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            <ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true} />
-                            <ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true} />
-                            <ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: blurs when a phone or camera is pointed at the screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true} />
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-[var(--shield-inner-border)]">
+                            <div className="sm:pr-3"><ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true} /></div>
+                            <div className="sm:px-3"><ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true} /></div>
+                            <div className="sm:pl-3"><ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: blurs when a phone or camera is pointed at the screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true} /></div>
                         </div>
                     </div>
 

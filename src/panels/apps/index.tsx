@@ -65,7 +65,7 @@ export default function AppsPanel() {
             <TabsTrigger value="install">Install software</TabsTrigger>
             <TabsTrigger value="debloat">Debloat</TabsTrigger>
           </TabsList>
-          <TabsContent value="install"><AppInstallerPanel updatesTools={<div className="flex flex-col gap-6"><PackageUpdateTools /><div className="flex flex-col gap-3"><div className="text-xs font-semibold uppercase tracking-widest opacity-60">Engines</div><EnginesSection /></div></div>} /></TabsContent>
+          <TabsContent value="install"><AppInstallerPanel updatesTools={<div className="flex flex-col gap-6"><PackageUpdateTools /><div className="apps-engines-section flex flex-col gap-3"><div className="text-xs font-semibold uppercase tracking-widest opacity-60">Engines</div><EnginesSection /></div></div>} /></TabsContent>
           <TabsContent value="debloat"><DebloatPanel /></TabsContent>
         </Tabs>
       </div>
