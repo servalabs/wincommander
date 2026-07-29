@@ -16,13 +16,13 @@ export default function ReclaimSpaceCard() {
 
 export function WindowsStorageCard() {
   return (
-    <Card data-tour="maintenance-disk-cleanup" className="maintenance-storage-card maintenance-storage-overview-card">
+    <Card className="maintenance-storage-card maintenance-storage-overview-card">
       <CardHeader>
         <CardTitle>Windows storage &amp; file hygiene</CardTitle>
         <CardDescription>Review Windows-managed storage, then choose the folders you want inspected for duplicate files or empty folders.</CardDescription>
       </CardHeader>
       <CardContent className="maintenance-storage-overview-content">
-        <section aria-label="Windows storage cleanup" className="maintenance-storage-section">
+        <section data-tour="maintenance-disk-cleanup" aria-label="Windows storage cleanup" className="maintenance-storage-section">
           <DiskCleanupGranular />
         </section>
         <section aria-label="Folder inspector and file hygiene" className="maintenance-file-hygiene-section">

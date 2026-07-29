@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Icon } from "../../components/ui/icon";
+import { CheckboxControl } from "../../components/ui/bp";
 import {
   filterFirewallRules,
   readFirewallRule,
@@ -135,14 +136,12 @@ export function FirewallRulesTable({
                   onClick={() => !disabled && onToggle(rule.id)}
                 >
                   <td>
-                    <input
-                      type="checkbox"
+                    <CheckboxControl
                       checked={checked}
                       disabled={disabled}
-                      aria-label={`Select ${rule.name}`}
+                      ariaLabel={`Select ${rule.name}`}
                       onChange={() => onToggle(rule.id)}
                       onClick={(e) => e.stopPropagation()}
-                      className="size-3.5 accent-[var(--accent)]"
                     />
                   </td>
                   <td className="wc-net-truncate" title={rule.name}>

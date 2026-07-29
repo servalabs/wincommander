@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { Classes, Dialog, Spinner, Icon, Button, Alert } from "@/components/ui/bp";
+import { Classes, Dialog, Spinner, Icon, Button, Alert, CheckboxControl } from "@/components/ui/bp";
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import useBackend from "../../hooks/useBackend";
 import { showError, showSuccess } from "../../utils/toast";
@@ -509,8 +509,8 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
 
     // ── Selection ─────────────────────────────────────────────────────────────
 
-    const toggleSelect = useCallback((path: string, e: React.MouseEvent) => {
-        e.stopPropagation();
+    const toggleSelect = useCallback((path: string, e?: React.MouseEvent) => {
+        e?.stopPropagation();
         setSelected(prev => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
     }, []);
 
@@ -764,7 +764,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                                                         return (
                                                             <tr key={row.fullPath} className={`da-row da-large-row ${isSelected ? "da-row-selected" : ""}`}>
                                                                 <td className="da-td-check" onClick={e => toggleSelect(row.fullPath, e)}>
-                                                                    <div className={`da-checkbox ${isSelected ? "checked" : ""}`} />
+                                                                    <CheckboxControl checked={isSelected} ariaLabel={`Select ${row.name}`} onChange={() => toggleSelect(row.fullPath)} onClick={e => e.stopPropagation()} />
                                                                 </td>
                                                                 <td className="da-td-name da-large-name" title={row.fullPath}>
                                                                     <Icon icon={getFileIcon(row.name, row.isDir).icon as any} size={14} className={`da-row-icon ${getFileIcon(row.name, row.isDir).colorClass}`} />
@@ -799,7 +799,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                                         <thead>
                                             <tr>
                                                 <th className="da-th-check" onClick={toggleSelectAll}>
-                                                    <div className={`da-checkbox ${allSelected ? "checked" : someSelected ? "indeterminate" : ""}`} />
+                                                    <CheckboxControl checked={allSelected} indeterminate={someSelected} ariaLabel="Select all items" onChange={toggleSelectAll} onClick={e => e.stopPropagation()} />
                                                 </th>
                                                 <th className="da-th-name">Name</th>
                                                 <th className="da-th-bar"></th>
@@ -822,7 +822,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                                                         title={row.fullPath}
                                                     >
                                                         <td className="da-td-check" onClick={e => toggleSelect(row.fullPath, e)}>
-                                                            <div className={`da-checkbox ${isSelected ? "checked" : ""}`} />
+                                                            <CheckboxControl checked={isSelected} ariaLabel={`Select ${row.name}`} onChange={() => toggleSelect(row.fullPath)} onClick={e => e.stopPropagation()} />
                                                         </td>
                                                         <td className="da-td-name">
                                                             <div className="da-td-indent" />

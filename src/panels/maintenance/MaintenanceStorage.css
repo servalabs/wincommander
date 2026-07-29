@@ -23,22 +23,18 @@
 .maintenance-app-cache-card {
   display: flex;
   flex-direction: column;
-  /* Windows storage owns two review workflows. Let the card grow with File
-     hygiene so the page—not an inner scroller—carries that content. The
-     adjacent cache card stretches to this same grid-row height and keeps its
-     independently long preview list inside its own scroll area. */
-  min-height: min(42rem, 68vh);
+  height: min(42rem, 68vh);
 }
 
 .maintenance-storage-overview-content,
 .maintenance-app-cache-content {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  flex: 1;
 }
 
 .maintenance-app-cache-content {
-  min-height: 0;
-  flex: 1;
   overflow: auto;
   overscroll-behavior: contain;
 }
@@ -48,13 +44,36 @@
 }
 
 .maintenance-file-hygiene-section {
+  display: flex;
+  min-height: 0;
+  flex: 1;
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--border);
 }
 
+.maintenance-file-hygiene-section > .maintenance-file-hygiene-tools,
+.maintenance-file-hygiene-card {
+  min-height: 0;
+  flex: 1;
+}
+
+.maintenance-file-hygiene-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .maintenance-file-hygiene-results {
-  max-height: 30rem;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.maintenance-file-hygiene-results > [data-slot="card-content"] {
+  min-height: 0;
+  flex: 1;
   overflow: auto;
   overscroll-behavior: contain;
 }
@@ -100,6 +119,7 @@
   }
 
   .maintenance-storage-overview-card,
+  .maintenance-app-cache-card,
   .maintenance-analysis-card,
   .maintenance-file-stats-slot > * {
     height: auto;

@@ -6,6 +6,8 @@ import {
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
+import { CheckboxControl } from "../../components/ui/bp";
 import { Icon, type IconName } from "../../components/ui/icon";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import SharedEmptyState from "../../components/shared/EmptyState";
@@ -30,6 +32,11 @@ function fileIconFor(name: string): IconName {
   return EXT_ICONS[ext] ?? "document";
 }
 
+function rootLabel(root: string) {
+  const normalized = root.replace(/[\\/]+$/, "");
+  return normalized.split(/[\\/]/).pop() || root;
+}
+
 function describeRemoveResult(result: DuplicateRemoveResult | EmptyFolderRemoveResult) {
   const summary = "bytesRecovered" in result
     ? `Removed ${result.filesRemoved} files and recovered ${formatBytes(result.bytesRecovered)}.`
@@ -42,6 +49,7 @@ function describeRemoveResult(result: DuplicateRemoveResult | EmptyFolderRemoveR
 export function FileHygieneTools() {
   const tools = useFileHygiene();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [rootsOpen, setRootsOpen] = useState(false);
   // Notices are dismissible rather than floating indefinitely: dismissal
   // resets whenever the underlying error/result identity changes (a fresh
   // scan error or a fresh remove result should reappear even if the last
@@ -79,7 +87,7 @@ export function FileHygieneTools() {
       {/* Roots apply to both tools below — kept structurally separate from the
           duplicates/empty switch so that scope is unambiguous. Exactly one
           "Choose folders" control lives here, always reachable. */}
-      <Card>
+      <Card className="maintenance-file-hygiene-card">
         <CardHeader>
           <div className="flex items-center gap-2">
             <Icon icon="folder-open" size={16} className="text-[var(--accent)]" />
@@ -97,15 +105,20 @@ export function FileHygieneTools() {
           </div>
           {tools.roots.length ? (
             <div className="flex flex-wrap gap-2">
-              {tools.roots.map((root) => (
+              {tools.roots.slice(0, 2).map((root) => (
                 <span key={root} className="flex max-w-full items-center gap-1.5 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] py-1 pl-2.5 pr-1.5 text-xs transition-colors hover:border-[var(--border-strong)]">
                   <Icon icon="folder-close" size={12} className="shrink-0 text-[var(--text-mute)]" />
-                  <span className="min-w-0 truncate font-mono text-[var(--text-dim)]" title={root}>{root}</span>
+                  <span className="min-w-0 truncate font-mono text-[var(--text-dim)]" title={root}>{rootLabel(root)}</span>
                   <button type="button" onClick={() => tools.removeRoot(root)} aria-label={`Remove ${root}`} title={`Remove ${root}`} className="shrink-0 rounded-[var(--r-sm)] p-0.5 text-[var(--text-mute)] hover:bg-[var(--surface-3)] hover:text-[var(--danger)]">
                     <Icon icon="cross" size={12} />
                   </button>
                 </span>
               ))}
+              {tools.roots.length > 2 && (
+                <Button size="sm" variant="outline" onClick={() => setRootsOpen(true)}>
+                  Show {tools.roots.length - 2} more
+                </Button>
+              )}
             </div>
           ) : (
             <SharedEmptyState
@@ -224,6 +237,28 @@ export function FileHygieneTools() {
           <AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => { setConfirmOpen(false); void tools.remove(); }}>Remove selected</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={rootsOpen} onOpenChange={setRootsOpen}>
+        <DialogContent className="max-h-[min(34rem,calc(100vh-2rem))] overflow-hidden">
+          <DialogHeader>
+            <DialogTitle>Selected folders</DialogTitle>
+            <DialogDescription>These folders are included in duplicate-file and empty-folder inspections.</DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 max-h-[22rem] overflow-y-auto overscroll-contain pr-1">
+            <div className="flex flex-col gap-2">
+              {tools.roots.map((root) => (
+                <div key={root} className="flex min-w-0 items-center gap-2 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
+                  <Icon icon="folder-close" size={14} className="shrink-0 text-[var(--text-mute)]" />
+                  <span className="min-w-0 flex-1 break-all font-mono text-xs text-[var(--text-dim)]" title={root}>{root}</span>
+                  <Button size="icon" variant="ghost" onClick={() => tools.removeRoot(root)} title={`Remove ${root}`} aria-label={`Remove ${root}`}>
+                    <Icon icon="cross" size={14} />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -241,10 +276,8 @@ function SelectionActionBar({ count, bytesLabel, onRemove }: { count: number; by
 
 function SelectionRow({ checked, disabled = false, onClick, icon, label, detail, retained = false }: { checked: boolean; disabled?: boolean; onClick: () => void; icon?: IconName; label: string; detail: string; retained?: boolean }) {
   return (
-    <button type="button" disabled={disabled} onClick={onClick} className="flex w-full items-start gap-3 rounded-[var(--r)] px-3 py-2 text-left transition-colors hover:bg-[var(--surface-2)] disabled:opacity-70">
-      <span className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[var(--r-sm)] border ${checked ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]" : "border-[var(--border-strong)]"}`}>
-        {checked && <Icon icon="check" size={12} />}
-      </span>
+    <div onClick={() => !disabled && onClick()} className={`flex w-full items-start gap-3 rounded-[var(--r)] px-3 py-2 text-left transition-colors hover:bg-[var(--surface-2)] ${disabled ? "cursor-default opacity-70" : "cursor-pointer"}`}>
+      <CheckboxControl checked={checked} disabled={disabled} ariaLabel={`Select ${label}`} onChange={onClick} onClick={(event) => event.stopPropagation()} />
       {icon && <Icon icon={icon} size={14} className="mt-0.5 shrink-0 text-[var(--text-mute)]" />}
       <span className="min-w-0">
         <span className="flex items-center gap-2">
@@ -253,7 +286,7 @@ function SelectionRow({ checked, disabled = false, onClick, icon, label, detail,
         </span>
         <span className="block break-all font-mono text-[11px] text-[var(--text-mute)]">{detail}</span>
       </span>
-    </button>
+    </div>
   );
 }
 

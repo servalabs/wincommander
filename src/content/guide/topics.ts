@@ -9,6 +9,7 @@
 
 import type { GuideTopic } from "./types";
 import scrubGif from "../../assets/tour/scrub.gif";
+import browserExtensionImage from "../../assets/tour/browser-extension.png";
 import lockdownVideo from "../../assets/tour/lockdown.mp4";
 import PrivacyShieldAnimation from "../../panels/privacy/PrivacyShieldAnimation";
 
@@ -227,10 +228,11 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     tour: {
       anchor: '[data-tour="privacy-browser-hardening"]',
       navigateTo: "privacy",
-      // A compact, text-first callout fits wholly above this wide/tall card.
-      // The previous large screenshot made that geometrically impossible and
-      // overlapped the highlighted extensions list on typical laptop heights.
+      // The image stays large enough to show the extension's controls. The
+      // tour placement logic measures the callout before final placement so
+      // it remains above the highlighted card instead of covering its list.
       placement: "top",
+      media: { type: "image", src: browserExtensionImage, alt: "Browser hardening extension controls" },
       tours: [
         { id: "tour-privacy", order: 10 },
         { id: "tour-dashboard", order: 50 },
@@ -381,12 +383,9 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     keywords: ["disk cleanup", "reclaim space", "system maintenance"],
     body: "Disk Clean-Up shows a live running total of reclaimable space as you select categories, before you clear anything.",
     tour: {
-      // Whole card highlighted as usual, PLUS a bolder secondary ring
-      // nested around the action row — "highlighted, but double highlighted
-      // with another rectangle" (2026-07-10 fix). The secondary ring covers
-      // the whole row, not just the MB counter <span>, so the Clean button the
-      // copy refers to sits inside it too (2026-07-26 fix: "only size is
-      // highlighted, not clean button").
+      // The primary ring deliberately covers Windows Storage only. File
+      // Hygiene shares the outer card but is a separate workflow. The
+      // secondary ring narrows attention to the live selected-space value.
       anchor: '[data-tour="maintenance-disk-cleanup"]',
       secondaryAnchor: '[data-tour="maintenance-disk-cleanup-actions"]',
       navigateTo: "maintenance",

@@ -4,6 +4,7 @@ import { Button } from "../../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
 import { Icon } from "../../ui/icon";
 import { Spinner } from "../../ui/spinner";
+import { CheckboxControl } from "../../ui/bp";
 import useBackend, { executeBackendCommand } from "../../../hooks/useBackend";
 import useEntitlements from "../../../hooks/useEntitlements";
 import { useAppState } from "../../../context/AppContext";
@@ -227,12 +228,8 @@ export default function DiskCleanupGranular() {
 
     return (
         <div className="flex flex-col gap-3">
-            {/* Tour anchor: the whole action row, so the secondary ring covers
-                the Clean button together with the live MB counter it feeds.
-                Ringing the counter <span> alone highlighted the number and left
-                Clean outside the box (2026-07-26 fix). */}
-            <div data-tour="maintenance-disk-cleanup-actions" className="flex flex-wrap items-center gap-2">
-                <span className="whitespace-nowrap">
+            <div className="flex flex-wrap items-center gap-2">
+                <span data-tour="maintenance-disk-cleanup-actions" className="whitespace-nowrap rounded-[var(--r-sm)] px-1 py-0.5">
                     <span className="font-mono text-base font-bold text-[var(--accent)]">{totalSelectedMb.toFixed(0)} MB</span>
                     <span className="ml-1 text-xs text-[var(--text-mute)]">selected</span>
                 </span>
@@ -288,11 +285,9 @@ export default function DiskCleanupGranular() {
 function CategoryRow({ category, checked, onToggle }: { category: CleanupCategory; checked: boolean; onToggle: () => void }) {
     const empty = category.FileCount === 0;
     return (
-        <button type="button" disabled={empty} onClick={onToggle}
-            className={`flex items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-left transition-colors hover:bg-[var(--surface-3)] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-[var(--surface-2)] ${checked ? "border-[var(--border-strong)]" : ""}`}>
-            <span className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[var(--r-sm)] border ${checked ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]" : "border-[var(--border-strong)]"}`}>
-                {checked && <Icon icon="tick" />}
-            </span>
+        <div onClick={() => !empty && onToggle()}
+            className={`flex items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-left transition-colors hover:bg-[var(--surface-3)] ${empty ? "cursor-default opacity-50 hover:bg-[var(--surface-2)]" : "cursor-pointer"} ${checked ? "border-[var(--border-strong)]" : ""}`}>
+            <CheckboxControl checked={checked} disabled={empty} ariaLabel={`Select ${category.Label}`} onChange={onToggle} onClick={(event) => event.stopPropagation()} />
             <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-1.5 text-xs font-semibold text-[var(--text)]">
                     {category.Id === "windowsOld" && <Icon icon="warning-sign" className="text-[var(--warn)]" />}
@@ -303,6 +298,6 @@ function CategoryRow({ category, checked, onToggle }: { category: CleanupCategor
                 </span>
             </span>
             {category.SizeMb >= 1024 && <Badge tone="warning">{(category.SizeMb / 1024).toFixed(1)} GB</Badge>}
-        </button>
+        </div>
     );
 }

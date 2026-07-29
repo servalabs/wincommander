@@ -213,6 +213,14 @@
   border: 1px solid var(--border);
 }
 
+/* Browser Hardening's extension capture needs more context than an icon, but
+   its tall target reserves limited space above. Keeping its full 5:3 frame
+   under 180px lets useTour place the callout wholly above the card. */
+.spotlight-callout--privacy-tour-browser-hardening .spotlight-media {
+  max-height: min(180px, 24vh);
+  object-fit: contain;
+}
+
 /* ── Embedded live component (e.g. Privacy Shield's own animation, reused
    as-is instead of a separate recording or dialog) ── */
 .spotlight-component-box {

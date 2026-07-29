@@ -21,7 +21,7 @@
 // the global `usePasteMonitor` hook in App.tsx; this component only
 // touches settings + Tauri commands for snooze / recent.
 
-import { Switch, Icon, Button, Tag } from "@/components/ui/bp";
+import { Switch, Icon, Button, Tag, CheckboxControl } from "@/components/ui/bp";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 import { PasteMonitorIntro } from "./MonitorIntros";
@@ -283,16 +283,18 @@ export default function PasteMonitorSection({
                   </span>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {CATEGORIES.map((c) => (
-                      <label
+                      <div
                         key={c.key}
-                        className="flex items-start gap-2.5 px-3 py-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] cursor-pointer hover:border-[var(--color-accent)]/40 transition-colors"
+                        onClick={() => onToggleCategory(c.key, !cats[c.key])}
+                        className="flex cursor-pointer items-start gap-2.5 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] px-3 py-2 transition-colors hover:border-[var(--color-accent)]/40"
                         style={{ userSelect: 'none' }}
                       >
-                        <input
-                          type="checkbox"
+                        <CheckboxControl
                           checked={cats[c.key]}
-                          onChange={(e) => onToggleCategory(c.key, e.currentTarget.checked)}
-                          className="mt-0.5 wc-check"
+                          onChange={(event) => onToggleCategory(c.key, event.currentTarget.checked)}
+                          onClick={(event) => event.stopPropagation()}
+                          ariaLabel={`Watch for ${c.title}`}
+                          className="mt-0.5"
                         />
                         <div className="flex flex-col gap-0.5 min-w-0">
                           <span className="text-[11px] font-medium text-[var(--shield-text-subtle)] leading-tight">
@@ -302,7 +304,7 @@ export default function PasteMonitorSection({
                             {c.description}
                           </span>
                         </div>
-                      </label>
+                      </div>
                     ))}
                   </div>
                 </div>

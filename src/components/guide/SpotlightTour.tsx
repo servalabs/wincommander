@@ -468,7 +468,7 @@ export default function SpotlightTour({ steps, onClose, dismissable = true }: Sp
       <motion.div
         key={index}
         ref={isHero ? modalRef : calloutRef}
-        className={isHero ? "spotlight-callout spotlight-hero-modal" : "spotlight-callout"}
+        className={isHero ? "spotlight-callout spotlight-hero-modal" : `spotlight-callout spotlight-callout--${step.topicId}`}
         // Opacity-only entrance: animating x/y/scale would set `transform` and
         // clobber the inline translate(-100%) used for top/left placements.
         style={isHero ? undefined : { width: CALLOUT_W, ...calloutStyle(rect, step.placement, calloutH) }}

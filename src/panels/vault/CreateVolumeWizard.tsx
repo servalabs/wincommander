@@ -1,4 +1,4 @@
-import { Dialog, Button, FormGroup, InputGroup, HTMLSelect, Icon } from "@/components/ui/bp";
+import { Dialog, Button, FormGroup, InputGroup, HTMLSelect, Icon, CheckboxControl } from "@/components/ui/bp";
 import { useState, useMemo, useCallback } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import useBackend from "../../hooks/useBackend";
@@ -369,11 +369,11 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                         )}
                         {isAdvanced && (
                             <div className="quick-format-row">
-                                <label className="quick-toggle">
-                                    <input type="checkbox" checked={quickFormat} onChange={e => setQuickFormat(e.target.checked)} />
+                                <div onClick={() => setQuickFormat(!quickFormat)} className="quick-toggle">
+                                    <CheckboxControl checked={quickFormat} ariaLabel="Quick format" onChange={event => setQuickFormat(event.currentTarget.checked)} onClick={event => event.stopPropagation()} />
                                     <span>Quick format</span>
                                     <span className="quick-desc">Faster but marginally less secure. Recommended for most use cases.</span>
-                                </label>
+                                </div>
                             </div>
                         )}
                     </div>

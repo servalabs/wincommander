@@ -1,6 +1,6 @@
 // src/panels/privacy/RdpIdleCard.tsx
 // Self-contained RDP Idle Disconnect card — no props needed.
-import { Switch, HTMLSelect, Icon, Spinner, Tag } from "@/components/ui/bp";
+import { Switch, HTMLSelect, Icon, Spinner, Tag, CheckboxControl } from "@/components/ui/bp";
 import { useCallback, useEffect, useState } from "react";
 import { useAppState } from "../../context/AppContext";
 import useEntitlements from "../../hooks/useEntitlements";
@@ -338,21 +338,21 @@ export default function RdpIdleCard() {
                                         <div className="pt-3 border-t border-[var(--shield-inner-border)] flex flex-col gap-2">
                                             <div className="text-[10px] font-mono uppercase tracking-widest text-[var(--shield-text-muted)] mb-1">On disconnect</div>
                                             <div className="grid grid-cols-2 gap-2">
-                                                <label className={`flex items-center gap-2.5 px-3 py-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] transition-colors ${rdpClearCacheLocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-[var(--color-accent)]/40'}`} style={{ userSelect: 'none' }}>
-                                                    <input type="checkbox" checked={rdpClearCache} disabled={rdpClearCacheLocked} onChange={e => patchRdpTracking({ rdpClearCacheOnDisconnect: e.currentTarget.checked })} className="wc-check" />
+                                                <div onClick={() => !rdpClearCacheLocked && patchRdpTracking({ rdpClearCacheOnDisconnect: !rdpClearCache })} className={`flex items-center gap-2.5 px-3 py-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] transition-colors ${rdpClearCacheLocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-[var(--color-accent)]/40'}`} style={{ userSelect: 'none' }}>
+                                                    <CheckboxControl checked={rdpClearCache} disabled={rdpClearCacheLocked} ariaLabel="Clear RDP history and cache" onChange={e => patchRdpTracking({ rdpClearCacheOnDisconnect: e.currentTarget.checked })} onClick={event => event.stopPropagation()} />
                                                     <span className="text-[11px] font-mono text-[var(--shield-text-subtle)] leading-tight">Clear RDP history & cache</span>
                                                     {rdpClearCacheLocked && <Icon icon="lock" size={10} className="ml-auto flex-shrink-0 text-[var(--color-text-muted)]" />}
-                                                </label>
-                                                <label className={`flex items-center gap-2.5 px-3 py-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] transition-colors ${rdpRemoveCredsLocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-[var(--color-accent)]/40'}`} style={{ userSelect: 'none' }}>
-                                                    <input type="checkbox" checked={rdpRemoveCreds} disabled={rdpRemoveCredsLocked} onChange={e => patchRdpTracking({ rdpRemoveCredsOnDisconnect: e.currentTarget.checked })} className="wc-check" />
+                                                </div>
+                                                <div onClick={() => !rdpRemoveCredsLocked && patchRdpTracking({ rdpRemoveCredsOnDisconnect: !rdpRemoveCreds })} className={`flex items-center gap-2.5 px-3 py-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] transition-colors ${rdpRemoveCredsLocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-[var(--color-accent)]/40'}`} style={{ userSelect: 'none' }}>
+                                                    <CheckboxControl checked={rdpRemoveCreds} disabled={rdpRemoveCredsLocked} ariaLabel="Remove saved credentials" onChange={e => patchRdpTracking({ rdpRemoveCredsOnDisconnect: e.currentTarget.checked })} onClick={event => event.stopPropagation()} />
                                                     <span className="text-[11px] font-mono text-[var(--shield-text-subtle)] leading-tight">Remove saved credentials</span>
                                                     {rdpRemoveCredsLocked && <Icon icon="lock" size={10} className="ml-auto flex-shrink-0 text-[var(--color-text-muted)]" />}
-                                                </label>
-                                                <label className={`flex items-center gap-2.5 px-3 py-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] transition-colors ${rdpDismountLocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-[var(--color-accent)]/40'}`} style={{ userSelect: 'none' }}>
-                                                    <input type="checkbox" checked={rdpDismountDraft} disabled={rdpDismountLocked} onChange={e => patchRdpDismountVaults(e.currentTarget.checked)} className="wc-check" />
+                                                </div>
+                                                <div onClick={() => !rdpDismountLocked && patchRdpDismountVaults(!rdpDismountDraft)} className={`flex items-center gap-2.5 px-3 py-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] transition-colors ${rdpDismountLocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-[var(--color-accent)]/40'}`} style={{ userSelect: 'none' }}>
+                                                    <CheckboxControl checked={rdpDismountDraft} disabled={rdpDismountLocked} ariaLabel="Dismount server vaults" onChange={e => patchRdpDismountVaults(e.currentTarget.checked)} onClick={event => event.stopPropagation()} />
                                                     <span className="text-[11px] font-mono text-[var(--shield-text-subtle)] leading-tight">Dismount server vaults</span>
                                                     {rdpDismountLocked && <Icon icon="lock" size={10} className="ml-auto flex-shrink-0 text-[var(--color-text-muted)]" />}
-                                                </label>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -435,14 +435,14 @@ export default function RdpIdleCard() {
                                     )}
                                     <div className="pt-2 border-t border-[var(--shield-inner-border)]">
                                         <div className="grid grid-cols-2 gap-2">
-                                            <label className="flex items-center gap-2.5 px-3 py-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] cursor-pointer hover:border-[var(--color-accent)]/40 transition-colors" style={{ userSelect: 'none' }}>
-                                                <input type="checkbox" checked={incomingDismountDraft} onChange={e => patchRdpIncomingDismount(e.currentTarget.checked)} className="wc-check" />
+                                            <div onClick={() => patchRdpIncomingDismount(!incomingDismountDraft)} className="flex cursor-pointer items-center gap-2.5 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] px-3 py-2 transition-colors hover:border-[var(--color-accent)]/40" style={{ userSelect: 'none' }}>
+                                                <CheckboxControl checked={incomingDismountDraft} ariaLabel="Dismount local vaults when all sessions end" onChange={e => patchRdpIncomingDismount(e.currentTarget.checked)} onClick={event => event.stopPropagation()} />
                                                 <span className="text-[11px] font-mono text-[var(--shield-text-subtle)] leading-tight">Dismount local vaults when all sessions end</span>
-                                            </label>
-                                            <label className="flex items-center gap-2.5 px-3 py-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] cursor-pointer hover:border-[var(--color-accent)]/40 transition-colors" style={{ userSelect: 'none' }}>
-                                                <input type="checkbox" checked={incomingSignOffDraft} onChange={e => patchRdpIncomingSignOffOnDisconnect(e.currentTarget.checked)} className="wc-check" />
+                                            </div>
+                                            <div onClick={() => patchRdpIncomingSignOffOnDisconnect(!incomingSignOffDraft)} className="flex cursor-pointer items-center gap-2.5 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] px-3 py-2 transition-colors hover:border-[var(--color-accent)]/40" style={{ userSelect: 'none' }}>
+                                                <CheckboxControl checked={incomingSignOffDraft} ariaLabel="Sign off when RDP window is closed" onChange={e => patchRdpIncomingSignOffOnDisconnect(e.currentTarget.checked)} onClick={event => event.stopPropagation()} />
                                                 <span className="text-[11px] font-mono text-[var(--shield-text-subtle)] leading-tight">Sign off when RDP window is closed</span>
-                                            </label>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>

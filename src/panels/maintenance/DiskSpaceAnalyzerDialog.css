@@ -810,50 +810,6 @@ html.light .da-sq-drag-hint {
   padding: 0 6px;
 }
 
-.da-checkbox {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid rgba(255, 255, 255, 0.3);
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.04);
-  position: relative;
-  transition: border-color 0.15s, background 0.15s;
-  vertical-align: middle;
-}
-
-.da-checkbox.checked {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-}
-
-.da-checkbox.checked::after {
-  content: "";
-  position: absolute;
-  left: 3px;
-  top: 0px;
-  width: 5px;
-  height: 9px;
-  border: 2px solid #fff;
-  border-top: none;
-  border-left: none;
-  transform: rotate(45deg);
-}
-
-.da-checkbox.indeterminate {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-}
-
-.da-checkbox.indeterminate::after {
-  content: "";
-  position: absolute;
-  left: 2px;
-  top: 5px;
-  width: 8px;
-  height: 2px;
-  background: #fff;
-}
 
 /* Selected row */
 .da-row-selected {
@@ -1666,18 +1622,6 @@ html.light .da-sr-count, html.light .da-sr-size {
 .da-th-check {
   width: 28px;
   padding: 0 4px;
-}
-
-.da-checkbox {
-  width: 12px;
-  height: 12px;
-}
-
-.da-checkbox.checked::after {
-  left: 2px;
-  top: 0;
-  width: 4px;
-  height: 8px;
 }
 
 .da-td-bar {

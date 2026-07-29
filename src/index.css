@@ -1211,67 +1211,6 @@ html.light body {
   .grid-cols-4 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
 }
 
-/* ── Custom checkbox ──────────────────────────────────────────────────
-   Native `<input type=checkbox>` + `accent-color` lets the browser pick
-   the tick mark colour, which in light mode can render a near-black
-   tick on a light blue fill — invisible at the 14×14 default size.
-   This class draws the box and tick ourselves with guaranteed contrast
-   in both themes. Apply with `<input type=checkbox className=wc-check>`. */
-.wc-check {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  border: 1.5px solid var(--color-border-light);
-  border-radius: 3px;
-  background: var(--color-bg-secondary);
-  cursor: pointer;
-  display: inline-grid;
-  place-content: center;
-  flex-shrink: 0;
-  transition: background 120ms ease, border-color 120ms ease;
-}
-.wc-check::before {
-  content: "";
-  width: 10px;
-  height: 10px;
-  transform: scale(0);
-  background-color: var(--color-bg-primary);
-  /* Tick mark drawn as a clip-path so we control the colour, not the browser. */
-  clip-path: polygon(14% 44%, 0% 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
-  transition: transform 120ms ease;
-}
-.wc-check:checked {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-}
-.wc-check:checked::before {
-  transform: scale(1);
-}
-.wc-check:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-.wc-check.wc-check-danger:checked {
-  background: var(--color-danger);
-  border-color: var(--color-danger);
-}
-.light .wc-check {
-  border-color: rgba(0, 0, 0, 0.28);
-  background: #ffffff;
-}
-.light .wc-check:checked {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-}
-.light .wc-check::before {
-  background-color: #ffffff;
-}
-.light .wc-check.wc-check-danger:checked {
-  background: var(--color-danger);
-  border-color: var(--color-danger);
-}
-
 @keyframes maintenance-scan {
   to { transform: translateX(100%); }
 }

@@ -453,6 +453,64 @@ function CheckDrawSvg() {
   );
 }
 
+export function CheckboxControl({
+  checked,
+  defaultChecked,
+  onChange,
+  disabled,
+  indeterminate,
+  className,
+  tabIndex,
+  onClick,
+  ariaLabel,
+}: {
+  checked?: boolean;
+  defaultChecked?: boolean;
+  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  disabled?: boolean;
+  indeterminate?: boolean;
+  className?: string;
+  tabIndex?: number;
+  onClick?: React.MouseEventHandler<HTMLButtonElement>;
+  ariaLabel?: string;
+}) {
+  useCheckKeyframe();
+
+  const checkedState: CheckboxPrimitive.CheckedState | undefined =
+    indeterminate ? "indeterminate" : checked;
+
+  return (
+    <CheckboxPrimitive.Root
+      checked={checkedState}
+      defaultChecked={defaultChecked}
+      disabled={disabled}
+      tabIndex={tabIndex}
+      onClick={onClick}
+      aria-label={ariaLabel}
+      onCheckedChange={(c) =>
+        onChange?.(syntheticChangeEvent(c === true))
+      }
+      // Box background/border transition is color-only — GPU-safe.
+      // Uses CSS tokens so duration/ease stay in sync with the design system.
+      className={cn(
+        "size-4 shrink-0 rounded-[var(--r-sm)] border border-[var(--border-strong)] bg-[var(--surface-2)] data-[state=checked]:bg-[var(--accent)] data-[state=checked]:border-[var(--accent-line)] data-[state=indeterminate]:bg-[var(--accent)] data-[state=indeterminate]:border-[var(--accent-line)] grid place-items-center outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-line)] disabled:pointer-events-none transition-[background-color,border-color] [transition-duration:var(--dur-fast)] [transition-timing-function:var(--ease)]",
+        className,
+      )}
+    >
+      {/* forceMount keeps the indicator in the DOM so the exit transition
+          on the box color is visible even as the indicator disappears. */}
+      <CheckboxPrimitive.Indicator forceMount>
+        {indeterminate ? (
+          <span className="block h-0.5 w-2 rounded-full bg-[var(--accent-contrast)]" />
+        ) : (
+          // key on checkedState forces SVG remount → replays draw animation
+          checkedState === true && <CheckDrawSvg key="checked" />
+        )}
+      </CheckboxPrimitive.Indicator>
+    </CheckboxPrimitive.Root>
+  );
+}
+
 export function Checkbox({
   checked,
   defaultChecked,
@@ -476,11 +534,6 @@ export function Checkbox({
   style?: React.CSSProperties;
   children?: React.ReactNode;
 }) {
-  useCheckKeyframe();
-
-  const checkedState: CheckboxPrimitive.CheckedState | undefined =
-    indeterminate ? "indeterminate" : checked;
-
   return (
     <label
       style={style}
@@ -490,28 +543,13 @@ export function Checkbox({
         className
       )}
     >
-      <CheckboxPrimitive.Root
-        checked={checkedState}
+      <CheckboxControl
+        checked={checked}
         defaultChecked={defaultChecked}
         disabled={disabled}
-        onCheckedChange={(c) =>
-          onChange?.(syntheticChangeEvent(c === true))
-        }
-        // Box background/border transition is color-only — GPU-safe.
-        // Uses CSS tokens so duration/ease stay in sync with the design system.
-        className="size-4 rounded-[var(--r-sm)] border border-[var(--border-strong)] bg-[var(--surface-2)] data-[state=checked]:bg-[var(--accent)] data-[state=checked]:border-[var(--accent-line)] data-[state=indeterminate]:bg-[var(--accent)] data-[state=indeterminate]:border-[var(--accent-line)] grid place-items-center outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-line)] disabled:pointer-events-none transition-[background-color,border-color] [transition-duration:var(--dur-fast)] [transition-timing-function:var(--ease)]"
-      >
-        {/* forceMount keeps the indicator in the DOM so the exit transition
-            on the box color is visible even as the indicator disappears. */}
-        <CheckboxPrimitive.Indicator forceMount>
-          {indeterminate ? (
-            <span className="block h-0.5 w-2 rounded-full bg-[var(--accent-contrast)]" />
-          ) : (
-            // key on checkedState forces SVG remount → replays draw animation
-            checkedState === true && <CheckDrawSvg key="checked" />
-          )}
-        </CheckboxPrimitive.Indicator>
-      </CheckboxPrimitive.Root>
+        indeterminate={indeterminate}
+        onChange={onChange}
+      />
       {(label ?? children) != null && <span>{label ?? children}</span>}
     </label>
   );

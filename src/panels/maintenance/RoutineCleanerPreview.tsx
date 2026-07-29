@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { CheckboxControl } from "../../components/ui/bp";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import type { RoutineCleanerCategory, RoutineCleanerItem } from "../../hooks/useBackend";
 import { formatBytes, getPopulatedRoutineCleanerCategories, getRecommendedItemIds, ROUTINE_CLEANER_CATEGORIES } from "./routineCleanerHelpers";
@@ -105,14 +106,8 @@ interface ItemRowProps {
 function ItemRow({ item, selected, disabled, onToggle }: ItemRowProps) {
   const category = ROUTINE_CLEANER_CATEGORIES.find((entry) => entry.id === item.category)?.label ?? item.category;
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 hover:border-[var(--border-strong)] has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60">
-      <input
-        className="mt-0.5 wc-check"
-        type="checkbox"
-        checked={selected}
-        disabled={disabled}
-        onChange={() => onToggle(item.id)}
-      />
+    <div onClick={() => !disabled && onToggle(item.id)} className={`flex items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 hover:border-[var(--border-strong)] ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+      <CheckboxControl checked={selected} disabled={disabled} ariaLabel={`Select ${item.label}`} onChange={() => onToggle(item.id)} onClick={(event) => event.stopPropagation()} />
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-[var(--text)]">
           {item.label}
@@ -126,6 +121,6 @@ function ItemRow({ item, selected, disabled, onToggle }: ItemRowProps) {
         </span>
       </span>
       <span className="shrink-0 font-mono text-xs text-[var(--text-dim)]">{formatBytes(item.bytes)}</span>
-    </label>
+    </div>
   );
 }
