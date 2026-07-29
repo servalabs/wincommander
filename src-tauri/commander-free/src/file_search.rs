@@ -550,9 +550,13 @@ mod tests {
     /// not merging with — the configured roots.
     #[test]
     fn resolve_content_roots_scope_overrides_configured() {
-        let configured = vec![PathBuf::from(r"C:\Users\test\Desktop"), PathBuf::from(r"C:\Users\test\Documents")];
-        let roots = resolve_content_roots(Some(r"D:\Projects\wincommander".to_string()), configured)
-            .expect("valid scope must resolve");
+        let configured = vec![
+            PathBuf::from(r"C:\Users\test\Desktop"),
+            PathBuf::from(r"C:\Users\test\Documents"),
+        ];
+        let roots =
+            resolve_content_roots(Some(r"D:\Projects\wincommander".to_string()), configured)
+                .expect("valid scope must resolve");
         assert_eq!(roots, vec![PathBuf::from(r"D:\Projects\wincommander")]);
     }
 
@@ -560,7 +564,10 @@ mod tests {
     /// unchanged — this is the no-regression guarantee for existing callers.
     #[test]
     fn resolve_content_roots_none_keeps_configured_roots() {
-        let configured = vec![PathBuf::from(r"C:\Users\test\Desktop"), PathBuf::from(r"C:\Users\test\Documents")];
+        let configured = vec![
+            PathBuf::from(r"C:\Users\test\Desktop"),
+            PathBuf::from(r"C:\Users\test\Documents"),
+        ];
         let roots = resolve_content_roots(None, configured.clone()).expect("None must never error");
         assert_eq!(roots, configured);
     }
@@ -583,14 +590,18 @@ mod tests {
     #[test]
     fn resolve_content_roots_rejects_empty_scope() {
         let err = resolve_content_roots(Some("   ".to_string()), vec![]).unwrap_err();
-        assert!(err.contains("empty"), "expected an empty-scope error, got: {err}");
+        assert!(
+            err.contains("empty"),
+            "expected an empty-scope error, got: {err}"
+        );
     }
 
     /// Control characters can't appear in a real Windows path — reject, same
     /// as `backend.rs::validate_es_scope_path`.
     #[test]
     fn resolve_content_roots_rejects_control_chars() {
-        let err = resolve_content_roots(Some("C:\\Users\\test\u{0007}".to_string()), vec![]).unwrap_err();
+        let err =
+            resolve_content_roots(Some("C:\\Users\\test\u{0007}".to_string()), vec![]).unwrap_err();
         assert!(
             err.contains("control characters"),
             "expected a control-char error, got: {err}"

@@ -19,8 +19,8 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Variant::{VARIANT, VT_I4};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    IFolderView, IPersistFolder2, IShellBrowser, IShellWindows, SHGetPathFromIDListEx, ShellWindows,
-    GPFIDL_DEFAULT, SID_STopLevelBrowser,
+    IFolderView, IPersistFolder2, IShellBrowser, IShellWindows, SHGetPathFromIDListEx,
+    SID_STopLevelBrowser, ShellWindows, GPFIDL_DEFAULT,
 };
 use windows_sys::Win32::Foundation::HWND as SysHwnd;
 use windows_sys::Win32::UI::WindowsAndMessaging::{

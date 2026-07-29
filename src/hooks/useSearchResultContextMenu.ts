@@ -81,16 +81,12 @@ export function useSearchResultContextMenu({ openPath, closeSearch, reportError 
           await invoke("search_delete_to_recycle_bin", { path: target.path });
           break;
         case "shred":
-          // Reuses the existing multi-pass confirmation dialog (irreversible,
-          // so a one-click shred here would be a dangerous UX regression)
-          // instead of calling a secure-delete command directly. This context
-          // menu also renders inside the separate "search-overlay" Tauri
-          // window (global hotkey quick-search) — a plain window.dispatchEvent
-          // there never reaches the main window's App.tsx listener, so this
-          // also emits the Tauri cross-window event, same dual-dispatch
-          // pattern already used for hidden-panels-lock/unlock.
-          window.dispatchEvent(new CustomEvent("open-shred-dialog"));
-          emit("open-shred-dialog").catch(() => {});
+          // Route the exact selected file or folder through the same batched
+          // cross-window event used by Explorer's WinCommander integration.
+          // BackgroundPollers opens the existing irreversible-action
+          // confirmation dialog with this path already selected; no secure
+          // deletion happens until the user confirms there.
+          await emit("shred-requested", target.path);
           break;
       }
       closeSearch();

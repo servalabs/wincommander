@@ -180,8 +180,8 @@ storage is `Get-DiskCleanupScan`/`Invoke-DiskCleanupCategories`; app-owned
 regenerable data is `routine_cleaner` with the `system` category withheld
 (`APP_CACHE_CLEANUP_CATEGORIES`). Before the application scan has results the
 scope renders a motion-policy-aware idle/scanning visual.
-File, shortcut, environment, uninstall-residue, registry, Explorer-menu, ARP,
-and Game Mode tools follow the same preview/revalidate pattern. Malware paths
+File, shortcut, environment, uninstall-residue, registry, Explorer-menu, and
+ARP tools follow the same preview/revalidate pattern. Malware paths
 remain entirely in `wincommander-pro.exe`: Free constructs trusted session
 safety context, while the WebView receives only scan/finding/quarantine IDs,
 hashes, sanitized labels, state, and counts.

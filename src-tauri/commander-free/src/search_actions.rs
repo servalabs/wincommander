@@ -102,7 +102,9 @@ fn validate_file_name(name: &str) -> Result<(), String> {
     }
     const RESERVED_CHARS: [char; 8] = ['<', '>', ':', '"', '|', '?', '*', '\0'];
     if name.chars().any(|c| RESERVED_CHARS.contains(&c)) {
-        return Err("The new name contains characters Windows doesn't allow in file names.".to_string());
+        return Err(
+            "The new name contains characters Windows doesn't allow in file names.".to_string(),
+        );
     }
     Ok(())
 }
@@ -122,20 +124,44 @@ pub fn search_rename_file(path: String, new_name: String) -> Result<String, Stri
     Ok(new_path.to_string_lossy().into_owned())
 }
 
-// KT: A true native "Properties" dialog needs ShellExecuteW with the
-// "properties" verb, which has no precedent anywhere in this codebase and
-// couldn't be build-verified in this environment (no cargo toolchain).
-// Fall back to revealing the item in Explorer (same as
-// search_open_containing_folder) until that's implemented and checked.
+#[cfg(windows)]
+fn show_native_properties(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let verb: Vec<u16> = "properties".encode_utf16().chain(Some(0)).collect();
+    let file: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut request = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_INVOKEIDLIST,
+        lpVerb: verb.as_ptr(),
+        lpFile: file.as_ptr(),
+        nShow: SW_SHOWNORMAL,
+        ..Default::default()
+    };
+
+    // KT: The "properties" verb must be invoked through the Shell context-menu
+    // handler; Explorer /select only reveals the item and never opens Properties.
+    if unsafe { ShellExecuteExW(&mut request) } == 0 {
+        return Err(format!(
+            "Failed to open Properties: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn show_native_properties(_path: &Path) -> Result<(), String> {
+    Err("The native Properties dialog is only available on Windows.".to_string())
+}
+
 #[tauri::command]
 pub fn search_show_properties(path: String) -> Result<(), String> {
-    existing_path(&path)?;
-    Command::new("explorer.exe")
-        .arg("/select,")
-        .arg(&path)
-        .spawn()
-        .map_err(|error| format!("Failed to reveal the item in Explorer: {error}"))?;
-    Ok(())
+    show_native_properties(existing_path(&path)?)
 }
 
 #[cfg(test)]

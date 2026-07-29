@@ -534,7 +534,10 @@ pub fn enter_calculator_mode(window: tauri::WebviewWindow) -> Result<(), String>
 /// and every later tray/hotkey reveal called hide() instead of show() — the
 /// "clicking the tray does nothing" bug. Show-vs-hide is per-call intent, never
 /// a property of how the process was launched.
-pub fn enter_calculator_mode_with(window: tauri::WebviewWindow, reveal: bool) -> Result<(), String> {
+pub fn enter_calculator_mode_with(
+    window: tauri::WebviewWindow,
+    reveal: bool,
+) -> Result<(), String> {
     use tauri::{Emitter, Manager};
 
     // Mark the runtime state as locked and tell the frontend to show the

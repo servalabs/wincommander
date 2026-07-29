@@ -556,6 +556,7 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
     // safe-paste-requested listener surfaces (success/error), and it doesn't
     // need the window shown.
     let is_safe_paste = parts.contains(&"--safe-paste");
+    let is_direct_context_shred = parts.contains(&"--context-shred");
     let paths: Vec<String> = parts
         .iter()
         .filter(|&&p| !p.starts_with("--"))
@@ -567,7 +568,7 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
         // calculator gate is never hidden by the hotkey (its visible state IS
         // the disguise) and reveals re-show the calc UI, not the real window.
         let calculator_mode = crate::calc_mode_active(app);
-        if is_safe_paste {
+        if is_safe_paste || is_direct_context_shred {
             // Skip both the hide and reveal branches below entirely — the
             // window must stay hidden/backgrounded for the whole Safe Paste
             // operation, success or failure.
@@ -614,7 +615,12 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
         }
     }
 
-    if !paths.is_empty() {
+    if is_direct_context_shred {
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            crate::context_menu_shred::execute(app_handle, paths).await;
+        });
+    } else if !paths.is_empty() {
         let event = resolve_context_menu_event(|flag| parts.contains(&flag));
         let _ = app.emit(event, &paths);
     }
@@ -651,6 +657,14 @@ mod resolve_context_menu_event_tests {
         // and must NOT be mistaken for scrub/safe-paste here.
         assert_eq!(
             resolve_context_menu_event(|f| f == "--focus"),
+            "shred-requested"
+        );
+    }
+
+    #[test]
+    fn direct_context_shred_flag_is_not_a_frontend_event() {
+        assert_eq!(
+            resolve_context_menu_event(|f| f == "--context-shred"),
             "shred-requested"
         );
     }

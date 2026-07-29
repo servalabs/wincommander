@@ -230,14 +230,6 @@ export interface PackageUpdateResult { updated: number; cancelled: boolean; erro
 export interface FirewallRule { id: string; name: string; enabled: boolean; action: string; program: string; signed: boolean | null }
 export interface FirewallAudit { rules: FirewallRule[]; cancelled: boolean; error: string | null }
 export interface FirewallRemediation { changed: number; cancelled: boolean; errors: string[]; backupPath: string | null }
-export interface PerformanceProcess { pid: number; name: string; cpuUsagePercent: number; memoryBytes: number; diskReadBytes: number; diskWrittenBytes: number }
-export interface PerformanceDisk { name: string; mountPoint: string; totalBytes: number; availableBytes: number; usedPercent: number }
-export interface PerformanceNetwork { name: string; receivedBytesSinceLastRefresh: number; transmittedBytesSinceLastRefresh: number; totalReceivedBytes: number; totalTransmittedBytes: number }
-export interface PerformanceSnapshot { capturedAt: string; cpuUsagePercent: number; logicalCores: number; memoryUsedBytes: number; memoryTotalBytes: number; disks: PerformanceDisk[]; networkInterfaces: PerformanceNetwork[]; topCpuProcesses: PerformanceProcess[]; topMemoryProcesses: PerformanceProcess[]; topDiskProcesses: PerformanceProcess[] }
-export interface GameModeValue { name: string; exists: boolean; kind: string | null; value: unknown }
-export interface GameModeChange { name: string; currentValue: unknown; desiredValue: number; willChange: boolean }
-export interface GameModePreview { profileActive: boolean; currentValues: GameModeValue[]; changes: GameModeChange[]; restoreAvailable: boolean }
-export interface GameModeOperation { action: string; preview: GameModePreview }
 export interface StartupImpactEntry { id: string; name: string; source: string; location: string; command: string; executablePath: string | null; pathExists: boolean; signatureStatus: string; signer: string | null; impact: string; recommendation: string }
 export interface StartupImpactScan { entries: StartupImpactEntry[]; truncated: boolean }
 export interface DriverInventoryEntry { deviceName: string | null; deviceClass: string | null; deviceId: string | null; infName: string | null; manufacturer: string | null; driverVersion: string | null; driverDate: string | null; isSigned: boolean | null; signer: string | null }
@@ -2178,10 +2170,6 @@ export function useBackend() {
     uninstallLeftoversCancel: () => invoke<void>("uninstall_leftovers_cancel"),
     arpCacheScan: () => invoke<ArpScan>("arp_cache_scan"),
     arpCacheClear: (scanId: string) => invoke<ArpClearResult>("arp_cache_clear", { scanId }),
-    getPerformanceSnapshot: () => invoke<PerformanceSnapshot>("get_performance_snapshot"),
-    gameModePreview: () => invoke<GameModePreview>("game_mode_preview"),
-    gameModeApply: () => invoke<GameModeOperation>("game_mode_apply"),
-    gameModeRestore: () => invoke<GameModeOperation>("game_mode_restore"),
     startupImpactScan: () => invoke<StartupImpactScan>("startup_impact_scan"),
     driverMaintenanceInventory: () => invoke<DriverMaintenanceInventory>("driver_maintenance_inventory"),
     driverUpdateSeam: () => invoke<DriverUpdateSeam>("driver_update_seam"),

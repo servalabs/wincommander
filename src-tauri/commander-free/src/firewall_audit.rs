@@ -313,7 +313,9 @@ fn apply_signatures(rules: &mut [FirewallRule]) {
         rule.signed = if rule.program.is_empty() {
             None
         } else {
-            signatures.get(&rule.program).map(|sig| sig.status == "Valid")
+            signatures
+                .get(&rule.program)
+                .map(|sig| sig.status == "Valid")
         };
     }
 }

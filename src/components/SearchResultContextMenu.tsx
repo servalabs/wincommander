@@ -49,7 +49,19 @@ export default function SearchResultContextMenu({ target, onAction, onClose }: P
   }, [onClose, renaming]);
 
   useEffect(() => {
-    if (renaming) renameInputRef.current?.select();
+    if (!renaming) return;
+
+    // Focus after the rename form commits, then once more after paint. The
+    // search overlay uses a short retry loop to recover native WebView focus
+    // after a global hotkey; its context-menu guard stops that loop, while
+    // these two attempts make the inline editor reliable in both windows.
+    const focusRenameInput = () => {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    };
+    focusRenameInput();
+    const frame = requestAnimationFrame(focusRenameInput);
+    return () => cancelAnimationFrame(frame);
   }, [renaming]);
 
   const startRename = () => {

@@ -160,6 +160,11 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       focusPollRef.current = null;
     }
     const tryFocus = () => {
+      // A result context menu owns focus while it is open (especially its
+      // inline Rename input). End any foreground-promotion retry that began
+      // on the result row's preceding right-click instead of stealing the
+      // caret back into the search field.
+      if (document.querySelector(".esb-context-menu")) return true;
       const el = inputRef.current;
       if (!el) return false;
       try { window.focus(); } catch { /* */ }
@@ -597,7 +602,13 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       ref={containerRef}
       className="esb-container"
       onClick={e => e.stopPropagation()}
-      onMouseDown={() => focusInputUntilStuck()}
+      onMouseDown={(event) => {
+        // Buttons and the inline Rename field inside the context menu must be
+        // allowed to retain focus. The retry loop also has the same guard for
+        // a poll that started just before the menu mounted.
+        if ((event.target as Element).closest(".esb-context-menu")) return;
+        focusInputUntilStuck();
+      }}
       onContextMenu={e => e.preventDefault()}
     >
       <div className="esb-input-row">

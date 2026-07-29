@@ -17,6 +17,7 @@ mod child_jobs;
 pub use wincmd_shared::command_strings;
 mod auth_anomaly;
 mod canary_tokens;
+mod context_menu_shred;
 mod datastore;
 mod devtools;
 mod disk_analyzer;
@@ -45,7 +46,6 @@ mod flow_bundle;
 mod flow_capabilities;
 mod flow_engine;
 mod flow_health;
-mod game_performance;
 mod gpo_policy;
 mod inactivity_timer;
 mod investigator_install;
@@ -1695,13 +1695,14 @@ pub fn run() {
                 // the toast in RightSidebar.tsx's safe-paste-requested listener
                 // (success/error), neither of which needs the window shown.
                 let is_safe_paste = args.iter().any(|a| a == "--safe-paste");
+                let is_direct_context_shred = args.iter().any(|a| a == "--context-shred");
                 // Only set skip_taskbar for hidden-mode non-calculator launches; the
                 // calculator block below explicitly resets it to false, so setting it
                 // here would be immediately undone and leaves the window in a bad state.
                 if hidden_mode && !calculator_mode_on_startup {
                     let _ = window.set_skip_taskbar(true);
                 }
-                if is_safe_paste {
+                if is_safe_paste || is_direct_context_shred {
                     // Skip every window-reveal call below entirely — the window
                     // must stay hidden/backgrounded for the whole Safe Paste
                     // operation, success or failure.
@@ -1774,7 +1775,13 @@ pub fn run() {
                     .filter(|p| !p.starts_with("--"))
                     .cloned()
                     .collect();
-                if !menu_paths.is_empty() {
+                if is_direct_context_shred {
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        context_menu_shred::execute(app_handle.clone(), menu_paths).await;
+                        app_handle.exit(0);
+                    });
+                } else if !menu_paths.is_empty() {
                     let event = session_instance::resolve_context_menu_event(|flag| {
                         args.iter().any(|a| a == flag)
                     });
@@ -2613,11 +2620,6 @@ pub fn run() {
             // ── Preview-first ARP cache maintenance ──
             network_maintenance::arp_cache_scan,
             network_maintenance::arp_cache_clear,
-            // ── Detailed performance + reversible Game Mode ──
-            game_performance::get_performance_snapshot,
-            game_performance::game_mode_preview,
-            game_performance::game_mode_apply,
-            game_performance::game_mode_restore,
             // ── Startup impact + safe driver maintenance seam ──
             startup_maintenance::startup_impact_scan,
             driver_maintenance::driver_maintenance_inventory,

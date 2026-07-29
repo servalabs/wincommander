@@ -3908,9 +3908,12 @@ pub async fn toggle_context_menu(enable: bool) -> Result<(), String> {
             .ok_or("Failed to convert exe path to string")?;
         // %1 = selected item path (works for both files and folders via Directory\shell)
         // %V = current folder path (only available for Directory\Background\shell)
-        let command_value_file = format!("\"{}\" \"%1\"", exe_str);
-        let command_value_dir = format!("\"{}\" \"%1\"", exe_str);
-        let command_value_bg = format!("\"{}\" \"%V\"", exe_str);
+        // Explorer's secure-delete verb is intentionally backend-only. The
+        // explicit flag prevents it from falling into the normal frontend
+        // confirmation flow used by in-app shred operations.
+        let command_value_file = format!("\"{}\" --context-shred \"%1\"", exe_str);
+        let command_value_dir = format!("\"{}\" --context-shred \"%1\"", exe_str);
+        let command_value_bg = format!("\"{}\" --context-shred \"%V\"", exe_str);
 
         // --- File (*) ---
         run_reg(&["add", KEY_FILE, "/ve", "/d", "Delete", "/f"])?;

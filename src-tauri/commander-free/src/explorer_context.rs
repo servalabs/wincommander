@@ -229,7 +229,9 @@ mod tests {
         assert!(is_virtual_shell_location("shell:Downloads"));
         assert!(is_virtual_shell_location("search-ms:query=budget"));
         assert!(is_virtual_shell_location("ftp://example.invalid/pub"));
-        assert!(is_virtual_shell_location(r"\\?\Volume{12345678-0000-0000-0000-000000000000}\"));
+        assert!(is_virtual_shell_location(
+            r"\\?\Volume{12345678-0000-0000-0000-000000000000}\"
+        ));
         assert!(is_virtual_shell_location(r"\\.\PhysicalDrive0"));
         assert!(is_virtual_shell_location(""));
         assert!(is_virtual_shell_location("   "));
@@ -262,7 +264,9 @@ mod tests {
         // are ordinary user folders and must survive.
         assert!(!has_rejected_component(r"D:\$Recycle.Bin backup"));
         assert!(!has_rejected_component(r"D:\Archive\$Recycle.Bin.old"));
-        assert!(!has_rejected_component(r"D:\System Volume Information Notes"));
+        assert!(!has_rejected_component(
+            r"D:\System Volume Information Notes"
+        ));
         assert!(!has_rejected_component(r"C:\config.msi.bak"));
     }
 
