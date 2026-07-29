@@ -1234,6 +1234,11 @@ pub struct TweakSettings {
     pub power: PowerTweaks,
     #[serde(default)]
     pub power_plan: Option<String>,
+    /// Desired state for each independently reversible Windows AI cleanup
+    /// operation. This is intentionally separate from the broad AI policy
+    /// toggle because each operation is applied and restored on its own.
+    #[serde(default)]
+    pub ai_component_cleanup: std::collections::HashMap<String, bool>,
     #[serde(default)]
     pub maintenance_runs: std::collections::HashMap<String, MaintenanceRunInfo>,
 }
@@ -2700,8 +2705,12 @@ pub fn get_convergence_command(path: &str, desired: bool) -> Option<&'static str
         ("tweaks.os.automaticMaintenanceDisabled", false) => Some("Enable-AutomaticMaintenance"),
         ("tweaks.os.win32LongPathsEnabled", true) => Some("Enable-Win32LongPaths"),
         ("tweaks.os.win32LongPathsEnabled", false) => Some("Disable-Win32LongPaths"),
-        ("tweaks.os.smbBandwidthThrottlingDisabled", true) => Some("Disable-SmbBandwidthThrottling"),
-        ("tweaks.os.smbBandwidthThrottlingDisabled", false) => Some("Enable-SmbBandwidthThrottling"),
+        ("tweaks.os.smbBandwidthThrottlingDisabled", true) => {
+            Some("Disable-SmbBandwidthThrottling")
+        }
+        ("tweaks.os.smbBandwidthThrottlingDisabled", false) => {
+            Some("Enable-SmbBandwidthThrottling")
+        }
 
         // ── Tweaks: UI ───────────────────────────────────────────────
         ("tweaks.ui.classicContextMenu", true) => Some("Enable-ClassicContextMenu"),
@@ -2760,8 +2769,12 @@ pub fn get_convergence_command(path: &str, desired: bool) -> Option<&'static str
         ("tweaks.security.gameDvrDisabled", false) => Some("Enable-GameDVR"),
         ("tweaks.security.remoteAssistanceDisabled", true) => Some("Disable-RemoteAssistance"),
         ("tweaks.security.remoteAssistanceDisabled", false) => Some("Enable-RemoteAssistance"),
-        ("tweaks.security.anonymousSamEnumerationBlocked", true) => Some("Block-AnonymousSamEnumeration"),
-        ("tweaks.security.anonymousSamEnumerationBlocked", false) => Some("Allow-AnonymousSamEnumeration"),
+        ("tweaks.security.anonymousSamEnumerationBlocked", true) => {
+            Some("Block-AnonymousSamEnumeration")
+        }
+        ("tweaks.security.anonymousSamEnumerationBlocked", false) => {
+            Some("Allow-AnonymousSamEnumeration")
+        }
 
         // ── Tweaks: OS (new) ─────────────────────────────────────────
         ("tweaks.os.memoryCompressionDisabled", true) => Some("Disable-MemoryCompression"),

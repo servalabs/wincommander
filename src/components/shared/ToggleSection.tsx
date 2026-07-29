@@ -34,6 +34,8 @@ interface ToggleSectionProps {
   searchQuery?: string;
   /** Content to display on the right side of the section header */
   headerRight?: React.ReactNode;
+  /** Supplemental content that belongs in the same card below the toggle grid. */
+  footer?: React.ReactNode;
   /** Accordion: Is this section collapsible? */
   collapsible?: boolean;
   /** Accordion: Is this section currently open? */
@@ -66,6 +68,7 @@ export default function ToggleSection({
   bare,
   searchQuery = "",
   headerRight,
+  footer,
   collapsible,
   isOpen,
   onToggle,
@@ -420,6 +423,7 @@ export default function ToggleSection({
         onToggle={onToggle}
       >
         {grid}
+        {footer && <div className="mt-4 border-t border-[var(--border)] pt-4">{footer}</div>}
       </SectionCard>
       {conflictDialog}
       {pinDialog}

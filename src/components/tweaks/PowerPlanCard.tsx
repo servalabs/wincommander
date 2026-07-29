@@ -62,7 +62,13 @@ const PLANS: PlanOption[] = [
  * a standalone "Ultimate Performance Power Plan" toggle). The toggle was
  * removed and Ultimate became a 4th radio here.
  */
-export default function PowerPlanCard({ titleOverride }: { titleOverride?: string }) {
+interface PowerPlanCardProps {
+    titleOverride?: string;
+    /** Lets the balanced Power & Graphics card own the outer card surface. */
+    bare?: boolean;
+}
+
+export default function PowerPlanCard({ titleOverride, bare = false }: PowerPlanCardProps) {
     const { appSettings, patchAppSettings } = useAppState();
     const { setPowerPlan } = useBackend();
     const [selected, setSelected] = useState<PowerPlanMode | null>(
@@ -96,36 +102,34 @@ export default function PowerPlanCard({ titleOverride }: { titleOverride?: strin
         }
     }, [selected, setPowerPlan, patchAppSettings]);
 
-    return (
-        <SectionCard title={titleOverride ?? "Power Plan"}>
-            <div className="flex flex-col gap-4 py-2">
-                <div className="flex flex-col gap-2">
-                    <span className="text-[11px] font-bold text-[var(--color-text-muted)] uppercase tracking-wider">
-                        Select Active Profile
-                    </span>
-                    <div className={`power-plan-switch power-plan-switch--${Math.max(0, PLANS.findIndex((p) => p.id === selected))}`}>
-                        <span className="power-plan-switch__thumb" aria-hidden="true" />
-                        {PLANS.map(plan => {
-                            const active = selected === plan.id;
-                            const loading = pending === plan.id;
-                            return (
-                                <button
-                                    key={plan.id}
-                                    type="button"
-                                    className={`power-plan-option ${plan.variant} ${active ? "active" : ""} ${loading ? "loading" : ""}`}
-                                    onClick={() => !loading && choose(plan)}
-                                    disabled={!!pending && pending !== plan.id}
-                                    aria-pressed={active}
-                                >
-                                    <Icon icon={loading ? "refresh" : plan.icon} size={14} className={loading ? "power-plan-option__spin" : ""} />
-                                    <span className="plan-title">{plan.title}</span>
-                                    <span className="plan-tag">{plan.tag}</span>
-                                </button>
-                            );
-                        })}
-                    </div>
-                </div>
+    const content = (
+        <div className="flex flex-col gap-2 py-1">
+            <span className="text-[11px] font-bold text-[var(--color-text-muted)] uppercase tracking-wider">
+                Active power plan
+            </span>
+            <div className={`power-plan-switch power-plan-switch--${Math.max(0, PLANS.findIndex((p) => p.id === selected))}`}>
+                <span className="power-plan-switch__thumb" aria-hidden="true" />
+                {PLANS.map(plan => {
+                    const active = selected === plan.id;
+                    const loading = pending === plan.id;
+                    return (
+                        <button
+                            key={plan.id}
+                            type="button"
+                            className={`power-plan-option ${plan.variant} ${active ? "active" : ""} ${loading ? "loading" : ""}`}
+                            onClick={() => !loading && choose(plan)}
+                            disabled={!!pending && pending !== plan.id}
+                            aria-pressed={active}
+                        >
+                            <Icon icon={loading ? "refresh" : plan.icon} size={14} className={loading ? "power-plan-option__spin" : ""} />
+                            <span className="plan-title">{plan.title}</span>
+                            <span className="plan-tag">{plan.tag}</span>
+                        </button>
+                    );
+                })}
             </div>
-        </SectionCard>
+        </div>
     );
+
+    return bare ? content : <SectionCard title={titleOverride ?? "Power Plan"}>{content}</SectionCard>;
 }

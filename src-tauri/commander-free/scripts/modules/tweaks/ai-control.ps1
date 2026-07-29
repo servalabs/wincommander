@@ -6,11 +6,11 @@ function Get-AIControlStatus {
     [pscustomobject]@{
         isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         classicApps = [pscustomobject]@{
-            photoViewer = Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations'
+            photoViewer = Test-AIControlPhotoViewerInstalled
             paint = Test-AIControlLegacyBinaryInstalled -App paint
             snipping = Test-AIControlLegacyBinaryInstalled -App snipping
             notepad = [bool](Get-WindowsCapability -Online -Name 'Microsoft.Windows.Notepad.System*' -ErrorAction SilentlyContinue | Where-Object State -eq 'Installed')
-            photosLegacy = [bool](Get-AppxPackage -AllUsers -Name '*PhotosLegacy*' -ErrorAction SilentlyContinue)
+            photosLegacy = Test-AIControlPhotosLegacyInstalled
         }
     }
 }

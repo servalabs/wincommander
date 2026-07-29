@@ -78,8 +78,11 @@ export default function ImportExportSettingsCard() {
     };
 
     return (
-        <SectionCard title="Backup & Restore" icon="import" className="import-export-settings-card">
-            <div className="import-export-row">
+        <SectionCard
+            title="Backup & Restore"
+            icon="import"
+            className="import-export-settings-card"
+            headerRight={(
                 <div className="import-export-buttons">
                     <Button
                         icon="export"
@@ -112,19 +115,19 @@ export default function ImportExportSettingsCard() {
                         </PopoverContent>
                     </Popover>
                 </div>
-
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                        <button type="button" className="import-export-warning">
-                            <Icon icon="warning-sign" size={12} className="import-export-warning__icon" />
-                            <span className="import-export-warning__text">Import replaces your current settings</span>
-                        </button>
-                    </TooltipTrigger>
-                    <TooltipContent align="end" className="import-export-warning-tooltip">
-                        {IMPORT_WARNING_FULL_TEXT}
-                    </TooltipContent>
-                </Tooltip>
-            </div>
+            )}
+        >
+            <Tooltip>
+                <TooltipTrigger asChild>
+                    <button type="button" className="import-export-warning">
+                        <Icon icon="warning-sign" size={12} className="import-export-warning__icon" />
+                        <span className="import-export-warning__text">Import replaces your current settings</span>
+                    </button>
+                </TooltipTrigger>
+                <TooltipContent align="end" className="import-export-warning-tooltip">
+                    {IMPORT_WARNING_FULL_TEXT}
+                </TooltipContent>
+            </Tooltip>
 
             <Alert
                 isOpen={!!pendingImportPath}

@@ -5,8 +5,9 @@ import useVisibility from "../../hooks/useVisibility";
 import SectionCard from "../../components/shared/SectionCard";
 import ToggleSection, { type ExternalToggleConflict } from "../../components/shared/ToggleSection";
 import DefenderExclusionAuditor from "../../components/tweaks/DefenderExclusionAuditor";
-import ExploitProtectionExtras from "../../components/tweaks/ExploitProtectionExtras";
+import { AcquisitionMonitorSwitch } from "../../components/tweaks/ExploitProtectionExtras";
 import PowerPlanCard from "../../components/tweaks/PowerPlanCard";
+import PowerGraphicsCard from "../../components/tweaks/PowerGraphicsCard";
 import WindowsAiAdvancedActions from "../../components/tweaks/WindowsAiAdvancedActions";
 import VmSandboxSection from "./VmSandboxSection";
 import ContextMenuIntegrationCard from "../../components/tweaks/ContextMenuIntegrationCard";
@@ -181,7 +182,6 @@ export default function TweaksPanel() {
                 <TabsContent value="exploit-protection">
                     <ExploitProtectionTab
                         showExpertSpeed={showExpertSpeed}
-                        noSearch={noSearch}
                         searchQuery={searchQuery}
                         handlePostToggle={handlePostToggle}
                     />
@@ -246,11 +246,21 @@ function PerformancePowerTab({ isAdvanced, noSearch, searchQuery, handlePostTogg
             return true;
         });
     }, [gpu]);
+    const gpuVendorDetected = detectGpuVendor(gpu) !== null;
 
     return (
         <div className="flex flex-col gap-4">
-            {noSearch && (
-                <PowerPlanCard titleOverride={isAdvanced ? "Power Plan" : "Energy & Speed"} />
+            {noSearch && isAdvanced && (
+                <PowerGraphicsCard
+                    powerSection={TWEAKS_SECTIONS[6]}
+                    gpuSection={gpuVendorDetected ? TWEAKS_SECTIONS[5] : undefined}
+                    toggles={gpuFilteredToggles}
+                    onToggled={handlePostToggle}
+                    searchQuery={searchQuery}
+                />
+            )}
+            {noSearch && !isAdvanced && (
+                <PowerPlanCard titleOverride="Energy & Speed" />
             )}
 
             {/* Performance & Gaming — fully defined in the registry but not
@@ -262,26 +272,7 @@ function PerformancePowerTab({ isAdvanced, noSearch, searchQuery, handlePostTogg
                 searchQuery={searchQuery}
             />
 
-            {/* Power Management pairs with GPU Vendor Tweaks (advanced only) so
-                Power Management's 2 toggles don't sit alone in a full-width,
-                mostly-empty section. Non-advanced users still get Power
-                Management full width since GPU Vendor Tweaks is hidden. */}
-            {isAdvanced ? (
-                <div className="grid grid-cols-2 gap-4">
-                    <ToggleSection
-                        section={TWEAKS_SECTIONS[6]}
-                        toggles={TWEAKS_TOGGLES}
-                        onToggled={handlePostToggle}
-                        searchQuery={searchQuery}
-                    />
-                    <ToggleSection
-                        section={TWEAKS_SECTIONS[5]}
-                        toggles={gpuFilteredToggles}
-                        onToggled={handlePostToggle}
-                        searchQuery={searchQuery}
-                    />
-                </div>
-            ) : (
+            {!isAdvanced && (
                 <ToggleSection
                     section={TWEAKS_SECTIONS[6]}
                     toggles={TWEAKS_TOGGLES}
@@ -363,9 +354,8 @@ function SecurityAppsTab({ showExpertSpeed, noSearch, searchQuery, handlePostTog
 }
 
 // ── Tab 5: Exploit protection ────────────────────────────────────────────
-function ExploitProtectionTab({ showExpertSpeed, noSearch, searchQuery, handlePostToggle }: {
+function ExploitProtectionTab({ showExpertSpeed, searchQuery, handlePostToggle }: {
     showExpertSpeed: boolean;
-    noSearch: boolean;
     searchQuery: string;
     handlePostToggle: (t: ToggleDef) => Promise<void>;
 }) {
@@ -377,13 +367,9 @@ function ExploitProtectionTab({ showExpertSpeed, noSearch, searchQuery, handlePo
                     toggles={TWEAKS_TOGGLES}
                     onToggled={handlePostToggle}
                     searchQuery={searchQuery}
+                    headerRight={<AcquisitionMonitorSwitch />}
                 />
             )}
-
-            {/* Exploit Protection extras — Acquisition Monitor switch + on-demand
-                vulnerable-driver scan (Round 2 bespoke controls, see
-                components/tweaks/ExploitProtectionExtras.tsx) */}
-            {showExpertSpeed && noSearch && <ExploitProtectionExtras />}
         </div>
     );
 }

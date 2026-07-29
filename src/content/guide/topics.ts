@@ -283,7 +283,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     title: "Two blocking layers, always on",
     summary: "DNS-category filtering blocks whole categories of sites at the lookup level; hosts-file blocklists add domain-based blocking on top for telemetry, AI services, piracy, and more.",
     keywords: ["dns", "hosts file", "blocklist", "firewall", "simple firewall", "network tour"],
-    body: "Simple Firewall categories filter DNS lookups by category (ads, malware, adult content, and more); Hosts Protection blocklists add domain-based blocking directly in the Windows hosts file.",
+    body: "DNS Firewall categories filter DNS lookups by category (ads, malware, adult content, and more); Hosts Protection blocklists add domain-based blocking directly in the Windows hosts file.",
     tour: {
       anchor: '[data-tour="network-security-controls"]',
       navigateTo: "network",

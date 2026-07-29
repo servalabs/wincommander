@@ -925,10 +925,23 @@ export interface TweakSettings {
    *  Ultimate Performance scheme (e9a42b02-…) when first selected.
    *  Single source of truth — OsTweaks.powerPlan was removed as dead code. */
   powerPlan: PowerPlanMode | null;
+  /** Desired state for the deeper, per-component Windows AI cleanup controls.
+   *  Kept separately from the broad Copilot/AI policy toggle because every
+   *  item can be enabled or restored independently. */
+  aiComponentCleanup?: Partial<Record<AiComponentCleanupOperation, boolean>>;
   maintenanceRuns?: Record<string, MaintenanceRunInfo>;
 }
 
 export type PowerPlanMode = 'powersaving' | 'balanced' | 'performance' | 'ultimate';
+
+export type AiComponentCleanupOperation =
+  | 'package-guard'
+  | 'appx-packages'
+  | 'recall-feature'
+  | 'cbs-packages'
+  | 'ai-files'
+  | 'scheduled-tasks'
+  | 'update-cleanup';
 
 export interface PerformanceTweaks {
   /** MMCSS gaming profile (SystemResponsiveness=10, NetworkThrottlingIndex off, Games priority) */

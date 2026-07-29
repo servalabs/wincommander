@@ -82,15 +82,57 @@ New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Na
     [pscustomobject]@{ status = 'enabled'; operation = 'update-cleanup'; changed = 1; requiresReboot = $false }
 }
 
+function Get-AIControlPhotoViewerAssociations {
+    [ordered]@{
+        '.bmp' = 'PhotoViewer.FileAssoc.Bitmap'
+        '.cr2' = 'PhotoViewer.FileAssoc.Tiff'
+        '.dib' = 'PhotoViewer.FileAssoc.Bitmap'
+        '.gif' = 'PhotoViewer.FileAssoc.Gif'
+        '.jfif' = 'PhotoViewer.FileAssoc.JFIF'
+        '.jpe' = 'PhotoViewer.FileAssoc.Jpeg'
+        '.jpeg' = 'PhotoViewer.FileAssoc.Jpeg'
+        '.jpg' = 'PhotoViewer.FileAssoc.Jpeg'
+        '.jxr' = 'PhotoViewer.FileAssoc.Jxr'
+        '.png' = 'PhotoViewer.FileAssoc.Png'
+        '.tif' = 'PhotoViewer.FileAssoc.Tiff'
+        '.tiff' = 'PhotoViewer.FileAssoc.Tiff'
+        '.wdp' = 'PhotoViewer.FileAssoc.Wdp'
+    }
+}
+
+function Test-AIControlPhotoViewerInstalled {
+    $associations = Get-AIControlPhotoViewerAssociations
+    $capabilitiesPath = 'HKLM:\SOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations'
+    if (-not (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Windows Photo Viewer\PhotoViewer.dll'))) { return $false }
+
+    try {
+        foreach ($entry in $associations.GetEnumerator()) {
+            $registeredAssociation = Get-ItemPropertyValue -LiteralPath $capabilitiesPath -Name $entry.Key -ErrorAction Stop
+            if ($registeredAssociation -ne $entry.Value) { return $false }
+        }
+        foreach ($association in @($associations.Values | Sort-Object -Unique)) {
+            $commandPath = "HKLM:\SOFTWARE\Classes\$association\shell\open\command"
+            $openCommand = (Get-Item -LiteralPath $commandPath -ErrorAction Stop).GetValue('')
+            if ($openCommand -notmatch '(?i)PhotoViewer\.dll' -or $openCommand -notmatch '(?i)ImageView_Fullscreen\s+%1') { return $false }
+        }
+    } catch {
+        return $false
+    }
+    $true
+}
+
 function Install-AIControlPhotoViewer {
-    $extensions = @('.Bmp', '.Cr2', '.Dib', '.Gif', '.JFIF', '.Jpe', '.Jpeg', '.Jpg', '.Jxr', '.Png', '.Tif', '.Tiff', '.Wdp')
-    foreach ($extension in $extensions) {
-        $association = if ($extension -in @('.Cr2', '.Tif', '.Tiff')) { 'PhotoViewer.FileAssoc.Tiff' } elseif ($extension -in @('.Dib', '.Bmp')) { 'PhotoViewer.FileAssoc.Bitmap' } elseif ($extension -in @('.Jpg', '.Jpe', '.Jpeg')) { 'PhotoViewer.FileAssoc.Jpeg' } else { "PhotoViewer.FileAssoc$extension" }
-        & reg.exe add 'HKLM\SOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations' /v $extension.ToLower() /t REG_SZ /d $association /f | Out-Null
+    $associations = Get-AIControlPhotoViewerAssociations
+    foreach ($entry in $associations.GetEnumerator()) {
+        $association = $entry.Value
+        & reg.exe add 'HKLM\SOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations' /v $entry.Key /t REG_SZ /d $association /f | Out-Null
         & reg.exe add "HKLM\SOFTWARE\Classes\$association\shell\open\command" /ve /t REG_EXPAND_SZ /d '%SystemRoot%\System32\rundll32.exe "%ProgramFiles%\Windows Photo Viewer\PhotoViewer.dll", ImageView_Fullscreen %1' /f | Out-Null
         & reg.exe add "HKLM\SOFTWARE\Classes\$association\shell\open\DropTarget" /v Clsid /t REG_SZ /d '{FFE2A43C-56B9-4bf5-9A79-CC6D4285608A}' /f | Out-Null
     }
-    [pscustomobject]@{ status = 'installed'; operation = 'classic-photo-viewer'; changed = $extensions.Count; requiresReboot = $false }
+    if (-not (Test-AIControlPhotoViewerInstalled)) {
+        throw 'Windows Photo Viewer registration did not pass verification.'
+    }
+    [pscustomobject]@{ status = 'installed'; operation = 'classic-photo-viewer'; changed = $associations.Count; requiresReboot = $false }
 }
 
 function Find-AIControlLegacyBinary {
@@ -153,11 +195,32 @@ function Install-AIControlNotepad {
 
 function Install-AIControlPhotosLegacy {
     Assert-AIControlAdmin
-    $existing = Get-AppxPackage -AllUsers -Name '*PhotosLegacy*' -ErrorAction SilentlyContinue
-    if (-not $existing) {
+    $changed = 0
+    if (-not (Test-AIControlPhotosLegacyInstalled)) {
         $store = Get-Command store.exe -ErrorAction SilentlyContinue
-        if ($store) { & $store.Source install 9NV2L4XVMCXM | Out-Null }
-        else { & winget.exe install --id 9NV2L4XVMCXM --source msstore --accept-package-agreements --accept-source-agreements --silent | Out-Null }
+        if ($store) {
+            & $store.Source install 9NV2L4XVMCXM | Out-Null
+            $installExitCode = $LASTEXITCODE
+        } else {
+            $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
+            if (-not $winget) { throw 'Microsoft Store and WinGet are unavailable, so Photos Legacy cannot be installed.' }
+            & $winget.Source install --id 9NV2L4XVMCXM --source msstore --accept-package-agreements --accept-source-agreements --silent | Out-Null
+            $installExitCode = $LASTEXITCODE
+        }
+        if ($installExitCode -ne 0) {
+            throw "Photos Legacy installation failed with exit code $installExitCode."
+        }
+        $changed = 1
     }
-    [pscustomobject]@{ status = 'installed'; operation = 'photos-legacy'; changed = 1; requiresReboot = $false }
+    for ($attempt = 0; $attempt -lt 10 -and -not (Test-AIControlPhotosLegacyInstalled); $attempt++) {
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not (Test-AIControlPhotosLegacyInstalled)) {
+        throw 'The installer finished, but Windows did not register the Photos Legacy app package.'
+    }
+    [pscustomobject]@{ status = 'installed'; operation = 'photos-legacy'; changed = $changed; requiresReboot = $false }
+}
+
+function Test-AIControlPhotosLegacyInstalled {
+    [bool](Get-AppxPackage -AllUsers -Name '*PhotosLegacy*' -ErrorAction SilentlyContinue)
 }
