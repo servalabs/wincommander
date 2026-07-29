@@ -9,9 +9,12 @@
 }
 
 .maintenance-storage-workspace {
+  /* Windows Storage + File Hygiene is the reference surface. Cache must fit
+     this same review height and never grow the grid row beyond it. */
+  --maintenance-storage-review-height: min(42rem, 68vh);
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  align-items: stretch;
+  align-items: start;
   gap: 1rem;
 }
 
@@ -23,7 +26,9 @@
 .maintenance-app-cache-card {
   display: flex;
   flex-direction: column;
-  height: min(42rem, 68vh);
+  height: var(--maintenance-storage-review-height);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .maintenance-storage-overview-content,
@@ -85,13 +90,13 @@
 .maintenance-analysis-workspace {
   display: grid;
   grid-template-columns: minmax(0, 7fr) minmax(18rem, 3fr);
-  align-items: stretch;
+  align-items: start;
   gap: 1rem;
 }
 
 .maintenance-analysis-card,
 .maintenance-file-stats-slot > * {
-  height: min(42rem, 68vh);
+  height: auto;
 }
 
 .maintenance-analysis-card {
@@ -102,12 +107,18 @@
 .maintenance-analysis-content {
   display: flex;
   min-height: 0;
-  flex: 1;
 }
 
 .maintenance-analysis-scroll {
   min-width: 0;
-  flex: 1;
+  overflow: visible;
+}
+
+/* The analyser is compact before its first manual scan. Once it has results,
+   its own body becomes a bounded review area; overflow then belongs here,
+   never to the empty card or page. */
+.maintenance-analysis-scroll:has(.disk-analyzer-inline.has-results) {
+  max-height: min(42rem, 68vh);
   overflow: auto;
   overscroll-behavior: contain;
 }
@@ -123,6 +134,10 @@
   .maintenance-analysis-card,
   .maintenance-file-stats-slot > * {
     height: auto;
+  }
+
+  .maintenance-storage-workspace {
+    --maintenance-storage-review-height: auto;
   }
 }
 

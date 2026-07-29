@@ -572,12 +572,16 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
     }, 0);
     const sortedRows = rows.slice().sort((a, b) => b.size - a.size);
     const currentFolderSize = rows.reduce((sum, row) => sum + row.size, 0);
+    // The inline analyser should be compact until the user runs its manual
+    // scan. Results may be long, so the parent review surface bounds only
+    // this populated state rather than showing a blank scroll region.
+    const hasResults = scanning || meta !== null || rows.length > 0 || largeItems.length > 0;
 
     /* Body content of the analyzer — same JSX whether we render as a modal
        (Dialog wrapper) or inline as a panel section. Toggled below via the
        `inline` prop. */
     const innerBody = (
-        <div className="bp5-dialog-body" style={{ padding: 0, display: "flex", flexDirection: "column", flex: inline ? "0 0 auto" : 1, overflow: inline ? "visible" : "hidden", minHeight: inline ? "560px" : undefined }}>
+        <div className="bp5-dialog-body" style={{ padding: 0, display: "flex", flexDirection: "column", flex: inline ? "0 0 auto" : 1, overflow: inline ? "visible" : "hidden", minHeight: inline && hasResults ? "560px" : undefined }}>
 
                     {/* ── Top Bar ── */}
                     <div className="da-topbar">
@@ -865,7 +869,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
     return (
         <>
             {inline ? (
-                <div className={`disk-analyzer-inline ${Classes.DARK}`}>
+                <div className={`disk-analyzer-inline ${Classes.DARK} ${hasResults ? "has-results" : "is-idle"}`}>
                     {innerBody}
                 </div>
             ) : (

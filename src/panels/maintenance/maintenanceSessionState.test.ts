@@ -75,6 +75,22 @@ test("storage dashboards do not auto-scan the manual analysis tools", async () =
   expect(fileStats).not.toContain("if (!fileStatsSession) void runScan()");
 });
 
+test("storage uses Windows Storage's review height while cache and analysis overflow only when populated", async () => {
+  const [panel, analyzer, css] = await Promise.all([
+    read("index.tsx"),
+    read("DiskSpaceAnalyzerDialog.tsx"),
+    read("MaintenanceStorage.css"),
+  ]);
+
+  expect(css).toContain("--maintenance-storage-review-height");
+  expect(css).toContain(".maintenance-app-cache-card");
+  expect(css).toContain("overflow: hidden;");
+  expect(panel).toContain("Disk space analyser");
+  expect(analyzer).toContain("const hasResults =");
+  expect(analyzer).toContain('hasResults ? "has-results" : "is-idle"');
+  expect(css).toContain(":has(.disk-analyzer-inline.has-results)");
+});
+
 test("visible maintenance scan controls use icon-only accessible actions", async () => {
   const sources = await Promise.all([
     "FileHygieneTools.tsx",

@@ -124,7 +124,7 @@ function StorageAndFileTools({ cleanupRef, analyzerRef }: { cleanupRef: React.Re
       </div>
       <div className="maintenance-analysis-workspace">
       <Card className="maintenance-analysis-card">
-        <CardHeader><CardTitle>Detailed folder map</CardTitle><CardDescription>Inspect disk usage and large items before taking action. This remains an analysis tool and does not delete files automatically.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Disk space analyser</CardTitle><CardDescription>Inspect disk usage and large items before taking action. This remains an analysis tool and does not delete files automatically.</CardDescription></CardHeader>
         <CardContent ref={analyzerRef} className="maintenance-analysis-content"><div className="maintenance-analysis-scroll"><DiskSpaceAnalyzerDialog inline isOpen={true} onClose={() => {}} initialMode="space" /></div></CardContent>
       </Card>
       <div className="maintenance-file-stats-slot"><FileStatsPanel /></div>
