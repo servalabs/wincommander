@@ -9,12 +9,13 @@
 }
 
 .maintenance-storage-workspace {
-  /* Windows Storage + File Hygiene is the reference surface. Cache must fit
-     this same review height and never grow the grid row beyond it. */
-  --maintenance-storage-review-height: min(42rem, 68vh);
+  /* Windows Storage + File Hygiene is the reference surface. Its fully
+     usable inspector determines the row height; cache must fit that height,
+     never the other way round. */
+  --maintenance-file-hygiene-height: 31rem;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  align-items: start;
+  align-items: stretch;
   gap: 1rem;
 }
 
@@ -26,8 +27,20 @@
 .maintenance-app-cache-card {
   display: flex;
   flex-direction: column;
-  height: var(--maintenance-storage-review-height);
   min-height: 0;
+}
+
+/* Let the complete Windows Storage/File Hygiene surface establish the grid
+   row. It must never crop its own folder chooser or inspection controls. */
+.maintenance-storage-overview-card {
+  height: auto;
+  overflow: visible;
+}
+
+/* The paired cache card stretches to the left card's resolved height. Its
+   content owns overflow so large cache results cannot expand the row. */
+.maintenance-app-cache-card {
+  align-self: stretch;
   overflow: hidden;
 }
 
@@ -50,20 +63,20 @@
 
 .maintenance-file-hygiene-section {
   display: flex;
-  min-height: 0;
-  flex: 1;
+  flex: 0 0 var(--maintenance-file-hygiene-height);
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--border);
 }
 
-.maintenance-file-hygiene-section > .maintenance-file-hygiene-tools,
-.maintenance-file-hygiene-card {
+.maintenance-file-hygiene-section > .maintenance-file-hygiene-tools {
+  height: 100%;
   min-height: 0;
   flex: 1;
 }
 
 .maintenance-file-hygiene-card {
+  height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -137,7 +150,7 @@
   }
 
   .maintenance-storage-workspace {
-    --maintenance-storage-review-height: auto;
+    --maintenance-file-hygiene-height: 31rem;
   }
 }
 
