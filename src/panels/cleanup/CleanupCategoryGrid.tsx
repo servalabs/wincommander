@@ -1,12 +1,10 @@
 // src/panels/cleanup/CleanupCategoryGrid.tsx
 // Renders ONE usability tier's card grid (Low impact / History & cache /
 // Rebuilds apps or connectivity / Data, accounts & recovery) — one instance
-// per System Cleanup tier tab (2026-07 tab split). The Low-impact tier
-// additionally renders the cross-tier controls (Scan All, summary bar,
-// account picker) at its top: it's the panel's default/first tab, so the
-// existing tour anchor and the scan-done tour event (which fires from Scan
-// All) stay reachable without a tab switch. Pure renderer — all state/IPC
-// lives in useCleanupScan.
+// per System Cleanup tier tab (2026-07 tab split). Scan All and the
+// needs-cleaning summary belong to SystemCleanupPanel's tab-navigation row;
+// this renderer keeps only tab-specific controls and card content. Pure
+// renderer — all state/IPC lives in useCleanupScan.
 import { useState } from "react";
 import { Button, Icon, Popover, Menu, MenuItem } from "@/components/ui/bp";
 import CleanupTraceCard from "../../components/cleanup/CleanupTraceCard";
@@ -53,9 +51,7 @@ export default function CleanupCategoryGrid({
 }: Props) {
   const {
     cardDataMap,
-    loadingAll,
     orderedScanCategories,
-    loadCategoryBatch,
     handleCardLoad,
     handleCardClear,
     handleClearAllTraces,
@@ -87,38 +83,10 @@ export default function CleanupCategoryGrid({
     handleClearSchedule,
   } = scan;
 
-  // Scan All, the summary bar, and the account picker are cross-tier
-  // controls — they only render on the Low-impact tab (the default/first
-  // tab) so they stay reachable without a tab switch.
+  // The low-impact tab alone owns the bulk-clear exclusion picker and account
+  // selector. The per-tab Scan All control is in the tab navigation above.
   const isLowImpactTab = tier === "low-impact";
   const tierMeta = CLEANUP_USABILITY_TIERS.find((t) => t.id === tier)!;
-
-  const scanAllTourState =
-    loadingAll === "standard"
-      ? "scanning"
-      : Object.values(cardDataMap).some((d) => d.count !== -1)
-        ? "done"
-        : undefined;
-
-  const headerButtons = (
-    <Button
-      small
-      intent="primary"
-      icon={loadingAll === "standard" ? undefined : "refresh"}
-      text={loadingAll === "standard" ? "Scanning..." : "Scan All"}
-      loading={loadingAll === "standard"}
-      disabled={loadingAll !== null}
-      onClick={() => loadCategoryBatch(orderedScanCategories, "standard")}
-      className="cleanup-scan-all-btn"
-      data-tour-state={scanAllTourState}
-      style={{
-        fontSize: 11,
-        fontWeight: 800,
-        letterSpacing: "0.6px",
-        padding: "6px 14px",
-      }}
-    />
-  );
 
   const sysCats = orderedScanCategories.filter(
     (c) => !c.scopeAware && c.usabilityTier === tier,
@@ -325,14 +293,9 @@ export default function CleanupCategoryGrid({
     <div className="flex flex-col gap-3">
       {isLowImpactTab && (
         <>
-          {/* ── Summary bar ──────────────────────────────────────────
-           * The needs-cleaning/clean/scanning counts render once,
-           * above the tab list, in SystemCleanupPanel.tsx (they must
-           * survive tab switches, unlike this tab-scoped block) —
-           * see CleanupSummaryStats there. This block keeps only the
-           * "Clear Low-Impact" shortcut + the bulk-clear exclude
-           * picker, which stay low-impact-tab-only by design. */}
-          <div className="flex items-center justify-end">{headerButtons}</div>
+          {/* The summary counts sit below the tab navigation in
+              SystemCleanupPanel. This block keeps only the low-impact bulk
+              clear exclusion controls. */}
           <div className="flex flex-col gap-2 mb-6" data-cleanup-summary="true">
             <div
               className="flex items-center gap-4 px-3 py-2.5 rounded-lg flex-wrap"

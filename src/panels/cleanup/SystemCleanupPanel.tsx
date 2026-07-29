@@ -1,6 +1,6 @@
 // Recreated System Cleanup panel: one panel-owned scroller, preserved layout,
 // and the existing backend hook contracts.
-import { Icon } from "@/components/ui/bp";
+import { Button, Icon } from "@/components/ui/bp";
 import { useEffect, useState } from "react";
 import useEntitlements from "../../hooks/useEntitlements";
 import useProInstall from "../../hooks/useProInstall";
@@ -16,6 +16,7 @@ import OsRepairCard from "../maintenance/OsRepairCard";
 import { useCleanupScan } from "./useCleanupScan";
 import { useCleanupLegacyDialogs } from "./useCleanupLegacyDialogs";
 import { useCleanupSessionState } from "./cleanupSessionState";
+import { VIEW_ONLY_CATEGORIES, type CleanupUsabilityTier } from "./cleanupCategories";
 
 export default function SystemCleanupPanel() {
     const hasSafeguards = true;
@@ -48,7 +49,7 @@ export default function SystemCleanupPanel() {
 
     const { openers, dialogs: legacyDialogs } = useCleanupLegacyDialogs(cardDataMap);
 
-    const [activeTab, setActiveTab] = useCleanupSessionState("cleanup.active-tab", "low-impact");
+    const [activeTab, setActiveTab] = useCleanupSessionState<CleanupUsabilityTier | "actions-monitoring">("cleanup.active-tab", "low-impact");
     const onRequestScheduleAccess = isInvestigator
         ? undefined
         : () => {
@@ -201,17 +202,10 @@ export default function SystemCleanupPanel() {
                             and forensic trace erasure only. The old
                             `<DiskCleanupGranular />` render used to be here. */}
 
-                        {hasSafeguards && <CleanupSummaryStats scan={scan} />}
-
                         {hasSafeguards && (
-                            <Tabs value={activeTab} onValueChange={setActiveTab}>
-                                <TabsList className="w-full flex-wrap justify-start">
-                                    <TabsTrigger value="low-impact">Low impact</TabsTrigger>
-                                    <TabsTrigger value="history-cache">History &amp; cache</TabsTrigger>
-                                    <TabsTrigger value="rebuilds-apps-connectivity">Rebuilds apps or connectivity</TabsTrigger>
-                                    <TabsTrigger value="data-accounts-recovery">Data, accounts &amp; recovery</TabsTrigger>
-                                    <TabsTrigger value="actions-monitoring">One-time actions &amp; monitoring</TabsTrigger>
-                                </TabsList>
+                            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as CleanupUsabilityTier | "actions-monitoring")}>
+                                <CleanupTabNavigation activeTab={activeTab} scan={scan} />
+                                <CleanupSummaryStats scan={scan} />
                                 <TabsContent value="low-impact">
                                     <CleanupCategoryGrid
                                         scan={scan}
@@ -375,13 +369,61 @@ export default function SystemCleanupPanel() {
     );
 }
 
+/**
+ * Keeps the scan action physically with the cleanup tab navigation. The scan
+ * scope intentionally follows the selected tab: an operator reviewing one
+ * risk tier should not unexpectedly start every other maintenance check.
+ */
+function CleanupTabNavigation({
+    activeTab,
+    scan,
+}: {
+    activeTab: CleanupUsabilityTier | "actions-monitoring";
+    scan: ReturnType<typeof useCleanupScan>;
+}) {
+    const { loadingAll, orderedScanCategories, loadCategoryBatch, cardDataMap } = scan;
+    const categories = activeTab === "actions-monitoring"
+        ? VIEW_ONLY_CATEGORIES
+        : orderedScanCategories.filter((category) => category.usabilityTier === activeTab);
+    const scanAllTourState = loadingAll === "standard"
+        ? "scanning"
+        : categories.some((category) => cardDataMap[category.id]?.count !== -1)
+            ? "done"
+            : undefined;
+
+    return (
+        <div className="flex flex-wrap items-center gap-2">
+            <TabsList className="min-w-0 flex-1 flex-wrap justify-start">
+                <TabsTrigger value="low-impact">Low impact</TabsTrigger>
+                <TabsTrigger value="history-cache">History &amp; cache</TabsTrigger>
+                <TabsTrigger value="rebuilds-apps-connectivity">Rebuilds apps or connectivity</TabsTrigger>
+                <TabsTrigger value="data-accounts-recovery">Data, accounts &amp; recovery</TabsTrigger>
+                <TabsTrigger value="actions-monitoring">One-time actions &amp; monitoring</TabsTrigger>
+            </TabsList>
+            <Button
+                small
+                intent="primary"
+                icon={loadingAll === "standard" ? undefined : "refresh"}
+                text={loadingAll === "standard" ? "Scanning..." : "Scan All"}
+                loading={loadingAll === "standard"}
+                disabled={loadingAll !== null || categories.length === 0}
+                onClick={() => loadCategoryBatch(categories, "standard")}
+                className="cleanup-scan-all-btn"
+                data-tour-state={scanAllTourState}
+                style={{
+                    fontSize: 11,
+                    fontWeight: 800,
+                    letterSpacing: "0.6px",
+                    padding: "6px 14px",
+                }}
+            />
+        </div>
+    );
+}
+
 // Cross-tab summary counts (needs cleaning / clean / excluded / scanning).
-// Rendered once above the tab list so the counts stay visible regardless of
-// the active tab — they used to live inside CleanupCategoryGrid gated to the
-// low-impact tab only, and disappeared on every other tab because Radix Tabs
-// unmounts inactive TabsContent (see CleanupCategoryGrid.tsx's remaining
-// low-impact-only summary block for the "Clear Low-Impact" + exclude picker
-// that stayed behind).
+// Rendered immediately below the tab navigation so it remains visible on
+// every tab without competing with the tab-row action.
 function CleanupSummaryStats({ scan }: { scan: ReturnType<typeof useCleanupScan> }) {
     const { summaryStats, clearAllExcludes, orderedScanCategories, cardDataMap } = scan;
     const scanningCount = orderedScanCategories.filter((cat) => cardDataMap[cat.id]?.loading).length;

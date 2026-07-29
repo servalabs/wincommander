@@ -60,7 +60,7 @@ describe("redesign surface copy guardrails", () => {
     // Encrypted Volumes moved onto the shared SectionCard (2026-07); its
     // title prop is the header, not a bespoke "vault-card-new-header" div.
     const headerIndex = source.indexOf('title="Encrypted Volumes"');
-    const systemStatusIndex = source.indexOf("<SystemEncryptionSection installed={isEncryptionEngineInstalled} compact />");
+    const systemStatusIndex = source.indexOf("<SystemEncryptionSection compact />");
     const mountedVolumesIndex = source.indexOf('className={`vault-content ${volumes.length === 0 ? "vault-content--empty" : ""}`}');
     const actionRowIndex = source.indexOf('className="vault-card-action-row"');
 
@@ -273,15 +273,20 @@ describe("redesign surface copy guardrails", () => {
     expect(css).not.toContain(".cleanup-panel {");
   });
 
-  // The tab split (2026-07) confines the cross-tier summary bar, Scan All,
-  // and account picker to the Low-impact tab (the default/first tab) — they
-  // no longer render once per tier. The counters themselves must still be
-  // unconditional within that gate, not further hidden per-counter.
+  // Scan All belongs in the tab-navigation row and scans only the active
+  // cleanup group. The summary stays directly below that row and remains
+  // unconditional while results arrive.
   test("System Cleanup keeps the summary footprint stable while scan results arrive", async () => {
     const cleanupGrid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
+    const cleanupPanel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
 
     expect(cleanupGrid).toContain("{isLowImpactTab && (");
     expect(cleanupGrid).toContain('data-cleanup-summary="true"');
+    expect(cleanupGrid).not.toContain('className="cleanup-scan-all-btn"');
+    expect(cleanupPanel).toContain("function CleanupTabNavigation");
+    expect(cleanupPanel).toContain("<CleanupTabNavigation activeTab={activeTab} scan={scan} />");
+    expect(cleanupPanel).toContain("loadCategoryBatch(categories, \"standard\")");
+    expect(cleanupPanel).toContain("<CleanupSummaryStats scan={scan} />");
     expect(cleanupGrid).not.toContain("{(summaryStats.needsCleaning > 0 || summaryStats.clean > 0) && (");
     expect(cleanupGrid).not.toContain("{summaryStats.needsCleaning > 0 && (");
     expect(cleanupGrid).not.toContain("{summaryStats.clean > 0 && (");
