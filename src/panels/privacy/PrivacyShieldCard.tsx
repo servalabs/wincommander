@@ -578,41 +578,41 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 )}
 
                 <div className="rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] p-4">
-                    {/* Essential: only the two primary blur triggers stay
-                        always-visible. "Camera Seen" (experimental), Record
-                        Proof, Detection Mode, Auto start, and the parameter
-                        sliders all moved into the single disclosure below. */}
+                    {/* Blur conditions are intentionally kept together: these
+                        are the three inputs that directly decide whether the
+                        screen is obscured. */}
                     <div className="flex flex-col gap-3">
                         <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Blur triggers" : "Activation Triggers"}</span>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                             <ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true} />
                             <ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true} />
+                            <ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: blurs when a phone or camera is pointed at the screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true} />
                         </div>
                     </div>
 
                     <div className="mt-4 pt-4 border-t border-[var(--shield-inner-border)]">
+                        {/* Launch behaviour is deliberately not a model
+                            parameter, so it gets its own direct row without
+                            an invented group title. */}
+                        <ShieldOption
+                            label={isAdvanced ? "Auto start" : "Auto start on launch"}
+                            tooltip={hasPaid
+                                ? "Automatically activate Privacy Shield a few seconds after the app launches. Skipped if no camera or the AI runtime isn't installed."
+                                : "Pro feature - auto-activate Privacy Shield after launch."}
+                            checked={autostart}
+                            onChange={(v) => {
+                                if (v && !hasPaid) { openShieldPaywall(); return; }
+                                setAutostart(v);
+                            }}
+                            disabled={false}
+                        />
+
                         <div className="flex items-center justify-between cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setShowAdvanced(!showAdvanced)}>
                             <span className="text-[10px] font-medium text-[var(--shield-text-muted)] block">{isAdvanced ? "Processing parameters" : "Advanced Settings"}</span>
                             <Icon icon={showAdvanced ? "chevron-up" : "chevron-down"} size={12} color="var(--shield-text-muted)" />
                         </div>
                         {showAdvanced && (
                             <div className="mt-4 flex flex-col gap-4">
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <ShieldOption
-                                        label={isAdvanced ? "Auto start" : "Auto start on launch"}
-                                        tooltip={hasPaid
-                                            ? "Automatically activate Privacy Shield a few seconds after the app launches. Skipped if no camera or the AI runtime isn't installed."
-                                            : "Pro feature - auto-activate Privacy Shield after launch."}
-                                        checked={autostart}
-                                        onChange={(v) => {
-                                            if (v && !hasPaid) { openShieldPaywall(); return; }
-                                            setAutostart(v);
-                                        }}
-                                        disabled={false}
-                                    />
-                                    <ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: detects phones or cameras pointed at screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true} />
-                                </div>
-
                                 <div className="flex flex-col gap-3 pt-3 border-t border-[var(--shield-inner-border)]">
                                     <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Capture on incident" : "Record Proof"}</span>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

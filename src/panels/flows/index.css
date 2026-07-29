@@ -115,7 +115,7 @@
 .flow-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   padding: 12px 14px;
   border: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
   border-left: 3px solid var(--color-border, rgba(255, 255, 255, 0.1));
@@ -125,6 +125,9 @@
 .flow-card--on {
   border-left-color: var(--color-success, #3fb950);
   background: var(--color-surface-3, rgba(255, 255, 255, 0.05));
+}
+.flow-card:not(.flow-card--on) {
+  opacity: 0.78;
 }
 .flow-card__head {
   display: flex;
@@ -165,16 +168,30 @@
 .flow-card__flow {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 10px;
+  flex-wrap: nowrap;
   font-size: 13px;
   color: var(--color-text-muted, #9aa0a6);
 }
 .flow-card__seg {
   display: inline-flex;
-  align-items: baseline;
+  align-items: flex-start;
   gap: 6px;
+  min-width: 0;
+  flex: 1 1 0;
+  padding: 8px 9px;
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+  border-radius: var(--radius-md, 4px);
+  background: var(--color-surface, rgba(255, 255, 255, 0.02));
 }
+.flow-card__seg > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flow-card__seg--when > svg { color: #58a6ff; flex: none; }
+.flow-card__seg--then > svg { color: var(--color-primary, #ff7a45); flex: none; }
 .flow-card__seg-label {
   font-size: 10px;
   text-transform: uppercase;
@@ -188,6 +205,25 @@
   color: var(--color-primary, #ff7a45);
   flex: none;
 }
+.flow-card__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--color-text-muted, #9aa0a6);
+  font-size: 11px;
+}
+.flow-card__last {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flow-card__last--warning { color: #ffa657; }
 
 /* ── Chips ── */
 .flow-chip {
@@ -211,6 +247,25 @@
 .flow-chip--risk-high {
   background: rgba(248, 81, 73, 0.15);
   color: #f85149;
+}
+.flow-chip--active {
+  background: rgba(63, 185, 80, 0.14);
+  color: var(--color-success, #3fb950);
+}
+.flow-chip--paused {
+  background: var(--color-surface-4, rgba(255, 255, 255, 0.08));
+  color: var(--color-text-muted, #9aa0a6);
+}
+
+@media (max-width: 680px) {
+  .flows-panel__top,
+  .flow-card__meta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .flow-card__flow { align-items: stretch; flex-direction: column; }
+  .flow-card__arrow { align-self: center; transform: rotate(90deg); }
+  .flow-card__last { justify-content: flex-start; }
 }
 
 /* ── Activity log ── */

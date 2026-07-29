@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Icon } from "@/components/ui/icon";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import useEntitlements from "@/hooks/useEntitlements";
-import { useFlowsV2 } from "@/hooks/useFlowsV2";
+import { useFlowsV2, type FlowLogEntry } from "@/hooks/useFlowsV2";
 import { useSettingsQuery } from "@/hooks/queries/useSettingsQuery";
 import RuleEditor from "./RuleEditor";
 import { buildFlowSettingOptions } from "./settingsCatalog";
@@ -51,6 +51,13 @@ function TemplateGrid({ onSelect }: { onSelect: (rule: Rule) => void }) {
       ))}
     </div>
   );
+}
+
+function flowActivityLabel(entry: FlowLogEntry | undefined): string {
+  if (!entry) return "Not run this session";
+  const at = new Date(entry.at);
+  const time = Number.isNaN(at.getTime()) ? "just now" : at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return `${entry.message || entry.kind} · ${time}`;
 }
 
 export default function FlowsPanel() {
@@ -119,6 +126,7 @@ export default function FlowsPanel() {
               {sorted.map((rule) => {
                 const { when, then } = ruleSummary(rule);
                 const locked = isFleetLocked(rule);
+                const latestActivity = log.find((entry) => entry.ruleId === rule.id);
                 return (
                   <motion.div
                     key={rule.id}
@@ -137,6 +145,9 @@ export default function FlowsPanel() {
                         aria-label={`Enable ${rule.name}`}
                       />
                       <span className="flow-card__name">{rule.name}</span>
+                      <span className={`flow-chip ${rule.enabled ? "flow-chip--active" : "flow-chip--paused"}`}>
+                        {rule.enabled ? "Active" : "Paused"}
+                      </span>
                       {locked && (
                         <span className="flow-chip flow-chip--fleet">
                           <Icon icon="lock" size={11} /> Fleet
@@ -160,12 +171,21 @@ export default function FlowsPanel() {
                       </span>
                     </div>
                     <div className="flow-card__flow">
-                      <span className="flow-card__seg flow-card__seg--when">
-                        <span className="flow-card__seg-label">When</span> {when}
+                      <span className="flow-card__seg flow-card__seg--when" title={when}>
+                        <Icon icon="flash" size={13} aria-hidden="true" />
+                        <span><span className="flow-card__seg-label">When</span> {when}</span>
                       </span>
                       <Icon icon="arrow-right" size={13} className="flow-card__arrow" />
-                      <span className="flow-card__seg flow-card__seg--then">
-                        <span className="flow-card__seg-label">Do</span> {then}
+                      <span className="flow-card__seg flow-card__seg--then" title={then}>
+                        <Icon icon="play" size={13} aria-hidden="true" />
+                        <span><span className="flow-card__seg-label">Then</span> {then}</span>
+                      </span>
+                    </div>
+                    <div className="flow-card__meta">
+                      <span>{rule.triggers.length} trigger{rule.triggers.length === 1 ? "" : "s"} · {rule.actions.length} action{rule.actions.length === 1 ? "" : "s"}</span>
+                      <span className={latestActivity?.kind === "refused" ? "flow-card__last flow-card__last--warning" : "flow-card__last"}>
+                        <Icon icon={latestActivity?.kind === "refused" ? "warning-sign" : "history"} size={11} />
+                        {flowActivityLabel(latestActivity)}
                       </span>
                     </div>
                   </motion.div>
