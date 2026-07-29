@@ -24,15 +24,15 @@ describe("System Cleanup lockdown coverage", () => {
     expect(panel).toContain("openSharedDetails(category.id)");
   });
 
-  test("completed scans collect every clean card in one final compact section", async () => {
+  test("completed scans pack every four clean cards into the next grid slot", async () => {
     const grid = await Bun.file("src/panels/cleanup/CleanupCategoryGrid.tsx").text();
     const card = await Bun.file("src/components/cleanup/CleanupTraceCard.tsx").text();
 
-    expect(grid).toContain("const cleanUserCats = userCats.filter(isUserClean)");
-    expect(grid).toContain("const totalCleanCards = cleanCats.length + cleanUserCats.length");
-    expect(grid).toContain("Clean cards");
-    expect(grid).toContain("{cleanUserCats.map((cat) => renderUserCard(cat, true))}");
-    expect(card).toContain("height: compact ? 44 : TRACE_CARD_HEIGHT");
+    expect(grid).toContain("const cleanCardPacks = packCleanCards(");
+    expect(grid).toContain("orderedScanCategories.flatMap");
+    expect(grid).toContain('data-cleanup-clean-pack="true"');
+    expect(grid).not.toContain("cleanCardsOpen");
+    expect(card).toContain("height: compact ? '100%' : TRACE_CARD_HEIGHT");
   });
 
   test("every expanded cleanup category is configurable and dispatched through the guarded lockdown path", async () => {

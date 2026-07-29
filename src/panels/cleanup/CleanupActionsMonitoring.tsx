@@ -2,9 +2,10 @@
 // The "One-Time Actions & Monitoring" section: one-shot destructive actions
 // on the left, read-only system monitors on the right. Extracted verbatim
 // from src/panels/cleanup/index.tsx — pure move, no behavior change.
-import { Button, Icon } from "@/components/ui/bp";
+import { Icon } from "@/components/ui/bp";
 import SectionCard from "../../components/shared/SectionCard";
 import CleanupTraceCard from "../../components/cleanup/CleanupTraceCard";
+import RunOnceButton from "../../components/cleanup/RunOnceButton";
 import { ACTION_CATEGORIES, VIEW_ONLY_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import type { CardData } from "./useCleanupScan";
 
@@ -61,15 +62,11 @@ export default function CleanupActionsMonitoring({
                                             {cat.description}
                                         </span>
                                     </div>
-                                    <Button
-                                        small
-                                        icon="play"
-                                        text={d.clearing ? 'Running…' : 'Run'}
-                                        intent="danger"
-                                        loading={d.clearing}
+                                    <RunOnceButton
+                                        isRunning={d.clearing}
                                         disabled={isInvestigator}
                                         onClick={() => handleCardClear(cat, cat.id === 'unallocatedErase' ? onDriveWipe : undefined)}
-                                        style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.4px', flexShrink: 0 }}
+                                        className="shrink-0"
                                     />
                                 </div>
                             );

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Button, Tag, Spinner, InputGroup, HTMLSelect } from "@/components/ui/bp";
 import SectionCard from "../../shared/SectionCard";
 import useBackend, { executeBackendCommand } from "../../../hooks/useBackend";
@@ -24,7 +24,7 @@ interface ServiceRow {
 
 const START_MODES = ["Automatic", "AutomaticDelayedStart", "Manual", "Disabled"];
 
-export default function ServiceManager({ embedded = false }: { embedded?: boolean }) {
+export default function ServiceManager({ embedded = false, scanKey = 0 }: { embedded?: boolean; scanKey?: number }) {
     const { appSettings, patchAppSettings } = useAppState();
     const { setServicesManual } = useBackend();
     // Collapsed by default + lazy fetch — see StartupManager comment.
@@ -35,6 +35,7 @@ export default function ServiceManager({ embedded = false }: { embedded?: boolea
     const [pending, setPending] = useState<Set<string>>(new Set());
     const [showOnlyRecommended, setShowOnlyRecommended] = useState(false);
     const [applyingRecommended, setApplyingRecommended] = useState(false);
+    const embeddedScanKey = useRef<number | undefined>(undefined);
 
     // "Apply Recommended Tweaks" is the granular Service Manager's
     // one-shot mode — calls the same Set-ServicesManual backend command
@@ -80,9 +81,15 @@ export default function ServiceManager({ embedded = false }: { embedded?: boolea
     }, []);
 
     useEffect(() => {
-        if ((isOpen || embedded) && rows.length === 0 && !loading) refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isOpen, embedded]);
+        if (embedded) {
+            if (embeddedScanKey.current !== scanKey) {
+                embeddedScanKey.current = scanKey;
+                void refresh();
+            }
+            return;
+        }
+        if (isOpen && rows.length === 0 && !loading) void refresh();
+    }, [embedded, isOpen, loading, refresh, rows.length, scanKey]);
 
     const setMode = useCallback(async (svc: ServiceRow, mode: string) => {
         setPending(prev => new Set(prev).add(svc.Name));
@@ -134,7 +141,7 @@ export default function ServiceManager({ embedded = false }: { embedded?: boolea
                     Apply Recommended Tweaks
                 </Button>
                 <Tag minimal>{`${filtered.length}/${rows.length}`}</Tag>
-                <Button minimal icon="refresh" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />
+                {!embedded && <Button minimal icon="refresh" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />}
             </div>
         </>
     );

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Button, Tag, Spinner, InputGroup, Switch, Icon } from "@/components/ui/bp";
 import SectionCard from "../../shared/SectionCard";
 import { executeBackendCommand } from "../../../hooks/useBackend";
@@ -19,7 +19,7 @@ interface ScheduledTask {
     LastResult: number | null;
 }
 
-export default function ScheduledTasksManager({ embedded = false }: { embedded?: boolean }) {
+export default function ScheduledTasksManager({ embedded = false, scanKey = 0 }: { embedded?: boolean; scanKey?: number }) {
     // Collapsed by default + lazy fetch — see StartupManager comment.
     const [isOpen, setIsOpen] = useState(false);
     const [tasks, setTasks] = useState<ScheduledTask[]>([]);
@@ -27,6 +27,7 @@ export default function ScheduledTasksManager({ embedded = false }: { embedded?:
     const [pending, setPending] = useState<Set<string>>(new Set());
     const [filter, setFilter] = useState("");
     const [showMicrosoft, setShowMicrosoft] = useState(false);
+    const embeddedScanKey = useRef<number | undefined>(undefined);
 
     const refresh = useCallback(async () => {
         setLoading(true);
@@ -40,9 +41,15 @@ export default function ScheduledTasksManager({ embedded = false }: { embedded?:
     }, []);
 
     useEffect(() => {
-        if ((isOpen || embedded) && tasks.length === 0 && !loading) refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isOpen, embedded]);
+        if (embedded) {
+            if (embeddedScanKey.current !== scanKey) {
+                embeddedScanKey.current = scanKey;
+                void refresh();
+            }
+            return;
+        }
+        if (isOpen && tasks.length === 0 && !loading) void refresh();
+    }, [embedded, isOpen, loading, refresh, scanKey, tasks.length]);
 
     const callAction = useCallback(async (cmd: string, t: ScheduledTask, verb: string) => {
         const key = t.Path + t.Name;
@@ -77,7 +84,7 @@ export default function ScheduledTasksManager({ embedded = false }: { embedded?:
             <span className="system-manager-caption">Scheduled jobs, Task Scheduler path, vendor signal, run state, and actions.</span>
             <div className="system-manager-actions">
                 <Tag minimal>{`${filtered.length}/${tasks.length}`}</Tag>
-                <Button minimal icon="refresh" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />
+                {!embedded && <Button minimal icon="refresh" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />}
             </div>
         </>
     );

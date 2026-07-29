@@ -1,38 +1,46 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import DiskCleanupGranular from "../../components/tweaks/managers/DiskCleanupGranular";
+import { FileHygieneTools } from "./FileHygieneTools";
 import { RoutineCleanerPanel } from "./RoutineCleanerPanel";
 import { APP_CACHE_CLEANUP_CATEGORIES } from "./routineCleanerHelpers";
 
-/**
- * Single space-reclaim surface. Storage & files used to render two side-by-side
- * cards — Get-DiskCleanupScan and routine_cleaner — that cleaned nine of the
- * same paths through different backends, then briefly a Segmented toggle that
- * showed only one scope at a time. Both problems are gone: the two scopes are
- * explicitly non-overlapping (Windows-owned vs application-owned, see
- * APP_CACHE_CLEANUP_CATEGORIES) and are now shown side by side again so a user
- * doesn't have to flip a switch to see the other one.
- */
+/** Kept as a compatibility export for callers that need both reclaim scopes. */
 export default function ReclaimSpaceCard() {
   return (
-    <Card data-tour="maintenance-disk-cleanup">
+    <div className="maintenance-reclaim-grid">
+      <WindowsStorageCard />
+      <AppBrowserCacheCard />
+    </div>
+  );
+}
+
+export function WindowsStorageCard() {
+  return (
+    <Card data-tour="maintenance-disk-cleanup" className="maintenance-storage-card maintenance-storage-overview-card">
       <CardHeader>
-        <CardTitle className="text-lg font-bold tracking-tight">Reclaim disk space</CardTitle>
-        <CardDescription>Preview before anything is deleted. Windows-owned and app-owned storage are cleared through two non-overlapping scopes — the two never touch the same path.</CardDescription>
+        <CardTitle>Windows storage &amp; file hygiene</CardTitle>
+        <CardDescription>Review Windows-managed storage, then choose the folders you want inspected for duplicate files or empty folders.</CardDescription>
       </CardHeader>
-      <CardContent className="min-w-0">
-        <div className="maintenance-reclaim-grid">
-          <div className="maintenance-reclaim-scope">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-mute)]">Windows storage</h3>
-            <p className="text-xs text-[var(--text-mute)]">Windows owns these paths: temp, update and delivery caches, Prefetch, thumbnails, crash dumps, error reports, Recycle Bin, and a previous Windows installation. Needs Administrator.</p>
-            <DiskCleanupGranular />
-          </div>
-          <div className="maintenance-reclaim-scope">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-mute)]">App &amp; browser caches</h3>
-            <p className="text-xs text-[var(--text-mute)]">Applications own these paths: browser, application, game-launcher, and SQLite caches. Every target is previewable per file, cancellable mid-run, and needs no elevation for user-owned data.</p>
-            <RoutineCleanerPanel categories={APP_CACHE_CLEANUP_CATEGORIES} />
-          </div>
-        </div>
+      <CardContent className="maintenance-storage-overview-content">
+        <section aria-label="Windows storage cleanup" className="maintenance-storage-section">
+          <DiskCleanupGranular />
+        </section>
+        <section aria-label="Folder inspector and file hygiene" className="maintenance-file-hygiene-section">
+          <FileHygieneTools />
+        </section>
       </CardContent>
+    </Card>
+  );
+}
+
+export function AppBrowserCacheCard() {
+  return (
+    <Card className="maintenance-storage-card maintenance-app-cache-card">
+      <CardHeader>
+        <CardTitle>App &amp; browser cache</CardTitle>
+        <CardDescription>Preview browser, application, game-launcher, and SQLite cache data before cleaning. Windows storage is not included here.</CardDescription>
+      </CardHeader>
+      <CardContent className="maintenance-app-cache-content"><RoutineCleanerPanel categories={APP_CACHE_CLEANUP_CATEGORIES} /></CardContent>
     </Card>
   );
 }

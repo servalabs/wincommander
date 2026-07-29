@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Icon, Button, Tag, Spinner, InputGroup, Tooltip } from "@/components/ui/bp";
 import { invoke } from "@tauri-apps/api/core";
 import SectionCard from "../../shared/SectionCard";
@@ -39,7 +39,7 @@ function parentFolder(path: string): string {
     return idx > 0 ? clean.slice(0, idx) : clean;
 }
 
-export default function StartupManager({ embedded = false }: { embedded?: boolean }) {
+export default function StartupManager({ embedded = false, scanKey = 0 }: { embedded?: boolean; scanKey?: number }) {
     // Collapsed by default — the data fetch only fires on first open so
     // the Tweaks panel doesn't pay a Get-StartupItems round-trip on every
     // mount (these subpanels stack vertically and were dominating load
@@ -49,6 +49,7 @@ export default function StartupManager({ embedded = false }: { embedded?: boolea
     const [loading, setLoading] = useState(false);
     const [pending, setPending] = useState<Set<string>>(new Set());
     const [filter, setFilter] = useState("");
+    const embeddedScanKey = useRef<number | undefined>(undefined);
 
     const refresh = useCallback(async () => {
         setLoading(true);
@@ -61,12 +62,16 @@ export default function StartupManager({ embedded = false }: { embedded?: boolea
         }
     }, []);
 
-    // Fetch on first expand; subsequent re-opens reuse the cache (user
-    // can click the refresh icon for a re-probe).
     useEffect(() => {
-        if ((isOpen || embedded) && items.length === 0 && !loading) refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isOpen, embedded]);
+        if (embedded) {
+            if (embeddedScanKey.current !== scanKey) {
+                embeddedScanKey.current = scanKey;
+                void refresh();
+            }
+            return;
+        }
+        if (isOpen && items.length === 0 && !loading) void refresh();
+    }, [embedded, isOpen, items.length, loading, refresh, scanKey]);
 
     const handleToggle = useCallback(async (item: StartupItem) => {
         setPending(prev => new Set(prev).add(item.Name));
@@ -108,7 +113,7 @@ export default function StartupManager({ embedded = false }: { embedded?: boolea
             <div className="system-manager-actions">
                 <Tag minimal>{`${items.length} entries`}</Tag>
                 <Tag minimal intent="warning">{`${totalRam.toFixed(0)} MB running`}</Tag>
-                <Button minimal icon="refresh" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />
+                {!embedded && <Button minimal icon="refresh" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />}
             </div>
         </>
     );

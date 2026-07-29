@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import {
   useBackend,
   type ExplorerContextResult,
@@ -21,13 +21,13 @@ export function useRegistryTools() {
   const [error, setError] = useMaintenanceSessionState<string | undefined>("registry-hygiene.error", undefined);
   const [result, setResult] = useMaintenanceSessionState<RegistryCleanerResult | ExplorerContextResult | undefined>("registry-hygiene.result", undefined);
 
-  const scan = useCallback(async () => {
+  const scan = useCallback(async (target: RegistryTool = tool) => {
     setBusy(true);
     setError(undefined);
     setResult(undefined);
     setSelected(new Set());
     try {
-      if (tool === "orphans") setRegistryScan(await backend.registryCleanerScan());
+      if (target === "orphans") setRegistryScan(await backend.registryCleanerScan());
       else setContextScan(await backend.explorerContextMenuScan());
     } catch (cause) {
       setError(String(cause));
@@ -35,6 +35,25 @@ export function useRegistryTools() {
       setBusy(false);
     }
   }, [backend, setBusy, setContextScan, setError, setRegistryScan, setResult, setSelected, tool]);
+
+  const [hasPreScanned, setHasPreScanned] = useMaintenanceSessionState("registry-hygiene.pre-scanned", false);
+
+  // Both views share one cached baseline. Switching tabs must never start a
+  // second disk/registry walk; the header refresh is the explicit rescan path.
+  useEffect(() => {
+    if (hasPreScanned || busy) return;
+    setHasPreScanned(true);
+    setBusy(true);
+    setError(undefined);
+    setResult(undefined);
+    Promise.all([backend.registryCleanerScan(), backend.explorerContextMenuScan()])
+      .then(([registry, context]) => {
+        setRegistryScan(registry);
+        setContextScan(context);
+      })
+      .catch((cause) => setError(String(cause)))
+      .finally(() => setBusy(false));
+  }, [backend, busy, hasPreScanned, setBusy, setContextScan, setError, setHasPreScanned, setRegistryScan, setResult]);
 
   const mutate = useCallback(async (action: ContextAction = "remove") => {
     if (!selected.size) return;

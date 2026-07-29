@@ -14,52 +14,87 @@ import "./StartupDriverTools.css";
 
 type ManagerTab = "startup" | "users" | "tasks" | "services" | "conceal";
 
-// Drives the `.manager-tab-switch--N` slot index for the sliding thumb —
-// order must match the buttons rendered in the tablist below.
 const MANAGER_TAB_ORDER: ManagerTab[] = ["startup", "users", "tasks", "services", "conceal"];
 
 export function StartupDriverTools() {
   const tools = useStartupDrivers();
   const [managerTab, setManagerTab] = useState<ManagerTab>("startup");
-  const startupScanLabel = tools.startup ? "Rescan startup impact" : "Scan startup impact";
-  const driverScanLabel = tools.drivers ? "Rescan drivers" : "Scan drivers";
+  const [showAllDrivers, setShowAllDrivers] = useState(false);
+  const [driverScanKey, setDriverScanKey] = useState(0);
+  const [managerScanKey, setManagerScanKey] = useState(0);
+
+  const scanChecks = async () => {
+    await tools.scanChecks();
+    setDriverScanKey((current) => current + 1);
+    setManagerScanKey((current) => current + 1);
+  };
+
+  const toggleAllDrivers = () => {
+    if (showAllDrivers) {
+      setShowAllDrivers(false);
+      return;
+    }
+    setShowAllDrivers(true);
+    if (!tools.drivers) void scanChecks();
+  };
+
   return <div className="flex flex-col gap-4">
     <Card>
-      <CardHeader>
-        <CardTitle>System Managers</CardTitle>
-        <CardDescription>Startup entries, local users, scheduled tasks, services, and runtime concealment, all in one place. The startup impact scan adds launch-path, signer, and conservative keep/review guidance.</CardDescription>
+      <CardHeader className="gap-3">
+        <div className="system-manager-header-row">
+          <CardTitle>System Managers</CardTitle>
+          <div className={`manager-tab-switch manager-tab-switch--${MANAGER_TAB_ORDER.indexOf(managerTab)}`} role="tablist" aria-label="System managers">
+            <span className="manager-tab-switch__thumb" aria-hidden="true" />
+            <ManagerTabButton active={managerTab === "startup"} icon="play" label="Startup" onClick={() => setManagerTab("startup")} />
+            <ManagerTabButton active={managerTab === "users"} icon="people" label="Users" onClick={() => setManagerTab("users")} />
+            <ManagerTabButton active={managerTab === "tasks"} icon="time" label="Tasks" onClick={() => setManagerTab("tasks")} />
+            <ManagerTabButton active={managerTab === "services"} icon="settings" label="Services" onClick={() => setManagerTab("services")} />
+            <ManagerTabButton active={managerTab === "conceal"} icon="eye-off" label="Conceal" onClick={() => setManagerTab("conceal")} />
+          </div>
+          <Button size="sm" variant="primary" className="system-manager-scan" disabled={tools.busy} onClick={() => void scanChecks()}>
+            <Icon icon={tools.busy ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} />
+            {tools.busy ? "Scanning" : "Scan checks"}
+          </Button>
+        </div>
+        <CardDescription>Startup entries, users, tasks, services, runtime visibility, and drivers are scanned once here. Switching views reuses those results until you scan again.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <div className={`manager-tab-switch manager-tab-switch--${MANAGER_TAB_ORDER.indexOf(managerTab)}`} role="tablist" aria-label="System managers">
-          <span className="manager-tab-switch__thumb" aria-hidden="true" />
-          <Button size="sm" variant="ghost" role="tab" aria-selected={managerTab === "startup"} className={`manager-tab-switch__btn${managerTab === "startup" ? " manager-tab-switch__btn--active" : ""}`} onClick={() => setManagerTab("startup")}><Icon icon="play" />Startup</Button>
-          <Button size="sm" variant="ghost" role="tab" aria-selected={managerTab === "users"} className={`manager-tab-switch__btn${managerTab === "users" ? " manager-tab-switch__btn--active" : ""}`} onClick={() => setManagerTab("users")}><Icon icon="people" />Users</Button>
-          <Button size="sm" variant="ghost" role="tab" aria-selected={managerTab === "tasks"} className={`manager-tab-switch__btn${managerTab === "tasks" ? " manager-tab-switch__btn--active" : ""}`} onClick={() => setManagerTab("tasks")}><Icon icon="time" />Tasks</Button>
-          <Button size="sm" variant="ghost" role="tab" aria-selected={managerTab === "services"} className={`manager-tab-switch__btn${managerTab === "services" ? " manager-tab-switch__btn--active" : ""}`} onClick={() => setManagerTab("services")}><Icon icon="settings" />Services</Button>
-          <Button size="sm" variant="ghost" role="tab" aria-selected={managerTab === "conceal"} className={`manager-tab-switch__btn${managerTab === "conceal" ? " manager-tab-switch__btn--active" : ""}`} onClick={() => setManagerTab("conceal")}><Icon icon="eye-off" />Conceal</Button>
-        </div>
-        {managerTab === "startup" && <>
-          <div className="flex flex-wrap gap-2"><Button size="icon" variant="primary" className="ml-auto" disabled={tools.busy} onClick={() => void tools.scanStartup()} title={startupScanLabel} aria-label={startupScanLabel}><Icon icon={tools.busy || tools.startup ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} /></Button></div>
-          <StartupManager embedded />
+        <div hidden={managerTab !== "startup"}>
+          <StartupManager embedded scanKey={managerScanKey} />
           {tools.startup && <div className="startup-impact-section">
-            <div className="startup-impact-section__heading">
-              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Signature &amp; launch-impact review</p>
-              <p className="text-xs text-[var(--text-mute)]">A one-shot Authenticode signature and impact scan of the entries above — not a live enable/disable list like the manager. Use it to spot unsigned or unverifiable launchers.</p>
-            </div>
+            <div className="startup-impact-section__heading"><p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Signature &amp; launch-impact review</p><p className="text-xs text-[var(--text-mute)]">Review unsigned or unverifiable launchers. The manager above remains the live enable/disable list.</p></div>
             {tools.startup.entries.map((entry) => <div key={entry.id} className="flex flex-wrap items-start gap-3 rounded-[var(--r)] border border-[var(--border)] p-3"><div className="min-w-0 flex-1"><p className="text-sm text-[var(--text)]">{entry.name}</p><p className="break-all font-mono text-[11px] text-[var(--text-mute)]">{entry.command}</p><p className="text-xs text-[var(--text-dim)]">{entry.signer ?? entry.signatureStatus} · {entry.source}</p></div><Badge tone={entry.recommendation === "keep" ? "success" : "warning"}>{entry.recommendation}</Badge></div>)}
             {!tools.startup.entries.length && <Empty text="No startup entries found." />}
           </div>}
-        </>}
-        {managerTab === "users" && <LocalUsersManager embedded />}
-        {managerTab === "tasks" && <ScheduledTasksManager embedded />}
-        {managerTab === "services" && <ServiceManager embedded />}
-        {managerTab === "conceal" && <RuntimeVisibilityManager embedded />}
+        </div>
+        <div hidden={managerTab !== "users"}><LocalUsersManager embedded scanKey={managerScanKey} /></div>
+        <div hidden={managerTab !== "tasks"}><ScheduledTasksManager embedded scanKey={managerScanKey} /></div>
+        <div hidden={managerTab !== "services"}><ServiceManager embedded scanKey={managerScanKey} /></div>
+        <div hidden={managerTab !== "conceal"}><RuntimeVisibilityManager embedded scanKey={managerScanKey} /></div>
       </CardContent>
     </Card>
+
     {tools.error && <Card><CardContent className="flex items-center gap-3 py-4"><Badge tone="danger">error</Badge><p className="text-sm text-[var(--text-dim)]">{tools.error}</p></CardContent></Card>}
-    <Card><CardHeader><CardTitle>Driver inventory</CardTitle><CardDescription>Bounded signed-PnP inventory. Cleanup is intentionally refused because active, offline-device, and rollback safety cannot be proven from inventory alone.</CardDescription></CardHeader><CardContent className="flex flex-col gap-3"><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => void tools.openUpdates()}><Icon icon="arrow-right" /> Open Windows Update</Button>{tools.drivers && <Badge tone="accent">{tools.drivers.drivers.length} drivers</Badge>}<Button size="icon" variant="primary" className="ml-auto" disabled={tools.busy} onClick={() => void tools.scanDrivers()} title={driverScanLabel} aria-label={driverScanLabel}><Icon icon={tools.busy || tools.drivers ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} /></Button></div><div className="max-h-[70vh] overflow-auto flex flex-col gap-3">{tools.drivers?.drivers.slice(0, 200).map((driver, index) => <div key={`${driver.deviceId}-${driver.infName}-${index}`} className="grid gap-1 rounded-[var(--r)] border border-[var(--border)] px-3 py-2 md:grid-cols-3"><span className="text-sm text-[var(--text)]">{driver.deviceName ?? "Unknown device"}</span><span className="font-mono text-xs text-[var(--text-dim)]">{driver.driverVersion ?? "unknown version"}</span><span className="text-xs text-[var(--text-mute)]">{driver.manufacturer ?? driver.signer ?? "unknown signer"} · {driver.isSigned ? "signed" : "signature unknown"}</span></div>)}{tools.drivers && !tools.drivers.drivers.length && <Empty text="No PnP drivers returned." />}</div>{tools.drivers && <p className="text-xs text-[var(--text-mute)]">{tools.drivers.cleanupLimitation}</p>}</CardContent></Card>
-    <DriverHealthSection />
+
+    <Card>
+      <CardHeader className="gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle>Drivers</CardTitle><CardDescription>See issues first; expand the inventory only when you need to inspect every installed driver.</CardDescription></div><div className="flex items-center gap-2"><Button size="sm" variant="outline" onClick={() => void tools.openUpdates()}><Icon icon="arrow-right" />Optional updates</Button><Button size="sm" variant="outline" disabled={tools.busy} onClick={toggleAllDrivers}>{showAllDrivers ? "Hide all drivers" : "Show all drivers"}</Button></div></div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <DriverHealthSection embedded hideActions scanKey={driverScanKey} />
+        {showAllDrivers && <div className="driver-inventory-section"><div className="driver-inventory-section__heading"><div><p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">All installed drivers</p><p className="text-xs text-[var(--text-mute)]">This list is informational; driver removal is intentionally not offered here.</p></div>{tools.drivers && <Badge tone="accent">{tools.drivers.drivers.length} drivers</Badge>}</div><div className="max-h-[56vh] overflow-auto flex flex-col gap-2">{tools.drivers?.drivers.slice(0, 200).map((driver, index) => <DriverRow key={`${driver.deviceId}-${driver.infName}-${index}`} driver={driver} />)}{tools.drivers && !tools.drivers.drivers.length && <Empty text="No PnP drivers returned." />}{!tools.drivers && <Empty text="Loading the current driver inventory…" />}</div>{tools.drivers && <p className="text-xs text-[var(--text-mute)]">{tools.drivers.cleanupLimitation}</p>}</div>}
+      </CardContent>
+    </Card>
   </div>;
+}
+
+function ManagerTabButton({ active, icon, label, onClick }: { active: boolean; icon: string; label: string; onClick: () => void }) {
+  return <Button size="sm" variant="ghost" role="tab" aria-selected={active} className={`manager-tab-switch__btn${active ? " manager-tab-switch__btn--active" : ""}`} onClick={onClick}><Icon icon={icon} />{label}</Button>;
+}
+
+function DriverRow({ driver }: { driver: { deviceName: string | null; deviceClass: string | null; manufacturer: string | null; signer: string | null; driverVersion: string | null; driverDate: string | null; isSigned: boolean | null } }) {
+  const signed = driver.isSigned === true;
+  return <div className={`driver-inventory-row${signed ? " is-signed" : " is-unsigned"}`}><div className="min-w-0"><p className="text-sm text-[var(--text)]">{driver.deviceName ?? "Unknown device"}</p><p className="text-xs text-[var(--text-mute)]">{driver.deviceClass ?? "Device driver"} · {driver.manufacturer ?? driver.signer ?? "Unknown publisher"}</p></div><p className="font-mono text-xs text-[var(--text-dim)]">{driver.driverVersion ?? "Unknown version"}{driver.driverDate ? ` · ${driver.driverDate}` : ""}</p><span className="driver-signature-state"><Icon icon={signed ? "check" : "cross"} size={14} />{signed ? "Signed" : "Unsigned"}</span></div>;
 }
 
 function Empty({ text }: { text: string }) { return <p className="py-6 text-center text-sm text-[var(--text-mute)]">{text}</p>; }

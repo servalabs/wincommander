@@ -8,11 +8,99 @@
   align-items: stretch;
 }
 
-.maintenance-reclaim-scope {
+.maintenance-storage-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 1rem;
+}
+
+.maintenance-storage-card {
+  min-width: 0;
+}
+
+.maintenance-storage-overview-card,
+.maintenance-app-cache-card {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  height: 100%;
+  height: min(42rem, 68vh);
+  overflow: hidden;
+}
+
+.maintenance-storage-overview-content,
+.maintenance-app-cache-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.maintenance-app-cache-content {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.maintenance-storage-section {
+  flex: 0 0 auto;
+}
+
+.maintenance-file-hygiene-section {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.maintenance-file-hygiene-results {
+  max-height: 30rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.maintenance-cache-preview-card {
+  margin-bottom: 0.75rem;
+}
+
+.maintenance-analysis-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(18rem, 3fr);
+  align-items: stretch;
+  gap: 1rem;
+}
+
+.maintenance-analysis-card,
+.maintenance-file-stats-slot > * {
+  height: min(42rem, 68vh);
+}
+
+.maintenance-analysis-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.maintenance-analysis-content {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.maintenance-analysis-scroll {
+  min-width: 0;
+  flex: 1;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 1279px) {
+  .maintenance-storage-workspace,
+  .maintenance-analysis-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .maintenance-storage-overview-card,
+  .maintenance-analysis-card,
+  .maintenance-file-stats-slot > * {
+    height: auto;
+  }
 }
 
 .maintenance-cache-idle {

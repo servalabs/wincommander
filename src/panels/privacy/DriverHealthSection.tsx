@@ -75,6 +75,12 @@ interface VulnerableDriversReport {
 interface DriverHealthSectionProps {
   /** Expert density unlocks the optional background "Watch" switch. */
   isAdvanced?: boolean;
+  /** Used by Maintenance's unified Drivers card. */
+  embedded?: boolean;
+  /** Bumps when the parent-wide scan action runs. */
+  scanKey?: number;
+  /** Keeps parent-level scanning as the single explicit scan action. */
+  hideActions?: boolean;
 }
 
 const SEVERITY_RANK: Record<Severity, number> = { critical: 0, warning: 1, info: 2 };
@@ -104,7 +110,7 @@ function remediation(d: DriverProblem): string {
   }
 }
 
-export default function DriverHealthSection({ isAdvanced = false }: DriverHealthSectionProps) {
+export default function DriverHealthSection({ isAdvanced = false, embedded = false, scanKey = 0, hideActions = false }: DriverHealthSectionProps) {
   const { appSettings, patchAppSettings } = useAppState();
   const watchEnabled = appSettings?.ideal?.security?.drivers?.watchEnabled ?? false;
 
@@ -147,7 +153,7 @@ export default function DriverHealthSection({ isAdvanced = false }: DriverHealth
   useEffect(() => {
     void refresh();
     void refreshVuln();
-  }, [refresh, refreshVuln]);
+  }, [refresh, refreshVuln, scanKey]);
 
   const handleOpenDeviceManager = useCallback(async () => {
     try {
@@ -198,18 +204,14 @@ export default function DriverHealthSection({ isAdvanced = false }: DriverHealth
     ? [...report.devices].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
     : [];
 
-  return (
-    <SectionCard title="Device & Driver Health" icon="pulse" headerRight={headerTag}>
-      <div className="driver-health-body">
+  const body = <div className="driver-health-body">
         <div className="driver-health-intro">
           Queries Windows PnP / Device Manager for hardware that is missing a driver or
           malfunctioning. Devices you intentionally disabled are shown but not flagged.
         </div>
 
         <div className="driver-health-controls">
-          <Button icon="refresh" minimal small onClick={refresh} disabled={loading}>
-            Refresh
-          </Button>
+          {!hideActions && <Button icon="refresh" minimal small onClick={refresh} disabled={loading}>Refresh</Button>}
           <Button icon="cog" minimal small onClick={handleOpenDeviceManager}>
             Open Device Manager
           </Button>
@@ -279,9 +281,7 @@ export default function DriverHealthSection({ isAdvanced = false }: DriverHealth
                   {vulnReport.ok ? 'NO EXPOSURE FOUND' : `${vulnReport.vulnerable.length} FOUND`}
                 </Tag>
               )}
-              <Button icon="refresh" minimal small onClick={refreshVuln} disabled={vulnLoading}>
-                Refresh scan
-              </Button>
+              {!hideActions && <Button icon="refresh" minimal small onClick={refreshVuln} disabled={vulnLoading}>Refresh scan</Button>}
             </div>
           </div>
 
@@ -331,7 +331,8 @@ export default function DriverHealthSection({ isAdvanced = false }: DriverHealth
             </div>
           )}
         </div>
-      </div>
-    </SectionCard>
-  );
+      </div>;
+
+  if (embedded) return body;
+  return <SectionCard title="Device & Driver Health" icon="pulse" headerRight={headerTag}>{body}</SectionCard>;
 }

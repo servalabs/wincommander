@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Button, Tag, Spinner, InputGroup, Switch, Icon, type Intent } from "@/components/ui/bp";
 import SectionCard from "../../shared/SectionCard";
 import { executeBackendCommand } from "../../../hooks/useBackend";
@@ -31,12 +31,13 @@ function userStatus(user: LocalLoginUser): { intent: Intent; label: string } {
     return { intent: "none", label: "Disabled" };
 }
 
-export default function LocalUsersManager({ embedded = false }: { embedded?: boolean }) {
+export default function LocalUsersManager({ embedded = false, scanKey = 0 }: { embedded?: boolean; scanKey?: number }) {
     const [isOpen, setIsOpen] = useState(false);
     const [rows, setRows] = useState<LocalLoginUser[]>([]);
     const [loading, setLoading] = useState(false);
     const [pending, setPending] = useState<Set<string>>(new Set());
     const [filter, setFilter] = useState("");
+    const embeddedScanKey = useRef<number | undefined>(undefined);
 
     const refresh = useCallback(async () => {
         setLoading(true);
@@ -50,9 +51,15 @@ export default function LocalUsersManager({ embedded = false }: { embedded?: boo
     }, []);
 
     useEffect(() => {
-        if ((isOpen || embedded) && rows.length === 0 && !loading) refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isOpen, embedded]);
+        if (embedded) {
+            if (embeddedScanKey.current !== scanKey) {
+                embeddedScanKey.current = scanKey;
+                void refresh();
+            }
+            return;
+        }
+        if (isOpen && rows.length === 0 && !loading) void refresh();
+    }, [embedded, isOpen, loading, refresh, rows.length, scanKey]);
 
     const handleToggle = useCallback(async (user: LocalLoginUser, hidden: boolean) => {
         const reason = hidden ? disabledReason(user) : null;
@@ -97,7 +104,7 @@ export default function LocalUsersManager({ embedded = false }: { embedded?: boo
             <div className="system-manager-actions">
                 <Tag minimal>{`${rows.length} users`}</Tag>
                 <Tag minimal intent={hiddenCount > 0 ? "primary" : "none"}>{`${hiddenCount} hidden`}</Tag>
-                <Button minimal icon="refresh" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />
+                {!embedded && <Button minimal icon="refresh" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />}
             </div>
         </>
     );

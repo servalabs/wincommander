@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   useBackend,
   type EnvironmentScan,
@@ -21,6 +21,7 @@ export function useSystemHygiene() {
   const [busy, setBusy] = useMaintenanceSessionState("system-hygiene.busy", false);
   const [error, setError] = useMaintenanceSessionState<string | undefined>("system-hygiene.error", undefined);
   const [summary, setSummary] = useMaintenanceSessionState<string | undefined>("system-hygiene.summary", undefined);
+  const [hasPreScanned, setHasPreScanned] = useMaintenanceSessionState("system-hygiene.pre-scanned", false);
 
   const scan = useCallback(async () => {
     setBusy(true);
@@ -37,6 +38,28 @@ export function useSystemHygiene() {
       setBusy(false);
     }
   }, [setBusy, setEnvironment, setError, setLeftovers, setSelected, setShortcuts, setSummary, tool]);
+
+  // Preload every hygiene review once. The three tabs are cached snapshots;
+  // changing tabs only changes what is shown, never launches background work.
+  useEffect(() => {
+    if (hasPreScanned || busy) return;
+    setHasPreScanned(true);
+    setBusy(true);
+    setError(undefined);
+    setSummary(undefined);
+    Promise.all([
+      backendRef.current.shortcutCleanerScan(),
+      backendRef.current.environmentCleanerScan(),
+      backendRef.current.uninstallLeftoversScan(),
+    ])
+      .then(([shortcutScan, environmentScan, leftoverScan]) => {
+        setShortcuts(shortcutScan);
+        setEnvironment(environmentScan);
+        setLeftovers(leftoverScan);
+      })
+      .catch((cause) => setError(String(cause)))
+      .finally(() => setBusy(false));
+  }, [busy, hasPreScanned, setBusy, setEnvironment, setError, setHasPreScanned, setLeftovers, setShortcuts, setSummary]);
 
   const apply = useCallback(async () => {
     if (!selected.size) return;

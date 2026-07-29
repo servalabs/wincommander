@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { showSuccess, showError } from "../../utils/toast";
 import useBackend from "../../hooks/useBackend";
-import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, isLowImpactCategory, type CleanupCategory } from "./cleanupCategories";
+import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, CLEANUP_USABILITY_TIERS, type CleanupCategory, type CleanupUsabilityTier } from "./cleanupCategories";
 
 const getSchedulerCategoryId = (categoryId: string): string =>
     [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES]
@@ -704,18 +704,19 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         }
     };
 
-    // "Clear Low-Impact" — single confirm, then clears only low-impact
-    // categories with findings. Higher-impact categories always stay per-card.
-    const handleClearAllTraces = async () => {
+    const handleClearTier = async (tier: CleanupUsabilityTier, excludedIds = new Set<string>()) => {
+        const tierLabel = tier === 'low-impact'
+            ? 'low-impact traces'
+            : CLEANUP_USABILITY_TIERS.find((item) => item.id === tier)?.label ?? 'this section';
         const withFindings = orderedScanCategories.filter(cat =>
             !cat.actionOnly &&
-            isLowImpactCategory(cat) &&
+            cat.usabilityTier === tier &&
             (cardDataMap[cat.id]?.count ?? 0) > 0 &&
             clearerMap[cat.id] &&
-            !clearAllExcludes.has(cat.id)
+            !excludedIds.has(cat.id)
         );
         if (!withFindings.length) return;
-        const excludedNames = Array.from(clearAllExcludes).map(id => {
+        const excludedNames = Array.from(excludedIds).map(id => {
             const cat = orderedScanCategories.find(c => c.id === id);
             return cat?.label ?? id;
         });
@@ -723,7 +724,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             ? ` (excluding ${excludedNames.join(', ')})`
             : '';
         if (!window.confirm(
-            `Clear low-impact traces across ${withFindings.length} categories${excludeNote}?`
+            `Clear ${tierLabel} across ${withFindings.length} categories${excludeNote}?`
         )) return;
         const stillHasData: string[] = [];
         for (const cat of withFindings) {
@@ -752,9 +753,12 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         if (stillHasData.length) {
             showError(`Some traces could not be cleared: ${stillHasData.join(', ')}.`);
         } else {
-            showSuccess('Low-impact traces cleared.');
+            showSuccess(`${tierLabel} cleared.`);
         }
     };
+    // Low impact keeps its existing exclusion picker. Other tabs clear only
+    // their own eligible findings through the shared tier action above.
+    const handleClearAllTraces = async () => handleClearTier('low-impact', clearAllExcludes);
 
     // ── Other-users sub-section ─────────────────────────────────────────
     // Clears for the selected OTHER user (or all users) write into the
@@ -826,6 +830,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         handleCardLoad,
         handleCardClear,
         handleClearAllTraces,
+        handleClearTier,
         clearAllExcludes,
         setClearAllExcludes,
         availableUsers,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   ButtonGroup,
@@ -118,7 +118,7 @@ function parentFolder(path: string): string {
 
 // ─── Runtime Concealment Manager ──────────────────────────────────────
 
-export function RuntimeVisibilityManager({ embedded = false }: { embedded?: boolean }) {
+export function RuntimeVisibilityManager({ embedded = false, scanKey = 0 }: { embedded?: boolean; scanKey?: number }) {
   const [stateView, setStateView] = useState<StateView | null>(null);
   const [stateLoading, setStateLoading] = useState(false);
   const [globalBusy, setGlobalBusy] = useState(false);
@@ -138,7 +138,7 @@ export function RuntimeVisibilityManager({ embedded = false }: { embedded?: bool
 
   useEffect(() => {
     void refreshState();
-  }, [refreshState]);
+  }, [refreshState, scanKey]);
 
   const hiddenKeys = useMemo(() => {
     return new Set((stateView?.state.entries ?? []).map((e) => e.key.toLowerCase()));
@@ -256,14 +256,14 @@ export function RuntimeVisibilityManager({ embedded = false }: { embedded?: bool
             Restore all
           </Button>
         </Tooltip>
-        <Button
+        {!embedded && <Button
           small
           icon="refresh"
           minimal
           onClick={refreshState}
           loading={stateLoading}
           disabled={stateLoading}
-        />
+        />}
       </ButtonGroup>
     </div>
   );
@@ -318,6 +318,8 @@ export function RuntimeVisibilityManager({ embedded = false }: { embedded?: bool
           hiddenKeys={hiddenKeys}
           onHide={onHide}
           onRestore={onRestore}
+          scanKey={scanKey}
+          hideScanAction={embedded}
         />
       </div>
   );
@@ -347,15 +349,20 @@ function RuntimesPanel({
   hiddenKeys,
   onHide,
   onRestore,
+  scanKey,
+  hideScanAction,
 }: {
   hiddenKeys: Set<string>;
   onHide: (key: string) => Promise<void>;
   onRestore: (key: string) => Promise<void>;
+  scanKey: number;
+  hideScanAction: boolean;
 }) {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [onlyHideable, setOnlyHideable] = useState(true);
+  const completedScanKey = useRef<number | undefined>(undefined);
 
   const scan = useCallback(async () => {
     setScanning(true);
@@ -371,8 +378,11 @@ function RuntimesPanel({
   }, []);
 
   useEffect(() => {
-    void scan();
-  }, [scan]);
+    if (completedScanKey.current !== scanKey) {
+      completedScanKey.current = scanKey;
+      void scan();
+    }
+  }, [scan, scanKey]);
 
   const filtered = useMemo(() => {
     if (!result) return [];
@@ -393,7 +403,7 @@ function RuntimesPanel({
           icon="error"
           title="Scan failed"
           description={error}
-          action={<Button onClick={scan}>Retry</Button>}
+          action={hideScanAction ? undefined : <Button onClick={scan}>Retry</Button>}
         />
       </Card>
     );
@@ -403,9 +413,9 @@ function RuntimesPanel({
     <div className="flex flex-col gap-3 mt-3">
       <Card>
         <div className="flex items-center gap-6 flex-wrap">
-          <Button icon="refresh" intent={Intent.PRIMARY} onClick={scan} loading={scanning}>
+          {!hideScanAction && <Button icon="refresh" intent={Intent.PRIMARY} onClick={scan} loading={scanning}>
             Scan
-          </Button>
+          </Button>}
           {result && (
             <>
               <div>
@@ -501,11 +511,7 @@ function RuntimesPanel({
                       >
                         <td>
                           <span style={{ fontWeight: 500 }}>{r.name}</span>
-                          {isHidden && (
-                            <Tag minimal intent={Intent.DANGER} style={{ marginLeft: 8 }}>
-                              hidden
-                            </Tag>
-                          )}
+                          {isHidden && <span className="runtime-visibility-state is-hidden">Concealed</span>}
                         </td>
                         <td>
                           <code>{r.pid}</code>

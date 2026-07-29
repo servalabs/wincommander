@@ -94,3 +94,64 @@
   flex-direction: column;
   gap: 2px;
 }
+
+.system-manager-header-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.system-manager-header-row > .manager-tab-switch {
+  flex: 1 1 520px;
+}
+
+.system-manager-scan {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.driver-inventory-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.driver-inventory-section__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.driver-inventory-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(150px, 0.8fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+}
+
+.driver-signature-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: max-content;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.driver-inventory-row.is-signed .driver-signature-state { color: var(--ok); }
+.driver-inventory-row.is-unsigned .driver-signature-state { color: var(--danger); }
+
+@media (max-width: 640px) {
+  .system-manager-header-row { align-items: stretch; flex-wrap: wrap; }
+  .system-manager-header-row > .manager-tab-switch { flex-basis: 100%; }
+  .system-manager-scan { margin-left: 0; }
+  .driver-inventory-row { grid-template-columns: 1fr; gap: 4px; }
+}

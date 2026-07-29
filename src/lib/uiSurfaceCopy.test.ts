@@ -237,27 +237,32 @@ describe("redesign surface copy guardrails", () => {
     expect(uninstaller).not.toContain("fallback");
   });
 
-  test("System Cleanup moves clean cards into a compact collapsible section", async () => {
+  test("System Cleanup stacks four confirmed-clean cards in one readable column", async () => {
     const cleanupGrid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
 
+    // Confirmed-clean cards remain visible and use four readable rows so their
+    // full titles and per-card controls do not get clipped.
     expect(cleanupGrid).toContain("const orderUnscannedFirst");
-    expect(cleanupGrid).toContain("const cleanCats = sysCats.filter(isClean);");
-    expect(cleanupGrid).toContain("const [cleanCardsOpen, setCleanCardsOpen] = useState(false);");
-    expect(cleanupGrid).toContain("cleanCats.map((cat) => renderCard(cat, true))");
+    expect(cleanupGrid).toContain("const activeSysCats = orderUnscannedFirst(");
+    expect(cleanupGrid).toContain("const cleanCardPacks = packCleanCards(");
+    expect(cleanupGrid).toContain("cleanCardPacks.map((pack, index) => (");
+    expect(cleanupGrid).toContain('className="grid h-[168px] grid-cols-1 grid-rows-4 gap-1"');
+    expect(cleanupGrid).toContain('className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"');
+    expect(cleanupGrid).not.toContain("cleanCardsOpen");
   });
 
   test("System Cleanup hides card rescan actions until a card has scan output", async () => {
     const traceCard = await read("src/components/cleanup/CleanupTraceCard.tsx");
 
     expect(traceCard).toContain("const hasScanOutput");
-    expect(traceCard).toContain("const rescanButton = !isActionOnly && onLoad && hasScanOutput");
+    expect(traceCard).toContain("!isActionOnly && onLoad && hasScanOutput ? (");
     expect(traceCard).not.toContain("disabled={loading || isNotLoaded}");
   });
 
   test("System Cleanup trace cards keep stable height across scan states", async () => {
     const traceCard = await read("src/components/cleanup/CleanupTraceCard.tsx");
 
-    expect(traceCard).toContain("const TRACE_CARD_HEIGHT = '168px';");
+    expect(traceCard).toContain('const TRACE_CARD_HEIGHT = "168px";');
     expect(traceCard).not.toContain("height: '96px'");
   });
 
@@ -343,19 +348,33 @@ describe("redesign surface copy guardrails", () => {
     expect(network).not.toContain("Censorship protection lives in Settings.");
     expect(network).not.toContain("Block categories before connections leave this PC");
     expect(network).not.toContain("changes apply automatically");
+    expect(network).not.toContain("Encrypted DNS is applied per adapter.");
+    expect(network).not.toContain("Choose categories to filter.");
+    expect(network).toContain('title="DNS Firewall"');
+    expect(network).toContain('title="Hosts Protection"');
+    expect(network).toContain('aria-labelledby="dns-optional-heading"');
+    expect(network).toContain("Government and social media are off by default");
     expect(network).toContain("Recommended");
   });
 
-  test("Windows Settings owns power plans while System Maintenance owns performance, startup, and driver controls", async () => {
+  test("Windows Settings owns the power and graphics controls while System Maintenance keeps an issue-first driver view", async () => {
     const startupDrivers = await read("src/panels/maintenance/StartupDriverTools.tsx");
-    const performance = await read("src/panels/maintenance/PerformanceTools.tsx");
+    const maintenance = await read("src/panels/maintenance/index.tsx");
     const network = await read("src/panels/network/NetworkMaintenanceTools.tsx");
 
     const tweaks = await read("src/panels/tweaks/index.tsx");
-    expect(startupDrivers).toContain("<StartupManager embedded />");
-    expect(startupDrivers).toContain("<DriverHealthSection />");
-    expect(tweaks).toContain('<PowerPlanCard titleOverride={isAdvanced ? "Power Plan" : "Energy & Speed"} />');
-    expect(performance).not.toContain("PowerPlanCard");
+    expect(startupDrivers).toContain("<StartupManager embedded scanKey={managerScanKey} />");
+    expect(startupDrivers).toContain("<DriverHealthSection embedded hideActions scanKey={driverScanKey} />");
+    expect(startupDrivers).toContain('showAllDrivers ? "Hide all drivers" : "Show all drivers"');
+    expect(startupDrivers).toContain('tools.drivers?.drivers.slice(0, 200)');
+    expect(startupDrivers).toContain('signed ? "Signed" : "Unsigned"');
+    expect(startupDrivers).toContain('className="system-manager-scan"');
+    expect(tweaks).toContain('<PowerGraphicsCard');
+    expect(tweaks).toContain('powerSection={TWEAKS_SECTIONS[6]}');
+    expect(tweaks).toContain('gpuSection={gpuVendorDetected ? TWEAKS_SECTIONS[5] : undefined}');
+    expect(tweaks).toContain('titleOverride="Energy & Speed"');
+    expect(maintenance).not.toContain('TabsTrigger value="performance"');
+    expect(maintenance).not.toContain("PerformanceTools");
     expect(tweaks).not.toContain("<StartupManager embedded />");
     expect(tweaks).not.toContain("<DriverHealthSection");
     expect(network).toContain("NetworkMaintenanceTools");
@@ -365,10 +384,10 @@ describe("redesign surface copy guardrails", () => {
     const startupDrivers = await read("src/panels/maintenance/StartupDriverTools.tsx");
     const tweaks = await read("src/panels/tweaks/index.tsx");
 
-    expect(startupDrivers).toContain("<LocalUsersManager embedded />");
-    expect(startupDrivers).toContain("<ScheduledTasksManager embedded />");
-    expect(startupDrivers).toContain("<ServiceManager embedded />");
-    expect(startupDrivers).toContain("<RuntimeVisibilityManager embedded />");
+    expect(startupDrivers).toContain("<LocalUsersManager embedded scanKey={managerScanKey} />");
+    expect(startupDrivers).toContain("<ScheduledTasksManager embedded scanKey={managerScanKey} />");
+    expect(startupDrivers).toContain("<ServiceManager embedded scanKey={managerScanKey} />");
+    expect(startupDrivers).toContain("<RuntimeVisibilityManager embedded scanKey={managerScanKey} />");
     expect(tweaks).not.toContain("LocalUsersManager");
     expect(tweaks).not.toContain("ScheduledTasksManager");
     expect(tweaks).not.toContain("ServiceManager");
@@ -393,7 +412,7 @@ describe("redesign surface copy guardrails", () => {
     expect(analyzer).toContain("persistDiskAnalyzerSession");
   });
 
-  test("Packages and Apps toolbar uses the split search/filter/action layout", async () => {
+  test("Packages and Apps keeps search, filters, and batch actions in one responsive toolbar", async () => {
     const panel = await read("src/panels/apps/components/AppInstallerPanel.tsx");
     const css = await read("src/panels/apps/components/AppInstallerPanel.css");
 
@@ -403,11 +422,21 @@ describe("redesign surface copy guardrails", () => {
     // actions-row is applied via cn() so it can toggle an is-hidden class for the
     // engines view — assert the class reference rather than a static className=.
     expect(panel).toContain('"installer-actions-row"');
-    // actions-row spans the full toolbar width (grid-column: 1 / -1) so it no
-    // longer sits squeezed into the right column below the search box.
+    expect(panel).toContain('text="REFRESH"');
+    expect(panel).toContain('text="SELECT ALL"');
+    expect(panel).toContain('text="CLEAR"');
+    expect(panel).toContain('text="UPDATE ALL"');
+    expect(panel).toContain('<TabsTrigger value="not-installed">Not Installed</TabsTrigger>');
+    expect(panel).toContain('<TabsTrigger value="updates">Updates</TabsTrigger>');
+    expect(panel).toContain('<TabsTrigger value="installed">Installed</TabsTrigger>');
+    // The action row spans the full toolbar width so the controls no longer
+    // compete with the search and category chips. The filter area receives the
+    // flexible column; search remains a readable fixed-width control.
     expect(css).toContain("grid-column: 1 / -1");
     expect(css).toContain(".installer-toolbar-layout");
-    expect(css).toContain("grid-template-columns: minmax(280px, 1fr) minmax(360px, 1fr)");
+    expect(css).toContain("grid-template-columns: minmax(240px, 340px) 1fr");
+    expect(css).toContain(".installer-action-buttons-utility");
+    expect(css).toContain(".installer-action-buttons-bulk");
   });
 
   test("dashboard resolves hidden Risk Matrix and More Products before rendering views", async () => {

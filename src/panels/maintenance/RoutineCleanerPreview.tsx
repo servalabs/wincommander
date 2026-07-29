@@ -4,7 +4,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import type { RoutineCleanerCategory, RoutineCleanerItem } from "../../hooks/useBackend";
-import { formatBytes, getPopulatedRoutineCleanerCategories, getRecommendedItemIds } from "./routineCleanerHelpers";
+import { formatBytes, getPopulatedRoutineCleanerCategories, getRecommendedItemIds, ROUTINE_CLEANER_CATEGORIES } from "./routineCleanerHelpers";
 import type { useRoutineCleaner } from "./useRoutineCleaner";
 
 type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
@@ -39,7 +39,7 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: RoutineCleane
 
   return (
     <div className="flex flex-col gap-3">
-      <Card>
+      <Card className="maintenance-cache-preview-card">
         <CardHeader className="flex-row items-start gap-3">
           <div>
             <CardTitle>Scan preview</CardTitle>
@@ -82,12 +82,7 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: RoutineCleane
                   Select recommended
                 </Button>
               </div>
-              {/* Max- (not fixed-) height: mirrors the Windows-storage column's
-                  own max-h-[22rem] scroll cap (DiskCleanupGranular.tsx) so the
-                  two equal-height grid columns still line up, without forcing
-                  a short single-category tab to pad out to the old stacked-view
-                  height. */}
-              <div className="flex max-h-[22rem] flex-col gap-2 overflow-y-auto overscroll-contain pr-1">
+              <div className="flex flex-col gap-2">
                 {group.items.map((item) => (
                   <ItemRow key={item.id} item={item} selected={selectedIds.has(item.id)} disabled={operation !== "idle"} onToggle={toggleItem} />
                 ))}
@@ -108,6 +103,7 @@ interface ItemRowProps {
 }
 
 function ItemRow({ item, selected, disabled, onToggle }: ItemRowProps) {
+  const category = ROUTINE_CLEANER_CATEGORIES.find((entry) => entry.id === item.category)?.label ?? item.category;
   return (
     <label className="flex cursor-pointer items-start gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2.5 hover:border-[var(--border-strong)] has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60">
       <input
@@ -124,7 +120,10 @@ function ItemRow({ item, selected, disabled, onToggle }: ItemRowProps) {
           {item.operation === "vacuum" && <Badge tone="warning">Optimize</Badge>}
           {item.truncated && <Badge tone="warning">Large target</Badge>}
         </span>
-        <span className="mt-1 block truncate font-mono text-[11px] text-[var(--text-dim)]" title={item.path}>{item.path}</span>
+        <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--text-dim)]">
+          <Badge tone="neutral">{category}</Badge>
+          <span className="min-w-0 truncate font-mono" title={item.path}>{item.path}</span>
+        </span>
       </span>
       <span className="shrink-0 font-mono text-xs text-[var(--text-dim)]">{formatBytes(item.bytes)}</span>
     </label>

@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 const DRIVER_LIMIT: usize = 2_000;
+const OPTIONAL_UPDATES_SETTINGS_URI: &str = "ms-settings:windowsupdate-optionalupdates";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const STDERR_SUMMARY_LIMIT: usize = 512;
@@ -59,7 +60,7 @@ pub async fn driver_maintenance_inventory() -> Result<DriverMaintenanceInventory
 pub fn driver_update_seam() -> Result<DriverUpdateSeam, String> {
     #[cfg(windows)]
     let opened = std::process::Command::new("explorer.exe")
-        .arg("ms-settings:windowsupdate")
+        .arg(OPTIONAL_UPDATES_SETTINGS_URI)
         .spawn()
         .map(|_| true)
         .map_err(|error| format!("could not open Windows Update: {error}"))?;
@@ -163,6 +164,13 @@ mod tests {
         let report = inventory(Vec::new(), false);
         assert!(!report.cleanup_available);
         assert!(report.cleanup_limitation.contains("cannot safely"));
+    }
+    #[test]
+    fn driver_update_handoff_targets_optional_updates() {
+        assert_eq!(
+            OPTIONAL_UPDATES_SETTINGS_URI,
+            "ms-settings:windowsupdate-optionalupdates"
+        );
     }
     #[test]
     fn pnp_payload_uses_camel_case_fields() {

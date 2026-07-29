@@ -3,19 +3,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import PanelHeader from "../../components/shared/PanelHeader";
 import TierGate from "../../components/shared/TierGate";
-import { FileHygieneTools } from "./FileHygieneTools";
+import { useBackend } from "../../hooks/useBackend";
 import { RegistryTools } from "./RegistryTools";
 import { MalwareCenter } from "./MalwareCenter";
 import { SecurityData } from "./SecurityData";
 import { SystemHygieneTools } from "./SystemHygieneTools";
-import { PerformanceTools } from "./PerformanceTools";
 import { StartupDriverTools } from "./StartupDriverTools";
-import ReclaimSpaceCard from "./ReclaimSpaceCard";
+import { AppBrowserCacheCard, WindowsStorageCard } from "./ReclaimSpaceCard";
 import DiskSpaceAnalyzerDialog from "./DiskSpaceAnalyzerDialog";
 import "./DiskSpaceAnalyzerDialog.css";
 import FileStatsPanel from "./FileStatsPanel";
 import "./MaintenanceStorage.css";
-import { useMaintenanceSessionState } from "./maintenanceSessionState";
+import { getMaintenanceSessionValue, primeMaintenanceSessionValue, useMaintenanceSessionState } from "./maintenanceSessionState";
+import { APP_CACHE_CLEANUP_CATEGORIES, getRecommendedItemIds } from "./routineCleanerHelpers";
+
+const APP_CACHE_SESSION_KEY = `routine-cleaner.${[...APP_CACHE_CLEANUP_CATEGORIES].sort().join("-")}`;
 
 export default function MaintenancePanel() {
   const [activeTab, setActiveTab] = useMaintenanceSessionState("maintenance.active-tab", "files");
@@ -39,40 +41,94 @@ export default function MaintenancePanel() {
     };
   }, [setActiveTab]);
 
+  useMaintenanceReviewPreload();
+
   return (
     <div className="panel-container flex flex-col gap-4">
       <PanelHeader
         panelId="maintenance"
         title="System Maintenance"
-        description="Reclaim space and check how it starts and performs. Windows repair, privacy, and trace erasure live in System Cleanup; software updates live in Packages & Apps."
+        description="Reclaim space and check startup, drivers, and security. Windows repair, privacy, and trace erasure live in System Cleanup; software updates live in Packages & Apps."
       />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="w-full flex-wrap justify-start">
           <TabsTrigger value="files">Storage &amp; files</TabsTrigger>
           <TabsTrigger value="registry">Registry &amp; cleanup</TabsTrigger>
-          <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="startup">Startup &amp; drivers</TabsTrigger>
           <TabsTrigger value="security">Security Center</TabsTrigger>
         </TabsList>
         <TabsContent value="files"><StorageAndFileTools cleanupRef={diskCleanupRef} analyzerRef={diskAnalyzerRef} /></TabsContent>
         <TabsContent value="registry"><RegistryAndHygieneTools /></TabsContent>
-        <TabsContent value="performance"><PerformanceTools /></TabsContent>
         <TabsContent value="startup"><StartupDriverTools /></TabsContent>
         <TabsContent value="security"><SecurityCenter /></TabsContent>
       </Tabs>
     </div>
   );
 }
+
+function useMaintenanceReviewPreload() {
+  const backend = useBackend();
+  const startedRef = useRef(false);
+
+  useEffect(() => {
+    if (startedRef.current || getMaintenanceSessionValue<boolean>("maintenance.review-preload-complete")) return;
+    startedRef.current = true;
+    primeMaintenanceSessionValue("maintenance.review-preload-complete", true);
+    primeMaintenanceSessionValue("registry-hygiene.pre-scanned", true);
+    primeMaintenanceSessionValue("registry-hygiene.busy", true);
+    primeMaintenanceSessionValue("system-hygiene.pre-scanned", true);
+    primeMaintenanceSessionValue("system-hygiene.busy", true);
+    primeMaintenanceSessionValue(`${APP_CACHE_SESSION_KEY}.operation`, "scanning");
+
+    void Promise.all([
+      backend.registryCleanerScan(),
+      backend.explorerContextMenuScan(),
+      backend.shortcutCleanerScan(),
+      backend.environmentCleanerScan(),
+      backend.uninstallLeftoversScan(),
+    ]).then(([registry, context, shortcuts, environment, leftovers]) => {
+      primeMaintenanceSessionValue("registry-hygiene.registry-scan", registry);
+      primeMaintenanceSessionValue("registry-hygiene.context-scan", context);
+      primeMaintenanceSessionValue("system-hygiene.shortcuts", shortcuts);
+      primeMaintenanceSessionValue("system-hygiene.environment", environment);
+      primeMaintenanceSessionValue("system-hygiene.leftovers", leftovers);
+    }).catch((cause) => {
+      const error = String(cause);
+      primeMaintenanceSessionValue("registry-hygiene.error", error);
+      primeMaintenanceSessionValue("system-hygiene.error", error);
+    }).finally(() => {
+      primeMaintenanceSessionValue("registry-hygiene.busy", false);
+      primeMaintenanceSessionValue("system-hygiene.busy", false);
+    });
+
+    // App/browser caches are a read-only Maintenance-wide preload. The panel
+    // consumes this same session entry, so opening Storage & files never starts
+    // a second scan and the visible refresh button remains the explicit rescan.
+    void backend.routineCleanerScan(APP_CACHE_CLEANUP_CATEGORIES).then((scan) => {
+      primeMaintenanceSessionValue(`${APP_CACHE_SESSION_KEY}.scan`, scan);
+      primeMaintenanceSessionValue(`${APP_CACHE_SESSION_KEY}.selected`, new Set(getRecommendedItemIds(scan.items)));
+    }).catch((cause) => {
+      primeMaintenanceSessionValue(`${APP_CACHE_SESSION_KEY}.error`, String(cause));
+    }).finally(() => {
+      primeMaintenanceSessionValue(`${APP_CACHE_SESSION_KEY}.operation`, "idle");
+    });
+  }, [backend]);
+}
 function StorageAndFileTools({ cleanupRef, analyzerRef }: { cleanupRef: React.RefObject<HTMLDivElement | null>; analyzerRef: React.RefObject<HTMLDivElement | null> }) {
   return (
     <div className="flex flex-col gap-4">
-      <div ref={cleanupRef}><ReclaimSpaceCard /></div>
-      <div className="grid gap-4 xl:grid-cols-2"><FileHygieneTools /><FileStatsPanel /></div>
-      <Card>
-        <CardHeader><CardTitle>Disk Space Analyzer</CardTitle><CardDescription>Inspect disk usage and large items before taking action. This remains an analysis tool and does not delete files automatically.</CardDescription></CardHeader>
-        <CardContent ref={analyzerRef} className="min-w-0"><div className="max-h-[70vh] overflow-auto"><DiskSpaceAnalyzerDialog inline isOpen={true} onClose={() => {}} initialMode="space" /></div></CardContent>
+      <div className="maintenance-storage-workspace">
+        <div ref={cleanupRef} className="min-w-0"><WindowsStorageCard /></div>
+        <AppBrowserCacheCard />
+      </div>
+      <div className="maintenance-analysis-workspace">
+      <Card className="maintenance-analysis-card">
+        <CardHeader><CardTitle>Detailed folder map</CardTitle><CardDescription>Inspect disk usage and large items before taking action. This remains an analysis tool and does not delete files automatically.</CardDescription></CardHeader>
+        <CardContent ref={analyzerRef} className="maintenance-analysis-content"><div className="maintenance-analysis-scroll"><DiskSpaceAnalyzerDialog inline isOpen={true} onClose={() => {}} initialMode="space" /></div></CardContent>
       </Card>
+      <div className="maintenance-file-stats-slot"><FileStatsPanel /></div>
+      </div>
     </div>
   );
 }

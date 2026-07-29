@@ -75,7 +75,7 @@ export function FileHygieneTools() {
   }, [tools.tool, tools.duplicateScan]);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="maintenance-file-hygiene-tools flex flex-col gap-4">
       {/* Roots apply to both tools below — kept structurally separate from the
           duplicates/empty switch so that scope is unambiguous. Exactly one
           "Choose folders" control lives here, always reachable. */}
@@ -83,9 +83,9 @@ export function FileHygieneTools() {
         <CardHeader>
           <div className="flex items-center gap-2">
             <Icon icon="folder-open" size={16} className="text-[var(--accent)]" />
-            <CardTitle>Folders to inspect</CardTitle>
+            <CardTitle>File hygiene</CardTitle>
           </div>
-          <CardDescription>Applies to both duplicate and empty-folder scans below. WinCommander never accepts paths during removal—only short-lived IDs from the preview.</CardDescription>
+          <CardDescription>Choose folders once, then inspect them for duplicate files or empty folders. WinCommander never accepts paths during removal—only short-lived IDs from the preview.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -115,17 +115,17 @@ export function FileHygieneTools() {
             />
           )}
         </CardContent>
-      </Card>
+
 
       {tools.error && !errorDismissed && <Notice tone="danger" title="Operation failed" message={tools.error} onDismiss={() => setErrorDismissed(true)} />}
       {resultNotice && !resultDismissed && <Notice tone={resultNotice.tone} title={resultNotice.title} message={resultNotice.message} onDismiss={() => setResultDismissed(true)} />}
 
-      <Card>
+      <div className="maintenance-file-hygiene-results border-t border-[var(--border)]">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Icon icon="clean" size={16} className="text-[var(--accent)]" />
-              <CardTitle>File hygiene scan</CardTitle>
+              <CardTitle>Inspect selected folders</CardTitle>
             </div>
             <Tabs value={tools.tool} onValueChange={(value) => tools.changeTool(value as "duplicates" | "empty")}>
               <TabsList>
@@ -185,7 +185,7 @@ export function FileHygieneTools() {
 
           {tools.tool === "duplicates" && tools.duplicateScan && (
             <>
-              <div className="flex max-h-[26rem] flex-col gap-3 overflow-y-auto overscroll-contain pr-1">
+              <div className="flex flex-col gap-3">
                 {tools.duplicateScan.groups.map((group) => (
                   <div key={group.id} className="rounded-[var(--r)] border border-[var(--border)] p-3 transition-colors hover:border-[var(--border-strong)]">
                     <div className="mb-2 flex items-center justify-between gap-2">
@@ -207,7 +207,7 @@ export function FileHygieneTools() {
 
           {tools.tool === "empty" && tools.emptyScan && (
             <>
-              <div className="flex max-h-[26rem] flex-col gap-2 overflow-y-auto overscroll-contain pr-1">
+              <div className="flex flex-col gap-2">
                 {tools.emptyScan.folders.map((folder) => <SelectionRow key={folder.id} checked={tools.selected.has(folder.id)} onClick={() => tools.select(folder.id)} icon="folder-close" label={folder.name} detail={folder.path} />)}
                 {!count && <SharedEmptyState icon="confirm" title="No empty folders found" hint="Every folder across the chosen folders is in use." />}
               </div>
@@ -215,6 +215,7 @@ export function FileHygieneTools() {
             </>
           )}
         </CardContent>
+      </div>
       </Card>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
@@ -227,9 +228,7 @@ export function FileHygieneTools() {
   );
 }
 
-// Pinned to the bottom of the (internally scrolling) results list so it stays
-// reachable on a long list, instead of only appearing after scrolling to the
-// very bottom of the page.
+// Keeps the destructive action visible after a long page-level results list.
 function SelectionActionBar({ count, bytesLabel, onRemove }: { count: number; bytesLabel?: string; onRemove: () => void }) {
   if (!count) return null;
   return (

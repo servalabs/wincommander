@@ -14,6 +14,17 @@ function readSessionValue<T>(key: string, initialValue: T): T {
   return sessionValues.get(key) as T;
 }
 
+export function getMaintenanceSessionValue<T>(key: string): T | undefined {
+  return sessionValues.get(key) as T | undefined;
+}
+
+// Panel-level preloads complete before their tab hooks mount. Publishing through
+// the same store keeps those hooks cache-only and avoids a second scan on entry.
+export function primeMaintenanceSessionValue<T>(key: string, value: T): void {
+  sessionValues.set(key, value);
+  sessionListeners.get(key)?.forEach((listener) => listener());
+}
+
 // KT: Maintenance tabs and panels unmount, so scan previews must live outside
 // component state to prevent navigation from silently triggering fresh work.
 export function useMaintenanceSessionState<T>(

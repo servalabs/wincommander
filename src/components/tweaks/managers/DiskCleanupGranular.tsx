@@ -96,6 +96,7 @@ export default function DiskCleanupGranular() {
     const [loading, setLoading] = useState(false);
     const [cleaning, setCleaning] = useState(false);
     const [cleaningAll, setCleaningAll] = useState(false);
+    const [showStorageInfo, setShowStorageInfo] = useState(false);
     const [selected, setSelected] = useState<Set<string>>(() => _diskCleanupCache ? defaultSelection(_diskCleanupCache) : new Set());
     const [scheduleMinutes, setScheduleMinutes] = useState<number | null>(null);
     const [scheduleBusy, setScheduleBusy] = useState(false);
@@ -231,22 +232,22 @@ export default function DiskCleanupGranular() {
                 Ringing the counter <span> alone highlighted the number and left
                 Clean outside the box (2026-07-26 fix). */}
             <div data-tour="maintenance-disk-cleanup-actions" className="flex flex-wrap items-center gap-2">
+                <span className="whitespace-nowrap">
+                    <span className="font-mono text-base font-bold text-[var(--accent)]">{totalSelectedMb.toFixed(0)} MB</span>
+                    <span className="ml-1 text-xs text-[var(--text-mute)]">selected</span>
+                </span>
                 <Button variant="danger" size="sm" disabled={cleaning || !selected.size} onClick={() => void clean()}>
                     <Icon icon="clean" />{cleaning ? "Cleaning…" : `Clean ${selected.size} selected`}
                 </Button>
                 <Button variant="outline" size="sm" disabled={cleaning || cleaningAll} onClick={() => void cleanAll()}
                     title="Run the built-in Windows cleanup sweep (cleanmgr) across every system category">
-                    <Icon icon="eraser" />{cleaningAll ? "Sweeping…" : "Windows sweep"}
+                    <Icon icon="eraser" />{cleaningAll ? "Cleaning…" : "Clean all"}
                 </Button>
-                <span className="whitespace-nowrap">
-                    <span className="font-mono text-base font-bold text-[var(--accent)]">{totalSelectedMb.toFixed(0)} MB</span>
-                    <span className="ml-1 text-xs text-[var(--text-mute)]">selected</span>
-                </span>
                 <div className="ml-auto flex items-center gap-2">
                     {schedulesEnabled ? (
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                                <Button size="icon" variant="ghost" disabled={scheduleBusy} aria-label="Auto-clean schedule"
+                                <Button size="icon" variant="outline" disabled={scheduleBusy} aria-label="Auto-clean schedule"
                                     title={scheduleMinutes === null ? "Schedule auto-clean" : `Auto-clean every ${formatInterval(scheduleMinutes)}`}>
                                     <Icon icon="time" className={scheduleMinutes === null ? "text-[var(--text-mute)]" : "text-[var(--accent)]"} />
                                 </Button>
@@ -260,19 +261,24 @@ export default function DiskCleanupGranular() {
                             </DropdownMenuContent>
                         </DropdownMenu>
                     ) : !isInvestigator && (
-                        <Button size="sm" variant="ghost" onClick={() => window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Scheduled Auto-Clean" } }))}
+                        <Button size="icon" variant="outline" onClick={() => window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Scheduled Auto-Clean" } }))}
                             title="Scheduled auto-clean is a paid feature">
-                            <Icon icon="time" /><Icon icon="lock" />
+                            <Icon icon="time" />
                         </Button>
                     )}
+                    <Button size="icon" variant="outline" onClick={() => setShowStorageInfo((current) => !current)}
+                        title="About Windows storage cleanup" aria-label="About Windows storage cleanup" aria-pressed={showStorageInfo}>
+                        <Icon icon="info-sign" />
+                    </Button>
                     <Button size="icon" variant="primary" disabled={loading} onClick={() => void refresh()} title={scanLabel} aria-label={scanLabel}>
                         <Icon icon={loading || cats.length ? "refresh" : "search"} className={loading ? "animate-spin" : undefined} />
                     </Button>
                 </div>
             </div>
+            {showStorageInfo && <p className="text-xs text-[var(--text-mute)]">Windows storage shows safe-to-review system categories. Selected items are only removed when you choose Clean selected.</p>}
 
             {loading && cats.length === 0 && <div className="flex justify-center py-6"><Spinner size={20} className="text-[var(--accent)]" /></div>}
-            <div className="grid max-h-[22rem] gap-2 overflow-auto overscroll-contain pr-1 sm:grid-cols-2">
+            <div className="grid gap-2 sm:grid-cols-2">
                 {cats.map(c => <CategoryRow key={c.Id} category={c} checked={selected.has(c.Id)} onToggle={() => toggle(c.Id)} />)}
             </div>
         </div>

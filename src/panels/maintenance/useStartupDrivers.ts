@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useBackend, type DriverMaintenanceInventory, type StartupImpactScan } from "../../hooks/useBackend";
 import { useMaintenanceSessionState } from "./maintenanceSessionState";
 
@@ -10,20 +10,27 @@ export function useStartupDrivers() {
   const [drivers, setDrivers] = useMaintenanceSessionState<DriverMaintenanceInventory | undefined>("startup-drivers.drivers", undefined);
   const [busy, setBusy] = useMaintenanceSessionState("startup-drivers.busy", false);
   const [error, setError] = useMaintenanceSessionState<string | undefined>("startup-drivers.error", undefined);
+  const initialScanRequested = useRef(false);
 
-  const scanStartup = useCallback(async () => {
+  const scanChecks = useCallback(async () => {
     setBusy(true); setError(undefined);
-    try { setStartup(await backendRef.current.startupImpactScan()); }
-    catch (cause) { setError(String(cause)); }
+    try {
+      const [startupScan, driverScan] = await Promise.all([
+        backendRef.current.startupImpactScan(),
+        backendRef.current.driverMaintenanceInventory(),
+      ]);
+      setStartup(startupScan);
+      setDrivers(driverScan);
+    } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
-  }, [setBusy, setError, setStartup]);
+  }, [setBusy, setDrivers, setError, setStartup]);
 
-  const scanDrivers = useCallback(async () => {
-    setBusy(true); setError(undefined);
-    try { setDrivers(await backendRef.current.driverMaintenanceInventory()); }
-    catch (cause) { setError(String(cause)); }
-    finally { setBusy(false); }
-  }, [setBusy, setDrivers, setError]);
+  useEffect(() => {
+    if ((!startup || !drivers) && !initialScanRequested.current) {
+      initialScanRequested.current = true;
+      void scanChecks();
+    }
+  }, [drivers, scanChecks, startup]);
 
   const openUpdates = useCallback(async () => {
     setError(undefined);
@@ -31,5 +38,5 @@ export function useStartupDrivers() {
     catch (cause) { setError(String(cause)); }
   }, [setError]);
 
-  return { startup, drivers, busy, error, scanStartup, scanDrivers, openUpdates };
+  return { startup, drivers, busy, error, scanChecks, openUpdates };
 }
