@@ -5,7 +5,6 @@ import type { SystemEncryptionStatus } from "../../hooks/useBackend";
 import './SystemEncryptionSection.css';
 
 interface SystemEncryptionSectionProps {
-  installed: boolean;
   /** Compact one-line status row variant for embedding inside another
    *  card (e.g. the Encrypted Volumes card on the Secure Storage panel).
    *  Skips the section title, body card, algorithm/mode meta, and the
@@ -13,14 +12,13 @@ interface SystemEncryptionSectionProps {
   compact?: boolean;
 }
 
-function SystemEncryptionSection({ installed, compact = false }: SystemEncryptionSectionProps) {
+function SystemEncryptionSection({ compact = false }: SystemEncryptionSectionProps) {
   const { getSystemEncryptionStatus } = useBackend();
   const [status, setStatus] = useState<SystemEncryptionStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
   const fetchStatus = useCallback(async () => {
-    if (!installed) return;
     setLoading(true);
     setErrMsg(null);
     try {
@@ -32,9 +30,7 @@ function SystemEncryptionSection({ installed, compact = false }: SystemEncryptio
     } finally {
       setLoading(false);
     }
-  }, [getSystemEncryptionStatus, installed]);
-
-  if (!installed) return null;
+  }, [getSystemEncryptionStatus]);
 
   const hasStatus = status !== null;
   const isEncrypted = status?.encrypted === true;

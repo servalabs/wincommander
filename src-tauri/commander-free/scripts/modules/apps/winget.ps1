@@ -683,7 +683,7 @@ function Test-WingetInstalled {
 # SCHEMA:
 #   { lastScanAt, scanDurationMs,
 #     manifestApps[], otherApps[], pendingUpdates[],
-#     essentials: { encryptionEngine, meshVpn, productivityEngine, winget },
+#     essentials: { meshVpn, productivityEngine, winget },
 #     summary: { totalInstalled, manifestInstalled, manifestTotal,
 #                manifestMissing, otherInstalled, updatesAvailable, essentialsOk } }
 # ============================================================================
@@ -952,11 +952,8 @@ function Get-AppInventory {
     }
 
     # -- 7. Check essentials (reuse step 3b filesystem detection) --
-    # LEARNING: Step 3b already detected VeraCrypt, Tailscale, and ActivityWatch via filesystem.
+    # LEARNING: Step 3b already detected Tailscale and ActivityWatch via filesystem.
     # Reuse those results here to avoid duplicate I/O. Only connectivity/running checks are new.
-    $encryptionInstalled = $filesystemOverrides.ContainsKey('IDRIX.VeraCrypt')
-    $encryptionVersion = if ($encryptionInstalled) { $filesystemOverrides['IDRIX.VeraCrypt'].version } else { $null }
-
     # Tailscale: reuse $meshInstalled/$meshVersion from step 3b, only add connected check
     $meshConnected = $null
     if ($meshInstalled) {
@@ -987,13 +984,12 @@ function Get-AppInventory {
     }
 
     $essentials = @{
-        encryptionEngine   = @{ installed = $encryptionInstalled; version = $encryptionVersion }
         meshVpn            = @{ installed = $meshInstalled; version = $meshVersion; connected = $meshConnected }
         productivityEngine = @{ installed = $awInstalled; running = $awRunning }
         winget             = @{ installed = $wingetInstalled; version = $wingetVersion }
     }
 
-    $essentialsOk = $encryptionInstalled -and $meshInstalled -and $awInstalled -and $wingetInstalled
+    $essentialsOk = $meshInstalled -and $awInstalled -and $wingetInstalled
 
     # -- 8. Build summary --
     $otherInstalledCount = $otherApps.Count

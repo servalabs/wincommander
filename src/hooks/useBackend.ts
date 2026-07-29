@@ -18,22 +18,10 @@ export type AIControlOperationId =
   | "cbs-packages"
   | "ai-files"
   | "scheduled-tasks"
-  | "update-cleanup"
-  | "classic-photo-viewer"
-  | "classic-paint"
-  | "classic-snipping"
-  | "classic-notepad"
-  | "photos-legacy";
+  | "update-cleanup";
 
 export interface AIControlStatus {
   isAdmin: boolean;
-  classicApps: {
-    photoViewer: boolean;
-    paint: boolean;
-    snipping: boolean;
-    notepad: boolean;
-    photosLegacy: boolean;
-  };
 }
 
 export interface AIControlOperationResult {
@@ -412,13 +400,12 @@ export interface UpdateStatus {
 }
 
 export interface ActivationStatus {
-  // Windows-only. Office activation detection was dropped: OHook activates
-  // at the Office process DLL layer (not SPP), so CIM/WMI/OSPP are blind
-  // to it and fingerprinting MAS-OHook artefacts (scheduled tasks /
-  // patcher DLLs) was too brittle to keep maintained. Diminishing returns.
   windows: {
     activated: boolean;
     edition: string | null;
+  };
+  office: {
+    installed: boolean;
   };
 }
 
@@ -1707,10 +1694,8 @@ export function useBackend() {
     invokePreviousWindowsInstallErase: () => execute<{ status: string; freedMB: number }>(invokeCommand("PreviousWindowsInstallErase")),
     getPreviousWindowsInstallInfo: () => execute<{ present: boolean; sizeMB: number }>("Get-PreviousWindowsInstallInfo"),
 
-    // Encryption Engine
+    // Encrypted volumes
     getEncryptionStatus: () => execute<EncryptionStatus>("Get-EncryptionStatus"),
-    testEncryptionInstalled: () => execute<EncryptionStatus>("Test-EncryptionInstalled"),
-    listEncryptionVolumes: () => execute<{ volumes: NonNullable<EncryptionStatus['volumes']> }>("List-EncryptionVolumes"),
     mountVolume: (path: string, letter: string, password: string, keyfile?: string, pim?: string) =>
       execute("Mount-EncryptionVolume", {
         VolumePath: path,
@@ -1921,6 +1906,7 @@ export function useBackend() {
     upgradeApp: (appId: string) => execute("Upgrade-App", { AppId: appId }),
 
     // Activation
+    getActivationStatus: () => execute<ActivationStatus>("Get-ActivationStatus"),
     openActivationSettings: () => execute("Open-ActivationSettings"),
 
 

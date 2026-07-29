@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Button, Icon } from "@/components/ui/bp";
 import { open } from "@tauri-apps/plugin-shell";
 import useBackend from "../../../hooks/useBackend";
@@ -14,7 +15,16 @@ const OFFICE_OFFLINE_URL =
   "https://officecdn.microsoft.com/db/492350f6-3a01-4f97-b9c0-c7c6ddf67d60/media/en-us/O365HomePremRetail.img";
 
 function ActivationPanel() {
-  const { openActivationSettings, error } = useBackend();
+  const { getActivationStatus, openActivationSettings, error } = useBackend();
+  const [officeInstalled, setOfficeInstalled] = useState<boolean>();
+
+  useEffect(() => {
+    let active = true;
+    void getActivationStatus().then((result) => {
+      if (active && result.success && result.data) setOfficeInstalled(result.data.office.installed);
+    });
+    return () => { active = false; };
+  }, [getActivationStatus]);
 
   const openWindowsSettings = async () => {
     await openActivationSettings();
@@ -54,7 +64,7 @@ function ActivationPanel() {
             pulls the latest build; offline .img is a full payload
             frozen at a release version. Users supply their own valid
             Microsoft licence and activate via Windows Settings. */}
-        <div className="activation-action-row">
+        {officeInstalled === false && <div className="activation-action-row">
           <div className="action-details">
             <div className="action-title">
               <Icon icon="download" size={12} className="text-accent" />
@@ -78,7 +88,7 @@ function ActivationPanel() {
               title="Full .img payload -- mount and run setup.exe for air-gapped installs"
             />
           </div>
-        </div>
+        </div>}
       </div>
     </div>
   );

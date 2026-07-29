@@ -124,9 +124,8 @@ export default function RightSidebar() {
                 .map(k => k.slice("action:".length))
             : []),
     ]);
-    const vaultDep = dependencyStatus?.find(d => d.panelId === 'vault' || d.id === 'encryptionEngine');
     const ramDiskDep = dependencyStatus?.find(d => d.id === 'ramDiskEngine');
-    const encryptionAvailable = !!vaultDep?.installed || !!encryptionStatus?.installed;
+    const encryptionAvailable = !!encryptionStatus?.installed || !!encryptionStatus?.volumes?.length;
     const ramDiskAvailable = !!ramDiskDep?.installed;
     const dismountAvailable = encryptionAvailable || ramDiskAvailable;
 
@@ -750,7 +749,7 @@ export default function RightSidebar() {
                     {!hiddenActions.has("dismount") && (
                     <div
                         className={`action-item ${!dismountAvailable ? 'action-item--disabled' : ''}`}
-                        data-tip={dismountAvailable ? "Emergency Dismount Volumes + RAM Disks" : `Requires ${vaultDep?.name ?? ramDiskDep?.name ?? 'Encryption Engine'}`}
+                        data-tip={dismountAvailable ? "Emergency Dismount Volumes + RAM Disks" : `Requires ${ramDiskDep?.name ?? 'a mounted volume or RAM disk'}`}
                         data-tip-intent="danger"
                     >
                         <ActionBtn

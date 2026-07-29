@@ -74,14 +74,6 @@ function Update-DepStatusCacheEntry([string]$depId, [hashtable]$mergeProps) {
 function Get-DependencyRegistry {
     return @(
         @{
-            id       = 'encryptionEngine'
-            name     = 'Encryption Engine'
-            wingetId = 'IDRIX.VeraCrypt'
-            panelId  = 'vault'
-            canStart = $false   # VeraCrypt is on-demand, no background service
-            canHide  = $true
-        },
-        @{
             # RAM disk engine. RAM Disk Engine isn't on winget so wingetId stays
             # $null; Install-RamDiskEngine does a direct SourceForge download
             # with silent /S install. Same UX as the other deps from the
@@ -214,20 +206,6 @@ function Get-DependencyRegistry {
 # ════════════════════════════════════════════════════════════════════════════
 # PER-DEPENDENCY: TEST INSTALLED
 # ════════════════════════════════════════════════════════════════════════════
-
-function Test-EncryptionEngineInstalled {
-    $vc64 = "$env:ProgramFiles\VeraCrypt\VeraCrypt.exe"
-    $vc86 = "${env:ProgramFiles(x86)}\VeraCrypt\VeraCrypt.exe"
-    $veraPath = if (Test-Path $vc64 -ErrorAction SilentlyContinue) { $vc64 }
-                elseif (Test-Path $vc86 -ErrorAction SilentlyContinue) { $vc86 }
-                else { $null }
-    $installed = $null -ne $veraPath
-    $version = $null
-    if ($installed) {
-        $version = try { (Get-Item $veraPath).VersionInfo.ProductVersion } catch { $null }
-    }
-    return @{ installed = $installed; version = $version }
-}
 
 function Test-MeshVpnInstalled {
     $installed = $false
@@ -497,23 +475,35 @@ function Test-PowerShell7Installed {
     #      unaffected by elevation or PATH.
     $installed = $false
     $version = $null
-    $ps7Path = "$env:ProgramFiles\PowerShell\7\pwsh.exe"
-    if (Test-Path $ps7Path) {
+    # A GUI process elevated through UAC can inherit an older PATH and misses
+    # user- or machine-scope pwsh installs. Prefer known executable locations,
+    # then PATH, then the MSIX package registration.
+    $installRoots = @($env:ProgramFiles, $env:ProgramW6432, ${env:ProgramFiles(x86)}) |
+        Where-Object { $_ } |
+        Select-Object -Unique
+    foreach ($root in $installRoots) {
+        $ps7Path = Join-Path $root 'PowerShell\7\pwsh.exe'
+        if (-not (Test-Path -LiteralPath $ps7Path -PathType Leaf)) { continue }
         $installed = $true
-        $version = try { (Get-Item $ps7Path).VersionInfo.ProductVersion } catch { $null }
+        $version = try { (Get-Item -LiteralPath $ps7Path).VersionInfo.ProductVersion } catch { $null }
+        break
     }
-    elseif (Get-Command pwsh -ErrorAction SilentlyContinue) {
-        $pwsh = Get-Command pwsh
-        if ($pwsh.Version.Major -ge 7) {
+
+    if (-not $installed) {
+        $pwsh = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($pwsh -and $pwsh.Source) {
             $installed = $true
-            $version = $pwsh.Version.ToString()
+            $version = try { (Get-Item -LiteralPath $pwsh.Source).VersionInfo.ProductVersion } catch { $pwsh.Version.ToString() }
         }
     }
-    else {
-        $appx = try { Get-AppxPackage -Name "Microsoft.PowerShell" -ErrorAction Stop } catch { $null }
+
+    if (-not $installed) {
+        $appx = try { Get-AppxPackage -Name "Microsoft.PowerShell" -AllUsers -ErrorAction Stop | Select-Object -First 1 } catch {
+            try { Get-AppxPackage -Name "Microsoft.PowerShell" -ErrorAction Stop | Select-Object -First 1 } catch { $null }
+        }
         if ($appx -and $appx.Version) {
             $installed = $true
-            $version = $appx.Version
+            $version = $appx.Version.ToString()
         }
     }
     return @{ installed = $installed; version = $version }
@@ -781,22 +771,6 @@ function Test-LocalLlmInstalled {
 # ════════════════════════════════════════════════════════════════════════════
 # PER-DEPENDENCY: INSTALL
 # ════════════════════════════════════════════════════════════════════════════
-
-function Install-EncryptionEngine {
-    Assert-IsAdmin
-    $status = Test-EncryptionEngineInstalled
-    if ($status.installed) { return @{ success = $true; message = "Encryption Engine already installed." } }
-
-    $wingetCmd = Resolve-WingetPath
-    if (-not $wingetCmd) { throw "Winget is required to install Encryption Engine." }
-
-    & $wingetCmd install --id IDRIX.VeraCrypt --exact --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
-    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335212) {
-        throw "Failed to install VeraCrypt (exit code $LASTEXITCODE)"
-    }
-
-    return @{ success = $true; message = "Encryption Engine installed." }
-}
 
 function Test-RamDiskEngineInstalled {
     # Mirrors Get-ImDiskExe in vault/ramdisks.ps1. We duplicate detection
@@ -1365,45 +1339,6 @@ function Install-PrivacyShieldAI {
 # PER-DEPENDENCY: HIDE (remove shortcuts, registry entries, tray icons)
 # ════════════════════════════════════════════════════════════════════════════
 
-function Hide-EncryptionEngine {
-    $itemsRemoved = 0
-    $errors = @()
-
-    # Start Menu folder
-    $veracryptFolder = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\VeraCrypt 1.26.24"
-    if (Test-Path $veracryptFolder) {
-        try { Invoke-7Erase -Path $veracryptFolder -Type File; $itemsRemoved++ }
-        catch { $errors += "VeraCrypt folder: $($_.Exception.Message)" }
-    }
-
-    # Uninstall registry keys
-    $veracryptUninstallKeys = @(
-        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{9EBED8F8-BD2F-4561-B5A3-628A8815F51F}',
-        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{9EBED8F8-BD2F-4561-B5A3-628A8815F51F}'
-    )
-    foreach ($key in $veracryptUninstallKeys) {
-        if (Test-Path $key) {
-            try {
-                Invoke-7Erase -Path $key -Type RegistryProperty -Name 'DisplayName'
-                Invoke-7Erase -Path $key -Type RegistryProperty -Name 'DisplayIcon'
-                $itemsRemoved++
-            }
-            catch { $errors += "VeraCrypt registry: $($_.Exception.Message)" }
-        }
-    }
-
-    # Desktop shortcuts
-    foreach ($desktop in @("$env:PUBLIC\Desktop", "$env:USERPROFILE\Desktop")) {
-        $path = Join-Path $desktop "VeraCrypt.lnk"
-        if (Test-Path $path) {
-            try { Invoke-7Erase -Path $path -Type File; $itemsRemoved++ }
-            catch { $errors += "VeraCrypt desktop: $($_.Exception.Message)" }
-        }
-    }
-
-    return @{ itemsRemoved = $itemsRemoved; warnings = $errors }
-}
-
 function Hide-MeshVpn {
     $itemsRemoved = 0
     $errors = @()
@@ -1747,6 +1682,15 @@ function Get-DependencyStatus {
     if (-not $Force) {
         $cached = Read-DepStatusCache
         if ($cached) {
+            # PowerShell can be installed by Store, winget, or an MSI while
+            # this 12-hour cache is fresh. Re-probe it on every read so the
+            # UI never offers an unnecessary install for an existing runtime.
+            $cachedPowerShell = @($cached.status | Where-Object { $_.id -eq 'powershell7' }) | Select-Object -First 1
+            if ($cachedPowerShell) {
+                $powerShellStatus = Test-PowerShell7Installed
+                $cachedPowerShell.installed = [bool]$powerShellStatus.installed
+                $cachedPowerShell.version = $powerShellStatus.version
+            }
             $payload = @{ dependencies = $cached.status; cacheAgeSecs = $cached.cacheAgeSecs }
             $script:_depStatusCache     = $payload
             $script:_depStatusCacheTime = Get-Date
@@ -1760,7 +1704,6 @@ function Get-DependencyStatus {
 
     foreach ($dep in $registry) {
         $status = switch ($dep.id) {
-            'encryptionEngine' { Test-EncryptionEngineInstalled }
             'ramDiskEngine' { Test-RamDiskEngineInstalled }
             'meshVpn' { Test-MeshVpnInstalled }
             'productivityEngine' { Test-ProductivityEngineInstalled }
@@ -1805,7 +1748,7 @@ function Install-Dependency {
         Install a single dependency by ID.
         After installing, automatically hides and starts the app if applicable.
     .PARAMETER Id
-        One of: encryptionEngine, meshVpn, productivityEngine, winget, chocolatey, scoop,
+        One of: meshVpn, productivityEngine, winget, chocolatey, scoop,
         privacyShieldAI, powershell7, vcredist, systemCleaner, instantSearch, diskHealthEngine
     .PARAMETER Target
         Optional sub-target (for privacyShieldAI: specific package name)
@@ -1829,7 +1772,6 @@ function Install-Dependency {
     try {
         # Step 1: Install
         $installResult = switch ($Id) {
-            'encryptionEngine' { Install-EncryptionEngine }
             'ramDiskEngine' { Install-RamDiskEngineDep }
             'meshVpn' { Install-MeshVpn }
             'productivityEngine' { Install-ProductivityEngine }
@@ -1991,7 +1933,7 @@ function Hide-AllBackendApps {
     Assert-IsAdmin
 
     try {
-        $result = Set-BackendAppsVisibility -Apps "meshVpn,encryptionEngine,productivityEngine,instantSearch,systemCleaner,unigetui,ramDiskEngine" -Hidden $true
+        $result = Set-BackendAppsVisibility -Apps "meshVpn,productivityEngine,instantSearch,systemCleaner,unigetui,ramDiskEngine" -Hidden $true
         return @{
             status       = 'hidden'
             itemsRemoved = $result.itemsChanged
@@ -2804,38 +2746,6 @@ function Set-BackendAppsVisibility {
     #   - Desktop shortcuts are permanently deleted on hide; Start Menu entries
     #     use backup-dir move so they can be restored; SystemComponent is toggled.
     $itemsChanged = 0
-
-    # VeraCrypt
-    if ($appList -contains 'encryptionEngine') {
-        # Find the versioned Start Menu folder dynamically (e.g. "VeraCrypt 1.26.24" changes per update)
-        $vcStartMenuFolders = @()
-        $smBase = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
-        if (Test-Path $smBase) {
-            Get-ChildItem -LiteralPath $smBase -Directory -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -like 'VeraCrypt*' } |
-                ForEach-Object { $vcStartMenuFolders += $_.FullName }
-        }
-        $shortcuts = $vcStartMenuFolders
-        if ($Hidden) { Remove-DepDesktopShortcuts -Names @('VeraCrypt.lnk') }
-
-        # Find uninstall key by DisplayName (version-agnostic)
-        $vcUninstallKeys = @()
-        foreach ($root in @(
-            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
-            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
-        )) {
-            if (-not (Test-Path $root)) { continue }
-            Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue | ForEach-Object {
-                $dn = (Get-ItemProperty -LiteralPath $_.PSPath -Name DisplayName -ErrorAction SilentlyContinue).DisplayName
-                if ($dn -and $dn -like 'VeraCrypt*') { $vcUninstallKeys += $_.PSPath }
-            }
-        }
-
-        $itemsChanged += Move-ShortcutsReversible -Paths $shortcuts -Hidden $Hidden -AppKey 'veracrypt.exe' -Warnings ([ref]$warnings)
-        if ($vcUninstallKeys.Count -gt 0) {
-            $itemsChanged += Set-SystemComponentReversible -Keys $vcUninstallKeys -Hidden $Hidden -Warnings ([ref]$warnings)
-        }
-    }
 
     # Tailscale
     if ($appList -contains 'meshVpn') {

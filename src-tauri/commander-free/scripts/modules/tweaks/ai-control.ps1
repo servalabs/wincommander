@@ -5,13 +5,6 @@
 function Get-AIControlStatus {
     [pscustomobject]@{
         isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-        classicApps = [pscustomobject]@{
-            photoViewer = Test-AIControlPhotoViewerInstalled
-            paint = Test-AIControlLegacyBinaryInstalled -App paint
-            snipping = Test-AIControlLegacyBinaryInstalled -App snipping
-            notepad = [bool](Get-WindowsCapability -Online -Name 'Microsoft.Windows.Notepad.System*' -ErrorAction SilentlyContinue | Where-Object State -eq 'Installed')
-            photosLegacy = Test-AIControlPhotosLegacyInstalled
-        }
     }
 }
 
@@ -21,9 +14,7 @@ function Invoke-AIControlOperation {
         [ValidateSet(
             'restore-point', 'package-guard',
             'appx-packages', 'recall-feature', 'cbs-packages', 'ai-files',
-            'scheduled-tasks', 'update-cleanup',
-            'classic-photo-viewer', 'classic-paint',
-            'classic-snipping', 'classic-notepad', 'photos-legacy'
+            'scheduled-tasks', 'update-cleanup'
         )]
         [string]$Operation,
         [ValidateSet('apply', 'revert')][string]$Mode = 'apply',
@@ -39,10 +30,5 @@ function Invoke-AIControlOperation {
         'ai-files' { Remove-AIControlFiles -Mode $Mode -Backup $Backup }
         'scheduled-tasks' { Set-AIControlScheduledTasks -Mode $Mode }
         'update-cleanup' { Set-AIControlUpdateCleanup -Mode $Mode }
-        'classic-photo-viewer' { Install-AIControlPhotoViewer }
-        'classic-paint' { Install-AIControlLegacyBinary -App paint }
-        'classic-snipping' { Install-AIControlLegacyBinary -App snipping }
-        'classic-notepad' { Install-AIControlNotepad }
-        'photos-legacy' { Install-AIControlPhotosLegacy }
     }
 }

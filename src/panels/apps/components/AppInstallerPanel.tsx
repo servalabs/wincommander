@@ -1,5 +1,5 @@
 import { Card, Button, Checkbox, InputGroup, Icon, Spinner } from "@/components/ui/bp";
-import { useMemo, useState, useEffect, useCallback, useRef } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { motion } from "framer-motion";
 import useBackend from "../../../hooks/useBackend";
 import { useAppState } from "../../../context/AppContext";
@@ -20,6 +20,7 @@ import './AppInstallerPanel.css';
 declare global {
   interface Window {
     __pendingAppInstall?: string[];
+    __pendingAppsInstallView?: "updates";
   }
 }
 
@@ -84,7 +85,7 @@ function mapCategoryToTab(category: string): string {
   return "basic";
 }
 
-function AppInstallerPanel() {
+function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
   const { appInventory, runAppInventoryScan, loading: contextLoading, patchAppSettings, forceRefreshDeps } = useAppState();
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -446,6 +447,17 @@ function AppInstallerPanel() {
     }
     checkWinget();
   }, [testWingetInstalled, appInventory, runAppInventoryScan]);
+
+  useEffect(() => {
+    const openUpdates = () => {
+      if (window.__pendingAppsInstallView !== "updates") return;
+      window.__pendingAppsInstallView = undefined;
+      setInstallerView("updates");
+    };
+    openUpdates();
+    window.addEventListener("apps-open-updates-tab", openUpdates);
+    return () => window.removeEventListener("apps-open-updates-tab", openUpdates);
+  }, []);
 
   const handleRefreshAll = useCallback(async () => {
     if (inventoryScanPending || contextLoading?.apps) return;
@@ -1158,6 +1170,7 @@ function AppInstallerPanel() {
                 back to the apps-update-section button anchor when this tab
                 isn't the active inner tab, so gating stays correct. */}
             <TabsContent value="updates">
+              {updatesTools && <div className="mb-6">{updatesTools}</div>}
               <div className="apps-grid" data-tour="apps-updates-grid">
                 {appsLoading ? (
                   <div className="empty-state">

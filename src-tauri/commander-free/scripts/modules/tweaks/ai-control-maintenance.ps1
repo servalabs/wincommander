@@ -1,5 +1,5 @@
 # ============================================================================
-# WINDOWS AI CONTROL — TASKS, UPDATE CLEANUP, REPAIR, AND CLASSIC APPS
+# WINDOWS AI CONTROL — TASKS, UPDATE CLEANUP, AND REPAIR
 # ============================================================================
 
 function Set-AIControlScheduledTasks {
@@ -36,7 +36,6 @@ function Set-AIControlScheduledTasks {
     }
     [pscustomobject]@{ status = 'removed'; operation = 'scheduled-tasks'; changed = $tasks.Count; requiresReboot = $false }
 }
-
 function Set-AIControlUpdateCleanup {
     param([ValidateSet('apply', 'revert')][string]$Mode)
     Assert-AIControlAdmin
@@ -82,145 +81,4 @@ New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI' -Na
     [pscustomobject]@{ status = 'enabled'; operation = 'update-cleanup'; changed = 1; requiresReboot = $false }
 }
 
-function Get-AIControlPhotoViewerAssociations {
-    [ordered]@{
-        '.bmp' = 'PhotoViewer.FileAssoc.Bitmap'
-        '.cr2' = 'PhotoViewer.FileAssoc.Tiff'
-        '.dib' = 'PhotoViewer.FileAssoc.Bitmap'
-        '.gif' = 'PhotoViewer.FileAssoc.Gif'
-        '.jfif' = 'PhotoViewer.FileAssoc.JFIF'
-        '.jpe' = 'PhotoViewer.FileAssoc.Jpeg'
-        '.jpeg' = 'PhotoViewer.FileAssoc.Jpeg'
-        '.jpg' = 'PhotoViewer.FileAssoc.Jpeg'
-        '.jxr' = 'PhotoViewer.FileAssoc.Jxr'
-        '.png' = 'PhotoViewer.FileAssoc.Png'
-        '.tif' = 'PhotoViewer.FileAssoc.Tiff'
-        '.tiff' = 'PhotoViewer.FileAssoc.Tiff'
-        '.wdp' = 'PhotoViewer.FileAssoc.Wdp'
-    }
-}
-
-function Test-AIControlPhotoViewerInstalled {
-    $associations = Get-AIControlPhotoViewerAssociations
-    $capabilitiesPath = 'HKLM:\SOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations'
-    if (-not (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Windows Photo Viewer\PhotoViewer.dll'))) { return $false }
-
-    try {
-        foreach ($entry in $associations.GetEnumerator()) {
-            $registeredAssociation = Get-ItemPropertyValue -LiteralPath $capabilitiesPath -Name $entry.Key -ErrorAction Stop
-            if ($registeredAssociation -ne $entry.Value) { return $false }
-        }
-        foreach ($association in @($associations.Values | Sort-Object -Unique)) {
-            $commandPath = "HKLM:\SOFTWARE\Classes\$association\shell\open\command"
-            $openCommand = (Get-Item -LiteralPath $commandPath -ErrorAction Stop).GetValue('')
-            if ($openCommand -notmatch '(?i)PhotoViewer\.dll' -or $openCommand -notmatch '(?i)ImageView_Fullscreen\s+%1') { return $false }
-        }
-    } catch {
-        return $false
-    }
-    $true
-}
-
-function Install-AIControlPhotoViewer {
-    $associations = Get-AIControlPhotoViewerAssociations
-    foreach ($entry in $associations.GetEnumerator()) {
-        $association = $entry.Value
-        & reg.exe add 'HKLM\SOFTWARE\Microsoft\Windows Photo Viewer\Capabilities\FileAssociations' /v $entry.Key /t REG_SZ /d $association /f | Out-Null
-        & reg.exe add "HKLM\SOFTWARE\Classes\$association\shell\open\command" /ve /t REG_EXPAND_SZ /d '%SystemRoot%\System32\rundll32.exe "%ProgramFiles%\Windows Photo Viewer\PhotoViewer.dll", ImageView_Fullscreen %1' /f | Out-Null
-        & reg.exe add "HKLM\SOFTWARE\Classes\$association\shell\open\DropTarget" /v Clsid /t REG_SZ /d '{FFE2A43C-56B9-4bf5-9A79-CC6D4285608A}' /f | Out-Null
-    }
-    if (-not (Test-AIControlPhotoViewerInstalled)) {
-        throw 'Windows Photo Viewer registration did not pass verification.'
-    }
-    [pscustomobject]@{ status = 'installed'; operation = 'classic-photo-viewer'; changed = $associations.Count; requiresReboot = $false }
-}
-
-function Find-AIControlLegacyBinary {
-    param([ValidateSet('paint', 'snipping')][string]$App)
-    $name = if ($App -eq 'paint') { 'mspaint.exe' } else { 'SnippingTool.exe' }
-    $candidates = @((Join-Path (Get-AIControlDataRoot) "sources\$name"))
-    $systemDrive = $env:SystemDrive.TrimEnd(':')
-    foreach ($drive in @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -and $_.DriveLetter -ne $systemDrive })) {
-        $candidates += "$($drive.DriveLetter):\Windows\System32\$name"
-    }
-    foreach ($candidate in $candidates) {
-        if (-not (Test-Path -LiteralPath $candidate)) { continue }
-        $signature = Get-AuthenticodeSignature -LiteralPath $candidate
-        if ($signature.Status -eq 'Valid' -and $signature.SignerCertificate.Subject -like '*Microsoft*') { return $candidate }
-    }
-    throw "A Microsoft-signed $name source wasn't found. Mount compatible Windows media or place it in the protected WinCommander AIControl sources directory."
-}
-
-function Test-AIControlLegacyBinaryInstalled {
-    # The '.installed' marker only records that an install ran once; it survives
-    # even if the copied binary or shortcut is later removed (AV, manual cleanup),
-    # so status must verify the real files Install-AIControlLegacyBinary writes.
-    param([ValidateSet('paint', 'snipping')][string]$App)
-    $name = if ($App -eq 'paint') { 'mspaint.exe' } else { 'SnippingTool.exe' }
-    $shortcutName = if ($App -eq 'paint') { 'Paint.lnk' } else { 'Accessories\Snipping Tool.lnk' }
-    $binaryPath = Join-Path (Get-AIControlDataRoot) "classic\$App\$name"
-    $shortcutPath = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\$shortcutName"
-    (Test-Path -LiteralPath $binaryPath) -and (Test-Path -LiteralPath $shortcutPath)
-}
-
-function Install-AIControlLegacyBinary {
-    param([ValidateSet('paint', 'snipping')][string]$App)
-    Assert-AIControlAdmin
-    $source = Find-AIControlLegacyBinary -App $App
-    $name = Split-Path -Leaf $source
-    $destinationRoot = Join-Path (Get-AIControlDataRoot) "classic\$App"
-    New-Item -Path $destinationRoot -ItemType Directory -Force | Out-Null
-    $destination = Join-Path $destinationRoot $name
-    Copy-Item -LiteralPath $source -Destination $destination -Force
-    $shortcutName = if ($App -eq 'paint') { 'Paint.lnk' } else { 'Accessories\Snipping Tool.lnk' }
-    $shortcutPath = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\$shortcutName"
-    New-Item -Path (Split-Path -Parent $shortcutPath) -ItemType Directory -Force | Out-Null
-    $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = $destination
-    $shortcut.Save()
-    New-Item -Path (Join-Path $destinationRoot '.installed') -ItemType File -Force | Out-Null
-    [pscustomobject]@{ status = 'installed'; operation = "classic-$App"; changed = 1; requiresReboot = $false }
-}
-
-function Install-AIControlNotepad {
-    Assert-AIControlAdmin
-    Get-AppxPackage -AllUsers -Name '*WindowsNotepad*' -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
-    Add-WindowsCapability -Online -Name 'Microsoft.Windows.Notepad.System~~~~0.0.1.0' -LimitAccess -ErrorAction Stop | Out-Null
-    Remove-Item -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths\notepad.exe' -Force -ErrorAction SilentlyContinue
-    & reg.exe add 'HKLM\SOFTWARE\Classes\Applications\notepad.exe\shell\open\command' /ve /t REG_EXPAND_SZ /d '%SystemRoot%\system32\NOTEPAD.EXE "%1"' /f | Out-Null
-    & reg.exe add 'HKLM\SOFTWARE\Classes\SystemFileAssociations\text\shell\edit\command' /ve /t REG_EXPAND_SZ /d '%SystemRoot%\system32\NOTEPAD.EXE "%1"' /f | Out-Null
-    [pscustomobject]@{ status = 'installed'; operation = 'classic-notepad'; changed = 1; requiresReboot = $false }
-}
-
-function Install-AIControlPhotosLegacy {
-    Assert-AIControlAdmin
-    $changed = 0
-    if (-not (Test-AIControlPhotosLegacyInstalled)) {
-        $store = Get-Command store.exe -ErrorAction SilentlyContinue
-        if ($store) {
-            & $store.Source install 9NV2L4XVMCXM | Out-Null
-            $installExitCode = $LASTEXITCODE
-        } else {
-            $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
-            if (-not $winget) { throw 'Microsoft Store and WinGet are unavailable, so Photos Legacy cannot be installed.' }
-            & $winget.Source install --id 9NV2L4XVMCXM --source msstore --accept-package-agreements --accept-source-agreements --silent | Out-Null
-            $installExitCode = $LASTEXITCODE
-        }
-        if ($installExitCode -ne 0) {
-            throw "Photos Legacy installation failed with exit code $installExitCode."
-        }
-        $changed = 1
-    }
-    for ($attempt = 0; $attempt -lt 10 -and -not (Test-AIControlPhotosLegacyInstalled); $attempt++) {
-        Start-Sleep -Milliseconds 500
-    }
-    if (-not (Test-AIControlPhotosLegacyInstalled)) {
-        throw 'The installer finished, but Windows did not register the Photos Legacy app package.'
-    }
-    [pscustomobject]@{ status = 'installed'; operation = 'photos-legacy'; changed = $changed; requiresReboot = $false }
-}
-
-function Test-AIControlPhotosLegacyInstalled {
-    [bool](Get-AppxPackage -AllUsers -Name '*PhotosLegacy*' -ErrorAction SilentlyContinue)
-}
+# The command surface intentionally contains only maintained repair actions.

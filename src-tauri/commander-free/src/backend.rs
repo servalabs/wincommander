@@ -2340,9 +2340,6 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         // Storage - Encrypted Volumes
         "Get-BitLockerVolumes" => Some("vault/volumes"),
         "Get-EncryptionStatus" => Some("vault/volumes"),
-        "Test-EncryptionInstalled" => Some("vault/volumes"),
-        "Install-EncryptionEngine" => Some("vault/volumes"),
-        "List-EncryptionVolumes" => Some("vault/volumes"),
         "Mount-EncryptionVolume" => Some("vault/volumes"),
         "Dismount-EncryptionVolume" => Some("vault/volumes"),
         "Open-EncryptionVolume" => Some("vault/volumes"),

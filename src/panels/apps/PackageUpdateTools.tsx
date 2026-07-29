@@ -8,9 +8,8 @@ import type { ManagerInventory, PackageUpdateInventory } from "../../hooks/useBa
 import { executeBackendCommand, useBackend } from "../../hooks/useBackend";
 import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/packageOperationLock";
 
-// Managers that can be installed on demand from this screen, and the
-// Install-Dependency id each maps to — the exact same id EnginesSection's
-// EngineCard passes for these two engines.
+// Managers that can be installed deliberately from this screen. They are not
+// part of the engine readiness grid or its bulk-install action.
 const INSTALLABLE_MANAGERS: Record<string, string> = { chocolatey: "chocolatey", scoop: "scoop" };
 
 // Display labels for the manager ids the backend reports (package_updates.rs
@@ -92,9 +91,8 @@ export function PackageUpdateTools() {
 
 function PackageManager({ manager, selected, toggle: onToggle, onInstallManager, installingManagers }: { manager: ManagerInventory; selected: Set<string>; toggle: (id: string) => void; onInstallManager: (manager: string) => void; installingManagers: Set<string> }) {
   if (!manager.available) {
-    // Chocolatey/Scoop specifically get an actionable install button — the
-    // same Install-Dependency call EnginesSection's EngineCard uses for these
-    // two engines. Winget/npm keep the passive notice unchanged.
+    // Chocolatey/Scoop are optional package-manager choices. Winget/npm keep
+    // the passive notice because this panel cannot install them safely here.
     if (manager.manager in INSTALLABLE_MANAGERS) {
       const installing = installingManagers.has(manager.manager);
       return <Card><CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">

@@ -113,7 +113,6 @@ export const DECOY_INVENTORY: AppInventorySnapshot = {
   ],
   pendingUpdates: [],
   essentials: {
-    encryptionEngine: { installed: false, version: null },
     meshVpn:          { installed: false, version: null, connected: null },
     productivityEngine: { installed: false, running: null },
     winget:           { installed: true, version: "1.8.1911" },

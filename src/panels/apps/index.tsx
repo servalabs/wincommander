@@ -2,7 +2,6 @@
 import { useEffect } from "react";
 import AppInstallerPanel from "./components/AppInstallerPanel";
 import EnginesSection from "./components/EnginesSection";
-import ClassicWindowsApps from "./components/ClassicWindowsApps";
 import DebloatPanel from "./DebloatPanel";
 import { PackageUpdateTools } from "./PackageUpdateTools";
 import PanelHeader from "../../components/shared/PanelHeader";
@@ -14,6 +13,7 @@ declare global {
   interface Window {
     __pendingAppsPackageUpdates?: boolean;
     __pendingAppInstall?: string[];
+    __pendingAppsInstallView?: "updates";
   }
 }
 
@@ -23,7 +23,9 @@ export default function AppsPanel() {
   useEffect(() => {
     const scrollToUpdates = () => {
       window.__pendingAppsPackageUpdates = undefined;
-      setActiveTab("updates-tools");
+      window.__pendingAppsInstallView = "updates";
+      setActiveTab("install");
+      window.dispatchEvent(new Event("apps-open-updates-tab"));
       window.setTimeout(() => document.getElementById("package-updates")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
     };
     // Deep-link: an install request fired while the user is elsewhere must not
@@ -61,20 +63,9 @@ export default function AppsPanel() {
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="w-full flex-wrap justify-start">
             <TabsTrigger value="install">Install software</TabsTrigger>
-            <TabsTrigger value="updates-tools">Updates & Tools</TabsTrigger>
             <TabsTrigger value="debloat">Debloat</TabsTrigger>
           </TabsList>
-          <TabsContent value="install"><AppInstallerPanel /></TabsContent>
-          <TabsContent value="updates-tools">
-            <div className="flex flex-col gap-6">
-              <PackageUpdateTools />
-              <div className="flex flex-col gap-3">
-                <div className="text-xs font-semibold uppercase tracking-widest opacity-60">Engines</div>
-                <EnginesSection />
-              </div>
-              <ClassicWindowsApps />
-            </div>
-          </TabsContent>
+          <TabsContent value="install"><AppInstallerPanel updatesTools={<div className="flex flex-col gap-6"><PackageUpdateTools /><div className="flex flex-col gap-3"><div className="text-xs font-semibold uppercase tracking-widest opacity-60">Engines</div><EnginesSection /></div></div>} /></TabsContent>
           <TabsContent value="debloat"><DebloatPanel /></TabsContent>
         </Tabs>
       </div>

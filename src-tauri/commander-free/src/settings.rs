@@ -1766,8 +1766,6 @@ pub struct PendingUpdateEntry {
 #[serde(rename_all = "camelCase")]
 pub struct EssentialAppsStatus {
     #[serde(default)]
-    pub encryption_engine: EssentialAppInfo,
-    #[serde(default)]
     pub mesh_vpn: MeshVPNEssentialInfo,
     #[serde(default)]
     pub productivity_engine: ProductivityEssentialInfo,

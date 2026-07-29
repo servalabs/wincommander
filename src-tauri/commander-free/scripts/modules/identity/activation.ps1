@@ -31,10 +31,24 @@ function Get-OfficeStatus {
         if (-not $installed) {
             $officePaths = @(
                 "$env:ProgramFiles\Microsoft Office\root\Office16",
-                "$env:ProgramFiles(x86)\Microsoft Office\root\Office16"
+                "$env:ProgramFiles(x86)\Microsoft Office\root\Office16",
+                "$env:ProgramW6432\Microsoft Office\root\Office16"
             )
             foreach ($path in $officePaths) {
                 if (Test-Path $path) { $installed = $true; break }
+            }
+        }
+
+        # Microsoft Store's desktop Office package does not always create the
+        # Click-to-Run registry keys above. Count that package as installed,
+        # but do not treat the Office Hub or Copilot companion apps as Office.
+        if (-not $installed) {
+            $storeOffice = try { Get-AppxPackage -Name 'Microsoft.Office.Desktop' -AllUsers -ErrorAction Stop | Select-Object -First 1 } catch {
+                try { Get-AppxPackage -Name 'Microsoft.Office.Desktop' -ErrorAction Stop | Select-Object -First 1 } catch { $null }
+            }
+            if ($storeOffice) {
+                $installed = $true
+                $products += $storeOffice.Name
             }
         }
 

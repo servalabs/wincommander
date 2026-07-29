@@ -29,7 +29,6 @@ const gateCardTransition = {
 
 /** Fallback panel → dependency ID mapping used when Get-DependencyStatus hasn't resolved yet */
 const PANEL_DEP_ID: Partial<Record<string, string>> = {
-    vault:          'encryptionEngine',
     productivity:   'productivityEngine',
     'search-files': 'instantSearch',
     'private-mesh': 'meshVpn',
@@ -39,7 +38,6 @@ const PANEL_DEP_ID: Partial<Record<string, string>> = {
 
 /** Fallback panel → dependency display name */
 const PANEL_DEP_NAME: Partial<Record<string, string>> = {
-    vault:          'Encryption Engine',
     productivity:   'Productivity Engine',
     'search-files': 'Instant Search Engine',
     'private-mesh': 'Private Mesh VPN',
@@ -55,14 +53,6 @@ const FEATURE_PREVIEWS: Record<string, { tagline: string; features: string[] }> 
             'Which apps you use and for how long',
             'Deep work vs. distraction patterns',
             'Hour-by-hour activity timeline',
-        ],
-    },
-    vault: {
-        tagline: 'Lock your sensitive files behind a password.',
-        features: [
-            'Military-grade encryption for your files',
-            'Files look normal when locked — nobody knows they exist',
-            'Works on any Windows machine',
         ],
     },
 };

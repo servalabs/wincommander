@@ -1388,7 +1388,6 @@ export interface PendingUpdateEntry {
 }
 
 export interface EssentialAppsStatus {
-  encryptionEngine: EssentialAppInfo;
   meshVpn: MeshVPNEssentialInfo;
   productivityEngine: ProductivityEssentialInfo;
   winget: EssentialAppInfo;

@@ -44,7 +44,7 @@ import "../privacy/index.css";
 const DEFAULT_COVER_NAME = "";
 
 const BACKEND_ALL_APP_IDS = [
-    "encryptionEngine", "meshVpn", "productivityEngine",
+    "meshVpn", "productivityEngine",
     "instantSearch", "systemCleaner", "unigetui", "ramDiskEngine",
 ];
 const BACKEND_EXE_NAMES = [

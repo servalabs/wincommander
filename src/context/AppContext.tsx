@@ -27,7 +27,6 @@ import { waitForSoftTimeout } from '../lib/softTimeout';
 
 interface AppState {
     systemInfo: SystemInfo | null;
-    encryptionInstalled: boolean | null;
     meshInstalled: boolean | null;
     meshStatus: MeshVPNStatus | null;
     defenderStatus: DefenderStatus | null;
@@ -155,7 +154,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         getSystemInfo,
         getDriveSmartHealth,
         getStartupStatus,
-        testEncryptionInstalled,
         getMeshVPNStatus,
         getDefenderStatus,
         getUpdateStatus,
@@ -169,7 +167,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Data State
     const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
-    const [encryptionInstalled, setEncryptionInstalled] = useState<boolean | null>(null);
     const [meshInstalled, setMeshInstalled] = useState<boolean | null>(null);
     const [meshStatus, setMeshStatus] = useState<MeshVPNStatus | null>(null);
     const [defenderStatus, setDefenderStatus] = useState<DefenderStatus | null>(null);
@@ -973,13 +970,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     }, [getAppBranding]);
 
-    const initInstallStatus = useCallback(async () => {
-        const enc = await testEncryptionInstalled();
-        if (enc.success && enc.data) {
-            setEncryptionInstalled(!!(enc.data as EncryptionStatus).installed);
-        }
-    }, [testEncryptionInstalled]);
-
     // Guard: prevent double-execution of the heavy system probe on React re-mount
     const probeRanRef = useRef(false);
 
@@ -1188,7 +1178,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const dependencyStep = getStartupStaggerStep("dependencies");
             scheduleAfter(dependencyStep.delayMs, () => {
                 void Promise.allSettled([
-                    initInstallStatus(),
                     refreshBranding(),
                     refreshDependencies(true),
                 ]);
@@ -1245,7 +1234,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 idleCallbacks.forEach((handle) => win.cancelIdleCallback!(handle));
             }
         };
-    }, [initializeApp, initInstallStatus, initSettings, refreshMesh, runAppInventoryScan, refreshDependencies, refreshBranding, getSystemInfo, mergeDiskHealth, persistProbeToSettings]);
+    }, [initializeApp, initSettings, refreshMesh, runAppInventoryScan, refreshDependencies, refreshBranding, getSystemInfo, mergeDiskHealth, persistProbeToSettings]);
 
     // Periodic app inventory refresh — keeps the radar's "APP UPDATES PENDING"
     // count and the Update All Apps button current without requiring the user
@@ -1261,7 +1250,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const ctx = useMemo(() => ({
         systemInfo,
-        encryptionInstalled,
         meshInstalled,
         meshStatus,
         defenderStatus,
@@ -1297,7 +1285,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshDriveHealth,
     }), [
         systemInfo,
-        encryptionInstalled,
         meshInstalled,
         meshStatus,
         defenderStatus,

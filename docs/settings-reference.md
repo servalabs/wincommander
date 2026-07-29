@@ -641,13 +641,12 @@ Commands: `Get-MeshVPNStatus`, `Start-MeshVPNLogin`, `Set-MeshVPNConfig`,
 | LAN Access     | `--allow-lan-access`     | boolean | —       |
 | Advertise Node | `--advertise-exit-node`  | boolean | false   |
 
-### Vault (VeraCrypt)
+### Vault encrypted volumes
 
 Vault preferences persist under `app.vault`. Commands:
-`Test-EncryptionInstalled`, `Install-EncryptionEngine`,
 `Mount-EncryptionVolume`, `Dismount-EncryptionVolume`,
 `Dismount-AllEncryptionVolumes`, `Clear-EncryptionKeys` (**evicts keys by dismounting all volumes — NOT crypto-erase**),
-`List-EncryptionVolumes`, `Open-EncryptionVolume`, `Get-EncryptionStatus`.
+`Open-EncryptionVolume`, `Get-EncryptionStatus`.
 
 Volume management: `Create-EncryptionVolume`, `Create-HiddenVolume`,
 `Get-VolumeInfo`, `Get-SystemEncryptionStatus`, `Get-EncryptionPartitions`,

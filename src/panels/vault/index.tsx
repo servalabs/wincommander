@@ -27,7 +27,6 @@ function VaultPanel() {
   const { encryptionStatus, refreshVault } = useAppState();
 
   const volumes = encryptionStatus?.volumes || [];
-  const isEncryptionEngineInstalled = encryptionStatus?.installed ?? true;
 
   return (
     <div className="vault-panel">
@@ -41,7 +40,6 @@ function VaultPanel() {
           <div className="vault-volumes-ramdisks-grid">
             <EncryptedVolumesTab
               volumes={volumes}
-              isEncryptionEngineInstalled={isEncryptionEngineInstalled}
               refreshVault={refreshVault}
             />
             <RamDisksSection />
@@ -54,7 +52,6 @@ function VaultPanel() {
 
 interface EncryptedVolumesTabProps {
   volumes: VaultVolume[];
-  isEncryptionEngineInstalled: boolean;
   refreshVault: (silent?: boolean) => Promise<void>;
 }
 
@@ -62,7 +59,7 @@ interface EncryptedVolumesTabProps {
 // volumes table) plus the Mount Encrypted Volume dialog — its state/handlers
 // used to live on the whole panel; they now live here with the tab that
 // owns them.
-function EncryptedVolumesTab({ volumes, isEncryptionEngineInstalled, refreshVault }: EncryptedVolumesTabProps) {
+function EncryptedVolumesTab({ volumes, refreshVault }: EncryptedVolumesTabProps) {
   const { theme } = useTheme();
 
   const [mountDialogOpen, setMountDialogOpen] = useState(false);
@@ -216,7 +213,7 @@ function EncryptedVolumesTab({ volumes, isEncryptionEngineInstalled, refreshVaul
                 <i />{volumes.length} mounted
               </span>
             )}
-            <SystemEncryptionSection installed={isEncryptionEngineInstalled} compact />
+            <SystemEncryptionSection compact />
             <Tooltip content="Refresh status" position="top">
               <Button
                 icon="refresh"

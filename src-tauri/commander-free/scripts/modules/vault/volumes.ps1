@@ -1,10 +1,6 @@
 # ENCRYPTED VOL MODULE (VERACRYPT)
 # ============================================================================
 
-function Test-EncryptionInstalled {
-    return $null -ne (Get-VeraCryptExe)
-}
-
 function Get-VeraCryptExe {
     $candidates = @(
         "${env:ProgramW6432}\VeraCrypt\VeraCrypt.exe",
@@ -13,11 +9,6 @@ function Get-VeraCryptExe {
     ) | Where-Object { $_ -and $_.Trim() -ne '' }
     foreach ($c in $candidates) { if (Test-Path -LiteralPath $c) { return $c } }
     return $null
-}
-
-function Install-EncryptionEngine {
-    winget install --id IDRIX.VeraCrypt --exact --silent --accept-source-agreements --accept-package-agreements
-    @{ status = 'installing' }
 }
 
 function Mount-EncryptionVolume {
@@ -329,11 +320,6 @@ function Open-EncryptionVolume {
     else {
         @{ status = 'error'; error = "Drive ${cleanLetter}: not found" }
     }
-}
-
-function List-EncryptionVolumes {
-    $status = Get-EncryptionStatus
-    @{ volumes = $status.volumes }
 }
 
 function Create-EncryptionVolume {

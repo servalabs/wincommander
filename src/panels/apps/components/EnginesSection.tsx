@@ -7,7 +7,7 @@ import { showSuccess, showError } from "../../../utils/toast";
 import type { DependencyInfo } from "../../../hooks/useDependencies";
 
 const CRITICAL_ENGINES = new Set([
-  "ramDiskEngine", "instantSearch", "encryptionEngine",
+  "ramDiskEngine", "instantSearch",
   "diskHealthEngine", "systemCleaner", "winget", "powershell7",
 ]);
 const OPTIONAL_ENGINES = new Set([
@@ -18,7 +18,6 @@ const OPTIONAL_ENGINES = new Set([
 const ENGINE_DESCRIPTIONS: Record<string, string> = {
   ramDiskEngine:       "RAM-backed temp disk for fast ephemeral ops",
   instantSearch:       "Lightning-fast file-search indexing",
-  encryptionEngine:    "On-the-fly drive & vault encryption",
   diskHealthEngine:    "S.M.A.R.T. disk health monitoring",
   systemCleaner:       "Deep junk removal beyond Disk Cleanup",
   winget:              "Windows Package Manager for app installs",
@@ -38,7 +37,6 @@ const ENGINE_DESCRIPTIONS: Record<string, string> = {
 const ENGINE_ICONS: Record<string, string> = {
   ramDiskEngine:      "database",
   instantSearch:      "search",
-  encryptionEngine:   "lock",
   diskHealthEngine:   "pulse",
   systemCleaner:      "eraser",
   winget:             "cube",
@@ -130,7 +128,13 @@ function EngineCard({ dep, importance, isBusy, onInstall }: CardProps) {
 // just another optional engine card here reads as redundant/circular, so it's
 // excluded from this grid. It's still a real dependency elsewhere (DependencyGate,
 // Install-Dependency, etc.) — only this display is filtered.
-const HIDDEN_FROM_ENGINES_GRID = new Set(["winget"]);
+const HIDDEN_FROM_ENGINES_GRID = new Set([
+  "winget",
+  // Chocolatey and Scoop remain available as deliberate, manual choices in
+  // Package updates. They are never part of the engine readiness surface.
+  "chocolatey",
+  "scoop",
+]);
 
 export default function EnginesSection() {
   const { dependencyStatus: allDependencyStatus, forceRefreshDeps, runAppInventoryScan } = useAppState();
