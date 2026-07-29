@@ -7,11 +7,13 @@ interface AppIconProps {
   category: string;
   iconData?: string | null;
   size?: number;
+  /** Prefer an installed app's original local icon over a bundled brand asset. */
+  preferNative?: boolean;
 }
 
 // Tries each bundled brand asset in order; if all fail to load, renders a
 // Blueprint icon picked from the app's category.
-export default function AppIcon({ id, category, iconData, size = 28 }: AppIconProps) {
+export default function AppIcon({ id, category, iconData, size = 28, preferNative = false }: AppIconProps) {
   const [attempt, setAttempt] = useState(0);
   const candidates = useMemo(() => brandIconCandidates(id), [id]);
 
@@ -19,7 +21,7 @@ export default function AppIcon({ id, category, iconData, size = 28 }: AppIconPr
     setAttempt(0);
   }, [id]);
 
-  // Curated brand SVG/PNG beats extracted EXE icon — Apple bundles and
+  // Curated brand SVG/PNG normally beats extracted EXE icon — Apple bundles and
   // similar components embed generic Windows icons in their EXEs, so we
   // always try the static asset first. iconData is the fallback for apps
   // with no curated file (TeamViewer, ExifTool, etc.).
@@ -27,6 +29,20 @@ export default function AppIcon({ id, category, iconData, size = 28 }: AppIconPr
   // loading="eager" is intentional: lazy defers the request until the img
   // enters the viewport, so onError never fires for off-screen cards and
   // the chain to iconData never completes. Icons are 28px — eager is fine.
+  if (preferNative && iconData) {
+    return (
+      <img
+        key={`${id}-native`}
+        src={iconData}
+        alt=""
+        className="app-icon-img"
+        width={size}
+        height={size}
+        loading="eager"
+      />
+    );
+  }
+
   if (attempt < candidates.length) {
     return (
       <img

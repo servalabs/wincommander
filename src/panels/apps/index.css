@@ -215,8 +215,8 @@
 .debloat-chip {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 7px;
+  gap: 8px;
+  padding: 5px 8px;
   border: 1px solid var(--color-border);
   border-radius: 6px;
   background: var(--color-bg-secondary);
@@ -232,6 +232,8 @@
 .debloat-chip .app-icon-img,
 .debloat-chip .app-icon-fallback {
   flex-shrink: 0;
+  border-radius: 4px;
+  object-fit: contain;
 }
 
 .debloat-chip.is-selected {

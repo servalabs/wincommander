@@ -82,6 +82,123 @@ function Split-ListParam {
     return $stringValue -split '\s*,\s*' | Where-Object { $_ -ne '' }
 }
 
+# ── Local application-icon resolution ─────────────────────────────────────
+# Debloat must show the icon Windows actually associates with an installed
+# package/program, without using a network icon service.  These helpers are in
+# core because the AppX and BCU inventory modules run independently.
+function Get-WcIconCachePath {
+    param([Parameter(Mandatory = $true)][string]$Key)
+    $base = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { [System.IO.Path]::GetTempPath() }
+    $dir = Join-Path $base 'WinCommander\icon-cache'
+    New-Item -ItemType Directory -Force -Path $dir -ErrorAction SilentlyContinue | Out-Null
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Key)
+        $digest = ($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join ''
+        return (Join-Path $dir "$digest.png")
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-WcImageDataUri {
+    param([Parameter(Mandatory = $true)][string]$ImagePath)
+    try {
+        if (-not (Test-Path -LiteralPath $ImagePath -PathType Leaf -ErrorAction SilentlyContinue)) { return $null }
+        $mime = switch ([System.IO.Path]::GetExtension($ImagePath).ToLowerInvariant()) {
+            '.png'  { 'image/png' }
+            '.jpg'  { 'image/jpeg' }
+            '.jpeg' { 'image/jpeg' }
+            '.gif'  { 'image/gif' }
+            '.webp' { 'image/webp' }
+            default { $null }
+        }
+        if (-not $mime) { return $null }
+        $bytes = [System.IO.File]::ReadAllBytes($ImagePath)
+        return "data:$mime;base64,$([Convert]::ToBase64String($bytes))"
+    }
+    catch { return $null }
+}
+
+function Get-WcExecutableIconData {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [string]$CacheKey = $SourcePath
+    )
+    try {
+        $path = [Environment]::ExpandEnvironmentVariables($SourcePath.Trim())
+        if ($path.StartsWith([string][char]34)) {
+            $end = $path.IndexOf([char]34, 1)
+            if ($end -gt 1) { $path = $path.Substring(1, $end - 1) }
+        }
+        else {
+            $path = $path -replace ',\s*-?\d+\s*$', ''
+        }
+        $path = $path.Trim([char]34, [char]32)
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf -ErrorAction SilentlyContinue)) { return $null }
+
+        # Some programs register a PNG directly; preserve that exact source.
+        $image = Get-WcImageDataUri -ImagePath $path
+        if ($image) { return $image }
+
+        $cache = Get-WcIconCachePath -Key $CacheKey
+        if (Test-Path -LiteralPath $cache -PathType Leaf -ErrorAction SilentlyContinue) {
+            return Get-WcImageDataUri -ImagePath $cache
+        }
+
+        Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+        $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($path)
+        if ($null -eq $icon -and [System.IO.Path]::GetExtension($path).ToLowerInvariant() -eq '.ico') {
+            $icon = New-Object System.Drawing.Icon($path)
+        }
+        if ($null -eq $icon) { return $null }
+        try {
+            $bitmap = $icon.ToBitmap()
+            try { $bitmap.Save($cache, [System.Drawing.Imaging.ImageFormat]::Png) }
+            finally { $bitmap.Dispose() }
+        }
+        finally { $icon.Dispose() }
+        return Get-WcImageDataUri -ImagePath $cache
+    }
+    catch { return $null }
+}
+
+function Get-WcAppxIconData {
+    param([Parameter(Mandatory = $true)]$Package)
+    try {
+        $installLocation = [string]$Package.InstallLocation
+        if ([string]::IsNullOrWhiteSpace($installLocation) -or -not (Test-Path -LiteralPath $installLocation -PathType Container -ErrorAction SilentlyContinue)) { return $null }
+        $manifestPath = Join-Path $installLocation 'AppxManifest.xml'
+        if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf -ErrorAction SilentlyContinue)) { return $null }
+        [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop
+        $visual = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Applications']/*[local-name()='Application']/*[local-name()='VisualElements']")
+        if (-not $visual) { return $null }
+        $logo = @('Square44x44Logo', 'Square150x150Logo', 'Logo') |
+            ForEach-Object { $visual.GetAttribute($_) } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object -First 1
+        if (-not $logo) { return $null }
+
+        $relative = $logo -replace '/', '\\'
+        $direct = Join-Path $installLocation $relative.TrimStart('\\')
+        $selected = if (Test-Path -LiteralPath $direct -PathType Leaf -ErrorAction SilentlyContinue) { Get-Item -LiteralPath $direct } else { $null }
+        if (-not $selected) {
+            $dir = Split-Path -Parent $direct
+            $stem = [System.IO.Path]::GetFileNameWithoutExtension($direct)
+            if (Test-Path -LiteralPath $dir -PathType Container -ErrorAction SilentlyContinue) {
+                $selected = Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.BaseName -like "$stem*" -and $_.Extension -match '^\.(png|jpg|jpeg|gif|webp)$' } |
+                    Sort-Object @{ Expression = { if ($_.Name -match 'scale-200') { 0 } elseif ($_.Name -match 'scale-150') { 1 } else { 2 } } }, Length -Descending |
+                    Select-Object -First 1
+            }
+        }
+        if (-not $selected) { return $null }
+        return Get-WcImageDataUri -ImagePath $selected.FullName
+    }
+    catch { return $null }
+}
+
 function Resolve-DataPath {
     param([string]$RelativePath)
     

@@ -1092,6 +1092,7 @@ export interface BcuApplication {
   aboutUrl: string;
   comment: string;
   displayIcon: string;
+  iconData?: string | null;
 }
 
 export interface BcuApplicationListResult {
@@ -2277,7 +2278,8 @@ export function useBackend() {
     // Apps: Teams & APPX Debloat
     removeTeams: () => execute("Remove-MicrosoftTeams"),
     getTeamsStatus: () => execute<{ installed: boolean }>("Get-TeamsStatus"),
-    getInstalledAppxInventory: () => execute<{ apps: { name: string; packageFullName: string; isProvisioned: boolean }[] }>("Get-InstalledAppxInventory"),
+    getInstalledAppxInventory: () => execute<{ apps: { name: string; packageFullName: string; isProvisioned: boolean; iconData?: string | null }[] }>("Get-InstalledAppxInventory"),
+    getDebloatWindowsIconData: () => execute<{ icons: Record<string, string | null> }>("Get-DebloatWindowsIconData"),
     removeAppxByName: (name: string) => execute("Remove-AppxByName", { Name: name }),
     restoreAppxByName: (name: string) => execute("Restore-AppxByName", { Name: name }),
     setAppxDeprovisioned: (name: string) => execute("Set-AppxDeprovisioned", { Name: name }),

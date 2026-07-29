@@ -121,6 +121,8 @@ function Get-BcuApplicationList {
                 if ($e.EstimatedSize -and $e.EstimatedSize -ne "0") {
                     try { $sizeKB = [long]$e.EstimatedSize } catch {}
                 }
+                $displayIcon = if ($e.DisplayIcon) { [string]$e.DisplayIcon } else { "" }
+                $iconCacheKey = "bcu:$($e.RegistryKeyName):$($e.DisplayName):$displayIcon"
 
                 $apps += @{
                     displayName       = if ($e.DisplayName)          { $e.DisplayName }          else { "Unknown" }
@@ -146,7 +148,8 @@ function Get-BcuApplicationList {
                     registryPath      = if ($e.RegistryPath)     { $e.RegistryPath }     else { "" }
                     aboutUrl          = if ($e.AboutUrl)          { $e.AboutUrl }          else { "" }
                     comment           = if ($e.Comment)           { $e.Comment }           else { "" }
-                    displayIcon       = if ($e.DisplayIcon)       { $e.DisplayIcon }       else { "" }
+                    displayIcon       = $displayIcon
+                    iconData          = if ($displayIcon) { Get-WcExecutableIconData -SourcePath $displayIcon -CacheKey $iconCacheKey } else { $null }
                 }
             }
         }

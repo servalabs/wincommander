@@ -21,7 +21,7 @@ export function useDebloatInventory(): UseDebloatInventoryResult {
     getInstalledAppxInventory, removeAppxByName,
     testBcuInstalled, installBcu: installBcuCmd,
     getBcuApplicationList, bcuQuietUninstallSingle, bcuLoudUninstallSingle,
-    testEdgeInstalled, testOneDriveInstalled, getTeamsStatus,
+    testEdgeInstalled, testOneDriveInstalled, getTeamsStatus, getDebloatWindowsIconData,
     removeEdge, removeOneDrive, removeTeams, removeCopilotAIComponents,
   } = useBackend();
 
@@ -51,13 +51,14 @@ export function useDebloatInventory(): UseDebloatInventoryResult {
           : ((res.data as any)?.apps ?? []);
         if (res.success) {
           const normalized = rawList
-            .map((a: any) => ({ name: (a.name ?? a.Name ?? "") as string }))
+            .map((a: any) => ({ name: (a.name ?? a.Name ?? "") as string, iconData: (a.iconData ?? a.IconData ?? null) as string | null }))
             .filter(a => a.name && !isSystemCritical(a.name));
           setStoreItems(normalized.map(a => ({
             id: a.name,
             label: getFriendlyName(a.name),
             source: "store" as const,
             category: getCategoryForStoreId(a.name),
+            iconData: a.iconData,
             recommended: RECOMMENDED_IDS.has(a.name),
             remove: async () => {
               const r = await removeAppxByName(a.name);
@@ -106,6 +107,7 @@ export function useDebloatInventory(): UseDebloatInventoryResult {
                 source: "program" as const,
                 category: "Programs",
                 sizeKB: a.estimatedSizeKB,
+                iconData: a.iconData ?? null,
                 recommended: false,
                 remove: async () => {
                   const r = a.canQuietUninstall
@@ -131,16 +133,19 @@ export function useDebloatInventory(): UseDebloatInventoryResult {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [edgeRes, odRes, teamsRes] = await Promise.all([
+      const [edgeRes, odRes, teamsRes, nativeIconsRes] = await Promise.all([
         testEdgeInstalled(),
         testOneDriveInstalled(),
         getTeamsStatus(),
+        getDebloatWindowsIconData(),
       ]);
       if (cancelled) return;
+      const nativeIcons = nativeIconsRes.success ? nativeIconsRes.data?.icons ?? {} : {};
       const items: DebloatItem[] = [];
       if (edgeRes.data?.installed) {
         items.push({
           id: "edge", label: "Microsoft Edge", source: "windows", category: "Windows extras",
+          iconData: nativeIcons.edge ?? null,
           recommended: true, riskNote: "Removes browser from Windows Sandbox",
           remove: async () => { const r = await removeEdge(); return { success: r.success, error: r.error }; },
         });
@@ -148,6 +153,7 @@ export function useDebloatInventory(): UseDebloatInventoryResult {
       if (odRes.data?.installed) {
         items.push({
           id: "onedrive", label: "OneDrive", source: "windows", category: "Windows extras",
+          iconData: nativeIcons.onedrive ?? null,
           recommended: true, riskNote: "Disables OneDrive sync; data not deleted",
           remove: async () => { const r = await removeOneDrive(); return { success: r.success, error: r.error }; },
         });
@@ -155,6 +161,7 @@ export function useDebloatInventory(): UseDebloatInventoryResult {
       if (teamsRes.data?.installed) {
         items.push({
           id: "teams", label: "Microsoft Teams", source: "windows", category: "Windows extras",
+          iconData: nativeIcons.teams ?? null,
           recommended: true,
           remove: async () => { const r = await removeTeams(); return { success: r.success, error: r.error }; },
         });
@@ -164,6 +171,7 @@ export function useDebloatInventory(): UseDebloatInventoryResult {
       if (!copilotRemoved) {
         items.push({
           id: "copilot-ai", label: "Copilot AI Components", source: "windows", category: "Windows extras",
+          iconData: nativeIcons["copilot-ai"] ?? null,
           recommended: true,
           remove: async () => {
             const r = await removeCopilotAIComponents();

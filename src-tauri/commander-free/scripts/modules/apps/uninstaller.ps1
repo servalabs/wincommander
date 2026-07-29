@@ -93,6 +93,44 @@ function Test-OneDriveInstalled {
     return @{ installed = $null -ne $oneDriveSetup }
 }
 
+# Returns native, locally installed icons for the integrated Windows-extra
+# actions. These are deliberately resolved from the executable/AppX package,
+# not downloaded or guessed from a public icon service.
+function Get-DebloatWindowsIconData {
+    try {
+        $icons = @{}
+        $edgeExe = @(
+            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+            "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
+        ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf -ErrorAction SilentlyContinue) } | Select-Object -First 1
+        if ($edgeExe) { $icons.edge = Get-WcExecutableIconData -SourcePath $edgeExe -CacheKey 'debloat-edge' }
+
+        $oneDriveExe = @(
+            "$env:LOCALAPPDATA\Microsoft\OneDrive\OneDrive.exe",
+            "$env:ProgramFiles\Microsoft OneDrive\OneDrive.exe"
+        ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf -ErrorAction SilentlyContinue) } | Select-Object -First 1
+        if ($oneDriveExe) { $icons.onedrive = Get-WcExecutableIconData -SourcePath $oneDriveExe -CacheKey 'debloat-onedrive' }
+
+        $teamsPackage = @(
+            Get-AppxPackage -Name 'MSTeams' -ErrorAction SilentlyContinue
+            Get-AppxPackage -Name 'MicrosoftTeams' -ErrorAction SilentlyContinue
+            Get-AppxPackage -Name 'MSTeams' -AllUsers -ErrorAction SilentlyContinue
+            Get-AppxPackage -Name 'MicrosoftTeams' -AllUsers -ErrorAction SilentlyContinue
+        ) | Where-Object { $_ -and $_.InstallLocation } | Select-Object -First 1
+        if ($teamsPackage) { $icons.teams = Get-WcAppxIconData -Package $teamsPackage }
+
+        $copilotPackage = @(
+            Get-AppxPackage -Name 'Microsoft.Copilot' -ErrorAction SilentlyContinue
+            Get-AppxPackage -Name 'Microsoft.Windows.Copilot' -ErrorAction SilentlyContinue
+            Get-AppxPackage -Name '*Copilot*' -ErrorAction SilentlyContinue
+        ) | Where-Object { $_ -and $_.InstallLocation } | Select-Object -First 1
+        if ($copilotPackage) { $icons.'copilot-ai' = Get-WcAppxIconData -Package $copilotPackage }
+
+        return @{ icons = $icons }
+    }
+    catch { return @{ icons = @{} } }
+}
+
 # ============================================================================
 # NEW: Microsoft Teams Removal
 # ============================================================================
@@ -199,6 +237,7 @@ function Get-InstalledAppxInventory {
                 version         = [string]$_.Version
                 publisher       = $_.Publisher
                 isProvisioned   = $provisioned.ContainsKey($_.Name)
+                iconData        = Get-WcAppxIconData -Package $_
             }
         })
 
@@ -211,6 +250,7 @@ function Get-InstalledAppxInventory {
                 version         = [string]$pkg.Version
                 publisher       = $pkg.PublisherId
                 isProvisioned   = $true
+                iconData        = $null
             }
         }
         return @{ apps = $apps }

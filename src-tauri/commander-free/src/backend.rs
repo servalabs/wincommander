@@ -1903,6 +1903,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         // remove, restore, and deprovision together in the local uninstaller
         // module so the panel never crosses the Pro sidecar boundary.
         "Get-InstalledAppxInventory" => Some("apps/uninstaller"),
+        "Get-DebloatWindowsIconData" => Some("apps/uninstaller"),
         "Remove-AppxByName" => Some("apps/uninstaller"),
         "Restore-AppxByName" => Some("apps/uninstaller"),
         "Set-AppxDeprovisioned" => Some("apps/uninstaller"),

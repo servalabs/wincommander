@@ -60,7 +60,7 @@ function DebloatChip({ item, selected, onToggle, removing }: {
           the only visual identity (a generic 2-3 letter text chip). Reuses
           the same resolver the app catalog uses; falls back to a category
           glyph when no bundled asset matches. */}
-      <AppIcon id={item.id} category={item.category} iconData={null} size={16} />
+      <AppIcon id={item.id} category={item.category} iconData={item.iconData} size={22} preferNative />
       <span className="debloat-chip-name" title={item.id}>{item.label}</span>
       {item.riskNote && (
         <span title={item.riskNote} style={{ flexShrink: 0, cursor: "help" }}>
