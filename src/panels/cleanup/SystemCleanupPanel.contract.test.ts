@@ -90,8 +90,10 @@ describe("System Cleanup panel reconstruction contracts", () => {
   test("the panel builds five tabs with Low impact as the default", async () => {
     const panel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
 
-    expect(panel).toContain('useCleanupSessionState("cleanup.active-tab", "low-impact")');
-    expect(panel).toContain("<Tabs value={activeTab} onValueChange={setActiveTab}>");
+    // The concrete tab type can be supplied as a generic; the persisted key
+    // and default are the behavioural contract.
+    expect(panel).toMatch(/useCleanupSessionState(?:<[^>]+>)?\("cleanup\.active-tab", "low-impact"\)/);
+    expect(panel).toMatch(/<Tabs value=\{activeTab\} onValueChange=\{\(value\) => setActiveTab\(/);
     const triggerOrder = ['value="low-impact"', 'value="history-cache"', 'value="rebuilds-apps-connectivity"', 'value="data-accounts-recovery"', 'value="actions-monitoring"'];
     let cursor = -1;
     for (const trigger of triggerOrder) {
@@ -174,6 +176,28 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(panel).toContain("migrationEnabled: hasPaid && proInstalled && !isInvestigator");
     expect(panel).toContain("schedulesEnabled={hasPaid && !isInvestigator}");
     expect(panel).toContain("onRequestScheduleAccess");
+  });
+
+  test("clean compact cards retain their supported auto-clean control", async () => {
+    const traceCard = await read("src/components/cleanup/CleanupTraceCard.tsx");
+
+    const compactCleanStart = traceCard.indexOf("{compact ? (");
+    const compactCleanEnd = traceCard.indexOf(") : (", compactCleanStart);
+    const compactCleanBranch = traceCard.slice(compactCleanStart, compactCleanEnd);
+
+    expect(compactCleanBranch).toContain("{scheduleControl}");
+    expect(traceCard).toContain("showScheduler && !isActionOnly");
+  });
+
+  test("Scan All tracks each tab batch independently", async () => {
+    const scan = await read("src/panels/cleanup/useCleanupScan.ts");
+    const panel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
+
+    expect(scan).toContain("_scanningBatchIds");
+    expect(scan).toContain("getCleanupScanBatchId");
+    expect(scan).toContain("isCategoryBatchScanning");
+    expect(panel).toContain("const isScanningThisTab = isCategoryBatchScanning(categories);");
+    expect(panel).toContain("disabled={isScanningThisTab || categories.length === 0}");
   });
 
   test("the scheduler is a stable non-Radix control with runtime test hooks", async () => {

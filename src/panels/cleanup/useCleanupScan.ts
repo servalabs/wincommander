@@ -22,7 +22,11 @@ let _cleanupCache: Record<string, CardData> = {};
 // an already-scanned account shows its traces instantly instead of re-running
 // the slow offline-hive scan (14-22s) every time. Persists across remounts.
 let _otherUserCache: Record<string, Record<string, CardData>> = {};
-let _scanningTag: 'standard' | 'dfir' | null = null;
+// Each visible cleanup tab owns a distinct batch. Keeping these IDs (rather
+// than a single global "loading all" flag) means an operator can start a scan
+// in one tier, move to another tier, and scan that tier without cancelling or
+// blocking the first one.
+let _scanningBatchIds = new Set<string>();
 
 export function getCleanupScanConcurrency(logicalCores?: number): number {
     const detectedCores = logicalCores ?? (
@@ -74,7 +78,15 @@ function isRealVisibleProfile(profile: { name?: string; displayName?: string; pa
 // Subscribers: the mounted component registers a setter so module-level
 // code can push updates into React state even from background scans.
 let _cacheSubscriber: ((cache: Record<string, CardData>) => void) | null = null;
-let _scanTagSubscriber: ((tag: 'standard' | 'dfir' | null) => void) | null = null;
+let _scanBatchSubscriber: ((batchIds: Set<string>) => void) | null = null;
+
+export function getCleanupScanBatchId(categories: Pick<CleanupCategory, 'id'>[]): string {
+    return categories.map(category => category.id).sort().join('|');
+}
+
+function publishScanningBatches() {
+    _scanBatchSubscriber?.(new Set(_scanningBatchIds));
+}
 
 export function updateCacheEntry(id: string, data: CardData) {
     _cleanupCache[id] = data;
@@ -448,7 +460,9 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         return map;
     };
     const [cardDataMap, setCardDataMap] = useState<Record<string, CardData>>(buildInitial);
-    const [loadingAll, setLoadingAll] = useState<'standard' | 'dfir' | null>(_scanningTag);
+    const [scanningBatchIds, setScanningBatchIds] = useState<Set<string>>(
+        () => new Set(_scanningBatchIds),
+    );
     const orderedScanCategories = useMemo(() => {
         const slowIds = new Set([
             'shellBags', 'walFiles',
@@ -489,13 +503,13 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // a single card (e.g., shellBags) triggered a cache update.
     useEffect(() => {
         _cacheSubscriber = (cache) => setCardDataMap(prev => ({ ...prev, ...cache }));
-        _scanTagSubscriber = (tag) => setLoadingAll(tag);
+        _scanBatchSubscriber = (batchIds) => setScanningBatchIds(batchIds);
         // Sync current state on mount
         if (Object.keys(_cleanupCache).length > 0) {
             setCardDataMap(prev => ({ ...prev, ..._cleanupCache }));
         }
-        setLoadingAll(_scanningTag);
-        return () => { _cacheSubscriber = null; _scanTagSubscriber = null; };
+        setScanningBatchIds(new Set(_scanningBatchIds));
+        return () => { _cacheSubscriber = null; _scanBatchSubscriber = null; };
     }, []);
 
     // Map of category IDs → backend getter functions (using already-destructured values)
@@ -634,8 +648,12 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // times until the queue is empty. If the list is shorter than the computed
     // worker count, every item starts at once.
     const loadCategoryBatch = async (cats: CleanupCategory[], tag: 'standard' | 'dfir') => {
-        _scanningTag = tag;
-        _scanTagSubscriber?.(tag);
+        const batchId = getCleanupScanBatchId(cats);
+        // A tab cannot start the same batch twice, but independent tabs can
+        // continue scanning in parallel as their category sets are disjoint.
+        if (!batchId || _scanningBatchIds.has(batchId)) return;
+        _scanningBatchIds.add(batchId);
+        publishScanningBatches();
         const concurrency = getCleanupScanConcurrency();
         const queue = [...cats];
         const workers: Promise<void>[] = [];
@@ -647,15 +665,21 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         for (let i = 0; i < Math.min(concurrency, cats.length); i++) {
             workers.push(spawn());
         }
-        await Promise.allSettled(workers);
-        _scanningTag = null;
-        _scanTagSubscriber?.(null);
-        // Lets the "Scan All" tour step (do-it-yourself) unlock its Next
-        // button once the real scan actually finishes — see tour-cleanup.
-        if (tag === 'standard') {
-            window.dispatchEvent(new CustomEvent("tour-cleanup-scan-done"));
+        try {
+            await Promise.allSettled(workers);
+        } finally {
+            _scanningBatchIds.delete(batchId);
+            publishScanningBatches();
+            // Lets the "Scan All" tour step (do-it-yourself) unlock its Next
+            // button once the real scan actually finishes — see tour-cleanup.
+            if (tag === 'standard') {
+                window.dispatchEvent(new CustomEvent("tour-cleanup-scan-done"));
+            }
         }
     };
+
+    const isCategoryBatchScanning = (cats: Pick<CleanupCategory, 'id'>[]) =>
+        scanningBatchIds.has(getCleanupScanBatchId(cats));
 
     // ── Main grid (current user / this machine) ─────────────────────────
     // The main "Advanced Defense & Traces" grid ALWAYS shows the current
@@ -822,7 +846,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
     return {
         cardDataMap,
-        loadingAll,
+        isCategoryBatchScanning,
         orderedScanCategories,
         allTraceCategories,
         summaryStats,

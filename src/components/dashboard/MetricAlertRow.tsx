@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Bell, BellOff } from "lucide-react";
 import { useMetricAlerts, type MetricKey } from "../../hooks/useMetricAlerts";
 
@@ -6,18 +6,19 @@ interface MetricAlertRowProps {
   metric: MetricKey;
   label: string;
   unit: string;
-  /** Network alerts keep an off bell informational: it confirms the disabled
-   * state without silently turning a notification rule back on. */
-  shakeWhenDisabled?: boolean;
+  /**
+   * When the alert is off, attempting to use its disabled controls gives a
+   * short cue on the bell. The bell itself always remains a normal on/off
+   * control.
+   */
+  buzzWhenInputDisabled?: boolean;
 }
 
-export type MetricAlertBellAction = "toggle" | "shake";
-
-export function getMetricAlertBellAction(
+export function shouldBuzzMetricAlertInput(
   enabled: boolean,
-  shakeWhenDisabled: boolean,
-): MetricAlertBellAction {
-  return !enabled && shakeWhenDisabled ? "shake" : "toggle";
+  buzzWhenInputDisabled: boolean,
+): boolean {
+  return !enabled && buzzWhenInputDisabled;
 }
 
 /**
@@ -30,7 +31,7 @@ export default function MetricAlertRow({
   metric,
   label,
   unit,
-  shakeWhenDisabled = false,
+  buzzWhenInputDisabled = false,
 }: MetricAlertRowProps) {
   const { config, update } = useMetricAlerts();
   const m = config?.[metric];
@@ -69,14 +70,19 @@ export default function MetricAlertRow({
     else setSecDraft(String(m.sustainedSecs));
   };
 
-  const handleBellClick = () => {
-    if (getMetricAlertBellAction(m.enabled, shakeWhenDisabled) === "shake") {
-      // Restart the short cue on consecutive clicks without changing settings.
-      setIsShaking(false);
-      requestAnimationFrame(() => setIsShaking(true));
-      return;
-    }
-    void commit({ enabled: !m.enabled });
+  const buzzBell = () => {
+    // Restart the short cue on consecutive attempts without changing settings.
+    setIsShaking(false);
+    requestAnimationFrame(() => setIsShaking(true));
+  };
+
+  const handleDisabledInputPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (busy || !shouldBuzzMetricAlertInput(m.enabled, buzzWhenInputDisabled)) return;
+    // Disabled native inputs do not receive focus. Prevent the pointer action
+    // at the wrapper so the off state remains unchanged while the bell cues
+    // the operator about why the field cannot be edited yet.
+    event.preventDefault();
+    buzzBell();
   };
 
   return (
@@ -85,21 +91,19 @@ export default function MetricAlertRow({
         type="button"
         className={`metric-alert-bell ${m.enabled ? "on" : "off"} ${isShaking ? "is-shaking" : ""}`}
         onAnimationEnd={() => setIsShaking(false)}
-        onClick={handleBellClick}
+        onClick={() => void commit({ enabled: !m.enabled })}
         disabled={busy}
         title={m.enabled
           ? `${label} alert on — click to mute`
-          : shakeWhenDisabled
-            ? `${label} alert is off`
-            : `${label} alert off — click to enable`}
-        aria-label={m.enabled ? `Mute ${label} alert` : `${label} alert is off`}
+          : `${label} alert off — click to enable`}
+        aria-label={m.enabled ? `Mute ${label} alert` : `Enable ${label} alert`}
       >
         {m.enabled ? <Bell size={12} /> : <BellOff size={12} />}
       </button>
       <span className="metric-alert-label">{label}</span>
       <div className="metric-alert-controls">
       <span className="metric-alert-over">over</span>
-      <div className="metric-alert-input">
+      <div className="metric-alert-input" onPointerDown={handleDisabledInputPointerDown}>
         <input
           type="number"
           min={metric === "cpu" ? 1 : 0.1}
@@ -115,7 +119,7 @@ export default function MetricAlertRow({
       </div>
       {/* Hold time — only fire after the value stays over the limit this long. */}
       <span className="metric-alert-over">for</span>
-      <div className="metric-alert-input">
+      <div className="metric-alert-input" onPointerDown={handleDisabledInputPointerDown}>
         <input
           type="number"
           min={1}

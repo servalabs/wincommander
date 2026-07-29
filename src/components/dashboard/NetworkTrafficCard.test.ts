@@ -11,6 +11,6 @@ describe("NetworkTrafficCard alert configuration", () => {
     expect((source.match(/<MetricAlertRow metric="upload"/g) ?? []).length).toBe(1);
     expect((source.match(/<MetricAlertRow metric="download"/g) ?? []).length).toBe(1);
     expect(source).toContain("Both alerts are off");
-    expect(source).toContain("shakeWhenDisabled");
+    expect(source).toContain("buzzWhenInputDisabled");
   });
 });

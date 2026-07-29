@@ -381,11 +381,12 @@ function CleanupTabNavigation({
     activeTab: CleanupUsabilityTier | "actions-monitoring";
     scan: ReturnType<typeof useCleanupScan>;
 }) {
-    const { loadingAll, orderedScanCategories, loadCategoryBatch, cardDataMap } = scan;
+    const { orderedScanCategories, loadCategoryBatch, cardDataMap, isCategoryBatchScanning } = scan;
     const categories = activeTab === "actions-monitoring"
         ? VIEW_ONLY_CATEGORIES
         : orderedScanCategories.filter((category) => category.usabilityTier === activeTab);
-    const scanAllTourState = loadingAll === "standard"
+    const isScanningThisTab = isCategoryBatchScanning(categories);
+    const scanAllTourState = isScanningThisTab
         ? "scanning"
         : categories.some((category) => cardDataMap[category.id]?.count !== -1)
             ? "done"
@@ -403,10 +404,10 @@ function CleanupTabNavigation({
             <Button
                 small
                 intent="primary"
-                icon={loadingAll === "standard" ? undefined : "refresh"}
-                text={loadingAll === "standard" ? "Scanning..." : "Scan All"}
-                loading={loadingAll === "standard"}
-                disabled={loadingAll !== null || categories.length === 0}
+                icon={isScanningThisTab ? undefined : "refresh"}
+                text={isScanningThisTab ? "Scanning..." : "Scan All"}
+                loading={isScanningThisTab}
+                disabled={isScanningThisTab || categories.length === 0}
                 onClick={() => loadCategoryBatch(categories, "standard")}
                 className="cleanup-scan-all-btn"
                 data-tour-state={scanAllTourState}

@@ -97,8 +97,8 @@ export default function NetworkTrafficCard({ expanded = true, onToggle }: Networ
             <span>Traffic alerts</span>
             <span>{alertsOn ? "Monitoring sustained peaks" : "Both alerts are off"}</span>
           </div>
-          <MetricAlertRow metric="upload" label="Upload" unit="MB/s" shakeWhenDisabled />
-          <MetricAlertRow metric="download" label="Download" unit="MB/s" shakeWhenDisabled />
+          <MetricAlertRow metric="upload" label="Upload" unit="MB/s" buzzWhenInputDisabled />
+          <MetricAlertRow metric="download" label="Download" unit="MB/s" buzzWhenInputDisabled />
         </div>
       )}
 
