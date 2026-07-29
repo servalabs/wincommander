@@ -645,7 +645,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
 
     const openDnsProGate = useCallback(() => {
         window.dispatchEvent(new CustomEvent("license-gate-open", {
-            detail: { tab: "buy", featureLabel: "Simple Firewall Pro filtering" },
+            detail: { tab: "buy", featureLabel: "DNS Firewall Pro filtering" },
         }));
     }, []);
 
@@ -801,14 +801,46 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
     // (dnsProvider reflects backend state) — not merely selected in the UI.
     const isAdvancedProviderActive = effectiveDns && (dnsProvider === 'adguard' || dnsProvider === 'swiss-firewall' || dnsProvider === 'cloudflare-malware-adult');
 
-    const orderedDnsCategories = useMemo(() => {
-        const specialCategoryRank = (id: string) => id === 'gov' ? 2 : id === 'social' ? 3 : 0;
-        return [...DNS_CATEGORIES].sort((left, right) => {
-            const specialOrder = specialCategoryRank(left.id) - specialCategoryRank(right.id);
-            if (specialOrder !== 0) return specialOrder;
-            return Number(controldFilters.has(right.id)) - Number(controldFilters.has(left.id));
-        });
-    }, [controldFilters]);
+    const recommendedDnsCategories = DNS_CATEGORIES.filter(category =>
+        DNS_CATEGORY_DEFAULT_IDS.includes(category.id)
+    );
+    const optionalDnsCategories = DNS_CATEGORIES.filter(category =>
+        !DNS_CATEGORY_DEFAULT_IDS.includes(category.id)
+    );
+    // Free keeps its existing three-category entitlement. The Recommended
+    // switch therefore selects the full recommended set on paid editions and
+    // the first three defaults on Free, matching applyControldSet's clamp.
+    const recommendedSelectionIds = isPaid
+        ? DNS_CATEGORY_DEFAULT_IDS
+        : DNS_CATEGORY_DEFAULT_IDS.slice(0, FREE_CONTROLD_LIMIT);
+    const allRecommendedActive = !isAdvancedProviderActive
+        && recommendedSelectionIds.length > 0
+        && recommendedSelectionIds.every(id => controldFilters.has(id));
+
+    const toggleRecommendedCategories = (enabled: boolean) => {
+        if (dnsBusy || isAdvancedProviderActive) return;
+
+        const desired = new Set(controldFilters);
+        DNS_CATEGORY_DEFAULT_IDS.forEach(id => desired.delete(id));
+        if (enabled) {
+            recommendedSelectionIds.forEach(id => desired.add(id));
+        }
+
+        // Keep the optimistic state identical to the set applyControldSet will
+        // persist on Free, including when an optional category was already on.
+        const next = (!isPaid && desired.size > FREE_CONTROLD_LIMIT)
+            ? new Set(DNS_CATEGORIES.filter(category => desired.has(category.id))
+                .slice(0, FREE_CONTROLD_LIMIT)
+                .map(category => category.id))
+            : desired;
+
+        setControldFilters(next);
+        cancelDns();
+        scheduleControld(() => next.size === 0
+            ? clearDnsForEmptyCategories()
+            : applyControldSet(next)
+        );
+    };
     const advancedProviderLabel = dnsProvider === 'adguard' ? 'AdGuard' : dnsProvider === 'swiss-firewall' ? 'Enterprise Firewall' : 'Custom DNS';
 
     const headerRight = (
@@ -856,25 +888,25 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                     <div style={{ opacity: dnsLoading ? 0.3 : 1, pointerEvents: dnsLoading ? 'none' : 'auto' }}>
                         {isAdvancedProviderActive && (
                             <UniversalCallout
-                                message={`${advancedProviderLabel} is active as your DNS provider — Simple Firewall categories below are inactive until you switch back.`}
+                                message={`${advancedProviderLabel} is active as your DNS provider — DNS Firewall categories below are inactive until you switch back.`}
                                 intent="warning"
                                 className="mb-3"
                             />
                         )}
-                        <p className="dns-blurb">
-                            Encrypted DNS is applied per adapter.
-                        </p>
-
-                        {/* Simple Firewall categories — the primary DNS flow. Each
+                        {/* DNS Firewall categories — the primary DNS flow. Each
                             card toggles a category and auto-applies after a 5s
-                            debounce (no Apply button). Turning the main Encrypted
-                            DNS toggle on with nothing selected auto-picks the
-                            sensible defaults; clearing every category auto-turns
-                            the main toggle off. */}
+                            debounce (no Apply button). Government and Social
+                            Media remain explicit opt-ins, separate from the
+                            recommended protection set. */}
                         <div className="simple-firewall-inline">
-                            <div className="dns-provider-grid__header">
-                                <h3 className="dns-provider-grid__label simple-firewall-title">SIMPLE FIREWALL — CATEGORIES</h3>
-                                <div className="flex items-center gap-2">
+                            <section className="dns-category-group" aria-labelledby="dns-recommended-heading">
+                                <div className="dns-category-group__header dns-category-group__header--recommended">
+                                    <div className="dns-category-group__heading">
+                                        <h3 id="dns-recommended-heading" className="dns-provider-grid__label simple-firewall-title">
+                                            Recommended
+                                        </h3>
+                                    </div>
+                                    <div className="dns-category-group__actions">
                                     {!isPaid && (
                                         <span className={`font-mono text-[9px] ${controldFilters.size >= FREE_CONTROLD_LIMIT ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'}`}>
                                             {controldFilters.size >= FREE_CONTROLD_LIMIT
@@ -882,31 +914,69 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                                                 : `${controldFilters.size}/${FREE_CONTROLD_LIMIT} free`}
                                         </span>
                                     )}
-                                    <AutoApplyPill status={controldDebounce.status} secsLeft={controldDebounce.secsLeft} />
-                                    <span className="dns-provider-grid__count">
-                                        {controldFilters.size} of {DNS_CATEGORIES.length} active
-                                    </span>
-                                </div>
-                            </div>
-                            <span className="dns-provider-grid__hint">Choose categories to filter.</span>
-                            <div className={`simple-firewall-grid${isAdvancedProviderActive ? ' simple-firewall-grid--inactive' : ''}`}>
-                                {orderedDnsCategories.map(cat => {
-                                    const active = !isAdvancedProviderActive && controldFilters.has(cat.id);
-                                    const isAtLimit = !isAdvancedProviderActive && !isPaid && !active && controldFilters.size >= FREE_CONTROLD_LIMIT;
-                                    return (
-                                        <DnsCategoryCard
-                                            key={cat.id}
-                                            id={cat.id}
-                                            label={cat.label}
-                                            description={cat.description}
-                                            icon={cat.icon}
-                                            active={active}
-                                            isAtLimit={isAtLimit}
-                                            onToggle={() => toggleControldCategory(cat.id)}
+                                        <AutoApplyPill status={controldDebounce.status} secsLeft={controldDebounce.secsLeft} />
+                                        <span className="dns-provider-grid__count">
+                                            {controldFilters.size} of {DNS_CATEGORIES.length} active
+                                        </span>
+                                        <WCSwitch
+                                            checked={allRecommendedActive}
+                                            onChange={toggleRecommendedCategories}
+                                            size="sm"
+                                            disabled={dnsBusy || isAdvancedProviderActive}
+                                            label="Apply recommended DNS Firewall categories"
                                         />
-                                    );
-                                })}
-                            </div>
+                                    </div>
+                                </div>
+                                <div className={`simple-firewall-grid${isAdvancedProviderActive ? ' simple-firewall-grid--inactive' : ''}`}>
+                                    {recommendedDnsCategories.map(cat => {
+                                        const active = !isAdvancedProviderActive && controldFilters.has(cat.id);
+                                        const isAtLimit = !isAdvancedProviderActive && !isPaid && !active && controldFilters.size >= FREE_CONTROLD_LIMIT;
+                                        return (
+                                            <DnsCategoryCard
+                                                key={cat.id}
+                                                id={cat.id}
+                                                label={cat.label}
+                                                description={cat.description}
+                                                icon={cat.icon}
+                                                active={active}
+                                                isAtLimit={isAtLimit}
+                                                onToggle={() => toggleControldCategory(cat.id)}
+                                            />
+                                        );
+                                    })}
+                                </div>
+                            </section>
+
+                            <section className="dns-category-group dns-category-group--optional" aria-labelledby="dns-optional-heading">
+                                <div className="dns-category-group__header">
+                                    <div className="dns-category-group__heading">
+                                        <h3 id="dns-optional-heading" className="dns-provider-grid__label simple-firewall-title">
+                                            Optional
+                                        </h3>
+                                        <span className="dns-category-group__description">
+                                            Government and social media are off by default because they can block everyday services.
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className={`simple-firewall-grid simple-firewall-grid--optional${isAdvancedProviderActive ? ' simple-firewall-grid--inactive' : ''}`}>
+                                    {optionalDnsCategories.map(cat => {
+                                        const active = !isAdvancedProviderActive && controldFilters.has(cat.id);
+                                        const isAtLimit = !isAdvancedProviderActive && !isPaid && !active && controldFilters.size >= FREE_CONTROLD_LIMIT;
+                                        return (
+                                            <DnsCategoryCard
+                                                key={cat.id}
+                                                id={cat.id}
+                                                label={cat.label}
+                                                description={cat.description}
+                                                icon={cat.icon}
+                                                active={active}
+                                                isAtLimit={isAtLimit}
+                                                onToggle={() => toggleControldCategory(cat.id)}
+                                            />
+                                        );
+                                    })}
+                                </div>
+                            </section>
                         </div>
 
                         {/* Advanced DNS — AdGuard / Enterprise Firewall / custom
@@ -929,7 +999,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                             {advancedOpen && (
                                 <div className="advanced-dns-disclosure__body">
                                     <span className="dns-provider-grid__hint">
-                                        Use a different provider instead of Simple Firewall categories.
+                                        Use a different provider instead of DNS Firewall categories.
                                     </span>
                                     <div className="advanced-dns-options">
                                         <button
@@ -998,7 +1068,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                         <header className="firewall-subcard__header">
                             <div className="firewall-subcard__title">
                                 <Icon icon="cloud" size={13} />
-                                <span>DNS</span>
+                                <span>DNS Firewall</span>
                             </div>
                             {headerRight}
                         </header>
@@ -1007,9 +1077,9 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                 </>
             ) : (
                 <SectionCard
-                    title="Encrypted DNS"
+                    title="DNS Firewall"
                     icon="cloud"
-                    className="ncr-stretch-card"
+                    className="ncr-stretch-card dns-firewall-card"
                     headerRight={headerRight}
                 >
                     {body}
@@ -1188,22 +1258,16 @@ function NetworkSecurityControls() {
     if (!visibility.isVisible({ capability: ["network"] })) return null;
 
     return (
-        <SectionCard title="Firewall" icon="shield" className="firewall-card">
-            {/* Tour anchor: covers both blocking layers — DNS-category
-                filtering (NetworkAdaptersCard, embedded) and hosts-file
-                blocklists (the Hosts Protection subcard below) — so one tour
-                stop can explain them together. */}
-            <div className="firewall-sections" data-tour="network-security-controls">
-                <NetworkAdaptersCard embedded />
-
-                {/* Host Protection detail — blocklist grids */}
-                <section className="firewall-subcard firewall-subcard--hosts">
-                    <header className="firewall-subcard__header">
-                        <div className="firewall-subcard__title">
-                            <Icon icon="shield" size={13} />
-                            <span>Hosts Protection</span>
-                        </div>
-                        <div className="firewall-subcard__header-actions">
+        // Two independent primary cards: DNS filtering and hosts-file
+        // protection are related, but no longer hidden inside a third wrapper.
+        <div className="network-security-cards" data-tour="network-security-controls">
+            <NetworkAdaptersCard />
+            <SectionCard
+                title="Hosts Protection"
+                icon="shield"
+                className="network-security-card hosts-protection-card"
+                headerRight={(
+                    <div className="network-security-card__header-actions">
                             {group1.length > 0 && (
                                 <div className="recommended-pill">
                                     <span className="recommended-pill__label">Recommended</span>
@@ -1219,9 +1283,10 @@ function NetworkSecurityControls() {
                             <button className="refresh-btn" onClick={(e) => { e.stopPropagation(); loadStatus(); }} disabled={isScanning || anyLoading}>
                                 <Icon icon="refresh" size={14} className={isScanning ? 'spinning' : ''} />
                             </button>
-                        </div>
-                    </header>
-                    <div className="blocklists-container">
+                    </div>
+                )}
+            >
+                <div className="blocklists-container">
                         {isScanning ? (
                             <div className="scanning-overlay"><div className="loader-spinner" /></div>
                         ) : (
@@ -1277,10 +1342,9 @@ function NetworkSecurityControls() {
                                 )}
                             </div>
                         )}
-                    </div>
-                </section>
-            </div>
-        </SectionCard>
+                </div>
+            </SectionCard>
+        </div>
     );
 }
 

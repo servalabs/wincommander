@@ -222,6 +222,7 @@ export function isFleetLocked(rule: Rule): boolean {
 
 export interface RuleTemplate {
   key: string;
+  icon: string;
   name: string;
   blurb: string;
   build(): Rule;
@@ -230,6 +231,7 @@ export interface RuleTemplate {
 export const RULE_TEMPLATES: RuleTemplate[] = [
   {
     key: "telemetry-location",
+    icon: "geolocation",
     name: "Telemetry on → Location off",
     blurb: "When telemetry protection is switched off (telemetry becomes active), immediately turn location tracking off.",
     build(): Rule {
@@ -246,6 +248,7 @@ export const RULE_TEMPLATES: RuleTemplate[] = [
   },
   {
     key: "gaze-camera",
+    icon: "camera",
     name: "Gaze detected → Camera off",
     blurb: "When Privacy Shield sees you look away (or a shoulder-surfer), deny camera access.",
     build(): Rule {
@@ -262,6 +265,7 @@ export const RULE_TEMPLATES: RuleTemplate[] = [
   },
   {
     key: "usb-inserted-notify",
+    icon: "notifications",
     name: "USB inserted → Notify",
     blurb: "Get a heads-up the moment any USB device is plugged in.",
     build(): Rule {
@@ -278,6 +282,7 @@ export const RULE_TEMPLATES: RuleTemplate[] = [
   },
   {
     key: "rogue-wifi-notify",
+    icon: "globe-network",
     name: "Rogue Wi-Fi detected → Notify",
     blurb: "Wi-Fi Guard spots a new access point or a downgraded connection to a trusted network — get notified immediately.",
     build(): Rule {
@@ -294,6 +299,7 @@ export const RULE_TEMPLATES: RuleTemplate[] = [
   },
   {
     key: "ransomware-signal-admins",
+    icon: "shield-alert",
     name: "Ransomware activity → Notify + signal admins",
     blurb: "Mass-encryption activity trips the Ransomware Monitor — notify this device and signal fleet admins in the same beat.",
     build(): Rule {
@@ -313,6 +319,7 @@ export const RULE_TEMPLATES: RuleTemplate[] = [
   },
   {
     key: "decoy-signal-admins",
+    icon: "eye-open",
     name: "Decoy file accessed → Notify + signal admins",
     blurb: "Someone touched a honeypot file — notify this device and signal fleet admins right away.",
     build(): Rule {

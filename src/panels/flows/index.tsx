@@ -37,7 +37,12 @@ function TemplateGrid({ onSelect }: { onSelect: (rule: Rule) => void }) {
           className="flows-template"
           onClick={() => onSelect(t.build())}
         >
-          <span className="flows-template__name">{t.name}</span>
+          <span className="flows-template__head">
+            <span className="flows-template__icon" aria-hidden="true">
+              <Icon icon={t.icon} size={18} />
+            </span>
+            <span className="flows-template__name">{t.name}</span>
+          </span>
           <span className="flows-template__blurb">{t.blurb}</span>
           <span className="flows-template__cta">
             <Icon icon="plus" size={12} /> Use template

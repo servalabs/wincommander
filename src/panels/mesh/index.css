@@ -18,23 +18,22 @@
 }
 
 .mesh-hero-card {
-    margin: 12px 24px 0;
+    margin: 0 0 12px;
     padding: 16px 20px;
     background: var(--color-bg-card);
     border: 1px solid var(--color-border);
-    border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--color-text-primary) 18%, transparent);
 }
 
 .mesh-hero-card.tunnel-active-glow {
     border-color: var(--color-border-accent);
     box-shadow: 0 0 24px color-mix(in srgb, var(--color-accent) 18%, transparent),
-                0 1px 3px rgba(0, 0, 0, 0.2);
+                0 1px 3px color-mix(in srgb, var(--color-text-primary) 20%, transparent);
 }
 
 .mesh-hero-content {
-    max-width: 1400px;
-    margin: 0 auto;
+    width: 100%;
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;
@@ -666,8 +665,6 @@
 
 @media (max-width: 720px) {
     .mesh-hero-card {
-        margin-left: 12px;
-        margin-right: 12px;
         padding: 14px;
     }
 

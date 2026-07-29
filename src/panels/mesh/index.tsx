@@ -910,7 +910,8 @@ function PrivateMeshPanel() {
                 title="Private Network"
                 description="Link your devices into a private, encrypted mesh — share files and reach them from anywhere."
             />
-            {/* Header / Mesh Status */}
+            {/* The overview card and the configuration grid deliberately share
+                the PanelHeader's left edge. The app shell owns that inset. */}
             <div className={`mesh-hero-card ${isActiveTunnel ? 'tunnel-active-glow' : ''}`}>
                 <div className="mesh-hero-content">
                     <div className="mesh-hero-main">
@@ -1027,7 +1028,7 @@ function PrivateMeshPanel() {
                 </div>
             </div>
 
-            <div className="mesh-content-grid px-6 pb-6 pt-2">
+            <div className="mesh-content-grid pb-6">
                 {/* Error banner gating:
                     - `meshStatus.error` is the live-response error: trust it.
                     - `backendError` is `useBackend()`'s sticky error state — it
