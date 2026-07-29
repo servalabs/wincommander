@@ -8,7 +8,7 @@
 // Rules live in src/lib/stegoBackup*.ts, state in ./useStegoBackup, pieces in
 // ./StegoBackupParts — this file is the layout only.
 
-import { Button, Callout, FormGroup, HTMLSelect, InputGroup } from "@/components/ui/bp";
+import { Button, FormGroup, HTMLSelect, InputGroup, Tooltip } from "@/components/ui/bp";
 import { useState } from "react";
 import SectionCard from "../../components/shared/SectionCard";
 import TierGate from "../../components/shared/TierGate";
@@ -35,26 +35,23 @@ export default function StegoBackupSection() {
   const locked = busy !== null;
 
   return (
-    <SectionCard title="Stego Backup" icon="video" headerRight={<InfoDot content={INFO.what} />}>
+    <SectionCard
+      title="Stego Backup"
+      icon="video"
+      headerRight={
+        <div className="stego-header-actions">
+          <Tooltip content="Do not upload or re-encode a backup video. Keep the password and the original carrier separately.">
+            <Button minimal small icon="warning-sign" aria-label="Important stego backup warning" />
+          </Tooltip>
+          <InfoDot content={INFO.what} />
+        </div>
+      }
+    >
       <div className="stego-section">
         <p className="stego-intro">
           Hide an encrypted volume inside a normal-looking video that still plays. The video carries
           your backup; only your password opens it.
         </p>
-
-        <Callout intent="warning" title="Before you rely on this">
-          <ul className="stego-warnings">
-            <li>Lose the password and the backup is gone — there is no recovery.</li>
-            <li>
-              Any re-encode destroys the hidden volume. Messaging apps, YouTube and Google Photos all
-              re-encode on upload, so move the file as a file.
-            </li>
-            <li>
-              Keep the original carrier away from the stego copy — two near-identical videos give it
-              away.
-            </li>
-          </ul>
-        </Callout>
 
         <TierGate tier="paid" featureLabel="Stego Backup">
           <div className="stego-blocks-row">
@@ -195,6 +192,12 @@ export default function StegoBackupSection() {
                 Copies the hidden container back out as a file. This step needs no password — you enter
                 it when you mount the container from the Volumes list above.
               </p>
+
+              <ol className="stego-restore-steps" aria-label="Restore steps">
+                <li>Choose the backup video.</li>
+                <li>Pick a new location for the container.</li>
+                <li>Mount it from Encrypted Volumes.</li>
+              </ol>
 
               <FilePick
                 label="Video with a backup…"

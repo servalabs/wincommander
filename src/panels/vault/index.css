@@ -943,22 +943,19 @@ input::-webkit-credentials-auto-fill-button {
    Vault V2 Card Layout
    ===================================================================== */
 
-/* Volumes & RAM disks tab: Encrypted Volumes and RAM Disks side by side
-   (each a SectionCard). Collapses to one column on narrow viewports. */
+.vault-storage-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Encrypted Volumes and RAM Disks sit together at the top; Stego Backup uses
+   the full row beneath them so its two workflows have room to breathe. */
 .vault-volumes-ramdisks-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-items: start;
-}
-
-/* Backup & Erase tab: Stego Backup stacked above Crypto-Erase (each a
-   SectionCard), full width, sized to its own content height — no forced
-   equal height, no side-by-side grid. */
-.vault-backup-erase-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
 }
 
 /* Dynamic one-line status under a SectionCard title (e.g. RAM Disks' mounted

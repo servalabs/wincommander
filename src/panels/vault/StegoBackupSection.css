@@ -6,12 +6,10 @@
 
 .stego-intro { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-dim); }
 
-.stego-warnings { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; }
-.stego-warnings li { font-size: 12px; line-height: 1.45; }
+.stego-header-actions { display: inline-flex; align-items: center; gap: 2px; }
 
-/* Create / Restore blocks — side by side on wide viewports, stacking to one
-   column below 700px (Backup & Erase already gives Stego Backup half the
-   panel width, so this needs its own narrower breakpoint). */
+/* Create / Restore blocks — side by side on wide viewports, then a single
+   focused workflow on narrow screens. */
 .stego-blocks-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -20,7 +18,13 @@
 }
 
 .stego-block { display: flex; flex-direction: column; gap: 8px; }
-.stego-block--restore { border-left: 1px solid var(--border); padding-left: 12px; }
+.stego-block {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 6px);
+  background: var(--surface-2);
+}
+.stego-block--restore { min-width: 0; }
 .stego-block__title {
   display: flex; align-items: center; gap: 6px;
   font-family: var(--font-display, inherit);
@@ -30,12 +34,21 @@
 @media (max-width: 700px) {
   .stego-blocks-row { grid-template-columns: minmax(0, 1fr); }
   .stego-block--restore {
-    border-left: 0;
-    padding-left: 0;
-    border-top: 1px solid var(--border);
-    padding-top: 12px;
     margin-top: 4px;
   }
+}
+
+.stego-restore-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 8px 10px 8px 26px;
+  border-radius: var(--radius-md, 4px);
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .stego-label { display: inline-flex; align-items: center; gap: 5px; }

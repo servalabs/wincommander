@@ -24,6 +24,8 @@ import LockdownWordsSection from "../privacy/LockdownWordsSection";
 import CheckInTimerSection from "../privacy/CheckInTimerSection";
 import PanicHotkeyTrigger from "../privacy/PanicHotkeyTrigger";
 import FileWatchTriggerSection from "../privacy/FileWatchTriggerSection";
+import CryptoEraseSection from "../vault/CryptoEraseSection";
+import { getPersona } from "../../types/settings";
 import { Icon, type IconName } from "@/components/ui/bp";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -643,6 +645,18 @@ function SelfDestructSection() {
     );
 }
 
+function EmergencyToolsSection() {
+    const { appSettings, encryptionStatus } = useAppState();
+
+    if (getPersona(appSettings) !== "secure") return null;
+
+    return (
+        <TierGate tier="paid" featureLabel="Crypto-Erase">
+            <CryptoEraseSection veracryptVolumes={encryptionStatus?.volumes ?? []} />
+        </TierGate>
+    );
+}
+
 // ── Panel ──────────────────────────────────────────────────────────────────────
 
 export default function SecretPanel() {
@@ -686,6 +700,7 @@ export default function SecretPanel() {
                 <TabsContent value="lockdown">
                     <div className="secret-grid">
                         <SelfDestructSection />
+                        <EmergencyToolsSection />
                     </div>
                 </TabsContent>
                 <TabsContent value="diagnostics">

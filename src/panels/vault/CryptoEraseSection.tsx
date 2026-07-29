@@ -119,7 +119,7 @@ export default function CryptoEraseSection({ veracryptVolumes }: { veracryptVolu
 
   return (
     <SectionCard
-      title="Crypto-Erase"
+      title="Emergency Tools — Crypto-Erase"
       icon="key"
       headerRight={
         <div className="crypto-erase-header-actions">
