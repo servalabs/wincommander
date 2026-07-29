@@ -1778,7 +1778,9 @@ pub fn run() {
                 if is_direct_context_shred {
                     let app_handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
-                        context_menu_shred::execute(app_handle.clone(), menu_paths).await;
+                        context_menu_shred::log_result(
+                            context_menu_shred::execute(app_handle.clone(), menu_paths).await,
+                        );
                         app_handle.exit(0);
                     });
                 } else if !menu_paths.is_empty() {
@@ -2573,6 +2575,7 @@ pub fn run() {
             search_actions::search_open_containing_folder,
             search_actions::search_open_in_vscode,
             search_actions::search_delete_to_recycle_bin,
+            search_actions::search_shred_direct,
             search_actions::search_rename_file,
             search_actions::search_show_properties,
             backend::is_path_dir,

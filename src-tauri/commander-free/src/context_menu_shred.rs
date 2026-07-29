@@ -118,33 +118,31 @@ fn validate_target(raw_path: &str) -> Result<PathBuf, String> {
     Ok(target)
 }
 
-/// Runs only for the Explorer `--context-shred` verb. No path is ever sent to
-/// the frontend: every target is re-resolved immediately before the existing
-/// secure-erase backend command runs.
-pub(crate) async fn execute(app: AppHandle, raw_paths: Vec<String>) {
+/// Runs only for direct shred entry points: the Explorer `--context-shred`
+/// verb and the in-app search result menu. No path is sent through the
+/// frontend confirmation flow: every target is re-resolved immediately before
+/// the existing secure-erase backend command runs.
+pub(crate) async fn execute(app: AppHandle, raw_paths: Vec<String>) -> Result<(), String> {
     if raw_paths.len() != 1 {
-        crate::log_message_src(
-            "warn",
-            "core",
-            "[ContextShred] refused unexpected target count",
-        );
-        return;
+        return Err("refused unexpected target count".into());
     }
-    let target = match validate_target(&raw_paths[0]) {
-        Ok(target) => target,
-        Err(error) => {
-            crate::log_message_src("warn", "core", &format!("[ContextShred] {error}"));
-            return;
-        }
-    };
+    let target = validate_target(&raw_paths[0])?;
     let mut params = HashMap::new();
     params.insert("Path".to_string(), target.to_string_lossy().into_owned());
     params.insert("Type".to_string(), "File".to_string());
-    match crate::backend::run_backend_script(app, "Invoke-7Erase".to_string(), params).await {
-        Ok(_) => crate::log_message_src("info", "core", "[ContextShred] completed"),
-        Err(error) => {
-            crate::log_message_src("error", "core", &format!("[ContextShred] failed: {error}"))
-        }
+    crate::backend::run_backend_script(app, "Invoke-7Erase".to_string(), params)
+        .await
+        .map(|_| ())
+        .map_err(|error| format!("secure erase failed: {error}"))
+}
+
+/// The direct-shell launch paths have no webview to return an error to, so
+/// retain their explicit audit logging while the in-app search command can
+/// return its error to the caller.
+pub(crate) fn log_result(result: Result<(), String>) {
+    match result {
+        Ok(()) => crate::log_message_src("info", "core", "[ContextShred] completed"),
+        Err(error) => crate::log_message_src("warn", "core", &format!("[ContextShred] {error}")),
     }
 }
 

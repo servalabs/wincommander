@@ -618,7 +618,9 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
     if is_direct_context_shred {
         let app_handle = app.clone();
         tauri::async_runtime::spawn(async move {
-            crate::context_menu_shred::execute(app_handle, paths).await;
+            crate::context_menu_shred::log_result(
+                crate::context_menu_shred::execute(app_handle, paths).await,
+            );
         });
     } else if !paths.is_empty() {
         let event = resolve_context_menu_event(|flag| parts.contains(&flag));

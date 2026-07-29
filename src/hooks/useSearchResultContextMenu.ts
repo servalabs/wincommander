@@ -1,6 +1,5 @@
 import { useCallback, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
 
 export type SearchContextAction =
   | "open"
@@ -81,12 +80,10 @@ export function useSearchResultContextMenu({ openPath, closeSearch, reportError 
           await invoke("search_delete_to_recycle_bin", { path: target.path });
           break;
         case "shred":
-          // Route the exact selected file or folder through the same batched
-          // cross-window event used by Explorer's WinCommander integration.
-          // BackgroundPollers opens the existing irreversible-action
-          // confirmation dialog with this path already selected; no secure
-          // deletion happens until the user confirms there.
-          await emit("shred-requested", target.path);
+          // The search result itself is the explicit target selection. Route
+          // it through the same guarded direct-shred backend as Explorer, so
+          // secure erase starts now and never opens the general in-app modal.
+          await invoke("search_shred_direct", { path: target.path });
           break;
       }
       closeSearch();

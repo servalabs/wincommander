@@ -90,6 +90,16 @@ pub fn search_delete_to_recycle_bin(path: String) -> Result<(), String> {
     trash::delete(target).map_err(|error| format!("Failed to move to the Recycle Bin: {error}"))
 }
 
+/// Search has already resolved the exact result the user chose. Shred it
+/// immediately, using the same canonical-path, protected-root and reparse
+/// point checks as Explorer's direct WinCommander context-menu action.
+/// Deliberately does not use the normal `shred-requested` event: that event is
+/// the in-app confirmation path and would reopen a modal over the search UI.
+#[tauri::command]
+pub async fn search_shred_direct(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    crate::context_menu_shred::execute(app, vec![path]).await
+}
+
 fn validate_file_name(name: &str) -> Result<(), String> {
     if name.trim().is_empty() {
         return Err("The new name cannot be empty.".to_string());
