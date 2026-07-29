@@ -10,7 +10,6 @@
 import type { GuideTopic } from "./types";
 import scrubGif from "../../assets/tour/scrub.gif";
 import lockdownVideo from "../../assets/tour/lockdown.mp4";
-import browserExtensionImage from "../../assets/tour/browser-extension.png";
 import PrivacyShieldAnimation from "../../panels/privacy/PrivacyShieldAnimation";
 
 export const GUIDE_TOPICS: GuideTopic[] = [
@@ -160,7 +159,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
       // regions (left/right cards + sidebar) and keeps them crisp until the
       // user clicks Fix All (2026-07-20). Anchoring the card (not the whole
       // centre column) keeps the callout placing cleanly to its right.
-      anchor: '[data-tour="dashboard-fix-region"]',
+      anchor: '[data-tour="dashboard-fix-region"], [data-tour="dashboard-radar"]',
       secondaryAnchor: '[data-tour="dashboard-radar"]',
       navigateTo: "dashboard",
       placement: "right",
@@ -168,6 +167,9 @@ export const GUIDE_TOPICS: GuideTopic[] = [
         eventName: "tour-fix-all-done",
         warning: "This turns on the recommended protections in one go — including things like Clipboard History, which clears what's currently there. Review items individually below first if you'd rather be selective.",
         keepDim: true,
+        alreadyStartedTitle: "Everything is already clear",
+        alreadyStartedSummary: "There is nothing left to fix. The radar is clear because every finding has been resolved or intentionally ignored, so you can continue the tour.",
+        hideWarningWhenPreStarted: true,
       },
       tours: [{ id: "tour-dashboard", order: 10 }],
     },
@@ -197,6 +199,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
       navigateTo: "dashboard",
       variant: "hero",
       media: { type: "video", src: lockdownVideo },
+      showWhen: (ctx) => ctx.lockdownVisible !== false,
       tours: [{ id: "tour-dashboard", order: 30 }],
     },
   },
@@ -224,16 +227,10 @@ export const GUIDE_TOPICS: GuideTopic[] = [
     tour: {
       anchor: '[data-tour="privacy-browser-hardening"]',
       navigateTo: "privacy",
-      // Rectangle callout (like RDP Idle), not the hero pill+dead-center
-      // treatment — Browser Hardening is a wide card, not a small icon
-      // button, so a pill ring looked wrong and a dead-center modal had no
-      // guaranteed clearance from it. calloutStyle()'s flip logic keeps
-      // this from ever overlapping the card (2026-07-10 fix). Placed above
-      // the card (not below) — the card got wider/shorter once Browsers and
-      // Extensions moved side-by-side (2026-07-20), so "above" clears it
-      // more reliably than "below" now.
+      // A compact, text-first callout fits wholly above this wide/tall card.
+      // The previous large screenshot made that geometrically impossible and
+      // overlapped the highlighted extensions list on typical laptop heights.
       placement: "top",
-      media: { type: "image", src: browserExtensionImage, alt: "The privacy extension installed in the browser toolbar" },
       tours: [
         { id: "tour-privacy", order: 10 },
         { id: "tour-dashboard", order: 50 },
@@ -279,18 +276,36 @@ export const GUIDE_TOPICS: GuideTopic[] = [
   // ── Network Control tour (tour-network — standalone; also continues the
   // full flow as tour-dashboard, order 65) ──
   {
-    id: "network-tour-security-controls",
-    title: "Two blocking layers, always on",
-    summary: "DNS-category filtering blocks whole categories of sites at the lookup level; hosts-file blocklists add domain-based blocking on top for telemetry, AI services, piracy, and more.",
-    keywords: ["dns", "hosts file", "blocklist", "firewall", "simple firewall", "network tour"],
-    body: "DNS Firewall categories filter DNS lookups by category (ads, malware, adult content, and more); Hosts Protection blocklists add domain-based blocking directly in the Windows hosts file.",
+    id: "network-tour-dns-firewall",
+    title: "Start with DNS Firewall",
+    summary: "DNS-category filtering blocks whole categories of sites at the lookup level before a connection is made.",
+    keywords: ["dns", "firewall", "simple firewall", "network tour"],
+    body: "DNS Firewall categories filter DNS lookups by category, such as ads, malware, and adult content.",
     tour: {
-      anchor: '[data-tour="network-security-controls"]',
+      anchor: '[data-tour="network-dns-firewall"]',
       navigateTo: "network",
+      openEvent: "open-network-dns-blocklists",
       placement: "bottom",
       tours: [
         { id: "tour-network", order: 10 },
         { id: "tour-dashboard", order: 65 },
+      ],
+    },
+  },
+  {
+    id: "network-tour-hosts-blocklists",
+    title: "Then add Hosts Protection",
+    summary: "Hosts-file blocklists add domain-based protection for telemetry, AI services, piracy, and more.",
+    keywords: ["hosts file", "blocklist", "network tour"],
+    body: "Hosts Protection blocks selected domains directly in the Windows hosts file.",
+    tour: {
+      anchor: '[data-tour="network-hosts-protection"]',
+      navigateTo: "network",
+      openEvent: "open-network-dns-blocklists",
+      placement: "bottom",
+      tours: [
+        { id: "tour-network", order: 20 },
+        { id: "tour-dashboard", order: 65.5 },
       ],
     },
   },
@@ -302,9 +317,9 @@ export const GUIDE_TOPICS: GuideTopic[] = [
   {
     id: "cleanup-tour-scan-all",
     title: "Scan All",
-    summary: "Click Scan All — this is everything currently sitting on your PC, right now, across every trace category.",
+    summary: "Click Scan All — it checks every cleanup item in the tab you are viewing right now.",
     keywords: ["scan all", "cleanup", "traces", "cleanup tour"],
-    body: "Scan All checks every trace category on this PC in one pass.",
+    body: "Scan All checks every cleanup category in the selected group in one pass.",
     tour: {
       anchor: '.cleanup-scan-all-btn',
       navigateTo: "cleanup",
@@ -321,7 +336,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
         // CleanupCategoryGrid.tsx) (2026-07-10 fix: "if it is already
         // scanning and 'Take the tour' is clicked, it should check").
         alreadyStartedTitle: "Already checking your trace data",
-        alreadyStartedSummary: "Scan All is already running — every card below is the forensic trace data it finds across this PC, category by category, ready the moment it lands.",
+        alreadyStartedSummary: "Scan All is already running — every card in this cleanup group will update with the trace data it finds, ready the moment it lands.",
       },
       tours: [
         { id: "tour-cleanup", order: 10 },

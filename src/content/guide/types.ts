@@ -33,6 +33,10 @@ export interface TourContext {
   /** Mirrors useBraveInstalled() — gates the "install Brave" step so it only
    *  shows when Brave isn't already on the machine. */
   braveInstalled?: boolean;
+  /** Whether the Lockdown action is actually available in the right sidebar.
+   *  New installs commonly keep it hidden until self-destruct is opted in, so
+   *  the walkthrough must not stop on an absent control. */
+  lockdownVisible?: boolean;
 }
 
 export interface GuideTopic {
@@ -119,6 +123,10 @@ export interface GuideTopic {
        *  steps where the point is to spotlight one region and blur the rest
        *  until the user clicks (e.g. Fix All — 2026-07-20). */
       keepDim?: boolean;
+      /** Do not retain a destructive-action warning when the action was
+       *  already complete before this step (for example, all findings were
+       *  fixed or intentionally ignored). */
+      hideWarningWhenPreStarted?: boolean;
     };
     /** Excludes this step from every tour when it returns false against the
      *  context resolveTourSteps is given (default {} — a step without this
@@ -166,6 +174,7 @@ export interface TourStep {
     alreadyStartedTitle?: string;
     alreadyStartedSummary?: string;
     keepDim?: boolean;
+    hideWarningWhenPreStarted?: boolean;
   };
   action?: {
     label: string;

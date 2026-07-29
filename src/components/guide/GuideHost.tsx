@@ -17,6 +17,8 @@ import type { TourStep } from "../../content/guide/types";
 import { getDensityForSettings } from "../../lib/personaMigration";
 import { setTourActive } from "../../lib/tourActive";
 import useBraveInstalled from "../../hooks/useBraveInstalled";
+import useBorrowedActive from "../../hooks/useBorrowedActive";
+import { DEFAULT_BORROWED_EXTRAS } from "../../lib/visibilityDefaults";
 
 // The full onboarding sequence — Dashboard's hero moments (Fix all, Scrub,
 // Lockdown, quick toggles) continuing straight through Privacy Settings,
@@ -43,13 +45,19 @@ export default function GuideHost() {
   // Gates the conditional "install Brave" stop — resolveTourSteps drops it
   // once Brave is already on the machine.
   const braveInstalled = useBraveInstalled();
+  const borrowedActive = useBorrowedActive();
+  const borrowedHidden = appSettings?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS;
+  const lockdownVisible =
+    appSettings?.ideal?.privacy?.selfDestruct?.enabled === true
+    && !appSettings?.app?.hiddenSidebarActions?.includes("lockdown")
+    && !(borrowedActive && borrowedHidden.includes("action:lockdown"));
 
   // Manual tour starts (title bar "?", dashboard "Take the tour", deep
   // links) — always dismissable.
   useEffect(() => {
     const onStart = (e: Event) => {
       const tourId = (e as CustomEvent<{ tourId?: string }>).detail?.tourId ?? "welcome";
-      const resolved = resolveTourSteps(GUIDE_TOPICS, tourId, density, { braveInstalled });
+      const resolved = resolveTourSteps(GUIDE_TOPICS, tourId, density, { braveInstalled, lockdownVisible });
       if (resolved.length > 0) {
         setMandatory(false);
         setSteps(resolved);
@@ -57,7 +65,7 @@ export default function GuideHost() {
     };
     window.addEventListener("start-tour", onStart as EventListener);
     return () => window.removeEventListener("start-tour", onStart as EventListener);
-  }, [density, braveInstalled]);
+  }, [density, braveInstalled, lockdownVisible]);
 
   // First launch auto-starts the full spotlight tour instead of the removed
   // Setup Wizard. Closing it does not re-open it during the same app session.
@@ -69,13 +77,13 @@ export default function GuideHost() {
     if (!shouldStart) return;
     tourAutoStartedRef.current = true;
     const timer = window.setTimeout(() => {
-      const resolved = resolveTourSteps(GUIDE_TOPICS, FIRST_RUN_TOUR_ID, density, { braveInstalled });
+      const resolved = resolveTourSteps(GUIDE_TOPICS, FIRST_RUN_TOUR_ID, density, { braveInstalled, lockdownVisible });
       if (resolved.length === 0) return;
       setMandatory(appSettings?.app?.hasSeenMandatoryTour !== true);
       setSteps(resolved);
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [appSettings, startupComplete, density, braveInstalled]);
+  }, [appSettings, startupComplete, density, braveInstalled, lockdownVisible]);
 
   // Publish "a tour is running" for the surfaces that hide a step's anchor
   // outside Expert density or behind a disabled module — see lib/tourActive.ts.

@@ -536,7 +536,11 @@ export default function useTour({ steps, onClose, dismissable = true }: UseTourA
       if (cancelled) return;
       try {
         const el = resolveAnchor(selector);
-        setSecondaryRect(el ? measureRect(el) : null);
+        // When a fallback primary anchor resolves to the same element (the
+        // all-clear Fix All tour falls back from its missing card to the
+        // radar), suppress the duplicate inner spotlight ring.
+        const primaryEl = resolveAnchor(step.anchor);
+        setSecondaryRect(el && el !== primaryEl ? measureRect(el) : null);
       } catch (err) {
         console.error("[useTour] secondary anchor poll failed", err);
       } finally {

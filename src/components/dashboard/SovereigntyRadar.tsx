@@ -48,6 +48,8 @@ export interface SovereigntyRadarProps {
    * receives it and shows only matching findings.
    */
   onNodeClick?: (key: string) => void;
+  /** Exposes completion to the Fix All tour when this is its fallback anchor. */
+  tourState?: "done";
 }
 
 // Domains sit on the diagonals so they never overlap the cross lines.
@@ -78,6 +80,7 @@ export default function SovereigntyRadar({
   missingEngineCount = 0,
   optimal,
   onNodeClick,
+  tourState,
 }: SovereigntyRadarProps) {
   const scanning = phase !== "complete" || report === null;
 
@@ -174,6 +177,7 @@ export default function SovereigntyRadar({
         // column, so the tour ring/hole hugs the radar (see
         // dashboard-tour-fix-all).
         data-tour="dashboard-radar"
+        data-tour-state={tourState}
       >
         <svg viewBox="0 0 200 200" className="sov-radar__svg" aria-hidden="true">
           <circle className="ring faint" cx="100" cy="100" r="92" />

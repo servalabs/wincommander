@@ -1260,9 +1260,9 @@ function NetworkSecurityControls() {
     return (
         // Two independent primary cards: DNS filtering and hosts-file
         // protection are related, but no longer hidden inside a third wrapper.
-        <div className="network-security-cards" data-tour="network-security-controls">
-            <NetworkAdaptersCard />
-            <SectionCard
+        <div className="network-security-cards">
+            <div data-tour="network-dns-firewall"><NetworkAdaptersCard /></div>
+            <div data-tour="network-hosts-protection"><SectionCard
                 title="Hosts Protection"
                 icon="shield"
                 className="network-security-card hosts-protection-card"
@@ -1343,7 +1343,7 @@ function NetworkSecurityControls() {
                             </div>
                         )}
                 </div>
-            </SectionCard>
+            </SectionCard></div>
         </div>
     );
 }
@@ -1492,6 +1492,11 @@ function NetworkPanel() {
     // instant the panel mounts or the tour polls for an anchor that never
     // appears. See content/guide/topics.ts: network-tour-security-controls.
     const [activeTab, setActiveTab] = useNetworkSessionState("network.active-tab", "dns");
+    useEffect(() => {
+        const openDnsBlocklists = () => setActiveTab("dns");
+        window.addEventListener("open-network-dns-blocklists", openDnsBlocklists);
+        return () => window.removeEventListener("open-network-dns-blocklists", openDnsBlocklists);
+    }, [setActiveTab]);
 
     return (
         <div className="h-full flex flex-col items-start">

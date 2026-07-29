@@ -360,7 +360,7 @@ export default function SpotlightTour({ steps, onClose, dismissable = true }: Sp
       <h3 className="spotlight-title">{title}</h3>
       <p className="spotlight-summary">{summary}</p>
 
-      {step.requiresAction?.warning && (
+      {step.requiresAction?.warning && !(actionPreStarted && step.requiresAction.hideWarningWhenPreStarted) && (
         <div className="spotlight-warning">
           <Icon icon="warning-sign" size={14} />
           <span>{step.requiresAction.warning}</span>

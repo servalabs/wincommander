@@ -49,9 +49,9 @@ const DEFAULT_OPEN_CARDS: string[] = [];
 // Only OPTIONAL / panel-gated engines belong here — they are surfaced within
 // their own panel, not in the dashboard "Needs Attention" list. Never add a
 // CRITICAL engine (see CRITICAL_ENGINES in apps/components/EnginesSection.tsx:
-// powershell7, encryptionEngine, ramDiskEngine, …) or a genuinely-missing
+// powershell7, ramDiskEngine, …) or a genuinely-missing
 // critical dependency will be silently hidden from the dashboard radar/score.
-const DASHBOARD_HIDDEN_DEPS = new Set(['productivityEngine', 'meshVpn', 'localLlm']);
+const DASHBOARD_HIDDEN_DEPS = new Set(['productivityEngine', 'meshVpn', 'localLlm', 'chocolatey', 'scoop']);
 
 function compareVersions(a: string | null | undefined, b: string | null | undefined): number | null {
   const parse = (value: string | null | undefined): number[] | null => {
@@ -635,9 +635,6 @@ export default function DashboardPanel() {
     const next = [...new Set([...ignoredFindingIds, f.id])];
     void patchAppSettings({ app: { ignoredFindingIds: next } }).catch(() => {});
   }, [ignoredFindingIds, patchAppSettings]);
-  const handleResetIgnored = useCallback(() => {
-    void patchAppSettings({ app: { ignoredFindingIds: [] } }).catch(() => {});
-  }, [patchAppSettings]);
 
   // KT: Use data availability instead of loading flags for the scrambler.
   // State is pre-seeded from cached settings.json (~5ms), so on subsequent runs
@@ -858,6 +855,7 @@ export default function DashboardPanel() {
                       updateFindingCount === 0
                     }
                     onNodeClick={setCategoryFilter}
+                    tourState={activeFindings.length === 0 ? "done" : undefined}
                   />
                   {!hideCenterChrome && (
                     <div className="dashboard-radar-updates">
@@ -888,8 +886,6 @@ export default function DashboardPanel() {
                         onFixOne={handleFixOne}
                         onFixAll={handleFixAll}
                         onIgnore={handleIgnoreFinding}
-                        ignoredCount={ignoredFindingIds.length}
-                        onResetIgnored={handleResetIgnored}
                         categoryFilter={categoryFilter}
                         onClearFilter={() => setCategoryFilter(null)}
                         expanded={needsAttentionExpanded}

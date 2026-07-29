@@ -29,8 +29,6 @@ export interface NeedsAttentionProps {
   onFixOne: (f: ScanFinding) => void;
   onFixAll: () => void;
   onIgnore: (f: ScanFinding) => void;
-  ignoredCount: number;
-  onResetIgnored: () => void;
   /**
    * When set, only show findings from this category (set by clicking a radar
    * node). The header shows the active filter and a clear affordance.
@@ -54,8 +52,6 @@ export default function NeedsAttention({
   onFixOne,
   onFixAll,
   onIgnore,
-  ignoredCount,
-  onResetIgnored,
   categoryFilter,
   onClearFilter,
   expanded: expandedProp,
@@ -77,18 +73,10 @@ export default function NeedsAttention({
     setExpanded(!expanded);
   };
 
-  if (findings.length === 0) {
-    // Nothing active — only surface the "restore ignored" affordance.
-    if (ignoredCount === 0) return null;
-    return (
-      <div className="needs-attention is-clear" role="status" aria-live="polite">
-        <span className="na-clear-msg"><span aria-hidden="true">✓ </span>All clear</span>
-        <button className="na-reset" onClick={onResetIgnored}>
-          Restore {ignoredCount} ignored
-        </button>
-      </div>
-    );
-  }
+  // An empty active list means all findings were fixed or deliberately
+  // ignored. Keep the dashboard focused on its clear radar instead of
+  // retaining a misleading Fix All / restore card.
+  if (findings.length === 0) return null;
 
   // When a radar node is clicked, show only its category.
   const visibleFindings = categoryFilter
@@ -171,13 +159,6 @@ export default function NeedsAttention({
               </li>
             );
           })}
-          {ignoredCount > 0 && (
-            <li className="na-foot">
-              <button className="na-reset" onClick={onResetIgnored}>
-                Restore {ignoredCount} ignored
-              </button>
-            </li>
-          )}
         </ul>
         {/* Footer (Update All Apps + Clean chip) sits OUTSIDE the scrollable
             list so it's never clipped at the bottom of the 240px scroll area. */}

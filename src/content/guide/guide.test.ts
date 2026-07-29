@@ -34,4 +34,12 @@ describe("guide content SSOT", () => {
     expect(guided.length > 0).toBe(true);
     expect(expert.length < guided.length).toBe(true);
   });
+
+  test("skips Lockdown when the action is not visible and separates DNS from Hosts guidance", () => {
+    const dashboard = resolveTourSteps(GUIDE_TOPICS, "tour-dashboard", "guided", { lockdownVisible: false });
+    expect(dashboard.some((step) => step.topicId === "dashboard-tour-lockdown")).toBe(false);
+    const ids = dashboard.map((step) => step.topicId);
+    expect(ids.includes("network-tour-dns-firewall")).toBe(true);
+    expect(ids.includes("network-tour-hosts-blocklists")).toBe(true);
+  });
 });
