@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -7,6 +7,10 @@ import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Icon } from "../../../components/ui/icon";
 import { useAIControlOperations } from "../../../hooks/useAIControlOperations";
+import {
+  type ClassicWindowsAppsCheckState,
+  useClassicWindowsAppsStatus,
+} from "../../../hooks/useClassicWindowsAppsStatus";
 import type { AIControlOperationId, AIControlStatus } from "../../../hooks/useBackend";
 
 interface ClassicApp {
@@ -14,77 +18,113 @@ interface ClassicApp {
   statusKey: keyof AIControlStatus["classicApps"];
   name: string;
   description: string;
-  note?: string;
+  icon: "image" | "application";
 }
-
-// Find-AIControlLegacyBinary (ai-control-maintenance.ps1) throws this when no
-// Microsoft-signed Paint/Snipping Tool source exists to restore from — the
-// normal case on Windows 11, since Microsoft no longer ships these by default
-// and WinCommander does not bundle them. Surface it as an explanation, not a
-// raw PowerShell error dump.
-function isLegacySourceMissingError(error: string): boolean {
-  return error.includes("Microsoft-signed") && error.includes("source wasn't found");
-}
-
-const LEGACY_SOURCE_MISSING_MESSAGE =
-  "Windows 11 no longer includes this app by default, and WinCommander could not find a Microsoft-signed copy on this device or an inserted Windows installation medium to restore it from.";
 
 const CLASSIC_APPS: ClassicApp[] = [
-  { operation: "classic-photo-viewer", statusKey: "photoViewer", name: "Windows Photo Viewer", description: "Register the inbox viewer for supported image formats." },
-  { operation: "classic-paint", statusKey: "paint", name: "Classic Paint", description: "Restore a Microsoft-signed local Paint binary and Start shortcut.", note: "Requires a compatible signed source if Windows no longer contains it." },
-  { operation: "classic-snipping", statusKey: "snipping", name: "Classic Snipping Tool", description: "Restore a Microsoft-signed local Snipping Tool and shortcut.", note: "Requires a compatible signed source if Windows no longer contains it." },
-  { operation: "classic-notepad", statusKey: "notepad", name: "Classic Notepad", description: "Replace the Store package with the Windows capability and classic associations." },
-  { operation: "photos-legacy", statusKey: "photosLegacy", name: "Photos Legacy", description: "Install Microsoft Photos Legacy from the Store source." },
+  {
+    operation: "classic-photo-viewer",
+    statusKey: "photoViewer",
+    name: "Windows Photo Viewer",
+    description: "Enable the familiar Windows viewer for common image formats.",
+    icon: "image",
+  },
+  {
+    operation: "photos-legacy",
+    statusKey: "photosLegacy",
+    name: "Photos Legacy",
+    description: "Install Microsoft's previous Photos experience from Microsoft Store.",
+    icon: "application",
+  },
 ];
+
+function formatCheckedTime(lastCheckedAt: Date | undefined): string {
+  if (!lastCheckedAt) return "Checking now";
+  return `Last checked ${lastCheckedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function statusBadge(checkState: ClassicWindowsAppsCheckState, isAvailable: boolean) {
+  if (checkState === "checking") {
+    return <Badge tone="neutral"><Icon icon="refresh" size={12} className="animate-spin" />Checking</Badge>;
+  }
+  if (checkState === "failed") {
+    return <Badge tone="danger"><Icon icon="warning-sign" size={12} />Check failed</Badge>;
+  }
+  if (isAvailable) {
+    return <Badge tone="success"><Icon icon="tick" size={12} />Available</Badge>;
+  }
+  return <Badge tone="neutral"><Icon icon="cross" size={12} />Not installed</Badge>;
+}
 
 export default function ClassicWindowsApps() {
   const tools = useAIControlOperations();
-  const { refresh } = tools;
+  const appStatus = useClassicWindowsAppsStatus();
   const [pending, setPending] = useState<ClassicApp>();
 
-  useEffect(() => { void refresh(); }, [refresh]);
-
-  const install = () => {
+  const install = async () => {
     const app = pending;
     setPending(undefined);
-    if (app) void tools.run(app.operation, `Install ${app.name}`);
+    if (!app) return;
+    const succeeded = await tools.run(app.operation, `Install ${app.name}`);
+    if (succeeded) await appStatus.check();
   };
 
   return (
     <div className="flex flex-col gap-3 px-4 py-4">
-      <div>
-        <p className="text-sm font-semibold text-[var(--text)]">Classic Windows apps</p>
-        <p className="mt-1 text-xs text-[var(--text-dim)]">Restore familiar inbox tools without bundling Windows binaries inside WinCommander.</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-[var(--text)]">Classic Windows apps</p>
+          <p className="mt-1 text-xs text-[var(--text-dim)]">Bring back familiar Microsoft photo experiences using components supplied by Windows or Microsoft Store.</p>
+          <p className="mt-1 text-[11px] text-[var(--text-mute)]">{formatCheckedTime(appStatus.lastCheckedAt)}</p>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={appStatus.checkState === "checking" || Boolean(tools.busyOperation)}
+          onClick={() => void appStatus.check()}
+        >
+          <Icon icon="refresh" className={appStatus.checkState === "checking" ? "animate-spin" : undefined} />
+          {appStatus.checkState === "checking" ? "Checking…" : "Check again"}
+        </Button>
       </div>
+
       <div className="grid gap-2 lg:grid-cols-2">
         {CLASSIC_APPS.map((app) => {
-          const installed = tools.status?.classicApps[app.statusKey] ?? false;
+          const installed = appStatus.status?.classicApps[app.statusKey] ?? false;
           return (
             <div key={app.operation} className="flex items-start justify-between gap-3 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] p-3">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-sm font-medium text-[var(--text)]">{app.name}</p>
-                  <Badge tone={installed ? "success" : "neutral"}>{installed ? "available" : "not detected"}</Badge>
+              <div className="flex min-w-0 gap-3">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-3)] text-[var(--accent)]">
+                  <Icon icon={app.icon} />
+                </span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-medium text-[var(--text)]">{app.name}</p>
+                    {statusBadge(appStatus.checkState, installed)}
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-[var(--text-dim)]">{app.description}</p>
                 </div>
-                <p className="mt-1 text-xs leading-relaxed text-[var(--text-dim)]">{app.description}</p>
-                {app.note && <p className="mt-1 text-[11px] text-[var(--text-mute)]">{app.note}</p>}
               </div>
-              <Button size="sm" variant="primary" disabled={Boolean(tools.busyOperation)} onClick={() => setPending(app)}>
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={appStatus.checkState !== "ready" || Boolean(tools.busyOperation)}
+                onClick={() => setPending(app)}
+              >
                 <Icon icon="download" />{tools.busyOperation === app.operation ? "Installing…" : installed ? "Repair" : "Install"}
               </Button>
             </div>
           );
         })}
       </div>
-      {tools.error && (
-        <p className="text-xs text-[var(--danger)]">
-          {isLegacySourceMissingError(tools.error) ? LEGACY_SOURCE_MISSING_MESSAGE : tools.error}
-        </p>
-      )}
+
+      {appStatus.checkError && <p className="text-xs text-[var(--danger)]">{appStatus.checkError} Use Check again to retry.</p>}
+      {tools.error && <p className="text-xs text-[var(--danger)]">{tools.error}</p>}
+
       <AlertDialog open={pending !== undefined} onOpenChange={(open) => { if (!open) setPending(undefined); }}>
         <AlertDialogContent>
-          <AlertDialogHeader><AlertDialogTitle>Install {pending?.name}?</AlertDialogTitle><AlertDialogDescription>{pending?.description} {pending?.note}</AlertDialogDescription></AlertDialogHeader>
-          <AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={install}>Install</AlertDialogAction></AlertDialogFooter>
+          <AlertDialogHeader><AlertDialogTitle>Install {pending?.name}?</AlertDialogTitle><AlertDialogDescription>{pending?.description}</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => void install()}>Install</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
