@@ -11,6 +11,9 @@ const VITE_HMR_RUNTIME_ERROR_PATTERNS = [
   /__vite__updateStyle is not defined/i,
   /__vite__removeStyle is not defined/i,
   /__vite__css is not defined/i,
+  // KT: browsers cache failed ESM links, so recreating React.lazy cannot
+  // recover after an HMR export change; the guarded page reload can.
+  /the requested module ['"]\/src\/[^'"]+['"] does not provide an export named/i,
 ];
 
 export function errorMessage(error: unknown): string {

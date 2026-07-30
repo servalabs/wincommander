@@ -12,7 +12,8 @@
 // IMPORTANT: `import.meta.glob` does NOT resolve path aliases (`@assets`).
 // The glob patterns below MUST be RELATIVE to this file
 // (`../../assets/<folder>/*`). Each match is eagerly resolved to its final
-// fingerprinted URL via `{ eager: true, query: '?url', import: 'default' }`.
+// fingerprinted URL via `{ eager: true, query: '?url&wc-module', import: 'default' }`.
+// `wc-module` keeps WebView2's cache key distinct from the raw asset URL.
 //
 // KT: `import.meta.glob` is a Vite build-time transform with no Bun runtime
 // implementation. `tools/check-tier-invariants.ts` (`bun run lint:tiers`)
@@ -113,25 +114,25 @@ export function applyProductAliases(productMap: Record<string, string>): Record<
 }
 
 const softwaresMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/softwares/**/*", { eager: true, query: "?url", import: "default" })
+  ? import.meta.glob("../../assets/softwares/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const entitiesMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/entities/*", { eager: true, query: "?url", import: "default" })
+  ? import.meta.glob("../../assets/entities/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const appsMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/apps/*", { eager: true, query: "?url", import: "default" })
+  ? import.meta.glob("../../assets/apps/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const editorialMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/editorial/*", { eager: true, query: "?url", import: "default" })
+  ? import.meta.glob("../../assets/editorial/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const contingencyProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/products/contingency/*", { eager: true, query: "?url", import: "default" })
+  ? import.meta.glob("../../assets/products/contingency/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const privateServerProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/products/private-server/*", { eager: true, query: "?url", import: "default" })
+  ? import.meta.glob("../../assets/products/private-server/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const winCommanderProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/products/wincommander/*", { eager: true, query: "?url", import: "default" })
+  ? import.meta.glob("../../assets/products/wincommander/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 
 // — app icons (svg/png/ico/gif), keyed by full filename incl. extension —

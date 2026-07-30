@@ -56,6 +56,12 @@ export default defineConfig(({ command }): UserConfig => ({
   },
   clearScreen: false,
   server: {
+    // WebView2 persists its HTTP cache across dev-app restarts. Never retain
+    // transformed module responses, or a raw asset cached under a Vite import
+    // URL can prevent React from mounting and leave an undiagnosed white page.
+    headers: {
+      "Cache-Control": "no-store",
+    },
     fs: {
       allow: [
         searchForWorkspaceRoot(process.cwd()),

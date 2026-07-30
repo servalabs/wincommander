@@ -1,7 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { applyProductAliases } from "./assets";
 
+declare const Bun: {
+  file(path: string): {
+    text(): Promise<string>;
+  };
+};
+
 describe("applyProductAliases", () => {
+  test("keeps shared asset module URLs separate from raw WebView asset URLs", async () => {
+    const source = await Bun.file("src/assets.ts").text();
+    const moduleQueries = source.match(/query: "\?url&wc-module"/g) ?? [];
+
+    expect(moduleQueries).toHaveLength(7);
+    expect(source).not.toContain('query: "?url"');
+  });
+
   test("keeps legacy product keys wired to the renamed asset files", () => {
     const aliased = applyProductAliases({
       "private-phone/phone-top-view.png": "/private-phone/phone-top-view.png",

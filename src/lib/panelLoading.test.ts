@@ -12,8 +12,14 @@ describe("panel loading recovery", () => {
     expect(isChunkLoadError(new Error("Rendered more hooks than during the previous render"))).toBe(false);
   });
 
-  test("recognises a stale Vite CSS hot-update runtime", () => {
+  test("recognises stale Vite hot-update runtime failures", () => {
     expect(isViteHmrRuntimeError(new ReferenceError("__vite__updateStyle is not defined"))).toBe(true);
+    expect(isViteHmrRuntimeError(new SyntaxError(
+      "The requested module '/src/components/shared/WCSwitch.tsx' does not provide an export named 'default'",
+    ))).toBe(true);
+    expect(isViteHmrRuntimeError(new SyntaxError(
+      "The requested module 'third-party-package' does not provide an export named 'default'",
+    ))).toBe(false);
     expect(isViteHmrRuntimeError(new Error("Cannot read properties of undefined"))).toBe(false);
   });
 
