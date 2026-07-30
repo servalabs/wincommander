@@ -52,7 +52,7 @@ export function RoutineCleanerPanel({ categories: allowedCategories }: RoutineCl
     await cleaner.cleanSelected();
   };
 
-  return <div className="flex flex-col gap-4">
+  return <div className="maintenance-routine-cleaner flex min-h-0 flex-1 flex-col gap-4">
     <div className="flex flex-wrap items-center gap-2">
       {/* Chips share the surface-2 bar background with their inactive state,
           so the row reads as one tab bar with a single accent-soft "active"

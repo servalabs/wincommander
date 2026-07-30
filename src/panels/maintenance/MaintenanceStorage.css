@@ -37,8 +37,9 @@
   overflow: visible;
 }
 
-/* The paired cache card stretches to the left card's resolved height. Its
-   content owns overflow so large cache results cannot expand the row. */
+/* The cache card always matches the complete Windows Storage/File Hygiene
+   column. Its own body owns overflow, so cache results beyond that height
+   scroll inside the card instead of growing the shared row. */
 .maintenance-app-cache-card {
   align-self: stretch;
   overflow: hidden;
@@ -100,16 +101,30 @@
   margin-bottom: 0.75rem;
 }
 
+.maintenance-cache-category-actions {
+  margin: 0.5rem 0 1rem;
+}
+
+/* Keep the preview dense and predictable: six target cards are visible in the
+   fixed-height cache card. Extra cache targets scroll here, independently of
+   the category bar and cleaning actions above. */
+.maintenance-cache-item-list {
+  max-height: calc(6 * 5.75rem + 5 * 0.5rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.25rem;
+}
+
 .maintenance-analysis-workspace {
   display: grid;
   grid-template-columns: minmax(0, 7fr) minmax(18rem, 3fr);
-  align-items: start;
+  align-items: stretch;
   gap: 1rem;
 }
 
 .maintenance-analysis-card,
 .maintenance-file-stats-slot > * {
-  height: auto;
+  height: min(42rem, 68vh);
 }
 
 .maintenance-analysis-card {
@@ -120,18 +135,12 @@
 .maintenance-analysis-content {
   display: flex;
   min-height: 0;
+  flex: 1;
 }
 
 .maintenance-analysis-scroll {
   min-width: 0;
-  overflow: visible;
-}
-
-/* The analyser is compact before its first manual scan. Once it has results,
-   its own body becomes a bounded review area; overflow then belongs here,
-   never to the empty card or page. */
-.maintenance-analysis-scroll:has(.disk-analyzer-inline.has-results) {
-  max-height: min(42rem, 68vh);
+  flex: 1;
   overflow: auto;
   overscroll-behavior: contain;
 }
@@ -152,6 +161,7 @@
   .maintenance-storage-workspace {
     --maintenance-file-hygiene-height: 31rem;
   }
+
 }
 
 .maintenance-cache-idle {

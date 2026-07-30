@@ -78,12 +78,12 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: RoutineCleane
           </TabsList>
           {categoryGroups.map((group) => (
             <TabsContent key={group.id} value={group.id}>
-              <div className="mb-3">
+              <div className="maintenance-cache-category-actions">
                 <Button size="sm" variant="outline" onClick={() => selectRecommendedInCategory(group.items)} disabled={operation !== "idle"}>
                   Select recommended
                 </Button>
               </div>
-              <div className="flex flex-col gap-2">
+              <div className="maintenance-cache-item-list flex flex-col gap-2" aria-label={`${group.label} cache targets`}>
                 {group.items.map((item) => (
                   <ItemRow key={item.id} item={item} selected={selectedIds.has(item.id)} disabled={operation !== "idle"} onToggle={toggleItem} />
                 ))}

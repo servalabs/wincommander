@@ -75,23 +75,29 @@ test("storage dashboards do not auto-scan the manual analysis tools", async () =
   expect(fileStats).not.toContain("if (!fileStatsSession) void runScan()");
 });
 
-test("storage gives File Hygiene a complete fixed review area while cache and analysis overflow only when populated", async () => {
-  const [panel, analyzer, css] = await Promise.all([
+test("storage matches the cache card to File Hygiene while retaining the established analyser presentation", async () => {
+  const [panel, analyzer, css, cleaner, preview] = await Promise.all([
     read("index.tsx"),
     read("DiskSpaceAnalyzerDialog.tsx"),
     read("MaintenanceStorage.css"),
+    read("RoutineCleanerPanel.tsx"),
+    read("RoutineCleanerPreview.tsx"),
   ]);
 
   expect(css).toContain("--maintenance-file-hygiene-height");
-  expect(css).toContain(".maintenance-storage-overview-card {");
-  expect(css).toContain("overflow: visible;");
-  expect(css).toContain("flex: 0 0 var(--maintenance-file-hygiene-height);");
+  expect(css).toContain("align-items: stretch;");
   expect(css).toContain(".maintenance-app-cache-card");
   expect(css).toContain("overflow: hidden;");
+  expect(css).toContain(".maintenance-app-cache-content {");
+  expect(css).toContain("overflow: auto;");
+  expect(cleaner).toContain("maintenance-routine-cleaner flex min-h-0 flex-1");
   expect(panel).toContain("Disk space analyser");
-  expect(analyzer).toContain("const hasResults =");
-  expect(analyzer).toContain('hasResults ? "has-results" : "is-idle"');
-  expect(css).toContain(":has(.disk-analyzer-inline.has-results)");
+  expect(analyzer).toContain('minHeight: inline ? "560px" : undefined');
+  expect(analyzer).not.toContain("const hasResults =");
+  expect(css).toContain("height: min(42rem, 68vh);");
+  expect(preview).toContain('className="maintenance-cache-category-actions"');
+  expect(preview).toContain('className="maintenance-cache-item-list flex flex-col gap-2"');
+  expect(css).toContain("max-height: calc(6 * 5.75rem + 5 * 0.5rem);");
 });
 
 test("visible maintenance scan controls use icon-only accessible actions", async () => {
