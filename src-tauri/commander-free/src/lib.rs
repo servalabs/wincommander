@@ -2717,6 +2717,7 @@ pub fn run() {
             fleet_agent::fleet_apply_pending_epoch,
             fleet_agent::fleet_update_posture_snapshot,
             fleet_agent::fleet_request_unenroll,
+            fleet_agent::fleet_unenroll_status,
             // ── F6 Phase-1 Piece 2 — BootNext UEFI setter (non-destructive) ──
             // NOT wired to any trigger/lockdown path here. The F6 orchestrator
             // (Piece 3) calls these explicitly after stage-1 crypto-erase succeeds.

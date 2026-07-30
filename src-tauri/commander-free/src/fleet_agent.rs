@@ -669,6 +669,16 @@ pub async fn fleet_request_unenroll() -> Result<serde_json::Value, String> {
         .await
 }
 
+/// Read the current managed-unenroll status without re-submitting it. Once
+/// approval revokes the device HMAC secret, Pro maps the status endpoint's 401
+/// to `{ approved: true }` so the local cleanup can finish cleanly.
+#[tauri::command]
+pub async fn fleet_unenroll_status() -> Result<serde_json::Value, String> {
+    crate::license::require_service_feature("fleet")?;
+    crate::sidecar::dispatch_paid_command("fleet_agent_unenroll_status", serde_json::Value::Null)
+        .await
+}
+
 /// Disconnect this device from the fleet and persist enabled=false to settings.
 /// The Pro agent task is aborted; no further heartbeats or command polls occur.
 ///
@@ -751,8 +761,8 @@ mod tests {
         let obsolete_gate = ["require", "_paid(\"fleet agent\")"].concat();
         assert_eq!(
             source.matches(&service_gate).count(),
-            6,
-            "connect, status, policy apply, posture, unenroll, and disconnect must all require Fleet"
+            7,
+            "connect, status, policy apply, posture, unenroll request/status, and disconnect must all require Fleet"
         );
         assert!(!source.contains(&obsolete_gate));
     }

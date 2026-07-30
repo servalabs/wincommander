@@ -44,7 +44,8 @@ const ENROLL_POLL_MS = 1_000;
 // seconds later once the steady poll caught up — looked like the click failed.
 const ENROLL_TIMEOUT_MS = 75_000;
 // Refresh cadence while a managed-device unenroll request is awaiting admin
-// approval (fleet_request_unenroll is idempotent — safe to re-poll).
+// approval. Refreshes use the status endpoint: resubmitting after approval
+// would correctly receive 401 because the device credential is revoked.
 const UNENROLL_POLL_MS = 5_000;
 
 interface UnenrollInfo {
@@ -53,9 +54,7 @@ interface UnenrollInfo {
   required: number;
 }
 
-// Result shape of fleet_request_unenroll — idempotent: a second call while a
-// request is already pending returns the SAME record with fresh approval
-// counts, so it doubles as a safe status-refresh poll.
+// Result shape shared by the initial request and status refreshes.
 type UnenrollResult = { status: string; approvals: number; required_approvals: number };
 
 export default function FleetConnectView() {
@@ -245,7 +244,7 @@ export default function FleetConnectView() {
     let consecutiveFailures = 0;
     unenrollPollRef.current = setInterval(async () => {
       try {
-        const r = await invoke<UnenrollResult>("fleet_request_unenroll");
+        const r = await invoke<UnenrollResult>("fleet_unenroll_status");
         consecutiveFailures = 0;
         setUnenrollInfo({ status: r.status, approvals: r.approvals, required: r.required_approvals });
         if (r.status === "approved") await finalizeApprovedUnenroll();

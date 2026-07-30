@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 const STORE_SECTION: &str = "pending_purchase";
+const WINCOMMANDER_CATALOG_SKUS: [&str; 4] =
+    ["pro_lifetime", "pro_membership", "investigator", "fleet"];
 
 fn unix_timestamp() -> u64 {
     std::time::SystemTime::now()
@@ -203,6 +205,22 @@ fn validate_catalog_offer(offer: &CatalogOffer) -> bool {
     valid_sku && has_copy && seat_bounds_are_valid
 }
 
+fn select_wincommander_catalog(mut offers: Vec<CatalogOffer>) -> Result<Vec<CatalogOffer>, String> {
+    // The licensing service is shared with other products. Ignore their offers,
+    // but require exactly one well-formed offer for every WinCommander SKU.
+    offers.retain(|offer| WINCOMMANDER_CATALOG_SKUS.contains(&offer.sku.as_str()));
+    let has_one_of_each_sku = WINCOMMANDER_CATALOG_SKUS
+        .iter()
+        .all(|sku| offers.iter().filter(|offer| offer.sku == *sku).count() == 1);
+    if offers.len() != WINCOMMANDER_CATALOG_SKUS.len()
+        || !has_one_of_each_sku
+        || offers.iter().any(|offer| !validate_catalog_offer(offer))
+    {
+        return Err("Current offers response was invalid.".to_string());
+    }
+    Ok(offers)
+}
+
 #[tauri::command]
 pub async fn get_purchase_catalog() -> Result<Vec<CatalogOffer>, String> {
     let api_base = crate::license::license_api_base()?;
@@ -227,10 +245,7 @@ pub async fn get_purchase_catalog() -> Result<Vec<CatalogOffer>, String> {
     let offers = body
         .offers
         .ok_or_else(|| "Current offers response was incomplete.".to_string())?;
-    if offers.len() != 4 || offers.iter().any(|offer| !validate_catalog_offer(offer)) {
-        return Err("Current offers response was invalid.".to_string());
-    }
-    Ok(offers)
+    select_wincommander_catalog(offers)
 }
 
 #[tauri::command]
@@ -481,6 +496,57 @@ mod tests {
             ..offer
         };
         assert!(!validate_catalog_offer(&invalid));
+    }
+
+    #[test]
+    fn catalog_ignores_offers_for_other_products() {
+        let desktop_offer = |sku: &str| CatalogOffer {
+            sku: sku.into(),
+            name: "WinCommander offer".into(),
+            price_label: "Server-calculated".into(),
+            detail: "Current WinCommander offer.".into(),
+            device_rule: "Server-calculated device allowance.".into(),
+            checkout_eligible: true,
+            min_seats: None,
+            max_seats: None,
+            seat_pricing_label: None,
+        };
+        let mut offers = WINCOMMANDER_CATALOG_SKUS
+            .iter()
+            .map(|sku| desktop_offer(sku))
+            .collect::<Vec<_>>();
+        offers.extend([
+            CatalogOffer {
+                sku: "theron_business".into(),
+                ..desktop_offer("pro_lifetime")
+            },
+            CatalogOffer {
+                sku: "theron_defense".into(),
+                ..desktop_offer("pro_lifetime")
+            },
+        ]);
+
+        let selected = select_wincommander_catalog(offers).expect("desktop offers accepted");
+        assert_eq!(selected.len(), WINCOMMANDER_CATALOG_SKUS.len());
+        assert!(selected
+            .iter()
+            .all(|offer| WINCOMMANDER_CATALOG_SKUS.contains(&offer.sku.as_str())));
+    }
+
+    #[test]
+    fn catalog_rejects_duplicate_or_missing_wincommander_offers() {
+        let offer = CatalogOffer {
+            sku: "pro_lifetime".into(),
+            name: "Pro".into(),
+            price_label: "Server-calculated".into(),
+            detail: "Current WinCommander offer.".into(),
+            device_rule: "Server-calculated device allowance.".into(),
+            checkout_eligible: true,
+            min_seats: None,
+            max_seats: None,
+            seat_pricing_label: None,
+        };
+        assert!(select_wincommander_catalog(vec![offer.clone(), offer]).is_err());
     }
 
     #[test]
