@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ThinkingOrb } from 'thinking-orbs';
 import { useAppState } from '../context/AppContext';
 import { useTheme } from '../context/ThemeContext';
 import useMotionPreference from '../hooks/useMotionPreference';
@@ -12,20 +13,6 @@ const SCRAMBLE_GLYPHS = "#$%01/\\[]{}<>+-*ABCDEF";
 const SCRAMBLE_TICK_MS = 60;
 // Ticks each character holds scrambled before it "decodes".
 // 4 × 60ms = 240ms per letter → 9-char label fully resolves in ~2160ms.
-
-/**
- * A deliberately local splash loader. Startup must never be blocked by an
- * optional visual package being absent from a developer's dependency cache.
- */
-function ThinkingOrb({ paused, ariaLabel }: { paused: boolean; ariaLabel: string }) {
-    return (
-        <span className={`sp-thinking-orb${paused ? ' sp-thinking-orb--paused' : ''}`} role="img" aria-label={ariaLabel}>
-            <span className="sp-thinking-orb__ring sp-thinking-orb__ring--outer" />
-            <span className="sp-thinking-orb__ring sp-thinking-orb__ring--inner" />
-            <span className="sp-thinking-orb__core" />
-        </span>
-    );
-}
 const SCRAMBLE_HOLD_TICKS = 4;
 
 // Single-character pool for the canvas matrix rain.
@@ -84,11 +71,9 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
     const [logoReady, setLogoReady] = useState(false);
     const [scrambleText, setScrambleText] = useState(() => scrambleWord(branding.companyLabel, 0));
     const [animDone, setAnimDone] = useState(false);
-    const [progress, setProgress] = useState(0);
     // Seed phase text from the window global: AppContext may have already emitted
     // (and finished) its startup phases before this component mounts, because
-    // StartupAuthGate withholds our render until the PIN check resolves. Without
-    // the seed the bar would sit on the initial label until the next event.
+    // StartupAuthGate withholds our render until the PIN check resolves.
     const [phaseText, setPhaseText] = useState(
         () => (window as Window & { __wcStartupProgress?: { phase: string } }).__wcStartupProgress?.phase ?? 'initializing'
     );
@@ -102,29 +87,6 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
         window.addEventListener('startup-progress', handler);
         return () => window.removeEventListener('startup-progress', handler);
     }, []);
-
-    // Smooth eased progress bar: ease toward 90% while the app is still loading,
-    // then to 100% the instant it reports ready. Asymptotic approach means the
-    // bar never sticks at 0 and never fake-completes ahead of real readiness —
-    // a faithful "loading… done" regardless of how fast startup finishes.
-    useEffect(() => {
-        // Reduced motion: no per-frame easing — snap the bar to its target.
-        if (reducedMotion) {
-            setProgress(isAppReady ? 100 : 90);
-            return;
-        }
-        let raf = 0;
-        const tick = () => {
-            setProgress(p => {
-                const target = isAppReady ? 100 : 90;
-                const next = p + (target - p) * 0.06;
-                return next > target - 0.5 ? target : next;
-            });
-            raf = requestAnimationFrame(tick);
-        };
-        raf = requestAnimationFrame(tick);
-        return () => cancelAnimationFrame(raf);
-    }, [isAppReady, reducedMotion]);
 
     // Canvas matrix rain — brightness-grid approach.
     // Every cell has a float brightness [0..1] that decays each frame; drops
@@ -311,9 +273,7 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
         return () => clearTimeout(t);
     }, [logoReady, reducedMotion, branding.companyLabel]);
 
-    // When the app reports ready, show the final phase. The eased progress effect
-    // above drives the bar to 100% off the same isAppReady flag — setting it here
-    // too would snap the bar and defeat the easing, so we only set the label.
+    // When the app reports ready, show the final phase.
     useEffect(() => {
         if (isAppReady) setPhaseText('control online');
     }, [isAppReady]);
@@ -402,8 +362,13 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
                 <h1 className="sp-brand sp-scramble">{scrambleText}</h1>
                 <p className="sp-sub">{branding.productLabel}</p>
 
-                <div className="sp-bar-track">
-                    <div className="sp-bar-fill" style={{ width: `${progress}%` }} />
+                <div className="sp-loader-orb">
+                    <ThinkingOrb
+                        state="composing"
+                        size={64}
+                        theme={isLight ? 'light' : 'dark'}
+                        aria-label="Loading WinCommander"
+                    />
                 </div>
 
                 <p className="sp-status">
@@ -414,12 +379,6 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
                     </span>
                     <span className="sp-status-caret">_</span>
                 </p>
-                <div className="sp-loader-orb">
-                    <ThinkingOrb
-                        paused={reducedMotion}
-                        ariaLabel="Loading WinCommander"
-                    />
-                </div>
             </div>
         </div>
     );
