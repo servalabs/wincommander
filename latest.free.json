@@ -1,11 +1,11 @@
 {
-  "platforms": {
-    "windows-x86_64": {
-      "url": "https://winupdates.servalabs.com/free/v3.2.2/WinCommander_3.2.2_x64_en-US.msi",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSYUw1dWVrWUtHdU5ER1pwRXd3Vmo2L1prODZWNjhxZFgyR3Z3RVBLeHVBVkVDWVRWTVFPTU9mZ3NDUVEyR2hlcmJXN2RSRnVGUWRLQzhJaEExQUFZVHdOeEVqT3pCM0E0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1MzA0OTAyCWZpbGU6V2luQ29tbWFuZGVyXzMuMi4yX3g2NF9lbi1VUy5tc2kKU0JIN2xlT09ZazczaGRCRDV0Sm5UTm4rcVF0NmtvUVVjQzcvM3lsalA2bS9pTFNKMG52OG5mdk9NSGN4UWhhSVJHOWl4S3lObFkzeHZlWmUwRkxnQ0E9PQo="
-    }
-  },
-  "version": "3.2.2",
-  "pub_date": "2026-07-29T11:31:42Z",
-  "notes": "WinCommander Free v3.2.2"
+    "platforms":  {
+                      "windows-x86_64":  {
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSYUw1dWVrWUtHdUVPeURzdjlmT0FxWWlFVGFxUWpWUStKUVFweHkrVkI2RnUzYlBTOFcyelh6emR2Wmk1Z0hVK0s0djlCbnR3Y1RnSDY3cUQrcTNqbnVmbVdJTWlnZndFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1NDgyNDQ5CWZpbGU6V2luQ29tbWFuZGVyXzMuMi4zX3g2NF9lbi1VUy5tc2kKSnArOWVkeGRWMVYzdzFZWUk2UTlEeDcwcW1wbVFzU00rem9VT2VGV3N4VmlRQkxRZ3JBTUF2ditKc2srUmNNeW5EVnFQbEE5MmFVVXR0dTBmR09iQ1E9PQo=",
+                                             "url":  "https://winupdates.servalabs.com/free/v3.2.3/WinCommander_3.2.3_x64_en-US.msi"
+                                         }
+                  },
+    "pub_date":  "2026-07-31T12:50:49Z",
+    "version":  "3.2.3",
+    "notes":  "WinCommander Free v3.2.3"
 }
