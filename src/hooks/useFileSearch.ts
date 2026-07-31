@@ -51,6 +51,10 @@ export function useFileSearch(): FileSearchState {
   const [resultsQuery, setResultsQuery] = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tauri invokes cannot be cancelled once sent.  A broad earlier query can
+  // therefore time out after a later, narrower query already succeeded; only
+  // the newest run is allowed to update the panel state.
+  const runIdRef = useRef(0);
   useEffect(() => () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
   }, []);
@@ -62,17 +66,22 @@ export function useFileSearch(): FileSearchState {
     size = sizeFilter,
     date = dateFilter,
   ) => {
+    const runId = ++runIdRef.current;
+    const isCurrent = () => runIdRef.current === runId;
     const hasActiveFilters = types.size > 0 || size !== "any" || date !== "any";
     const effectiveQuery = q.trim();
     if (!effectiveQuery && !hasActiveFilters) {
+      if (!isCurrent()) return;
       setResults([]);
       setHasSearched(false);
       setError(null);
       setResultsQuery(q);
       return;
     }
-    setIsSearching(true);
-    setError(null);
+    if (isCurrent()) {
+      setIsSearching(true);
+      setError(null);
+    }
     try {
       // KT: filters now go to the backend even when a text query is present.
       // The old code sent the bare query, over-fetched 5x, and filtered
@@ -95,21 +104,27 @@ export function useFileSearch(): FileSearchState {
         const diff = sfAppSortScore(a) - sfAppSortScore(b);
         return diff !== 0 ? diff : a.name.length - b.name.length;
       });
-      setResults(sorted);
-      setTotalCount(resp.total);
-      setHasSearched(true);
-      setResultsQuery(q);
+      if (isCurrent()) {
+        setResults(sorted);
+        setTotalCount(resp.total);
+        setHasSearched(true);
+        setResultsQuery(q);
+      }
     } catch (err) {
-      setError(String(err));
-      setResults([]);
-      setHasSearched(true);
-      setResultsQuery(q);
+      if (isCurrent()) {
+        setError(String(err));
+        setResults([]);
+        setHasSearched(true);
+        setResultsQuery(q);
+      }
     } finally {
-      setIsSearching(false);
+      if (isCurrent()) setIsSearching(false);
     }
   }, [dateFilter, searchTypes, sizeFilter]);
 
   const setQuery = useCallback((value: string) => {
+    // Invalidate in-flight work immediately, not after the debounce delay.
+    runIdRef.current += 1;
     setQueryState(value);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => performSearch(value, resultLimit), 300);
@@ -121,6 +136,7 @@ export function useFileSearch(): FileSearchState {
   }, [performSearch, query, resultLimit]);
 
   const clear = useCallback(() => {
+    runIdRef.current += 1;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     setQueryState("");
     setResults([]);
@@ -141,6 +157,7 @@ export function useFileSearch(): FileSearchState {
     const types = next.types ?? searchTypes;
     const size = next.size ?? sizeFilter;
     const date = next.date ?? dateFilter;
+    runIdRef.current += 1;
     if (next.types) setSearchTypes(next.types);
     if (next.size) setSizeFilterState(next.size);
     if (next.date) setDateFilterState(next.date);

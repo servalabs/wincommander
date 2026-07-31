@@ -82,6 +82,41 @@ function Split-ListParam {
     return $stringValue -split '\s*,\s*' | Where-Object { $_ -ne '' }
 }
 
+# Everything's Winget package installs the GUI/service only.  The search UI
+# talks to the publisher's separate ES command-line executable, which has no
+# Winget package.  Keep it in WinCommander's shared binary folder rather than
+# pretending `Voidtools.Everything.Cli` exists.
+function Install-EverythingSearchCli {
+    $existing = Join-Path $env:ProgramData 'WinCommander\bin\es.exe'
+    if (Test-Path -LiteralPath $existing -PathType Leaf) { return $existing }
+
+    $arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+        'Arm64' { 'ARM64' }
+        'X86'   { 'x86' }
+        default { 'x64' }
+    }
+    $version = '1.1.0.37'
+    $uri = "https://www.voidtools.com/ES-$version.$arch.zip"
+    $scratch = Join-Path ([System.IO.Path]::GetTempPath()) "WinCommander-ES-$PID-$([Guid]::NewGuid().ToString('N'))"
+    $archive = "$scratch.zip"
+    $targetDir = Split-Path -Parent $existing
+
+    try {
+        New-Item -ItemType Directory -Path $targetDir -Force -ErrorAction Stop | Out-Null
+        Invoke-WebRequest -Uri $uri -OutFile $archive -UseBasicParsing -ErrorAction Stop
+        Expand-Archive -LiteralPath $archive -DestinationPath $scratch -Force -ErrorAction Stop
+        $cli = Get-ChildItem -LiteralPath $scratch -Filter 'es.exe' -File -Recurse -ErrorAction Stop | Select-Object -First 1
+        if (-not $cli) { throw 'The official Everything CLI archive did not contain es.exe.' }
+        Copy-Item -LiteralPath $cli.FullName -Destination $existing -Force -ErrorAction Stop
+        if (-not (Test-Path -LiteralPath $existing -PathType Leaf)) { throw 'Everything CLI installation did not complete.' }
+        return $existing
+    }
+    finally {
+        Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # ── Local application-icon resolution ─────────────────────────────────────
 # Debloat must show the icon Windows actually associates with an installed
 # package/program, without using a network icon service.  These helpers are in

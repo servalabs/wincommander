@@ -108,6 +108,39 @@
   min-width: 0;
 }
 
+/* Typed filter words are provisional until Tab, exactly like the global
+   Ctrl+Space search.  Keeping the cue below the field avoids disguising it as
+   entered query text while still making the keyboard action discoverable. */
+.sfp-tab-filter {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px dashed color-mix(in srgb, var(--color-accent) 48%, transparent);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sfp-tab-filter:hover,
+.sfp-tab-filter:focus-visible {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  outline: none;
+}
+
+.sfp-tab-filter kbd {
+  padding: 1px 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  background: var(--color-bg-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
 /* Search input — V2 Input wrapped with a leading search icon and a
    trailing spinner/clear button. */
 .search-files-input-group {

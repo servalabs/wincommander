@@ -1061,24 +1061,26 @@ function Install-InstantSearch {
     # Proactively sync sources — same robustness as Install-WingetApps to avoid -1978335138
     Invoke-WingetSourceUpdate -WingetCmd $wingetCmd
 
-    foreach ($pkgId in @('voidtools.Everything', 'voidtools.Everything.Cli')) {
-        & $wingetCmd install --id $pkgId --exact --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity
-        $code = $LASTEXITCODE
+    $pkgId = 'voidtools.Everything'
+    & $wingetCmd install --id $pkgId --exact --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity
+    $code = $LASTEXITCODE
 
-        if ($code -eq 0 -or $code -eq -1978335212) { continue }
-
+    if ($code -ne 0 -and $code -ne -1978335212) {
         if ($code -eq -1978335231) {
             # Hash mismatch — retry with --ignore-security-hash (safe after source update)
             & $wingetCmd install --id $pkgId --exact --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity --ignore-security-hash
             $retryCode = $LASTEXITCODE
-            if ($retryCode -eq 0 -or $retryCode -eq -1978335212) { continue }
-            throw "Installer hash mismatch for $pkgId and retry also failed (exit code $retryCode)"
+            if ($retryCode -ne 0 -and $retryCode -ne -1978335212) {
+                throw "Installer hash mismatch for $pkgId and retry also failed (exit code $retryCode)"
+            }
         }
-
-        throw "Failed to install $pkgId (exit code $code)"
+        else {
+            throw "Failed to install $pkgId (exit code $code)"
+        }
     }
 
-    return @{ success = $true; message = "Instant Search Engine and CLI installed." }
+    $cliPath = Install-EverythingSearchCli
+    return @{ success = $true; message = "Instant Search Engine and CLI installed."; cliPath = $cliPath }
 }
 
 function Install-SystemCleaner {

@@ -8,8 +8,7 @@ function Read-AppsManifest {
     $apps = @(
         @{ category = "base"; id = "Nilesoft.Shell"; name = "Custom Context Menu"; description = "Powerful shell extension and context menu customizer." },
         @{ category = "base"; id = "Giorgiotani.Peazip"; name = "PeaZip"; description = "Lightweight archive manager supporting many formats." },
-        @{ category = "base"; id = "Voidtools.Everything"; name = "Search Engine"; description = "Instant full-disk file search engine with GUI." },
-        @{ category = "base"; id = "Voidtools.Everything.Cli"; name = "Search Engine CLI"; description = "Instant full-disk file search engine - command-line version." },
+        @{ category = "base"; id = "Voidtools.Everything"; name = "Search Engine"; description = "Instant full-disk file search engine. WinCommander also installs its required search CLI." },
         @{ category = "base"; id = "DuongDieuPhap.ImageGlass"; name = "ImageGlass"; description = "Fast, modern image viewer." },
         @{ category = "base"; id = "Starpine.Screenbox"; name = "Screenbox"; description = "Modern media player for Windows." },
         @{ category = "base"; id = "VideoLAN.VLC"; name = "VLC Media Player"; description = "Free, open-source media player that plays almost any format." },
@@ -438,18 +437,7 @@ function Install-WingetApps {
     # Deduce list from input (handle string vs array, and splitting combined strings)
     $list = $AppIds | ForEach-Object { $_.ToString().Split(',') } | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
-    # Co-install required companions. Voidtools.Everything (GUI) ships without es.exe;
-    # the search feature needs Voidtools.Everything.Cli which provides es.exe.
-    # Auto-add the CLI whenever the GUI is requested so the panel install is complete.
-    $coInstallMap = @{ 'Voidtools.Everything' = 'Voidtools.Everything.Cli' }
-    $expandedList = [System.Collections.Generic.List[string]]::new()
-    foreach ($id in $list) { $expandedList.Add($id) }
-    foreach ($id in @($list)) {
-        if ($coInstallMap.ContainsKey($id) -and $expandedList -notcontains $coInstallMap[$id]) {
-            $expandedList.Add($coInstallMap[$id])
-        }
-    }
-    $list = $expandedList.ToArray()
+    $installEverythingCli = $list -contains 'Voidtools.Everything'
 
     $needsWinget = $list | Where-Object { $_ -ne 'ImDisk.Toolkit' }
     $wingetCmd = $null
@@ -529,6 +517,21 @@ function Install-WingetApps {
                 error   = $true
                 message = "Installation failed for $appId with exit code $code"
                 id      = $appId
+                status  = 'failed'
+            }
+        }
+    }
+
+    if ($installEverythingCli) {
+        try {
+            $cliPath = Install-EverythingSearchCli
+            $results += @{ id = 'WinCommander.EverythingCli'; status = 'installed'; path = $cliPath }
+        }
+        catch {
+            return @{
+                error   = $true
+                message = "Everything was installed, but its required search CLI could not be installed: $($_.Exception.Message)"
+                id      = 'Voidtools.Everything'
                 status  = 'failed'
             }
         }

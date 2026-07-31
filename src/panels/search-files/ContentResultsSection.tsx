@@ -1,6 +1,7 @@
 // src/panels/search-files/ContentResultsSection.tsx
 //
-// "Inside files" result group — wincmd-search content hits as two-line
+// Content-index result group — matches from text extracted out of the folders
+// the user chose to index, rendered as two-line rows.
 // rows (file line + highlighted snippet line), plus the index status bar,
 // indexed-folders management, and the extracted-text expansion pane.
 // Rows share the panel's single listbox selection model. Pure renderer.
@@ -68,7 +69,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
     <div className="sfp-section">
       <div className="sfp-section-bar">
         <span className="sfp-section-label">
-          Inside files
+          Text matches (indexed folders)
           {!contentLoading && rows.length > 0 && (
             <span className="sfp-section-count">{rows.length.toLocaleString()}</span>
           )}

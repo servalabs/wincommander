@@ -119,7 +119,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
 
   const search = useChipSearch(visible);
   const {
-    query, setQuery, suggestion, explorerOffer, acceptExplorerOffer,
+    query, setQuery, suggestion,
     primary, contentRows, reset: resetSearch, setError,
   } = search;
   const reduceMotion = useReducedMotionPref();
@@ -470,10 +470,11 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
   const totalRows = primary.length + dedupedContentRows.length;
   const activeIndex = Math.min(selectedIndex, Math.max(0, totalRows - 1));
 
-  // The ghost is the ONE thing Tab acts on: a trailing-word chip candidate when
-  // there is one, otherwise the folder Explorer was last showing. Nothing else
-  // promotes it, so the plain-text search keeps running underneath and a file
-  // literally named "folder-icons.psd" is never blocked.
+  // The ghost is the ONE thing Tab acts on: a trailing-word chip candidate.
+  // The shortcut launcher must not silently inherit Explorer's active folder:
+  // showing an unexpected "In <folder>" pill looks like a hidden search scope
+  // and makes a global search appear to be broken. Folder jumps remain explicit
+  // through the documented ">folder" query syntax.
   const ghost = useMemo(() => {
     if (suggestion) {
       const def = chipDef(suggestion.chip.kind);
@@ -482,15 +483,13 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         label: def.supportsStrict ? `${def.label} first` : def.label,
       };
     }
-    if (explorerOffer) return { icon: "folder-open", label: `In ${explorerOffer.label}` };
     return null;
-  }, [suggestion, explorerOffer]);
+  }, [suggestion]);
 
   const promoteGhost = useCallback(() => {
     setSelectedIndex(0);
     if (suggestion) { setQuery(promoteChip(query, suggestion)); return; }
-    if (explorerOffer) acceptExplorerOffer();
-  }, [suggestion, query, setQuery, explorerOffer, acceptExplorerOffer]);
+  }, [suggestion, query, setQuery]);
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const text = e.target.value;

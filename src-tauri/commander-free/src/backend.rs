@@ -6257,6 +6257,7 @@ fn locate_es_exe_uncached() -> Option<std::path::PathBuf> {
         std::path::PathBuf::from(r"C:\Program Files\Everything\es.exe"),
         std::path::PathBuf::from(r"C:\Program Files\Everything 1.5a\es.exe"),
         std::path::PathBuf::from(r"C:\Program Files (x86)\Everything\es.exe"),
+        std::path::PathBuf::from(r"C:\ProgramData\WinCommander\bin\es.exe"),
         std::path::PathBuf::from(r"C:\Tools\es.exe"),
         std::path::PathBuf::from(r"C:\ProgramData\chocolatey\bin\es.exe"),
     ];

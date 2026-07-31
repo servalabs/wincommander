@@ -19,7 +19,7 @@ import { useFileSearch } from "@/hooks/useFileSearch";
 import { useContentIndex } from "@/hooks/useContentIndex";
 import { useSearchHotkey } from "@/hooks/useSearchHotkey";
 import { dedupeContentRows } from "@/lib/contentSearch";
-import { getIndexDisplayError } from "@/lib/searchFilesPanel";
+import { getIndexDisplayError, getTabFilterSuggestion } from "@/lib/searchFilesPanel";
 import { isEngineMissingError } from "@/lib/fileNameSearch";
 import { buildContentFilterTokens } from "@/lib/contentQueryFilters";
 import { areResultsFresh, buildSelectionEntries, stepSelection } from "@/lib/searchSelection";
@@ -50,6 +50,10 @@ export default function SearchFilesPanel() {
   // Focus never leaves the input — rows are aria options, not tab stops.
   const [selected, setSelected] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
+  const tabFilter = useMemo(
+    () => getTabFilterSuggestion(search.query, search.searchTypes, search.sizeFilter, search.dateFilter),
+    [search.query, search.searchTypes, search.sizeFilter, search.dateFilter],
+  );
 
   // Focus input on mount
   useEffect(() => {
@@ -124,8 +128,32 @@ export default function SearchFilesPanel() {
     setSelected(-1);
   }, [search, content]);
 
+  const acceptTabFilter = useCallback(() => {
+    if (!tabFilter) return;
+    // Apply the filter before updating the text: setQuery clears the pending
+    // filter-triggered debounce and schedules exactly one search without the
+    // keyword, so `folder` becomes the Folders filter instead of a name term.
+    switch (tabFilter.kind) {
+      case "files": case "folders": case "documents": case "images": case "videos":
+      case "audio": case "archives": case "apps": case "code":
+        search.toggleSearchType(tabFilter.kind);
+        break;
+      case "big": search.setSizeFilter("large"); break;
+      case "small": search.setSizeFilter("tiny"); break;
+      case "today": search.setDateFilter("today"); break;
+      case "thisWeek": search.setDateFilter("week"); break;
+      case "last30Days": search.setDateFilter("month"); break;
+      default: return;
+    }
+    search.setQuery(tabFilter.nextQuery);
+    inputRef.current?.focus();
+  }, [search, tabFilter]);
+
   const handleInputKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey && tabFilter) {
+      e.preventDefault();
+      acceptTabFilter();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (entries.length === 0) return;
       e.preventDefault();
       setSelected((s) => stepSelection(s, e.key === "ArrowDown" ? 1 : -1, entries.length));
@@ -143,7 +171,7 @@ export default function SearchFilesPanel() {
     } else if (e.key === "Escape") {
       clearAll();
     }
-  }, [entries.length, selected, openEntry, search, content.contentQuery, clearAll]);
+  }, [entries.length, selected, openEntry, search, content.contentQuery, clearAll, tabFilter, acceptTabFilter]);
 
   // A missing/stopped filename indexer must not scream over healthy content
   // results — it degrades to an inline notice under the File-names group.
@@ -210,6 +238,12 @@ export default function SearchFilesPanel() {
             </TooltipContent>
           </Tooltip>
         </div>
+        {tabFilter && (
+          <button type="button" className="sfp-tab-filter" onClick={acceptTabFilter}>
+            <Icon icon="filter" size={13} />
+            <span>Press <kbd>Tab</kbd> to filter by <strong>{tabFilter.label}</strong></span>
+          </button>
+        )}
         <FilterBar
           searchTypes={search.searchTypes}
           sizeFilter={search.sizeFilter}

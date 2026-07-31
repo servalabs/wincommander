@@ -34,8 +34,6 @@ import type { ChipSuggestion, QueryState } from "@/lib/searchTokens";
 /** Rows that carry no real stat data — reconstructed from a remembered path. */
 export type BrowseResult = SearchResult & { synthetic?: boolean };
 
-export interface ExplorerFolder { path: string; label: string }
-
 const NAME_DEBOUNCE_MS = 200;
 const CONTENT_DEBOUNCE_MS = 275;
 /** Over-fetch the browse page so noise filtering still leaves a full list. */
@@ -391,10 +389,6 @@ export interface ChipSearchApi {
   setQuery: React.Dispatch<React.SetStateAction<QueryState>>;
   /** Trailing-word chip candidate. Provisional until Tab. */
   suggestion: ChipSuggestion | null;
-  /** Explorer's last-viewed folder, while it is still worth offering. */
-  explorerOffer: ExplorerFolder | null;
-  acceptExplorerOffer: () => void;
-  dismissExplorerOffer: () => void;
   /** True when the rows CURRENTLY on screen are a recency browse, not a search. */
   isBrowse: boolean;
   /** True for a ">folder" jump query. */
@@ -423,8 +417,6 @@ export function useChipSearch(active: boolean): ChipSearchApi {
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [explorerFolder, setExplorerFolder] = useState<ExplorerFolder | null>(null);
-  const [offerUsed, setOfferUsed] = useState(false);
 
   const runIdRef = useRef(0);
   const nameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -444,15 +436,6 @@ export function useChipSearch(active: boolean): ChipSearchApi {
   const plan = useMemo(() => buildEverythingPlan(searchState), [searchState]);
   const suggestion = useMemo(() => suggestChip(query), [query]);
 
-  const probeExplorerFolder = useCallback(() => {
-    setOfferUsed(false);
-    invoke<ExplorerFolder | null>("get_foreground_explorer_folder")
-      .then((folder) => setExplorerFolder(folder ?? null))
-      // No Explorer window, COM refused, or the command not registered yet —
-      // all the same nothing-to-offer case, never an error.
-      .catch(() => setExplorerFolder(null));
-  }, []);
-
   const reset = useCallback(() => {
     runIdRef.current += 1; // orphan any in-flight response
     setQuery(EMPTY_QUERY);
@@ -462,12 +445,7 @@ export function useChipSearch(active: boolean): ChipSearchApi {
     setTotalCount(null);
     setError(null);
     setIsSearching(false);
-    probeExplorerFolder();
-  }, [probeExplorerFolder]);
-
-  useEffect(() => {
-    if (active) probeExplorerFolder();
-  }, [active, probeExplorerFolder]);
+  }, []);
 
   // ── Filename / browse pass ──
   useEffect(() => {
@@ -566,23 +544,8 @@ export function useChipSearch(active: boolean): ChipSearchApi {
     };
   }, [active, jump.term, searchState]);
 
-  const explorerOffer = useMemo(() => {
-    if (offerUsed || !explorerFolder) return null;
-    return chipOf(query, "in") ? null : explorerFolder;
-  }, [offerUsed, explorerFolder, query]);
-
-  const acceptExplorerOffer = useCallback(() => {
-    const folder = explorerFolder;
-    if (!folder) return;
-    setOfferUsed(true);
-    setQuery((prev) => addChip(prev, "in", { path: folder.path, pathLabel: folder.label }));
-  }, [explorerFolder]);
-
-  const dismissExplorerOffer = useCallback(() => setOfferUsed(true), []);
-
   return {
     query, setQuery, suggestion,
-    explorerOffer, acceptExplorerOffer, dismissExplorerOffer,
     isBrowse: showingBrowse, isJump: jump.isJump, term: jump.term,
     primary, contentRows, totalCount, isSearching, error, setError, reset,
   };
