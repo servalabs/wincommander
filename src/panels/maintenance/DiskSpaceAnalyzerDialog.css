@@ -1,5 +1,19 @@
 /* ── Disk Space Analyzer Dialog ────────────────────────────────────────────── */
 
+/* Inline analyzer shares the fixed-height Maintenance card with File Statistics.
+   Result lists own their scrolling; the card itself must never show an empty
+   scrollbar before a scan. */
+.disk-analyzer-inline {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.disk-analyzer-inline > .bp5-dialog-body {
+  min-height: 0;
+}
+
 .disk-analyzer-dialog {
   display: flex;
   flex-direction: column;

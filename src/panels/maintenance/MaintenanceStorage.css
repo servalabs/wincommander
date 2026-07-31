@@ -101,10 +101,6 @@
   margin-bottom: 0.75rem;
 }
 
-.maintenance-cache-category-actions {
-  margin: 0.5rem 0 1rem;
-}
-
 /* Keep the preview dense and predictable: six target cards are visible in the
    fixed-height cache card. Extra cache targets scroll here, independently of
    the category bar and cleaning actions above. */
@@ -141,8 +137,8 @@
 .maintenance-analysis-scroll {
   min-width: 0;
   flex: 1;
-  overflow: auto;
-  overscroll-behavior: contain;
+  min-height: 0;
+  overflow: hidden;
 }
 
 @media (max-width: 1279px) {

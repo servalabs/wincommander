@@ -952,7 +952,10 @@ export interface NetworkDrive {
 export interface MeshVPNPeer {
   ID: string;
   Hostname: string;
-  OS: string;
+  // Tailscale only supplies this when the peer reports an OS. Older clients
+  // and several appliance clients legitimately omit it, so do not pretend
+  // that an empty value is a Windows machine in the UI.
+  OS?: string | null;
   Online: boolean;
   Active: boolean;
   Relay: string;

@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { CheckboxControl } from "../../components/ui/bp";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import type { RoutineCleanerCategory, RoutineCleanerItem } from "../../hooks/useBackend";
-import { formatBytes, getPopulatedRoutineCleanerCategories, getRecommendedItemIds, ROUTINE_CLEANER_CATEGORIES } from "./routineCleanerHelpers";
+import { formatBytes, getPopulatedRoutineCleanerCategories, ROUTINE_CLEANER_CATEGORIES } from "./routineCleanerHelpers";
 import type { useRoutineCleaner } from "./useRoutineCleaner";
 
 type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
@@ -28,15 +28,6 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: RoutineCleane
   }, [categoryGroups, activeCategory]);
 
   if (!scan) return null;
-
-  // Scoped to this tab's category only: recomputes selection for just these
-  // items so switching tabs never touches another category's selection.
-  const selectRecommendedInCategory = (items: RoutineCleanerItem[]) => {
-    const recommendedIds = new Set(getRecommendedItemIds(items));
-    items.forEach((item) => {
-      if (recommendedIds.has(item.id) !== selectedIds.has(item.id)) toggleItem(item.id);
-    });
-  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -78,11 +69,6 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: RoutineCleane
           </TabsList>
           {categoryGroups.map((group) => (
             <TabsContent key={group.id} value={group.id}>
-              <div className="maintenance-cache-category-actions">
-                <Button size="sm" variant="outline" onClick={() => selectRecommendedInCategory(group.items)} disabled={operation !== "idle"}>
-                  Select recommended
-                </Button>
-              </div>
               <div className="maintenance-cache-item-list flex flex-col gap-2" aria-label={`${group.label} cache targets`}>
                 {group.items.map((item) => (
                   <ItemRow key={item.id} item={item} selected={selectedIds.has(item.id)} disabled={operation !== "idle"} onToggle={toggleItem} />

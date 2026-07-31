@@ -576,7 +576,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
        (Dialog wrapper) or inline as a panel section. Toggled below via the
        `inline` prop. */
     const innerBody = (
-        <div className="bp5-dialog-body" style={{ padding: 0, display: "flex", flexDirection: "column", flex: inline ? "0 0 auto" : 1, overflow: inline ? "visible" : "hidden", minHeight: inline ? "560px" : undefined }}>
+        <div className="bp5-dialog-body" style={{ padding: 0, display: "flex", flexDirection: "column", flex: 1, overflow: "hidden", minHeight: 0 }}>
 
                     {/* ── Top Bar ── */}
                     <div className="da-topbar">

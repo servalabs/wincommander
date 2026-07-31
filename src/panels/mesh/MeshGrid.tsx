@@ -63,7 +63,7 @@ export default function MeshGrid({
                                 </button>
                             </Tooltip>
                         )}
-                        <Tooltip content={peer.OS || 'Unknown OS'}>
+                        <Tooltip content={osTooltip(peer.OS)}>
                             <span className="flex items-center">
                                 <OsLogo os={peer.OS} size={24} />
                             </span>
@@ -189,18 +189,37 @@ function SendFileIcon() {
 
 // ── Colored OS logo SVGs ─────────────────────────────────────────────
 // Exported so index.tsx can reuse them in gateway chips.
-export function OsLogo({ os, size = 16 }: { os: string | undefined; size?: number }) {
-    const lower = (os || '').toLowerCase();
+export function OsLogo({ os, size = 16 }: { os: string | null | undefined; size?: number }) {
+    const lower = normaliseOs(os);
 
-    if (lower.includes('win')) return <WindowsLogo size={size} />;
-    if (lower.includes('mac') || lower.includes('darwin')) return <AppleLogo size={size} />;
-    if (lower.includes('ios') || lower.includes('iphone') || lower.includes('ipad')) return <AppleLogo size={size} />;
+    // Tailscale reports "darwin" for macOS. It contains the letters "win",
+    // so it must be checked before Windows; the former broad Win match made
+    // Macs render as Windows devices.
+    if (lower.includes('mac') || lower.includes('darwin') || lower.includes('ios') || lower.includes('iphone') || lower.includes('ipad')) {
+        return <AppleLogo size={size} />;
+    }
     if (lower.includes('android')) return <AndroidLogo size={size} />;
     if (lower.includes('freebsd') || lower.includes('openbsd') || lower.includes('netbsd') || lower.includes('bsd')) {
         return <FreeBSDLogo size={size} />;
     }
     if (lower.includes('linux') || lower.includes('unix')) return <LinuxLogo size={size} />;
-    return <GenericDeviceLogo size={size} />;
+    if (lower.includes('windows') || lower === 'win32' || /^win(?:dows)?(?:10|11)?$/.test(lower)) {
+        return <WindowsLogo size={size} />;
+    }
+    return <UnknownOsLogo size={size} />;
+}
+
+function normaliseOs(os: string | null | undefined): string {
+    return typeof os === 'string' ? os.trim().toLowerCase() : '';
+}
+
+/** Never infer an OS from a hostname or IP: neither is reliable or safe.
+ *  A peer that has not reported its OS is deliberately shown as unknown. */
+export function osTooltip(os: string | null | undefined): string {
+    const value = normaliseOs(os);
+    return value && !['unknown', 'n/a', 'na', 'none', 'null'].includes(value)
+        ? os!.trim()
+        : 'Unknown OS — not reported by this device';
 }
 
 function WindowsLogo({ size }: { size: number }) {
@@ -282,12 +301,13 @@ function FreeBSDLogo({ size }: { size: number }) {
     );
 }
 
-function GenericDeviceLogo({ size }: { size: number }) {
+function UnknownOsLogo({ size }: { size: number }) {
     return (
-        <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{ display: 'block' }}>
-            <rect x="1.5" y="3" width="13" height="9" rx="2" stroke="#888" strokeWidth="1.4"/>
-            <line x1="5" y1="14" x2="11" y2="14" stroke="#888" strokeWidth="1.4" strokeLinecap="round"/>
-            <line x1="8" y1="12" x2="8" y2="14" stroke="#888" strokeWidth="1.4" strokeLinecap="round"/>
+        <svg width={size} height={size} viewBox="0 0 20 20" fill="none" role="img" aria-label="Unknown operating system" style={{ display: 'block' }}>
+            <rect x="2" y="3" width="16" height="11" rx="2" stroke="var(--color-text-muted)" strokeWidth="1.35"/>
+            <path d="M8 17h4M10 14v3" stroke="var(--color-text-muted)" strokeWidth="1.35" strokeLinecap="round"/>
+            <path d="M8.1 7.3c.15-1.1.95-1.8 2.05-1.8 1.13 0 1.98.69 1.98 1.68 0 1.32-1.5 1.54-1.8 2.5" stroke="var(--color-text-secondary)" strokeWidth="1.35" strokeLinecap="round"/>
+            <circle cx="10.3" cy="11.6" r=".7" fill="var(--color-text-secondary)"/>
         </svg>
     );
 }

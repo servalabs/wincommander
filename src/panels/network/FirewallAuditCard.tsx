@@ -31,7 +31,7 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
     setPending({ action, names: firewall.selectedRules.map((rule) => rule.name) });
 
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">

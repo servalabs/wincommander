@@ -92,10 +92,12 @@ test("storage matches the cache card to File Hygiene while retaining the establi
   expect(css).toContain("overflow: auto;");
   expect(cleaner).toContain("maintenance-routine-cleaner flex min-h-0 flex-1");
   expect(panel).toContain("Disk space analyser");
-  expect(analyzer).toContain('minHeight: inline ? "560px" : undefined');
+  expect(analyzer).toContain('flex: 1, overflow: "hidden", minHeight: 0');
   expect(analyzer).not.toContain("const hasResults =");
   expect(css).toContain("height: min(42rem, 68vh);");
-  expect(preview).toContain('className="maintenance-cache-category-actions"');
+  expect(preview).toContain('onClick={selectRecommended}');
+  expect(preview).not.toContain('className="maintenance-cache-category-actions"');
+  expect(preview.match(/Select recommended/g)).toHaveLength(1);
   expect(preview).toContain('className="maintenance-cache-item-list flex flex-col gap-2"');
   expect(css).toContain("max-height: calc(6 * 5.75rem + 5 * 0.5rem);");
 });

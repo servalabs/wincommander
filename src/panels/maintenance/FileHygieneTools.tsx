@@ -32,11 +32,6 @@ function fileIconFor(name: string): IconName {
   return EXT_ICONS[ext] ?? "document";
 }
 
-function rootLabel(root: string) {
-  const normalized = root.replace(/[\\/]+$/, "");
-  return normalized.split(/[\\/]/).pop() || root;
-}
-
 function describeRemoveResult(result: DuplicateRemoveResult | EmptyFolderRemoveResult) {
   const summary = "bytesRecovered" in result
     ? `Removed ${result.filesRemoved} files and recovered ${formatBytes(result.bytesRecovered)}.`
@@ -84,74 +79,34 @@ export function FileHygieneTools() {
 
   return (
     <div className="maintenance-file-hygiene-tools flex flex-col gap-4">
-      {/* Roots apply to both tools below — kept structurally separate from the
-          duplicates/empty switch so that scope is unambiguous. Exactly one
-          "Choose folders" control lives here, always reachable. */}
       <Card className="maintenance-file-hygiene-card">
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Icon icon="folder-open" size={16} className="text-[var(--accent)]" />
-            <CardTitle>File hygiene</CardTitle>
-          </div>
-          <CardDescription>Choose folders once, then inspect them for duplicate files or empty folders. WinCommander never accepts paths during removal—only short-lived IDs from the preview.</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={() => void tools.chooseRoots()} disabled={tools.busy}>
-              <Icon icon="folder-open" /> Choose folders
-            </Button>
-            {tools.busy && <Button size="icon" variant="outline" onClick={() => void tools.cancel()} title={`Cancel ${tools.tool} scan`} aria-label={`Cancel ${tools.tool} scan`}><Icon icon="stop" /></Button>}
-            {!!tools.roots.length && <Badge tone="accent">{tools.roots.length} root{tools.roots.length === 1 ? "" : "s"}</Badge>}
-          </div>
-          {tools.roots.length ? (
-            <div className="flex flex-wrap gap-2">
-              {tools.roots.slice(0, 2).map((root) => (
-                <span key={root} className="flex max-w-full items-center gap-1.5 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] py-1 pl-2.5 pr-1.5 text-xs transition-colors hover:border-[var(--border-strong)]">
-                  <Icon icon="folder-close" size={12} className="shrink-0 text-[var(--text-mute)]" />
-                  <span className="min-w-0 truncate font-mono text-[var(--text-dim)]" title={root}>{rootLabel(root)}</span>
-                  <button type="button" onClick={() => tools.removeRoot(root)} aria-label={`Remove ${root}`} title={`Remove ${root}`} className="shrink-0 rounded-[var(--r-sm)] p-0.5 text-[var(--text-mute)] hover:bg-[var(--surface-3)] hover:text-[var(--danger)]">
-                    <Icon icon="cross" size={12} />
-                  </button>
-                </span>
-              ))}
-              {tools.roots.length > 2 && (
-                <Button size="sm" variant="outline" onClick={() => setRootsOpen(true)}>
-                  Show {tools.roots.length - 2} more
-                </Button>
-              )}
-            </div>
-          ) : (
-            <SharedEmptyState
-              icon="folder-open"
-              title="No folders chosen yet"
-              hint="Use Choose folders above to pick one or more folders to inspect."
-            />
-          )}
-        </CardContent>
-
-
-      {tools.error && !errorDismissed && <Notice tone="danger" title="Operation failed" message={tools.error} onDismiss={() => setErrorDismissed(true)} />}
-      {resultNotice && !resultDismissed && <Notice tone={resultNotice.tone} title={resultNotice.title} message={resultNotice.message} onDismiss={() => setResultDismissed(true)} />}
-
-      <div className="maintenance-file-hygiene-results border-t border-[var(--border)]">
+        {tools.error && !errorDismissed && <Notice tone="danger" title="Operation failed" message={tools.error} onDismiss={() => setErrorDismissed(true)} />}
+        {resultNotice && !resultDismissed && <Notice tone={resultNotice.tone} title={resultNotice.title} message={resultNotice.message} onDismiss={() => setResultDismissed(true)} />}
+        <div className="maintenance-file-hygiene-results">
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Icon icon="clean" size={16} className="text-[var(--accent)]" />
               <CardTitle>Inspect selected folders</CardTitle>
             </div>
-            <Tabs value={tools.tool} onValueChange={(value) => tools.changeTool(value as "duplicates" | "empty")}>
-              <TabsList>
-                <TabsTrigger value="duplicates">Duplicate files</TabsTrigger>
-                <TabsTrigger value="empty">Empty folders</TabsTrigger>
-              </TabsList>
-            </Tabs>
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              {!!tools.roots.length && <Badge tone="accent">{tools.roots.length} folder{tools.roots.length === 1 ? "" : "s"}</Badge>}
+              {tools.roots.length > 0 && <Button size="sm" variant="outline" onClick={() => setRootsOpen(true)}><Icon icon="folder-open" /> View selected</Button>}
+              <Button size="sm" variant="outline" onClick={() => void tools.chooseRoots()} disabled={tools.busy}><Icon icon="folder-open" /> Choose folders</Button>
+              {tools.busy && <Button size="icon" variant="outline" onClick={() => void tools.cancel()} title={`Cancel ${tools.tool} scan`} aria-label={`Cancel ${tools.tool} scan`}><Icon icon="stop" /></Button>}
+            </div>
           </div>
           <CardDescription>
             {tools.tool === "duplicates"
               ? "Select copies to remove; one verified copy per group is always retained."
               : "Only folders still empty at removal time are deleted."}
           </CardDescription>
+          <Tabs value={tools.tool} onValueChange={(value) => tools.changeTool(value as "duplicates" | "empty")}>
+            <TabsList>
+              <TabsTrigger value="duplicates">Duplicate files</TabsTrigger>
+              <TabsTrigger value="empty">Empty folders</TabsTrigger>
+            </TabsList>
+          </Tabs>
           {hasScan && (
             <div className="flex flex-wrap items-center gap-2 pt-1">
               {tools.tool === "duplicates" ? (

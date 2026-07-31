@@ -298,12 +298,15 @@ pub(crate) fn force_window_foreground(window: &tauri::WebviewWindow) {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
-        ShowWindow, SW_SHOW,
+        ShowWindow, SW_RESTORE,
     };
     let Ok(raw_hwnd) = window.hwnd() else { return };
     let target: HWND = raw_hwnd.0 as HWND;
     unsafe {
-        ShowWindow(target, SW_SHOW);
+        // Tray clicks must restore a minimized window as well as show a hidden
+        // one. SW_SHOW leaves an iconic window minimized, which made the tray
+        // appear unresponsive after a minimize-to-tray session.
+        ShowWindow(target, SW_RESTORE);
 
         // Microsoft-documented workaround: a synthetic Alt keystroke resets
         // the foreground-window lock for the current input desktop, so any

@@ -37,62 +37,59 @@ export function SystemHygieneTools() {
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <CardHeader>
-          <CardTitle>System hygiene</CardTitle>
-          <CardDescription>
-            Audit broken shortcuts, stale environment paths, and conservative
-            uninstall leftovers. Nothing is preselected.
-          </CardDescription>
+        <CardHeader className="flex-row items-start gap-3">
+          <div className="min-w-0">
+            <CardTitle>System hygiene</CardTitle>
+            <CardDescription>
+              Audit broken shortcuts, stale environment paths, and conservative
+              uninstall leftovers. Nothing is preselected.
+            </CardDescription>
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {items && (
+              <Badge tone="accent">
+                {items.length} candidate{items.length === 1 ? "" : "s"}
+              </Badge>
+            )}
+            {tools.busy && tools.tool !== "environment" && (
+              <Button
+                size="icon"
+                variant="outline"
+                onClick={() => void tools.cancel()}
+                title={`Cancel ${tools.tool} scan`}
+                aria-label={`Cancel ${tools.tool} scan`}
+              >
+                <Icon icon="stop" />
+              </Button>
+            )}
+            <Button
+              size="icon"
+              variant="primary"
+              disabled={tools.busy}
+              onClick={() => void tools.scan()}
+              title={scanLabel}
+              aria-label={scanLabel}
+            >
+              <Icon
+                icon={tools.busy || items ? "refresh" : "search"}
+                className={tools.busy ? "animate-spin" : undefined}
+              />
+            </Button>
+          </div>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
+        <CardContent>
           <Tabs
             value={tools.tool}
             onValueChange={(value) =>
               tools.changeTool(value as SystemHygieneTool)
             }
           >
-            <TabsList>
+            <TabsList className="relative isolate overflow-hidden">
               <TabsTrigger value="shortcuts">Shortcuts</TabsTrigger>
               <TabsTrigger value="environment">Environment</TabsTrigger>
               <TabsTrigger value="leftovers">Uninstall leftovers</TabsTrigger>
             </TabsList>
           </Tabs>
-          <div className="flex flex-wrap items-center gap-2">
-            {items && (
-              <Badge tone="accent">
-                {items.length} candidate{items.length === 1 ? "" : "s"}
-              </Badge>
-            )}
-            {tools.tool !== "shortcuts" && (
-              <div className="ml-auto flex items-center gap-2">
-                {tools.busy && tools.tool !== "environment" && (
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    onClick={() => void tools.cancel()}
-                    title={`Cancel ${tools.tool} scan`}
-                    aria-label={`Cancel ${tools.tool} scan`}
-                  >
-                    <Icon icon="stop" />
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={tools.busy}
-                  onClick={() => void tools.scan()}
-                  title={scanLabel}
-                  aria-label={scanLabel}
-                >
-                  <Icon
-                    icon={tools.busy || items ? "refresh" : "search"}
-                    className={tools.busy ? "animate-spin" : undefined}
-                  />
-                  {scanLabel}
-                </Button>
-              </div>
-            )}
-          </div>
         </CardContent>
       </Card>
 
@@ -101,7 +98,7 @@ export function SystemHygieneTools() {
 
       {tools.tool === "shortcuts" && tools.shortcuts && (
         <Card>
-          <CardHeader className="flex-row items-start gap-3">
+          <CardHeader>
             <div>
               <CardTitle>Broken shortcuts</CardTitle>
               <CardDescription>
@@ -110,35 +107,8 @@ export function SystemHygieneTools() {
                 unresolved targets are excluded.
               </CardDescription>
             </div>
-            <div className="ml-auto flex shrink-0 items-center gap-2">
-              {tools.busy && (
-                <Button
-                  size="icon"
-                  variant="outline"
-                  onClick={() => void tools.cancel()}
-                  title="Cancel broken-shortcut scan"
-                  aria-label="Cancel broken-shortcut scan"
-                >
-                  <Icon icon="stop" />
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="primary"
-                disabled={tools.busy}
-                onClick={() => void tools.scan()}
-                title={scanLabel}
-                aria-label={scanLabel}
-              >
-                <Icon
-                  icon={tools.busy ? "refresh" : "search"}
-                  className={tools.busy ? "animate-spin" : undefined}
-                />
-                {scanLabel}
-              </Button>
-            </div>
           </CardHeader>
-          <CardContent className="flex flex-col gap-2">
+          <CardContent className="max-h-[min(30rem,calc(100vh-20rem))] overflow-y-auto overscroll-contain pr-1">
             {tools.shortcuts.shortcuts.map((item) => (
               <Row
                 key={item.id}

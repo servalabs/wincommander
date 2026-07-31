@@ -31,7 +31,7 @@ export function RegistryTools() {
             <Tabs value={tools.tool} onValueChange={(value) => tools.changeTool(value as "orphans" | "context")} className="min-w-0">
               <TabsList><TabsTrigger value="orphans">Registry orphans</TabsTrigger><TabsTrigger value="context">Context menu</TabsTrigger></TabsList>
             </Tabs>
-            <div className="ml-auto flex items-center gap-2">
+            <div className="ml-auto flex shrink-0 items-center gap-2">
               {entries && <Badge tone="accent">{entries.length} candidate{entries.length === 1 ? "" : "s"}</Badge>}
               <Button size="icon" variant="primary" disabled={tools.busy} onClick={() => void tools.scan()} title={scanLabel} aria-label={scanLabel}><Icon icon={tools.busy || entries ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} /></Button>
             </div>
