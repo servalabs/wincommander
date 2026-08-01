@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { PANEL_MANIFESTS } from "../types/panels";
-import { createUiAuditSettings, uiAuditBackendResponse, uiAuditDirectResponse } from "./uiAudit";
+import { createUiAuditSettings, UI_AUDIT_ARRAY_COMMANDS, UI_AUDIT_POPULATED_ARRAY_COMMANDS, uiAuditBackendResponse, uiAuditDirectResponse } from "./uiAudit";
 import { buildTraceView } from "../components/shared/traceTable";
 
 describe("UI audit fixture", () => {
@@ -14,6 +14,17 @@ describe("UI audit fixture", () => {
       expect(panel.id).toBeTruthy();
     }
   });
+
+  test("loads every manifest-backed panel chunk through its production route", async () => {
+    const ids = new Set<string>();
+    for (const panel of PANEL_MANIFESTS) {
+      expect(ids.has(panel.id)).toBe(false);
+      ids.add(panel.id);
+      const module = await panel.importFn();
+      expect(typeof module.default).toBe("function");
+    }
+    expect(ids.size).toBe(PANEL_MANIFESTS.length);
+  }, 15_000);
 
   test("enables every module used by a routed panel", () => {
     const modules = createUiAuditSettings().app.modules ?? {};
@@ -56,5 +67,24 @@ describe("UI audit fixture", () => {
     expect((uiAuditDirectResponse("get_driver_health") as { devices: unknown[] }).devices).toEqual([]);
     expect((uiAuditDirectResponse("get_vulnerable_drivers") as { vulnerable: unknown[] }).vulnerable).toEqual([]);
     expect((uiAuditDirectResponse("malware_quarantine_list") as { entries: unknown[] }).entries).toEqual([]);
+  });
+
+  test("returns arrays for every typed array IPC contract used by the audit surface", () => {
+    for (const command of UI_AUDIT_ARRAY_COMMANDS) {
+      expect(Array.isArray(uiAuditDirectResponse(command))).toBe(true);
+    }
+  });
+
+  test("populates security and activity viewers so layout audits exercise real rows", () => {
+    for (const command of UI_AUDIT_POPULATED_ARRAY_COMMANDS) {
+      expect((uiAuditDirectResponse(command) as unknown[]).length).toBeGreaterThan(0);
+    }
+
+    const usbTimeline = uiAuditDirectResponse("get_usb_timeline") as {
+      records: Record<string, unknown>;
+      sessions: unknown[];
+    };
+    expect(Object.keys(usbTimeline.records).length).toBeGreaterThan(0);
+    expect(usbTimeline.sessions.length).toBeGreaterThan(0);
   });
 });

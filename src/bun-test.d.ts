@@ -25,7 +25,7 @@ declare module "bun:test" {
   }
 
   export function describe(name: string, fn: TestFn): void;
-  export function test(name: string, fn: TestFn): void;
+  export function test(name: string, fn: TestFn, timeout?: number): void;
   /** Alias for `test`. */
   export function it(name: string, fn: TestFn): void;
   export function beforeEach(fn: TestFn): void;

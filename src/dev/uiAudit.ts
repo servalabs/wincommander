@@ -202,6 +202,69 @@ export function uiAuditBackendResponse(command: string): unknown {
   }
 }
 
+export const UI_AUDIT_ARRAY_COMMANDS = [
+  "content_get_doc",
+  "drop_standard_decoys",
+  "f6_list_removable_volumes",
+  "flow_list_rules",
+  "get_active_alerts",
+  "get_auth_anomaly_recent",
+  "get_canary_recent",
+  "get_drift_report",
+  "get_log_records",
+  "get_network_honeypot_ports",
+  "get_network_honeypot_recent",
+  "get_paste_monitor_recent",
+  "get_print_audit_log",
+  "get_purchase_catalog",
+  "get_ransomware_recent",
+  "get_ransomware_watched_dirs",
+  "get_recent_downloads",
+  "get_recent_screen_capture",
+  "get_remote_access_recent",
+  "get_remote_access_tools",
+  "get_top_processes",
+  "get_usb_autosandbox_recent",
+  "get_usb_hid_alerts",
+  "get_usb_storage_volumes",
+  "get_usb_transfer_stats",
+  "get_wifi_guard_known",
+  "get_wifi_guard_recent",
+  "get_wipe_drive_list",
+  "list_backend_commands",
+  "list_canaries",
+  "list_decoys",
+  "search_content",
+] as const;
+
+export const UI_AUDIT_POPULATED_ARRAY_COMMANDS = [
+  "drop_standard_decoys",
+  "f6_list_removable_volumes",
+  "get_active_alerts",
+  "get_auth_anomaly_recent",
+  "get_canary_recent",
+  "get_log_records",
+  "get_network_honeypot_ports",
+  "get_network_honeypot_recent",
+  "get_paste_monitor_recent",
+  "get_print_audit_log",
+  "get_ransomware_recent",
+  "get_ransomware_watched_dirs",
+  "get_recent_downloads",
+  "get_recent_screen_capture",
+  "get_remote_access_recent",
+  "get_remote_access_tools",
+  "get_top_processes",
+  "get_usb_autosandbox_recent",
+  "get_usb_hid_alerts",
+  "get_usb_storage_volumes",
+  "get_usb_transfer_stats",
+  "get_wifi_guard_known",
+  "get_wifi_guard_recent",
+  "list_canaries",
+  "list_decoys",
+] as const satisfies ReadonlyArray<(typeof UI_AUDIT_ARRAY_COMMANDS)[number]>;
+
 export function uiAuditDirectResponse(command: string): unknown {
   if (command.startsWith("plugin:")) return null;
   switch (command) {
@@ -216,6 +279,13 @@ export function uiAuditDirectResponse(command: string): unknown {
     case "get_managed_policy":
       return { managed: false, source: "", values: {} };
     case "flow_list_rules":
+      return [];
+    case "list_backend_commands":
+    case "get_wipe_drive_list":
+    case "get_purchase_catalog":
+    case "get_drift_report":
+    case "search_content":
+    case "content_get_doc":
       return [];
     case "runtime_visibility_state":
       return { state: { entries: [] }, statePath: "C:\\Audit\\runtime-visibility.json" };
@@ -262,6 +332,74 @@ export function uiAuditDirectResponse(command: string): unknown {
         { date: "2026-08-01", timestamp: "22:41:09", level: "INFO", source: "core", os: "Windows", message: "UI audit fixture loaded" },
         { date: "2026-08-01", timestamp: "22:42:17", level: "WARN", source: "pro", os: "Windows", message: "Example structured warning for layout verification" },
       ];
+    case "get_recent_downloads":
+      return [
+        { name: "audit-report.pdf", path: "C:\\Audit\\Downloads\\audit-report.pdf", sizeBytes: 3145728, modifiedAt: 1785624000 },
+        { name: "evidence-bundle.zip", path: "C:\\Audit\\Downloads\\evidence-bundle.zip", sizeBytes: 9437184, modifiedAt: 1785623100 },
+      ];
+    case "get_top_processes":
+      return [
+        { name: "audit-tool.exe", cpuUsage: 12.4, ramMb: 286 },
+        { name: "case-indexer.exe", cpuUsage: 7.1, ramMb: 412 },
+      ];
+    case "get_auth_anomaly_recent":
+      return [{ kind: "failedLogonBurst", severity: "high", summary: "8 failed sign-ins in 90 seconds", user: "AuditUser", ip: "192.0.2.44", count: 8, detectedAt: "2026-08-01T22:40:00Z" }];
+    case "list_canaries":
+      return [{ id: "audit-canary", label: "Quarterly report", tokenType: "docx", outputPath: "C:\\Audit\\Canaries\\Quarterly Report.docx", beaconUrl: "http://127.0.0.1:8765/beacon/audit-canary", createdAt: "2026-08-01T20:00:00Z" }];
+    case "get_canary_recent":
+      return [{ tokenId: "audit-canary", label: "Quarterly report", remoteAddr: "127.0.0.1", userAgent: "UI audit agent", firedAt: "2026-08-01T22:30:00Z" }];
+    case "get_network_honeypot_ports":
+      return [{ port: 445, label: "SMB", enabled: true, custom: false }, { port: 3389, label: "RDP", enabled: false, custom: false }];
+    case "get_network_honeypot_recent":
+      return [{ port: 445, service: "SMB", peer: "192.0.2.55", peekHex: "ff534d42", detectedAt: "2026-08-01T22:35:00Z" }];
+    case "get_wifi_guard_known":
+      return [["Audit Wi-Fi", ["00:11:22:33:44:55", "00:11:22:33:44:66"]]];
+    case "get_wifi_guard_recent":
+      return [{ ssid: "Audit Wi-Fi", bssid: "00:11:22:33:44:99", auth: "WPA2", signal: "82%", reason: "newBssid", detectedAt: "2026-08-01T22:37:00Z" }];
+    case "f6_list_removable_volumes":
+      return [{ driveLetter: "E:", label: "AUDIT USB" }];
+    case "list_decoys":
+      return [{ path: "C:\\Audit\\Decoys\\Passwords.xlsx", exists: true }];
+    case "get_decoy_recent":
+      return [{ path: "C:\\Audit\\Decoys\\Passwords.xlsx", kind: "read", detected_at: "2026-08-01T22:32:00Z" }];
+    case "drop_standard_decoys":
+      return ["C:\\Audit\\Decoys\\Passwords.xlsx", "C:\\Audit\\Decoys\\Payroll.docx"];
+    case "get_print_audit_log":
+      return [{ timeCreated: "2026-08-01T22:20:00Z", document: "C:\\Audit\\Cases\\report.docx", pages: 12, printer: "Audit Printer", user: "AuditUser" }];
+    case "get_paste_monitor_recent":
+      return [{ pattern: "Suspicious encoded command", severity: "danger", detected_at: "2026-08-01T22:29:00Z" }];
+    case "get_ransomware_recent":
+      return [{ count: 48, window_seconds: 10, sample_paths: ["C:\\Audit\\Cases\\sample-a.docx", "C:\\Audit\\Cases\\sample-b.pdf"], detected_at: "2026-08-01T22:25:00Z", pid: 4242, image_name: "audit-tool.exe", image_path: "C:\\Audit\\audit-tool.exe", action_taken: "monitor" }];
+    case "get_ransomware_watched_dirs":
+      return ["C:\\Audit\\Cases", "C:\\Audit\\Evidence"];
+    case "get_remote_access_tools":
+      return [{ id: "audit-rdp", label: "Remote Desktop", processNames: ["mstsc.exe"], ports: [3389], enabled: true }];
+    case "get_remote_access_recent":
+      return [{ tool: "Remote Desktop", confidence: "high", reason: "Incoming RDP session", port: 3389, peer: "192.0.2.64", logHint: "Security 4624", detectedAt: "2026-08-01T22:28:00Z" }];
+    case "get_active_alerts":
+      return [{ alertId: "audit-alert", kind: "attention", severity: "warn", summary: "Secondary device entered frame", firedAt: "2026-08-01T22:26:00Z" }];
+    case "get_usb_storage_volumes":
+      return [{ driveLetter: "E:", label: "AUDIT USB", model: "Audit Flash Drive", serial: "AUDIT123" }];
+    case "get_usb_transfer_stats":
+      return [{ deviceKey: "0781:5581:storage:AUDIT123", friendlyName: "AUDIT USB", readBytes: 7340032, writeBytes: 2097152, lastSampleEpoch: 1785624000 }];
+    case "get_usb_hid_alerts":
+      return [{ deviceKey: "046d:c31c:hid:AUDITKBD", friendlyName: "Audit Keyboard", detectedAt: "2026-08-01T22:24:00Z", gapsSampled: 24, medianGapMs: 7.2, recentHidDevice: "Audit Keyboard", redFlag: "hidOnly", severity: "warning" }];
+    case "get_usb_autosandbox_recent":
+      return [{ time: "2026-08-01T22:23:00Z", deviceKey: "0781:5581:storage:AUDIT123", friendlyName: "AUDIT USB", action: "alert", enforced: false, detail: "New removable storage observed" }];
+    case "get_recent_screen_capture":
+      return [{ tool: "OBS Studio", processName: "obs64.exe", confidence: "high", detectedAt: "2026-08-01T22:22:00Z" }];
+    case "get_usb_timeline":
+      return {
+        records: {
+          auditUsb: {
+            identity: { key: "0781:5581:storage:AUDIT123", vid: "0781", pid: "5581", friendlyName: "Audit Flash Drive", isHid: false, isMassStorage: true, instanceId: "USBSTOR\\AUDIT123" },
+            lastSeen: 1785624000,
+            totalPluggedSecs: 1800,
+            sessionCount: 3,
+          },
+        },
+        sessions: [{ deviceKey: "0781:5581:storage:AUDIT123", attachedAt: 1785623100, detachedAt: null, volumeLetter: "E:" }],
+      };
     default:
       if (command.endsWith("_list") || command.startsWith("list_") || command.includes("_recent")) return [];
       return structuredClone(AUDIT_TRACE);
