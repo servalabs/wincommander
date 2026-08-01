@@ -182,7 +182,11 @@ function preloadSearchFilesPanel() {
 }
 
 function AppContent() {
-  const [activePanel, setActivePanel] = useState<PanelId>("dashboard");
+  const [activePanel, setActivePanel] = useState<PanelId>(() => {
+    if (!import.meta.env.DEV) return "dashboard";
+    const requested = new URLSearchParams(window.location.search).get("panel") as PanelId | null;
+    return requested && PANEL_MANIFESTS.some((panel) => panel.id === requested) ? requested : "dashboard";
+  });
   const [panelRecoveryGeneration, setPanelRecoveryGeneration] = useState(0);
   const [splashDone, setSplashDone] = useState(false);
   const { playStartupSound } = useStartupSound();
