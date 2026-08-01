@@ -361,6 +361,8 @@ export function uiAuditDirectResponse(command: string): unknown {
       return AUDIT_LICENSE;
     case "get_live_metrics":
       return { cpuUsage: 23, cpuTemp: 47, ramUsagePercent: 38, ramUsedGb: 12.2, ramTotalGb: 32, disks: [{ name: "C:", totalGb: 953.9, freeGb: 542.5 }] };
+    case "get_public_ip_trace":
+      return { ip: "203.0.113.42" };
     case "get_managed_policy":
       return { managed: false, source: "", values: {} };
     case "flow_list_rules":

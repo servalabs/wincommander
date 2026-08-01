@@ -146,6 +146,14 @@ describe("UI audit fixture", () => {
     expect(volumes.every((volume) => volume.recoveryPasswordPresent)).toBe(true);
   });
 
+  test("populates the Dashboard public-network readout", () => {
+    expect(uiAuditDirectResponse("get_public_ip_trace")).toEqual({ ip: "203.0.113.42" });
+    expect(uiAuditBackendResponse("Get-DNSStatus")).toMatchObject({
+      provider: "Cloudflare",
+      servers: ["1.1.1.1", "1.0.0.1"],
+    });
+  });
+
   test("returns arrays for every typed array IPC contract used by the audit surface", () => {
     for (const command of UI_AUDIT_ARRAY_COMMANDS) {
       expect(Array.isArray(uiAuditDirectResponse(command))).toBe(true);

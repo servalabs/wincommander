@@ -193,6 +193,15 @@ export default function DashboardPanel() {
     }
   }, [viewMode, effectiveViewMode, setViewMode]);
 
+  // The radar promises live Public IP + DNS readouts. Public IP owns its own
+  // probe, but DNS is shared AppContext state and was never requested when a
+  // session opened directly on Dashboard, leaving the tile on "checking…"
+  // until Network Control happened to mount. Prime that shared state once;
+  // refreshNetwork's TTL guard prevents redundant backend work on revisits.
+  useEffect(() => {
+    void refreshNetwork(true);
+  }, [refreshNetwork]);
+
   // Findings the user has chosen to ignore are hidden from the radar counts,
   // the Needs-Attention list, and Fix Everything (persisted in app settings).
   const ignoredFindingIds = useMemo(
