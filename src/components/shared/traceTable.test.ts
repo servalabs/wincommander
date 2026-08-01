@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildTraceView, humanizeTraceKey, traceCellText } from "./traceTable";
+import { buildTraceView, humanizeTraceKey, paginateTraceRows, traceCellText } from "./traceTable";
 
 describe("trace table view model", () => {
   test("exposes every scalar field from a forensic record as a table column", () => {
@@ -60,6 +60,47 @@ describe("trace table view model", () => {
     expect(view.datasets[0].columns).toEqual(["Source", "Entry", "Destination", "Name", "Value"]);
     expect(view.datasets[0].rows[0]).toEqual({ Source: "NetworkList", Entry: "Office Wi-Fi" });
     expect(view.datasets[0].rows[1]).toEqual({ Source: "Z:", Destination: "\\\\server\\share" });
+  });
+
+  test("expands scalar arrays into forensic columns instead of one generic Value column", () => {
+    const view = buildTraceView({
+      paths: [
+        "C:\\Users\\Audit\\Recent\\report.docx.lnk",
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU",
+        "2026-08-01 21:14:52 — audit-tool.exe launched",
+      ],
+    }, []);
+
+    expect(view.datasets[0].columns).toEqual([
+      "Name",
+      "Directory",
+      "Extension",
+      "Path",
+      "Hive",
+      "Key",
+      "Timestamp",
+      "Entry",
+    ]);
+    expect(view.datasets[0].rows[0]).toMatchObject({
+      Name: "report.docx.lnk",
+      Extension: "lnk",
+      Path: "C:\\Users\\Audit\\Recent\\report.docx.lnk",
+    });
+  });
+
+  test("paginates large datasets deterministically and clamps stale pages", () => {
+    const rows = Array.from({ length: 205 }, (_, index) => ({ index }));
+    const second = paginateTraceRows(rows, 1);
+    expect(second.page).toBe(1);
+    expect(second.totalPages).toBe(3);
+    expect(second.startIndex).toBe(100);
+    expect(second.rows).toHaveLength(100);
+    expect(second.rows[0]).toEqual({ index: 100 });
+
+    const clamped = paginateTraceRows(rows, 99);
+    expect(clamped.page).toBe(2);
+    expect(clamped.startIndex).toBe(200);
+    expect(clamped.rows).toHaveLength(5);
   });
 
   test("normalizes technical field labels and display values", () => {

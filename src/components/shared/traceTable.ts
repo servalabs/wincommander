@@ -22,6 +22,16 @@ export interface TraceViewModel {
   structured: boolean;
 }
 
+export const TRACE_PAGE_SIZE = 100;
+
+export interface TracePage<T> {
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  startIndex: number;
+  rows: T[];
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -123,7 +133,10 @@ function collectDatasets(
       mergeRows(
         datasets,
         path,
-        scalarRows.map((item) => ({ ...context, Value: item })),
+        scalarRows.map((item) => ({
+          ...context,
+          ...(typeof item === "string" ? parseFallbackItem(item) : { Value: item }),
+        })),
       );
     }
     return;
@@ -152,6 +165,25 @@ function parseFallbackItem(item: string): TraceTableRow {
   if (separator > 2) {
     return { Name: item.slice(0, separator), Value: item.slice(separator + 2) };
   }
+
+  const registryPath = item.match(/^(HK(?:CU|LM|CR|U|CC)|HKEY_[A-Z_]+)\\(.+)$/i);
+  if (registryPath) return { Hive: registryPath[1].toUpperCase(), Key: registryPath[2] };
+
+  if (/^(?:[A-Z]:\\|\\\\)/i.test(item)) {
+    const lastSeparator = Math.max(item.lastIndexOf("\\"), item.lastIndexOf("/"));
+    const name = lastSeparator >= 0 ? item.slice(lastSeparator + 1) : item;
+    const directory = lastSeparator > 0 ? item.slice(0, lastSeparator) : item;
+    const extensionMatch = name.match(/\.([^.]+)$/);
+    return {
+      ...(name ? { Name: name } : {}),
+      Directory: directory,
+      ...(extensionMatch ? { Extension: extensionMatch[1].toLocaleLowerCase() } : {}),
+      Path: item,
+    };
+  }
+
+  const timestamped = item.match(/^(\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?)\s+(?:[|–—-])\s+(.+)$/);
+  if (timestamped) return { Timestamp: timestamped[1], Entry: timestamped[2] };
 
   return { Entry: item };
 }
@@ -205,4 +237,19 @@ export function traceCellText(value: TraceCell | undefined): string {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   return String(value);
+}
+
+export function paginateTraceRows<T>(rows: T[], requestedPage: number, pageSize = TRACE_PAGE_SIZE): TracePage<T> {
+  const normalizedPageSize = Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : TRACE_PAGE_SIZE;
+  const totalPages = Math.max(1, Math.ceil(rows.length / normalizedPageSize));
+  const normalizedPage = Number.isFinite(requestedPage) ? Math.max(0, Math.floor(requestedPage)) : 0;
+  const page = Math.min(normalizedPage, totalPages - 1);
+  const startIndex = page * normalizedPageSize;
+  return {
+    page,
+    pageSize: normalizedPageSize,
+    totalPages,
+    startIndex,
+    rows: rows.slice(startIndex, startIndex + normalizedPageSize),
+  };
 }

@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, Icon } from "@/components/ui/bp";
 import type { CleanupCategory } from "../../panels/cleanup/cleanupCategories";
 import {
   buildTraceView,
+  paginateTraceRows,
   traceCellText,
   type TraceDataset,
   type TraceTableRow,
@@ -159,8 +160,9 @@ function compareCells(left: unknown, right: unknown): number {
 function TraceDataTable({ dataset, query }: { dataset: TraceDataset; query: string }) {
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [page, setPage] = useState(0);
 
-  const visibleRows = useMemo(() => {
+  const matchingRows = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     let rows = dataset.rows.map((row, sourceIndex) => ({ row, sourceIndex }));
     rows = needle
@@ -177,6 +179,11 @@ function TraceDataTable({ dataset, query }: { dataset: TraceDataset; query: stri
     }
     return rows;
   }, [dataset.rows, query, sortColumn, sortDirection]);
+  const pageView = useMemo(() => paginateTraceRows(matchingRows, page), [matchingRows, page]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [dataset.id, query]);
 
   const toggleSort = (column: string) => {
     if (sortColumn === column) {
@@ -185,17 +192,19 @@ function TraceDataTable({ dataset, query }: { dataset: TraceDataset; query: stri
       setSortColumn(column);
       setSortDirection("asc");
     }
+    setPage(0);
   };
 
   return (
     <section className="trace-dialog__dataset">
       <div className="trace-dialog__dataset-header">
         <strong>{dataset.title}</strong>
-        <span>{visibleRows.length === dataset.rows.length ? `${dataset.rows.length} rows` : `${visibleRows.length} of ${dataset.rows.length} rows`}</span>
+        <span>{matchingRows.length === dataset.rows.length ? `${dataset.rows.length} rows` : `${matchingRows.length} of ${dataset.rows.length} rows`}</span>
       </div>
-      {visibleRows.length ? (
-        <div className="trace-dialog__table-scroll">
-          <table>
+      {matchingRows.length ? (
+        <>
+          <div className="trace-dialog__table-scroll">
+            <table>
             <thead>
               <tr>
                 <th className="trace-dialog__row-number" scope="col">#</th>
@@ -210,9 +219,9 @@ function TraceDataTable({ dataset, query }: { dataset: TraceDataset; query: stri
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map(({ row, sourceIndex }: { row: TraceTableRow; sourceIndex: number }, rowIndex) => (
+              {pageView.rows.map(({ row, sourceIndex }: { row: TraceTableRow; sourceIndex: number }, rowIndex) => (
                 <tr key={`${dataset.id}:${sourceIndex}`}>
-                  <td className="trace-dialog__row-number">{rowIndex + 1}</td>
+                  <td className="trace-dialog__row-number">{pageView.startIndex + rowIndex + 1}</td>
                   {dataset.columns.map((column) => {
                     const text = traceCellText(row[column]);
                     return <td key={column} title={text}>{text}</td>;
@@ -220,8 +229,25 @@ function TraceDataTable({ dataset, query }: { dataset: TraceDataset; query: stri
                 </tr>
               ))}
             </tbody>
-          </table>
-        </div>
+            </table>
+          </div>
+          {pageView.totalPages > 1 ? (
+            <div className="trace-dialog__pagination" aria-label={`${dataset.title} pages`}>
+              <span>
+                Rows {pageView.startIndex + 1}–{pageView.startIndex + pageView.rows.length} of {matchingRows.length}
+              </span>
+              <div>
+                <button type="button" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={pageView.page === 0} aria-label="Previous page">
+                  <Icon icon="chevron-left" size={11} />
+                </button>
+                <strong>{pageView.page + 1} / {pageView.totalPages}</strong>
+                <button type="button" onClick={() => setPage((current) => Math.min(pageView.totalPages - 1, current + 1))} disabled={pageView.page === pageView.totalPages - 1} aria-label="Next page">
+                  <Icon icon="chevron-right" size={11} />
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </>
       ) : (
         <span className="trace-dialog__empty">No rows match this filter.</span>
       )}

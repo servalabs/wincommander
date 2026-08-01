@@ -80,6 +80,25 @@ describe("redesign shared primitives", () => {
     expect(html).toContain("Clear");
   });
 
+  test("trace detail dialog pages large forensic datasets instead of rendering every artifact", () => {
+    const html = renderToStaticMarkup(
+      <TraceDetailDialog
+        category={category}
+        isOpen
+        count={125}
+        items={[]}
+        rawData={{ entries: Array.from({ length: 125 }, (_, index) => ({ name: `artifact-${index}.dat`, source: "registry" })) }}
+        clearing={false}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Rows 1–100 of 125");
+    expect(html).toContain("1 / 2");
+    expect(html).toContain("artifact-99.dat");
+    expect(html).not.toContain("artifact-100.dat");
+  });
+
   test("system radar renders score and findings without panel-specific copy", () => {
     const html = renderToStaticMarkup(
       <SystemRadar

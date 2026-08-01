@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { PANEL_MANIFESTS } from "../types/panels";
 import { createUiAuditSettings, uiAuditBackendResponse, uiAuditDirectResponse } from "./uiAudit";
+import { buildTraceView } from "../components/shared/traceTable";
 
 describe("UI audit fixture", () => {
   test("makes every manifest-backed panel reachable without persisted hiding", () => {
@@ -27,6 +28,17 @@ describe("UI audit fixture", () => {
 
     expect(itemsRule).toContain("grid-auto-rows: max-content");
     expect(itemsRule).toContain("align-content: start");
+  });
+
+  test("exercises multi-column forensic datasets instead of one-column placeholders", () => {
+    const view = buildTraceView(uiAuditDirectResponse("audit_trace_fixture"), []);
+    const paths = view.datasets.find((dataset) => dataset.id === "paths");
+
+    expect(view.datasets.length).toBeGreaterThanOrEqual(10);
+    expect(view.datasets.every((dataset) => dataset.columns.length >= 2)).toBe(true);
+    expect(paths?.columns).toContain("Path");
+    expect(paths?.columns).toContain("Hive");
+    expect(paths?.columns).toContain("Timestamp");
   });
 
   test("returns array-backed fixtures for every mounted system manager", () => {

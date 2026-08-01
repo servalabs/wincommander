@@ -68,6 +68,11 @@ const AUDIT_TRACE = {
   records: [
     { category: "Application", id: "AUDIT-001", name: "audit-tool.exe", path: "C:\\Audit\\audit-tool.exe", publisher: "Audit Publisher" },
   ],
+  paths: [
+    "C:\\Audit\\Recent\\audit-case.pdf.lnk",
+    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU",
+    "2026-08-01 21:14:52 — audit-tool.exe launched",
+  ],
   sections: [
     { name: "RunMRU", count: 2, sample: [{ valueName: "a", value: "audit-tool.exe", user: "AuditUser" }] },
   ],
