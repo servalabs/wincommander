@@ -194,6 +194,11 @@ export function uiAuditBackendResponse(command: string): unknown {
       return [];
     case "Get-AppBranding":
       return { companyName: "ServaLabs", productName: "WinCommander" };
+    case "Get-ActivationStatus":
+      return {
+        windows: { activated: true, edition: "Windows 11 Pro" },
+        office: { installed: false },
+      };
     case "Get-WCSystemProbe":
     case "Get-WCMigrationData":
       return {};

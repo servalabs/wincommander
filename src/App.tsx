@@ -20,6 +20,7 @@ import useMotionPreference from "./hooks/useMotionPreference";
 import { panelVariants, panelTransition } from "./components/shared/motion";
 import DependencyGate from "./components/DependencyGate";
 import SplashScreen from "./components/SplashScreen";
+import { shouldSkipStartupSplash } from "./lib/startupMode";
 import AppShell from "./components/AppShell";
 import { SearchProvider } from "./context/SearchContext";
 import BackgroundPollers from "./components/BackgroundPollers";
@@ -188,7 +189,9 @@ function AppContent() {
     return requested && PANEL_MANIFESTS.some((panel) => panel.id === requested) ? requested : "dashboard";
   });
   const [panelRecoveryGeneration, setPanelRecoveryGeneration] = useState(0);
-  const [splashDone, setSplashDone] = useState(false);
+  const [splashDone, setSplashDone] = useState(() =>
+    shouldSkipStartupSplash(import.meta.env.DEV, window.location.pathname),
+  );
   const { playStartupSound } = useStartupSound();
   const [hiddenPanelsUnlocked, setHiddenPanelsUnlocked] = useState(false);
   const [shredPaths, setShredPaths] = useState<string[]>([]);

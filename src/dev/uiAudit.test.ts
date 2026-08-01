@@ -3,8 +3,16 @@ import { readFileSync } from "node:fs";
 import { PANEL_MANIFESTS } from "../types/panels";
 import { createUiAuditSettings, UI_AUDIT_ARRAY_COMMANDS, UI_AUDIT_POPULATED_ARRAY_COMMANDS, uiAuditBackendResponse, uiAuditDirectResponse } from "./uiAudit";
 import { buildTraceView } from "../components/shared/traceTable";
+import { shouldSkipStartupSplash } from "../lib/startupMode";
 
 describe("UI audit fixture", () => {
+  test("skips only the dev audit splash so exhaustive route checks do not time out", () => {
+    expect(shouldSkipStartupSplash(true, "/ui-audit.html")).toBe(true);
+    expect(shouldSkipStartupSplash(true, "/nested/ui-audit.html")).toBe(true);
+    expect(shouldSkipStartupSplash(true, "/")).toBe(false);
+    expect(shouldSkipStartupSplash(false, "/ui-audit.html")).toBe(false);
+  });
+
   test("makes every manifest-backed panel reachable without persisted hiding", () => {
     const settings = createUiAuditSettings();
     expect(settings.app.permanentlyHiddenPanels).toEqual([]);
@@ -59,6 +67,13 @@ describe("UI audit fixture", () => {
 
     expect((uiAuditDirectResponse("scan_runtimes") as { runtimes: unknown[] }).runtimes).toEqual([]);
     expect((uiAuditDirectResponse("runtime_visibility_state") as { state: { entries: unknown[] } }).state.entries).toEqual([]);
+  });
+
+  test("supplies the activation shape consumed by the Settings panel", () => {
+    expect(uiAuditBackendResponse("Get-ActivationStatus")).toEqual({
+      windows: { activated: true, edition: "Windows 11 Pro" },
+      office: { installed: false },
+    });
   });
 
   test("matches the array contracts consumed by driver and security views", () => {
