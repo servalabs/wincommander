@@ -60,13 +60,17 @@ describe("UI audit fixture", () => {
     expect(paths?.columns).toContain("Timestamp");
   });
 
-  test("returns array-backed fixtures for every mounted system manager", () => {
+  test("populates every mounted system manager with contract-shaped rows", () => {
     for (const command of ["Get-StartupItems", "Get-LocalLoginUsers", "Get-AllScheduledTasks", "Get-AllServices"]) {
-      expect(uiAuditBackendResponse(command)).toEqual([]);
+      const rows = uiAuditBackendResponse(command) as Record<string, unknown>[];
+      expect(rows.length).toBeGreaterThan(0);
+      expect(Object.keys(rows[0] ?? {}).length).toBeGreaterThanOrEqual(6);
     }
 
-    expect((uiAuditDirectResponse("scan_runtimes") as { runtimes: unknown[] }).runtimes).toEqual([]);
-    expect((uiAuditDirectResponse("runtime_visibility_state") as { state: { entries: unknown[] } }).state.entries).toEqual([]);
+    const runtimes = (uiAuditDirectResponse("scan_runtimes") as { runtimes: Record<string, unknown>[] }).runtimes;
+    expect(runtimes.length).toBeGreaterThan(0);
+    expect(runtimes[0]).toMatchObject({ name: "audit-tray.exe", kind: "TypeB", hideable: true });
+    expect((uiAuditDirectResponse("runtime_visibility_state") as { state: { entries: unknown[] } }).state.entries.length).toBeGreaterThan(0);
   });
 
   test("supplies the activation shape consumed by the Settings panel", () => {
@@ -76,12 +80,70 @@ describe("UI audit fixture", () => {
     });
   });
 
-  test("matches the array contracts consumed by driver and security views", () => {
-    expect((uiAuditDirectResponse("startup_impact_scan") as { entries: unknown[] }).entries).toEqual([]);
-    expect((uiAuditDirectResponse("driver_maintenance_inventory") as { drivers: unknown[] }).drivers).toEqual([]);
-    expect((uiAuditDirectResponse("get_driver_health") as { devices: unknown[] }).devices).toEqual([]);
-    expect((uiAuditDirectResponse("get_vulnerable_drivers") as { vulnerable: unknown[] }).vulnerable).toEqual([]);
-    expect((uiAuditDirectResponse("malware_quarantine_list") as { entries: unknown[] }).entries).toEqual([]);
+  test("populates maintenance, driver, security, and network contracts", () => {
+    for (const command of [
+      "startup_impact_scan",
+      "registry_cleaner_scan",
+      "explorer_context_menu_scan",
+      "environment_cleaner_scan",
+      "uninstall_leftovers_scan",
+      "malware_quarantine_list",
+    ]) {
+      const rows = (uiAuditDirectResponse(command) as { entries: Record<string, unknown>[] }).entries;
+      expect(rows.length).toBeGreaterThan(0);
+      expect(Object.keys(rows[0] ?? {}).length).toBeGreaterThanOrEqual(3);
+    }
+
+    expect((uiAuditDirectResponse("shortcut_cleaner_scan") as { shortcuts: unknown[] }).shortcuts.length).toBeGreaterThan(0);
+    expect((uiAuditDirectResponse("driver_maintenance_inventory") as { drivers: unknown[] }).drivers.length).toBeGreaterThan(0);
+    expect((uiAuditDirectResponse("get_driver_health") as { devices: unknown[] }).devices.length).toBeGreaterThan(0);
+    expect((uiAuditDirectResponse("get_vulnerable_drivers") as { vulnerable: unknown[] }).vulnerable.length).toBeGreaterThan(0);
+
+    const ports = uiAuditBackendResponse("Get-NetworkPorts") as { rows: unknown[]; totals: { shown: number } };
+    expect(ports.rows.length).toBeGreaterThan(1);
+    expect(ports.totals.shown).toBe(ports.rows.length);
+    const adapters = uiAuditBackendResponse("Get-PhysicalNetworkAdapters") as { adapters: unknown[] };
+    expect(adapters.adapters.length).toBeGreaterThan(1);
+
+    expect(uiAuditDirectResponse("get_network_honeypot_bind_all_interfaces")).toBe(false);
+    expect(uiAuditDirectResponse("network_honeypot_status")).toMatchObject({ running: false, armedPorts: [] });
+    expect(uiAuditDirectResponse("get_ping_block_status")).toEqual({ blocked: false });
+    expect(uiAuditDirectResponse("wifi_guard_status")).toMatchObject({ running: false, currentSsid: "Audit Wi-Fi" });
+    const firewallBlocks = uiAuditBackendResponse("Get-ProtocolBlocks") as { blocks: unknown[] };
+    expect(firewallBlocks.blocks.length).toBeGreaterThan(0);
+  });
+
+  test("populates install, update, and debloat app states", () => {
+    const inventory = uiAuditBackendResponse("Get-AppInventory") as {
+      manifestApps: Array<{ installed: boolean; updateAvailable: boolean }>;
+      pendingUpdates: unknown[];
+    };
+    expect(inventory.manifestApps.some((app) => !app.installed)).toBe(true);
+    expect(inventory.manifestApps.some((app) => app.installed && app.updateAvailable)).toBe(true);
+    expect(inventory.pendingUpdates.length).toBeGreaterThan(0);
+
+    const appx = uiAuditBackendResponse("Get-InstalledAppxInventory") as { apps: unknown[] };
+    const bcu = uiAuditBackendResponse("Get-BcuApplicationList") as { apps: unknown[] };
+    expect(appx.apps.length).toBeGreaterThan(0);
+    expect(bcu.apps.length).toBeGreaterThan(0);
+    expect(uiAuditBackendResponse("Test-BcuInstalled")).toMatchObject({ installed: true });
+    expect(uiAuditBackendResponse("Test-EdgeInstalled")).toMatchObject({ installed: true });
+    expect(uiAuditBackendResponse("Test-OneDriveInstalled")).toMatchObject({ installed: true });
+    expect(uiAuditBackendResponse("Get-TeamsStatus")).toMatchObject({ installed: true });
+  });
+
+  test("populates the irreversible-storage review without enabling an erase", () => {
+    const volumes = uiAuditBackendResponse("Get-BitLockerVolumes") as Array<{
+      mountPoint: string;
+      volumeType: string;
+      protectorTypes: string[];
+      recoveryPasswordPresent: boolean;
+    }>;
+    expect(volumes.length).toBeGreaterThan(1);
+    expect(volumes.some((volume) => volume.volumeType === "OperatingSystem")).toBe(true);
+    expect(volumes.some((volume) => volume.volumeType === "Data")).toBe(true);
+    expect(volumes.every((volume) => volume.protectorTypes.length > 0)).toBe(true);
+    expect(volumes.every((volume) => volume.recoveryPasswordPresent)).toBe(true);
   });
 
   test("returns arrays for every typed array IPC contract used by the audit surface", () => {

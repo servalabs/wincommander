@@ -451,9 +451,9 @@ export default function ActivePorts() {
                     </div>
                     <div
                         className="active-ports-toggle"
-                        title="Show connections to/from 127.0.0.1 or ::1 (this PC talking to itself)"
+                        title="Hide connections to/from 127.0.0.1 or ::1 (this PC talking to itself)"
                         role="switch"
-                        aria-checked={!hideLoopback}
+                        aria-checked={hideLoopback}
                         tabIndex={0}
                         onClick={() => setHideLoopback((v) => !v)}
                         onKeyDown={(e) => {
@@ -463,14 +463,14 @@ export default function ActivePorts() {
                             }
                         }}
                     >
-                        <WCSwitch checked={!hideLoopback} onChange={(next) => setHideLoopback(!next)} size="sm" />
-                        <span>{hideLoopback ? "Show Loopback Connections" : "Hide Loopback Connections"}</span>
+                        <WCSwitch checked={hideLoopback} onChange={setHideLoopback} size="sm" />
+                        <span>Hide Loopback Connections</span>
                     </div>
                     <div
                         className="active-ports-toggle"
                         title="Pause the 10-second automatic refresh of this list"
                         role="switch"
-                        aria-checked={!paused}
+                        aria-checked={paused}
                         tabIndex={0}
                         onClick={() => setPaused((v) => !v)}
                         onKeyDown={(e) => {
@@ -480,8 +480,8 @@ export default function ActivePorts() {
                             }
                         }}
                     >
-                        <WCSwitch checked={!paused} onChange={(next) => setPaused(!next)} size="sm" />
-                        <span>{paused ? "Resume Port Monitoring" : "Pause Port Monitoring"}</span>
+                        <WCSwitch checked={paused} onChange={setPaused} size="sm" />
+                        <span>Pause Port Monitoring</span>
                     </div>
                 </div>
 

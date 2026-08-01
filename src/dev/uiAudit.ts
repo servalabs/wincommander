@@ -48,6 +48,23 @@ const AUDIT_METRIC_ALERTS = {
   download: { enabled: false, threshold: 10, hysteresisEnabled: true, hysteresisPct: 20, sustainedEnabled: true, sustainedSecs: 30 },
 };
 
+const AUDIT_APP_INVENTORY = structuredClone(DECOY_INVENTORY);
+const auditUpdateApp = AUDIT_APP_INVENTORY.manifestApps.find((app) => app.id === "7zip.7zip");
+if (auditUpdateApp) {
+  auditUpdateApp.installedVersion = "23.01";
+  auditUpdateApp.latestVersion = "24.08";
+  auditUpdateApp.updateAvailable = true;
+}
+AUDIT_APP_INVENTORY.pendingUpdates = [{
+  id: "7zip.7zip",
+  name: "7-Zip",
+  installedVersion: "23.01",
+  latestVersion: "24.08",
+  source: "winget",
+  inManifest: true,
+}];
+AUDIT_APP_INVENTORY.summary.updatesAvailable = 1;
+
 const AUDIT_TRACE = {
   entries: [
     { name: "audit-tool.exe", path: "C:\\Audit\\audit-tool.exe", source: "ShimCache", lastRun: "2026-08-01 22:31:08", count: 4 },
@@ -138,7 +155,7 @@ export function createUiAuditSettings(): AppSettings {
         gpu: AUDIT_SYSTEM_INFO.gpu,
         ram: AUDIT_SYSTEM_INFO.ram,
       },
-      apps: { inventory: DECOY_INVENTORY },
+      apps: { inventory: AUDIT_APP_INVENTORY },
     },
   });
 }
@@ -169,6 +186,11 @@ export function uiAuditBackendResponse(command: string): unknown {
       return { provider: "Cloudflare", dohId: "cloudflare", servers: ["1.1.1.1", "1.0.0.1"] };
     case "Get-EncryptionStatus":
       return { installed: true, volumes: [], systemDrive: { encrypted: true, status: "Protected" } };
+    case "Get-BitLockerVolumes":
+      return [
+        { mountPoint: "C:", volumeType: "OperatingSystem", volumeStatus: "FullyEncrypted", encryptionMethod: "XtsAes256", protectorTypes: ["Tpm", "RecoveryPassword"], recoveryPasswordPresent: true, backupUsed: true },
+        { mountPoint: "D:", volumeType: "Data", volumeStatus: "FullyEncrypted", encryptionMethod: "XtsAes256", protectorTypes: ["Password", "RecoveryPassword"], recoveryPasswordPresent: true, backupUsed: true },
+      ];
     case "Get-ProductivityStatus":
       return { installed: true, running: true, details: { server: true, input: true, active: true } };
     case "Get-MeshVPNStatus":
@@ -186,12 +208,70 @@ export function uiAuditBackendResponse(command: string): unknown {
     case "Get-InstalledBrowsersJson":
       return { browsers: [{ Name: "Microsoft Edge", Hardened: true }, { Name: "Mozilla Firefox", Hardened: false }] };
     case "Get-AppInventory":
-      return DECOY_INVENTORY;
+      return AUDIT_APP_INVENTORY;
+    case "Test-WingetInstalled":
+      return { status: "installed" };
+    case "Get-InstalledAppxInventory":
+      return {
+        apps: [
+          { name: "Microsoft.BingNews_8wekyb3d8bbwe", packageFullName: "Microsoft.BingNews_4.55.62231.0_x64__8wekyb3d8bbwe", isProvisioned: true, iconData: null },
+          { name: "Microsoft.XboxGamingOverlay_8wekyb3d8bbwe", packageFullName: "Microsoft.XboxGamingOverlay_7.124.5142.0_x64__8wekyb3d8bbwe", isProvisioned: true, iconData: null },
+        ],
+      };
+    case "Test-BcuInstalled":
+      return { installed: true, cliPath: "C:\\Audit\\BCU\\bcuninstaller.exe" };
+    case "Get-BcuApplicationList":
+      return {
+        apps: [{
+          displayName: "Legacy Audit Toolbar", publisher: "Legacy Audit Vendor", displayVersion: "2.4.1", installDate: "20240115", installLocation: "C:\\Audit\\Programs\\LegacyToolbar", installSource: "C:\\Audit\\Installers", uninstallString: '"C:\\Audit\\Programs\\LegacyToolbar\\uninstall.exe"', quietUninstall: '"C:\\Audit\\Programs\\LegacyToolbar\\uninstall.exe" /S', estimatedSizeKB: 28672, isProtected: false, isSystemComponent: false, isOrphaned: false, isUpdate: false, isValid: true, isRegistered: true, isWebBrowser: false, canQuietUninstall: true, uninstallerKind: "Nsis", is64Bit: "X64", registryKeyName: "LegacyAuditToolbar", registryPath: "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\LegacyAuditToolbar", aboutUrl: "https://example.invalid/audit-toolbar", comment: "Synthetic removable desktop program.", displayIcon: "C:\\Audit\\Programs\\LegacyToolbar\\toolbar.exe", iconData: null,
+        }],
+        totalCount: 1,
+        scanTime: "2026-08-01T22:45:00Z",
+      };
+    case "Test-EdgeInstalled":
+    case "Test-OneDriveInstalled":
+    case "Get-TeamsStatus":
+      return { installed: true };
+    case "Get-DebloatWindowsIconData":
+      return { icons: {} };
     case "Get-StartupItems":
+      return [
+        { Name: "Audit Case Indexer", Command: '"C:\\Audit\\Tools\\case-indexer.exe" --background', RamUsageMB: 86, Status: "Running", IsEnabled: true, Source: "Registry", Location: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", Recommendation: "Keep", Category: "Productivity", Description: "Indexes synthetic audit case metadata." },
+        { Name: "Legacy Audit Helper", Command: '"C:\\Audit\\Legacy\\audit-helper.exe"', RamUsageMB: 0, Status: "Disabled", IsEnabled: false, Source: "Folder", Location: "C:\\Audit\\Startup", Recommendation: "Disable", Category: "Utility", Description: "Representative disabled startup entry." },
+      ];
     case "Get-LocalLoginUsers":
+      return [
+        { name: "AuditAnalyst", fullName: "Audit Analyst", description: "Synthetic standard account", enabled: true, hiddenFromLogin: false, builtIn: false, currentUser: true, sid: "S-1-5-21-1000-1000-1000-1001" },
+        { name: "AuditService", fullName: "Audit Service", description: "Synthetic hidden service account", enabled: false, hiddenFromLogin: true, builtIn: false, currentUser: false, sid: "S-1-5-21-1000-1000-1000-1002" },
+      ];
     case "Get-AllScheduledTasks":
+      return [
+        { Name: "Audit Case Sync", Path: "\\WinCommander Audit\\", State: "Ready", Description: "Synchronizes synthetic audit case metadata.", Author: "ServaLabs Audit", IsMicrosoft: false, LastRunTime: "2026-08-01T22:30:00Z", NextRunTime: "2026-08-02T22:30:00Z", LastResult: 0 },
+        { Name: "Audit Disabled Task", Path: "\\WinCommander Audit\\", State: "Disabled", Description: "Representative disabled scheduled task.", Author: "ServaLabs Audit", IsMicrosoft: false, LastRunTime: null, NextRunTime: null, LastResult: null },
+      ];
     case "Get-AllServices":
-      return [];
+      return [
+        { Name: "WCAuditIndexer", DisplayName: "WinCommander Audit Indexer", Description: "Synthetic running service for UI verification.", StartMode: "Automatic", State: "Running", Status: "OK", CanPauseAndContinue: false, CanStop: true, Recommended: null },
+        { Name: "WCAuditLegacy", DisplayName: "WinCommander Audit Legacy Helper", Description: "Synthetic stopped service with a recommendation.", StartMode: "Manual", State: "Stopped", Status: "OK", CanPauseAndContinue: false, CanStop: false, Recommended: "Disabled" },
+      ];
+    case "Get-NetworkPorts": {
+      const rows = [
+        { proto: "TCP", localAddr: "192.0.2.10", localPort: 51820, remoteAddr: "198.51.100.24", remotePort: 443, state: "ESTABLISHED", pid: 4242, processName: "audit-sync.exe", processPath: "C:\\Audit\\Tools\\audit-sync.exe" },
+        { proto: "UDP", localAddr: "0.0.0.0", localPort: 5353, remoteAddr: "", remotePort: 0, state: "LISTEN", pid: 4343, processName: "audit-discovery.exe", processPath: "C:\\Audit\\Tools\\audit-discovery.exe" },
+        { proto: "TCP", localAddr: "127.0.0.1", localPort: 1420, remoteAddr: "", remotePort: 0, state: "LISTEN", pid: 4444, processName: "audit-ui.exe", processPath: "C:\\Audit\\Tools\\audit-ui.exe" },
+      ];
+      return { status: "ok", durationMs: 18, truncated: false, totals: { tcp: 2, udp: 1, shown: rows.length }, rows };
+    }
+    case "Get-PhysicalNetworkAdapters":
+      return {
+        status: "ok",
+        adapters: [
+          { id: "{AUDIT-WIFI-0001}", groupId: "PCI\\VEN_AUDIT&DEV_WIFI", name: "Audit Wi-Fi", description: "Synthetic Wi-Fi 6E Adapter", kind: "wifi", status: "Up", linkSpeedMbps: "1200", factoryMac: "02-00-00-00-00-01", currentMac: "02-00-00-00-A1-01", isSpoofed: true },
+          { id: "{AUDIT-ETH-0002}", groupId: "PCI\\VEN_AUDIT&DEV_ETH", name: "Audit Ethernet", description: "Synthetic 2.5 GbE Adapter", kind: "ethernet", status: "Disconnected", linkSpeedMbps: null, factoryMac: "02-00-00-00-00-02", currentMac: "02-00-00-00-00-02", isSpoofed: false },
+        ],
+      };
+    case "Get-ProtocolBlocks":
+      return { blocks: [{ Name: "WinCommander Audit HTTPS Block", Protocol: "TCP", Port: "443", Direction: "Outbound", Enabled: true }] };
     case "Get-AppBranding":
       return { companyName: "ServaLabs", productName: "WinCommander" };
     case "Get-ActivationStatus":
@@ -293,21 +373,51 @@ export function uiAuditDirectResponse(command: string): unknown {
     case "content_get_doc":
       return [];
     case "runtime_visibility_state":
-      return { state: { entries: [] }, statePath: "C:\\Audit\\runtime-visibility.json" };
+      return { state: { version: 1, entries: [{ key: "audit-tray.exe", hiddenAtUnixMs: Date.parse("2026-08-01T21:30:00Z"), applied: true, runValueRenames: [{ subkey: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", originalName: "AuditTray", renamedTo: "WCAuditTray" }], uninstallHides: [] }] }, statePath: "C:\\Audit\\runtime-visibility.json" };
     case "scan_runtimes":
-      return { runtimes: [], scannedAtUnixMs: Date.parse("2026-08-01T22:45:00Z"), totalProcesses: 0 };
+      return {
+        runtimes: [
+          { pid: 4242, parentPid: 1000, name: "audit-tray.exe", exePath: "C:\\Audit\\Tools\\audit-tray.exe", hasVisibleWindow: false, startsAtLogon: true, kind: "TypeB", hideable: true, tags: ["tray", "autostart", "synthetic"] },
+          { pid: 4243, parentPid: 4242, name: "audit-worker.exe", exePath: "C:\\Audit\\Tools\\audit-worker.exe", hasVisibleWindow: false, startsAtLogon: false, kind: "TypeC", hideable: true, tags: ["worker", "synthetic"] },
+          { pid: 4244, parentPid: 1000, name: "audit-viewer.exe", exePath: "C:\\Audit\\Tools\\audit-viewer.exe", hasVisibleWindow: true, startsAtLogon: false, kind: "TypeE", hideable: false, tags: ["visible", "synthetic"] },
+        ],
+        scannedAtUnixMs: Date.parse("2026-08-01T22:45:00Z"),
+        totalProcesses: 3,
+      };
     case "startup_impact_scan":
-      return { entries: [], truncated: false };
+      return {
+        entries: [
+          { id: "startup-audit-indexer", name: "Audit Case Indexer", source: "Registry", location: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", command: '"C:\\Audit\\Tools\\case-indexer.exe" --background', executablePath: "C:\\Audit\\Tools\\case-indexer.exe", pathExists: true, signatureStatus: "Valid", signer: "ServaLabs Audit", impact: "Medium", recommendation: "Keep" },
+          { id: "startup-audit-legacy", name: "Legacy Audit Helper", source: "Startup Folder", location: "C:\\Audit\\Startup", command: '"C:\\Audit\\Legacy\\audit-helper.exe"', executablePath: "C:\\Audit\\Legacy\\audit-helper.exe", pathExists: false, signatureStatus: "NotSigned", signer: null, impact: "High", recommendation: "Disable" },
+        ],
+        truncated: false,
+      };
     case "driver_maintenance_inventory":
-      return { drivers: [], truncated: false, cleanupAvailable: false, cleanupLimitation: "Driver removal is intentionally unavailable in the UI audit." };
+      return {
+        drivers: [
+          { deviceName: "Audit Wi-Fi Adapter", deviceClass: "Net", deviceId: "PCI\\VEN_AUDIT&DEV_WIFI", infName: "oem42.inf", manufacturer: "Audit Hardware Lab", driverVersion: "12.4.2.6", driverDate: "2026-07-14", isSigned: true, signer: "Audit Hardware Lab" },
+          { deviceName: "Legacy Audit Filter", deviceClass: "System", deviceId: "ROOT\\AUDITFILTER", infName: "oem99.inf", manufacturer: "Legacy Audit Vendor", driverVersion: "1.0.0.3", driverDate: "2021-04-02", isSigned: false, signer: null },
+        ],
+        truncated: false,
+        cleanupAvailable: false,
+        cleanupLimitation: "Driver removal is intentionally unavailable in the UI audit.",
+      };
     case "malware_quarantine_list":
-      return { entries: [] };
+      return { entries: [{ quarantineId: "audit-quarantine-001", sha256: "ad8c2d27bc65d97ab1fbc1e1708b31606a39b8c623d6ff52b57ab9c691d17e38", threatLabel: "Audit.Test.Sample", state: "quarantined" }] };
     case "security_threat_snapshot":
       return { source: "local", capturedAt: "2026-08-01T22:45:00Z", defender: { status: "available", realTimeEnabled: true, antivirusEnabled: true, recentThreatCount: 0, severityCounts: {} }, network: { interfaceCount: 2, activeInterfaceCount: 1 } };
     case "security_cve_snapshot":
       return { source: "osv", sourceTimestamp: "2026-08-01T22:45:00Z", queriedVersion: "24H2", status: "requires_approved_windows_provider", results: [], lookupPerformed: false };
     case "metric_alerts_get_config":
       return AUDIT_METRIC_ALERTS;
+    case "network_honeypot_status":
+      return { running: false, armedPorts: [], conflictingPorts: [], bindAllInterfaces: false };
+    case "get_network_honeypot_bind_all_interfaces":
+      return false;
+    case "get_ping_block_status":
+      return { blocked: false };
+    case "wifi_guard_status":
+      return { running: false, learning: false, knownSsidCount: 1, currentSsid: "Audit Wi-Fi", currentBssid: "00:11:22:33:44:55" };
     case "routine_cleaner_scan":
       return {
         items: [{ id: "audit-cache", category: "applications", label: "Audit application cache", path: "C:\\Audit\\Cache", bytes: 2621440, fileCount: 18, recommended: true, operation: "delete", truncated: false }],
@@ -317,19 +427,19 @@ export function uiAuditDirectResponse(command: string): unknown {
         cancelled: false,
       };
     case "registry_cleaner_scan":
-      return { entries: [], skippedEntries: 0 };
+      return { entries: [{ id: "registry-audit-clsid", classId: "{00000000-0000-0000-0000-AUDIT000001}", serverKind: "InprocServer32", missingServer: "C:\\Audit\\Missing\\audit-shell.dll", hive: "HKCU" }], skippedEntries: 1 };
     case "explorer_context_menu_scan":
-      return { entries: [], skippedEntries: 0 };
+      return { entries: [{ id: "context-audit-open", label: "Open with Audit Viewer", location: "HKCU\\Software\\Classes\\*\\shell\\AuditViewer", command: '"C:\\Audit\\Missing\\audit-viewer.exe" "%1"', enabled: true }], skippedEntries: 0 };
     case "shortcut_cleaner_scan":
-      return { shortcuts: [], scannedShortcuts: 24, cancelled: false, truncated: false };
+      return { shortcuts: [{ id: "shortcut-audit-legacy", name: "Legacy Audit Helper", path: "C:\\Audit\\Desktop\\Legacy Audit Helper.lnk", target: "C:\\Audit\\Missing\\audit-helper.exe" }], scannedShortcuts: 24, cancelled: false, truncated: false };
     case "environment_cleaner_scan":
-      return { entries: [], skippedEntries: 0 };
+      return { entries: [{ id: "environment-audit-path", scope: "User", variable: "PATH", value: "C:\\Audit\\Missing\\bin", kind: "missing-path-entry" }], skippedEntries: 0 };
     case "uninstall_leftovers_scan":
-      return { entries: [], scannedFolders: 12, skippedFolders: 0, cancelled: false, truncated: false };
+      return { entries: [{ id: "leftover-audit-legacy", name: "Legacy Audit Suite", path: "C:\\Audit\\AppData\\LegacyAudit", bytes: 15728640, scope: "User" }], scannedFolders: 12, skippedFolders: 0, cancelled: false, truncated: false };
     case "get_driver_health":
-      return { devices: [], summary: { total: 0, critical: 0, warning: 0, info: 0, ok: true } };
+      return { devices: [{ name: "Legacy Audit Filter", class: "System", status: "Error", problemCode: 28, problemText: "Representative missing-driver warning", severity: "warning", instanceId: "ROOT\\AUDITFILTER\\0000", manufacturer: "Legacy Audit Vendor" }], summary: { total: 1, critical: 0, warning: 1, info: 0, ok: false } };
     case "get_vulnerable_drivers":
-      return { vulnerable: [], scanned: 0, ok: true };
+      return { vulnerable: [{ filename: "audit-legacy.sys", path: "C:\\Audit\\Drivers\\audit-legacy.sys", state: "present", reason: "Synthetic vulnerable-driver match", matchedBy: "audit-fixture" }], scanned: 2, ok: false };
     case "get_pro_install_status":
       return { installed: true, compatible: true, version: "3.2.4" };
     case "get_log_records":
