@@ -4764,7 +4764,7 @@ function Get-CleanupSummaryAllUsers {
         $previewMax = 500
         $categories = @()
         foreach ($cat in $requestedCats) {
-            $count = 0; $items = @()
+            $count = 0; $items = @(); $records = @()
             try {
                 # For the current user delegate to the same per-category functions the
                 # main cleanup panel uses — counts will always be identical.
@@ -4776,101 +4776,121 @@ function Get-CleanupSummaryAllUsers {
                         'recentFiles' {
                             $r = Get-RecentFiles
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.entries) | Select-Object -First $previewMax
                             $items = @($r.entries) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'psHistory' {
                             $r = Get-PSHistory
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.entries) | Select-Object -First $previewMax
                             $items = @($r.entries) | Select-Object -First $previewMax | ForEach-Object { $_.command }
                         }
                         'jumpLists' {
                             $r = Get-JumpLists
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.entries) | Select-Object -First $previewMax
                             $items = @($r.entries) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'browserFootprints' {
                             $r = Get-BrowserFootprints
                             $count = if ($r.totalBrowsers) { [int]$r.totalBrowsers } else { 0 }
+                            $records = @($r.browsers) | Select-Object -First $previewMax
                             $items = @($r.browsers) | Select-Object -First $previewMax | ForEach-Object { "$($_.browser): $($_.totalSizeKB) KB" }
                         }
                         'shellBags' {
                             $r = Get-ShellBags
                             $count = @($r.entries).Count
+                            $records = @($r.entries) | Select-Object -First $previewMax
                             $items = @($r.entries) | Select-Object -First $previewMax | ForEach-Object { $_.path }
                         }
                         'execCache' {
                             $r = Get-ExecutionCache
                             $count = @($r.entries).Count
+                            $records = @($r.entries) | Select-Object -First $previewMax
                             $items = @($r.entries) | Select-Object -First $previewMax | ForEach-Object { $_.path }
                         }
                         'ntUserTraces' {
                             $r = Get-NTUserTraces
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.sections) | Select-Object -First $previewMax
                             $items = @($r.sections) | ForEach-Object { "$($_.name): $($_.count)" } | Select-Object -First $previewMax
                         }
                         'rdpHistory' {
                             $r = Get-RDPHistory
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.entries) | Select-Object -First $previewMax
                             $items = @($r.entries) | Select-Object -First $previewMax | ForEach-Object { $_.host }
                         }
                         'notepadState' {
                             $r = Get-NotepadStateFiles
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'crashDumps' {
                             $r = Get-CrashDumpList
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.dumps) | Select-Object -First $previewMax
                             $items = @($r.dumps) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'walFiles' {
                             $r = Get-SQLiteWALList
                             $count = if ($r.total) { [int]$r.total } else { 0 }
-                            $items = @($r.databases) | Select-Object -First $previewMax | ForEach-Object { $_.name }
+                            $records = @($r.files) | Select-Object -First $previewMax
+                            $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'recallDb' {
                             $r = Get-RecallDatabaseInfo
                             $count = if ($r.total) { [int]$r.total } else { 0 }
-                            $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
+                            $records = @($r.databases) | Select-Object -First $previewMax
+                            $items = @($r.databases) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'webCache' {
                             $r = Get-WebCacheInfo
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'thumbnailDb' {
                             $r = Get-ThumbnailCacheInfo
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'notificationDb' {
                             $r = Get-NotificationDatabaseInfo
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'activitiesTimeline' {
                             $r = Get-ActivitiesTimelineInfo
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'rdpBitmapCache' {
                             $r = Get-RdpBitmapCacheInfo
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'officeMru' {
                             $r = Get-OfficeMruInfo
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'embeddedWebCache' {
                             $r = Get-EmbeddedWebCacheInfo
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         'explorerSearchHistory' {
                             $r = Get-ExplorerSearchHistoryInfo
                             $count = if ($r.total) { [int]$r.total } else { 0 }
+                            $records = @($r.files) | Select-Object -First $previewMax
                             $items = @($r.files) | Select-Object -First $previewMax | ForEach-Object { $_.name }
                         }
                         default { $delegated = $false }
@@ -5250,7 +5270,17 @@ function Get-CleanupSummaryAllUsers {
                 }
                 } # end if (-not $delegated)
             } catch {}
-            $categories += @{ id = $cat; count = $count; items = @($items | Select-Object -First $previewMax) }
+            if (@($records).Count -eq 0 -and @($items).Count -gt 0) {
+                $records = @($items | Select-Object -First $previewMax | ForEach-Object {
+                    [pscustomobject]@{ entry = [string]$_ }
+                })
+            }
+            $categories += @{
+                id      = $cat
+                count   = $count
+                items   = @($items | Select-Object -First $previewMax)
+                records = @($records | Select-Object -First $previewMax)
+            }
         }
 
         # Unload hive if we loaded it

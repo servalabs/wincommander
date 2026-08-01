@@ -19,7 +19,7 @@ interface TraceDetailDialogProps {
   count: number;
   items: string[];
   rawData?: unknown;
-  groupedItems?: Array<{ title: string; count: number; items: string[] }>;
+  groupedItems?: Array<{ title: string; count: number; items: string[]; rawData?: unknown }>;
   clearing: boolean;
   onClose: () => void;
   onClear?: () => void;
@@ -45,7 +45,7 @@ export default function TraceDetailDialog({
   const groupedViews = useMemo(
     () => (groupedItems ?? []).map((group) => ({
       ...group,
-      view: buildTraceView(undefined, group.items),
+      view: buildTraceView(group.rawData, group.items),
     })),
     [groupedItems],
   );

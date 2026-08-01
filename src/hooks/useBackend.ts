@@ -1465,7 +1465,12 @@ export function useBackend() {
           total: number;
           hiveAvailable: boolean;
           hiveError?: string;
-          categories: Array<{ id: string; count: number; items: string[] }>;
+          categories: Array<{
+            id: string;
+            count: number;
+            items: string[];
+            records?: Array<Record<string, unknown>>;
+          }>;
         }>;
       }>("Get-CleanupSummaryAllUsers", {
         ...(categoryIds && categoryIds.length > 0 ? { CategoryIds: categoryIds.join(',') } : {}),

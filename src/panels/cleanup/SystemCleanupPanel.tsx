@@ -313,6 +313,7 @@ export default function SystemCleanupPanel() {
                     isOpen={!!otherDetailCategory}
                     count={otherUserDataMap[otherDetail.catId]?.count ?? 0}
                     items={otherUserDataMap[otherDetail.catId]?.items ?? []}
+                    rawData={otherUserDataMap[otherDetail.catId]?.raw}
                     clearing={otherUserDataMap[otherDetail.catId]?.clearing ?? false}
                     onClose={() => setOtherDetail(null)}
                     onClear={!isInvestigator && canSwitchUsers
@@ -339,6 +340,7 @@ export default function SystemCleanupPanel() {
                             title: u.displayName || u.username,
                             count: userData?.count ?? 0,
                             items: userData?.items ?? [],
+                            rawData: userData?.raw,
                         };
                     })
                     .filter(group => group.count > 0 || group.items.length > 0);

@@ -252,4 +252,40 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(scan).toContain("MULTI_USER_CLEANUP_IDS.has(cat.id)");
     expect(scan).toContain("if (s.targetUser) continue;");
   });
+
+  test("profile and all-users viewers preserve structured records", async () => {
+    const backendTypes = await read("src/hooks/useBackend.ts");
+    const scan = await read("src/panels/cleanup/useCleanupScan.ts");
+    const panel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
+    const dialog = await read("src/components/shared/TraceDetailDialog.tsx");
+    const cleanupScript = await read("src-tauri/commander-free/scripts/modules/privacy/cleanup.ps1");
+
+    expect(backendTypes).toContain("records?: Array<Record<string, unknown>>");
+    expect(scan).toContain("raw: c.records?.length ? { records: c.records } : undefined");
+    expect(panel).toContain("rawData={otherUserDataMap[otherDetail.catId]?.raw}");
+    expect(panel).toContain("rawData: userData?.raw");
+    expect(dialog).toContain("buildTraceView(group.rawData, group.items)");
+    expect(cleanupScript).toContain("$count = 0; $items = @(); $records = @()");
+    expect(cleanupScript).toContain("records = @($records | Select-Object -First $previewMax)");
+  });
+
+  test("multi-user delegation reads WAL and Recall result collections from their real fields", async () => {
+    const cleanupScript = await read("src-tauri/commander-free/scripts/modules/privacy/cleanup.ps1");
+    const delegationComment = cleanupScript.indexOf("# For the current user delegate");
+    const delegatedStart = cleanupScript.indexOf("if ($isCurrentUser)", delegationComment);
+    const otherUsersStart = cleanupScript.indexOf("# Other-users path", delegatedStart);
+    const delegated = cleanupScript.slice(delegatedStart, otherUsersStart);
+    const walStart = delegated.indexOf("'walFiles'");
+    const recallStart = delegated.indexOf("'recallDb'", walStart);
+    const webCacheStart = delegated.indexOf("'webCache'", recallStart);
+    const walBlock = delegated.slice(walStart, recallStart);
+    const recallBlock = delegated.slice(recallStart, webCacheStart);
+
+    expect(walBlock).toContain("Get-SQLiteWALList");
+    expect(walBlock).toContain("$records = @($r.files)");
+    expect(walBlock).not.toContain("$r.databases");
+    expect(recallBlock).toContain("Get-RecallDatabaseInfo");
+    expect(recallBlock).toContain("$records = @($r.databases)");
+    expect(recallBlock).not.toContain("$r.files");
+  });
 });

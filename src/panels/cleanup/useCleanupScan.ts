@@ -225,7 +225,11 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // ── Combined "All Users" view (#7) ──────────────────────────────────
     // Sums every account's per-category counts into one grid; the detail
     // modal breaks the total back down per user (e.g. alice 200 + bob 300 → 500).
-    const [allUsersRaw, setAllUsersRaw] = useState<Array<{ username: string; displayName: string; categories: Record<string, { count: number; items: string[] }> }>>([]);
+    const [allUsersRaw, setAllUsersRaw] = useState<Array<{
+        username: string;
+        displayName: string;
+        categories: Record<string, { count: number; items: string[]; raw?: unknown }>;
+    }>>([]);
 
     // True when the grid is showing the logged-in operator (the default). All
     // the existing single-user load/clear paths apply only in this mode.
@@ -253,15 +257,27 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 const u = res.data.users[0];
                 // hiveAvailable=false means registry categories show 0 (hive locked/unavailable).
                 // This is silent — not an error the user needs to act on.
-                const byId: Record<string, { count: number; items: string[] }> = {};
-                for (const c of u.categories) byId[c.id] = { count: c.count, items: c.items ?? [] };
+                const byId: Record<string, { count: number; items: string[]; raw?: unknown }> = {};
+                for (const c of u.categories) {
+                    byId[c.id] = {
+                        count: c.count,
+                        items: c.items ?? [],
+                        raw: c.records?.length ? { records: c.records } : undefined,
+                    };
+                }
                 const next: Record<string, CardData> = {};
                 const requestedIds = categoryIds?.length ? new Set(categoryIds) : null;
                 for (const cat of [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES]) {
                     if (!cat.scopeAware || !MULTI_USER_CLEANUP_IDS.has(cat.id)) continue;
                     if (requestedIds && !requestedIds.has(cat.id)) continue;
                     const d = byId[cat.id];
-                    next[cat.id] = { count: d?.count ?? 0, items: d?.items ?? [], loading: false, clearing: false };
+                    next[cat.id] = {
+                        count: d?.count ?? 0,
+                        items: d?.items ?? [],
+                        loading: false,
+                        clearing: false,
+                        raw: d?.raw,
+                    };
                 }
                 const merged = categoryIds?.length
                     ? { ...(_otherUserCache[username] ?? {}), ...next }
@@ -288,7 +304,11 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 setAllUsersRaw(res.data.users.map(u => ({
                     username: u.username,
                     displayName: availableUsers.find(a => a.name === u.username)?.displayName ?? u.username,
-                    categories: Object.fromEntries((u.categories ?? []).map(c => [c.id, { count: c.count, items: c.items ?? [] }])),
+                    categories: Object.fromEntries((u.categories ?? []).map(c => [c.id, {
+                        count: c.count,
+                        items: c.items ?? [],
+                        raw: c.records?.length ? { records: c.records } : undefined,
+                    }])),
                 })));
             } else {
                 showError(res.error || 'Failed to load combined user traces.');
