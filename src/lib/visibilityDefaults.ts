@@ -8,7 +8,7 @@
 // palette, and every borrowed-mode consumer agree on the starting state.
 //
 // Semantics requested by the owner:
-//   • System Records (sidecar) + Productivity + Server Apps + Flows → hidden ALWAYS by default
+//   • Productivity + Server Apps + Flows → hidden ALWAYS by default
 //     (Secret Settings is hidden-until-revealed via its own 5×-click gate, so
 //      it is not listed here.) Flows is the Pro automation surface — revealed
 //      from the Secret Settings visibility table.
@@ -19,21 +19,22 @@
 
 // Panels hidden while Borrowed Mode is active. Everything except the four
 // "safe" panels (dashboard, tweaks, apps, system-identity).
-export const DEFAULT_BORROWED_PANELS: string[] = [
+import type { PanelId } from "../types/panels";
+
+export const DEFAULT_BORROWED_PANELS = [
   "privacy",
   "network",
   "cleanup",
   "vault",
   "private-mesh",
   "server-apps",
-  "sidecar",
   "productivity",
   "flows",
   "fleet",
   "secret",
-];
+] satisfies PanelId[];
 
-export const DEFAULT_ALWAYS_PANELS: string[] = ["sidecar", "productivity", "server-apps", "flows"];
+export const DEFAULT_ALWAYS_PANELS = ["productivity", "server-apps", "flows"] satisfies PanelId[];
 
 // Right-sidebar surfaces hidden when borrowed. ai-advisor and search are
 // intentionally absent — they stay visible while borrowed.

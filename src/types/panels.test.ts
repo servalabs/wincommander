@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { VisibilityCtx } from "../lib/visibility";
-import { getPrimaryManifests, getSidebarManifests } from "./panels";
+import { DEFAULT_ALWAYS_PANELS, DEFAULT_BORROWED_PANELS } from "../lib/visibilityDefaults";
+import { getPrimaryManifests, getSidebarManifests, PANEL_MANIFESTS } from "./panels";
 
 describe("panel IA manifest", () => {
   test("primary sidebar manifests match the current cover IA", () => {
@@ -22,6 +23,14 @@ describe("panel IA manifest", () => {
 
     expect(labels).not.toContain("Intelligence");
     expect(labels).not.toContain(["Advanced", "Tools"].join(" "));
+  });
+
+  test("visibility defaults only reference reachable panel manifests", () => {
+    const reachable = new Set(PANEL_MANIFESTS.map((panel) => panel.id));
+
+    for (const panelId of [...DEFAULT_ALWAYS_PANELS, ...DEFAULT_BORROWED_PANELS]) {
+      expect(reachable.has(panelId)).toBe(true);
+    }
   });
 
   test("capability tier entries obey the resolver while primary cover IA stays stable", () => {

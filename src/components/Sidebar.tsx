@@ -168,10 +168,10 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
 
     return navItems.filter(item => {
       if (item.id === 'secret' && !secretSettingsRevealed) return false;
-      // Server Apps, System Records (sidecar), Productivity and Fleet are
+      // Server Apps, Productivity and Fleet are
       // now governed by the Secret Settings visibility table like every other
       // panel — no hardwired hide flags. Defaults (visibilityDefaults):
-      // sidecar + productivity + server-apps start "Always" hidden.
+      // productivity + server-apps + flows start "Always" hidden.
 
       if (lockedIds.includes(item.id) && !showUnlockedPanels) return false;
 

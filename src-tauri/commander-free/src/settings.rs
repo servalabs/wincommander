@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 pub const SETTINGS_VERSION: u32 = 2;
 
-const DEFAULT_PERMANENTLY_HIDDEN_PANELS: &[&str] = &["sidecar", "productivity", "server-apps"];
+const DEFAULT_PERMANENTLY_HIDDEN_PANELS: &[&str] = &["productivity", "server-apps", "flows"];
 
 // ── Device Identifiers ───────────────────────────────────────────────
 
@@ -1932,13 +1932,21 @@ fn create_default_settings() -> AppSettings {
 }
 
 fn apply_runtime_defaults(settings: &mut AppSettings) {
-    if settings.app.permanently_hidden_panels.is_none() {
-        settings.app.permanently_hidden_panels = Some(
-            DEFAULT_PERMANENTLY_HIDDEN_PANELS
-                .iter()
-                .map(|panel| panel.to_string())
-                .collect(),
-        );
+    match settings.app.permanently_hidden_panels.as_mut() {
+        Some(panels) => {
+            // `sidecar` was the persisted ID of the retired System Records
+            // panel. Drop it while loading older settings so visibility state
+            // cannot keep referring to a route that no longer exists.
+            panels.retain(|panel| panel != "sidecar");
+        }
+        None => {
+            settings.app.permanently_hidden_panels = Some(
+                DEFAULT_PERMANENTLY_HIDDEN_PANELS
+                    .iter()
+                    .map(|panel| panel.to_string())
+                    .collect(),
+            );
+        }
     }
 }
 
@@ -3015,6 +3023,20 @@ pub fn update_current_state(probe: serde_json::Value) -> Result<serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_defaults_remove_the_retired_sidecar_panel_id() {
+        let mut settings = create_default_settings();
+        settings.app.permanently_hidden_panels =
+            Some(vec!["sidecar".to_string(), "productivity".to_string()]);
+
+        apply_runtime_defaults(&mut settings);
+
+        assert_eq!(
+            settings.app.permanently_hidden_panels,
+            Some(vec!["productivity".to_string()])
+        );
+    }
 
     /// Asserts that after applying an admin config (both merge and overwrite
     /// strategies), the resulting AppSettings has BOTH the merged ideal field

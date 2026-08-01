@@ -41,7 +41,6 @@ export type PanelId =
   | "search-files"
   | "maintenance"
   | "cleanup"
-  | "sidecar"
   | "advisor"
   | "secret"
   | "flows"
@@ -378,7 +377,6 @@ const NAV_GROUP_BY_ID: Partial<Record<PanelId, NavGroup>> = {
   maintenance: "system",
   vault: "secure",
   "server-apps": "secure",
-  sidecar: "secure",
   tweaks: "system",
   apps: "system",
   fleet: "system",
