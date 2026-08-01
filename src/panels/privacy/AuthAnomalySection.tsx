@@ -12,6 +12,7 @@ import { Button, Spinner, Switch, Tag } from '@/components/ui/bp';
 import type { Intent } from '@/components/ui/bp';
 import useEntitlements from '@/hooks/useEntitlements';
 import SectionCard from '../../components/shared/SectionCard';
+import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
 
 interface AuthAnomalyHit {
   kind: string;
@@ -28,6 +29,7 @@ function sevIntent(sev: string): Intent | undefined {
 }
 
 export default function AuthAnomalySection() {
+  const requestConfirm = useAppConfirm();
   const { canUse } = useEntitlements();
   const [running, setRunning] = useState(false);
   const [hits, setHits] = useState<AuthAnomalyHit[]>([]);
@@ -67,6 +69,12 @@ export default function AuthAnomalySection() {
   );
 
   const clear = useCallback(async () => {
+    const accepted = await requestConfirm({
+      title: 'Clear recent access anomalies?',
+      description: 'This removes the recent sign-in anomaly findings recorded for this app session.',
+      confirmLabel: 'Clear findings',
+    });
+    if (!accepted) return;
     setBusy(true);
     try {
       await invoke('clear_auth_anomaly_recent');
@@ -76,7 +84,7 @@ export default function AuthAnomalySection() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [requestConfirm]);
 
   if (!canUse('paid')) {
     return (

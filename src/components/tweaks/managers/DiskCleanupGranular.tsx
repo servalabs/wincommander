@@ -11,6 +11,7 @@ import { useAppState } from "../../../context/AppContext";
 import { runOperation } from "../../../context/OperationContext";
 import { showSuccess, showError } from "../../../utils/toast";
 import { formatMaintenanceSuccess } from "../../../utils/maintenance";
+import { useAppConfirm } from "../../shared/AppConfirmDialog";
 
 interface CleanupCategory {
     Id: string;
@@ -90,6 +91,7 @@ const defaultSelection = (cats: CleanupCategory[]) =>
 
 /** Windows-owned storage scope of the Maintenance "Reclaim disk space" card. */
 export default function DiskCleanupGranular() {
+    const requestConfirm = useAppConfirm();
     // Seed from the module-level cache (already populated by the app-startup
     // pre-load, or a previous mount) so a returning/first-time visit renders
     // the live data immediately instead of an empty grid + loading flash.
@@ -186,9 +188,14 @@ export default function DiskCleanupGranular() {
 
     const clean = useCallback(async () => {
         if (selected.size === 0) return;
-        if (selected.has("windowsOld") && !window.confirm(
-            "Deleting Windows.old removes the option to roll back to the previous Windows version. Continue?"
-        )) return;
+        if (selected.has("windowsOld")) {
+            const accepted = await requestConfirm({
+                title: "Delete Windows.old?",
+                description: "Deleting Windows.old removes the option to roll back to the previous Windows version. This cannot be undone.",
+                confirmLabel: "Delete Windows.old",
+            });
+            if (!accepted) return;
+        }
 
         setCleaning(true);
         const res = await executeBackendCommand<{ success?: boolean; freedTotalMb?: number; message?: string }>(
@@ -202,7 +209,7 @@ export default function DiskCleanupGranular() {
         } else {
             showError(res.error || res.data?.message || "Cleanup failed");
         }
-    }, [selected, refresh]);
+    }, [requestConfirm, selected, refresh]);
 
     const changeSchedule = async (value: string) => {
         setScheduleBusy(true);

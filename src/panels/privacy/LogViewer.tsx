@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/bp";
 import { Icon } from "../../components/ui/icon";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import { showSuccess, showError } from "../../utils/toast";
 import {
     filterLogRecords,
@@ -59,6 +60,7 @@ function getRuntimeOsLabel(): string {
 const recordKey = (r: LogRecord) => `${r.date} ${r.timestamp} ${r.message} ${r.occurrences ?? 1}`;
 
 export default function LogViewer() {
+    const confirmAction = useAppConfirm();
     const [records, setRecords] = useState<LogRecord[]>([]);
     const [loading, setLoading] = useState(false);
     const [level, setLevel] = useState<LevelFilter>("ERROR_WARN");
@@ -86,6 +88,12 @@ export default function LogViewer() {
     useEffect(() => { refresh(); }, [refresh]);
 
     const handleClear = useCallback(async () => {
+        const accepted = await confirmAction({
+            title: "Clear all WinCommander logs?",
+            description: "This permanently removes every stored WinCommander log record. This cannot be undone.",
+            confirmLabel: "Clear logs",
+        });
+        if (!accepted) return;
         try {
             await invoke("clear_log_records");
             setRecords([]);
@@ -93,7 +101,7 @@ export default function LogViewer() {
         } catch {
             showError("Failed to clear logs.");
         }
-    }, []);
+    }, [confirmAction]);
 
     const filtered = useMemo(
         () => filterLogRecords(records, level, source, search),

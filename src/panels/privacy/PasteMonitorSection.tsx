@@ -36,6 +36,7 @@ import {
 import useEntitlements from "../../hooks/useEntitlements";
 import type { PasteMonitorCategories } from "../../types/settings";
 import SectionCard from "../../components/shared/SectionCard";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 interface DetectionRow {
   pattern: string;
@@ -99,6 +100,7 @@ export default function PasteMonitorSection({
   expanded: expandedProp,
   onExpandedChange,
 }: Props) {
+  const requestConfirm = useAppConfirm();
   const { canUse } = useEntitlements();
   const isPaid = canUse('paid');
   const cryptoSwap = cryptoSwapEnabled ?? DEFAULT_PASTE_MONITOR_CRYPTO_SWAP_ENABLED;
@@ -186,6 +188,12 @@ export default function PasteMonitorSection({
   };
 
   const onClearRecent = async () => {
+    const accepted = await requestConfirm({
+      title: "Clear recent clipboard detections?",
+      description: "This removes the recent detection metadata recorded for this app session. Clipboard content is not stored here.",
+      confirmLabel: "Clear detections",
+    });
+    if (!accepted) return;
     try {
       await invoke("clear_paste_monitor_recent");
     } catch (err) {

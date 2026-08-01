@@ -22,6 +22,7 @@ import { useCallback, useEffect, useState } from "react";
 import { showSuccess, showError } from "../../utils/toast";
 import { DecoyMonitorIntro } from "./MonitorIntros";
 import SectionCard from "../../components/shared/SectionCard";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 interface DecoyInfoRow {
   path: string;
@@ -60,6 +61,7 @@ export default function DecoyMonitorSection({
   expanded: expandedProp,
   onExpandedChange,
 }: Props) {
+  const requestConfirm = useAppConfirm();
   const [expandedLocal, setExpandedLocal] = useState(false);
   const isControlled = expandedProp !== undefined && onExpandedChange !== undefined;
   const expanded = isControlled ? expandedProp! : expandedLocal;
@@ -181,7 +183,12 @@ export default function DecoyMonitorSection({
   };
 
   const onDeleteFile = async (path: string) => {
-    if (!window.confirm(`Delete this file?\n\n${path}\n\nThis removes the actual file on disk, not just the watch entry.`)) return;
+    const accepted = await requestConfirm({
+      title: "Delete decoy file?",
+      description: `${path}\n\nThis removes the actual file from disk, not only the watch entry. This cannot be undone.`,
+      confirmLabel: "Delete file",
+    });
+    if (!accepted) return;
     try {
       await invoke("delete_decoy", { path });
       onPatchDecoy({ enrolledPaths: enrolledPaths.filter((p) => p !== path) });
@@ -193,6 +200,12 @@ export default function DecoyMonitorSection({
   };
 
   const onClearRecent = async () => {
+    const accepted = await requestConfirm({
+      title: "Clear recent decoy access events?",
+      description: "This removes the recent decoy-file access events recorded for this app session.",
+      confirmLabel: "Clear events",
+    });
+    if (!accepted) return;
     try {
       await invoke("clear_decoy_recent");
     } catch { /* ignore */ }

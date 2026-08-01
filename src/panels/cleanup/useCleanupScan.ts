@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { showSuccess, showError } from "../../utils/toast";
 import useBackend from "../../hooks/useBackend";
 import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, CLEANUP_USABILITY_TIERS, type CleanupCategory, type CleanupUsabilityTier } from "./cleanupCategories";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 const getSchedulerCategoryId = (categoryId: string): string =>
     [...STANDARD_CATEGORIES, ...DEEP_DFIR_CATEGORIES]
@@ -100,6 +101,7 @@ interface CleanupScanOptions {
 }
 
 export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationEnabled }: CleanupScanOptions) {
+    const requestConfirm = useAppConfirm();
     const backend = useBackend();
     const {
         clearPowerShellHistory,
@@ -720,7 +722,14 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             onDriveWipe?.();
             return;
         }
-        if (cat.confirmMessage && !window.confirm(cat.confirmMessage)) return;
+        if (cat.confirmMessage) {
+            const accepted = await requestConfirm({
+                title: `Clear ${cat.label}?`,
+                description: cat.confirmMessage,
+                confirmLabel: "Clear",
+            });
+            if (!accepted) return;
+        }
         const clearer = clearerMap[cat.id];
         if (!clearer) return;
 
@@ -767,9 +776,12 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         const excludeNote = excludedNames.length
             ? ` (excluding ${excludedNames.join(', ')})`
             : '';
-        if (!window.confirm(
-            `Clear ${tierLabel} across ${withFindings.length} categories${excludeNote}?`
-        )) return;
+        const accepted = await requestConfirm({
+            title: `Clear ${tierLabel}?`,
+            description: `Clear findings across ${withFindings.length} categories${excludeNote}? Each category will be re-scanned after cleanup.`,
+            confirmLabel: "Clear categories",
+        });
+        if (!accepted) return;
         const stillHasData: string[] = [];
         for (const cat of withFindings) {
             const clearer = clearerMap[cat.id];
@@ -854,13 +866,23 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // "Clear for {selected user}" in the sub-section.
     const handleOtherUserClear = async (cat: CleanupCategory) => {
         if (!selectedUser) return;
-        if (!window.confirm(`Clear ${cat.label} for ${selectedDisplay}?`)) return;
+        const accepted = await requestConfirm({
+            title: `Clear ${cat.label}?`,
+            description: `Clear ${cat.label} for ${selectedDisplay}? The selected profile will be re-scanned afterward.`,
+            confirmLabel: "Clear profile",
+        });
+        if (!accepted) return;
         await runOtherUserClear(cat, [selectedUser]);
     };
 
     // "Clear for all users" in the sub-section (admin-only, scopeAware-only).
     const handleCardClearAllUsers = async (cat: CleanupCategory) => {
-        if (!window.confirm(`Clear ${cat.label} for ALL ${availableUsers.length} users on this machine? This cannot be undone.`)) return;
+        const accepted = await requestConfirm({
+            title: `Clear ${cat.label} for all users?`,
+            description: `Clear ${cat.label} for all ${availableUsers.length} user profiles on this machine? This cannot be undone.`,
+            confirmLabel: "Clear all users",
+        });
+        if (!accepted) return;
         await runOtherUserClear(cat, undefined);
     };
 

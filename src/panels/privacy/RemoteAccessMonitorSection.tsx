@@ -25,6 +25,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 import { showError } from "../../utils/toast";
 import SectionCard from "../../components/shared/SectionCard";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 interface ToolEntry {
   id: string;
@@ -71,6 +72,7 @@ export default function RemoteAccessMonitorSection({
   expanded: expandedProp,
   onExpandedChange,
 }: Props) {
+  const requestConfirm = useAppConfirm();
   const [expandedLocal, setExpandedLocal] = useState(false);
   const isControlled = expandedProp !== undefined && onExpandedChange !== undefined;
   const expanded = isControlled ? expandedProp! : expandedLocal;
@@ -149,6 +151,12 @@ export default function RemoteAccessMonitorSection({
   };
 
   const onClearRecent = async () => {
+    const accepted = await requestConfirm({
+      title: "Clear recent remote-access detections?",
+      description: "This removes the recent remote-session findings recorded for this app session.",
+      confirmLabel: "Clear detections",
+    });
+    if (!accepted) return;
     try {
       await invoke("clear_remote_access_recent");
     } catch {

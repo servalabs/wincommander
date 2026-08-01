@@ -17,6 +17,7 @@ import useBackend, { UsbHistoryItem, DnsCacheEntry, ExecutionCacheEntry, ShellBa
 import { showSuccess, showError } from "../../utils/toast";
 import UniversalCallout from "../../components/shared/UniversalCallout";
 import { type CardData, updateCacheEntry } from "./useCleanupScan";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 const formatExecPath = (rawPath: string) => {
     let p = rawPath || "";
@@ -72,6 +73,7 @@ const formatSizeKB = (sizeKB: number) => {
 };
 
 export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
+    const requestConfirm = useAppConfirm();
     const [localLoadingMap, setLocalLoadingMap] = useState<Record<string, boolean>>({});
 
     const [usbDialogOpen, setUsbDialogOpen] = useState(false);
@@ -353,7 +355,12 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
     };
 
     const handleEraseAllWlan = async () => {
-        if (!window.confirm("Forget ALL known Wi-Fi networks? You will lose internet access.")) return;
+        const accepted = await requestConfirm({
+            title: "Forget all Wi-Fi networks?",
+            description: "Every saved Wi-Fi profile will be removed and the current wireless connection may be lost.",
+            confirmLabel: "Forget all networks",
+        });
+        if (!accepted) return;
         await runLocalOnly('wlanErase', async () => {
             const res = await removeWlanProfile("");
             if (res.success) {
@@ -625,7 +632,12 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
     };
 
     const handleClearShadowCopies = async () => {
-        if (!window.confirm("Delete ALL shadow copies (Volume Shadow Service snapshots)? This cannot be undone.")) return;
+        const accepted = await requestConfirm({
+            title: "Delete all shadow copies?",
+            description: "All Volume Shadow Service snapshots and their restore data will be deleted. This cannot be undone.",
+            confirmLabel: "Delete snapshots",
+        });
+        if (!accepted) return;
         await runLocalOnly('shadowCopiesClear', async () => {
             const res = await clearShadowCopies();
             if (res.success) {
@@ -758,7 +770,12 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
 
     // GROUP I-A: Advanced DFIR handlers
     const handleClearAmcache = async () => {
-        if (!window.confirm("Purge Amcache execution traces? Live registry keys cleared immediately; .hve file scheduled for boot-time deletion.")) return;
+        const accepted = await requestConfirm({
+            title: "Purge Amcache traces?",
+            description: "Live Amcache registry keys will be cleared immediately and the .hve file will be scheduled for deletion during boot.",
+            confirmLabel: "Purge Amcache",
+        });
+        if (!accepted) return;
         await runLocalOnly('amcache', async () => {
             const res = await clearAmcache();
             if (res.success && res.data) {
@@ -822,7 +839,12 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
 
 
     const handleClearSearchIndex = async () => {
-        if (!window.confirm("Clear Windows Search index (Windows.edb)? Search will stop working until the index rebuilds (may take minutes).")) return;
+        const accepted = await requestConfirm({
+            title: "Clear the Windows Search index?",
+            description: "Windows Search index databases and related index files will be removed. Search results will be incomplete or unavailable until Windows rebuilds them, which may take several minutes.",
+            confirmLabel: "Clear index",
+        });
+        if (!accepted) return;
         await runLocalOnly('searchIndex', async () => {
             const res = await clearSearchIndex();
             if (res.success && res.data) {

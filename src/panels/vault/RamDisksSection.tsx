@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import useBackend from "../../hooks/useBackend";
 import UniversalToggle from "../../components/shared/UniversalToggle";
 import SectionCard from "../../components/shared/SectionCard";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import { useAppState } from "../../context/AppContext";
 import { showSuccess, showError } from "../../utils/toast";
 import type { RamDisk, RamDiskStatus, SystemRamInfo } from "../../hooks/useBackend";
@@ -18,6 +19,7 @@ function fmtMB(mb: number): string {
 }
 
 function RamDisksSection() {
+  const confirmAction = useAppConfirm();
   const {
     testRamDiskInstalled,
     installRamDiskEngine,
@@ -133,6 +135,12 @@ function RamDisksSection() {
   };
 
   const handleDismount = async (letter: string) => {
+    const accepted = await confirmAction({
+      title: `Dismount RAM disk ${letter}?`,
+      description: `All unsaved contents on RAM disk ${letter} will be permanently lost. This cannot be undone.`,
+      confirmLabel: "Dismount and discard",
+    });
+    if (!accepted) return;
     const r = await removeRamDisk(letter);
     if (r?.success) {
       showSuccess(`RAM disk ${letter} dismounted.`);
@@ -145,6 +153,12 @@ function RamDisksSection() {
 
   const handleDismountAll = async () => {
     if (!status?.disks?.length) return;
+    const accepted = await confirmAction({
+      title: `Dismount all ${status.disks.length} RAM disks?`,
+      description: "All unsaved contents on every mounted RAM disk will be permanently lost. This cannot be undone.",
+      confirmLabel: "Dismount all and discard",
+    });
+    if (!accepted) return;
     setDismountingAll(true);
     try {
       const r = await removeAllRamDisks();

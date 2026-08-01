@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { WipeDriveEntry } from "../../hooks/useBackend";
 import useBackend from "../../hooks/useBackend";
 import { showSuccess, showError } from "../../utils/toast";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 interface Props {
   open: boolean;
@@ -33,6 +34,7 @@ function effectiveMediaType(entry: WipeDriveEntry): string {
 
 export default function DriveWipeDialog({ open, onClose }: Props) {
   const { invokeUnallocatedSpaceErase } = useBackend();
+  const requestConfirm = useAppConfirm();
   const [drives, setDrives] = useState<WipeDriveEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -59,9 +61,12 @@ export default function DriveWipeDialog({ open, onClose }: Props) {
   const handleWipe = async () => {
     if (!selected.size) return;
     const driveList = Array.from(selected).map(l => `${l}:`).join(", ");
-    if (!window.confirm(
-      `Overwrite free space on ${driveList}?\n\nThis may take 30+ minutes per drive and runs in the background.`
-    )) return;
+    const accepted = await requestConfirm({
+      title: "Overwrite free space?",
+      description: `Overwrite free space on ${driveList}?\n\nThis may take 30+ minutes per drive and runs in the background. Existing files remain, but deleted-data recovery from free space is intentionally prevented.`,
+      confirmLabel: "Start overwrite",
+    });
+    if (!accepted) return;
 
     setWiping(true);
     const failures: string[] = [];

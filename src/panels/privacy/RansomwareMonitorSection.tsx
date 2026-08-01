@@ -19,6 +19,7 @@ import {
   DEFAULT_RANSOMWARE_WINDOW_SECONDS,
 } from "../../hooks/useRansomwareMonitor";
 import SectionCard from "../../components/shared/SectionCard";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import type { RansomwareAction } from "../../types/settings";
 
 interface RansomwareDetection {
@@ -71,6 +72,7 @@ export default function RansomwareMonitorSection({
   expanded: expandedProp,
   onExpandedChange,
 }: Props) {
+  const requestConfirm = useAppConfirm();
   const [expandedLocal, setExpandedLocal] = useState(false);
   const isControlled = expandedProp !== undefined && onExpandedChange !== undefined;
   const expanded = isControlled ? expandedProp! : expandedLocal;
@@ -121,6 +123,12 @@ export default function RansomwareMonitorSection({
 
   const hasRecent = recent.length > 0;
   const onClearRecent = async () => {
+    const accepted = await requestConfirm({
+      title: "Clear recent ransomware alerts?",
+      description: "This removes the recent mass-encryption findings recorded for this app session.",
+      confirmLabel: "Clear alerts",
+    });
+    if (!accepted) return;
     try { await invoke("clear_ransomware_recent"); } catch { /* ignore */ }
     refreshRecent();
   };

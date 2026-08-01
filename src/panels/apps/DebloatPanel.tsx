@@ -12,6 +12,7 @@ import { useDebloatInventory } from "./useDebloatInventory";
 // staggerDelay caps per-item delay — large groups won't animate for seconds.
 import { staggerDelay } from "../../components/shared/AnimatedList";
 import { DURATION_S, EASE } from "../../components/shared/motion";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 const FILTER_CHIPS = [
   { key: "all",            label: "All" },
@@ -73,6 +74,7 @@ function DebloatChip({ item, selected, onToggle, removing }: {
 }
 
 export default function DebloatPanel() {
+  const requestConfirm = useAppConfirm();
   const { items, loading, errors, bcuInstalled, bcuInstalling, rescan, installBcu } = useDebloatInventory();
   const { createRestorePoint } = useBackend();
 
@@ -140,12 +142,25 @@ export default function DebloatPanel() {
   const handleRemove = useCallback(async () => {
     const targets = items.filter(i => selected.has(i.id));
     if (!targets.length) return;
+    const preview = targets.slice(0, 5).map((item) => item.label).join(", ");
+    const remainder = targets.length > 5 ? ` and ${targets.length - 5} more` : "";
+    const accepted = await requestConfirm({
+      title: `Remove ${targets.length} selected item${targets.length === 1 ? "" : "s"}?`,
+      description: `${preview}${remainder}\n\n${restorePoint ? "WinCommander will attempt to create a restore point first." : "Restore point protection is disabled, reducing rollback options."}`,
+      confirmLabel: "Remove selected apps",
+    });
+    if (!accepted) return;
     setRemoving(true);
     try {
       if (restorePoint) {
         try { await createRestorePoint(); }
         catch {
-          if (!window.confirm("Restore point creation failed. Proceed with removal anyway?")) {
+          const accepted = await requestConfirm({
+            title: "Continue without a restore point?",
+            description: "Windows could not create the requested restore point. Removing the selected apps without it reduces your rollback options.",
+            confirmLabel: "Continue removal",
+          });
+          if (!accepted) {
             setRemoving(false);
             return;
           }
@@ -181,7 +196,7 @@ export default function DebloatPanel() {
     } finally {
       setRemoving(false);
     }
-  }, [items, selected, restorePoint, createRestorePoint, rescan]);
+  }, [items, selected, restorePoint, createRestorePoint, requestConfirm, rescan]);
 
   return (
     <div className="debloat-panel">

@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { Button, Icon } from "@/components/ui/bp";
 import SectionCard from "../shared/SectionCard";
+import { useAppConfirm } from "../shared/AppConfirmDialog";
 import UpdateFlowDialog from "../UpdateFlowDialog";
 import useEntitlements from "../../hooks/useEntitlements";
 import useProInstall from "../../hooks/useProInstall";
@@ -253,6 +254,7 @@ function ProVersionNotices({ freeNeedsUpdate }: { freeNeedsUpdate: boolean }) {
 }
 
 function ProVersionActions({ freeNeedsUpdate }: { freeNeedsUpdate: boolean }) {
+    const confirmAction = useAppConfirm();
     const [deletingPro, setDeletingPro] = useState(false);
     const { manifestError, status, installState, refresh, proActionLabel, proCompare, needsRepair } = useProVersionState();
     const proBusy = installState.kind === "installing" || deletingPro;
@@ -267,6 +269,12 @@ function ProVersionActions({ freeNeedsUpdate }: { freeNeedsUpdate: boolean }) {
     };
 
     const deletePro = async () => {
+        const accepted = await confirmAction({
+            title: "Remove the installed Pro sidecar?",
+            description: "This deletes the installed WinCommander Pro binary. Pro features will be unavailable until it is installed again.",
+            confirmLabel: "Remove Pro",
+        });
+        if (!accepted) return;
         setDeletingPro(true);
         try {
             await invoke("delete_pro_binary");

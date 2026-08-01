@@ -22,6 +22,7 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { Button, HTMLSelect, InputGroup, Spinner, Tag } from '@/components/ui/bp';
 import type { Intent } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
+import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
 import { showError, showSuccess } from '../../utils/toast';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -70,6 +71,7 @@ function formatRelative(iso: string): string {
 // ── Section ──────────────────────────────────────────────────────────────────
 
 export default function CanaryTokensSection() {
+  const confirmAction = useAppConfirm();
   // Listener
   const [listenerStatus, setListenerStatus] = useState<ListenerStatus>({ running: false, port: null });
   const [portInput, setPortInput] = useState('8765');
@@ -226,19 +228,35 @@ export default function CanaryTokensSection() {
 
   const deleteToken = useCallback(
     async (id: string) => {
+      const token = tokens.find((candidate) => candidate.id === id);
+      const accepted = await confirmAction({
+        title: `Stop tracking canary “${token?.label ?? id}”?`,
+        description: token?.outputPath
+          ? `This removes its monitoring record. The generated artifact remains at ${token.outputPath}.`
+          : 'This removes its monitoring record. The generated artifact remains on disk.',
+        confirmLabel: 'Stop tracking',
+      });
+      if (!accepted) return;
       try {
-        await invoke('delete_canary', { args: { tokenId: id } });
+        await invoke('delete_canary', { args: { id } });
         setTokens((prev) => prev.filter((t) => t.id !== id));
+        void showSuccess('Canary monitoring record removed; the generated artifact remains on disk.');
       } catch (e) {
         showError(String(e));
       }
     },
-    [],
+    [confirmAction, tokens],
   );
 
   // ── Clear recent ───────────────────────────────────────────────────────────
 
   const clearRecent = useCallback(async () => {
+    const accepted = await confirmAction({
+      title: 'Clear recent canary hits?',
+      description: 'This permanently removes the displayed canary-hit history. Generated canary artifacts are not affected.',
+      confirmLabel: 'Clear hit history',
+    });
+    if (!accepted) return;
     setClearBusy(true);
     try {
       await invoke('clear_canary_recent');
@@ -248,7 +266,7 @@ export default function CanaryTokensSection() {
     } finally {
       setClearBusy(false);
     }
-  }, []);
+  }, [confirmAction]);
 
   // ── Header pill ───────────────────────────────────────────────────────────
 

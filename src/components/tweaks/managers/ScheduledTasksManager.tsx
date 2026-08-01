@@ -6,6 +6,7 @@ import { showSuccess, showError } from "../../../utils/toast";
 import "./ScheduledTasksManager.css";
 import { enabledRowsFirst } from "./systemManagerSort";
 import { AnimatedList, AnimatedTableRow, staggerDelay } from "../../shared/AnimatedList";
+import { useAppConfirm } from "../../shared/AppConfirmDialog";
 
 interface ScheduledTask {
     Name: string;
@@ -20,6 +21,7 @@ interface ScheduledTask {
 }
 
 export default function ScheduledTasksManager({ embedded = false, scanKey = 0 }: { embedded?: boolean; scanKey?: number }) {
+    const requestConfirm = useAppConfirm();
     // Collapsed by default + lazy fetch — see StartupManager comment.
     const [isOpen, setIsOpen] = useState(false);
     const [tasks, setTasks] = useState<ScheduledTask[]>([]);
@@ -161,11 +163,14 @@ export default function ScheduledTasksManager({ embedded = false, scanKey = 0 }:
                                         {disabled ? "Enable" : "Disable"}
                                     </Button>
                                     <Button small icon="trash" intent="danger" loading={isPending}
-                                        onClick={() => {
-                                            if (window.confirm(`Permanently delete scheduled task '${t.Name}'?`)) {
-                                                callAction("Remove-ScheduledTaskByPath", t, "Removed");
-                                            }
-                                        }}>Delete</Button>
+                                        onClick={() => void (async () => {
+                                            const accepted = await requestConfirm({
+                                                title: "Delete scheduled task?",
+                                                description: `Permanently delete “${t.Name}” at ${t.Path}? This cannot be undone.`,
+                                                confirmLabel: "Delete task",
+                                            });
+                                            if (accepted) await callAction("Remove-ScheduledTaskByPath", t, "Removed");
+                                        })()}>Delete</Button>
                                 </div>
                             </div>
                         </AnimatedTableRow>

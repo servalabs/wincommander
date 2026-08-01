@@ -24,6 +24,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { initUniversalLogging } from "./lib/logger";
 import { applyMotionClass } from "./lib/motionPolicy";
 import GlobalErrorBoundary from "./components/ErrorBoundary";
+import { AppConfirmProvider } from "./components/shared/AppConfirmDialog";
 
 initUniversalLogging();
 console.log('[App] Frontend environment initialized.');
@@ -114,8 +115,10 @@ if (windowLabel === "search-overlay") {
       <GlobalErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <ThemeProvider>
-            <ExternalNotificationBridge />
-            <App />
+            <AppConfirmProvider>
+              <ExternalNotificationBridge />
+              <App />
+            </AppConfirmProvider>
           </ThemeProvider>
         </QueryClientProvider>
       </GlobalErrorBoundary>

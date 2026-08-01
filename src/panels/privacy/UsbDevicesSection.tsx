@@ -29,6 +29,7 @@ import type { Intent } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
 import { formatTrustScore, trustScoreTone } from '../../lib/usbTrust';
 import { showSuccess, showError } from '../../utils/toast';
+import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
 
 // U-C: shape returned by get_usb_hid_alerts (timing + device identity — no keystroke content).
 interface HidInjectionAlert {
@@ -249,6 +250,7 @@ interface AutoActionRecord {
 }
 
 export default function UsbDevicesSection() {
+  const requestConfirm = useAppConfirm();
   const [running, setRunning] = useState(false);
   const [notifyEnabled, setNotifyEnabled] = useState(false);
   const [entries, setEntries] = useState<UsbTimelineEntry[]>([]);
@@ -531,6 +533,12 @@ export default function UsbDevicesSection() {
   );
 
   const clearHidAlerts = useCallback(async () => {
+    const accepted = await requestConfirm({
+      title: 'Clear recent USB HID alerts?',
+      description: 'This removes the recent keystroke-injection alert metadata recorded for this app session.',
+      confirmLabel: 'Clear alerts',
+    });
+    if (!accepted) return;
     setBusy(true);
     setError(null);
     try {
@@ -541,7 +549,7 @@ export default function UsbDevicesSection() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [requestConfirm]);
 
   const toggleNotify = useCallback(
     async (on: boolean) => {
@@ -582,13 +590,12 @@ export default function UsbDevicesSection() {
   const blockDevice = useCallback(
     async (entry: UsbTimelineEntry) => {
       const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
-      if (
-        !window.confirm(
-          `Disable "${name}" now?\n\nThe device will stop working in Windows until you Allow it again. Requires WinCommander Pro and admin rights.`,
-        )
-      ) {
-        return;
-      }
+      const accepted = await requestConfirm({
+        title: `Disable “${name}”?`,
+        description: "The device will stop working in Windows until you allow it again. This requires WinCommander Pro and administrator rights.",
+        confirmLabel: "Disable device",
+      });
+      if (!accepted) return;
       setBusy(true);
       setError(null);
       try {
@@ -604,7 +611,7 @@ export default function UsbDevicesSection() {
         setBusy(false);
       }
     },
-    [refresh, volumes],
+    [refresh, requestConfirm, volumes],
   );
 
   const allowDevice = useCallback(
@@ -638,13 +645,13 @@ export default function UsbDevicesSection() {
   const setVolumeReadonly = useCallback(
     async (letter: string, readOnly: boolean) => {
       const displayLetter = letter.replace(/:$/, '');
-      if (
-        readOnly &&
-        !window.confirm(
-          `Force volume ${displayLetter}: read-only?\n\nWrites will be blocked until you clear read-only. Requires admin (best-effort on already-mounted volumes — may need a re-plug).`,
-        )
-      ) {
-        return;
+      if (readOnly) {
+        const accepted = await requestConfirm({
+          title: `Make ${displayLetter}: read-only?`,
+          description: "Writes will be blocked until read-only mode is cleared. Administrator rights are required, and an already-mounted volume may need to be re-plugged.",
+          confirmLabel: "Make read-only",
+        });
+        if (!accepted) return;
       }
       setBusy(true);
       setError(null);
@@ -657,10 +664,16 @@ export default function UsbDevicesSection() {
         setBusy(false);
       }
     },
-    [refresh],
+    [refresh, requestConfirm],
   );
 
   const clear = useCallback(async () => {
+    const accepted = await requestConfirm({
+      title: 'Clear the USB device timeline?',
+      description: 'This permanently removes stored USB sessions and resets each device’s accumulated session count and connected time.',
+      confirmLabel: 'Clear USB history',
+    });
+    if (!accepted) return;
     setBusy(true);
     setError(null);
     try {
@@ -671,7 +684,7 @@ export default function UsbDevicesSection() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [requestConfirm]);
 
   // U-F: start / stop auto-sandbox monitor.
   const toggleAutoSandbox = useCallback(
@@ -729,6 +742,12 @@ export default function UsbDevicesSection() {
 
   // U-F: clear recent actions ring.
   const clearAutoActions = useCallback(async () => {
+    const accepted = await requestConfirm({
+      title: 'Clear recent USB auto-sandbox actions?',
+      description: 'This removes the recent automatic USB response records saved for this app session.',
+      confirmLabel: 'Clear actions',
+    });
+    if (!accepted) return;
     setAutoSandboxBusy(true);
     setError(null);
     try {
@@ -739,7 +758,7 @@ export default function UsbDevicesSection() {
     } finally {
       setAutoSandboxBusy(false);
     }
-  }, []);
+  }, [requestConfirm]);
 
   const attachedCount = entries.filter((e) => e.attached).length;
   const headerRight = (

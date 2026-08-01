@@ -21,6 +21,7 @@ import { Icon } from "@/components/ui/icon";
 import { showSuccess, showError } from "../../utils/toast";
 import PanelHeader from "../../components/shared/PanelHeader";
 import SectionCard from "../../components/shared/SectionCard";
+import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import "./index.css";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -94,6 +95,7 @@ export default function DevPanel() {
 // ── Inner panel (only renders when isDev === true) ─────────────────────
 
 function DevPanelInner() {
+  const confirmAction = useAppConfirm();
   // ── Sidecar status ──
   const [sidecarStatus, setSidecarStatus] = useState<SidecarStatus | null>(null);
   const [sidecarLoading, setSidecarLoading] = useState(false);
@@ -150,8 +152,15 @@ function DevPanelInner() {
   const simulateEvent = () =>
     runAction("simulate_event", () => invoke("dev_simulate_event", { kind: simKind }));
 
-  const resetState = () =>
-    runAction("reset_state", () => invoke("dev_reset_state"));
+  const resetState = async () => {
+    const accepted = await confirmAction({
+      title: "Reset all WinCommander settings?",
+      description: "This deletes store/settings.dat. WinCommander will start in first-run state on the next launch. This cannot be undone.",
+      confirmLabel: "Reset settings",
+    });
+    if (!accepted) return;
+    await runAction("reset_state", () => invoke("dev_reset_state"));
+  };
 
   // ── Render ──
   return (

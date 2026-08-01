@@ -14,6 +14,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Button, Icon, InputGroup, Spinner, Switch, Tag } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
+import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
 
 /** Local callout replacement — our global `.bp6-callout` overrides
  *  fight BP's default `::before` icon (absolute-positioned) so icons
@@ -142,6 +143,7 @@ export default function WifiGuardSection({
    *  inside a sibling card (e.g. the merged Adapters + Wi-Fi Guard card). */
   embedded?: boolean;
 } = {}) {
+  const requestConfirm = useAppConfirm();
   const [status, setStatus] = useState<WifiGuardStatus | null>(null);
   const [recent, setRecent] = useState<WifiGuardHit[]>([]);
   const [known, setKnown] = useState<KnownEntry[]>([]);
@@ -252,29 +254,34 @@ export default function WifiGuardSection({
   }, [addSsid, addBssid, refresh]);
 
   const handleClearKnown = useCallback(async () => {
-    if (
-      !window.confirm(
-        'Forget all learned SSID/BSSID associations? The detector will re-enter learning mode for 24 hours.',
-      )
-    ) {
-      return;
-    }
+    const accepted = await requestConfirm({
+      title: 'Forget learned Wi-Fi identities?',
+      description: 'All learned SSID/BSSID associations will be removed. Wi-Fi Guard will re-enter learning mode for 24 hours.',
+      confirmLabel: 'Forget associations',
+    });
+    if (!accepted) return;
     try {
       await invoke('clear_wifi_guard_known');
       await refresh();
     } catch (err) {
       setError(String(err));
     }
-  }, [refresh]);
+  }, [refresh, requestConfirm]);
 
   const handleClearRecent = useCallback(async () => {
+    const accepted = await requestConfirm({
+      title: 'Clear recent Wi-Fi Guard fires?',
+      description: 'This removes the recent Wi-Fi identity alerts recorded for this app session.',
+      confirmLabel: 'Clear alerts',
+    });
+    if (!accepted) return;
     try {
       await invoke('clear_wifi_guard_recent');
       setRecent([]);
     } catch (err) {
       setError(String(err));
     }
-  }, []);
+  }, [requestConfirm]);
 
   const running = !!status?.running;
   const learning = !!status?.learning;
