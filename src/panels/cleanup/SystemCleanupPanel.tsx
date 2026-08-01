@@ -290,6 +290,7 @@ export default function SystemCleanupPanel() {
                     isOpen={!!traceDetailCategory}
                     count={traceDetailData?.count ?? 0}
                     items={traceDetailData?.items ?? []}
+                    rawData={traceDetailData?.raw}
                     clearing={traceDetailData?.clearing ?? false}
                     onClose={() => setTraceDetailCatId(null)}
                     onClear={traceDetailCategory.clearDataKey && !isInvestigator

@@ -11,9 +11,11 @@
 }
 
 .trace-dialog__panel {
-  width: min(680px, 100%);
+  width: min(1120px, 100%);
   max-height: min(720px, calc(100vh - 120px));
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
   /* Was var(--color-surface, #111827) — that token is undefined, so the
@@ -73,11 +75,20 @@
   line-height: 1.45;
 }
 
+.trace-dialog__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
 .trace-dialog__summary {
   display: flex;
   align-items: baseline;
   gap: 7px;
-  padding: 16px 18px 0;
 }
 
 .trace-dialog__summary strong {
@@ -90,10 +101,100 @@
   font-size: 12px;
 }
 
+.trace-dialog__summary small {
+  margin-left: 6px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.trace-dialog__search {
+  width: min(320px, 45%);
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-card);
+  color: var(--color-text-muted);
+}
+
+.trace-dialog__search:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 15%, transparent);
+}
+
+.trace-dialog__search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.trace-dialog__search button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
 .trace-dialog__items {
   display: grid;
-  gap: 6px;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
   padding: 14px 18px 18px;
+}
+
+.trace-dialog__metadata {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.trace-dialog__metadata > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+}
+
+.trace-dialog__metadata span,
+.trace-dialog__metadata strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-dialog__metadata span {
+  margin-bottom: 3px;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.trace-dialog__metadata strong {
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .trace-dialog__group {
@@ -131,10 +232,9 @@
 
 .trace-dialog__group-items {
   display: grid;
-  gap: 6px;
+  gap: 12px;
 }
 
-.trace-dialog__items code,
 .trace-dialog__empty {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -146,10 +246,145 @@
   font-size: 12px;
 }
 
+.trace-dialog__dataset {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg-card);
+}
+
+.trace-dialog__dataset-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.trace-dialog__dataset-header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  letter-spacing: 0.2px;
+}
+
+.trace-dialog__dataset-header span {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+
+.trace-dialog__table-scroll {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.trace-dialog table {
+  width: 100%;
+  min-width: max-content;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.trace-dialog th,
+.trace-dialog td {
+  max-width: 420px;
+  padding: 7px 10px;
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.trace-dialog th:last-child,
+.trace-dialog td:last-child {
+  border-right: 0;
+}
+
+.trace-dialog tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.trace-dialog th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-family: var(--font-sans);
+  font-size: 9px;
+  letter-spacing: 0.45px;
+  text-transform: uppercase;
+}
+
+.trace-dialog th button {
+  width: 100%;
+  min-height: 31px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+.trace-dialog th button:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+.trace-dialog td {
+  overflow-wrap: anywhere;
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+}
+
+.trace-dialog tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--color-bg-secondary) 55%, var(--color-bg-card));
+}
+
+.trace-dialog .trace-dialog__row-number {
+  width: 42px;
+  min-width: 42px;
+  max-width: 42px;
+  color: var(--color-text-muted);
+  text-align: right;
+  user-select: none;
+}
+
 .trace-dialog__footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   padding: 14px 18px 18px;
   border-top: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+}
+
+@media (max-width: 760px) {
+  .trace-dialog {
+    padding-inline: 12px;
+  }
+
+  .trace-dialog__toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .trace-dialog__search {
+    width: 100%;
+  }
 }

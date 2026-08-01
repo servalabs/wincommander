@@ -65,6 +65,7 @@ describe("redesign shared primitives", () => {
         isOpen
         count={3}
         items={["one", "two"]}
+        rawData={{ entries: [{ name: "one", source: "registry", modified: "today" }] }}
         clearing={false}
         onClose={() => undefined}
         onClear={() => undefined}
@@ -73,6 +74,9 @@ describe("redesign shared primitives", () => {
 
     expect(html).toContain("Sample Trace");
     expect(html).toContain("one");
+    expect(html).toContain("Source");
+    expect(html).toContain("Modified");
+    expect(html).toContain("Filter every field");
     expect(html).toContain("Clear");
   });
 
