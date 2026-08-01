@@ -239,6 +239,16 @@ export function traceCellText(value: TraceCell | undefined): string {
   return String(value);
 }
 
+export function traceRowsToTsv(columns: string[], rows: TraceTableRow[]): string {
+  const cleanCell = (value: TraceCell | undefined) => traceCellText(value)
+    .replace(/\t/g, " ")
+    .replace(/\r?\n/g, " ↵ ");
+  return [
+    columns.map((column) => cleanCell(column)).join("\t"),
+    ...rows.map((row) => columns.map((column) => cleanCell(row[column])).join("\t")),
+  ].join("\n");
+}
+
 export function paginateTraceRows<T>(rows: T[], requestedPage: number, pageSize = TRACE_PAGE_SIZE): TracePage<T> {
   const normalizedPageSize = Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : TRACE_PAGE_SIZE;
   const totalPages = Math.max(1, Math.ceil(rows.length / normalizedPageSize));

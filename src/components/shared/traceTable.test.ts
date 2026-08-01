@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildTraceView, humanizeTraceKey, paginateTraceRows, traceCellText } from "./traceTable";
+import { buildTraceView, humanizeTraceKey, paginateTraceRows, traceCellText, traceRowsToTsv } from "./traceTable";
 
 describe("trace table view model", () => {
   test("exposes every scalar field from a forensic record as a table column", () => {
@@ -101,6 +101,15 @@ describe("trace table view model", () => {
     expect(clamped.page).toBe(2);
     expect(clamped.startIndex).toBe(200);
     expect(clamped.rows).toHaveLength(5);
+  });
+
+  test("exports the complete filtered row shape as spreadsheet-friendly TSV", () => {
+    const tsv = traceRowsToTsv(
+      ["Name", "Count", "Missing"],
+      [{ Name: "Audit\tTool", Count: 2, Missing: null }, { Name: "Line 1\nLine 2", Count: 1 }],
+    );
+
+    expect(tsv).toBe("Name\tCount\tMissing\nAudit Tool\t2\t—\nLine 1 ↵ Line 2\t1\t—");
   });
 
   test("normalizes technical field labels and display values", () => {

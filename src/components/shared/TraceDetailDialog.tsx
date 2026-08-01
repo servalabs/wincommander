@@ -5,9 +5,11 @@ import {
   buildTraceView,
   paginateTraceRows,
   traceCellText,
+  traceRowsToTsv,
   type TraceDataset,
   type TraceTableRow,
 } from "./traceTable";
+import { showError, showSuccess } from "../../utils/toast";
 import "./TraceDetailDialog.css";
 
 interface TraceDetailDialogProps {
@@ -161,6 +163,7 @@ function TraceDataTable({ dataset, query }: { dataset: TraceDataset; query: stri
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(0);
+  const [copyState, setCopyState] = useState<"idle" | "copying" | "copied">("idle");
 
   const matchingRows = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -183,7 +186,8 @@ function TraceDataTable({ dataset, query }: { dataset: TraceDataset; query: stri
 
   useEffect(() => {
     setPage(0);
-  }, [dataset.id, query]);
+    setCopyState("idle");
+  }, [dataset.id, dataset.rows, query]);
 
   const toggleSort = (column: string) => {
     if (sortColumn === column) {
@@ -193,13 +197,39 @@ function TraceDataTable({ dataset, query }: { dataset: TraceDataset; query: stri
       setSortDirection("asc");
     }
     setPage(0);
+    setCopyState("idle");
+  };
+
+  const copyRows = async () => {
+    setCopyState("copying");
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable");
+      const tsv = traceRowsToTsv(dataset.columns, matchingRows.map(({ row }) => row));
+      await navigator.clipboard.writeText(tsv);
+      setCopyState("copied");
+      showSuccess(`${matchingRows.length} ${matchingRows.length === 1 ? "row" : "rows"} copied as TSV.`);
+    } catch (error) {
+      setCopyState("idle");
+      showError(`Couldn't copy trace rows: ${error}`);
+    }
   };
 
   return (
     <section className="trace-dialog__dataset">
       <div className="trace-dialog__dataset-header">
         <strong>{dataset.title}</strong>
-        <span>{matchingRows.length === dataset.rows.length ? `${dataset.rows.length} rows` : `${matchingRows.length} of ${dataset.rows.length} rows`}</span>
+        <div className="trace-dialog__dataset-actions">
+          <span>{matchingRows.length === dataset.rows.length ? `${dataset.rows.length} rows` : `${matchingRows.length} of ${dataset.rows.length} rows`}</span>
+          <Button
+            icon={copyState === "copied" ? "tick" : "duplicate"}
+            text={copyState === "copied" ? "Copied" : "Copy TSV"}
+            minimal
+            small
+            loading={copyState === "copying"}
+            disabled={matchingRows.length === 0 || copyState === "copying"}
+            onClick={() => void copyRows()}
+          />
+        </div>
       </div>
       {matchingRows.length ? (
         <>

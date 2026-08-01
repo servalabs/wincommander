@@ -97,6 +97,7 @@ describe("redesign shared primitives", () => {
     expect(html).toContain("1 / 2");
     expect(html).toContain("artifact-99.dat");
     expect(html).not.toContain("artifact-100.dat");
+    expect(html).toContain("Copy TSV");
   });
 
   test("system radar renders score and findings without panel-specific copy", () => {
