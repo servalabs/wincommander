@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { PANEL_MANIFESTS } from "../types/panels";
-import { createUiAuditSettings } from "./uiAudit";
+import { createUiAuditSettings, uiAuditBackendResponse, uiAuditDirectResponse } from "./uiAudit";
 
 describe("UI audit fixture", () => {
   test("makes every manifest-backed panel reachable without persisted hiding", () => {
@@ -27,5 +27,22 @@ describe("UI audit fixture", () => {
 
     expect(itemsRule).toContain("grid-auto-rows: max-content");
     expect(itemsRule).toContain("align-content: start");
+  });
+
+  test("returns array-backed fixtures for every mounted system manager", () => {
+    for (const command of ["Get-StartupItems", "Get-LocalLoginUsers", "Get-AllScheduledTasks", "Get-AllServices"]) {
+      expect(uiAuditBackendResponse(command)).toEqual([]);
+    }
+
+    expect((uiAuditDirectResponse("scan_runtimes") as { runtimes: unknown[] }).runtimes).toEqual([]);
+    expect((uiAuditDirectResponse("runtime_visibility_state") as { state: { entries: unknown[] } }).state.entries).toEqual([]);
+  });
+
+  test("matches the array contracts consumed by driver and security views", () => {
+    expect((uiAuditDirectResponse("startup_impact_scan") as { entries: unknown[] }).entries).toEqual([]);
+    expect((uiAuditDirectResponse("driver_maintenance_inventory") as { drivers: unknown[] }).drivers).toEqual([]);
+    expect((uiAuditDirectResponse("get_driver_health") as { devices: unknown[] }).devices).toEqual([]);
+    expect((uiAuditDirectResponse("get_vulnerable_drivers") as { vulnerable: unknown[] }).vulnerable).toEqual([]);
+    expect((uiAuditDirectResponse("malware_quarantine_list") as { entries: unknown[] }).entries).toEqual([]);
   });
 });

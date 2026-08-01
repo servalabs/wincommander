@@ -19,6 +19,9 @@ export function useStartupDrivers() {
         backendRef.current.startupImpactScan(),
         backendRef.current.driverMaintenanceInventory(),
       ]);
+      if (!Array.isArray(startupScan?.entries) || !Array.isArray(driverScan?.drivers)) {
+        throw new Error("Startup or driver scan returned an invalid response.");
+      }
       setStartup(startupScan);
       setDrivers(driverScan);
     } catch (cause) { setError(String(cause)); }

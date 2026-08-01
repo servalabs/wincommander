@@ -138,7 +138,7 @@ export function createUiAuditSettings(): AppSettings {
   });
 }
 
-function backendAuditResponse(command: string): unknown {
+export function uiAuditBackendResponse(command: string): unknown {
   switch (command) {
     case "Get-StartupStatus":
       return { systemInfo: AUDIT_SYSTEM_INFO, productivity: { installed: true, running: true, details: { server: true, input: true, active: true } } };
@@ -182,6 +182,11 @@ function backendAuditResponse(command: string): unknown {
       return { browsers: [{ Name: "Microsoft Edge", Hardened: true }, { Name: "Mozilla Firefox", Hardened: false }] };
     case "Get-AppInventory":
       return DECOY_INVENTORY;
+    case "Get-StartupItems":
+    case "Get-LocalLoginUsers":
+    case "Get-AllScheduledTasks":
+    case "Get-AllServices":
+      return [];
     case "Get-AppBranding":
       return { companyName: "ServaLabs", productName: "WinCommander" };
     case "Get-WCSystemProbe":
@@ -192,9 +197,8 @@ function backendAuditResponse(command: string): unknown {
   }
 }
 
-function directAuditResponse(command: string): unknown {
+export function uiAuditDirectResponse(command: string): unknown {
   if (command.startsWith("plugin:")) return null;
-  if (command.endsWith("_list") || command.startsWith("list_") || command.includes("_recent")) return [];
   switch (command) {
     case "startup_pin_is_configured":
       return false;
@@ -210,6 +214,8 @@ function directAuditResponse(command: string): unknown {
       return [];
     case "runtime_visibility_state":
       return { state: { entries: [] }, statePath: "C:\\Audit\\runtime-visibility.json" };
+    case "scan_runtimes":
+      return { runtimes: [], scannedAtUnixMs: Date.parse("2026-08-01T22:45:00Z"), totalProcesses: 0 };
     case "startup_impact_scan":
       return { entries: [], truncated: false };
     case "driver_maintenance_inventory":
@@ -241,7 +247,9 @@ function directAuditResponse(command: string): unknown {
     case "uninstall_leftovers_scan":
       return { entries: [], scannedFolders: 12, skippedFolders: 0, cancelled: false, truncated: false };
     case "get_driver_health":
-      return { issues: [], watchIntervalSecs: 300 };
+      return { devices: [], summary: { total: 0, critical: 0, warning: 0, info: 0, ok: true } };
+    case "get_vulnerable_drivers":
+      return { vulnerable: [], scanned: 0, ok: true };
     case "get_pro_install_status":
       return { installed: true, compatible: true, version: "3.2.4" };
     case "get_log_records":
@@ -250,6 +258,7 @@ function directAuditResponse(command: string): unknown {
         { date: "2026-08-01", timestamp: "22:42:17", level: "WARN", source: "pro", os: "Windows", message: "Example structured warning for layout verification" },
       ];
     default:
+      if (command.endsWith("_list") || command.startsWith("list_") || command.includes("_recent")) return [];
       return structuredClone(AUDIT_TRACE);
   }
 }
@@ -267,7 +276,7 @@ export function installUiAuditMocks(): void {
       settings = mergeSettings(settings, patch);
       return structuredClone(settings);
     }
-    if (command === "run_backend_script") return backendAuditResponse(String(args.command ?? ""));
-    return directAuditResponse(command);
+    if (command === "run_backend_script") return uiAuditBackendResponse(String(args.command ?? ""));
+    return uiAuditDirectResponse(command);
   }, { shouldMockEvents: true });
 }

@@ -32,6 +32,14 @@ const MAX_ENTRIES = 500;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// localStorage persists the entire bounded map as one JSON value. Keep the
+// validated parse in memory while the backing string is unchanged; another
+// WebView or external writer still invalidates it because every read compares
+// the current storage value before reuse.
+let cachedStorage: Storage | null = null;
+let cachedRaw: string | null | undefined;
+let cachedStore: Record<string, FrecencyEntry> | undefined;
+
 // KT: time-BUCKET decay (Firefox's "frecency" algorithm), not `count / age`.
 // Raw division makes a single very-recent open swamp everything else as age
 // approaches zero (score approaches infinity), which makes ranking feel
@@ -144,6 +152,7 @@ function readStore(): Record<string, FrecencyEntry> {
   } catch {
     return {};
   }
+  if (storage === cachedStorage && raw === cachedRaw && cachedStore) return cachedStore;
   if (!raw) return {};
 
   try {
@@ -160,6 +169,9 @@ function readStore(): Record<string, FrecencyEntry> {
       // a single hand-edited or truncated entry shouldn't poison the rest.
       if (isValidEntry(value)) out[key] = value;
     }
+    cachedStorage = storage;
+    cachedRaw = raw;
+    cachedStore = out;
     return out;
   } catch {
     return {};
@@ -170,8 +182,15 @@ function writeStore(store: Record<string, FrecencyEntry>): void {
   const storage = getStorage();
   if (!storage) return;
   try {
-    storage.setItem(STORAGE_KEY, JSON.stringify({ v: STORAGE_VERSION, entries: store }));
+    const raw = JSON.stringify({ v: STORAGE_VERSION, entries: store });
+    storage.setItem(STORAGE_KEY, raw);
+    cachedStorage = storage;
+    cachedRaw = raw;
+    cachedStore = store;
   } catch {
+    cachedStorage = null;
+    cachedRaw = undefined;
+    cachedStore = undefined;
     /* quota / disabled storage — non-fatal, matches notificationStore.ts */
   }
 }
@@ -202,6 +221,28 @@ function enforceCap(store: Record<string, FrecencyEntry>, now: number): void {
   const overflow = keys.length - MAX_ENTRIES;
   if (overflow <= 0) return;
 
+  // recordOpen adds one entry at a time, so the hot path overflows by exactly
+  // one. Finding the weakest entry in a single pass avoids sorting all 501
+  // records on every new file in a burst (for example an archive extraction
+  // or bulk search activation).
+  if (overflow === 1) {
+    let weakestKey = keys[0];
+    let weakestValue = evictionValue(store[weakestKey], now);
+    for (let index = 1; index < keys.length; index += 1) {
+      const key = keys[index];
+      const value = evictionValue(store[key], now);
+      if (value < weakestValue) {
+        weakestKey = key;
+        weakestValue = value;
+      }
+    }
+    delete store[weakestKey];
+    return;
+  }
+
+  // A persisted store can exceed the cap by more than one after a version
+  // downgrade or manual edit. Keep the simple bulk-recovery path for that
+  // uncommon case; it is not paid during ordinary recordOpen calls.
   keys
     .map((key) => ({ key, value: evictionValue(store[key], now) }))
     .sort((a, b) => a.value - b.value)
@@ -263,6 +304,9 @@ export function clearFrecency(): void {
   if (!storage) return;
   try {
     storage.removeItem(STORAGE_KEY);
+    cachedStorage = null;
+    cachedRaw = undefined;
+    cachedStore = undefined;
   } catch {
     /* non-fatal */
   }

@@ -129,6 +129,9 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
     setError(null);
     try {
       const r = await invoke<DriverHealthReport>('get_driver_health');
+      if (!r?.summary || !Array.isArray(r.devices)) {
+        throw new Error('Driver health returned an invalid response.');
+      }
       setReport(r);
     } catch (err) {
       setError(String(err));
@@ -142,6 +145,9 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
     setVulnError(null);
     try {
       const r = await invoke<VulnerableDriversReport>('get_vulnerable_drivers');
+      if (!Array.isArray(r?.vulnerable)) {
+        throw new Error('Vulnerable-driver scan returned an invalid response.');
+      }
       setVulnReport(r);
     } catch (err) {
       setVulnError(String(err));

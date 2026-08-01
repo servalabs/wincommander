@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { CheckboxControl } from "../../components/ui/bp";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { resolveAvailableTab } from "../../components/ui/tabSelection";
 import type { RoutineCleanerCategory, RoutineCleanerItem } from "../../hooks/useBackend";
 import { formatBytes, getPopulatedRoutineCleanerCategories, ROUTINE_CLEANER_CATEGORIES } from "./routineCleanerHelpers";
 import type { useRoutineCleaner } from "./useRoutineCleaner";
@@ -19,13 +20,13 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: RoutineCleane
   const { scan, selectedIds, selectedItems, operation, selectRecommended, toggleItem } = cleaner;
   const categoryGroups = useMemo(() => getPopulatedRoutineCleanerCategories(scan?.items ?? []), [scan?.items]);
   const [activeCategory, setActiveCategory] = useState<RoutineCleanerCategory | undefined>(categoryGroups[0]?.id);
+  const visibleActiveCategory = resolveAvailableTab(categoryGroups.map((group) => group.id), activeCategory);
 
   // Results are re-grouped on every scan; keep the active tab pointed at a
   // category that still has matches instead of rendering an empty pane.
   useEffect(() => {
-    if (!categoryGroups.length) return;
-    if (!categoryGroups.some((group) => group.id === activeCategory)) setActiveCategory(categoryGroups[0].id);
-  }, [categoryGroups, activeCategory]);
+    if (visibleActiveCategory !== activeCategory) setActiveCategory(visibleActiveCategory);
+  }, [activeCategory, visibleActiveCategory]);
 
   if (!scan) return null;
 
@@ -53,12 +54,12 @@ export function RoutineCleanerPreview({ cleaner, onRequestClean }: RoutineCleane
         </CardContent>
       </Card>
 
-      {scan.items.length === 0 ? (
+      {scan.items.length === 0 || !visibleActiveCategory ? (
         <Card>
-          <CardContent className="py-6 text-center text-sm text-[var(--text-dim)]">No cleanable cache data found in the selected categories.</CardContent>
+          <CardContent className="py-6 text-center text-sm text-[var(--text-dim)]">{scan.items.length ? "No supported cache categories were returned." : "No cleanable cache data found in the selected categories."}</CardContent>
         </Card>
       ) : (
-        <Tabs value={activeCategory} onValueChange={(value) => setActiveCategory(value as RoutineCleanerCategory)}>
+        <Tabs value={visibleActiveCategory} onValueChange={(value) => setActiveCategory(value as RoutineCleanerCategory)}>
           <TabsList className="flex-wrap">
             {categoryGroups.map((group) => (
               <TabsTrigger key={group.id} value={group.id} className="gap-1.5">

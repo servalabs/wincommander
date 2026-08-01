@@ -234,6 +234,21 @@ describe("recordOpen performance (Defect 3 — hot path, runs on every file open
     // because absolute timing is machine-dependent.
     console.log(`recordOpen @ 500-entry cap: ${perCallMs.toFixed(4)}ms/call over ${iterations} iterations`);
   });
+
+  test("the parse cache invalidates when another WebView changes localStorage", () => {
+    const now = 1_700_000_000_000;
+    recordOpen("C:/main-window.txt", now);
+
+    storage.setItem(STORAGE_KEY, JSON.stringify({
+      v: 1,
+      entries: {
+        "c:/overlay-window.txt": { path: "C:/overlay-window.txt", opens: 2, lastOpened: now },
+      },
+    }));
+
+    expect(frecencyScore("C:/main-window.txt", now)).toBe(0);
+    expect(frecencyScore("C:/overlay-window.txt", now)).toBeGreaterThan(0);
+  });
 });
 
 describe("corrupt / hostile storage contents", () => {

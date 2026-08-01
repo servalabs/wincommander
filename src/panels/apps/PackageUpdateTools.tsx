@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { resolveAvailableTab } from "../../components/ui/tabSelection";
 import type { ManagerInventory, PackageUpdateInventory } from "../../hooks/useBackend";
 import { executeBackendCommand, useBackend } from "../../hooks/useBackend";
 import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/packageOperationLock";
@@ -57,11 +58,16 @@ export function PackageUpdateTools() {
     () => new Set(displayedManagers.flatMap((manager) => manager.updates.map((update) => update.id))),
     [displayedManagers],
   );
+  const visibleActiveManager = resolveAvailableTab(
+    displayedManagers.map((manager) => manager.manager),
+    activeManager,
+    pickDefaultManager(displayedManagers),
+  );
 
   useEffect(() => {
-    if (!packages || activeManager && displayedManagers.some((manager) => manager.manager === activeManager)) return;
-    setActiveManager(pickDefaultManager(displayedManagers));
-  }, [activeManager, displayedManagers, packages]);
+    if (!packages || visibleActiveManager === activeManager) return;
+    setActiveManager(visibleActiveManager ?? pickDefaultManager(displayedManagers));
+  }, [activeManager, displayedManagers, packages, visibleActiveManager]);
 
   useEffect(() => {
     setPackageIds((selected) => {
@@ -111,7 +117,7 @@ export function PackageUpdateTools() {
       <CardHeader><CardTitle>Updates across package managers</CardTitle><CardDescription>Check and apply explicit updates from Winget, Chocolatey, Scoop, and global npm. Each manager reports availability independently.</CardDescription></CardHeader>
       <CardContent className="flex flex-wrap items-center gap-2"><Button variant="primary" disabled={busy} onClick={() => void inspectPackages()}><Icon icon="search" />{busy ? "Checking…" : "Check updates"}</Button>{busy && <Button variant="outline" onClick={() => void cancel()}><Icon icon="stop" /> Cancel</Button>}{packages && <Badge tone="accent">{displayedUpdateCount} additional</Badge>}</CardContent>
     </Card>
-    {!!displayedManagers.length && <Tabs value={activeManager} onValueChange={setActiveManager}>
+    {visibleActiveManager && <Tabs value={visibleActiveManager} onValueChange={setActiveManager}>
       <TabsList className="w-full flex-wrap justify-start">{displayedManagers.map((manager) => <TabsTrigger key={manager.manager} value={manager.manager} className="gap-1.5">{MANAGER_LABELS[manager.manager] ?? manager.manager}<Badge tone={manager.updates.length ? "accent" : "neutral"}>{manager.updates.length}</Badge></TabsTrigger>)}</TabsList>
       {displayedManagers.map((manager) => <TabsContent key={manager.manager} value={manager.manager}><PackageManager manager={manager} hiddenUpdateCount={hiddenUpdateCounts.get(manager.manager) ?? 0} selected={packageIds} toggle={(id) => setPackageIds(toggle(packageIds, id))} onInstallManager={installManager} installingManagers={installingManagers} /></TabsContent>)}
     </Tabs>}

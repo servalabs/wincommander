@@ -128,6 +128,9 @@ export function RuntimeVisibilityManager({ embedded = false, scanKey = 0 }: { em
     setStateLoading(true);
     try {
       const v = await invoke<StateView>("runtime_visibility_state");
+      if (!v?.state || !Array.isArray(v.state.entries)) {
+        throw new Error("Runtime visibility state returned an invalid response.");
+      }
       setStateView(v);
     } catch (e) {
       setGlobalMessage(`State load failed: ${e}`);
@@ -369,6 +372,9 @@ function RuntimesPanel({
     setError(null);
     try {
       const r = await invoke<ScanResult>("scan_runtimes");
+      if (!r || !Array.isArray(r.runtimes)) {
+        throw new Error("Runtime scan returned an invalid response.");
+      }
       setResult(r);
     } catch (e) {
       setError(String(e));
