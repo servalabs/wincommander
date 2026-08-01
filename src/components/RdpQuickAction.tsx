@@ -96,6 +96,7 @@ export default function RdpQuickAction({ isCollapsed }: { isCollapsed: boolean }
           minimal
           onClick={() => setIsManageOpen(true)}
           title="Remote Endpoints"
+          aria-label="Manage remote endpoints"
         />
       </div>
     );
@@ -158,25 +159,35 @@ export default function RdpQuickAction({ isCollapsed }: { isCollapsed: boolean }
       <div className="rdp-sidebar-container">
         <div
           className="node-header"
-          role="button"
-          tabIndex={0}
-          onClick={() => setIsListOpen(!isListOpen)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsListOpen(!isListOpen); } }}
           style={{ cursor: 'pointer', background: 'none', border: 'none', width: '100%', padding: '6px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
         >
-          <div className="node-info" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Icon icon="desktop" size={13} className="node-icon" />
-            <span className="node-label" style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', fontWeight: 700, letterSpacing: '0.5px', color: 'var(--color-text-secondary)' }}>ENDPOINTS</span>
-            <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', color: 'var(--color-text-muted)', fontWeight: 600 }}>({nodes.length})</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <button
+            type="button"
+            className="node-header-toggle"
+            aria-expanded={isListOpen}
+            aria-controls="rdp-endpoint-list"
+            onClick={() => setIsListOpen(!isListOpen)}
+            style={{ cursor: 'pointer', background: 'none', border: 'none', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flex: 1, minWidth: 0 }}
+          >
+            <span className="node-info" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Icon icon="desktop" size={13} className="node-icon" />
+              <span className="node-label" style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', fontWeight: 700, letterSpacing: '0.5px', color: 'var(--color-text-secondary)' }}>ENDPOINTS</span>
+              <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', color: 'var(--color-text-muted)', fontWeight: 600 }}>({nodes.length})</span>
+            </span>
             <Icon icon={isListOpen ? "chevron-up" : "chevron-down"} size={12} color="var(--color-text-muted)" />
-            <Button icon="cog" minimal small onClick={(e: React.MouseEvent) => { e.stopPropagation(); setIsManageOpen(true); }} className="node-settings-btn" />
-          </div>
+          </button>
+          <Button
+            icon="cog"
+            minimal
+            small
+            onClick={() => setIsManageOpen(true)}
+            className="node-settings-btn"
+            aria-label="Manage remote endpoints"
+          />
         </div>
 
         {isListOpen && (
-          <div className="rdp-multi-list" style={{ padding: '2px 0 4px' }}>
+          <div id="rdp-endpoint-list" className="rdp-multi-list" style={{ padding: '2px 0 4px' }}>
             {nodes.map(node => (
               <button
                 key={node.id}
@@ -227,8 +238,8 @@ export default function RdpQuickAction({ isCollapsed }: { isCollapsed: boolean }
                         minimal
                         small
                         className="node-action-btn"
-                        title="Edit connection"
-                        aria-label="Edit connection"
+                        title={`Edit ${n.label}`}
+                        aria-label={`Edit ${n.label}`}
                         onClick={() => startEdit(n)}
                       />
                       <Button
@@ -237,8 +248,8 @@ export default function RdpQuickAction({ isCollapsed }: { isCollapsed: boolean }
                         small
                         intent="danger"
                         className="node-action-btn"
-                        title="Delete connection"
-                        aria-label="Delete connection"
+                        title={`Delete ${n.label}`}
+                        aria-label={`Delete ${n.label}`}
                         onClick={() => handleDelete(n.id)}
                       />
                     </div>

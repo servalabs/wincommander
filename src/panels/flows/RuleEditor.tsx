@@ -377,16 +377,16 @@ function ConditionEditor({
       />
       {condition.type === "TimeCondition" && (
         <span className="flow-inline">
-          <Input type="number" min={0} max={23} disabled={disabled} value={condition.startHour} onChange={(e) => onChange({ ...condition, startHour: Number(e.target.value) })} />
+          <Input aria-label="Start hour" type="number" min={0} max={23} disabled={disabled} value={condition.startHour} onChange={(e) => onChange({ ...condition, startHour: Number(e.target.value) })} />
           <span>–</span>
-          <Input type="number" min={0} max={23} disabled={disabled} value={condition.endHour} onChange={(e) => onChange({ ...condition, endHour: Number(e.target.value) })} />
+          <Input aria-label="End hour" type="number" min={0} max={23} disabled={disabled} value={condition.endHour} onChange={(e) => onChange({ ...condition, endHour: Number(e.target.value) })} />
           <span className="flow-hint">h</span>
         </span>
       )}
       {condition.type === "BatteryCondition" && (
         <span className="flow-inline">
           <Sel ariaLabel="op" value={condition.operator} onChange={(operator) => onChange({ ...condition, operator: operator as Condition["type"] extends "BatteryCondition" ? "<" : never })} options={[{ value: "<", label: "<" }, { value: "<=", label: "≤" }, { value: ">", label: ">" }, { value: ">=", label: "≥" }].map((o) => ({ value: o.value as "<", label: o.label }))} />
-          <Input type="number" min={0} max={100} disabled={disabled} value={condition.percentage} onChange={(e) => onChange({ ...condition, percentage: Number(e.target.value) })} />
+          <Input aria-label="Battery percentage" type="number" min={0} max={100} disabled={disabled} value={condition.percentage} onChange={(e) => onChange({ ...condition, percentage: Number(e.target.value) })} />
           <span className="flow-hint">%</span>
         </span>
       )}
@@ -534,7 +534,7 @@ function ActionEditor({ action, commands, disabled, onChange }: { action: Action
       )}
       {action.type === "DelayAction" && (
         <span className="flow-inline">
-          <Input type="number" min={0} disabled={disabled} value={action.seconds} onChange={(e) => onChange({ ...action, seconds: Number(e.target.value) })} />
+          <Input aria-label="Delay seconds" type="number" min={0} disabled={disabled} value={action.seconds} onChange={(e) => onChange({ ...action, seconds: Number(e.target.value) })} />
           <span className="flow-hint">seconds</span>
         </span>
       )}

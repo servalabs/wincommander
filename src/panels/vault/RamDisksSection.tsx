@@ -281,6 +281,7 @@ function RamDisksSection() {
                 )}
               </div>
               <Switch
+                aria-label="Auto-create RAM disk on startup"
                 checked={autostartEnabled}
                 disabled={autostartSaving}
                 style={{ marginBottom: 0 }}
@@ -323,10 +324,23 @@ function RamDisksSection() {
                     <td className="actions-cell">
                       <div style={{ display: "flex", gap: 4 }}>
                         <Tooltip content="Open in Explorer">
-                          <Button minimal small icon="folder-open" onClick={() => openRamDisk(d.letter)} />
+                          <Button
+                            minimal
+                            small
+                            icon="folder-open"
+                            aria-label={`Open ${d.letter} in Explorer`}
+                            onClick={() => openRamDisk(d.letter)}
+                          />
                         </Tooltip>
                         <Tooltip content="Dismount (data will be lost)">
-                          <Button minimal small icon="eject" intent="danger" onClick={() => void handleDismount(d.letter)} />
+                          <Button
+                            minimal
+                            small
+                            icon="eject"
+                            intent="danger"
+                            aria-label={`Dismount RAM disk ${d.letter}`}
+                            onClick={() => void handleDismount(d.letter)}
+                          />
                         </Tooltip>
                       </div>
                     </td>
@@ -366,6 +380,7 @@ function RamDisksSection() {
                 <span className="vault-range-value">{fmtMB(asSizeMB)}</span>
               </div>
               <input
+                aria-label="Startup RAM disk size"
                 type="range"
                 className="vault-range"
                 min={sliderMin}

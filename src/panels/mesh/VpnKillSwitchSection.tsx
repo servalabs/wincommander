@@ -138,7 +138,12 @@ export default function VpnKillSwitchSection() {
           <span className={`vpn-ks-armed-label${armed ? " vpn-ks-armed-label--on" : ""}`}>
             {armed ? "ARMED" : "DISARMED"}
           </span>
-          <Switch checked={armed} disabled={busy} onCheckedChange={(v) => void setArmed(v)} />
+          <Switch
+            checked={armed}
+            disabled={busy}
+            onCheckedChange={(v) => void setArmed(v)}
+            aria-label="Block internet if VPN drops"
+          />
         </span>
       </div>
       <div className="vpn-ks-controls">

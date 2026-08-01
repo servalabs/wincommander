@@ -294,7 +294,7 @@ function EncryptedVolumesTab({ volumes, refreshVault }: EncryptedVolumesTabProps
                         <span className="vault-active-dot" aria-hidden />
                         <strong>{vol.letter}</strong>
                       </td>
-                      <td><span className={`type-badge${vol.type === "Hidden" ? " hidden" : ""}`}>{vol.type}</span></td>
+                      <td><span className={`type-badge${vol.type === "Hidden" ? " type-badge--hidden" : ""}`}>{vol.type}</span></td>
                       <td className="path-cell">
                         <span className="truncate-path" title={vol.path}>{vol.path}</span>
                       </td>

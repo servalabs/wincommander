@@ -489,6 +489,7 @@ export default function FleetConnectView() {
               checked={dispatch}
               onCheckedChange={setDispatch}
               disabled={!signingKeyPub.trim() || enrolling}
+              aria-label="Enable command dispatch"
             />
           </div>
 

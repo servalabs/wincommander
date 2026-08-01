@@ -80,6 +80,7 @@ export default function StegoBackupSection() {
 
               <div className="stego-size-row">
                 <FormGroup
+                  labelFor="stego-hidden-volume-size"
                   label={
                     <span className="stego-label">
                       Hidden volume size <InfoDot content={INFO.size} />
@@ -87,6 +88,7 @@ export default function StegoBackupSection() {
                   }
                 >
                   <InputGroup
+                    id="stego-hidden-volume-size"
                     type="number"
                     min={1}
                     value={fields.sizeRaw}
@@ -94,8 +96,9 @@ export default function StegoBackupSection() {
                     onChange={(e) => set.setSizeRaw(e.currentTarget.value)}
                   />
                 </FormGroup>
-                <FormGroup label="Unit">
+                <FormGroup label="Unit" labelFor="stego-hidden-volume-unit">
                   <HTMLSelect
+                    id="stego-hidden-volume-unit"
                     value={fields.sizeUnit}
                     disabled={locked}
                     onChange={(e) => set.setSizeUnit(e.currentTarget.value as SizeUnit)}
@@ -124,6 +127,7 @@ export default function StegoBackupSection() {
 
               <div className="stego-password-row">
                 <FormGroup
+                  labelFor="stego-password"
                   label={
                     <span className="stego-label">
                       Password <InfoDot content={INFO.password} />
@@ -132,6 +136,7 @@ export default function StegoBackupSection() {
                   helperText="At least 8 characters. Write it down somewhere safe before you continue."
                 >
                   <InputGroup
+                    id="stego-password"
                     type={showPassword ? "text" : "password"}
                     value={fields.password}
                     autoComplete="new-password"
@@ -147,8 +152,9 @@ export default function StegoBackupSection() {
                     }
                   />
                 </FormGroup>
-                <FormGroup label="Confirm password">
+                <FormGroup label="Confirm password" labelFor="stego-password-confirm">
                   <InputGroup
+                    id="stego-password-confirm"
                     type={showPassword ? "text" : "password"}
                     value={fields.passwordConfirm}
                     autoComplete="new-password"

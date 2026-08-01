@@ -11,9 +11,9 @@ const AUDIT_LICENSE = {
   licensed: true,
   valid: true,
   plan: "Pro",
-  features: ["paid"],
+  features: ["paid", "fleet"],
   base_features: ["paid"],
-  active_service_features: [],
+  active_service_features: ["fleet"],
   device_hash: "ui-audit-device",
   seats_used: 1,
   seat_limit: 5,
@@ -107,6 +107,40 @@ const AUDIT_TRACE = {
   ],
 };
 
+const AUDIT_FLOW_RULES = [
+  {
+    id: "audit-usb-flow",
+    name: "USB inserted → Notify",
+    enabled: true,
+    triggers: [{ type: "USBTrigger", mode: "insert" }],
+    conditions: [{ type: "TimeCondition", startHour: 8, endHour: 18 }],
+    actions: [{ type: "NotifyAction", message: "Audit USB device inserted", severity: "warning" }],
+    notes: "Synthetic local rule for exhaustive UI verification.",
+    tags: ["audit", "usb"],
+    riskLevel: "low",
+    schemaVersion: 2,
+    source: { kind: "Local" },
+    locked: false,
+  },
+  {
+    id: "audit-fleet-ransomware-flow",
+    name: "Ransomware signal policy",
+    enabled: false,
+    triggers: [{ type: "RansomwareMonitorTrigger" }],
+    conditions: [],
+    actions: [
+      { type: "NotifyAction", message: "Ransomware activity detected", severity: "danger" },
+      { type: "SignalAction", targetRole: "admins", signalType: "distress" },
+    ],
+    notes: "Synthetic fleet-locked rule for layout verification.",
+    tags: ["audit", "fleet"],
+    riskLevel: "high",
+    schemaVersion: 2,
+    source: { kind: "Fleet", epochVersion: 7 },
+    locked: true,
+  },
+];
+
 function mergeSettings<T>(current: T, patch: unknown): T {
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) return current;
   const output = { ...(current as Record<string, unknown>) };
@@ -136,6 +170,15 @@ export function createUiAuditSettings(): AppSettings {
       hideLicensePanel: false,
       sidebarCollapsed: false,
       lastPanel: "dashboard",
+      rdpNodes: [
+        {
+          id: "audit-rdp",
+          label: "Audit Workstation",
+          hostname: "192.0.2.25",
+          username: "AuditUser",
+        },
+      ],
+      selectedRdpNodeId: "audit-rdp",
     },
     ideal: {
       identity: {
@@ -185,7 +228,48 @@ export function uiAuditBackendResponse(command: string): unknown {
     case "Get-DNSStatus":
       return { provider: "Cloudflare", dohId: "cloudflare", servers: ["1.1.1.1", "1.0.0.1"] };
     case "Get-EncryptionStatus":
-      return { installed: true, volumes: [], systemDrive: { encrypted: true, status: "Protected" } };
+      return {
+        installed: true,
+        path: "C:\\Audit\\VeraCrypt\\VeraCrypt.exe",
+        volumes: [
+          { letter: "V:", path: "C:\\Audit\\Vaults\\case-files.hc", type: "Normal" },
+          { letter: "W:", path: "C:\\Audit\\Vaults\\plausible-cover.hc", type: "Hidden" },
+        ],
+      };
+    case "Get-SystemEncryptionStatus":
+      return { encrypted: true, progress: 100, algorithm: "XTS-AES-256", mode: "TPM + PIN" };
+    case "Get-AvailableDriveLetters":
+      return { letters: ["X", "Y", "Z"] };
+    case "Get-EncryptionPartitions":
+      return {
+        partitions: [
+          { diskNumber: 2, partitionNumber: 1, driveLetter: null, size: "64 GB", sizeBytes: 68719476736, devicePath: "\\\\?\\Volume{audit-encrypted}", busType: "USB", model: "Audit Encrypted SSD" },
+          { diskNumber: 3, partitionNumber: 2, driveLetter: "Q", size: "128 GB", sizeBytes: 137438953472, devicePath: "\\\\?\\Volume{audit-mounted}", busType: "NVMe", model: "Audit Evidence Disk" },
+        ],
+      };
+    case "Test-RamDiskInstalled":
+      return { installed: true };
+    case "Get-RamDiskStatus":
+      return {
+        installed: true,
+        disks: [
+          {
+            deviceNumber: 1,
+            letter: "R:",
+            sizeBytes: 2147483648,
+            size: "2 GB",
+            type: "VM",
+            properties: "NTFS · Read/Write",
+          },
+        ],
+      };
+    case "Get-SystemRamInfo":
+      return {
+        totalBytes: 34359738368,
+        totalMB: 32768,
+        freeBytes: 21474836480,
+        freeMB: 20480,
+      };
     case "Get-BitLockerVolumes":
       return [
         { mountPoint: "C:", volumeType: "OperatingSystem", volumeStatus: "FullyEncrypted", encryptionMethod: "XtsAes256", protectorTypes: ["Tpm", "RecoveryPassword"], recoveryPasswordPresent: true, backupUsed: true },
@@ -203,7 +287,10 @@ export function uiAuditBackendResponse(command: string): unknown {
         self: { Hostname: "WC-AUDIT-PC", Online: true, Active: true, IPs: ["100.64.0.10"], ExitNode: false, ExitNodeOption: true },
         prefs: { AdvertiseExitNode: false, ExitNodeIP: "", ExitNodeAllowLANAccess: false, ShieldsUp: false, Unattended: true, AcceptRoutes: true, AcceptDNS: true },
         MagicDNSSuffix: "audit.mesh",
-        peers: [{ ID: "audit-peer", HostName: "AUDIT-LAPTOP", DNSName: "audit-laptop.audit.mesh", OS: "windows", Online: true, Active: true, Relay: "", LastSeen: "2026-08-01T22:00:00Z", IPs: ["100.64.0.11"], RxBytes: 1048576, TxBytes: 524288, CurAddr: "192.0.2.10:41641", ExitNodeOption: false }],
+        peers: [
+          { ID: "audit-peer", Hostname: "AUDIT-LAPTOP", DNSName: "audit-laptop.audit.mesh", OS: "windows", Online: true, Active: true, Relay: "", LastSeen: "2026-08-01T22:00:00Z", IPs: ["100.64.0.11"], RxBytes: 1048576, TxBytes: 524288, CurAddr: "192.0.2.10:41641", ExitNodeOption: false },
+          { ID: "audit-gateway", Hostname: "AUDIT-GATEWAY", DNSName: "audit-gateway.audit.mesh", OS: "linux", Online: false, Active: false, Relay: "sfo", LastSeen: "2026-07-01T12:00:00Z", IPs: ["100.64.0.12"], RxBytes: 7340032, TxBytes: 3145728, CurAddr: "", ExitNodeOption: true },
+        ],
       };
     case "Get-InstalledBrowsersJson":
       return { browsers: [{ Name: "Microsoft Edge", Hardened: true }, { Name: "Mozilla Firefox", Hardened: false }] };
@@ -358,6 +445,9 @@ export function uiAuditDirectResponse(command: string): unknown {
     case "is_dev_build":
       return true;
     case "get_license_status":
+    case "refresh_license":
+    case "activate_license":
+    case "start_trial":
       return AUDIT_LICENSE;
     case "get_live_metrics":
       return { cpuUsage: 23, cpuTemp: 47, ramUsagePercent: 38, ramUsedGb: 12.2, ramTotalGb: 32, disks: [{ name: "C:", totalGb: 953.9, freeGb: 542.5 }] };
@@ -366,14 +456,30 @@ export function uiAuditDirectResponse(command: string): unknown {
     case "get_managed_policy":
       return { managed: false, source: "", values: {} };
     case "flow_list_rules":
-      return [];
+      return structuredClone(AUDIT_FLOW_RULES);
     case "list_backend_commands":
+      return ["Show-Notification", "Refresh-SystemStatus", "Lock-Workstation"];
     case "get_wipe_drive_list":
     case "get_purchase_catalog":
     case "get_drift_report":
     case "search_content":
     case "content_get_doc":
       return [];
+    case "vpn_kill_switch_status":
+      return { armed: false, fired: false, tunnelState: "up", lastFiredAt: 0 };
+    case "fleet_status":
+      return { connected: false, deviceId: "", serverUrl: "", lastEnrollAt: null, lastError: null, retrying: false, pendingApproval: false };
+    case "app_check_for_updates_doh":
+      return { available: false, version: "3.5.0", current_version: "3.5.0" };
+    case "fetch_pro_manifest":
+      return {
+        version: "3.5.0",
+        pub_date: "2026-08-01T20:00:00Z",
+        notes: "Synthetic UI audit manifest",
+        url: "https://updates.example.invalid/wincommander-pro-3.5.0.exe",
+        sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        size: 73400320,
+      };
     case "runtime_visibility_state":
       return { state: { version: 1, entries: [{ key: "audit-tray.exe", hiddenAtUnixMs: Date.parse("2026-08-01T21:30:00Z"), applied: true, runValueRenames: [{ subkey: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", originalName: "AuditTray", renamedTo: "WCAuditTray" }], uninstallHides: [] }] }, statePath: "C:\\Audit\\runtime-visibility.json" };
     case "scan_runtimes":
@@ -443,7 +549,13 @@ export function uiAuditDirectResponse(command: string): unknown {
     case "get_vulnerable_drivers":
       return { vulnerable: [{ filename: "audit-legacy.sys", path: "C:\\Audit\\Drivers\\audit-legacy.sys", state: "present", reason: "Synthetic vulnerable-driver match", matchedBy: "audit-fixture" }], scanned: 2, ok: false };
     case "get_pro_install_status":
-      return { installed: true, compatible: true, version: "3.2.4" };
+      return {
+        installed: true,
+        install_path: "C:\\Audit\\WinCommander Pro\\wincommander-pro.exe",
+        resolved_path: "C:\\Audit\\WinCommander Pro\\wincommander-pro.exe",
+        local_version: "3.5.0",
+        local_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      };
     case "get_log_records":
       return [
         { date: "2026-08-01", timestamp: "22:41:09", level: "INFO", source: "core", os: "Windows", message: "UI audit fixture loaded" },
@@ -526,6 +638,16 @@ export function uiAuditDirectResponse(command: string): unknown {
 export function installUiAuditMocks(): void {
   mockWindows("main");
   let settings = createUiAuditSettings();
+  let flowRules = structuredClone(AUDIT_FLOW_RULES);
+  let fleetStatus = {
+    connected: false,
+    deviceId: "",
+    serverUrl: "",
+    lastEnrollAt: null as string | null,
+    lastError: null as string | null,
+    retrying: false,
+    pendingApproval: false,
+  };
   mockIPC((command, payload) => {
     const args = payload && typeof payload === "object" && !Array.isArray(payload)
       ? payload as Record<string, unknown>
@@ -537,6 +659,40 @@ export function installUiAuditMocks(): void {
       return structuredClone(settings);
     }
     if (command === "run_backend_script") return uiAuditBackendResponse(String(args.command ?? ""));
+    if (command === "flow_list_rules") return structuredClone(flowRules);
+    if (command === "flow_save_rule" && args.rule && typeof args.rule === "object") {
+      const next = structuredClone(args.rule) as (typeof flowRules)[number];
+      const existing = flowRules.findIndex((rule) => rule.id === next.id);
+      if (existing >= 0) flowRules[existing] = next;
+      else flowRules.push(next);
+      return null;
+    }
+    if (command === "flow_delete_rule") {
+      flowRules = flowRules.filter((rule) => rule.id !== args.ruleId);
+      return null;
+    }
+    if (command === "flow_set_enabled") {
+      flowRules = flowRules.map((rule) => rule.id === args.ruleId ? { ...rule, enabled: Boolean(args.enabled) } : rule);
+      return null;
+    }
+    if (command === "flow_fire_now") return null;
+    if (command === "fleet_status") return structuredClone(fleetStatus);
+    if (command === "fleet_connect") {
+      fleetStatus = {
+        connected: true,
+        deviceId: "audit-device-01",
+        serverUrl: String(args.serverUrl ?? "https://fleet.audit.invalid"),
+        lastEnrollAt: "2026-08-01T22:45:00Z",
+        lastError: null,
+        retrying: false,
+        pendingApproval: true,
+      };
+      return null;
+    }
+    if (command === "fleet_disconnect") {
+      fleetStatus = { ...fleetStatus, connected: false, retrying: false, pendingApproval: false };
+      return null;
+    }
     return uiAuditDirectResponse(command);
   }, { shouldMockEvents: true });
 }

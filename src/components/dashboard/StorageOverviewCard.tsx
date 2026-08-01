@@ -38,6 +38,7 @@ const StorageOverviewCard = memo(function StorageOverviewCard({ systemInfo, isLo
                     type="button"
                     className="hardware-card-toggle"
                     onClick={onToggle}
+                    aria-expanded={expanded}
                 >
                     <HardDrive size={14} />
                     <span>STORAGE</span>

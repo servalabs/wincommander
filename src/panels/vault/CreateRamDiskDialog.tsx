@@ -121,6 +121,7 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
             <span className="vault-range-value">{fmtMB(sizeMB)}</span>
           </div>
           <input
+            aria-label="RAM disk size"
             type="range"
             className="vault-range"
             min={sliderMin}

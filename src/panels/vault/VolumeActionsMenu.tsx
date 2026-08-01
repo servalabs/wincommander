@@ -20,6 +20,7 @@ function VolumeActionsMenu({ letter, path, type, onDismounted }: VolumeActionsMe
 
   const [dismounting, setDismounting] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
+  const driveLabel = letter.endsWith(":") ? letter : `${letter}:`;
 
   const handleDismount = async () => {
     setDismounting(true);
@@ -27,10 +28,10 @@ function VolumeActionsMenu({ letter, path, type, onDismounted }: VolumeActionsMe
       await dismountVolume(letter);
       await refreshVault(true);
       onDismounted();
-      showSuccess(`Volume ${letter}: dismounted.`);
+      showSuccess(`Volume ${driveLabel} dismounted.`);
     } catch (e) {
       // Operational volume result → Notifications tab, not System Alerts.
-      showError(e instanceof Error ? e.message : `Failed to dismount ${letter}:.`, undefined, { kind: "notification" });
+      showError(e instanceof Error ? e.message : `Failed to dismount ${driveLabel}.`, undefined, { kind: "notification" });
     } finally {
       setDismounting(false);
     }
@@ -49,6 +50,7 @@ function VolumeActionsMenu({ letter, path, type, onDismounted }: VolumeActionsMe
           small
           onClick={handleOpen}
           className="vol-inline-btn"
+          aria-label={`Open ${driveLabel} in Explorer`}
         />
       </Tooltip>
 
@@ -59,6 +61,7 @@ function VolumeActionsMenu({ letter, path, type, onDismounted }: VolumeActionsMe
           small
           onClick={() => setPropertiesOpen(true)}
           className="vol-inline-btn"
+          aria-label={`View properties for ${driveLabel}`}
         />
       </Tooltip>
 
@@ -72,6 +75,7 @@ function VolumeActionsMenu({ letter, path, type, onDismounted }: VolumeActionsMe
             loading={dismounting}
             onClick={handleDismount}
             className="vol-danger-btn"
+            aria-label={`Dismount ${driveLabel}`}
           />
         </Tooltip>
       </TierGate>

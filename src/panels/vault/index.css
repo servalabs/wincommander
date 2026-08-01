@@ -483,7 +483,7 @@
   border: 1px solid var(--color-border);
 }
 
-.type-badge.hidden {
+.type-badge--hidden {
   color: var(--color-warning);
   border-color: var(--color-warning);
 }

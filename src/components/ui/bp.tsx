@@ -368,6 +368,7 @@ export function Switch({
   disabled,
   className,
   style,
+  "aria-label": ariaLabel,
 }: {
   checked?: boolean;
   defaultChecked?: boolean;
@@ -381,6 +382,7 @@ export function Switch({
   style?: React.CSSProperties;
   innerLabel?: React.ReactNode;
   innerLabelChecked?: React.ReactNode;
+  "aria-label"?: string;
 }) {
   return (
     <label style={style} className={cn("inline-flex items-center gap-2 cursor-pointer", className)}>
@@ -388,6 +390,7 @@ export function Switch({
         checked={checked}
         defaultChecked={defaultChecked}
         disabled={disabled}
+        aria-label={ariaLabel}
         onCheckedChange={(c) => onChange?.(syntheticChangeEvent(c))}
       />
       {label != null && (

@@ -644,6 +644,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
     return (
         <Dialog
             isOpen={isOpen}
+            title="Create Encrypted Volume"
             onClose={(applying && !hasError) ? undefined : handleClose}
             canOutsideClickClose={!applying || hasError}
             canEscapeKeyClose={!applying || hasError}

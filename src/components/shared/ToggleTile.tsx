@@ -148,16 +148,6 @@ function ToggleTile({
         .filter(Boolean)
         .join(" ")}
       onClick={handleActivate}
-      role="switch"
-      aria-checked={checked}
-      aria-disabled={managedByOrg || isHardDisabled || undefined}
-      tabIndex={isHardDisabled ? -1 : 0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          handleActivate();
-        }
-      }}
       data-needs-admin={riskFlags?.needsAdmin ? "true" : undefined}
       data-reduces-security={riskFlags?.reducesSecurity ? "true" : undefined}
       data-irreversible={riskFlags?.irreversible ? "true" : undefined}

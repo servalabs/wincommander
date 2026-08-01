@@ -227,6 +227,7 @@ function DevPanelInner() {
             />
             <select
               className="dev-select"
+              aria-label="Simulated event type"
               value={simKind}
               onChange={(e) => setSimKind(e.target.value as SimEventKind)}
             >

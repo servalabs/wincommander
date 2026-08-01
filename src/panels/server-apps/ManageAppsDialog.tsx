@@ -172,17 +172,21 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
                         {/* Order controls */}
                         <div className="manage-app-order">
                             <button
+                                type="button"
                                 className="manage-app-order-btn"
                                 onClick={() => moveUp(idx)}
                                 disabled={idx === 0}
                                 title="Move up"
+                                aria-label={`Move ${row.name} up`}
                             >▲</button>
                             <span className="manage-app-num">{idx + 1}</span>
                             <button
+                                type="button"
                                 className="manage-app-order-btn"
                                 onClick={() => moveDown(idx)}
                                 disabled={idx === rows.length - 1}
                                 title="Move down"
+                                aria-label={`Move ${row.name} down`}
                             >▼</button>
                         </div>
 
@@ -194,16 +198,18 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
                         {/* Fields */}
                         <div className="manage-app-fields">
                             <div className="manage-app-row-top">
-                                <FormGroup label="Name" className="manage-app-form-group">
+                                <FormGroup label="Name" labelFor={`manage-app-name-${row._stableKey}`} className="manage-app-form-group">
                                     <InputGroup
+                                        id={`manage-app-name-${row._stableKey}`}
                                         value={row.name}
                                         onChange={e => handleNameChange(idx, e.target.value)}
                                         placeholder="Display name"
                                         small
                                     />
                                 </FormGroup>
-                                <FormGroup label="Icon" className="manage-app-form-group manage-app-icon-select">
+                                <FormGroup label="Icon" labelFor={`manage-app-icon-${row._stableKey}`} className="manage-app-form-group manage-app-icon-select">
                                     <HTMLSelect
+                                        id={`manage-app-icon-${row._stableKey}`}
                                         value={row.icon}
                                         onChange={e => update(idx, { icon: e.target.value })}
                                         options={ICON_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
@@ -211,8 +217,9 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
                                     />
                                 </FormGroup>
                             </div>
-                            <FormGroup label="URL" className="manage-app-form-group manage-app-url">
+                            <FormGroup label="URL" labelFor={`manage-app-url-${row._stableKey}`} className="manage-app-form-group manage-app-url">
                                 <InputGroup
+                                    id={`manage-app-url-${row._stableKey}`}
                                     value={row.url}
                                     onChange={e => update(idx, { url: e.target.value })}
                                     placeholder="http://192.168.x.x:port"
@@ -221,8 +228,11 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
                             </FormGroup>
                             <div className="manage-app-css-toggle">
                                 <button
+                                    type="button"
                                     className="manage-app-css-btn"
                                     onClick={() => update(idx, { _cssOpen: !row._cssOpen })}
+                                    aria-expanded={!!row._cssOpen}
+                                    aria-controls={`manage-app-css-${row._stableKey}`}
                                 >
                                     <Icon icon={row._cssOpen ? 'chevron-down' : 'chevron-right'} size={10} />
                                     Custom CSS
@@ -230,6 +240,8 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
                                 </button>
                                 {row._cssOpen && (
                                     <TextArea
+                                        id={`manage-app-css-${row._stableKey}`}
+                                        aria-label={`Custom CSS for ${row.name}`}
                                         value={row.customCss || ''}
                                         onChange={e => update(idx, { customCss: e.target.value })}
                                         placeholder="/* CSS injected into the webview */"

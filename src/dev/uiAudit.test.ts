@@ -154,6 +154,43 @@ describe("UI audit fixture", () => {
     });
   });
 
+  test("populates deep storage, mesh, flow, fleet, license, and update states", () => {
+    const storage = uiAuditBackendResponse("Get-EncryptionStatus") as { volumes: unknown[] };
+    const partitions = uiAuditBackendResponse("Get-EncryptionPartitions") as { partitions: unknown[] };
+    const ramDisks = uiAuditBackendResponse("Get-RamDiskStatus") as { installed: boolean; disks: unknown[] };
+    const mesh = uiAuditBackendResponse("Get-MeshVPNStatus") as { peers: Array<{ Hostname: string; ExitNodeOption: boolean }> };
+    const rules = uiAuditDirectResponse("flow_list_rules") as Array<{ enabled: boolean; locked: boolean }>;
+
+    expect(storage.volumes.length).toBeGreaterThan(1);
+    expect(partitions.partitions.length).toBeGreaterThan(1);
+    expect(uiAuditBackendResponse("Test-RamDiskInstalled")).toEqual({ installed: true });
+    expect(ramDisks.installed).toBe(true);
+    expect(ramDisks.disks.length).toBeGreaterThan(0);
+    expect(uiAuditBackendResponse("Get-SystemRamInfo")).toMatchObject({ totalMB: 32768, freeMB: 20480 });
+    expect(mesh.peers.every((peer) => peer.Hostname.length > 0)).toBe(true);
+    expect(mesh.peers.some((peer) => peer.ExitNodeOption)).toBe(true);
+    expect(rules.some((rule) => rule.enabled && !rule.locked)).toBe(true);
+    expect(rules.some((rule) => !rule.enabled && rule.locked)).toBe(true);
+    expect(uiAuditDirectResponse("refresh_license")).toMatchObject({ valid: true, active_service_features: ["fleet"] });
+    expect(uiAuditDirectResponse("fleet_status")).toMatchObject({ connected: false, retrying: false });
+    expect(uiAuditDirectResponse("app_check_for_updates_doh")).toMatchObject({ available: false, current_version: "3.5.0" });
+    expect(uiAuditDirectResponse("fetch_pro_manifest")).toMatchObject({ version: "3.5.0" });
+  });
+
+  test("populates a remote endpoint for list, edit, and connect audits", () => {
+    const settings = createUiAuditSettings();
+
+    expect(settings.app.rdpNodes).toEqual([
+      {
+        id: "audit-rdp",
+        label: "Audit Workstation",
+        hostname: "192.0.2.25",
+        username: "AuditUser",
+      },
+    ]);
+    expect(settings.app.selectedRdpNodeId).toBe("audit-rdp");
+  });
+
   test("returns arrays for every typed array IPC contract used by the audit surface", () => {
     for (const command of UI_AUDIT_ARRAY_COMMANDS) {
       expect(Array.isArray(uiAuditDirectResponse(command))).toBe(true);
