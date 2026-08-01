@@ -1692,11 +1692,11 @@ export const SUPPORTED_AUTOERASE_IDS = new Set<string>([
   'ntfsJournals', 'recycleBin',
   // DFIR
   'ntUserTraces', 'notepadState', 'pcaDatabase', 'crashDumps', 'walFiles',
-  'printSpooler', 'webCache', 'notificationDb', 'branchCache',
+  'printSpooler', 'webCache', 'thumbnailDb', 'notificationDb', 'branchCache',
   'eventTranscript', 'activitiesTimeline', 'rdpBitmapCache', 'servicingLogs',
-  'deviceInstallLogs', 'usageTraceLogs',
+  'deviceInstallLogs', 'usageTraceLogs', 'defenderHistory',
   'appLaunchHistory', 'officeMru', 'embeddedWebCache', 'p2pUpdateCache',
-  'explorerSearchHistory',
+  'reliabilityHistory', 'explorerSearchHistory', 'searchPersonalization',
   // Disk cleanup (scheduled via cleanmgr — runs as current user). No
   // CleanupCategory carries this id, so applyScheduling() never surfaces it
   // here; its only UI is Maintenance's "Reclaim disk space" card, which gates
@@ -1723,7 +1723,7 @@ export const SUPPORTED_AUTOERASE_IDS = new Set<string>([
 const SYSTEM_CONTEXT_IDS = new Set<string>([
   'eventLogs', 'searchIndex', 'amcache', 'recallDb', 'branchCache',
   'eventTranscript', 'servicingLogs', 'deviceInstallLogs', 'usageTraceLogs',
-  'appLaunchHistory', 'p2pUpdateCache', 'reliabilityHistory',
+  'appLaunchHistory', 'p2pUpdateCache', 'reliabilityHistory', 'defenderHistory',
 ]);
 
 // Mutate the existing exported arrays in-place so consumers that imported

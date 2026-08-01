@@ -174,11 +174,11 @@ export default function LockdownConfigSection(props: Props = {}) {
   );
 
   // ── User-folder shred list ─────────────────────────────────────────
-  // User-supplied folder paths that get securely shredded (Invoke-7Erase,
-  // single durable RNG-overwrite pass by default, user-configurable up to 7)
-  // BEFORE the Rust cascade fires (RightSidebar.fireSelfDestruct). Runs first so user
-  // data is destroyed even if a later step fails / machine is yanked
-  // mid-cascade. Settings field: ideal.privacy.selfDestruct.shredFolders.
+  // User-supplied folder paths that the Rust lockdown cascade securely shreds
+  // (Invoke-7Erase, single durable RNG-overwrite pass by default,
+  // user-configurable up to 7). Keeping this as a real destruct step means it
+  // runs for sidebar, hotkey, distress-phrase, dead-man, and destroy-PIN triggers.
+  // Settings field: ideal.privacy.selfDestruct.shredFolders.
   const shredFolders = useMemo(() => config?.shredFolders ?? [], [config?.shredFolders]);
 
   // Local usernames selected for removal by the remove_users destruct step.
@@ -272,9 +272,8 @@ export default function LockdownConfigSection(props: Props = {}) {
           </div>
         </div>
 
-        {/* User-defined folder shred list. Runs BEFORE the Rust cascade
-            (RightSidebar.fireSelfDestruct) so user data is destroyed
-            first, regardless of which other steps are enabled. Each
+        {/* User-defined folder shred list. The Rust cascade dispatches this
+            as the configured_folders step on every lockdown trigger. Each
             folder goes through the secure shredder command (single
             durable RNG-overwrite pass + GUID rename) — irreversible on
             HDD, best-effort on SSD due to wear-levelling. */}

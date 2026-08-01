@@ -11,8 +11,8 @@
 # ------------
 # Each schedulable privacy-clean category has a small inline clear script in
 # the `$script:AutoEraseScripts` hashtable below. `Set-AutoEraseSchedule`
-# looks up the script by categoryId, base64-encodes it (avoids PowerShell
-# argument-escaping hell when embedded in -Argument), and registers a
+# looks up the script by categoryId, writes it beneath an ACL-hardened
+# ProgramData scripts directory, and registers a
 # Windows Scheduled Task named `WinCommander_AutoErase_<categoryId>`.
 #
 # Why inline (not call back into commander.exe)
@@ -255,7 +255,25 @@ Get-ChildItem -Path "`$env:ProgramData\Microsoft\Wlansvc\Profiles\Interfaces" -R
 "@
     'netDrives'         = "Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue | Where-Object { `$_.DisplayRoot -like '\\\\*' } | ForEach-Object { Remove-PSDrive -Name `$_.Name -Force -ErrorAction SilentlyContinue }; net use * /delete /yes 2>`$null | Out-Null"
     'ntfsJournals'      = "`$fsTool = 'fs' + 'util'; Get-Volume -ErrorAction SilentlyContinue | Where-Object { `$_.DriveLetter -and `$_.FileSystem -eq 'NTFS' } | ForEach-Object { & `$fsTool usn deletejournal /d (`$_.DriveLetter + ':') 2>`$null | Out-Null }"
-    'recycleBin'        = "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"
+    'recycleBin'        = @"
+`$drives = [System.IO.DriveInfo]::GetDrives() | Where-Object { `$_.DriveType -in 'Fixed','Removable' -and `$_.IsReady }
+foreach (`$drv in `$drives) {
+    `$binRoot = Join-Path `$drv.RootDirectory.FullName '`$Recycle.Bin'
+    if (Test-Path -LiteralPath `$binRoot) {
+        Get-ChildItem -LiteralPath `$binRoot -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-ChildItem -LiteralPath `$_.FullName -Force -ErrorAction SilentlyContinue |
+                Where-Object { `$_.Name -like '`$I*' -or `$_.Name -like '`$R*' } |
+                ForEach-Object {
+                    if (`$_.PSIsContainer) { Erase-Dir `$_.FullName } else { Erase-OneFile `$_.FullName | Out-Null }
+                }
+        }
+    }
+    # Refresh the shell's Recycle Bin state only after recoverable content and
+    # metadata have been overwritten. Calling this first would unlink the files
+    # before Erase-OneFile could reach them.
+    try { Clear-RecycleBin -DriveLetter `$drv.Name.TrimEnd('\').TrimEnd(':') -Force -ErrorAction SilentlyContinue } catch {}
+}
+"@
 
     # Deep trace analysis categories --------------------------------------------------
     'ntUserTraces'      = @"
@@ -317,6 +335,14 @@ if (Test-Path `$webCacheDir) {
         try { Erase-OneFile `$_.FullName } catch {}
     }
 }
+"@
+    'thumbnailDb'       = @"
+Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
+`$thumbDir = "`$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
+Get-ChildItem -LiteralPath `$thumbDir -Filter 'thumbcache_*.db' -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
+Get-ChildItem -LiteralPath `$thumbDir -Filter 'iconcache_*.db' -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
+Start-Process explorer.exe -ErrorAction SilentlyContinue
 "@
     'notificationDb'    = @"
 Get-Service -Name 'WpnUserService*' -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue
@@ -401,6 +427,14 @@ foreach (`$t in `$targets) {
     }
 }
 "@
+    'defenderHistory'    = @"
+`$historyDir = "`$env:ProgramData\Microsoft\Windows Defender\Scans\History\Service"
+if (Test-Path `$historyDir) {
+    Get-ChildItem -LiteralPath `$historyDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
+}
+`$mpLog = "`$env:ProgramData\Microsoft\Windows Defender\Support\MpCmdRun.log"
+if (Test-Path `$mpLog) { Erase-OneFile `$mpLog }
+"@
 
     # Extended app-usage / office / web-cache / P2P update categories --------
     'appLaunchHistory'   = @"
@@ -442,6 +476,12 @@ if (Test-Path `$doDir) {
 }
 Start-Service DoSvc -ErrorAction SilentlyContinue
 "@
+    'reliabilityHistory' = @"
+`$racDir = "`$env:ProgramData\Microsoft\RAC\StateData"
+if (Test-Path `$racDir) {
+    Get-ChildItem -LiteralPath `$racDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
+}
+"@
     'explorerSearchHistory' = @"
 foreach (`$k in @(
     'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery',
@@ -455,6 +495,25 @@ foreach (`$k in @(
             }
         }
     }
+}
+"@
+    'searchPersonalization' = @"
+foreach (`$key in @(
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\JumplistData',
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search\Launch'
+)) {
+    if (-not (Test-Path `$key)) { continue }
+    `$item = Get-Item -LiteralPath `$key -ErrorAction SilentlyContinue
+    if (`$item) {
+        foreach (`$name in @(`$item.Property)) {
+            Remove-ItemProperty -LiteralPath `$key -Name `$name -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Get-ChildItem -LiteralPath `$key -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+`$trainedDataStore = "`$env:LOCALAPPDATA\Microsoft\InputPersonalization\TrainedDataStore"
+if (Test-Path `$trainedDataStore) {
+    Get-ChildItem -LiteralPath `$trainedDataStore -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
 }
 "@
 
@@ -501,24 +560,76 @@ function Get-AutoEraseSupportedCategories {
 # command line short and constant-size no matter how large a category's
 # erase logic grows. Mirrors the -File pattern already used by
 # autostart.rs / attend_watch.rs.
+function ConvertTo-AutoEraseSafeScope {
+    param([string]$Value)
+    if (-not $Value) { return 'default' }
+    $safe = $Value -replace '[^A-Za-z0-9._-]', '_'
+    if ($safe.Length -gt 80) { $safe = $safe.Substring(0, 80) }
+    if (-not $safe) { return 'default' }
+    $safe
+}
+
+function Set-AutoEraseDirectoryAcl {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [bool]$UsersMayWrite = $false
+    )
+    [System.IO.Directory]::CreateDirectory($Path) | Out-Null
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $inherit = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    $propagation = [System.Security.AccessControl.PropagationFlags]::None
+    $allow = [System.Security.AccessControl.AccessControlType]::Allow
+    $systemSid = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+    $adminsSid = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    $usersSid = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
+    $acl.SetOwner($adminsSid)
+    $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($systemSid, 'FullControl', $inherit, $propagation, $allow))
+    $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($adminsSid, 'FullControl', $inherit, $propagation, $allow))
+    $userRights = if ($UsersMayWrite) { 'Modify' } else { 'ReadAndExecute' }
+    $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($usersSid, $userRights, $inherit, $propagation, $allow))
+    Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+}
+
+function Initialize-AutoEraseStorage {
+    $base = Join-Path $env:ProgramData 'WinCommander\auto-erase'
+    $scripts = Join-Path $base 'scripts'
+    $state = Join-Path $base 'state'
+    # The task payload may execute as SYSTEM/highest. Its directory must never
+    # inherit a permissive WinCommander ProgramData ACL. Standard users receive
+    # read/execute only; their writable state lives inside their own LocalAppData.
+    Set-AutoEraseDirectoryAcl -Path $base -UsersMayWrite $false
+    Set-AutoEraseDirectoryAcl -Path $scripts -UsersMayWrite $false
+    Set-AutoEraseDirectoryAcl -Path $state -UsersMayWrite $false
+    @{ base = $base; scripts = $scripts; state = $state }
+}
+
 function ConvertTo-AutoEraseTaskArgument {
     param(
         [string]$CategoryId,
         [int]$IntervalMinutes,
-        [string]$Script
+        [string]$Script,
+        [string]$ExecutionScope = 'default'
     )
     # Every scheduled task invocation goes through a small queue/catch-up wrapper:
     #   - one global mutex makes categories run sequentially instead of all at once
     #   - a last-run marker makes boot/logon triggers catch up after sleep/offline
     #     time while skipping duplicate runs shortly after a normal interval run.
     $categoryLiteral = $CategoryId.Replace("'", "''")
+    $scopeKey = ConvertTo-AutoEraseSafeScope $ExecutionScope
+    $scopeLiteral = $scopeKey.Replace("'", "''")
     $wrapper = @"
 `$ErrorActionPreference = 'SilentlyContinue'
 `$categoryId = '$categoryLiteral'
+`$scopeKey = '$scopeLiteral'
 `$intervalMinutes = $IntervalMinutes
-`$root = Join-Path `$env:ProgramData 'WinCommander\auto-erase'
-New-Item -ItemType Directory -Path `$root -Force | Out-Null
-`$marker = Join-Path `$root ("`$categoryId.last")
+`$stateRoot = if (`$scopeKey -eq 'system') {
+    Join-Path `$env:ProgramData 'WinCommander\auto-erase\state'
+} else {
+    Join-Path `$env:LOCALAPPDATA 'WinCommander\auto-erase'
+}
+New-Item -ItemType Directory -Path `$stateRoot -Force | Out-Null
+`$marker = Join-Path `$stateRoot ("`$categoryId.`$scopeKey.last")
 `$now = Get-Date
 `$due = `$true
 if (Test-Path -LiteralPath `$marker) {
@@ -554,7 +665,7 @@ __AUTO_ERASE_BODY__
                 # clear can never silently report success while leaving traces.
                 try {
                     `$res = @{ ts = (Get-Date).ToUniversalTime().ToString('o'); removed = `$script:AutoEraseRemoved; deferred = `$script:AutoEraseDeferred; failed = `$script:AutoEraseFailed }
-                    [System.IO.File]::WriteAllText((Join-Path `$root ("`$categoryId.result.json")), (`$res | ConvertTo-Json -Compress))
+                    [System.IO.File]::WriteAllText((Join-Path `$stateRoot ("`$categoryId.`$scopeKey.result.json")), (`$res | ConvertTo-Json -Compress))
                 } catch {}
                 [System.IO.File]::WriteAllText(`$marker, (Get-Date).ToUniversalTime().ToString('o'))
             }
@@ -569,9 +680,8 @@ __AUTO_ERASE_BODY__
     # has Erase-OneFile / Erase-Dir available regardless of which category it serves.
     $fullScript = $script:EraseFunctions + "`n" + $wrapper.Replace('__AUTO_ERASE_BODY__', $Script)
 
-    $root = Join-Path $env:ProgramData 'WinCommander\auto-erase'
-    New-Item -ItemType Directory -Path $root -Force | Out-Null
-    $scriptPath = Join-Path $root "$CategoryId.ps1"
+    $storage = Initialize-AutoEraseStorage
+    $scriptPath = Join-Path $storage.scripts "$CategoryId.$scopeKey.ps1"
     # UTF8 (with BOM) so Windows PowerShell 5.1 reads it back correctly via -File.
     [System.IO.File]::WriteAllText($scriptPath, $fullScript, [System.Text.Encoding]::UTF8)
 
@@ -626,7 +736,8 @@ function Set-AutoEraseSchedule {
         }
 
         $eraseScript = $script:AutoEraseScripts[$CategoryId]
-        $argument = ConvertTo-AutoEraseTaskArgument -CategoryId $CategoryId -IntervalMinutes $IntervalMinutes -Script $eraseScript
+        $scope = if ($RunAsSystem) { 'system' } else { "user-$TargetUser" }
+        $argument = ConvertTo-AutoEraseTaskArgument -CategoryId $CategoryId -IntervalMinutes $IntervalMinutes -Script $eraseScript -ExecutionScope $scope
 
         $action  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument
 
@@ -711,6 +822,18 @@ function Set-MultiUserAutoEraseSchedule {
         $targetArr = Get-CimInstance -ClassName Win32_UserProfile -ErrorAction SilentlyContinue |
             Where-Object { -not $_.Special -and $_.SID -match '^S-1-5-21-' -and $_.LocalPath -like "$sysDrive\Users\*" } |
             ForEach-Object { Split-Path $_.LocalPath -Leaf }
+    }
+
+    # SYSTEM-context categories are machine-wide. Registering one task per
+    # selected user only overwrote the same canonical task repeatedly and made
+    # the result count dishonest.
+    if ($RunAsSystem) {
+        $r = Set-AutoEraseSchedule `
+            -CategoryId      $CategoryId `
+            -IntervalMinutes $IntervalMinutes `
+            -RunAsSystem     $true `
+            -TargetUser      'SYSTEM'
+        return @{ status = 'ok'; results = @($r); total = 1 }
     }
 
     $results = @()
@@ -882,6 +1005,50 @@ function Invoke-AutoEraseMigration {
             if (-not $result.error) { $migrated += $m.categoryId }
         }
         Unregister-ScheduledTask -TaskName $m.legacy -Confirm:$false -ErrorAction SilentlyContinue
+    }
+
+    # 3. Re-register current-name tasks that still execute a legacy script from
+    # the writable parent directory. New tasks execute only from the ACL-hardened
+    # scripts subdirectory and keep independent per-user catch-up markers.
+    $currentTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue |
+        Where-Object { $_.TaskName -like "$newPrefix*" })
+    foreach ($t in $currentTasks) {
+        $actionArgs = [string](@($t.Actions)[0].Arguments)
+        if ($actionArgs -like '*WinCommander\auto-erase\scripts*') { continue }
+
+        $tail = $t.TaskName.Substring($newPrefix.Length)
+        $catId = $null
+        $targetUser = [string]$t.Principal.UserId
+        foreach ($knownCat in $script:AutoEraseScripts.Keys) {
+            if ($tail -eq $knownCat) {
+                $catId = $knownCat
+                break
+            }
+            if ($tail -like "${knownCat}_*") {
+                $catId = $knownCat
+                $targetUser = $tail.Substring($knownCat.Length + 1)
+                break
+            }
+        }
+        if (-not $catId) { continue }
+
+        $minutes = 60
+        $repetition = @($t.Triggers | ForEach-Object { $_.Repetition.Interval } | Where-Object { $_ }) | Select-Object -First 1
+        if ($repetition -match 'PT(\d+)M') {
+            $minutes = [int]$Matches[1]
+        } elseif ($repetition -match 'PT(\d+)H') {
+            $minutes = [int]$Matches[1] * 60
+        } elseif ($repetition -match 'P(\d+)D') {
+            $minutes = [int]$Matches[1] * 1440
+        }
+        $runAsSystem = [bool]($t.Principal.UserId -eq 'SYSTEM')
+        $result = Set-AutoEraseSchedule `
+            -CategoryId $catId `
+            -IntervalMinutes $minutes `
+            -RunAsSystem $runAsSystem `
+            -TargetUser $targetUser `
+            -TaskNameOverride $t.TaskName
+        if (-not $result.error) { $migrated += $t.TaskName }
     }
     @{ status = 'ok'; migrated = $migrated }
 }

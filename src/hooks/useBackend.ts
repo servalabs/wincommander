@@ -1438,10 +1438,9 @@ export function useBackend() {
       execute<{ status: string; migrated: string[] }>("Invoke-AutoEraseMigration"),
 
     // ── Multi-user scope ────────────────────────────────────────────────────
-    // All four run FREE / in-process in the Free binary — their PowerShell
-    // lives in privacy/cleanup and there is no Pro sidecar handler for them.
-    // The real privilege boundary (reading/clearing other users' hives) is
-    // Windows Administrator, enforced server-side via Test-IsAdmin.
+    // Profile discovery stays read-only. Cross-user clearing and schedule
+    // mutations dispatch through Pro; Windows Administrator remains the final
+    // privilege boundary for loading other users' hives and registering tasks.
     getUserProfiles: () =>
       execute<{
         profiles: Array<{ name: string; displayName?: string; path: string; sid?: string; isCurrent?: boolean }>;

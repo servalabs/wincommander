@@ -987,20 +987,18 @@ pub struct SelfDestructSettings {
     /// deserialize round-trip silently drops it (same trap as `shred_folders`).
     #[serde(default)]
     pub reboot_to_usb_enabled: Option<bool>,
-    /// Absolute paths of folders the user wants securely deleted before
-    /// the Rust orchestrator hands over. The frontend reads this and
-    /// fires Invoke-7Erase (single durable RNG-overwrite pass by default,
-    /// user-configurable up to 7) per folder concurrently with full_lockdown.
-    /// Rust itself doesn't consume it — but the field MUST exist on the
-    /// struct, otherwise patch_settings_cmd's round-trip
-    /// (serialize → merge → DESERIALIZE) silently drops it as an unknown
-    /// field, leaving the user's configured folders persisted nowhere
-    /// and the cascade with an empty deletion list at fire time.
+    /// Absolute paths of folders the user wants securely deleted during
+    /// lockdown. Rust consumes this through the `configured_folders` destruct
+    /// step, so it runs for sidebar, hotkey, distress-phrase, dead-man, and
+    /// destroy-PIN triggers. This field MUST exist on the Rust struct: otherwise
+    /// patch_settings_cmd's serialize-merge-deserialize round-trip silently
+    /// drops it and leaves the cascade with an empty deletion list.
     pub shred_folders: Option<Vec<String>>,
     /// Local usernames the user selected for removal during the lockdown
     /// cascade. The `remove_users` destruct step (Pro) securely wipes each
     /// account's user-profile folder (single durable RNG-overwrite pass), then deletes the profile and
-    /// the local account. Unlike `shred_folders`, Rust DOES consume this:
+    /// the local account. Rust consumes this in the same trigger-complete way as
+    /// `shred_folders`:
     /// `run_destruct_step` injects it into the Pro dispatch, so it fires on
     /// every trigger path (sidebar, hotkey, distress phrase, dead-man, destroy
     /// PIN) — not only the frontend `fireSelfDestruct`. Built-in, logged-in,

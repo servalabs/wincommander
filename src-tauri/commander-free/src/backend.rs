@@ -5086,6 +5086,76 @@ async fn run_destruct_step(app: &tauri::AppHandle, def: &DestructStepDef) -> Res
         // are intentionally excluded — the `browser_footprints` step
         // is the user-facing knob for browser coverage.
         run_bleachbit_clean(true, false).await.map(|_| ())
+    } else if def.id == "configured_folders" {
+        let settings = crate::settings::read_settings().ok();
+        let paths = settings
+            .as_ref()
+            .and_then(|s| s.ideal.privacy.self_destruct.shred_folders.clone())
+            .unwrap_or_default();
+        let wipe_mft_slack = settings
+            .as_ref()
+            .and_then(|s| s.ideal.tweaks.security.shred_mft_slack_enabled)
+            .unwrap_or(false);
+        if paths.is_empty() {
+            crate::log_message(
+                "info",
+                "[Destruct] Configured Folder Shred: no folders configured — skipping",
+            );
+            Ok(())
+        } else {
+            let mut failures = Vec::new();
+            let mft_command = join_parts(&["Clear-MFT~", "Resident~", "Slack~"]);
+            let erase_command = join_parts(&["Invoke-~", "7Erase~"]);
+            for path in &paths {
+                if wipe_mft_slack {
+                    let mft_result = crate::sidecar::dispatch_paid_command(
+                        &mft_command,
+                        serde_json::json!({ "Path": path }),
+                    )
+                    .await;
+                    match mft_result {
+                        Err(e) => failures.push(format!("{path}: MFT/slack pass failed: {e}")),
+                        Ok(v) if v.get("ok").and_then(|o| o.as_bool()) == Some(false) => {
+                            let detail = v
+                                .get("stdout")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("MFT/slack pass reported failure");
+                            failures.push(format!("{path}: {detail}"));
+                        }
+                        Ok(_) => {}
+                    }
+                }
+                let erase_result = crate::sidecar::dispatch_paid_command(
+                    &erase_command,
+                    serde_json::json!({ "Path": path, "Type": "Folder" }),
+                )
+                .await
+                .and_then(|v| {
+                    if v.get("ok").and_then(|o| o.as_bool()) == Some(false) {
+                        Err(v
+                            .get("stdout")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("folder erase failed")
+                            .to_string())
+                    } else {
+                        Ok(())
+                    }
+                });
+                if let Err(e) = erase_result {
+                    failures.push(format!("{path}: {e}"));
+                }
+            }
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{} failure(s) across {} configured folder(s): {}",
+                    failures.len(),
+                    paths.len(),
+                    failures.join(" | ")
+                ))
+            }
+        }
     } else if def.id == "veracrypt_header_destroy" {
         // Feature 5 crypto-erase: the automated cascade can only target
         // VeraCrypt containers the user has explicitly pre-configured — an

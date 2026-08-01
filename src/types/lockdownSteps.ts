@@ -3,7 +3,7 @@
 // Lockdown step registry — TS mirror of Rust DESTRUCT_STEPS
 // ═══════════════════════════════════════════════════════════════════════
 //
-// Mirrors `src-tauri/commander-free/src/lockdown_steps.rs`. Stable
+// Mirrors `src-tauri/commander-free/src/action_steps.rs`. Stable
 // IDs and labels MUST stay in sync with the Rust side — they're the
 // keys in `privacy.selfDestruct.steps` (settings) and the `label`
 // values emitted by Rust's `lockdown-step` Tauri events.
@@ -14,10 +14,10 @@
 //   2. Build the operation-overlay row list when the sidebar's
 //      Lockdown button fires (RightSidebar.fireSelfDestruct).
 //
-// If you add a step on the Rust side, add it here too. CI doesn't
-// catch the divergence today; a settings round-trip will silently
-// drop unknown keys (forwards-compat) so an out-of-sync TS only
-// causes UI gaps, not data corruption.
+// If you add a step on the Rust side, add it here too. The cleanup
+// Lockdown coverage test guards the high-value trace subset and the
+// system-cleaner sentinel; a settings round-trip still silently drops
+// unknown keys (forwards-compat), so keep the full catalog aligned.
 
 import { clearCommand, commandId, invokeCommand } from "../lib/commandIds";
 
@@ -42,7 +42,7 @@ export interface DestructStepDef {
 
 export const DESTRUCT_STEPS: readonly DestructStepDef[] = [
   // System cleaner
-
+  { id: "system_cleaner", label: "System Cleaner", command: "__system_cleaner__", group: "systemCleaner", defaultEnabled: true },
 
   // Privacy traces
   { id: "dismount_volumes",   label: "Dismount Volumes",      command: commandId("Dismount-", "All", "Encryption", "Volumes"), group: "privacyTraces", defaultEnabled: true },
@@ -128,11 +128,30 @@ export const DESTRUCT_STEPS: readonly DestructStepDef[] = [
   { id: "recall",        label: "Recall Database",  command: clearCommand("RecallDatabase"),   group: "deepDfir", defaultEnabled: true },
   { id: "search_index",  label: "Search Index",     command: clearCommand("SearchIndex"),      group: "deepDfir", defaultEnabled: true },
   { id: "print_spooler", label: "Print Spooler",    command: clearCommand("PrintSpooler"),     group: "deepDfir", defaultEnabled: true },
+  { id: "web_cache", label: "Web Cache Database", command: clearCommand("WebCache"), group: "deepDfir", defaultEnabled: true },
+  { id: "thumbnail_cache", label: "Thumbnail & Icon Cache", command: clearCommand("ThumbnailCache"), group: "deepDfir", defaultEnabled: true },
+  { id: "notification_database", label: "Notification History", command: clearCommand("NotificationDatabase"), group: "deepDfir", defaultEnabled: true },
+  { id: "branch_cache", label: "Peer Distribution Cache", command: clearCommand("BranchCache"), group: "deepDfir", defaultEnabled: true },
+  { id: "event_transcript", label: "Diagnostics Timeline", command: clearCommand("EventTranscript"), group: "deepDfir", defaultEnabled: true },
+  { id: "activities_timeline", label: "Timeline Cache", command: clearCommand("ActivitiesTimeline"), group: "deepDfir", defaultEnabled: true },
+  { id: "rdp_bitmap_cache", label: "Remote Session Cache", command: clearCommand("RdpBitmapCache"), group: "deepDfir", defaultEnabled: true },
+  { id: "servicing_logs", label: "Servicing Logs", command: clearCommand("ServicingLogs"), group: "deepDfir", defaultEnabled: true },
+  { id: "device_install_logs", label: "Device Install Logs", command: clearCommand("DeviceInstallLogs"), group: "deepDfir", defaultEnabled: true },
+  { id: "usage_trace_logs", label: "Usage Trace Logs", command: clearCommand("UsageTraceLogs"), group: "deepDfir", defaultEnabled: true },
+  { id: "defender_history", label: "Protection History", command: clearCommand("DefenderHistory"), group: "deepDfir", defaultEnabled: true },
+  { id: "app_launch_history", label: "App Launch History", command: clearCommand("AppLaunchHistory"), group: "deepDfir", defaultEnabled: true },
+  { id: "office_mru", label: "Office Document History", command: clearCommand("OfficeMru"), group: "deepDfir", defaultEnabled: true },
+  { id: "embedded_web_cache", label: "Embedded Browser Cache", command: clearCommand("EmbeddedWebCache"), group: "deepDfir", defaultEnabled: true },
+  { id: "p2p_update_cache", label: "Update Sharing Cache", command: clearCommand("P2PUpdateCache"), group: "deepDfir", defaultEnabled: true },
+  { id: "reliability_history", label: "Stability History", command: clearCommand("ReliabilityHistory"), group: "deepDfir", defaultEnabled: true },
+  { id: "explorer_search_history", label: "Explorer Search History", command: clearCommand("ExplorerSearchHistory"), group: "deepDfir", defaultEnabled: true },
+  { id: "search_personalization", label: "Search Personalization Data", command: clearCommand("SearchPersonalizationData"), group: "deepDfir", defaultEnabled: true },
 
   // Privacy Clean deep erasers (default OFF — slow)
   { id: "unallocated_erase", label: "Free Space Cleanup",      command: invokeCommand("UnallocatedSpaceErase"), group: "privacyClean", defaultEnabled: false },
   { id: "ssd_trim",         label: "SSD TRIM",               command: invokeCommand("SSDTrim"),              group: "privacyClean", defaultEnabled: false },
   { id: "virtual_memory",   label: "Virtual Memory Purge",   command: invokeCommand("VirtualMemoryPurge"),   group: "privacyClean", defaultEnabled: true },
+  { id: "configured_folders", label: "Configured Folder Shred", command: "__configured_folders__", group: "privacyClean", defaultEnabled: true },
 
   // Feature 5 — real crypto-erase (IRREVERSIBLE; default OFF — explicit opt-in required).
   // These steps destroy the encryption master key; the drive becomes permanently unreadable.
@@ -206,11 +225,30 @@ export const DESTRUCT_STEP_DESCRIPTIONS: Record<string, string> = {
   recall:         "Microsoft Recall + ConnectedDevices databases.",
   search_index:   "Windows Search Index (Windows.edb) content.",
   print_spooler:  "Document images sitting in the print spool queue.",
+  web_cache: "Windows/WinINET web history, cookies, and cached responses.",
+  thumbnail_cache: "Explorer thumbnail and icon databases.",
+  notification_database: "Action Center notification history database.",
+  branch_cache: "BranchCache and peer-distribution content cache.",
+  event_transcript: "Windows diagnostic activity and telemetry timeline database.",
+  activities_timeline: "Per-user Windows Timeline and Activity Feed database.",
+  rdp_bitmap_cache: "Cached bitmap tiles from Remote Desktop sessions.",
+  servicing_logs: "CBS and DISM component-install and update logs.",
+  device_install_logs: "PnP and USB device installation history in SetupAPI logs.",
+  usage_trace_logs: "SleepStudy, WDI, and WMI ETW usage traces.",
+  defender_history: "Microsoft Defender scan, detection, and protection history.",
+  app_launch_history: "BAM per-user timestamps for launched programs.",
+  office_mru: "Office recent-document, recent-location, and trusted-document records.",
+  embedded_web_cache: "WebView2 caches, cookies, and history stored by desktop apps.",
+  p2p_update_cache: "Delivery Optimization content cached for peer-to-peer sharing.",
+  reliability_history: "Reliability Monitor's dated app-install, crash, and stability history.",
+  explorer_search_history: "Terms typed into File Explorer search and address fields.",
+  search_personalization: "Per-app search tracking and inking/typing personalization data.",
 
   // Privacy Clean deep erasers (slow / destructive)
   unallocated_erase: "Overwrites unused disk space so deleted files cannot be recovered. May take 30+ minutes on large drives.",
   ssd_trim:         "Optimize-Volume -ReTrim — TRIMs unmapped SSD blocks. Irreversible.",
   virtual_memory:   "Disable hibernation and clear the pagefile on next boot.",
+  configured_folders: "Securely erase every folder selected above on every lockdown trigger. Uses the MFT-resident/slack pass first when that shred policy is enabled.",
 
   // Feature 5 — real crypto-erase (IRREVERSIBLE)
   bitlocker_erase:

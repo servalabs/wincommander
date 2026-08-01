@@ -15,7 +15,6 @@ import { showSuccess, showError } from "../utils/toast";
 import { runOperation } from "../context/OperationContext";
 import { DESTRUCT_STEPS, isStepEnabled } from "../types/lockdownSteps";
 import { DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
-import { invokeCommand } from "../lib/commandIds";
 import MetadataScrubberDialog from "./MetadataScrubberDialog";
 import './RightSidebar.css';
 
@@ -351,12 +350,6 @@ export default function RightSidebar() {
         const enabledDefs = DESTRUCT_STEPS.filter((d) => isStepEnabled(d, userSteps));
         const includeAppEnabled = enabledDefs.some((d) => d.id === 'include_app');
 
-        // User-defined folder shred list — runs as a single frontend-
-        // orchestrated row BEFORE the Rust cascade so user data is
-        // destroyed first even if the cascade aborts mid-flight.
-        const shredFolders = sdConfig?.shredFolders ?? [];
-        const userFolderRowLabel = 'Delete User Folders';
-
         type Deferred = {
             promise: Promise<void>;
             resolve: () => void;
@@ -372,21 +365,7 @@ export default function RightSidebar() {
             });
             deferreds.set(def.label, { promise, resolve, reject });
         }
-        // Reserve a row for the user-folder shred when the user has
-        // configured paths. Resolved by the frontend-driven loop below
-        // (secure shredder per folder), not by a Rust `lockdown-step` event.
-        let userFolderDeferred: Deferred | null = null;
         let removeSchedulesDeferred: Deferred | null = null;
-        if (shredFolders.length > 0) {
-            let resolve: () => void = () => { };
-            let reject: (err: Error) => void = () => { };
-            const promise = new Promise<void>((res, rej) => {
-                resolve = res;
-                reject = rej;
-            });
-            userFolderDeferred = { promise, resolve, reject };
-            deferreds.set(userFolderRowLabel, userFolderDeferred);
-        }
         // Reserve a row for removing auto-erase schedules when enabled.
         if (enabledDefs.some(d => d.id === 'remove_schedules')) {
             let resolve: () => void = () => { };
@@ -452,39 +431,6 @@ export default function RightSidebar() {
                     new Promise<void>((res) => setTimeout(res, 6000)),
                 ]).then(() => def.resolve()).catch(() => { /* already settled */ });
             }
-        }
-
-        // Kick off the user-folder shred concurrently with the cascade.
-        // Each folder runs through the secure shredder command (single durable
-        // RNG-overwrite pass + GUID rename + recursive subdir erase — same
-        // primitive the right-sidebar's Secure Shredder uses). The whole row resolves when
-        // every folder finishes; one folder failing reports the row as
-        // errored but does NOT abort the rest of the cascade.
-        if (userFolderDeferred && shredFolders.length > 0) {
-            const def = userFolderDeferred;
-            (async () => {
-                const failures: string[] = [];
-                await Promise.all(
-                    shredFolders.map(async (path) => {
-                        try {
-                            const res = await invoke<any>('run_backend_script', {
-                                command: invokeCommand('7Erase'),
-                                params: { Path: path, Type: 'Folder' },
-                            });
-                            if (res && typeof res === 'object' && 'error' in res && res.error) {
-                                failures.push(`${path}: ${res.message || 'delete failed'}`);
-                            }
-                        } catch (err) {
-                            failures.push(`${path}: ${String(err)}`);
-                        }
-                    }),
-                );
-                if (failures.length > 0) {
-                    def.reject(new Error(failures.join('; ')));
-                } else {
-                    def.resolve();
-                }
-            })();
         }
 
         // Kick off removal of auto-erase schedules (frontend-driven row).
