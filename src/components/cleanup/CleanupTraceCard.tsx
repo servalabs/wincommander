@@ -641,6 +641,7 @@ export default function CleanupTraceCard({
               disabled={clearDisabled}
               onClick={onClear}
               className="cleanup-run-once-button--fill"
+              actionLabel={category.label}
             />
           )}
         </div>

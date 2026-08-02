@@ -67,6 +67,7 @@ export default function CleanupActionsMonitoring({
                                         disabled={isInvestigator}
                                         onClick={() => handleCardClear(cat, cat.id === 'unallocatedErase' ? onDriveWipe : undefined)}
                                         className="shrink-0"
+                                        actionLabel={cat.label}
                                     />
                                 </div>
                             );

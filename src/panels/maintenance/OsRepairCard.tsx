@@ -100,7 +100,13 @@ export default function OsRepairCard() {
           const history = getHistory(action.key);
           const isBusy = !!busy[action.key];
           const runButton = (
-            <Button size="sm" variant="outline" disabled={isBusy} onClick={() => void run(action.key, action.operationLabel, handlers[action.key])}>
+            <Button
+              size="sm"
+              variant="outline"
+              aria-label={isBusy ? `${action.label} is running` : `Run ${action.label}`}
+              disabled={isBusy}
+              onClick={() => void run(action.key, action.operationLabel, handlers[action.key])}
+            >
               <Icon icon={isBusy ? "refresh" : "play"} className={isBusy ? "animate-spin" : undefined} />{isBusy ? "Running…" : "Run"}
             </Button>
           );

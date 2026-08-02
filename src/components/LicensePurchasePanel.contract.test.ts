@@ -76,15 +76,34 @@ describe("Purchase surface: shortest path to payment", () => {
     expect(panel).toContain('replace(/[^\\d+]/g, "")');
     expect(panel).toContain("+ Add phone (optional)");
     expect(panel).toContain("isPhoneShown");
+    expect(panel).toContain('htmlFor={emailId}');
+    expect(panel).toContain('id={emailId}');
+    expect(panel).toContain('htmlFor={phoneId}');
+    expect(panel).toContain('id={phoneId}');
   });
 
-  test("checkout creation and the Fleet seat bounds are unchanged", async () => {
+  test("checkout creation and the Fleet seat bounds are enforced and announced", async () => {
     const panel = await read("src/components/LicensePurchasePanel.tsx");
 
     expect(panel).toContain("await purchase.start({");
     expect(panel).toContain("await open(pending.checkoutUrl)");
     expect(panel).toContain("Math.max(selected.minSeats!, value - 1)");
     expect(panel).toContain("Math.min(selected.maxSeats!, value + 1)");
+    expect(panel).toContain("Math.max(selected.minSeats!, value)");
+    expect(panel).toContain('aria-label={`Decrease managed devices; minimum ${selected.minSeats}`}');
+    expect(panel).toContain('aria-label={`Increase managed devices; maximum ${selected.maxSeats}`}');
+    expect(panel).toContain('aria-label={`${fleetSeats} managed devices selected`}');
+  });
+
+  test("the modal and existing-key field expose their purpose to assistive technology", async () => {
+    const gate = await read("src/components/LicenseGate.tsx");
+
+    expect(gate).toContain('role={inline ? "region" : "dialog"}');
+    expect(gate).toContain('aria-modal={inline ? undefined : true}');
+    expect(gate).toContain("aria-labelledby={titleId}");
+    expect(gate).toContain("aria-describedby={subtitleId}");
+    expect(gate).toContain('htmlFor={licenseKeyId}');
+    expect(gate).toContain('id={licenseKeyId}');
   });
 
   test("the pending checkout state keeps its key box, hints and recovery buttons", async () => {

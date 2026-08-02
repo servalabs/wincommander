@@ -16,7 +16,7 @@ export interface SearchHotkeyState {
 
 export function useSearchHotkey(): SearchHotkeyState {
   const { appSettings, patchAppSettings } = useAppState();
-  const [hotkey, setHotkey] = useState<string>(appSettings?.app?.searchHotkey ?? "Ctrl+Space");
+  const [hotkey, setHotkey] = useState<string>(appSettings?.app?.searchHotkey || "Ctrl+Space");
   const [recording, setRecording] = useState(false);
 
   useEffect(() => {

@@ -61,8 +61,8 @@ export function IndexedFoldersManager({ roots, reindexing, rescanning, onReindex
               <Button
                 size="icon"
                 variant="ghost"
-                title="Remove folder"
-                aria-label="Remove folder"
+                title={`Remove ${root} from indexed folders`}
+                aria-label={`Remove ${root} from indexed folders`}
                 onClick={() => onRemoveFolder(root)}
               >
                 <Icon icon="cross" size={14} />

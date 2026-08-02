@@ -5,6 +5,7 @@ interface RunOnceButtonProps {
   disabled?: boolean;
   onClick: () => void;
   className?: string;
+  actionLabel: string;
 }
 
 /** Shared one-shot action control across System Cleanup. */
@@ -13,11 +14,13 @@ export default function RunOnceButton({
   disabled = false,
   onClick,
   className = "",
+  actionLabel,
 }: RunOnceButtonProps) {
   return (
     <button
       type="button"
       disabled={isRunning || disabled}
+      aria-label={isRunning ? `${actionLabel} is running` : `Run ${actionLabel} once`}
       onClick={(event) => {
         event.stopPropagation();
         onClick();

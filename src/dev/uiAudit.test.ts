@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { PANEL_MANIFESTS } from "../types/panels";
-import { createUiAuditSettings, UI_AUDIT_ARRAY_COMMANDS, UI_AUDIT_POPULATED_ARRAY_COMMANDS, uiAuditBackendResponse, uiAuditDirectResponse } from "./uiAudit";
+import { createUiAuditLicenseStatus, createUiAuditPendingPurchase, createUiAuditSettings, UI_AUDIT_ARRAY_COMMANDS, UI_AUDIT_POPULATED_ARRAY_COMMANDS, uiAuditBackendResponse, uiAuditDirectResponse } from "./uiAudit";
 import { buildTraceView } from "../components/shared/traceTable";
 import { shouldSkipStartupSplash } from "../lib/startupMode";
 
@@ -77,6 +77,17 @@ describe("UI audit fixture", () => {
     expect(uiAuditBackendResponse("Get-ActivationStatus")).toEqual({
       windows: { activated: true, edition: "Windows 11 Pro" },
       office: { installed: false },
+    });
+  });
+
+  test("supports active and unlicensed rendered purchase states", () => {
+    expect(createUiAuditLicenseStatus()).toMatchObject({ licensed: true, valid: true, plan: "Pro" });
+    expect(createUiAuditLicenseStatus("unlicensed")).toMatchObject({
+      configured: true,
+      licensed: false,
+      valid: false,
+      features: [],
+      trial_available: true,
     });
   });
 
@@ -208,5 +219,36 @@ describe("UI audit fixture", () => {
     };
     expect(Object.keys(usbTimeline.records).length).toBeGreaterThan(0);
     expect(usbTimeline.sessions.length).toBeGreaterThan(0);
+  });
+
+  test("populates filename, indexed-content, drive, purchase, and drift contracts", () => {
+    const settings = createUiAuditSettings();
+    const names = uiAuditDirectResponse("search_everything") as { results: Array<{ full_path: string }>; total: number };
+    const content = uiAuditDirectResponse("search_content") as Array<{ doc_id: string; snippet: string }>;
+    const chunks = uiAuditDirectResponse("content_get_doc") as Array<{ field: string; text: string }>;
+    const drives = uiAuditDirectResponse("get_wipe_drive_list") as Array<{ isSystem: boolean; isRemovable: boolean }>;
+    const offers = uiAuditDirectResponse("get_purchase_catalog") as Array<{ sku: string; checkoutEligible: boolean }>;
+
+    expect(names.results.length).toBeGreaterThan(1);
+    expect(names.total).toBe(names.results.length);
+    expect(names.results.every((row) => row.full_path.startsWith("C:\\Audit\\"))).toBe(true);
+    expect(content.every((row) => row.doc_id.length > 0 && row.snippet.includes("<mark>"))).toBe(true);
+    expect(chunks.some((chunk) => chunk.field === "Body" && chunk.text.length > 40)).toBe(true);
+    expect(uiAuditDirectResponse("content_index_status")).toMatchObject({ indexed_docs: 428, pending_docs: 0, is_indexing: false });
+    expect(drives.some((drive) => drive.isSystem)).toBe(true);
+    expect(drives.some((drive) => drive.isRemovable)).toBe(true);
+    expect(offers.some((offer) => offer.sku === "fleet" && offer.checkoutEligible)).toBe(true);
+    expect(createUiAuditPendingPurchase({ sku: "fleet", seats: 1 })).toMatchObject({
+      purchaseId: "audit-purchase-001",
+      sku: "fleet",
+      seats: 5,
+      amount: 3_000,
+      currency: "USD",
+    });
+    expect(createUiAuditPendingPurchase({ sku: "fleet", seats: 6 })).toMatchObject({ seats: 6, amount: 3_600 });
+    expect((uiAuditDirectResponse("get_drift_report") as unknown[]).length).toBeGreaterThan(1);
+    expect(settings.app.fileSearch?.roots).toEqual(["C:\\Audit\\Cases", "C:\\Audit\\Evidence"]);
+    expect(settings.app.fileSearch?.exclusions).toEqual(["*.tmp", "node_modules"]);
+    expect(settings.app.searchHotkey).toBe("Ctrl+Space");
   });
 });

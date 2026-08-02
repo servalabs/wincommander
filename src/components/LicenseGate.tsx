@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -51,6 +51,9 @@ export default function LicenseGate({
   const [requestedFeatureLabel, setRequestedFeatureLabel] = useState<string | null>(
     inlineFeatureLabel ?? null
   );
+  const titleId = useId();
+  const subtitleId = useId();
+  const licenseKeyId = useId();
 
   const { data: licenseStatus } = useLicenseQuery();
   const invalidateLicense = useInvalidateLicense();
@@ -193,6 +196,10 @@ export default function LicenseGate({
         >
           <motion.div
             className={`license-gate-card${inline ? " license-gate-card--inline" : ""}`}
+            role={inline ? "region" : "dialog"}
+            aria-modal={inline ? undefined : true}
+            aria-labelledby={titleId}
+            aria-describedby={subtitleId}
             onClick={(event) => event.stopPropagation()}
             variants={cardVariants}
             initial="hidden"
@@ -204,8 +211,8 @@ export default function LicenseGate({
               <button type="button" onClick={closeModal} aria-label="Close" className="license-gate-close">×</button>
             )}
             <div className="license-gate-header">
-              <div className="license-gate-title">WINCOMMANDER · LICENSE</div>
-              <div className="license-gate-subtitle">
+              <div id={titleId} className="license-gate-title">WINCOMMANDER · LICENSE</div>
+              <div id={subtitleId} className="license-gate-subtitle">
                 {requestedFeatureLabel
                   ? <><strong>{requestedFeatureLabel}</strong> requires WinCommander Pro.</>
                   : "Purchase securely or activate an existing key."}
@@ -233,8 +240,9 @@ export default function LicenseGate({
               <TabsContent value="activate" className="mt-2">
                 <div className="license-gate-activate">
                   <div className="license-gate-field">
-                    <label className="license-gate-label">License Key</label>
+                    <label className="license-gate-label" htmlFor={licenseKeyId}>License Key</label>
                     <input
+                      id={licenseKeyId}
                       type="text"
                       className="license-gate-input"
                       placeholder="WC-PRO-XXXX-XXXX-XXXX-XXXX-XXXX"

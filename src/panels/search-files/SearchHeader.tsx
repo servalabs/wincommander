@@ -30,7 +30,12 @@ export default function SearchHeader({ hotkey }: { hotkey: SearchHotkeyState }) 
         ) : (
           <Tooltip>
             <TooltipTrigger asChild>
-              <button className="search-hk-badge" onClick={hotkey.startRecording}>
+              <button
+                type="button"
+                className="search-hk-badge"
+                aria-label={`Change search hotkey, currently ${hotkey.hotkey || "not set"}`}
+                onClick={hotkey.startRecording}
+              >
                 {hotkey.hotkey}
               </button>
             </TooltipTrigger>

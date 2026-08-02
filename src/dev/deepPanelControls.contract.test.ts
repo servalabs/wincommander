@@ -19,7 +19,7 @@ describe("deep panel control accessibility", () => {
   });
 
   test("labels controls that rendered anonymously in the deep audit", async () => {
-    const [vpn, fleet, dev, flows, apps, wizard, vault, volumeActions, ramDisks, createRamDisk, stego, rdp] = await Promise.all([
+    const [vpn, fleet, dev, flows, apps, wizard, vault, volumeActions, ramDisks, createRamDisk, stego, rdp, indexedFolders, runOnce, cleanupActions, cleanupCard, searchHeader, searchHotkey, osRepairCard] = await Promise.all([
       Bun.file("src/panels/mesh/VpnKillSwitchSection.tsx").text(),
       Bun.file("src/panels/fleet/FleetConnectView.tsx").text(),
       Bun.file("src/panels/dev/index.tsx").text(),
@@ -32,6 +32,13 @@ describe("deep panel control accessibility", () => {
       Bun.file("src/panels/vault/CreateRamDiskDialog.tsx").text(),
       Bun.file("src/panels/vault/StegoBackupSection.tsx").text(),
       Bun.file("src/components/RdpQuickAction.tsx").text(),
+      Bun.file("src/panels/search-files/IndexedFolders.tsx").text(),
+      Bun.file("src/components/cleanup/RunOnceButton.tsx").text(),
+      Bun.file("src/panels/cleanup/CleanupActionsMonitoring.tsx").text(),
+      Bun.file("src/components/cleanup/CleanupTraceCard.tsx").text(),
+      Bun.file("src/panels/search-files/SearchHeader.tsx").text(),
+      Bun.file("src/hooks/useSearchHotkey.ts").text(),
+      Bun.file("src/panels/maintenance/OsRepairCard.tsx").text(),
     ]);
 
     expect(vpn).toContain('aria-label="Block internet if VPN drops"');
@@ -59,5 +66,12 @@ describe("deep panel control accessibility", () => {
     expect(rdp).toContain('aria-label="Manage remote endpoints"');
     expect(rdp).toContain("aria-expanded={isListOpen}");
     expect(rdp).not.toContain('role="button"');
+    expect(indexedFolders).toContain("aria-label={`Remove ${root} from indexed folders`}");
+    expect(runOnce).toContain('`Run ${actionLabel} once`');
+    expect(cleanupActions).toContain("actionLabel={cat.label}");
+    expect(cleanupCard).toContain("actionLabel={category.label}");
+    expect(searchHeader).toContain('aria-label={`Change search hotkey, currently ${hotkey.hotkey || "not set"}`}');
+    expect(searchHotkey).toContain('appSettings?.app?.searchHotkey || "Ctrl+Space"');
+    expect(osRepairCard).toContain('aria-label={isBusy ? `${action.label} is running` : `Run ${action.label}`}');
   });
 });

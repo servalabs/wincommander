@@ -34,6 +34,8 @@ export default function LicensePurchasePanel({
   const purchase = usePurchase(onActivated);
   const catalog = usePurchaseCatalog();
   const ringId = useId();
+  const emailId = useId();
+  const phoneId = useId();
   const emailOk = validEmail(email);
   const hasInvestigatorEntitlement =
     licenseStatus?.valid === true && (licenseStatus.features ?? []).includes("advanced");
@@ -51,6 +53,11 @@ export default function LicensePurchasePanel({
       setSku(visibleOffers[0].sku);
     }
   }, [visibleOffers, sku]);
+
+  useEffect(() => {
+    if (selected?.sku !== "fleet" || selected.minSeats == null || selected.maxSeats == null) return;
+    setFleetSeats((value) => Math.min(selected.maxSeats!, Math.max(selected.minSeats!, value)));
+  }, [selected?.sku, selected?.minSeats, selected?.maxSeats]);
 
   const startCheckout = async () => {
     setNotice(null);
@@ -95,7 +102,7 @@ export default function LicensePurchasePanel({
               <div className="license-gate-trial-sub">Pro features · No card · Once per Windows device</div>
             </div>
           </div>
-          <button className="license-gate-trial-btn" disabled={isLicenseBusy} onClick={onStartTrial}>
+          <button type="button" className="license-gate-trial-btn" disabled={isLicenseBusy} onClick={onStartTrial}>
             {isLicenseBusy ? "Starting…" : "Start Free Trial"}
           </button>
         </div>
@@ -108,7 +115,7 @@ export default function LicensePurchasePanel({
           <span className="license-gate-error-detail">
             {catalog.error.replace(/^Error:\s*/i, "")}
           </span>
-          <button className="license-gate-btn-retry" onClick={() => void catalog.refresh()}>Retry</button>
+          <button type="button" className="license-gate-btn-retry" onClick={() => void catalog.refresh()}>Retry</button>
         </div>
       )}
       {!purchase.pending && visibleOffers && (
@@ -132,9 +139,26 @@ export default function LicensePurchasePanel({
         <div className="license-gate-config-row">
           <span className="license-gate-label">Managed devices</span>
           <div className="license-gate-stepper">
-            <button className="license-gate-stepper-btn" onClick={() => setFleetSeats((value) => Math.max(selected.minSeats!, value - 1))} disabled={fleetSeats <= selected.minSeats}>−</button>
-            <span className="license-gate-stepper-val">{fleetSeats}</span>
-            <button className="license-gate-stepper-btn" onClick={() => setFleetSeats((value) => Math.min(selected.maxSeats!, value + 1))} disabled={fleetSeats >= selected.maxSeats}>+</button>
+            <button
+              type="button"
+              className="license-gate-stepper-btn"
+              aria-label={`Decrease managed devices; minimum ${selected.minSeats}`}
+              onClick={() => setFleetSeats((value) => Math.max(selected.minSeats!, value - 1))}
+              disabled={fleetSeats <= selected.minSeats}
+            >−</button>
+            <span
+              className="license-gate-stepper-val"
+              role="status"
+              aria-live="polite"
+              aria-label={`${fleetSeats} managed devices selected`}
+            >{fleetSeats}</span>
+            <button
+              type="button"
+              className="license-gate-stepper-btn"
+              aria-label={`Increase managed devices; maximum ${selected.maxSeats}`}
+              onClick={() => setFleetSeats((value) => Math.min(selected.maxSeats!, value + 1))}
+              disabled={fleetSeats >= selected.maxSeats}
+            >+</button>
           </div>
           {selected.seatPricingLabel && <span className="license-gate-config-hint">{selected.seatPricingLabel}</span>}
         </div>
@@ -143,8 +167,9 @@ export default function LicensePurchasePanel({
       {!purchase.pending && (
         <>
           <div className="license-gate-field">
-            <label className="license-gate-label">Email — your license key is delivered here</label>
+            <label className="license-gate-label" htmlFor={emailId}>Email — your license key is delivered here</label>
             <input
+              id={emailId}
               type="email"
               className={`license-gate-input${email && !emailOk ? " input-error" : ""}`}
               placeholder="you@example.com"
@@ -154,8 +179,9 @@ export default function LicensePurchasePanel({
           </div>
           {isPhoneShown ? (
             <div className="license-gate-field">
-              <label className="license-gate-label">Phone (optional, international format)</label>
+              <label className="license-gate-label" htmlFor={phoneId}>Phone (optional, international format)</label>
               <input
+                id={phoneId}
                 type="tel"
                 className="license-gate-input"
                 placeholder="+919876543210"

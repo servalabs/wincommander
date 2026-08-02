@@ -5,6 +5,7 @@ import type { AppSettings } from "../types/settings";
 
 export const UI_AUDIT_QUERY_KEY = "wc-ui-audit";
 export const UI_AUDIT_PANEL_QUERY_KEY = "panel";
+export const UI_AUDIT_LICENSE_QUERY_KEY = "license";
 
 const AUDIT_LICENSE = {
   configured: true,
@@ -20,6 +21,44 @@ const AUDIT_LICENSE = {
   trial_active: false,
   trial_available: false,
 };
+
+const AUDIT_UNLICENSED = {
+  configured: true,
+  licensed: false,
+  valid: false,
+  reason: "No license is installed on this synthetic audit device.",
+  plan: null,
+  features: [] as string[],
+  base_features: [] as string[],
+  active_service_features: [] as string[],
+  device_hash: "ui-audit-device",
+  seats_used: 0,
+  seat_limit: null,
+  trial_active: false,
+  trial_available: true,
+};
+
+export function createUiAuditLicenseStatus(mode?: string | null) {
+  return structuredClone(mode === "unlicensed" ? AUDIT_UNLICENSED : AUDIT_LICENSE);
+}
+
+export function createUiAuditPendingPurchase(input?: { sku?: string; seats?: number | null }) {
+  const sku = input?.sku === "pro_membership" || input?.sku === "fleet"
+    ? input.sku
+    : "pro_lifetime";
+  const fleetSeatCount = Math.max(5, Math.min(500, Number(input?.seats ?? 5)));
+  const seats = sku === "fleet" ? fleetSeatCount : null;
+  const amount = sku === "fleet" ? fleetSeatCount * 600 : sku === "pro_membership" ? 2_900 : 7_900;
+  return {
+    purchaseId: "audit-purchase-001",
+    sku,
+    seats,
+    checkoutUrl: "https://checkout.example.invalid/audit-purchase-001",
+    amount,
+    currency: "USD",
+    expiresAt: Date.parse("2026-08-03T00:00:00Z"),
+  };
+}
 
 const AUDIT_SYSTEM_INFO = {
   osName: "Windows 11 Pro",
@@ -179,6 +218,11 @@ export function createUiAuditSettings(): AppSettings {
         },
       ],
       selectedRdpNodeId: "audit-rdp",
+      searchHotkey: "Ctrl+Space",
+      fileSearch: {
+        roots: ["C:\\Audit\\Cases", "C:\\Audit\\Evidence"],
+        exclusions: ["*.tmp", "node_modules"],
+      },
     },
     ideal: {
       identity: {
@@ -410,16 +454,19 @@ export const UI_AUDIT_ARRAY_COMMANDS = [
 ] as const;
 
 export const UI_AUDIT_POPULATED_ARRAY_COMMANDS = [
+  "content_get_doc",
   "drop_standard_decoys",
   "f6_list_removable_volumes",
   "get_active_alerts",
   "get_auth_anomaly_recent",
   "get_canary_recent",
+  "get_drift_report",
   "get_log_records",
   "get_network_honeypot_ports",
   "get_network_honeypot_recent",
   "get_paste_monitor_recent",
   "get_print_audit_log",
+  "get_purchase_catalog",
   "get_ransomware_recent",
   "get_ransomware_watched_dirs",
   "get_recent_downloads",
@@ -433,8 +480,10 @@ export const UI_AUDIT_POPULATED_ARRAY_COMMANDS = [
   "get_usb_transfer_stats",
   "get_wifi_guard_known",
   "get_wifi_guard_recent",
+  "get_wipe_drive_list",
   "list_canaries",
   "list_decoys",
+  "search_content",
 ] as const satisfies ReadonlyArray<(typeof UI_AUDIT_ARRAY_COMMANDS)[number]>;
 
 export function uiAuditDirectResponse(command: string): unknown {
@@ -460,11 +509,52 @@ export function uiAuditDirectResponse(command: string): unknown {
     case "list_backend_commands":
       return ["Show-Notification", "Refresh-SystemStatus", "Lock-Workstation"];
     case "get_wipe_drive_list":
+      return [
+        { letter: "C", label: "Windows", freeGB: 542.5, totalGB: 953.9, mediaType: "NVMe", busType: "NVMe", isRemovable: false, isSystem: true },
+        { letter: "E", label: "AUDIT USB", freeGB: 42.1, totalGB: 57.7, mediaType: "Unknown", busType: "USB", isRemovable: true, isSystem: false },
+      ];
     case "get_purchase_catalog":
+      return [
+        { sku: "pro_lifetime", name: "WinCommander Pro Lifetime", priceLabel: "$79 one-time", detail: "All Pro tools on one registered device.", deviceRule: "Lifetime access for one device; transfer subject to the service policy.", checkoutEligible: true },
+        { sku: "pro_membership", name: "WinCommander Pro Membership", priceLabel: "$29/year", detail: "Pro tools with active service updates.", deviceRule: "One registered device while membership is active.", checkoutEligible: true },
+        { sku: "fleet", name: "WinCommander Fleet", priceLabel: "$6/device/month", detail: "Central policy and device coordination.", deviceRule: "Five-device minimum with per-seat billing.", checkoutEligible: true, minSeats: 5, maxSeats: 500, seatPricingLabel: "$6 per device / month" },
+      ];
     case "get_drift_report":
+      return [
+        { path: "ideal.privacy.telemetry", idealValue: false, currentValue: true, command: "Disable-Telemetry" },
+        { path: "ideal.network.dnsProvider", idealValue: "cloudflare", currentValue: "automatic", command: "Set-CloudflareDNS" },
+      ];
     case "search_content":
+      return [
+        { doc_id: "1785624000001", path: "C:\\Audit\\Cases\\incident-report.pdf", name: "incident-report.pdf", ext: "pdf", mtime: 1785624000, size: 3145728, score: 0.94, match_kind: "Hybrid", snippet: "The <mark>audit</mark> timeline records the initial alert.", author: "Audit Team", doc_title: "Incident Review", tags: "audit,incident" },
+        { doc_id: "1785624000002", path: "C:\\Audit\\Evidence\\collection-notes.docx", name: "collection-notes.docx", ext: "docx", mtime: 1785623100, size: 1048576, score: 0.82, match_kind: "Keyword", snippet: "Validated the <mark>audit</mark> collection against the manifest.", author: "Examiner", doc_title: "Collection Notes", tags: "evidence" },
+      ];
     case "content_get_doc":
-      return [];
+      return [
+        { doc_id: "1785624000001", field: "Title", ordinal: 0, text: "Incident Review" },
+        { doc_id: "1785624000001", field: "Body", ordinal: 1, text: "The audit timeline records the initial alert, containment steps, and verification outcome." },
+      ];
+    case "search_everything":
+      return {
+        results: [
+          { name: "audit-index.csv", directory: "C:\\Audit\\Cases", full_path: "C:\\Audit\\Cases\\audit-index.csv", size: "524288", modified: "2026-08-01 22:40:00", icon_data: null },
+          { name: "audit-viewer.exe", directory: "C:\\Audit\\Tools", full_path: "C:\\Audit\\Tools\\audit-viewer.exe", size: "7340032", modified: "2026-08-01 22:25:00", icon_data: null },
+        ],
+        total: 2,
+        query: "audit",
+      };
+    case "search_everything_count":
+      return 2;
+    case "content_index_status":
+      return { indexed_docs: 428, pending_docs: 0, is_indexing: false, last_error: null, index_size_bytes: 8388608 };
+    case "get_pending_purchase":
+      return null;
+    case "create_purchase":
+    case "resume_purchase_checkout":
+      return createUiAuditPendingPurchase();
+    case "poll_purchase_status":
+    case "reconcile_purchase_status":
+      return { state: "checkout_pending", providerStatus: "created", amount: 7_900, currency: "USD", activated: false };
     case "vpn_kill_switch_status":
       return { armed: false, fired: false, tunnelState: "up", lastFiredAt: 0 };
     case "fleet_status":
@@ -638,6 +728,10 @@ export function uiAuditDirectResponse(command: string): unknown {
 export function installUiAuditMocks(): void {
   mockWindows("main");
   let settings = createUiAuditSettings();
+  let licenseStatus = createUiAuditLicenseStatus(
+    new URLSearchParams(window.location.search).get(UI_AUDIT_LICENSE_QUERY_KEY),
+  );
+  let pendingPurchase: ReturnType<typeof createUiAuditPendingPurchase> | null = null;
   let flowRules = structuredClone(AUDIT_FLOW_RULES);
   let fleetStatus = {
     connected: false,
@@ -653,6 +747,41 @@ export function installUiAuditMocks(): void {
       ? payload as Record<string, unknown>
       : {};
     if (command === "get_settings") return structuredClone(settings);
+    if (command === "get_license_status" || command === "refresh_license") return structuredClone(licenseStatus);
+    if (command === "activate_license") {
+      licenseStatus = createUiAuditLicenseStatus();
+      return structuredClone(licenseStatus);
+    }
+    if (command === "start_trial") {
+      licenseStatus = { ...createUiAuditLicenseStatus(), trial_active: true, trial_available: false };
+      return structuredClone(licenseStatus);
+    }
+    if (command === "get_pending_purchase") return structuredClone(pendingPurchase);
+    if (command === "create_purchase") {
+      const input = args.input && typeof args.input === "object"
+        ? args.input as { sku?: string; seats?: number | null }
+        : undefined;
+      pendingPurchase = createUiAuditPendingPurchase(input);
+      return structuredClone(pendingPurchase);
+    }
+    if (command === "resume_purchase_checkout") {
+      pendingPurchase ??= createUiAuditPendingPurchase();
+      return structuredClone(pendingPurchase);
+    }
+    if (command === "poll_purchase_status" || command === "reconcile_purchase_status") {
+      return {
+        state: "checkout_pending",
+        providerStatus: "created",
+        amount: pendingPurchase?.amount ?? 7_900,
+        currency: pendingPurchase?.currency ?? "USD",
+        activated: false,
+      };
+    }
+    if (command === "resend_purchase_license") return null;
+    if (command === "forget_pending_purchase") {
+      pendingPurchase = null;
+      return null;
+    }
     if (command === "patch_settings_cmd" || command === "set_settings" || command === "update_current_state") {
       const patch = command === "set_settings" ? args.settings : command === "update_current_state" ? { current: args.probe } : args.patch;
       settings = mergeSettings(settings, patch);
