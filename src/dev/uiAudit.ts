@@ -387,6 +387,17 @@ export function uiAuditBackendResponse(command: string): unknown {
       return { installed: true };
     case "Get-DebloatWindowsIconData":
       return { icons: {} };
+    case "Get-DiskCleanupScan":
+      return {
+        categories: [
+          { Id: "userTemp", Label: "User temporary files", Path: "C:\\Users\\Audit\\AppData\\Local\\Temp", Exists: true, FileCount: 184, SizeBytes: 398_458_880, SizeMb: 380.0 },
+          { Id: "windowsTemp", Label: "Windows temporary files", Path: "C:\\Windows\\Temp", Exists: true, FileCount: 71, SizeBytes: 197_656_576, SizeMb: 188.5 },
+          { Id: "updateCache", Label: "Windows Update cache", Path: "C:\\Windows\\SoftwareDistribution\\Download", Exists: true, FileCount: 42, SizeBytes: 1_395_864_576, SizeMb: 1_331.2 },
+          { Id: "prefetch", Label: "Prefetch cache", Path: "C:\\Windows\\Prefetch", Exists: true, FileCount: 96, SizeBytes: 63_753_216, SizeMb: 60.8 },
+          { Id: "windowsOld", Label: "Previous Windows installation", Path: "C:\\Windows.old", Exists: true, FileCount: 2_418, SizeBytes: 13_743_895_347, SizeMb: 13_107.2 },
+          { Id: "deliveryOptimization", Label: "Delivery Optimization cache", Path: "C:\\Windows\\SoftwareDistribution\\DeliveryOptimization", Exists: false, FileCount: 0, SizeBytes: 0, SizeMb: 0 },
+        ],
+      };
     case "Get-StartupItems":
       return [
         { Name: "Audit Case Indexer", Command: '"C:\\Audit\\Tools\\case-indexer.exe" --background', RamUsageMB: 86, Status: "Running", IsEnabled: true, Source: "Registry", Location: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", Recommendation: "Keep", Category: "Productivity", Description: "Indexes synthetic audit case metadata." },
@@ -690,12 +701,43 @@ export function uiAuditDirectResponse(command: string): unknown {
       return { running: false, learning: false, knownSsidCount: 1, currentSsid: "Audit Wi-Fi", currentBssid: "00:11:22:33:44:55" };
     case "routine_cleaner_scan":
       return {
-        items: [{ id: "audit-cache", category: "applications", label: "Audit application cache", path: "C:\\Audit\\Cache", bytes: 2621440, fileCount: 18, recommended: true, operation: "delete", truncated: false }],
-        totalBytes: 2621440,
-        totalFiles: 18,
+        items: [
+          { id: "audit-edge-cache", category: "browsers", label: "Microsoft Edge cache", path: "C:\\Audit\\Browser\\Edge\\Cache", bytes: 8_388_608, fileCount: 128, recommended: true, operation: "delete", truncated: false },
+          { id: "audit-firefox-thumbnails", category: "browsers", label: "Firefox thumbnail cache", path: "C:\\Audit\\Browser\\Firefox\\thumbnails", bytes: 1_310_720, fileCount: 42, recommended: true, operation: "delete", truncated: false },
+          { id: "audit-app-cache", category: "applications", label: "Audit application cache", path: "C:\\Audit\\Cache", bytes: 2_621_440, fileCount: 18, recommended: true, operation: "delete", truncated: false },
+          { id: "audit-shader-cache", category: "gaming", label: "DirectX shader cache", path: "C:\\Audit\\Gaming\\D3DCache", bytes: 67_108_864, fileCount: 320, recommended: true, operation: "delete", truncated: false },
+          { id: "audit-launcher-logs", category: "gaming", label: "Game launcher logs", path: "C:\\Audit\\Gaming\\Launcher\\Logs", bytes: 786_432, fileCount: 12, recommended: false, operation: "delete", truncated: false },
+          { id: "audit-sqlite-journals", category: "databases", label: "Orphaned SQLite journals", path: "C:\\Audit\\Databases", bytes: 3_670_016, fileCount: 7, recommended: false, operation: "delete", truncated: false },
+        ],
+        totalBytes: 83_886_080,
+        totalFiles: 527,
         skippedTargets: 0,
         cancelled: false,
       };
+    case "run_disk_scan":
+      return {
+        scanRoot: "C:\\Audit",
+        totalSize: 40_802_189_312,
+        freeSpace: 496_068_722_688,
+        driveCapacity: 1_099_511_627_776,
+        fileCount: 8_421,
+        folderCount: 614,
+        wiztreeFound: true,
+      };
+    case "get_disk_children":
+      return [
+        { name: "Cases", fullPath: "C:\\Audit\\Cases", size: 19_327_352_832, allocated: 19_341_262_848, isDir: true, lastModified: "2026-08-01T22:20:00Z", fileCount: 3_216, folderCount: 188 },
+        { name: "Downloads", fullPath: "C:\\Audit\\Downloads", size: 9_663_676_416, allocated: 9_671_524_352, isDir: true, lastModified: "2026-08-01T21:48:00Z", fileCount: 804, folderCount: 37 },
+        { name: "AppData", fullPath: "C:\\Audit\\AppData", size: 6_442_450_944, allocated: 6_451_462_144, isDir: true, lastModified: "2026-08-01T22:36:00Z", fileCount: 4_288, folderCount: 389 },
+        { name: "evidence-image.iso", fullPath: "C:\\Audit\\evidence-image.iso", size: 5_368_709_120, allocated: 5_368_709_120, isDir: false, lastModified: "2026-07-31T19:04:00Z", fileCount: 1, folderCount: 0 },
+      ];
+    case "get_large_disk_items":
+      return [
+        { name: "evidence-image.iso", fullPath: "C:\\Audit\\evidence-image.iso", size: 5_368_709_120, allocated: 5_368_709_120, isDir: false, lastModified: "2026-07-31T19:04:00Z", fileCount: 1, folderCount: 0, itemType: "Archive", cleanupHint: "Review before deleting", risk: "review" },
+        { name: "case-archive.zip", fullPath: "C:\\Audit\\Cases\\case-archive.zip", size: 2_576_980_377, allocated: 2_577_006_592, isDir: false, lastModified: "2026-08-01T20:12:00Z", fileCount: 1, folderCount: 0, itemType: "Archive", cleanupHint: "Review before deleting", risk: "review" },
+        { name: "capture-session.mkv", fullPath: "C:\\Audit\\Cases\\capture-session.mkv", size: 1_395_864_576, allocated: 1_395_867_648, isDir: false, lastModified: "2026-08-01T18:52:00Z", fileCount: 1, folderCount: 0, itemType: "Video", cleanupHint: "Large media file", risk: "review" },
+        { name: "BrowserCache", fullPath: "C:\\Audit\\AppData\\BrowserCache", size: 754_974_720, allocated: 756_023_296, isDir: true, lastModified: "2026-08-01T22:36:00Z", fileCount: 944, folderCount: 48, itemType: "Folder", cleanupHint: "Cache candidate", risk: "temporary" },
+      ];
     case "registry_cleaner_scan":
       return { entries: [{ id: "registry-audit-clsid", classId: "{00000000-0000-0000-0000-AUDIT000001}", serverKind: "InprocServer32", missingServer: "C:\\Audit\\Missing\\audit-shell.dll", hive: "HKCU" }], skippedEntries: 1 };
     case "explorer_context_menu_scan":

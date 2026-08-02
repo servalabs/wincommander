@@ -529,11 +529,9 @@ function RuntimesPanel({
                         </td>
                         <td>
                           <div className="runtime-signal-cell">
-                            <Tooltip content={KIND_DETAIL[r.kind]} compact>
-                              <Tag intent={KIND_INTENT[r.kind]} minimal>
-                                {KIND_LABEL[r.kind]}
-                              </Tag>
-                            </Tooltip>
+                            <Tag intent={KIND_INTENT[r.kind]} minimal title={KIND_DETAIL[r.kind]}>
+                              {KIND_LABEL[r.kind]}
+                            </Tag>
                             <div className="runtime-signal-tags">
                               {r.tags.slice(0, 3).map((t) => (
                                 <Tag key={t} minimal>
@@ -554,6 +552,7 @@ function RuntimesPanel({
                               type="button"
                               className="system-manager-path"
                               disabled={!r.exePath}
+                              aria-label={`Open folder containing ${r.name}`}
                               onClick={() => r.exePath && invoke("open_path", { path: parentFolder(r.exePath) }).catch(() => {})}
                             >
                               {r.exePath ?? "—"}
@@ -574,7 +573,7 @@ function RuntimesPanel({
                                 transition={{ duration: DURATION_S.fast, ease: EASE.standard }}
                                 style={{ display: "inline-block" }}
                               >
-                                <Button small icon="eye-open" onClick={() => onRestore(r.name)}>
+                                <Button small icon="eye-open" onClick={() => onRestore(r.name)} aria-label={`Restore ${r.name}`}>
                                   Restore
                                 </Button>
                               </motion.span>
@@ -592,6 +591,7 @@ function RuntimesPanel({
                                   icon="eye-off"
                                   intent={Intent.WARNING}
                                   onClick={() => onHide(r.name)}
+                                  aria-label={`Hide ${r.name}`}
                                 >
                                   Hide
                                 </Button>

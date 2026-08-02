@@ -92,6 +92,35 @@ describe("UI audit fixture", () => {
   });
 
   test("populates maintenance, driver, security, and network contracts", () => {
+    const diskCleanup = uiAuditBackendResponse("Get-DiskCleanupScan") as {
+      categories: Array<{ Id: string; FileCount: number; SizeMb: number }>;
+    };
+    expect(diskCleanup.categories.length).toBeGreaterThan(4);
+    expect(diskCleanup.categories.find((category) => category.Id === "windowsOld")).toMatchObject({
+      FileCount: 2_418,
+      SizeMb: 13_107.2,
+    });
+    const routineCleaner = uiAuditDirectResponse("routine_cleaner_scan") as {
+      items: Array<{ category: string; path: string; bytes: number; fileCount: number }>;
+      totalBytes: number;
+      totalFiles: number;
+    };
+    expect(routineCleaner.items.length).toBeGreaterThan(4);
+    expect(new Set(routineCleaner.items.map((item) => item.category))).toEqual(
+      new Set(["browsers", "applications", "gaming", "databases"]),
+    );
+    expect(routineCleaner.items.every((item) => item.path && item.bytes > 0 && item.fileCount > 0)).toBe(true);
+    expect(routineCleaner.totalBytes).toBe(routineCleaner.items.reduce((sum, item) => sum + item.bytes, 0));
+    expect(routineCleaner.totalFiles).toBe(routineCleaner.items.reduce((sum, item) => sum + item.fileCount, 0));
+    const diskScan = uiAuditDirectResponse("run_disk_scan") as { scanRoot: string; totalSize: number; fileCount: number; folderCount: number };
+    expect(diskScan).toMatchObject({ scanRoot: "C:\\Audit", fileCount: 8_421, folderCount: 614 });
+    expect(diskScan.totalSize).toBeGreaterThan(10 * 1024 ** 3);
+    const diskChildren = uiAuditDirectResponse("get_disk_children") as Array<{ fullPath: string; size: number; isDir: boolean }>;
+    const largeDiskItems = uiAuditDirectResponse("get_large_disk_items") as Array<{ fullPath: string; itemType: string; cleanupHint: string; risk: string }>;
+    expect(diskChildren.length).toBeGreaterThan(3);
+    expect(new Set(diskChildren.map((item) => item.isDir))).toEqual(new Set([true, false]));
+    expect(largeDiskItems.length).toBeGreaterThan(3);
+    expect(largeDiskItems.every((item) => item.fullPath && item.itemType && item.cleanupHint && item.risk)).toBe(true);
     for (const command of [
       "startup_impact_scan",
       "registry_cleaner_scan",

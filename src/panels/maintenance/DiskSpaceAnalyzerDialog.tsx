@@ -606,13 +606,13 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
 
                     <div className="da-modebar">
                         <div className="da-mode-tabs">
-                            <button type="button" className={viewMode === "space" ? "active" : ""} onClick={() => setViewMode("space")}>Disk Usage</button>
-                            <button type="button" className={viewMode === "large" ? "active" : ""} onClick={() => setViewMode("large")}>Large Files</button>
+                            <button type="button" aria-pressed={viewMode === "space"} className={viewMode === "space" ? "active" : ""} onClick={() => setViewMode("space")}>Disk Usage</button>
+                            <button type="button" aria-pressed={viewMode === "large"} className={viewMode === "large" ? "active" : ""} onClick={() => setViewMode("large")}>Large Files</button>
                         </div>
                         {viewMode === "space" && rows.length > 0 && (
                             <div className="da-mode-tabs da-view-tabs">
-                                <button type="button" className={spaceViewStyle === "treemap" ? "active" : ""} onClick={() => setSpaceViewStyle("treemap")}>Treemap</button>
-                                <button type="button" className={spaceViewStyle === "list" ? "active" : ""} onClick={() => setSpaceViewStyle("list")}>List</button>
+                                <button type="button" aria-pressed={spaceViewStyle === "treemap"} className={spaceViewStyle === "treemap" ? "active" : ""} onClick={() => setSpaceViewStyle("treemap")}>Treemap</button>
+                                <button type="button" aria-pressed={spaceViewStyle === "list"} className={spaceViewStyle === "list" ? "active" : ""} onClick={() => setSpaceViewStyle("list")}>List</button>
                             </div>
                         )}
                         {selected.size > 0 && (
@@ -638,6 +638,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                                             <button
                                                 key={mb}
                                                 type="button"
+                                                aria-pressed={minLargeSize === mb * 1024 * 1024}
                                                 className={minLargeSize === mb * 1024 * 1024 ? "active" : ""}
                                                 onClick={async () => {
                                                     const next = mb * 1024 * 1024;
@@ -739,6 +740,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                                                     <button
                                                         key={id}
                                                         type="button"
+                                                        aria-pressed={largeFilter === id}
                                                         className={largeFilter === id ? "active" : ""}
                                                         onClick={() => setLargeFilter(id as typeof largeFilter)}
                                                     >
@@ -778,9 +780,9 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                                                                 </td>
                                                                 <td className="da-td-date da-muted">{row.lastModified.slice(0, 16)}</td>
                                                                 <td className="da-td-actions">
-                                                                    <Button minimal small icon="document-open" title="Open" onClick={() => openPath(row.fullPath)} />
-                                                                    <Button minimal small icon="folder-open" title="Open folder" onClick={() => openParentFolder(row.fullPath)} />
-                                                                    <Button minimal small icon="trash" intent="danger" title="Delete" onClick={() => setDeletingSingle(row)} />
+                                                                    <Button minimal small icon="document-open" title={`Open ${row.name}`} aria-label={`Open ${row.name}`} onClick={() => openPath(row.fullPath)} />
+                                                                    <Button minimal small icon="folder-open" title={`Open folder containing ${row.name}`} aria-label={`Open folder containing ${row.name}`} onClick={() => openParentFolder(row.fullPath)} />
+                                                                    <Button minimal small icon="trash" intent="danger" title={`Delete ${row.name}`} aria-label={`Delete ${row.name}`} onClick={() => setDeletingSingle(row)} />
                                                                 </td>
                                                             </tr>
                                                         );
@@ -806,7 +808,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                                                 <th className="da-th-alloc">Alloc</th>
                                                 <th className="da-th-items">Items</th>
                                                 <th className="da-th-date">Modified</th>
-                                                <th className="da-th-del"></th>
+                                                <th className="da-th-del">Actions</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -844,8 +846,8 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                                                             ) : ""}
                                                         </td>
                                                         <td className="da-td-date da-muted">{row.lastModified.slice(0, 16)}</td>
-                                                        <td className="da-td-del" onClick={e => { e.stopPropagation(); setDeletingSingle(row); }}>
-                                                            <Icon icon="trash" size={14} className="da-del-icon" />
+                                                        <td className="da-td-del">
+                                                            <Button minimal small icon="trash" intent="danger" title={`Delete ${row.name}`} aria-label={`Delete ${row.name}`} onClick={e => { e.stopPropagation(); setDeletingSingle(row); }} />
                                                         </td>
                                                     </tr>
 

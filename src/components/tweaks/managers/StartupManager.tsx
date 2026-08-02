@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { Icon, Button, Tag, Spinner, InputGroup, Tooltip } from "@/components/ui/bp";
+import { Icon, Button, Tag, Spinner, InputGroup } from "@/components/ui/bp";
 import { invoke } from "@tauri-apps/api/core";
 import SectionCard from "../../shared/SectionCard";
 import { executeBackendCommand } from "../../../hooks/useBackend";
@@ -113,7 +113,7 @@ export default function StartupManager({ embedded = false, scanKey = 0 }: { embe
             <div className="system-manager-actions">
                 <Tag minimal>{`${items.length} entries`}</Tag>
                 <Tag minimal intent="warning">{`${totalRam.toFixed(0)} MB running`}</Tag>
-                {!embedded && <Button minimal icon="refresh" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />}
+                {!embedded && <Button minimal icon="refresh" aria-label="Refresh startup items" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />}
             </div>
         </>
     );
@@ -121,6 +121,7 @@ export default function StartupManager({ embedded = false, scanKey = 0 }: { embe
     const body = (
         <>
             <InputGroup
+                aria-label="Search startup items"
                 placeholder="Search startup items..."
                 leftIcon="search"
                 value={filter}
@@ -185,6 +186,7 @@ export default function StartupManager({ embedded = false, scanKey = 0 }: { embe
                                     <button
                                         type="button"
                                         className="system-manager-path"
+                                        aria-label={`Open folder containing ${item.Name}`}
                                         onClick={() => commandPath && invoke("open_path", { path: parentFolder(commandPath) }).catch(() => {})}
                                         disabled={!commandPath}
                                         title={commandPath ? `${item.Command}\nClick to open containing folder` : item.Command}
@@ -192,9 +194,7 @@ export default function StartupManager({ embedded = false, scanKey = 0 }: { embe
                                         {item.Command}
                                     </button>
                                 </div>
-                                <Tooltip content={recTip}>
-                                    <Tag minimal intent={recIntent as any}>{recLabel}</Tag>
-                                </Tooltip>
+                                <Tag minimal intent={recIntent as any} title={recTip}>{recLabel}</Tag>
                                 <Tag minimal>{item.Status === "Running" ? `${item.RamUsageMB.toFixed(0)} MB` : item.Status}</Tag>
                                 <Button
                                     small
@@ -202,6 +202,7 @@ export default function StartupManager({ embedded = false, scanKey = 0 }: { embe
                                     loading={isPending}
                                     onClick={() => handleToggle(item)}
                                     icon={item.IsEnabled ? "disable" : "tick"}
+                                    aria-label={`${item.IsEnabled ? "Disable" : "Enable"} ${item.Name} at startup`}
                                 >
                                     {item.IsEnabled ? "Disable" : "Enable"}
                                 </Button>

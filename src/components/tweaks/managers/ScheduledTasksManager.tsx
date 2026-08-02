@@ -86,7 +86,7 @@ export default function ScheduledTasksManager({ embedded = false, scanKey = 0 }:
             <span className="system-manager-caption">Scheduled jobs, Task Scheduler path, vendor signal, run state, and actions.</span>
             <div className="system-manager-actions">
                 <Tag minimal>{`${filtered.length}/${tasks.length}`}</Tag>
-                {!embedded && <Button minimal icon="refresh" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />}
+                {!embedded && <Button minimal icon="refresh" aria-label="Refresh scheduled tasks" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />}
             </div>
         </>
     );
@@ -95,6 +95,7 @@ export default function ScheduledTasksManager({ embedded = false, scanKey = 0 }:
         <>
             <div className="scheduled-tasks-manager__toolbar">
                 <InputGroup
+                    aria-label="Search scheduled tasks"
                     placeholder="Search by name / path..."
                     leftIcon="search"
                     value={filter}
@@ -156,13 +157,13 @@ export default function ScheduledTasksManager({ embedded = false, scanKey = 0 }:
                                 </div>
                                 <Tag className="scheduled-tasks-manager__state" minimal intent={disabled ? "none" : "primary"}>{t.State}</Tag>
                                 <div className="scheduled-tasks-manager__actions">
-                                    <Button small icon="play" disabled={disabled} loading={isPending}
+                                    <Button small icon="play" disabled={disabled} loading={isPending} aria-label={`Run ${t.Name}`}
                                         onClick={() => callAction("Start-ScheduledTaskByPath", t, "Started")}>Run</Button>
-                                    <Button small icon={disabled ? "tick" : "disable"} intent={disabled ? "success" : "danger"} loading={isPending}
+                                    <Button small icon={disabled ? "tick" : "disable"} intent={disabled ? "success" : "danger"} loading={isPending} aria-label={`${disabled ? "Enable" : "Disable"} ${t.Name}`}
                                         onClick={() => callAction(disabled ? "Enable-ScheduledTaskByPath" : "Disable-ScheduledTaskByPath", t, disabled ? "Enabled" : "Disabled")}>
                                         {disabled ? "Enable" : "Disable"}
                                     </Button>
-                                    <Button small icon="trash" intent="danger" loading={isPending}
+                                    <Button small icon="trash" intent="danger" loading={isPending} aria-label={`Delete ${t.Name}`}
                                         onClick={() => void (async () => {
                                             const accepted = await requestConfirm({
                                                 title: "Delete scheduled task?",

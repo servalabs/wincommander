@@ -158,11 +158,12 @@ interface ButtonProps {
   tabIndex?: number;
   autoFocus?: boolean;
   style?: React.CSSProperties;
-  size?: string;
-  variant?: string;
+  size?: ButtonSize | "small" | "large";
+  variant?: ButtonVariant;
   onBlur?: React.FocusEventHandler;
   id?: string;
   name?: string;
+  "aria-pressed"?: boolean;
   "data-tip"?: string;
   /** Guide-tour anchor, e.g. '[data-tour="privacy-shield-how-it-works"]'. */
   "data-tour"?: string;
@@ -211,20 +212,27 @@ export function Button({
   active,
   className,
   onClick,
+  onBlur,
   type = "button",
   title,
   "aria-label": ariaLabel,
+  "aria-pressed": ariaPressed,
   tabIndex,
   autoFocus,
   style,
+  size,
+  variant: requestedVariant,
+  id,
+  name,
   children,
   "data-tip": dataTip,
   "data-tour": dataTour,
   "data-tour-state": dataTourState,
 }: ButtonProps) {
   const hasContent = text != null || children != null;
-  const variant = pickVariant(intent, minimal, outlined);
-  const btnSize: ButtonSize = large ? "lg" : small ? "sm" : !hasContent && icon != null ? "icon" : "default";
+  const variant = requestedVariant ?? pickVariant(intent, minimal, outlined);
+  const requestedSize = size === "large" ? "lg" : size === "small" ? "sm" : size;
+  const btnSize: ButtonSize = requestedSize ?? (large ? "lg" : small ? "sm" : !hasContent && icon != null ? "icon" : "default");
 
   return (
     <UiButton
@@ -233,11 +241,15 @@ export function Button({
       size={btnSize}
       disabled={disabled || loading}
       onClick={onClick}
+      onBlur={onBlur}
       title={title}
       aria-label={ariaLabel}
+      aria-pressed={ariaPressed}
       tabIndex={tabIndex}
       autoFocus={autoFocus}
       style={style}
+      id={id}
+      name={name}
       data-tip={dataTip}
       data-tour={dataTour}
       data-tour-state={dataTourState}

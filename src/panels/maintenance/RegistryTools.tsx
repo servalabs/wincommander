@@ -7,7 +7,7 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
-import { Checkbox } from "../../components/ui/bp";
+import { CheckboxControl } from "../../components/ui/bp";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { useBackend } from "../../hooks/useBackend";
 import { showSuccess } from "../../utils/toast";
@@ -99,8 +99,8 @@ function LocationRow({ checked, onClick, title, state, tone, currentLabel, curre
   };
   return <div className="rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface)] p-3 hover:bg-[var(--surface-2)]">
     <div className="flex items-center gap-2">
-      <Checkbox checked={checked} onChange={onClick} />
-      <button type="button" onClick={onClick} aria-pressed={checked} className="min-w-0 flex-1 text-left">
+      <CheckboxControl checked={checked} onChange={onClick} ariaLabel={`Select ${title}: ${currentPath}`} />
+      <button type="button" onClick={onClick} aria-pressed={checked} aria-label={`${title}: ${currentPath}`} className="min-w-0 flex-1 text-left">
         <span className="truncate text-sm font-medium text-[var(--text)]">{title}</span>
       </button>
       <Badge tone={tone}>{state}</Badge>
@@ -121,7 +121,7 @@ function PathDetail({ icon, label, path, onCopy, onReveal }: { icon: "database" 
   return <div className="mt-2 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 text-[12px]">
     <Icon icon={icon} className="text-[var(--text-mute)]" />
     <span className="min-w-0"><span className="block text-[11px] text-[var(--text-mute)]">{label}</span><span className="block truncate font-mono text-[11px] text-[var(--text-dim)]" title={path}>{path}</span></span>
-    <span className="flex items-center gap-1"><Button size="icon" variant="ghost" className="size-7" title="Copy full path" aria-label="Copy full path" onClick={onCopy}><Icon icon="clipboard" /></Button>{onReveal && <Button size="icon" variant="ghost" className="size-7" title="Open parent folder" aria-label="Open parent folder" onClick={onReveal}><Icon icon="folder-open" /></Button>}</span>
+    <span className="flex items-center gap-1"><Button size="icon" variant="ghost" className="size-7" title="Copy full path" aria-label={`Copy ${label}`} onClick={onCopy}><Icon icon="clipboard" /></Button>{onReveal && <Button size="icon" variant="ghost" className="size-7" title="Open parent folder" aria-label={`Open parent folder for ${label}`} onClick={onReveal}><Icon icon="folder-open" /></Button>}</span>
   </div>;
 }
 

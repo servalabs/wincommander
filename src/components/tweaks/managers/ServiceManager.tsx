@@ -141,7 +141,7 @@ export default function ServiceManager({ embedded = false, scanKey = 0 }: { embe
                     Apply Recommended Tweaks
                 </Button>
                 <Tag minimal>{`${filtered.length}/${rows.length}`}</Tag>
-                {!embedded && <Button minimal icon="refresh" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />}
+                {!embedded && <Button minimal icon="refresh" aria-label="Refresh services" onClick={(e) => { e.stopPropagation(); refresh(); }} loading={loading} />}
             </div>
         </>
     );
@@ -149,9 +149,10 @@ export default function ServiceManager({ embedded = false, scanKey = 0 }: { embe
     const body = (
         <>
             <div className="system-manager-toolbar">
-                <InputGroup placeholder="Search services..." leftIcon="search" value={filter}
+                <InputGroup aria-label="Search services" placeholder="Search services..." leftIcon="search" value={filter}
                     onChange={e => setFilter(e.currentTarget.value)} className="system-manager-toolbar-filter" />
                 <Button small minimal active={showOnlyRecommended} icon="filter"
+                    aria-pressed={showOnlyRecommended}
                     onClick={() => setShowOnlyRecommended(v => !v)}>Recommended only</Button>
             </div>
             <AnimatedList className="system-manager-list system-manager-list--services">
@@ -188,6 +189,7 @@ export default function ServiceManager({ embedded = false, scanKey = 0 }: { embe
                                 </div>
                                 <Tag minimal intent={svc.State === "Running" ? "success" : "none"}>{svc.State}</Tag>
                                 <HTMLSelect
+                                    aria-label={`Startup mode for ${svc.DisplayName}`}
                                     value={svc.StartMode === "Auto" ? "Automatic" : svc.StartMode}
                                     onChange={e => setMode(svc, e.currentTarget.value)}
                                     disabled={isPending}
@@ -195,6 +197,7 @@ export default function ServiceManager({ embedded = false, scanKey = 0 }: { embe
                                     fill
                                 />
                                 <Button small loading={isPending} disabled={!svc.CanStop && svc.State === "Running"}
+                                    aria-label={`${svc.State === "Running" ? "Stop" : "Start"} ${svc.DisplayName}`}
                                     onClick={() => startStop(svc)}>
                                     {svc.State === "Running" ? "Stop" : "Start"}
                                 </Button>

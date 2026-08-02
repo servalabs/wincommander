@@ -112,6 +112,7 @@ export default function LocalUsersManager({ embedded = false, scanKey = 0 }: { e
     const body = (
         <>
             <InputGroup
+                aria-label="Search local users"
                 placeholder="Search local users..."
                 leftIcon="search"
                 value={filter}
@@ -161,6 +162,7 @@ export default function LocalUsersManager({ embedded = false, scanKey = 0 }: { e
                                         disabled={!canToggle}
                                         onChange={e => handleToggle(user, e.currentTarget.checked)}
                                         label="Hide from login"
+                                        aria-label={`Hide ${user.name} from login`}
                                     />
                                 </div>
                             </div>

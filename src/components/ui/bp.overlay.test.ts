@@ -32,3 +32,19 @@ describe("Dialog/AlertDialog overlay rendering", () => {
     }
   });
 });
+
+describe("Blueprint-compatible button semantics", () => {
+  test("forwards declared native interaction and pressed-state props", () => {
+    expect(componentSource).toContain('"aria-pressed": ariaPressed');
+    expect(componentSource).toContain("aria-pressed={ariaPressed}");
+    expect(componentSource).toContain("onBlur={onBlur}");
+    expect(componentSource).toContain("id={id}");
+    expect(componentSource).toContain("name={name}");
+  });
+
+  test("honors modern and legacy size aliases instead of silently dropping them", () => {
+    expect(componentSource).toContain('size?: ButtonSize | "small" | "large"');
+    expect(componentSource).toContain('size === "large" ? "lg" : size === "small" ? "sm" : size');
+    expect(componentSource).toContain("requestedVariant ?? pickVariant");
+  });
+});
