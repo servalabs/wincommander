@@ -40,9 +40,17 @@ Native Tauri commands require Microsoft Edge WebView2. If it is unavailable, CLI
 - Mutating commands require `--confirm RUN:<command-id>`.
 - Destructive commands require `--confirm DESTROY:<command-id>`.
 - `--dry-run` never invokes a dispatcher and reports what would execute.
-- `--timeout-ms` is enforced only for read-only native Tauri commands and sets a wait deadline from 100 ms to 60 minutes; the default native deadline is 300,000 ms (5 minutes). It is a wait limit, not transactional cancellation.
-- The parser accepts `--timeout-ms` on a read-only backend-script command, but that existing backend dispatcher has no deadline and ignores it. Automation must not rely on a backend-script timeout.
+- `--timeout-ms` is enforced for every read-only command, native or backend-script, and sets a wait deadline from 100 ms to 60 minutes; the default deadline is 300,000 ms (5 minutes). It is a wait limit, not transactional cancellation: the CLI stops waiting, reports `error: "timeout"`, and exits `10`, but already-started work continues in whatever it started.
 - Mutating and destructive CLI commands do not accept `--timeout-ms`; they run to completion and are serialized across CLI processes in the current Windows session.
+
+Risk is assigned in a fail-closed priority order rather than by name alone:
+
+1. `authz::DESTRUCTIVE_COMMANDS` — the same registry the CI authorization gate enforces — always wins. Adding a catastrophic command there is enough to make the CLI demand `DESTROY:`; it does not also need a frightening name. This is why `tauri:fleet_connect` and `tauri:internet_kill_switch_set` are destructive despite reading as ordinary mutations.
+2. A small table of handlers whose name misreports their effect, each verified against the handler body. `tauri:search_rename_file` calls `std::fs::rename`, and the `tauri:export_*` commands write a new artefact, so none of them may hold the no-confirmation read-only tier their prefix implies — a read-only wait deadline must never be able to kill an export part-written.
+3. The name prefix/token rules.
+4. Any name containing `erase`, `shred`, `wipe`, or `destroy`, matched anywhere rather than only as a prefix, so the whole `Invoke-*Erase` family is destructive.
+
+Step 4 runs after the read-only allowlist, so `Get-AutoEraseSchedules` remains a read while `Invoke-7Erase` is destructive. It deliberately over-classifies a few configuration commands that schedule erasure rather than performing it — `Set-AutoEraseSchedule`, `Set-MultiUserAutoEraseSchedule`, `Set-ShredPolicy` — which require `DESTROY:`. Classification remains a safeguard, not authentication; `commands describe <id>` always reports the exact token a command needs.
 - Parameters must be a JSON object supplied inline, as `@path`, or as `-` for stdin. Native Tauri dispatch preserves JSON values; backend-script dispatch serializes object values to their string/JSON representations for its existing dispatcher. Neither path evaluates parameter text as shell code.
 - Existing licence, module, administrator, investigator-mode, and Pro-sidecar checks are preserved because CLI commands use the same backend and Tauri dispatchers as the GUI.
 
@@ -57,7 +65,7 @@ wincommander-free.exe run backend:Clear-DnsCache `
   --confirm DESTROY:backend:Clear-DnsCache
 ```
 
-The process exits after one response. A read-only native wait timeout returns exit code `10`; it cannot cancel already-started external work. Terminal `tauri:lockdown` and `tauri:full_lockdown` may instead return `{ "detached": true, "processExitRequested": true }` with exit code `0`, because the production handler requests application exit after it launches its cleanup worker. That payload acknowledges only that the worker was started and process exit was requested; it is not a wipe-completion result.
+The process exits after one response. A read-only wait timeout returns exit code `10`; it cannot cancel already-started external work. Terminal `tauri:lockdown` and `tauri:full_lockdown` may instead return `{ "detached": true, "processExitRequested": true }` with exit code `0`, because the production handler requests application exit after it launches its cleanup worker. That payload acknowledges only that the worker was started and process exit was requested; it is not a wipe-completion result.
 
 ## Exit codes
 
@@ -72,12 +80,12 @@ The process exits after one response. A read-only native wait timeout returns ex
 | `7` | Command is cataloged but unavailable for this build/runtime |
 | `8` | Dispatcher/handler execution failed |
 | `9` | Native runtime, WebView2 prerequisite, or invoke-bridge failure |
-| `10` | Read-only native command exceeded its requested/default wait deadline |
+| `10` | Read-only command exceeded its requested/default wait deadline |
 | `11` | Another mutating or destructive CLI command holds the cross-process execution lock |
 
 ## Developer checks
 
-The catalog is generated from the actual Tauri handler registry, backend dispatcher/tier gate, and production frontend call sites.
+The catalog is generated from the actual Tauri handler registry, backend dispatcher/tier gate, and production frontend call sites. It records each handler's `#[cfg(debug_assertions)]` gate as `debugOnly`, so the four debug-only handlers the release binary refuses are derived from the gate itself rather than from a hardcoded name list that could drift past the drift check.
 
 ```powershell
 bun run gen:cli-catalog

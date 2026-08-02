@@ -13,11 +13,12 @@ interface CommandEntry {
   name: string;
   transport: Transport;
   registered: boolean;
+  debugOnly: boolean;
   frontendReferences: string[];
 }
 
 interface CommandCatalog {
-  schemaVersion: 1;
+  schemaVersion: 2;
   commands: CommandEntry[];
 }
 
@@ -31,17 +32,39 @@ function normalizePath(path: string): string {
   return relative(ROOT, path).replaceAll("\\", "/");
 }
 
-function extractHandlerNames(source: string): Set<string> {
+// Maps each registered handler to whether its `generate_handler!` entry is
+// gated behind `#[cfg(debug_assertions)]`. The gate matters at runtime: a
+// debug-only handler is genuinely absent from the release binary's invoke
+// registry, so the CLI must refuse it up front instead of dispatching into a
+// command that does not exist. Deriving the flag here — rather than
+// hardcoding the names in cli.rs — is what stops the two lists drifting apart
+// when a new dev-panel handler is added.
+function extractHandlerNames(source: string): Map<string, boolean> {
   const marker = ".invoke_handler(tauri::generate_handler![";
   const start = source.indexOf(marker);
   if (start < 0) throw new Error("Tauri generate_handler list not found");
   const end = source.indexOf("        ])", start);
   if (end < 0) throw new Error("Tauri generate_handler list terminator not found");
   const block = source.slice(start + marker.length, end);
-  const names = new Set<string>();
+  const names = new Map<string, boolean>();
+  let debugOnly = false;
   for (const line of block.split(/\r?\n/)) {
+    const cfg = line.match(/^\s*#\[cfg\((.+)\)\]\s*$/);
+    if (cfg) {
+      // Any other predicate would also make a handler conditionally absent,
+      // and the catalog has no field to express that. Fail the generator
+      // rather than ship a command list that lies about what is invokable.
+      if (cfg[1].trim() !== "debug_assertions") {
+        throw new Error(`Unsupported cfg predicate on a Tauri handler: ${cfg[1]}`);
+      }
+      debugOnly = true;
+      continue;
+    }
     const match = line.match(/^\s*(?:[A-Za-z_][\w]*::)*([A-Za-z_][\w]*),\s*$/);
-    if (match) names.add(match[1]);
+    if (match) {
+      names.set(match[1], debugOnly);
+      debugOnly = false;
+    }
   }
   return names;
 }
@@ -110,6 +133,9 @@ async function buildCatalog(): Promise<CommandCatalog> {
   const backendSource = readFileSync(BACKEND_RS, "utf8");
   const handlers = extractHandlerNames(libSource);
   for (const internal of INTERNAL_TAURI_HANDLERS) handlers.delete(internal);
+  if (![...handlers.values()].some(Boolean)) {
+    throw new Error("No #[cfg(debug_assertions)] handler found — the cfg parse has stopped working");
+  }
   const registeredBackendNames = extractBackendNames(backendSource);
   const backendNames = new Set(registeredBackendNames);
   const tauriRefs = new Map<string, Set<string>>();
@@ -129,13 +155,14 @@ async function buildCatalog(): Promise<CommandCatalog> {
     }
   }
 
-  const tauriNames = new Set([...handlers, ...tauriRefs.keys()]);
+  const tauriNames = new Set([...handlers.keys(), ...tauriRefs.keys()]);
   const commands: CommandEntry[] = [
     ...[...tauriNames].map((name): CommandEntry => ({
       id: `tauri:${name}`,
       name,
       transport: "tauri",
       registered: handlers.has(name),
+      debugOnly: handlers.get(name) ?? false,
       frontendReferences: [...(tauriRefs.get(name) ?? [])].sort(),
     })),
     ...[...backendNames].map((name): CommandEntry => ({
@@ -143,11 +170,12 @@ async function buildCatalog(): Promise<CommandCatalog> {
       name,
       transport: "backend-script",
       registered: registeredBackendNames.has(name),
+      debugOnly: false,
       frontendReferences: [...(backendRefs.get(name) ?? [])].sort(),
     })),
   ].sort((a, b) => a.id.localeCompare(b.id));
 
-  return { schemaVersion: 1, commands };
+  return { schemaVersion: 2, commands };
 }
 
 function canonical(catalog: CommandCatalog): string {

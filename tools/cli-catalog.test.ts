@@ -10,7 +10,7 @@ const byId = new Map(catalog.commands.map((entry) => [entry.id, entry]));
 
 describe("generated WinCommander CLI catalog", () => {
   test("covers the real Tauri and backend command surfaces", () => {
-    expect(catalog.schemaVersion).toBe(1);
+    expect(catalog.schemaVersion).toBe(2);
     expect(catalog.commands.length).toBeGreaterThan(400);
     expect(byId.get("tauri:get_settings")?.registered).toBe(true);
     expect(byId.get("tauri:run_backend_script")?.registered).toBe(true);
@@ -40,6 +40,21 @@ describe("generated WinCommander CLI catalog", () => {
     const ids = getRadarDriftToggles().map((toggle) => toggle.id);
     expect(ids).not.toContain("contextMenuShred");
     expect(ids).not.toContain("contextMenuScrub");
+  });
+
+  test("derives debug-only handlers from their cfg gate instead of a hardcoded list", () => {
+    const flagged = (catalog.commands as Entry[]).filter((entry) => entry.debugOnly).map((entry) => entry.id);
+    expect(flagged).toEqual([
+      "tauri:dev_reset_state",
+      "tauri:dev_simulate_event",
+      "tauri:open_devtools",
+      "tauri:test_pro_dispatch",
+    ]);
+    // A debug-gated handler is absent from the release invoke registry, so the
+    // release binary must refuse exactly these four and no others.
+    const lib = readFileSync(resolve(import.meta.dir, "../src-tauri/commander-free/src/lib.rs"), "utf8");
+    const gateCount = [...lib.matchAll(/#\[cfg\(debug_assertions\)\]\s*\n\s*(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*,/g)].length;
+    expect(gateCount).toBe(flagged.length);
   });
 
   test("does not embed sensitive paid command names contiguously in Free", () => {

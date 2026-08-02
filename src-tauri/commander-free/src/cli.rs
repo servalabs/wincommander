@@ -38,6 +38,11 @@ struct GeneratedCommand {
     name: String,
     transport: Transport,
     registered: bool,
+    /// Emitted by the generator from the `#[cfg(debug_assertions)]` attribute on
+    /// the handler's `generate_handler!` entry. Deliberately not `serde(default)`:
+    /// a catalog that predates the field must fail loudly rather than silently
+    /// report every debug-gated handler as executable in a release build.
+    debug_only: bool,
     frontend_references: Vec<String>,
 }
 
@@ -101,6 +106,9 @@ static TAURI_RUN: LazyLock<Mutex<Option<TauriRunSpec>>> = LazyLock::new(|| Mutex
 static TAURI_RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TAURI_RUN_BRIDGE_READY: AtomicBool = AtomicBool::new(false);
 static TAURI_RUN_EXIT_CODE: AtomicI32 = AtomicI32::new(9);
+/// Claimed by whichever of the backend dispatcher and its wait deadline
+/// finishes first, so exactly one JSON document reaches stdout.
+static BACKEND_RUN_SETTLED: AtomicBool = AtomicBool::new(false);
 
 struct CliExecutionLock {
     #[cfg(windows)]
@@ -353,7 +361,7 @@ fn describe(entry: &GeneratedCommand) -> CommandDescription {
         name: entry.name.clone(),
         transport: entry.transport,
         registered: available_in_this_build(entry),
-        debug_only: is_debug_only(entry),
+        debug_only: entry.debug_only,
         frontend_references: entry.frontend_references.clone(),
         tier,
         risk,
@@ -362,19 +370,49 @@ fn describe(entry: &GeneratedCommand) -> CommandDescription {
     }
 }
 
-fn is_debug_only(entry: &GeneratedCommand) -> bool {
-    entry.transport == Transport::Tauri
-        && matches!(
-            entry.name.as_str(),
-            "open_devtools" | "dev_reset_state" | "dev_simulate_event" | "test_pro_dispatch"
-        )
-}
-
 fn available_in_this_build(entry: &GeneratedCommand) -> bool {
-    entry.registered && (cfg!(debug_assertions) || !is_debug_only(entry))
+    entry.registered && (cfg!(debug_assertions) || !entry.debug_only)
 }
 
+/// Handlers whose name misreports its effect, verified against the handler body
+/// rather than its spelling. Without these each one would be granted a weaker
+/// confirmation token than the work it performs — and a read-only
+/// classification also makes a command eligible for the wait deadline, so an
+/// export could be killed part-written.
+const RISK_OVERRIDES: &[(&str, Risk)] = &[
+    // `search_` reads, but these two rename a file on disk and overwrite the
+    // clipboard respectively.
+    ("tauri:search_rename_file", Risk::Mutating),
+    ("tauri:search_set_file_clipboard", Risk::Mutating),
+    // `export_` writes a new artefact.
+    ("tauri:export_evidence_vault", Risk::Mutating),
+    ("tauri:export_evidence_affidavit", Risk::Mutating),
+    ("tauri:export_flow_bundle", Risk::Mutating),
+    ("tauri:export_settings_cmd", Risk::Mutating),
+    // `_snapshot` reads elsewhere; this one pushes posture to the fleet server.
+    ("tauri:fleet_update_posture_snapshot", Risk::Mutating),
+];
+
+/// Words that only ever denote irreversible destruction of user data. Matched
+/// anywhere in the name, because the destructive prefix lists are anchored at
+/// the start and so miss `Invoke-7Erase`, `Invoke-UnallocatedSpaceErase`, and
+/// the rest of the `Invoke-*Erase` family. Applied only after the read-only
+/// allowlist has had its say, so `Get-AutoEraseSchedules` stays a read.
+const ERASURE_WORDS: &[&str] = &["erase", "shred", "wipe", "destroy"];
+
+/// Fails closed, in priority order: the repository's authoritative destructive
+/// registry outranks every heuristic, then hand-verified overrides, then the
+/// name rules. `authz::DESTRUCTIVE_COMMANDS` is the same list the CI
+/// authorization gate enforces, so a newly registered catastrophic command
+/// demands `DESTROY:` here the moment it is added there — it no longer depends
+/// on someone also picking a scary-enough name.
 fn classify_risk(entry: &GeneratedCommand) -> Risk {
+    if entry.transport == Transport::Tauri && crate::authz::action_for(&entry.name).is_some() {
+        return Risk::Destructive;
+    }
+    if let Some((_, risk)) = RISK_OVERRIDES.iter().find(|(id, _)| *id == entry.id) {
+        return *risk;
+    }
     let name = entry.name.to_ascii_lowercase();
     let destructive = match entry.transport {
         Transport::BackendScript => {
@@ -426,6 +464,9 @@ fn classify_risk(entry: &GeneratedCommand) -> Risk {
     };
     if read_only {
         return Risk::ReadOnly;
+    }
+    if ERASURE_WORDS.iter().any(|word| name.contains(word)) {
+        return Risk::Destructive;
     }
     Risk::Mutating
 }
@@ -607,23 +648,25 @@ fn run_command(request: RunRequest) -> i32 {
         }));
         return 0;
     }
+    let wait_deadline = (description.risk == Risk::ReadOnly).then_some(request.timeout_ms);
     match entry.transport {
         Transport::BackendScript => match backend_params(&request.params) {
-            Ok(params) => run_backend(entry.name.clone(), params),
+            Ok(params) => run_backend(entry.name.clone(), params, wait_deadline),
             Err(error) => fail(2, "invalid_arguments", error),
         },
         Transport::Tauri => run_tauri(
             description.id,
             entry.name.clone(),
             request.params,
-            (description.risk == Risk::ReadOnly).then_some(request.timeout_ms),
+            wait_deadline,
         ),
     }
 }
 
-fn run_backend(command: String, params: HashMap<String, String>) -> i32 {
+fn run_backend(command: String, params: HashMap<String, String>, timeout_ms: Option<u64>) -> i32 {
     let command_id = format!("backend:{command}");
     let output_id = command_id.clone();
+    let timeout_id = command_id.clone();
     let execution_code = Arc::new(AtomicI32::new(9));
     let result_code = execution_code.clone();
     let mut context = tauri::generate_context!();
@@ -639,8 +682,32 @@ fn run_backend(command: String, params: HashMap<String, String>) -> i32 {
             let command = command.clone();
             let command_id = output_id.clone();
             let execution_code = execution_code.clone();
+            // The backend transport cannot cancel work in flight, so this is a
+            // wait deadline only — identical in meaning to the native one. It
+            // exists because without it a wedged dispatcher hangs the calling
+            // automation forever with no output at all.
+            if let Some(timeout_ms) = timeout_ms {
+                let timeout_id = timeout_id.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
+                    if !BACKEND_RUN_SETTLED.swap(true, Ordering::SeqCst) {
+                        print_json(&json!({
+                            "ok": false,
+                            "command": timeout_id,
+                            "error": "timeout",
+                            "message": format!("read-only command exceeded {timeout_ms} ms; this is a wait limit, not transactional cancellation")
+                        }));
+                        use std::io::Write;
+                        let _ = std::io::stdout().flush();
+                        std::process::exit(10);
+                    }
+                });
+            }
             tauri::async_runtime::spawn(async move {
                 let response = crate::backend::run_backend_script(result_handle.clone(), command, params).await;
+                if BACKEND_RUN_SETTLED.swap(true, Ordering::SeqCst) {
+                    return;
+                }
                 match response {
                     Ok(result) => {
                         print_json(&json!({ "ok": true, "command": command_id, "result": result }));
@@ -925,6 +992,7 @@ mod tests {
             name: "scan_and_clean".to_string(),
             transport: Transport::Tauri,
             registered: true,
+            debug_only: false,
             frontend_references: vec![],
         };
         assert_eq!(classify_risk(&scan_and_clean), Risk::Destructive);
@@ -954,9 +1022,120 @@ mod tests {
             name: "Export-Report".to_string(),
             transport: Transport::BackendScript,
             registered: true,
+            debug_only: false,
             frontend_references: vec![],
         };
         assert_eq!(classify_risk(&export_report), Risk::Mutating);
+    }
+
+    /// The name heuristic cannot be trusted to notice a catastrophic command on
+    /// its own: `fleet_connect` and `internet_kill_switch_set` read as ordinary
+    /// mutations. `authz::DESTRUCTIVE_COMMANDS` is the list CI already enforces,
+    /// so binding the CLI to it means adding a command there is enough to make
+    /// the CLI demand `DESTROY:` too.
+    #[test]
+    fn authoritative_destructive_registry_outranks_the_name_heuristic() {
+        let catalog = catalog().expect("catalog parses");
+        let mut checked = 0;
+        for (name, _) in crate::authz::DESTRUCTIVE_COMMANDS {
+            let id = format!("tauri:{name}");
+            // Not every registered destructive action is a Tauri handler in Free
+            // (`run_destruct_step` is an internal dispatch to the Pro sidecar).
+            let Some(entry) = catalog.commands.iter().find(|entry| entry.id == id) else {
+                continue;
+            };
+            assert_eq!(classify_risk(entry), Risk::Destructive, "{id}");
+            assert_eq!(
+                describe(entry).confirmation,
+                Some(format!("DESTROY:{id}")),
+                "{id}"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 6,
+            "expected the registry to cover Tauri handlers, matched only {checked}"
+        );
+    }
+
+    /// Each of these was verified against its handler body, not its name.
+    #[test]
+    fn handlers_that_misreport_their_effect_use_their_verified_risk() {
+        let catalog = catalog().expect("catalog parses");
+        for (id, expected) in RISK_OVERRIDES {
+            let entry = catalog
+                .commands
+                .iter()
+                .find(|entry| entry.id == *id)
+                .unwrap_or_else(|| panic!("{id} left the catalog; re-verify its risk"));
+            assert_eq!(classify_risk(entry), *expected, "{id}");
+        }
+        // search_rename_file calls std::fs::rename, so it must never be granted
+        // the no-confirmation read-only tier its `search_` prefix implies.
+        let rename = catalog
+            .commands
+            .iter()
+            .find(|entry| entry.id == "tauri:search_rename_file")
+            .unwrap();
+        assert_eq!(
+            describe(rename).confirmation,
+            Some("RUN:tauri:search_rename_file".to_string())
+        );
+    }
+
+    /// The destructive prefix lists are anchored at the start of the name, so
+    /// the whole `Invoke-*Erase` family read as ordinary mutations.
+    #[test]
+    fn irreversible_erasure_is_destructive_wherever_the_word_appears() {
+        let catalog = catalog().expect("catalog parses");
+        for id in [
+            "backend:Invoke-7Erase",
+            "backend:Invoke-UnallocatedSpaceErase",
+            "backend:Invoke-CrashDumpErase",
+            "backend:Invoke-PreviousWindowsInstallErase",
+        ] {
+            let entry = catalog
+                .commands
+                .iter()
+                .find(|entry| entry.id == id)
+                .unwrap_or_else(|| panic!("{id} missing from catalog"));
+            assert_eq!(classify_risk(entry), Risk::Destructive, "{id}");
+        }
+        // ...but the read-only allowlist still wins, so listing erase schedules
+        // is not dragged into the destructive tier by the same word.
+        let schedules = catalog
+            .commands
+            .iter()
+            .find(|entry| entry.id == "backend:Get-AutoEraseSchedules")
+            .unwrap();
+        assert_eq!(classify_risk(schedules), Risk::ReadOnly);
+    }
+
+    /// The generator derives this from `#[cfg(debug_assertions)]`; a hardcoded
+    /// copy in this file used to be able to drift silently past every gate.
+    #[test]
+    fn debug_only_flags_come_from_the_generated_catalog() {
+        let catalog = catalog().expect("catalog parses");
+        let flagged: Vec<&str> = catalog
+            .commands
+            .iter()
+            .filter(|entry| entry.debug_only)
+            .map(|entry| entry.id.as_str())
+            .collect();
+        assert_eq!(
+            flagged,
+            [
+                "tauri:dev_reset_state",
+                "tauri:dev_simulate_event",
+                "tauri:open_devtools",
+                "tauri:test_pro_dispatch"
+            ]
+        );
+        assert!(catalog
+            .commands
+            .iter()
+            .filter(|entry| entry.debug_only)
+            .all(|entry| entry.transport == Transport::Tauri));
     }
 
     #[test]
@@ -985,7 +1164,7 @@ mod tests {
         assert_eq!(
             tauri_commands
                 .iter()
-                .filter(|entry| is_debug_only(entry))
+                .filter(|entry| entry.debug_only)
                 .count(),
             4
         );
