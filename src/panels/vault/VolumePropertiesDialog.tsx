@@ -72,13 +72,13 @@ function VolumePropertiesDialog({ isOpen, onClose, letter, path, type }: VolumeP
 
       <div className="props-body">
         {loading && (
-          <div className="props-loading">
+          <div className="props-loading" role="status" aria-busy="true">
             <Spinner size={20} />
             <span>Loading…</span>
           </div>
         )}
         {errMsg && !loading && (
-          <div className="props-error">
+          <div className="props-error" role="alert">
             <Icon icon="warning-sign" />
             <span>{errMsg}</span>
           </div>

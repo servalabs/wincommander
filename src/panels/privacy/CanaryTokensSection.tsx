@@ -374,7 +374,7 @@ export default function CanaryTokensSection() {
           </div>
         </div>
 
-        {error && <div className="font-mono text-sm text-[var(--color-danger)]">{error}</div>}
+        {error && <div role="alert" className="font-mono text-sm text-[var(--color-danger)]">{error}</div>}
 
         {/* ── Token list ── */}
         <div className="flex flex-col gap-2">

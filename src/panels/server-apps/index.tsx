@@ -24,7 +24,7 @@
 // Used for whitelabeling — hiding logos, renaming headers, etc.
 // ══════════════════════════════════════════════════════════════════════════
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Button, Icon, NonIdealState, IconName } from "@/components/ui/bp";
 import { usePatchSettings, useSettingsQuery } from '../../hooks/queries/useSettingsQuery';
 import EmbeddedWebView from '../../components/shared/EmbeddedWebView';
@@ -42,6 +42,20 @@ const DEFAULT_APPS = [
     { id: 'controller', name: 'Smart Controller', url: 'http://192.168.1.10:8123/', icon: 'home', customCss: '' },
     { id: 'dashboard', name: 'Dashboard', url: 'http://192.168.1.30/#/', icon: 'dashboard', customCss: '' },
 ];
+
+/**
+ * Preserve an explicitly configured empty list. Falling back on `.length`
+ * made "remove every app" impossible: the next render silently restored all
+ * defaults and left the purpose-built empty state unreachable.
+ */
+export function resolveServerApps(configured: ServerAppConfig[] | undefined): ServerAppConfig[] {
+    return configured === undefined ? DEFAULT_APPS : configured;
+}
+
+/** Keep the selected tab valid when settings arrive or the list is edited. */
+export function resolveActiveServerAppId(apps: readonly ServerAppConfig[], activeId: string): string {
+    return apps.some((app) => app.id === activeId) ? activeId : (apps[0]?.id ?? '');
+}
 
 // ── Branding CSS generator ────────────────────────────────────────────
 // Pure CSS approach: hides third-party logos and uses :has() + ::before
@@ -134,16 +148,22 @@ export default function ServerAppsPanel() {
     const { data: settings } = useSettingsQuery();
     const patchSettings = usePatchSettings();
 
-    // Use settings if available, otherwise defaults
-    const apps = settings?.ideal?.serverApps?.apps?.length
-        ? settings.ideal.serverApps.apps
-        : DEFAULT_APPS;
+    // Defaults are only for a genuinely unconfigured install. An empty array
+    // is a deliberate user configuration and must stay empty.
+    const apps = resolveServerApps(settings?.ideal?.serverApps?.apps);
 
     // White-label company name — used to replace third-party logos with branded text
     const companyName = settings?.ideal?.identity?.branding?.companyName || '';
 
     const [activeAppId, setActiveAppId] = useState<string>(apps[0]?.id || '');
     const [manageOpen, setManageOpen] = useState(false);
+
+    // Settings load asynchronously. The first render can use defaults while a
+    // saved, completely different tab list is still arriving; reconcile the
+    // selection so that transition cannot strand the panel with no webview.
+    useEffect(() => {
+        setActiveAppId((current) => resolveActiveServerAppId(apps, current));
+    }, [apps]);
 
     const handleSaveApps = useCallback(async (updated: ServerAppConfig[]) => {
         await patchSettings.mutateAsync({ ideal: { serverApps: { apps: updated } } });

@@ -79,7 +79,14 @@ export default function DevPanel() {
       .catch(() => setIsDev(false));
   }, []);
 
-  if (isDev === null) return null; // brief loading state — no flash
+  if (isDev === null) {
+    return (
+      <div className="dev-panel-release-guard" role="status" aria-busy="true">
+        <Icon icon="refresh" size={20} />
+        <span>Checking whether Dev Tools are available…</span>
+      </div>
+    );
+  }
 
   if (!isDev) {
     return (

@@ -27,7 +27,7 @@ function readMotionDisabled(): boolean {
  *  the Network panel's useDebounceApply so the Censorship Protection toggle
  *  keeps its original 5s auto-apply behavior after moving here. */
 function useDebounceApply(delayMs = 5000) {
-    const [status, setStatus] = useState<'idle' | 'pending' | 'applying' | 'applied'>('idle');
+    const [status, setStatus] = useState<'idle' | 'pending' | 'applying' | 'applied' | 'failed'>('idle');
     const [secsLeft, setSecsLeft] = useState(0);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -55,8 +55,10 @@ function useDebounceApply(delayMs = 5000) {
             setStatus('applying');
             try {
                 if (fnRef.current) await fnRef.current();
-            } finally {
                 setStatus('applied');
+            } catch {
+                setStatus('failed');
+            } finally {
                 resetRef.current = setTimeout(() => setStatus('idle'), 2000);
             }
         }, delayMs);
@@ -100,6 +102,7 @@ export default function IdentityPanel() {
     const dnsOn = Boolean(appSettings?.ideal?.network?.dns?.provider);
     const persistedCensorship = Boolean(appSettings?.ideal?.network?.dns?.censorshipProtection);
     const [censorshipBusy, setCensorshipBusy] = useState(false);
+    const [censorshipError, setCensorshipError] = useState<string | null>(null);
     const [optimisticCensorship, setOptimisticCensorship] = useState<boolean | null>(null);
     const effectiveCensorship = optimisticCensorship !== null ? optimisticCensorship : persistedCensorship;
     const censorshipDebounce = useDebounceApply(5000);
@@ -119,6 +122,7 @@ export default function IdentityPanel() {
 
     const handleCensorshipToggle = useCallback((checked: boolean) => {
         if (censorshipBusy || !dnsOn) return;
+        setCensorshipError(null);
         setOptimisticCensorship(checked);
         scheduleCensorship(async () => {
             // Re-check live DNS state: it may have changed since this was
@@ -129,14 +133,18 @@ export default function IdentityPanel() {
                 return;
             }
             setCensorshipBusy(true);
-            const response = checked
-                ? await enableDnsCensorshipProtection()
-                : await disableDnsCensorshipProtection();
-            setCensorshipBusy(false);
-            if (response.success) {
-                patchAppSettings({ ideal: { network: { dns: { censorshipProtection: checked } } } }).catch(() => { });
-            } else {
+            try {
+                const response = checked
+                    ? await enableDnsCensorshipProtection()
+                    : await disableDnsCensorshipProtection();
+                if (!response.success) throw new Error(response.error || "Could not apply censorship protection.");
+                await patchAppSettings({ ideal: { network: { dns: { censorshipProtection: checked } } } });
+            } catch (error) {
                 setOptimisticCensorship(null);
+                setCensorshipError(error instanceof Error ? error.message : "Could not apply censorship protection.");
+                throw error;
+            } finally {
+                setCensorshipBusy(false);
             }
         });
     }, [censorshipBusy, dnsOn, enableDnsCensorshipProtection, disableDnsCensorshipProtection,
@@ -242,6 +250,7 @@ export default function IdentityPanel() {
                                 {censorshipDebounce.status === 'pending' && `Applying in ${censorshipDebounce.secsLeft}s…`}
                                 {censorshipDebounce.status === 'applying' && 'Applying…'}
                                 {censorshipDebounce.status === 'applied' && 'Applied'}
+                                {censorshipDebounce.status === 'failed' && 'Failed'}
                             </span>
                         )}
                         <WCSwitch
@@ -252,6 +261,9 @@ export default function IdentityPanel() {
                             label="Censorship protection"
                         />
                     </div>
+                    {censorshipError && (
+                        <div className="identity-censorship-error" role="alert">{censorshipError}</div>
+                    )}
                 </SectionCard>
 
                 <VersionManagementCard />

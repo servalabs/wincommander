@@ -187,6 +187,18 @@
     background: var(--color-bg-card);
 }
 
+button.blocklist-brand-card {
+    width: 100%;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+
+button.blocklist-brand-card:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
 .blocklist-brand-card.bbc-applied {
     border-color: var(--color-success);
     /* Calmer dark green fill for dark mode */

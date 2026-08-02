@@ -222,10 +222,61 @@ describe("System Cleanup panel reconstruction contracts", () => {
 
     expect(applyHandler).toContain("const succeeded = await onSetSchedule(");
     expect(applyHandler).toContain("if (succeeded)");
-    expect(applyHandler.indexOf("if (succeeded)") < applyHandler.indexOf("setIsOpen(false)")).toBe(true);
+    expect(applyHandler.indexOf("if (succeeded)") < applyHandler.indexOf("closeAndReturnFocus()")).toBe(true);
     expect(clearHandler).toContain("const succeeded = await onClearSchedule()");
     expect(clearHandler).toContain("if (succeeded)");
-    expect(clearHandler.indexOf("if (succeeded)") < clearHandler.indexOf("setIsOpen(false)")).toBe(true);
+    expect(clearHandler.indexOf("if (succeeded)") < clearHandler.indexOf("closeAndReturnFocus()")).toBe(true);
+    expect(scheduler).toContain("const closeAndReturnFocus = useCallback");
+    expect(scheduler).toContain("window.requestAnimationFrame(() => triggerRef.current?.focus())");
+    expect(scheduler).toContain("window.innerWidth - VIEWPORT_MARGIN * 2");
+    expect(scheduler).toContain("maxHeight: `calc(100vh - ${VIEWPORT_MARGIN * 2}px)`");
+  });
+
+  test("scan failure, empty, loading, and populated cards remain visibly distinct", async () => {
+    const traceCard = await read("src/components/cleanup/CleanupTraceCard.tsx");
+
+    expect(traceCard).toContain('type BandState = "has" | "clean" | "scanning" | "error"');
+    expect(traceCard).toMatch(/: loading[\s\S]{0,100}\? "scanning"[\s\S]{0,100}: error[\s\S]{0,100}\? "error"/);
+    expect(traceCard).toContain('label: "Scan failed"');
+    expect(traceCard).toContain('role="alert"');
+    expect(traceCard).toContain('preview.length === 0');
+    expect(traceCard).toContain('open details to inspect');
+  });
+
+  test("the free-space dialog distinguishes discovery errors and contains invocation failures", async () => {
+    const driveWipe = await read("src/panels/cleanup/DriveWipeDialog.tsx");
+
+    expect(driveWipe).toContain("const [loadError, setLoadError]");
+    expect(driveWipe).toContain("Could not detect local drives.");
+    expect(driveWipe).toContain("Retry drive detection");
+    expect(driveWipe).toContain('role="alert"');
+    expect(driveWipe).toMatch(/try \{[\s\S]*invokeUnallocatedSpaceErase[\s\S]*\} catch \(error\)/);
+    expect(driveWipe).toContain("ariaLabel={`Select ${drive.letter}");
+  });
+
+  test("one-time actions and browser inventory collapse safely on narrow viewports", async () => {
+    const actions = await read("src/panels/cleanup/CleanupActionsMonitoring.tsx");
+    const legacyDialogs = await read("src/panels/cleanup/useCleanupLegacyDialogs.tsx");
+
+    expect(actions).toContain("grid grid-cols-1 items-start gap-6 xl:grid-cols-2");
+    expect(actions).toContain("grid grid-cols-1 gap-4 sm:grid-cols-2");
+    expect(actions).toContain('aria-labelledby="cleanup-one-time-actions-heading"');
+    expect(actions).toContain('aria-labelledby="cleanup-system-monitoring-heading"');
+    expect(legacyDialogs).toContain("grid grid-cols-1 gap-3 pb-1.5 lg:grid-cols-2");
+    expect(legacyDialogs).toContain("grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-2");
+  });
+
+  test("active bespoke viewers expose loading, error, empty, and category-specific actions", async () => {
+    const legacyDialogs = await read("src/panels/cleanup/useCleanupLegacyDialogs.tsx");
+
+    expect(legacyDialogs).toContain("const [browserFootprintsError, setBrowserFootprintsError]");
+    expect(legacyDialogs).toContain("Auditing browser profiles…");
+    expect(legacyDialogs).toContain("Browser audit failed:");
+    expect(legacyDialogs).toContain('text="RETRY AUDIT"');
+    expect(legacyDialogs).toContain("No browser profiles detected");
+    expect(legacyDialogs).toContain("aria-label={`Forget Wi-Fi profile ${p.name}`}");
+    expect(legacyDialogs).toContain("aria-label={`Clear ${b.browser} artifacts for ${b.profilePath}`}");
+    expect(legacyDialogs).toContain("disabled={browserFootprints.length === 0 || !!localLoadingMap['browserFootprints']}");
   });
 
   test("every deep cleanup card is connected to scan, clear, and details", async () => {

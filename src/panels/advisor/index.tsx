@@ -71,7 +71,7 @@ const TASKS: TaskDef[] = [
   },
 ];
 
-type StatusKind = "ready" | "model-missing" | "server-down" | "engine-missing";
+type StatusKind = "checking" | "ready" | "model-missing" | "server-down" | "engine-missing";
 
 function statusKind(
   status: ReturnType<typeof useAdvisor>["status"],
@@ -90,16 +90,20 @@ export default function AdvisorPanel() {
   const patchSettings = usePatchSettings();
 
   const model = (settings?.app?.advisor?.model as AdvisorModel) ?? DEFAULT_ADVISOR_MODEL;
+  const [initialProbePending, setInitialProbePending] = useState(true);
   const [activeTask, setActiveTask] = useState<LlmTask | null>(null);
   const [copied, setCopied] = useState(false);
 
   // Probe the server once on mount.
   useEffect(() => {
-    void advisor.refreshStatus();
+    void advisor.refreshStatus().finally(() => setInitialProbePending(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const kind = useMemo(() => statusKind(advisor.status, model), [advisor.status, model]);
+  const kind = useMemo(
+    () => initialProbePending && !advisor.status ? "checking" : statusKind(advisor.status, model),
+    [advisor.status, initialProbePending, model],
+  );
   const ready = kind === "ready";
 
   const onModelChange = useCallback(
@@ -133,6 +137,8 @@ export default function AdvisorPanel() {
 
   const statusLabel = useMemo(() => {
     switch (kind) {
+      case "checking":
+        return "Checking local AI engine…";
       case "ready":
         return `Advisor ready — ${model}`;
       case "model-missing":
@@ -349,6 +355,8 @@ export default function AdvisorPanel() {
             >
               {ready
                 ? "Pick a task above to get a plain-language read on your machine."
+                : kind === "checking"
+                  ? "Checking the local AI engine and installed models…"
                 : "Install the engine and download a model to enable the advisor."}
             </motion.div>
           ) : null}

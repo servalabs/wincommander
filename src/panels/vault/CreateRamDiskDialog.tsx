@@ -95,6 +95,8 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
         // Operational RAM-disk result → Notifications tab, not System Alerts.
         showError(r?.error || "Failed to create RAM disk.", undefined, { kind: "notification" });
       }
+    } catch (error) {
+      showError(error instanceof Error ? error.message : "Failed to create RAM disk.", undefined, { kind: "notification" });
     } finally {
       setCreating(false);
     }

@@ -136,8 +136,8 @@ export default function VmSandboxSection() {
           {(loading || busy) && <Spinner size={14} />}
         </div>
 
-        {error && <div className="font-mono text-sm text-red-400">{error}</div>}
-        {!error && message && <div className="font-mono text-sm text-green-400">{message}</div>}
+        {error && <div className="font-mono text-sm text-red-400" role="alert">{error}</div>}
+        {!error && message && <div className="font-mono text-sm text-green-400" role="status">{message}</div>}
 
         {caps && (!caps.hyperv || !caps.sandbox) && (
           <div className="flex flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 text-sm">

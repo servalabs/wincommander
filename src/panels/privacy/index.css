@@ -97,6 +97,11 @@
     padding-right: 4px;
 }
 
+.privacy-monitoring-shell {
+    container-type: inline-size;
+    min-width: 0;
+}
+
 .privacy-monitor-col {
     display: flex;
     flex-direction: column;
@@ -105,9 +110,10 @@
     flex: 1 1 0;
 }
 
-@media (max-width: 760px) {
+@container (max-width: 760px) {
     .privacy-monitoring-columns {
         flex-direction: column;
+        padding-right: 0;
     }
 }
 

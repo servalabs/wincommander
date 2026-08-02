@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { buildTraceView } from "../../components/shared/traceTable";
-import { ALL_CATEGORIES } from "./cleanupCategories";
+import {
+  ACTION_CATEGORIES,
+  ALL_CATEGORIES,
+  CLEANUP_USABILITY_TIERS,
+  VIEW_ONLY_CATEGORIES,
+} from "./cleanupCategories";
 
 function source(path: string) {
   const sourcePath = new URL(`../../${path}`, import.meta.url).pathname.replace(
@@ -21,6 +26,30 @@ describe("complete cleanup forensic viewer coverage", () => {
     for (const category of scannable) {
       expect(new RegExp(`\\b${category.getDataKey}\\s*:`).test(backendSource)).toBe(true);
     }
+  });
+
+  test("accounts for every category across all five rendered tabs", () => {
+    const tierCounts = Object.fromEntries(
+      CLEANUP_USABILITY_TIERS.map((tier) => [
+        tier.id,
+        ALL_CATEGORIES.filter((category) => category.usabilityTier === tier.id).length,
+      ]),
+    );
+
+    expect(tierCounts).toEqual({
+      "low-impact": 18,
+      "history-cache": 23,
+      "rebuilds-apps-connectivity": 13,
+      "data-accounts-recovery": 26,
+    });
+    expect(Object.values(tierCounts).reduce((total, count) => total + count, 0)).toBe(80);
+    expect(ACTION_CATEGORIES.map((category) => category.id)).toEqual([
+      "virtualMemory",
+      "unallocatedErase",
+      "previousWindowsInstall",
+    ]);
+    expect(VIEW_ONLY_CATEGORIES.map((category) => category.id)).toEqual(["processIntel"]);
+    expect(ALL_CATEGORIES.filter((category) => category.getDataKey && !category.clearDataKey).map((category) => category.id)).toEqual(["processIntel"]);
   });
 
   test("renders every scannable artifact as a multi-column forensic dataset", () => {
@@ -63,6 +92,8 @@ describe("complete cleanup forensic viewer coverage", () => {
     const dialog = source("components/shared/TraceDetailDialog.tsx");
 
     expect(card).toContain("data-cleanup-category={category.id}");
+    expect(card).toContain("data-cleanup-state={bandState}");
+    expect(card).toContain('aria-label={`${category.label}: ${accessibleStatus}`}');
     expect(card).toContain("aria-label={`View details for ${category.label}`}");
     expect(card).toContain("aria-label={`Scan ${category.label}`}");
     expect(card).toContain("aria-label={`Rescan ${category.label}`}");

@@ -28,11 +28,11 @@ export default function CleanupActionsMonitoring({
 }: Props) {
     return (
         <SectionCard title="One-Time Actions & Monitoring" style={{ marginBottom: '32px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', alignItems: 'start' }}>
+            <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
                 {/* LEFT: One-Time Actions */}
-                <div data-tour="cleanup-one-time-actions">
+                <section data-tour="cleanup-one-time-actions" aria-labelledby="cleanup-one-time-actions-heading">
                     <div className="flex items-center gap-3 mb-6 py-3">
-                        <span className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>One-Time Actions</span>
+                        <h3 id="cleanup-one-time-actions-heading" className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>One-Time Actions</h3>
                         <div className="flex-1 h-px bg-[var(--color-border)] opacity-50" />
                         <span className="text-[9px] italic opacity-60 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>run on demand</span>
                     </div>
@@ -73,16 +73,16 @@ export default function CleanupActionsMonitoring({
                             );
                         })}
                     </div>
-                </div>
+                </section>
 
                 {/* RIGHT: System Monitoring */}
-                <div data-tour="cleanup-process-review">
+                <section data-tour="cleanup-process-review" aria-labelledby="cleanup-system-monitoring-heading">
                     <div className="flex items-center gap-3 mb-6 py-3">
-                        <span className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>System Monitoring</span>
+                        <h3 id="cleanup-system-monitoring-heading" className="text-[10px] font-semibold uppercase tracking-wider whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>System Monitoring</h3>
                         <div className="flex-1 h-px bg-[var(--color-border)] opacity-50" />
                         <span className="text-[9px] italic opacity-60 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>view only</span>
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         {VIEW_ONLY_CATEGORIES.map(cat => {
                             const d = cardDataMap[cat.id] || { count: -1, items: [], loading: false, clearing: false };
                             return (
@@ -102,7 +102,7 @@ export default function CleanupActionsMonitoring({
                             );
                         })}
                     </div>
-                </div>
+                </section>
             </div>
         </SectionCard>
     );

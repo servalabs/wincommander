@@ -840,7 +840,7 @@ export default function UsbDevicesSection() {
           </div>
         )}
 
-        {error && <div className="font-mono text-sm text-[var(--color-danger)]">{error}</div>}
+        {error && <div role="alert" className="font-mono text-sm text-[var(--color-danger)]">{error}</div>}
 
         {running && entries.length > 0 && (() => {
           const totalPlugSecs = entries.reduce((s, e) => s + livePluggedSecs(e, nowSec), 0);

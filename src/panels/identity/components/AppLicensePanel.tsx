@@ -147,8 +147,9 @@ export default function AppLicensePanel({ onStatusLoaded }: AppLicensePanelProps
             <span className="text-[10px] font-bold text-accent tracking-tighter opacity-80 uppercase">License Status</span>
             <Tag minimal intent={status?.valid ? "success" : "warning"}>{statusText}</Tag>
           </div>
-          <FormGroup label="License Key" className="compact-form" helperText="Format: WC-NAME-XXXX">
+          <FormGroup label="License Key" labelFor="identity-license-key" className="compact-form" helperText="Format: WC-NAME-XXXX">
             <InputGroup
+              id="identity-license-key"
               value={licenseKey}
               onChange={(e) => setLicenseKey(e.target.value)}
               placeholder="WC-PRO-XXXX-XXXX-XXXX-XXXX-XXXX"

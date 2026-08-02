@@ -349,6 +349,14 @@
                   display: -webkit-box;
                 }
 
+                .identity-censorship-error {
+                  margin-top: 6px;
+                  color: var(--color-danger);
+                  font-family: var(--font-mono);
+                  font-size: 10px;
+                  line-height: 1.4;
+                }
+
                 .auto-apply-pill {
                   font-family: var(--font-mono);
                   font-size: 8px;

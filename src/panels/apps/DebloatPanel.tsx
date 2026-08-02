@@ -47,16 +47,17 @@ function DebloatChip({ item, selected, onToggle, removing }: {
   item: DebloatItem; selected: boolean; onToggle: (id: string) => void; removing: boolean;
 }) {
   return (
-    <div
+    <button
+      type="button"
       className={`debloat-chip${selected ? " is-selected" : ""}`}
-      onClick={() => !removing && onToggle(item.id)}
+      onClick={() => onToggle(item.id)}
+      aria-pressed={selected}
+      aria-label={`${selected ? "Deselect" : "Select"} ${item.label}`}
+      disabled={removing}
     >
-      <Checkbox
-        checked={selected}
-        onChange={() => {}}
-        className="m-0 shrink-0"
-        style={{ marginBottom: 0, pointerEvents: "none" }}
-      />
+      <span className="debloat-chip-check" aria-hidden="true">
+        {selected && <Icon icon="tick" size={10} />}
+      </span>
       {/* Real brand icon alongside the source badge — SourceBadge alone was
           the only visual identity (a generic 2-3 letter text chip). Reuses
           the same resolver the app catalog uses; falls back to a category
@@ -69,7 +70,7 @@ function DebloatChip({ item, selected, onToggle, removing }: {
         </span>
       )}
       <SourceBadge source={item.source} />
-    </div>
+    </button>
   );
 }
 
@@ -211,7 +212,7 @@ export default function DebloatPanel() {
           disabled={removing || loading}
         />
         {heroActive && (
-          <Button icon="cross" minimal small onClick={clearSelection} disabled={removing} />
+          <Button icon="cross" minimal small onClick={clearSelection} disabled={removing} aria-label="Clear recommended debloat selection" />
         )}
         <span className="debloat-hero-sub">
           {heroActive ? "Scroll down to review, then click Remove" : "Preselects known safe-to-remove items"}
@@ -358,7 +359,7 @@ export default function DebloatPanel() {
             className="font-mono text-[10.5px]"
             style={{ marginBottom: 0 }}
           />
-          <Button icon="cross" minimal small onClick={clearSelection} disabled={removing} />
+          <Button icon="cross" minimal small onClick={clearSelection} disabled={removing} aria-label="Clear debloat selection" />
           <Button
             icon="trash"
             intent="danger"

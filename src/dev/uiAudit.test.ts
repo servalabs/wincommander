@@ -4,6 +4,7 @@ import { PANEL_MANIFESTS } from "../types/panels";
 import { createUiAuditLicenseStatus, createUiAuditPendingPurchase, createUiAuditSettings, UI_AUDIT_ARRAY_COMMANDS, UI_AUDIT_POPULATED_ARRAY_COMMANDS, uiAuditBackendResponse, uiAuditDirectResponse } from "./uiAudit";
 import { buildTraceView } from "../components/shared/traceTable";
 import { shouldSkipStartupSplash } from "../lib/startupMode";
+import { ALL_CATEGORIES } from "../panels/cleanup/cleanupCategories";
 
 describe("UI audit fixture", () => {
   test("skips only the dev audit splash so exhaustive route checks do not time out", () => {
@@ -58,6 +59,39 @@ describe("UI audit fixture", () => {
     expect(paths?.columns).toContain("Path");
     expect(paths?.columns).toContain("Hive");
     expect(paths?.columns).toContain("Timestamp");
+  });
+
+  test("keeps cleanup viewer fixtures category-specific", () => {
+    const dns = buildTraceView(uiAuditBackendResponse("Get-DnsCacheEntries"), []);
+    const srum = buildTraceView(uiAuditBackendResponse("Get-SRUMData"), []);
+    const cacheFiles = buildTraceView(uiAuditBackendResponse("Get-BranchCacheInfo"), []);
+    const eventLogs = buildTraceView(uiAuditBackendResponse("Get-EventLogSummary"), []);
+
+    expect(dns.datasets.map((dataset) => dataset.id)).toEqual(["entries"]);
+    expect(srum.datasets.map((dataset) => dataset.id)).toEqual(["entries"]);
+    expect(cacheFiles.datasets.map((dataset) => dataset.id)).toEqual(["files"]);
+    expect(eventLogs.datasets.map((dataset) => dataset.id)).toEqual(["logs"]);
+    expect([dns, srum, cacheFiles, eventLogs].every((view) =>
+      view.datasets.every((dataset) => dataset.columns.length >= 2),
+    )).toBe(true);
+  });
+
+  test("gives every scannable cleanup category a focused rendered fixture", () => {
+    const backendUrl = new URL("../hooks/useBackend.ts", import.meta.url);
+    const backendPath = decodeURIComponent(backendUrl.pathname).replace(/^\/([A-Za-z]:)/, "$1");
+    const backendSource = readFileSync(backendPath, "utf8");
+    const backendLines = backendSource.split(/\r?\n/);
+
+    for (const category of ALL_CATEGORIES.filter((entry) => entry.getDataKey)) {
+      const mappingLine = backendLines.find((line) => line.includes(`${category.getDataKey}:`));
+      const command = mappingLine?.match(/"(Get-[^"]+)"/)?.[1];
+      expect(command).toBeTruthy();
+
+      const view = buildTraceView(uiAuditBackendResponse(command!), []);
+      expect(view.datasets.length).toBeGreaterThan(0);
+      expect(view.datasets.length <= 2).toBe(true);
+      expect(view.datasets.every((dataset) => dataset.columns.length >= 2)).toBe(true);
+    }
   });
 
   test("populates every mounted system manager with contract-shaped rows", () => {

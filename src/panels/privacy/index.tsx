@@ -326,6 +326,7 @@ export default function PrivacyPanel() {
                                       * column expands, only the cards BELOW IT IN THAT SAME COLUMN
                                       * move down by exactly that amount — normal document flow,
                                       * no dead space, and the other column never moves at all. */}
+                                    <div className="privacy-monitoring-shell">
                                     <div className="privacy-monitoring-columns">
                                         <div className="privacy-monitor-col">
                                             <div className="privacy-monitor-cell"><PrivacyShieldCard /></div>
@@ -390,6 +391,7 @@ export default function PrivacyPanel() {
                                             </div>
                                             <div className="privacy-monitor-cell"><PrintActivitySection /></div>
                                         </div>
+                                    </div>
                                     </div>
                                 </SectionCard>
                             )}

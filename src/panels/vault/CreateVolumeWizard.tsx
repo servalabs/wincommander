@@ -369,11 +369,11 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                         )}
                         {isAdvanced && (
                             <div className="quick-format-row">
-                                <div onClick={() => setQuickFormat(!quickFormat)} className="quick-toggle">
-                                    <CheckboxControl checked={quickFormat} ariaLabel="Quick format" onChange={event => setQuickFormat(event.currentTarget.checked)} onClick={event => event.stopPropagation()} />
+                                <label className="quick-toggle">
+                                    <CheckboxControl checked={quickFormat} ariaLabel="Quick format" onChange={event => setQuickFormat(event.currentTarget.checked)} />
                                     <span>Quick format</span>
                                     <span className="quick-desc">Faster but marginally less secure. Recommended for most use cases.</span>
-                                </div>
+                                </label>
                             </div>
                         )}
                     </div>

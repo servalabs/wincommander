@@ -153,9 +153,14 @@ interface BlocklistItemProps {
 function BlocklistItem({ name, description, entryCount, isApplied, onToggle, loading, disabled, logos }: BlocklistItemProps) {
     if (logos && logos.length > 0) {
         return (
-            <div
+            <button
+                type="button"
                 className={`blocklist-brand-card ${isApplied ? 'bbc-applied' : ''} ${loading ? 'bbc-loading' : ''}`}
-                style={{ opacity: loading ? 0.7 : 1, pointerEvents: loading ? 'none' : 'auto' }}
+                style={{ opacity: loading ? 0.7 : 1 }}
+                disabled={disabled || loading}
+                aria-pressed={isApplied}
+                aria-label={`${isApplied ? 'Disable' : 'Enable'} ${name.replace(/-/g, ' ')} blocklist`}
+                onClick={() => onToggle(!isApplied)}
             >
                 <div className="bbc-top">
                     <div className="bbc-logos">
@@ -171,11 +176,7 @@ function BlocklistItem({ name, description, entryCount, isApplied, onToggle, loa
                     <span className="bbc-count">{entryCount.toLocaleString()} domains</span>
                 </div>
 
-                <div className="bbc-content" onClick={(e) => {
-                    if (!(e.target as HTMLElement).closest('[role="switch"], .bp5-switch, .bp6-switch')) {
-                        if (!disabled && !loading) onToggle(!isApplied);
-                    }
-                }}>
+                <div className="bbc-content">
                     <div className="bbc-text">
                         <div className="bbc-title">{name === 'telemetry-blocklist' ? 'telemetry' : name.replace(/-/g, ' ')}</div>
                         <div className="bbc-desc">{description}</div>
@@ -189,7 +190,7 @@ function BlocklistItem({ name, description, entryCount, isApplied, onToggle, loa
                         </div>
                     </div>
                 </div>
-            </div>
+            </button>
         );
     }
 
@@ -214,18 +215,14 @@ function DnsCategoryCard({
 }) {
     const logos = DNS_CATEGORY_LOGOS[id];
     return (
-        <div
+        <button
+            type="button"
             className={`blocklist-brand-card${active ? ' bbc-applied' : ''}`}
             style={{ cursor: isAtLimit ? 'not-allowed' : 'pointer', opacity: isAtLimit ? 0.45 : 1 }}
-            role="button"
-            tabIndex={isAtLimit ? -1 : 0}
             aria-pressed={active}
-            onKeyDown={(e) => {
-                if (!isAtLimit && (e.key === 'Enter' || e.key === ' ')) {
-                    e.preventDefault();
-                    onToggle();
-                }
-            }}
+            aria-label={`${active ? 'Disable' : 'Enable'} ${label} DNS category`}
+            disabled={isAtLimit}
+            onClick={onToggle}
         >
             <div className="bbc-top">
                 <div className="bbc-logos dns-bbc-logos">
@@ -251,7 +248,7 @@ function DnsCategoryCard({
                     </span>
                 )}
             </div>
-            <div className="bbc-content" onClick={() => { if (!isAtLimit) onToggle(); }}>
+            <div className="bbc-content">
                 <div className="bbc-text">
                     <div className="bbc-title">{label}</div>
                     <div className="bbc-desc">{description}</div>
@@ -264,7 +261,7 @@ function DnsCategoryCard({
                     </div>
                 </div>
             </div>
-        </div>
+        </button>
     );
 }
 

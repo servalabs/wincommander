@@ -346,9 +346,23 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
+    width: 100%;
+    color: inherit;
+    font: inherit;
+    background: transparent;
     /* hover changes: border-color, background */
     transition: border-color var(--dur-normal, 200ms) var(--ease),
                 background-color var(--dur-normal, 200ms) var(--ease);
+}
+
+.mesh-file-dropzone:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+.mesh-file-dropzone:disabled {
+    cursor: wait;
+    opacity: 0.65;
 }
 
 .mesh-file-dropzone:hover {

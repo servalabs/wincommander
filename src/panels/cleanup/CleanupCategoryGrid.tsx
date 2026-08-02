@@ -320,6 +320,7 @@ export default function CleanupCategoryGrid({
                       })
                     }
                     title="Remove from exclusions"
+                    aria-label={`Remove ${orderedScanCategories.find((c) => c.id === id)?.label ?? id} from bulk-clear exclusions`}
                     style={{
                       fontSize: 9,
                       fontWeight: 700,
@@ -398,6 +399,7 @@ export default function CleanupCategoryGrid({
                       ref={ref as React.Ref<HTMLButtonElement>}
                       type="button"
                       title="Add another category to exclude"
+                      aria-label="Add a category to bulk-clear exclusions"
                       onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -583,7 +585,7 @@ export default function CleanupCategoryGrid({
         activeUserCats.length > 0 ||
         cleanCardPacks.length > 0) && (
         <section className="mt-12 mb-6">
-          <div className="flex items-center gap-3 mb-6 py-3">
+          <div className="flex flex-wrap items-center gap-3 mb-6 py-3">
             {tierMeta.id === "data-accounts-recovery" && (
               <Icon
                 icon="warning-sign"

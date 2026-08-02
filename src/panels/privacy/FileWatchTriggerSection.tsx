@@ -171,7 +171,7 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
                             <option value="deleted">Deleted</option>
                         </select>
                     </div>
-                    {formError && <span className="text-[10px]" style={{ color: 'var(--color-danger)' }}>{formError}</span>}
+                    {formError && <span role="alert" className="text-[10px]" style={{ color: 'var(--color-danger)' }}>{formError}</span>}
                     <div className="flex gap-2">
                         <button
                             type="button"

@@ -186,10 +186,12 @@ export default function AIRuntimeInstaller({ onInstalled }: AIRuntimeInstallerPr
             </div>
 
             {error && (
-                <Callout intent="danger" title="Installation Error" icon={null} className="mt-2 text-xs">
-                    {error}
-                    <Button minimal small icon="refresh" onClick={fetchStatus} className="ml-2" text="Retry" />
-                </Callout>
+                <div role="alert">
+                    <Callout intent="danger" title="Installation Error" icon={null} className="mt-2 text-xs">
+                        {error}
+                        <Button minimal small icon="refresh" onClick={fetchStatus} className="ml-2" text="Retry" />
+                    </Callout>
+                </div>
             )}
 
             <Collapse isOpen={detailsOpen}>

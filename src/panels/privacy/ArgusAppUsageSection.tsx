@@ -51,6 +51,7 @@ export default function ArgusAppUsageSection() {
   const [monitorError, setMonitorError] = useState<string | null>(null);
 
   const isRunning = status?.running === true;
+  const statusLoading = status === null && monitorError === null;
 
   // ── Data refresh ───────────────────────────────────────────────────────
 
@@ -62,6 +63,7 @@ export default function ArgusAppUsageSection() {
       ]);
       setStatus(s);
       setRecent(r);
+      setMonitorError(null);
     } catch (e) {
       setMonitorError(String(e));
     }
@@ -95,7 +97,11 @@ export default function ArgusAppUsageSection() {
   // ── Status pill ────────────────────────────────────────────────────────
 
   let statusPill: React.ReactNode;
-  if (isRunning) {
+  if (statusLoading) {
+    statusPill = <span className="text-[10px] px-2 py-0.5 rounded border border-[var(--color-border)] flex-shrink-0 font-mono">CHECKING</span>;
+  } else if (monitorError && status === null) {
+    statusPill = <span className="text-[10px] px-2 py-0.5 rounded border border-[var(--color-danger,#f87171)]/40 text-[var(--color-danger,#f87171)] flex-shrink-0 font-mono">ERROR</span>;
+  } else if (isRunning) {
     statusPill = (
       <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-success)]/15 text-[var(--color-success)] border border-[var(--color-success)]/30 flex-shrink-0 font-mono">
         ACTIVE
@@ -137,7 +143,7 @@ export default function ArgusAppUsageSection() {
           <div className="flex items-center gap-3 flex-wrap">
             <Switch
               checked={isRunning}
-              disabled={monitorBusy}
+              disabled={monitorBusy || statusLoading}
               onChange={(e) => void toggleMonitor((e.target as HTMLInputElement).checked)}
               label="App-usage monitoring active"
             />
@@ -145,16 +151,17 @@ export default function ArgusAppUsageSection() {
               icon="refresh"
               minimal
               small
-              disabled={monitorBusy}
+              disabled={monitorBusy || statusLoading}
               onClick={() => void refreshStatus()}
+              aria-label="Refresh app-usage windows"
             >
               Refresh
             </Button>
-            {monitorBusy && <Spinner size={14} />}
+            {(monitorBusy || statusLoading) && <Spinner size={14} />}
           </div>
 
           {monitorError && (
-            <div className="font-mono text-xs text-[var(--color-danger,#f87171)]">{monitorError}</div>
+            <div role="alert" className="font-mono text-xs text-[var(--color-danger,#f87171)]">{monitorError}</div>
           )}
 
           {/* Status line */}

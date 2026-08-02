@@ -245,12 +245,12 @@ export default function RdpIdleCard() {
                                                 </span>
                                             )}
                                             {!hasPaid && !rdpIdleLocked && (
-                                                <span onClick={() => window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Idle Session Monitor" } }))}
+                                                <button type="button" aria-label="Upgrade to unlock Idle Session Monitor" onClick={() => window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Idle Session Monitor" } }))}
                                                     className="text-[9px] px-2 py-0.5 rounded flex-shrink-0 cursor-pointer"
                                                     style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)', border: '1px solid var(--color-border-accent)', fontFamily: 'var(--font-mono)', fontWeight: 700, letterSpacing: 1 }}
                                                     title="Click to unlock with WinCommander Pro">
                                                     PRO
-                                                </span>
+                                                </button>
                                             )}
                                         </div>
                                         <p className="text-xs text-[var(--shield-text-subtle)] text-pretty max-w-[280px]">
@@ -378,12 +378,12 @@ export default function RdpIdleCard() {
                                             <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-success)]/15 text-[var(--color-success)] border border-[var(--color-success)]/30 flex-shrink-0">Active</span>
                                         )}
                                         {!hasPaid && (
-                                            <span onClick={() => window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Incoming Idle Sign-Out" } }))}
+                                            <button type="button" aria-label="Upgrade to unlock Incoming Idle Sign-Out" onClick={() => window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Incoming Idle Sign-Out" } }))}
                                                 className="text-[9px] px-2 py-0.5 rounded flex-shrink-0 cursor-pointer"
                                                 style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)', border: '1px solid var(--color-border-accent)', fontFamily: 'var(--font-mono)', fontWeight: 700, letterSpacing: 1 }}
                                                 title="Click to unlock with WinCommander Pro">
                                                 PRO
-                                            </span>
+                                            </button>
                                         )}
                                     </div>
                                     <p className="text-xs text-[var(--shield-text-subtle)] text-pretty max-w-[300px]">
@@ -454,7 +454,7 @@ export default function RdpIdleCard() {
                             )}
 
                             {incomingError && (
-                                <div className="flex items-center gap-2 text-[var(--color-danger)] text-xs">
+                                <div role="alert" className="flex items-center gap-2 text-[var(--color-danger)] text-xs">
                                     <Icon icon="warning-sign" size={12} />
                                     <span>{incomingError}</span>
                                 </div>

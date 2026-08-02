@@ -493,10 +493,15 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                     below, this one is also clickable (opens the intro
                                     dialog) — cursor:pointer overrides the shared
                                     cursor:help so the affordance still reads clearly. */}
-                                <Icon icon="info-sign" size={11} className="physical-shield-info-icon"
-                                    style={{ cursor: 'pointer' }}
+                                <button
+                                    type="button"
+                                    aria-label="How Privacy Gaze Shield works"
+                                    className="inline-flex"
                                     data-tour="privacy-shield-how-it-works"
-                                    onClick={() => setShowShieldIntro(true)} />
+                                    onClick={() => setShowShieldIntro(true)}
+                                >
+                                    <Icon icon="info-sign" size={11} className="physical-shield-info-icon" />
+                                </button>
                             </Tooltip>
                         </div>
                         {/* Single badge group — Active / Looking away / FREE tier /
@@ -516,12 +521,12 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                 )}
                                 {!hasPaid && quota && !quota.is_unlimited && (
                                     <>
-                                        <span className="text-[10px] px-2 py-0.5 rounded flex-shrink-0 cursor-pointer"
+                                        <button type="button" aria-label="Upgrade Privacy Shield for unlimited time" className="text-[10px] px-2 py-0.5 rounded flex-shrink-0 cursor-pointer"
                                             title={`Free tier — ${quota.hard_cap_minutes} min per day. Upgrade for unlimited use.`}
                                             onClick={openShieldPaywall}
                                             style={{ background: 'var(--color-accent-dim, rgba(0,160,255,0.12))', color: 'var(--color-accent)', border: '1px solid var(--color-accent)', fontFamily: 'var(--font-mono)', letterSpacing: '0.5px' }}>
                                             FREE
-                                        </span>
+                                        </button>
                                         {quota.minutes_remaining > 0 ? (
                                             <span className="text-[10px] px-2 py-0.5 rounded flex-shrink-0 tabular-nums"
                                                 title={privacyShieldRunning
@@ -538,10 +543,10 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                                     : `${Math.ceil(quota.minutes_remaining)} / ${quota.hard_cap_minutes} min today`}
                                             </span>
                                         ) : (
-                                            <span className="text-[10px] px-2 py-0.5 rounded flex-shrink-0 cursor-pointer" title="Free-tier daily cap reached." onClick={openShieldPaywall}
+                                            <button type="button" aria-label="Upgrade Privacy Shield after reaching the daily limit" className="text-[10px] px-2 py-0.5 rounded flex-shrink-0 cursor-pointer" title="Free-tier daily cap reached." onClick={openShieldPaywall}
                                                 style={{ background: 'var(--color-warning-dim)', color: 'var(--color-warning)', border: '1px solid var(--color-warning)', fontFamily: 'var(--font-mono)', letterSpacing: '0.5px' }}>
                                                 DAILY LIMIT REACHED
-                                            </span>
+                                            </button>
                                         )}
                                     </>
                                 )}
@@ -583,10 +588,10 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                         screen is obscured. */}
                     <div className="flex flex-col gap-3">
                         <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Blur triggers" : "Activation Triggers"}</span>
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-[var(--shield-inner-border)]">
-                            <div className="sm:pr-3"><ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true} /></div>
-                            <div className="sm:px-3"><ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true} /></div>
-                            <div className="sm:pl-3"><ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: blurs when a phone or camera is pointed at the screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true} /></div>
+                        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,160px),1fr))] gap-3">
+                            <div><ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true} /></div>
+                            <div><ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true} /></div>
+                            <div><ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: blurs when a phone or camera is pointed at the screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true} /></div>
                         </div>
                     </div>
 
@@ -607,12 +612,12 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                             disabled={false}
                         />
 
-                        <div className="flex items-center justify-between cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setShowAdvanced(!showAdvanced)}>
+                        <button type="button" className="flex w-full items-center justify-between cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setShowAdvanced(!showAdvanced)} aria-expanded={showAdvanced} aria-controls="privacy-shield-processing-parameters">
                             <span className="text-[10px] font-medium text-[var(--shield-text-muted)] block">{isAdvanced ? "Processing parameters" : "Advanced Settings"}</span>
                             <Icon icon={showAdvanced ? "chevron-up" : "chevron-down"} size={12} color="var(--shield-text-muted)" />
-                        </div>
+                        </button>
                         {showAdvanced && (
-                            <div className="mt-4 flex flex-col gap-4">
+                            <div id="privacy-shield-processing-parameters" className="mt-4 flex flex-col gap-4">
                                 <div className="flex flex-col gap-3 pt-3 border-t border-[var(--shield-inner-border)]">
                                     <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Capture on incident" : "Record Proof"}</span>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

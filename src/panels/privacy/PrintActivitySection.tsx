@@ -133,6 +133,7 @@ export default function PrintActivitySection() {
 
         {error && (
           <div
+            role="alert"
             style={{
               padding: 8,
               background: 'var(--color-danger-dim)',

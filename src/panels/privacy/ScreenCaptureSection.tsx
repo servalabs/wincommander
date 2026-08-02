@@ -130,7 +130,7 @@ export default function ScreenCaptureSection({
       </div>
 
       {error && (
-        <div className="screencap-error">
+        <div role="alert" className="screencap-error">
           <Icon icon="warning-sign" size={12} />
           <span>{error}</span>
         </div>

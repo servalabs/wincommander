@@ -24,7 +24,7 @@ import './index.css';
 type VaultVolume = NonNullable<EncryptionStatus["volumes"]>[number];
 
 function VaultPanel() {
-  const { encryptionStatus, refreshVault } = useAppState();
+  const { encryptionStatus, refreshVault, loading } = useAppState();
 
   const volumes = encryptionStatus?.volumes || [];
 
@@ -41,6 +41,7 @@ function VaultPanel() {
             <EncryptedVolumesTab
               volumes={volumes}
               refreshVault={refreshVault}
+              initialLoading={loading.vault && encryptionStatus === null}
             />
             <RamDisksSection />
           </div>
@@ -53,13 +54,14 @@ function VaultPanel() {
 interface EncryptedVolumesTabProps {
   volumes: VaultVolume[];
   refreshVault: (silent?: boolean) => Promise<void>;
+  initialLoading: boolean;
 }
 
 // Encrypted Volumes tab: the card body (header, install-prompt, action row,
 // volumes table) plus the Mount Encrypted Volume dialog — its state/handlers
 // used to live on the whole panel; they now live here with the tab that
 // owns them.
-function EncryptedVolumesTab({ volumes, refreshVault }: EncryptedVolumesTabProps) {
+function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: EncryptedVolumesTabProps) {
   const { theme } = useTheme();
 
   const [mountDialogOpen, setMountDialogOpen] = useState(false);
@@ -73,6 +75,7 @@ function EncryptedVolumesTab({ volumes, refreshVault }: EncryptedVolumesTabProps
   const [availableLetters, setAvailableLetters] = useState<string[]>([]);
   const [mountType, setMountType] = useState<'file' | 'partition'>('file');
   const [partitions, setPartitions] = useState<EncryptionPartition[]>([]);
+  const [mountDetailsLoading, setMountDetailsLoading] = useState(false);
 
   const {
     mountVolume,
@@ -97,6 +100,8 @@ function EncryptedVolumesTab({ volumes, refreshVault }: EncryptedVolumesTabProps
   const openMountDialog = useCallback(async () => {
     resetMountForm();
     setMountDialogOpen(true);
+    setMountDetailsLoading(true);
+    setPartitions([]);
     try {
       const [letterRes, partitionRes] = await Promise.all([
         getAvailableDriveLetters(),
@@ -129,6 +134,8 @@ function EncryptedVolumesTab({ volumes, refreshVault }: EncryptedVolumesTabProps
       console.error("Failed to fetch mount details", err);
       const fallback = "EFGHIJKLMNOPQRSTUVWXYZ".split("");
       setAvailableLetters(fallback);
+    } finally {
+      setMountDetailsLoading(false);
     }
   }, [resetMountForm, getAvailableDriveLetters, getEncryptionPartitions]);
 
@@ -257,7 +264,12 @@ function EncryptedVolumesTab({ volumes, refreshVault }: EncryptedVolumesTabProps
         </div>
 
         <div className={`vault-content ${volumes.length === 0 ? "vault-content--empty" : ""}`}>
-          {volumes.length > 0 ? (
+          {initialLoading ? (
+            <div className="empty-state" role="status" aria-busy="true">
+              <Icon icon="refresh" className="empty-icon" size={32} />
+              <p>Checking encrypted volumes…</p>
+            </div>
+          ) : volumes.length > 0 ? (
             <table className="volumes-table wc-table wc-table--striped">
               <thead>
                 <tr>
@@ -396,7 +408,9 @@ function EncryptedVolumesTab({ volumes, refreshVault }: EncryptedVolumesTabProps
                   green active-dot and bright drive-letter chip when the OS
                   has it mounted. The selected row gets an accent border. */}
               <div className="partition-list" role="listbox" id="partition-select" aria-label="Select partition">
-                {partitions.length === 0 ? (
+                {mountDetailsLoading ? (
+                  <div className="partition-list-empty" role="status" aria-busy="true">Discovering partitions…</div>
+                ) : partitions.length === 0 ? (
                   <div className="partition-list-empty">No mountable partitions found.</div>
                 ) : (
                   partitions.map((p) => {

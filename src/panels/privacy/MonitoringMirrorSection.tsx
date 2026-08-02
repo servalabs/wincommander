@@ -257,7 +257,7 @@ export default function MonitoringMirrorSection() {
           </Button>
           {busy && <Spinner size={14} />}
           {error && (
-            <span className="font-mono text-xs text-[var(--color-danger,#f87171)]">{error}</span>
+            <span role="alert" className="font-mono text-xs text-[var(--color-danger,#f87171)]">{error}</span>
           )}
         </div>
       </div>

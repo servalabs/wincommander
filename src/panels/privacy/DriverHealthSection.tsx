@@ -233,7 +233,7 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
           )}
         </div>
 
-        {error && <div className="driver-health-error">{error}</div>}
+        {error && <div role="alert" className="driver-health-error">{error}</div>}
 
         {!loading && summary && (summary.ok || sortedDevices.length === 0) && (
           <div className="driver-health-empty">No driver problems detected.</div>
@@ -301,7 +301,7 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
           </div>
 
           {vulnError && (
-            <div className="driver-health-error">{vulnError}</div>
+            <div role="alert" className="driver-health-error">{vulnError}</div>
           )}
 
           {!vulnLoading && vulnReport && vulnReport.ok && (

@@ -82,10 +82,12 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
     const { theme } = useTheme();
     const [rows, setRows] = useState<AppRow[]>([]);
     const [saving, setSaving] = useState(false);
+    const [saveError, setSaveError] = useState<string | null>(null);
 
     // Re-seed local state each time the dialog opens
     const handleOpened = useCallback(() => {
         setRows(toRows(apps));
+        setSaveError(null);
     }, [apps]);
 
     // ── Field update helpers ──────────────────────────────────────────────
@@ -124,10 +126,13 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
     }, []);
 
     const handleSave = useCallback(async () => {
+        setSaveError(null);
         setSaving(true);
         try {
             await onSave(toApps(rows));
             onClose();
+        } catch (error) {
+            setSaveError(error instanceof Error ? error.message : String(error));
         } finally {
             setSaving(false);
         }
@@ -150,7 +155,7 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
     return (
         <Dialog
             isOpen={isOpen}
-            onClose={onClose}
+            onClose={() => { if (!saving) onClose(); }}
             onOpened={handleOpened}
             title="Manage Server Apps"
             className={`manage-apps-dialog ${theme === 'dark' ? Classes.DARK : ''}`}
@@ -273,6 +278,11 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
                     onClick={addApp}
                     className="manage-apps-add-btn"
                 />
+                {saveError && (
+                    <p className="manage-apps-error" role="alert">
+                        Could not save server apps: {saveError}
+                    </p>
+                )}
             </DialogBody>
             <DialogFooter
                 actions={

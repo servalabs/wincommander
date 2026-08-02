@@ -112,6 +112,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
     const [rdpHistory, setRdpHistory] = useState<RDPHistoryEntry[]>([]);
     const [jumpLists, setJumpLists] = useState<JumpListEntry[]>([]);
     const [browserFootprints, setBrowserFootprints] = useState<BrowserFootprintBrowser[]>([]);
+    const [browserFootprintsError, setBrowserFootprintsError] = useState<string | null>(null);
     const [prefetchFiles, setPrefetchFiles] = useState<PrefetchEntry[]>([]);
     const [prefetchAccessDenied, setPrefetchAccessDenied] = useState(false);
     const [prefetcherEnabled, setPrefetcherEnabled] = useState<number>(3);
@@ -529,15 +530,23 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
 
     const handleBrowserFootprints = async () => {
         const cached = cardDataMap['browserFootprints']?.raw;
-        if (cached?.browsers) { setBrowserFootprints(Array.isArray(cached.browsers) ? cached.browsers : []); setBrowserFootprintsDialogOpen(true); return; }
+        if (cached?.browsers) {
+            setBrowserFootprints(Array.isArray(cached.browsers) ? cached.browsers : []);
+            setBrowserFootprintsError(null);
+            setBrowserFootprintsDialogOpen(true);
+            return;
+        }
         setBrowserFootprintsDialogOpen(true);
         setBrowserFootprints([]);
+        setBrowserFootprintsError(null);
         await runLocalOnly('browserFootprints', async () => {
             const res = await getBrowserFootprints();
             if (res.success && res.data?.browsers) {
                 setBrowserFootprints(Array.isArray(res.data.browsers) ? res.data.browsers : []);
             } else {
-                showError(res.error || "Failed to audit browser footprints.");
+                const message = res.error || "Failed to audit browser footprints.";
+                setBrowserFootprintsError(message);
+                showError(message);
             }
         });
     };
@@ -1060,7 +1069,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                     <div className="mb-3 p-2 bg-blue-500/10 text-blue-400 text-xs rounded border border-blue-500/20">
                         Passwords are shown in cleartext. Use with caution.
                     </div>
-                    <div style={{ maxHeight: 360, overflowY: "auto", paddingRight: "8px" }}>
+                    <div style={{ maxHeight: 360, overflow: "auto", paddingRight: "8px" }}>
                         <table className="wc-table wc-table--striped" style={{ width: "100%" }}>
                             <thead>
                                 <tr>
@@ -1080,13 +1089,14 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                                         transition={{ delay: staggerDelay(idx), duration: DURATION_S.fast }}
                                     >
                                         <td className="font-semibold" style={{ color: 'var(--color-text-primary)' }}>{p.name}</td>
-                                        <td className="font-mono text-xs opacity-80" style={{ color: 'var(--color-text-muted)' }}>{p.password || "<NO PASS>"}</td>
+                                        <td className="font-mono text-xs opacity-80" style={{ color: 'var(--color-text-muted)', wordBreak: "break-all" }}>{p.password || "<NO PASS>"}</td>
                                         <td>
                                             <Button
                                                 icon="trash"
                                                 small
                                                 minimal
                                                 intent="danger"
+                                                aria-label={`Forget Wi-Fi profile ${p.name}`}
                                                 onClick={() => handleRemoveWlanProfile(p.name)}
                                                 loading={localLoadingMap["wlanRemove"]}
                                             />
@@ -2006,6 +2016,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                 <div className="wc-dialog-body">
                     <div style={{
                         display: "flex",
+                        flexWrap: "wrap",
                         alignItems: "center",
                         justifyContent: "space-between",
                         gap: 16,
@@ -2032,11 +2043,23 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                             </span>
                         </div>
                     </div>
-                    <div style={{ maxHeight: 500, overflowY: "auto", paddingRight: "6px" }}>
-                        {browserFootprints.length === 0 && !localLoadingMap['browserFootprints'] && (
+                    <div style={{ maxHeight: 500, overflow: "auto", paddingRight: "6px" }}>
+                        {localLoadingMap['browserFootprints'] && (
+                            <div className="flex items-center justify-center gap-2 py-8 text-xs" role="status" style={{ color: "var(--color-text-muted)" }}>
+                                <Icon icon="refresh" size={14} className="animate-spin" />
+                                Auditing browser profiles…
+                            </div>
+                        )}
+                        {browserFootprintsError && !localLoadingMap['browserFootprints'] && (
+                            <div className="mx-1 mb-3 flex flex-wrap items-center justify-between gap-2 rounded border px-3 py-2 text-xs" role="alert" style={{ borderColor: "var(--color-danger)", color: "var(--color-danger)", background: "var(--color-danger-dim)" }}>
+                                <span>Browser audit failed: {browserFootprintsError}</span>
+                                <Button small minimal icon="refresh" text="RETRY AUDIT" onClick={() => void handleBrowserFootprints()} />
+                            </div>
+                        )}
+                        {browserFootprints.length === 0 && !localLoadingMap['browserFootprints'] && !browserFootprintsError && (
                             <p className="text-xs text-center py-4" style={{ color: "var(--color-text-muted)" }}>No browser profiles detected</p>
                         )}
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12, paddingBottom: 6 }}>
+                        <div className="grid grid-cols-1 gap-3 pb-1.5 lg:grid-cols-2">
                             {[...browserFootprints].sort((a, b) => b.totalSizeKB - a.totalSizeKB).map((b) => (
                                 <div key={`${b.browser}:${b.profilePath}`} style={{ background: "var(--color-bg-secondary)", borderRadius: 8, padding: 14, border: "1px solid var(--color-border)" }}>
                                     <div className="flex items-start justify-between gap-3 mb-2">
@@ -2050,7 +2073,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                                             {formatSizeKB(b.totalSizeKB)}
                                         </span>
                                     </div>
-                                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", columnGap: 12, rowGap: 6, marginTop: 10 }}>
+                                    <div className="mt-2.5 grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-2">
                                         {b.artifacts.filter(a => a.sizeKB > 0).map((a) => (
                                             <div key={`${b.browser}:${b.profilePath}:${a.name}`} style={{ minWidth: 0, padding: "4px 6px", borderRadius: 4, background: "var(--color-bg-tertiary)", border: "1px solid color-mix(in srgb, var(--color-border) 70%, transparent)" }}>
                                                 <div className="text-[10px] truncate" title={a.name} style={{ color: "var(--color-text-secondary)" }}>{a.name}</div>
@@ -2067,6 +2090,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                                         <Button
                                             icon="trash"
                                             text="CLEAR THIS BROWSER"
+                                            aria-label={`Clear ${b.browser} artifacts for ${b.profilePath}`}
                                             onClick={() => handleClearBrowserFootprint(b)}
                                             loading={localLoadingMap[browserFootprintCacheKey(b)]}
                                             className="modal-primary-btn danger"
@@ -2079,7 +2103,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                 </div>
                 <div className="mount-dialog-footer">
                     <Button icon="cross" text="CLOSE" onClick={() => setBrowserFootprintsDialogOpen(false)} minimal className="modal-cancel-btn" />
-                    <Button icon="trash" text="CLEAR ALL BROWSERS" onClick={handleClearBrowserFootprints} loading={localLoadingMap["browserFootprintsClear"]} className="modal-primary-btn danger" />
+                    <Button icon="trash" text="CLEAR ALL BROWSERS" onClick={handleClearBrowserFootprints} loading={localLoadingMap["browserFootprintsClear"]} disabled={browserFootprints.length === 0 || !!localLoadingMap['browserFootprints']} className="modal-primary-btn danger" />
                 </div>
             </Dialog>
 

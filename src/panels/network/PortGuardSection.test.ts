@@ -7,6 +7,7 @@
 // and independently removable, not silently collapse into one row.
 
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { mergeEntries, type FirewallBlock, type PortEntry } from './PortGuardSection';
 
 function fw(overrides: Partial<FirewallBlock>): FirewallBlock {
@@ -77,5 +78,13 @@ describe('mergeEntries', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].numericPort).toBeNull();
     expect(rows[0].portDisplay).toBe('6881-6889');
+  });
+});
+
+describe('managed-port populated-state accessibility', () => {
+  test('labels per-row watch and remove controls with the port identity', async () => {
+    const source = readFileSync('src/panels/network/PortGuardSection.tsx', 'utf8');
+    expect(source).toContain("Port Watch for ${row.label} on ${row.portDisplay}");
+    expect(source).toContain("Remove ${row.label} on ${row.portDisplay}");
   });
 });

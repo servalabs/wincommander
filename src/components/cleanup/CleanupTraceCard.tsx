@@ -35,7 +35,7 @@ interface CleanupTraceCardProps {
 
 const TRACE_CARD_HEIGHT = "168px";
 
-type BandState = "has" | "clean" | "scanning" | "not-scanned" | "action-only";
+type BandState = "has" | "clean" | "scanning" | "error" | "not-scanned" | "action-only";
 interface BandDef {
   bg: string;
   borderColor: string;
@@ -65,6 +65,13 @@ const BAND: Record<BandState, BandDef> = {
     labelColor: "var(--color-info)",
     icon: "refresh",
     label: "Scanning…",
+  },
+  error: {
+    bg: "var(--color-danger-dim)",
+    borderColor: "color-mix(in srgb, var(--color-danger) 32%, transparent)",
+    labelColor: "var(--color-danger)",
+    icon: "error",
+    label: "Scan failed",
   },
   "not-scanned": {
     bg: "var(--color-bg-secondary)",
@@ -118,12 +125,17 @@ export default function CleanupTraceCard({
     ? "action-only"
     : loading
       ? "scanning"
+      : error
+        ? "error"
       : hasData
         ? "has"
         : isEmpty
           ? "clean"
           : "not-scanned";
   const band = BAND[bandState];
+  const accessibleStatus = bandState === "has"
+    ? `${count} ${count === 1 ? "trace found" : "traces found"}`
+    : band.label;
   // Unlike a Popover, Tooltip does not restore focus to a card action that
   // moved during wheel input and therefore cannot pull this panel backward.
   const infoTooltip = (
@@ -208,8 +220,10 @@ export default function CleanupTraceCard({
         className={`relative overflow-hidden flex flex-col text-center${compact ? " cleanup-trace-card--compact" : ""}`}
         data-cleanup-trace-card
         data-cleanup-category={category.id}
+        data-cleanup-state={bandState}
         role="group"
-        aria-label={`${category.label} cleanup status`}
+        aria-label={`${category.label}: ${accessibleStatus}`}
+        aria-busy={loading || clearing}
         style={{
           height: compact ? "100%" : TRACE_CARD_HEIGHT,
           padding: 0,
@@ -325,8 +339,10 @@ export default function CleanupTraceCard({
       className="relative overflow-hidden flex flex-col"
       data-cleanup-trace-card
       data-cleanup-category={category.id}
+      data-cleanup-state={bandState}
       role="group"
-      aria-label={`${category.label} cleanup status`}
+      aria-label={`${category.label}: ${accessibleStatus}`}
+      aria-busy={loading || clearing}
       style={{
         height: TRACE_CARD_HEIGHT,
         background: "var(--color-bg-secondary)",
@@ -468,9 +484,25 @@ export default function CleanupTraceCard({
               </div>
             </AnimatePresence>
           )}
+          {!loading && hasData && preview.length === 0 && (
+            <div
+              className="font-mono"
+              style={{
+                fontSize: 8.5,
+                padding: "2px 6px",
+                borderRadius: 2,
+                background: "var(--color-bg-tertiary)",
+                color: "var(--color-text-muted)",
+              }}
+            >
+              {count} {count === 1 ? "trace" : "traces"} found · open details to inspect
+            </div>
+          )}
           {error && !loading && (
             <div
-              className="font-mono truncate"
+              className="font-mono line-clamp-2"
+              role="alert"
+              title={error}
               style={{
                 fontSize: 8.5,
                 padding: "2px 6px",

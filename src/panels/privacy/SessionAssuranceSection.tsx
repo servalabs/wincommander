@@ -257,7 +257,7 @@ export default function SessionAssuranceSection() {
           </div>
 
           {monitorError && (
-            <div className="font-mono text-xs text-[var(--color-danger)]">{monitorError}</div>
+            <div role="alert" className="font-mono text-xs text-[var(--color-danger)]">{monitorError}</div>
           )}
 
           {/* Score */}

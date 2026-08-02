@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { AlignJustify, Clock } from 'lucide-react';
 import './ProductivityTimeline.css';
 import type { ArgusWindowSlot } from './ArgusAppUsageSection';
+import PrivacyEventTable from './PrivacyEventTable';
 
 // ── Re-export so consumers can import from a single location ──────────
 export type { ArgusWindowSlot };
@@ -164,42 +165,32 @@ interface FlatListProps {
 }
 
 function FlatList({ windows }: FlatListProps) {
-  return (
-    <div className="max-h-[260px] overflow-auto rounded border border-[var(--color-border)]" role="region" aria-label="Recent app-usage window records">
-      <table className="w-full text-left text-[11px]" aria-label="Recent app-usage window records">
-        <thead className="sticky top-0 bg-[var(--color-bg-secondary)] text-[var(--shield-text-muted)]">
-          <tr>
-            <th scope="col" className="px-2 py-1.5">Time</th>
-            <th scope="col" className="px-2 py-1.5">Category</th>
-            <th scope="col" className="px-2 py-1.5 text-right">Active</th>
-            <th scope="col" className="px-2 py-1.5 text-right">Idle</th>
-            <th scope="col" className="px-2 py-1.5 text-right">Active share</th>
-            <th scope="col" className="px-2 py-1.5">Top scores</th>
-          </tr>
-        </thead>
-        <tbody>
-      {[...windows].reverse().map((slot, i) => {
+  return <PrivacyEventTable
+    title="Recent app-usage window records"
+    columns={["Time", "Category", "Active", "Idle", "Active share", "Top scores"]}
+    rows={[...windows].reverse().map((slot, i) => {
         const ratio = activeRatio(slot);
         const pct = Math.round(ratio * 100);
         const topScores = Object.entries(slot.categoryScores)
           .sort(([, a], [, b]) => b - a)
           .slice(0, 3);
-
-        return (
-          <tr key={`${slot.windowStart}-${i}`} className="border-t border-[var(--color-border)]">
-            <td className="whitespace-nowrap px-2 py-1.5 font-mono opacity-70">{slot.windowStart.slice(0, 16).replace('T', ' ')}–{slot.windowEnd.slice(11, 16)}</td>
-            <td className="px-2 py-1.5">{slot.topCategory}</td>
-            <td className="px-2 py-1.5 text-right font-mono">{formatDuration(slot.activeSeconds)}</td>
-            <td className="px-2 py-1.5 text-right font-mono">{formatDuration(slot.idleSeconds)}</td>
-            <td className="px-2 py-1.5 text-right font-mono">{pct}%</td>
-            <td className="px-2 py-1.5 font-mono opacity-70">{topScores.map(([cat, score]) => `${cat} ${Math.round(score * 100)}%`).join(', ') || '—'}</td>
-          </tr>
-        );
+        const scoreText = topScores.map(([cat, score]) => `${cat} ${Math.round(score * 100)}%`).join(', ') || '—';
+        const timeText = `${slot.windowStart.slice(0, 16).replace('T', ' ')}–${slot.windowEnd.slice(11, 16)}`;
+        return {
+          id: `${slot.windowStart}-${i}`,
+          search: `${timeText} ${slot.topCategory} ${slot.activeSeconds} ${slot.idleSeconds} ${pct} ${scoreText}`,
+          sort: [slot.windowStart, slot.topCategory, String(slot.activeSeconds), String(slot.idleSeconds), String(pct), scoreText],
+          cells: [
+            <span className="whitespace-nowrap font-mono opacity-70">{timeText}</span>,
+            slot.topCategory,
+            <span className="font-mono">{formatDuration(slot.activeSeconds)}</span>,
+            <span className="font-mono">{formatDuration(slot.idleSeconds)}</span>,
+            <span className="font-mono">{pct}%</span>,
+            <span className="font-mono opacity-70">{scoreText}</span>,
+          ],
+        };
       })}
-        </tbody>
-      </table>
-    </div>
-  );
+  />;
 }
 
 // ── Main component ────────────────────────────────────────────────────

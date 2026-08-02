@@ -43,8 +43,9 @@ export default function CleanupScheduleControl({
   const [position, setPosition] = useState<{
     left: number;
     top: number;
+    width: number;
     visibility: "hidden" | "visible";
-  }>({ left: 0, top: 0, visibility: "hidden" });
+  }>({ left: 0, top: 0, width: SURFACE_WIDTH, visibility: "hidden" });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const surfaceId = useId();
@@ -58,20 +59,36 @@ export default function CleanupScheduleControl({
     if (!trigger) return;
     const rect = trigger.getBoundingClientRect();
     const surfaceHeight = surfaceRef.current?.getBoundingClientRect().height ?? 280;
+    const surfaceWidth = Math.min(SURFACE_WIDTH, Math.max(0, window.innerWidth - VIEWPORT_MARGIN * 2));
     const fitsBelow = rect.bottom + 6 + surfaceHeight <= window.innerHeight - VIEWPORT_MARGIN;
     const top = fitsBelow
       ? rect.bottom + 6
       : Math.max(VIEWPORT_MARGIN, rect.top - surfaceHeight - 6);
     const left = Math.min(
-      window.innerWidth - SURFACE_WIDTH - VIEWPORT_MARGIN,
-      Math.max(VIEWPORT_MARGIN, rect.right - SURFACE_WIDTH),
+      window.innerWidth - surfaceWidth - VIEWPORT_MARGIN,
+      Math.max(VIEWPORT_MARGIN, rect.right - surfaceWidth),
     );
-    setPosition({ left, top, visibility: "visible" });
+    setPosition({ left, top, width: surfaceWidth, visibility: "visible" });
   }, []);
 
   useLayoutEffect(() => {
     if (isOpen) updatePosition();
   }, [isOpen, updatePosition]);
+
+  useEffect(() => {
+    if (!isOpen || !portalTarget) return;
+    const frame = window.requestAnimationFrame(() => {
+      surfaceRef.current
+        ?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), [role="menuitem"]:not([aria-disabled="true"])')
+        ?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isOpen, portalTarget]);
+
+  const closeAndReturnFocus = useCallback(() => {
+    setIsOpen(false);
+    window.requestAnimationFrame(() => triggerRef.current?.focus());
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -81,7 +98,10 @@ export default function CleanupScheduleControl({
       setIsOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setIsOpen(false);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeAndReturnFocus();
+      }
     };
     window.addEventListener("resize", updatePosition);
     window.addEventListener("scroll", updatePosition, true);
@@ -93,7 +113,7 @@ export default function CleanupScheduleControl({
       document.removeEventListener("pointerdown", handlePointerDown, true);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isOpen, updatePosition]);
+  }, [closeAndReturnFocus, isOpen, updatePosition]);
 
   if (!onSetSchedule) {
     if (!onRequestScheduleAccess) return null;
@@ -125,7 +145,7 @@ export default function CleanupScheduleControl({
       const succeeded = await onSetSchedule(Math.max(minInterval, minutes));
       if (succeeded) {
         setCustomMinutes("");
-        setIsOpen(false);
+        closeAndReturnFocus();
       }
     } catch {
       // The backend owner reports the error; keep the editor open for retry.
@@ -136,7 +156,7 @@ export default function CleanupScheduleControl({
     try {
       if (!onClearSchedule) return;
       const succeeded = await onClearSchedule();
-      if (succeeded) setIsOpen(false);
+      if (succeeded) closeAndReturnFocus();
     } catch {
       // The backend owner reports the error; keep the editor open for retry.
     }
@@ -172,6 +192,7 @@ export default function CleanupScheduleControl({
           id={surfaceId}
           role="dialog"
           aria-label={`${categoryLabel} auto-clean schedule`}
+          aria-busy={scheduleBusy}
           data-cleanup-schedule-surface
           data-cleanup-schedule-menu="true"
           data-state="open"
@@ -179,7 +200,9 @@ export default function CleanupScheduleControl({
           style={{
             position: "fixed",
             zIndex: "var(--z-popover)",
-            width: SURFACE_WIDTH,
+            width: position.width,
+            maxHeight: `calc(100vh - ${VIEWPORT_MARGIN * 2}px)`,
+            overflowY: "auto",
             left: position.left,
             top: position.top,
             visibility: position.visibility,
@@ -204,6 +227,7 @@ export default function CleanupScheduleControl({
                 <InputGroup
                   small
                   type="number"
+                  aria-label={`${categoryLabel} custom auto-clean interval in minutes`}
                   placeholder={`Custom (min ${minInterval})`}
                   value={customMinutes}
                   onChange={event => setCustomMinutes(event.target.value)}
@@ -218,7 +242,7 @@ export default function CleanupScheduleControl({
                   small
                   minimal
                   icon="tick"
-                  aria-label="Apply custom schedule"
+                  aria-label={`Apply custom schedule for ${categoryLabel}`}
                   disabled={scheduleBusy || !customMinutes}
                   onClick={() => {
                     const minutes = Number.parseInt(customMinutes, 10);

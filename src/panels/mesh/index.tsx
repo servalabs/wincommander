@@ -1257,7 +1257,13 @@ function PrivateMeshPanel() {
                             ]}
                         />
                     </div>
-                    <div className="mesh-file-dropzone group" onClick={handleFileSelect}>
+                    <button
+                        type="button"
+                        className="mesh-file-dropzone group"
+                        onClick={handleFileSelect}
+                        disabled={fileTransferLoading}
+                        aria-label={selectedFile ? `Choose a different file. Selected ${selectedFile.split(/[\\/]/).pop()}` : "Choose a file to send"}
+                    >
                         <Icon icon={selectedFile ? "document" : "upload"} size={32} className={selectedFile ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)]"} />
                         <div className="text-xs font-mono truncate w-full text-center mt-4">
                             {selectedFile ? (
@@ -1266,7 +1272,7 @@ function PrivateMeshPanel() {
                                 <span className="text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)] transition-colors">Click to select file</span>
                             )}
                         </div>
-                    </div>
+                    </button>
                     <div className="mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] px-4 py-3">
                         <div className="text-[10px] font-mono font-bold uppercase tracking-[0.18em] text-[var(--color-text-muted)] mb-1">
                             Delivery

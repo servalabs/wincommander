@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button, Checkbox, Dialog, DialogBody, DialogFooter, Spinner } from "@/components/ui/bp";
 import { invoke } from "@tauri-apps/api/core";
 import type { WipeDriveEntry } from "../../hooks/useBackend";
@@ -37,18 +37,29 @@ export default function DriveWipeDialog({ open, onClose }: Props) {
   const requestConfirm = useAppConfirm();
   const [drives, setDrives] = useState<WipeDriveEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [wiping, setWiping] = useState(false);
 
+  const loadDrives = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const list = await invoke<WipeDriveEntry[]>("get_wipe_drive_list");
+      setDrives(Array.isArray(list) ? list : []);
+    } catch (error) {
+      setDrives([]);
+      setLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!open) return;
-    setLoading(true);
     setSelected(new Set());
-    invoke<WipeDriveEntry[]>("get_wipe_drive_list")
-      .then(list => setDrives(Array.isArray(list) ? list : []))
-      .catch(() => setDrives([]))
-      .finally(() => setLoading(false));
-  }, [open]);
+    void loadDrives();
+  }, [loadDrives, open]);
 
   const toggleDrive = (letter: string) => {
     setSelected(prev => {
@@ -73,8 +84,12 @@ export default function DriveWipeDialog({ open, onClose }: Props) {
     for (const letter of Array.from(selected)) {
       const drive = drives.find(d => d.letter === letter);
       const mt = drive ? effectiveMediaType(drive) : "Unknown";
-      const res = await invokeUnallocatedSpaceErase(letter, mt);
-      if (!res.success) failures.push(`${letter}: ${res.error ?? "unknown error"}`);
+      try {
+        const res = await invokeUnallocatedSpaceErase(letter, mt);
+        if (!res.success) failures.push(`${letter}: ${res.error ?? "unknown error"}`);
+      } catch (error) {
+        failures.push(`${letter}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     setWiping(false);
     onClose();
@@ -98,10 +113,10 @@ export default function DriveWipeDialog({ open, onClose }: Props) {
       canEscapeKeyClose={!wiping}
       canOutsideClickClose={!wiping}
     >
-      <DialogBody>
+      <DialogBody aria-busy={loading || wiping}>
         <p className="text-[var(--text-dim)] text-sm mb-3">
           Select which drives to wipe. Unallocated blocks are overwritten so deleted
-          files cannot be recovered. The appropriate method is chosen per drive type.
+          files are substantially harder to recover. The appropriate method is chosen per drive type.
         </p>
 
         <div className="mb-4 rounded-[var(--r-lg)] border border-[var(--warn)]/30 bg-[var(--warn)]/8 px-3 py-2.5 text-xs text-[var(--text-dim)] leading-relaxed">
@@ -118,9 +133,17 @@ export default function DriveWipeDialog({ open, onClose }: Props) {
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center gap-2 py-8 text-[var(--text-mute)] text-sm">
+          <div className="flex items-center justify-center gap-2 py-8 text-[var(--text-mute)] text-sm" role="status">
             <Spinner size={16} />
             Detecting drives…
+          </div>
+        ) : loadError ? (
+          <div className="flex flex-col items-center gap-3 py-8 text-center text-sm" role="alert">
+            <span className="text-[var(--danger)]">Could not detect local drives.</span>
+            <span className="max-w-full break-words font-mono text-xs text-[var(--text-mute)]">{loadError}</span>
+            <Button small minimal icon="refresh" onClick={() => void loadDrives()}>
+              Retry drive detection
+            </Button>
           </div>
         ) : drives.length === 0 ? (
           <div className="py-8 text-center text-[var(--text-mute)] text-sm">
@@ -147,6 +170,7 @@ export default function DriveWipeDialog({ open, onClose }: Props) {
                     checked={checked}
                     onChange={() => toggleDrive(drive.letter)}
                     disabled={wiping}
+                    ariaLabel={`Select ${drive.letter}: ${drive.label || "local drive"}`}
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -172,7 +196,7 @@ export default function DriveWipeDialog({ open, onClose }: Props) {
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-3 mt-1">
+                    <div className="flex flex-wrap items-center gap-3 mt-1">
                       <span className="text-xs text-[var(--text-mute)]">
                         {drive.freeGB} GB free / {drive.totalGB} GB total
                       </span>
@@ -195,7 +219,7 @@ export default function DriveWipeDialog({ open, onClose }: Props) {
           onClick={handleWipe}
         >
           {wiping ? (
-            <span className="flex items-center gap-2">
+            <span className="flex items-center gap-2" role="status">
               <Spinner size={13} />
               Starting…
             </span>

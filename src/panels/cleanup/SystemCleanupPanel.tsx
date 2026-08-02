@@ -394,6 +394,9 @@ function CleanupTabNavigation({
         : categories.some((category) => cardDataMap[category.id]?.count !== -1)
             ? "done"
             : undefined;
+    const activeTabLabel = activeTab === "actions-monitoring"
+        ? "One-time actions and monitoring"
+        : CLEANUP_TAB_LABELS[activeTab];
 
     return (
         <div className="flex flex-wrap items-center gap-2">
@@ -409,6 +412,7 @@ function CleanupTabNavigation({
                 intent="primary"
                 icon={isScanningThisTab ? undefined : "refresh"}
                 text={isScanningThisTab ? "Scanning..." : "Scan All"}
+                aria-label={isScanningThisTab ? `Scanning ${activeTabLabel}` : `Scan all ${activeTabLabel}`}
                 loading={isScanningThisTab}
                 disabled={isScanningThisTab || categories.length === 0}
                 onClick={() => loadCategoryBatch(categories, "standard")}
@@ -425,6 +429,13 @@ function CleanupTabNavigation({
     );
 }
 
+const CLEANUP_TAB_LABELS: Record<CleanupUsabilityTier, string> = {
+    "low-impact": "Low impact",
+    "history-cache": "History and cache",
+    "rebuilds-apps-connectivity": "Rebuilds apps or connectivity",
+    "data-accounts-recovery": "Data accounts and recovery",
+};
+
 // Cross-tab summary counts (needs cleaning / clean / excluded / scanning).
 // Rendered immediately below the tab navigation so it remains visible on
 // every tab without competing with the tab-row action.
@@ -432,44 +443,45 @@ function CleanupSummaryStats({ scan }: { scan: ReturnType<typeof useCleanupScan>
     const { summaryStats, clearAllExcludes, orderedScanCategories, cardDataMap } = scan;
     const scanningCount = orderedScanCategories.filter((cat) => cardDataMap[cat.id]?.loading).length;
     return (
-        <div
+        <dl
             className="flex items-center gap-5 flex-wrap px-3 py-2.5 rounded-lg"
             style={{ background: 'var(--color-bg-tertiary)', border: '1px solid var(--color-border)' }}
             data-cleanup-summary-stats="true"
+            aria-label="Cleanup scan summary"
         >
             <div className="flex min-w-[84px] flex-col items-center gap-0.5">
-                <span className="font-mono text-[20px] font-bold leading-none" style={{ color: 'var(--color-warning)' }}>
-                    {summaryStats.needsCleaning}
-                </span>
-                <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
+                <dt className="order-2 text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
                     Needs cleaning
-                </span>
+                </dt>
+                <dd className="order-1 font-mono text-[20px] font-bold leading-none" style={{ color: 'var(--color-warning)' }}>
+                    {summaryStats.needsCleaning}
+                </dd>
             </div>
             <div className="flex min-w-[84px] flex-col items-center gap-0.5">
-                <span className="font-mono text-[20px] font-bold leading-none" style={{ color: 'var(--color-success)' }}>
-                    {summaryStats.clean}
-                </span>
-                <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
+                <dt className="order-2 text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
                     Clean
-                </span>
+                </dt>
+                <dd className="order-1 font-mono text-[20px] font-bold leading-none" style={{ color: 'var(--color-success)' }}>
+                    {summaryStats.clean}
+                </dd>
             </div>
             <div className="flex min-w-[72px] flex-col items-center gap-0.5">
-                <span className="font-mono text-[20px] font-bold leading-none text-[var(--color-text-muted)]">
-                    {clearAllExcludes.size}
-                </span>
-                <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
+                <dt className="order-2 text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
                     Excluded
-                </span>
+                </dt>
+                <dd className="order-1 font-mono text-[20px] font-bold leading-none text-[var(--color-text-muted)]">
+                    {clearAllExcludes.size}
+                </dd>
             </div>
             <div className="flex min-w-[72px] flex-col items-center gap-0.5">
-                <span className="font-mono text-[20px] font-bold leading-none text-[var(--color-text-muted)]">
-                    {scanningCount}
-                </span>
-                <span className="text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
+                <dt className="order-2 text-[9px] uppercase tracking-widest text-[var(--color-text-muted)]">
                     Scanning
-                </span>
+                </dt>
+                <dd className="order-1 font-mono text-[20px] font-bold leading-none text-[var(--color-text-muted)]">
+                    {scanningCount}
+                </dd>
             </div>
-        </div>
+        </dl>
     );
 }
 

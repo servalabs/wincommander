@@ -146,6 +146,239 @@ const AUDIT_TRACE = {
   ],
 };
 
+const AUDIT_FILE_TRACE = {
+  files: [
+    { name: "audit-cache.db", path: "C:\\Audit\\Cache\\audit-cache.db", sizeKB: 384, modified: "2026-08-01 19:48:03", source: "Local cache" },
+    { name: "audit-cache.db-wal", path: "C:\\Audit\\Cache\\audit-cache.db-wal", sizeKB: 128, modified: "2026-08-01 19:49:11", source: "SQLite WAL" },
+  ],
+  total: 2,
+  totalSizeKB: 512,
+  totalSizeMB: 0.5,
+};
+
+function cleanupAuditResponse(command: string): unknown | undefined {
+  switch (command) {
+    case "Get-DnsCacheEntries":
+      return {
+        entries: [
+          { name: "audit.internal", data: "192.0.2.44", recordType: "A", status: "Success", ttl: 245 },
+          { name: "casefiles.internal", data: "2001:db8::44", recordType: "AAAA", status: "Success", ttl: 418 },
+        ],
+        total: 2,
+      };
+    case "Get-USBDeviceHistory":
+      return {
+        devices: [
+          { deviceId: "USBSTOR\\DISK&VEN_AUDIT&PROD_EVIDENCE_SSD", friendlyName: "Audit Evidence SSD", manufacturer: "ServaLabs Audit", className: "DiskDrive" },
+          { deviceId: "USB\\VID_A11D&PID_0002", friendlyName: "Audit Security Key", manufacturer: "ServaLabs Audit", className: "HIDClass" },
+        ],
+        total: 2,
+      };
+    case "Get-ExecutionCache":
+      return {
+        entries: [
+          { path: "C:\\Audit\\Tools\\audit-tool.exe", source: "ShimCache" },
+          { path: "C:\\Audit\\Tools\\case-indexer.exe", source: "UserAssist" },
+        ],
+        total: 2,
+      };
+    case "Get-ProcessIntelligence":
+      return {
+        entries: [
+          { name: "audit-sync.exe", pid: 4242, path: "C:\\Audit\\Tools\\audit-sync.exe", signed: "Valid", signer: "ServaLabs Audit", elevated: "No" },
+          { name: "case-indexer.exe", pid: 4343, path: "C:\\Audit\\Tools\\case-indexer.exe", signed: "NotSigned", signer: null, elevated: "Yes" },
+        ],
+        total: 2,
+      };
+    case "Get-ShellBags":
+      return {
+        entries: [
+          { path: "C:\\Audit\\Cases", lastModified: "2026-08-01 21:14:52", source: "BagMRU" },
+          { path: "D:\\Evidence\\Exports", lastModified: "2026-08-01 20:02:17", source: "Bags" },
+        ],
+        total: 2,
+      };
+    case "Get-SRUMData":
+      return {
+        entries: [
+          { name: "audit-sync.exe", pid: 4242, path: "C:\\Audit\\Tools\\audit-sync.exe", owner: "AuditAnalyst", cpuTime: 183.4, memoryKB: 86400, threadCount: 12 },
+          { name: "case-indexer.exe", pid: 4343, path: "C:\\Audit\\Tools\\case-indexer.exe", owner: "AuditAnalyst", cpuTime: 92.1, memoryKB: 42112, threadCount: 7 },
+        ],
+        srumSizeMb: 12.6,
+        total: 2,
+      };
+    case "Get-EventLogSummary":
+      return {
+        logs: [
+          { name: "System", count: 1824, oldest: "2026-07-28 09:12:00", newest: "2026-08-01 22:41:08", sizeMb: 20.1 },
+          { name: "Security", count: 3641, oldest: "2026-07-25 18:05:22", newest: "2026-08-01 22:43:51", sizeMb: 64.0 },
+        ],
+        total: 5465,
+      };
+    case "Get-PSHistory":
+      return {
+        entries: [
+          { id: 1, command: "Get-FileHash C:\\Audit\\Cases\\report.docx" },
+          { id: 2, command: "Get-WinEvent -LogName System -MaxEvents 25" },
+        ],
+        historyPath: "C:\\Users\\AuditAnalyst\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt",
+        total: 2,
+        fileTotal: 1,
+      };
+    case "Get-RecentFiles":
+      return {
+        entries: [
+          { name: "report.docx", extension: ".docx", target: "C:\\Audit\\Cases\\report.docx", lastModified: "2026-08-01 21:14:52", sizeBytes: 65536 },
+          { name: "timeline.csv", extension: ".csv", target: "C:\\Audit\\Exports\\timeline.csv", lastModified: "2026-08-01 20:48:03", sizeBytes: 18432 },
+        ],
+        total: 2,
+        path: "C:\\Users\\AuditAnalyst\\AppData\\Roaming\\Microsoft\\Windows\\Recent",
+      };
+    case "Get-RDPHistory":
+      return {
+        entries: [
+          { type: "MRU", host: "audit-workstation.internal", username: "AuditAnalyst", key: "MRU0", lastModified: "2026-08-01 18:22:09" },
+          { type: "SavedCredential", host: "audit-gateway.internal", username: "AuditReviewer", key: "TERMSRV/audit-gateway.internal", lastModified: "2026-07-31 16:05:44" },
+        ],
+        total: 2,
+      };
+    case "Get-ConnectivityHistory":
+      return {
+        entries: [
+          { source: "NetworkList", type: "Profile", name: "Audit Lab", key: "{AUDIT-NETWORK-1}", description: "Private audit network", dnsSuffix: "audit.internal", category: 1 },
+          { source: "Signatures", type: "Signature", name: "Audit VPN", key: "{AUDIT-NETWORK-2}", description: "Synthetic VPN signature", dnsSuffix: "vpn.audit.internal", category: 1 },
+        ],
+        total: 2,
+      };
+    case "Get-JumpLists":
+      return {
+        entries: [
+          { name: "1b4dd67f29cb1962.automaticDestinations-ms", type: "Automatic", sizeKB: 48, lastModified: "2026-08-01 21:11:09" },
+          { name: "5f7b5f1e01b83767.customDestinations-ms", type: "Custom", sizeKB: 12, lastModified: "2026-08-01 20:37:42" },
+        ],
+        total: 2,
+      };
+    case "Get-BrowserFootprints":
+      return {
+        browsers: [
+          { browser: "Edge", profilePath: "C:\\Users\\AuditAnalyst\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default", artifacts: [{ name: "History", sizeKB: 2048 }, { name: "Cookies", sizeKB: 512 }], totalSizeKB: 2560 },
+          { browser: "Firefox", profilePath: "C:\\Users\\AuditAnalyst\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles\\audit.default", artifacts: [{ name: "places.sqlite", sizeKB: 3072 }], totalSizeKB: 3072 },
+        ],
+        totalBrowsers: 2,
+      };
+    case "Get-PrefetchFiles":
+      return {
+        entries: [
+          { name: "AUDIT-TOOL.EXE", fileName: "AUDIT-TOOL.EXE-A11D0001.pf", sizeKB: 42, lastRun: "2026-08-01 22:31:08", created: "2026-07-28 08:12:00" },
+          { name: "CASE-INDEXER.EXE", fileName: "CASE-INDEXER.EXE-A11D0002.pf", sizeKB: 36, lastRun: "2026-08-01 22:28:44", created: "2026-07-27 15:41:00" },
+        ],
+        total: 2,
+        path: "C:\\Windows\\Prefetch",
+        accessDenied: false,
+        enablePrefetcher: 3,
+      };
+    case "Get-ShadowCopies":
+      return {
+        copies: [
+          { id: "{AUDIT-SHADOW-1}", drive: "C:\\", deviceObject: "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy42", created: "2026-08-01 03:00:00", originatingMachine: "WC-AUDIT-PC", serviceMachine: "WC-AUDIT-PC", clientAccessible: true, persistent: true, stateStr: "Created" },
+        ],
+        total: 1,
+        vssRunning: true,
+      };
+    case "Get-NTFSJournals":
+      return {
+        journals: [
+          { drive: "C:", present: true, journalId: "0x01DAA11D", maxSize: "32 MB" },
+          { drive: "D:", present: true, journalId: "0x01DAA11E", maxSize: "64 MB" },
+        ],
+        total: 2,
+      };
+    case "Get-AmcacheEntries":
+      return {
+        entries: [
+          { category: "Application", count: 2, sample: [{ id: "AUDIT-APP-1", name: "audit-tool.exe", path: "C:\\Audit\\Tools\\audit-tool.exe" }, { id: "AUDIT-APP-2", name: "case-indexer.exe", path: "C:\\Audit\\Tools\\case-indexer.exe" }] },
+        ],
+        hveFileSizeMb: 8.4,
+        hveFileExists: true,
+        total: 2,
+      };
+    case "Get-NTUserTraces":
+      return {
+        sections: [
+          { name: "RunMRU", count: 2, entries: [{ key: "a", value: "audit-tool.exe" }, { key: "b", value: "case-indexer.exe" }] },
+          { name: "RecentDocs", count: 1, entries: [{ key: ".docx", value: "report.docx" }] },
+        ],
+        total: 3,
+      };
+    case "Get-CrashDumpList":
+      return {
+        dumps: [
+          { source: "LocalDumps", name: "audit-tool.4242.dmp", sizeKB: 2048, modified: "2026-08-01 17:08:22" },
+          { source: "WER", name: "case-indexer.4343.dmp", sizeKB: 1536, modified: "2026-07-31 11:42:03" },
+        ],
+        total: 2,
+        totalSizeMB: 3.5,
+      };
+    case "Get-SQLiteWALList":
+      return {
+        files: [
+          { name: "audit.db-wal", sizeKB: 128, dir: "C:\\Audit\\Cache", modified: "2026-08-01 19:49:11" },
+          { name: "timeline.db-shm", sizeKB: 32, dir: "C:\\Audit\\Timeline", modified: "2026-08-01 19:49:08" },
+        ],
+        total: 2,
+        totalSizeMB: 0.16,
+      };
+    case "Get-RecallDatabaseInfo":
+      return {
+        databases: [
+          { source: "Recall", name: "ukg.db", path: "C:\\Audit\\Recall\\ukg.db", sizeKB: 4096, modified: "2026-08-01 18:23:10" },
+          { source: "Timeline", name: "ActivitiesCache.db", path: "C:\\Audit\\Timeline\\ActivitiesCache.db", sizeKB: 1536, modified: "2026-08-01 18:19:44" },
+        ],
+        total: 2,
+        totalSizeMB: 5.5,
+      };
+    case "Get-RecycleBinInfo":
+      return {
+        items: [
+          { originalPath: "C:\\Audit\\deleted-note.txt", deletedTime: "2026-08-01 20:04:11", sizeBytes: 43008, sizeKB: 42, account: "AuditAnalyst", sid: "S-1-5-21-1000-1000-1000-1001", drive: "C:" },
+          { originalPath: "D:\\Evidence\\draft.csv", deletedTime: "2026-08-01 18:52:44", sizeBytes: 18432, sizeKB: 18, account: "AuditReviewer", sid: "S-1-5-21-1000-1000-1000-1002", drive: "D:" },
+        ],
+        total: 2,
+        totalSizeKB: 60,
+      };
+    case "Get-ClipboardHistoryStatus":
+      return {
+        clipboardHistoryDisabled: false,
+        cloudClipboardDisabled: true,
+        historyItems: [
+          { type: "text", preview: "Audit clipboard record", charCount: 22 },
+          { type: "html", preview: "Case evidence table", charCount: 148 },
+        ],
+        total: 2,
+      };
+    case "Get-WlanProfiles":
+      return { profiles: [{ name: "Audit Lab", password: "audit-fixture-only" }, { name: "Audit Guest", password: null }], total: 2 };
+    case "Get-NetworkDrives":
+      return { drives: [{ Name: "Z:", DisplayRoot: "\\\\audit-server\\cases" }, { Name: "Y:", DisplayRoot: "\\\\audit-server\\exports" }], total: 2 };
+    case "Get-BluetoothDevices":
+      return { devices: [{ id: "BTHENUM\\AUDIT-HEADSET", name: "Audit Headset", lastSeen: "2026-08-01 21:02:18" }], total: 1 };
+    case "Get-AutoEraseSchedules":
+      return { schedules: [], total: 0 };
+    case "Get-AutoEraseSupportedCategories":
+      return { categories: [], total: 0 };
+    case "Get-PrivacyProtectionStatus":
+      return { enabled: false, pagefile: false, prefetch: true, recentFiles: true, jumpLists: true, thumbnailCache: true };
+    default:
+      break;
+  }
+
+  if (/^Get-(?:NotepadStateFiles|PCAInfo|SearchIndexInfo|PrintSpoolerInfo|WebCacheInfo|ThumbnailCacheInfo|NotificationDatabaseInfo|BranchCacheInfo|EventTranscriptInfo|ActivitiesTimelineInfo|RdpBitmapCacheInfo|ServicingLogsInfo|DeviceInstallLogsInfo|UsageTraceLogsInfo|DefenderHistoryInfo|WSLDataInfo|DockerDesktopDataInfo|VirtualMachineArtifactsInfo|DeveloperCachesInfo|CredentialManagerInfo|NetworkWizardHistoryInfo|WERHistoryInfo|InactiveUserProtectionMetadataInfo|StickyNotesInfo|OneDriveMetadataInfo|SpotlightCacheInfo|FontCacheInfo|LegacyIconCacheInfo|GameCapturesInfo|PhotosCacheInfo|XboxCacheInfo|CommunicationCachesInfo|EditorHistoryInfo|GitActivityInfo|SSHStateInfo|RemoteAccessLogsInfo|PasswordManagerCachesInfo|GameLauncherLogsInfo|AdobeRecentInfo|OfficeTempFilesInfo|FirewallLogInfo|NeighborCacheInfo|NetBIOSCacheInfo|GeolocationCacheInfo|VPNPhonebooksInfo|ProxyCacheInfo|CloudPlaceholdersInfo|BITSQueueInfo|CellularHistoryInfo|AppLaunchHistoryInfo|OfficeMruInfo|EmbeddedWebCacheInfo|P2PUpdateCacheInfo|ReliabilityHistoryInfo|ExplorerSearchHistoryInfo|SearchPersonalizationInfo)$/.test(command)) {
+    return structuredClone(AUDIT_FILE_TRACE);
+  }
+
+  return undefined;
+}
+
 const AUDIT_FLOW_RULES = [
   {
     id: "audit-usb-flow",
@@ -469,8 +702,11 @@ export function uiAuditBackendResponse(command: string): unknown {
     case "Get-WCSystemProbe":
     case "Get-WCMigrationData":
       return {};
-    default:
+    default: {
+      const cleanupResponse = cleanupAuditResponse(command);
+      if (cleanupResponse !== undefined) return cleanupResponse;
       return command.startsWith("Get-") ? structuredClone(AUDIT_TRACE) : { ok: true };
+    }
   }
 }
 

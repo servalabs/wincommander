@@ -1514,6 +1514,7 @@ function ManagedPortRow({
             >
               <Switch
                 checked={row.honeypotEnabled}
+                aria-label={`${row.honeypotEnabled ? 'Disable' : 'Enable'} Port Watch for ${row.label} on ${row.portDisplay}`}
                 onChange={(e) =>
                   onHoneypotEnable(row.numericPort!, (e.target as HTMLInputElement).checked)
                 }
@@ -1596,6 +1597,7 @@ function ManagedPortRow({
             intent="danger"
             small
             onClick={() => onRemove(row)}
+            aria-label={`Remove ${row.label} on ${row.portDisplay}`}
             style={{ minHeight: 22, minWidth: 22, padding: 0 }}
           />
         </Tooltip>

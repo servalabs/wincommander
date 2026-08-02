@@ -137,7 +137,7 @@ export default function AuthAnomalySection() {
           {busy && <Spinner size={14} />}
         </div>
 
-        {error && <div className="font-mono text-sm text-[var(--color-danger)]">{error}</div>}
+        {error && <div role="alert" className="font-mono text-sm text-[var(--color-danger)]">{error}</div>}
         {hits.length === 0 && <div className="text-sm opacity-70">No anomalies recorded.</div>}
 
         {hits.length > 0 && (

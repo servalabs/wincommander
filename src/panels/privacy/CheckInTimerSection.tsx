@@ -162,7 +162,7 @@ export default function CheckInTimerSection({ bare = false }: { bare?: boolean }
       </div>
 
       {error && (
-        <div style={{ padding: 8, background: 'var(--color-danger-dim)', border: '1px solid color-mix(in srgb, var(--color-danger) 50%, transparent)', borderRadius: 4, fontSize: 11, color: 'var(--color-danger)' }}>
+        <div role="alert" style={{ padding: 8, background: 'var(--color-danger-dim)', border: '1px solid color-mix(in srgb, var(--color-danger) 50%, transparent)', borderRadius: 4, fontSize: 11, color: 'var(--color-danger)' }}>
           {error}
         </div>
       )}

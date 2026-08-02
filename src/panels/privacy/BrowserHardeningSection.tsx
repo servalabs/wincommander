@@ -232,7 +232,7 @@ export default function BrowserHardeningSection({ isAdvanced, searchQuery }: Bro
           </div>
         )}
         {!browsersLoading && browserDetectError && (
-          <div className="flex items-center justify-between gap-3 rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2">
+          <div role="alert" className="flex items-center justify-between gap-3 rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2">
             <span className="text-xs text-[var(--color-warning)]">{browserDetectError}</span>
             <Button small minimal icon="refresh" onClick={() => void loadBrowsers({ showLoading: true })}>Retry</Button>
           </div>

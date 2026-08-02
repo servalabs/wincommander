@@ -323,7 +323,9 @@ describe("redesign surface copy guardrails", () => {
 
     expect(scheduler).toContain("const succeeded = await onSetSchedule(");
     expect(scheduler).toContain("const succeeded = await onClearSchedule()");
-    expect(scheduler).toContain("if (succeeded) setIsOpen(false);");
+    expect(scheduler).toContain("if (succeeded) {");
+    expect(scheduler).toContain("if (succeeded) closeAndReturnFocus();");
+    expect(scheduler).toContain("const closeAndReturnFocus = useCallback");
     expect(cleanupScan).toContain("return true;");
     expect(cleanupScan).toContain("return false;");
   });
