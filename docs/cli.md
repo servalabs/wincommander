@@ -2,7 +2,7 @@
 
 WinCommander Free uses one executable for both the desktop app and headless automation. Launching `wincommander-free.exe` normally opens the GUI. The explicit verbs `commands`, `audit`, `run`, and `help` switch the same executable into CLI mode.
 
-Run it from an elevated terminal because the shipped executable retains WinCommander's administrator manifest. Output is one JSON document on stdout and failures use a nonzero process exit code.
+Run it from an elevated terminal because the shipped executable retains WinCommander's administrator manifest. Every CLI request writes one structured JSON document to stdout; the process exit code carries the outcome.
 
 ```powershell
 wincommander-free.exe commands list
@@ -24,6 +24,14 @@ $process = Start-Process .\wincommander-free.exe `
 exit $process.ExitCode
 ```
 
+## Catalog and runtime
+
+The generated catalog contains 1,183 entries: 763 backend-script commands and 420 Tauri handlers. Four Tauri handlers are debug-only, so the shipped release binary executes 1,179 commands; it retains the four debug-only entries for catalog-drift auditing and refuses them at runtime.
+
+Backend commands run in a windowless Tauri context. Native commands run through a real, invisible `cli-runtime.html` Tauri WebView that invokes the same production handler as the GUI. CLI mode never mounts the React dashboard or creates a tray icon, taskbar window, hotkeys, ambient monitors, autostart state, or updater polling.
+
+Native Tauri commands require Microsoft Edge WebView2. If it is unavailable, CLI mode returns one JSON error with `error: "runtime_prerequisite"` and exit code `9`; it does not display the GUI prerequisite dialog.
+
 ## Safety model
 
 `commands describe` reports the command transport, tier, risk, frontend references, headless support, and exact confirmation token.
@@ -31,10 +39,11 @@ exit $process.ExitCode
 - Read-only commands run without a confirmation token.
 - Mutating commands require `--confirm RUN:<command-id>`.
 - Destructive commands require `--confirm DESTROY:<command-id>`.
-- `--dry-run` never invokes the backend and reports what would execute.
-- `--timeout-ms` is available only for read-only native Tauri commands and sets a wait deadline from 100 ms to 60 minutes. It is not transactional cancellation.
-- Mutating and destructive CLI commands run to completion and are serialized across CLI processes in the current Windows session.
-- Parameters must be a JSON object supplied inline, as `@path`, or as `-` for stdin. They are parsed as data and are never evaluated as shell text.
+- `--dry-run` never invokes a dispatcher and reports what would execute.
+- `--timeout-ms` is enforced only for read-only native Tauri commands and sets a wait deadline from 100 ms to 60 minutes; the default native deadline is 300,000 ms (5 minutes). It is a wait limit, not transactional cancellation.
+- The parser accepts `--timeout-ms` on a read-only backend-script command, but that existing backend dispatcher has no deadline and ignores it. Automation must not rely on a backend-script timeout.
+- Mutating and destructive CLI commands do not accept `--timeout-ms`; they run to completion and are serialized across CLI processes in the current Windows session.
+- Parameters must be a JSON object supplied inline, as `@path`, or as `-` for stdin. Native Tauri dispatch preserves JSON values; backend-script dispatch serializes object values to their string/JSON representations for its existing dispatcher. Neither path evaluates parameter text as shell code.
 - Existing licence, module, administrator, investigator-mode, and Pro-sidecar checks are preserved because CLI commands use the same backend and Tauri dispatchers as the GUI.
 
 Examples:
@@ -48,9 +57,23 @@ wincommander-free.exe run backend:Clear-DnsCache `
   --confirm DESTROY:backend:Clear-DnsCache
 ```
 
-All 763 backend-script commands and all 416 release Tauri handlers are executable from the shipped Free binary. Debug builds additionally expose the four debug-only handlers, for 1,183 executable commands in total. Release builds keep those four entries cataloged for drift auditing but refuse to execute them.
+The process exits after one response. A read-only native wait timeout returns exit code `10`; it cannot cancel already-started external work. Terminal `tauri:lockdown` and `tauri:full_lockdown` may instead return `{ "detached": true, "processExitRequested": true }` with exit code `0`, because the production handler requests application exit after it launches its cleanup worker. That payload acknowledges only that the worker was started and process exit was requested; it is not a wipe-completion result.
 
-Native commands run through a minimal hidden Tauri runtime. CLI mode does not mount the React dashboard, create a tray icon, show a taskbar window, register hotkeys, start ambient monitors, write autostart state, or begin updater polling. The process exits after one response. A read-only wait timeout returns exit code 10; mutating commands cannot be cut off with this option while external work may still be running. Terminal Lockdown commands may return a detached acknowledgement because the production handler requests application exit after launching its cleanup worker.
+## Exit codes
+
+| Code | Meaning |
+| :-- | :-- |
+| `0` | Success, dry-run, or a detached terminal-lockdown acknowledgement |
+| `2` | Invalid CLI arguments, including a timeout on a mutating or destructive command |
+| `3` | Required exact confirmation token missing or incorrect |
+| `4` | Unknown catalog command |
+| `5` | Embedded catalog error |
+| `6` | Catalog audit found a missing dispatcher or adapter |
+| `7` | Command is cataloged but unavailable for this build/runtime |
+| `8` | Dispatcher/handler execution failed |
+| `9` | Native runtime, WebView2 prerequisite, or invoke-bridge failure |
+| `10` | Read-only native command exceeded its requested/default wait deadline |
+| `11` | Another mutating or destructive CLI command holds the cross-process execution lock |
 
 ## Developer checks
 
