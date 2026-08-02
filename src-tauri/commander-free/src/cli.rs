@@ -109,6 +109,9 @@ static TAURI_RUN_EXIT_CODE: AtomicI32 = AtomicI32::new(9);
 /// Claimed by whichever of the backend dispatcher and its wait deadline
 /// finishes first, so exactly one JSON document reaches stdout.
 static BACKEND_RUN_SETTLED: AtomicBool = AtomicBool::new(false);
+/// The same guarantee for the native path, where a terminal command's
+/// acknowledgement is emitted up front and both watchdogs can still fire.
+static TAURI_RESULT_EMITTED: AtomicBool = AtomicBool::new(false);
 
 struct CliExecutionLock {
     #[cfg(windows)]
@@ -245,7 +248,7 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
             while index < rest.len() {
                 match rest[index] {
                     "--params" => {
-                        let value = rest.get(index + 1).ok_or("--params requires a value")?;
+                        let value = option_value(rest, index, "--params")?;
                         params = parse_params(value)?;
                         index += 2;
                     }
@@ -254,12 +257,12 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
                         index += 1;
                     }
                     "--confirm" => {
-                        let value = rest.get(index + 1).ok_or("--confirm requires a value")?;
+                        let value = option_value(rest, index, "--confirm")?;
                         confirmation = Some((*value).to_string());
                         index += 2;
                     }
                     "--timeout-ms" => {
-                        let value = rest.get(index + 1).ok_or("--timeout-ms requires a value")?;
+                        let value = option_value(rest, index, "--timeout-ms")?;
                         timeout_ms = value
                             .parse::<u64>()
                             .map_err(|_| "--timeout-ms must be an integer")?;
@@ -282,6 +285,24 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
             }))
         }
         _ => Err("unknown command; run `wincommander-cli help`".to_string()),
+    }
+}
+
+/// Reads the value that follows an option, refusing anything flag-shaped.
+///
+/// Silently swallowing the next token is not a cosmetic parser flaw here:
+/// `run <read-only-id> --confirm --dry-run` used to absorb `--dry-run` as the
+/// confirmation string, leaving `dry_run` false. A read-only command needs no
+/// confirmation, so the bogus value was never checked either — the operator
+/// asked for a preview and got a live execution. The same swallow could smuggle
+/// `--safe-copy` past this parser and into the argv scan in `lib.rs::run`.
+fn option_value<'a>(rest: &'a [&'a str], index: usize, flag: &str) -> Result<&'a str, String> {
+    match rest.get(index + 1) {
+        None => Err(format!("{flag} requires a value")),
+        Some(value) if value.starts_with("--") => Err(format!(
+            "{flag} requires a value, but found the flag {value}"
+        )),
+        Some(value) => Ok(*value),
     }
 }
 
@@ -648,6 +669,23 @@ fn run_command(request: RunRequest) -> i32 {
         }));
         return 0;
     }
+    // `lockdown` and `full_lockdown` launch their cleanup worker and then tear
+    // the process down, so no IPC completion ever arrives — and Tauri's
+    // `App::run` exits the process directly rather than returning, so nothing
+    // after `crate::run()` executes either. Emit the acknowledgement here,
+    // while stdout is still certainly ours, or automation gets no JSON at all.
+    // It acknowledges the dispatch, never the outcome: verify the wipe
+    // independently.
+    if entry.transport == Transport::Tauri && is_terminal_tauri_command(&entry.name) {
+        TAURI_RESULT_EMITTED.store(true, Ordering::SeqCst);
+        print_json(&json!({
+            "ok": true,
+            "command": description.id,
+            "result": { "detached": true, "processExitRequested": true }
+        }));
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+    }
     let wait_deadline = (description.risk == Risk::ReadOnly).then_some(request.timeout_ms);
     match entry.transport {
         Transport::BackendScript => match backend_params(&request.params) {
@@ -756,25 +794,19 @@ fn run_tauri(id: String, command: String, params: Value, timeout_ms: Option<u64>
     TAURI_RUN_BRIDGE_READY.store(false, Ordering::SeqCst);
     TAURI_RUN_ACTIVE.store(true, Ordering::SeqCst);
     crate::run();
-    if TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst) {
-        let spec = TAURI_RUN.lock().ok().and_then(|mut slot| slot.take());
-        if let Some(spec) = spec.filter(|spec| is_terminal_tauri_command(&spec.command)) {
-            print_json(&json!({
-                "ok": true,
-                "command": spec.id,
-                "result": { "detached": true, "processExitRequested": true }
-            }));
-            0
-        } else {
-            fail(
-                9,
-                "runtime_exited",
-                "the Tauri runtime exited before the command returned".into(),
-            )
-        }
-    } else {
-        TAURI_RUN_EXIT_CODE.load(Ordering::SeqCst)
+    // Tauri's `App::run` exits the process directly and never returns, so this
+    // is reached only if that contract changes. A terminal command has already
+    // printed its acknowledgement before dispatch, hence the emitted-guard.
+    if TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst)
+        && !TAURI_RESULT_EMITTED.swap(true, Ordering::SeqCst)
+    {
+        return fail(
+            9,
+            "runtime_exited",
+            "the Tauri runtime exited before the command returned".into(),
+        );
     }
+    TAURI_RUN_EXIT_CODE.load(Ordering::SeqCst)
 }
 
 fn is_terminal_tauri_command(command: &str) -> bool {
@@ -795,13 +827,20 @@ pub(crate) fn tauri_initialization_script() -> Result<String, String> {
         .map_err(|error| format!("failed to encode command: {error}"))?;
     let params = serde_json::to_string(&spec.params)
         .map_err(|error| format!("failed to encode params: {error}"))?;
+    // Encoded a second time so the JSON document arrives as a JS *string*
+    // literal for JSON.parse, rather than as inline object syntax.
+    let params_json = serde_json::to_string(&params)
+        .map_err(|error| format!("failed to encode params: {error}"))?;
     Ok(format!(
         r#"
 (() => {{
   if (window.__WINCOMMANDER_CLI_STARTED__) return;
   window.__WINCOMMANDER_CLI_STARTED__ = true;
   const command = {command};
-  const params = {params};
+  // Parsed, not spliced as an object literal: a literal would let a key named
+  // __proto__ set the prototype instead of becoming an ordinary parameter, so
+  // the handler would silently receive different params than were requested.
+  const params = JSON.parse({params_json});
   const normalize = (value) => {{
     if (value == null) return null;
     if (value instanceof Error) return {{ name: value.name, message: value.message, stack: value.stack }};
@@ -846,6 +885,7 @@ pub(crate) fn start_tauri_watchdog(app: tauri::AppHandle) -> Result<(), String> 
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         if !TAURI_RUN_BRIDGE_READY.load(Ordering::SeqCst)
             && TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst)
+            && !TAURI_RESULT_EMITTED.swap(true, Ordering::SeqCst)
         {
             print_json(&json!({
                 "ok": false,
@@ -860,7 +900,9 @@ pub(crate) fn start_tauri_watchdog(app: tauri::AppHandle) -> Result<(), String> 
     if let Some(timeout_ms) = spec.timeout_ms {
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
-            if TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst) {
+            if TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst)
+                && !TAURI_RESULT_EMITTED.swap(true, Ordering::SeqCst)
+            {
                 print_json(&json!({
                     "ok": false,
                     "command": spec.id,
@@ -899,15 +941,20 @@ pub(crate) fn complete_tauri_cli(
         .take()
         .ok_or_else(|| "Tauri CLI request is unavailable".to_string())?;
     let code = if ok { 0 } else { 8 };
-    if ok {
-        print_json(&json!({ "ok": true, "command": spec.id, "result": payload }));
-    } else {
-        print_json(&json!({
-            "ok": false,
-            "command": spec.id,
-            "error": "execution_failed",
-            "message": payload
-        }));
+    // A terminal command acknowledged its dispatch before the runtime started;
+    // if its handler does reply, exit with the real code but stay silent so the
+    // one-document-per-invocation contract holds.
+    if !TAURI_RESULT_EMITTED.swap(true, Ordering::SeqCst) {
+        if ok {
+            print_json(&json!({ "ok": true, "command": spec.id, "result": payload }));
+        } else {
+            print_json(&json!({
+                "ok": false,
+                "command": spec.id,
+                "error": "execution_failed",
+                "message": payload
+            }));
+        }
     }
     TAURI_RUN_EXIT_CODE.store(code, Ordering::SeqCst);
     terminate_tauri_cli(&app, code)
@@ -1179,6 +1226,64 @@ mod tests {
                 .count(),
             if cfg!(debug_assertions) { 420 } else { 416 }
         );
+    }
+
+    /// `--confirm --dry-run` used to absorb `--dry-run` as the confirmation
+    /// value. On a read-only command no confirmation is checked, so the operator
+    /// asked for a preview and got a live execution. The same swallow could
+    /// smuggle `--safe-copy` through to the argv scan in `lib.rs::run`.
+    #[test]
+    fn a_flag_is_never_accepted_as_an_option_value() {
+        let argv: Vec<String> = ["run", "tauri:get_settings", "--confirm", "--dry-run"]
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        let error = match parse_action(&argv) {
+            Err(error) => error,
+            Ok(_) => panic!("`--confirm --dry-run` must not parse"),
+        };
+        assert!(error.contains("--confirm"), "{error}");
+        assert!(error.contains("--dry-run"), "{error}");
+
+        for flag in ["--params", "--timeout-ms", "--confirm"] {
+            let argv: Vec<String> = ["run", "tauri:get_settings", flag, "--safe-copy"]
+                .iter()
+                .map(|arg| (*arg).to_string())
+                .collect();
+            assert!(parse_action(&argv).is_err(), "{flag} accepted a flag value");
+        }
+
+        let argv: Vec<String> = ["run", "tauri:get_settings", "--dry-run"]
+            .iter()
+            .map(|arg| (*arg).to_string())
+            .collect();
+        assert!(matches!(
+            parse_action(&argv),
+            Ok(Action::Run(RunRequest { dry_run: true, .. }))
+        ));
+    }
+
+    /// Params reach the hidden webview as a parsed JSON document, so a key named
+    /// `__proto__` stays an ordinary parameter instead of setting the prototype.
+    #[test]
+    fn params_reach_the_webview_as_parsed_json_not_object_syntax() {
+        *TAURI_RUN.lock().unwrap() = Some(TauriRunSpec {
+            id: "tauri:get_settings".to_string(),
+            command: "get_settings".to_string(),
+            params: json!({ "__proto__": { "polluted": true }, "quote": "a\"b" }),
+            timeout_ms: None,
+        });
+        let script = tauri_initialization_script().expect("script builds");
+        *TAURI_RUN.lock().unwrap() = None;
+        assert!(script.contains("JSON.parse("), "{script}");
+        assert!(
+            !script.contains("const params = {\""),
+            "params must not be spliced as object syntax"
+        );
+        // The JSON document is embedded as a JS string literal, so its own
+        // quotes arrive escaped rather than terminating the literal early.
+        assert!(script.contains("__proto__"));
+        assert!(script.contains("\\\"polluted\\\""), "{script}");
     }
 
     #[test]

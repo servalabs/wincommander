@@ -21,6 +21,21 @@ describe("generated WinCommander CLI catalog", () => {
     expect(byId.has("backend:lockdown-step")).toBe(false);
   });
 
+  // docs/cli.md, FEATURES.md and ARCHITECTURE.md all quote these totals. Pin
+  // them here so a catalog change fails loudly instead of quietly making three
+  // documents wrong.
+  test("matches the command totals quoted in the docs", () => {
+    const tauri = (catalog.commands as Entry[]).filter((entry) => entry.transport === "tauri");
+    const backend = (catalog.commands as Entry[]).filter((entry) => entry.transport === "backend-script");
+    expect(catalog.commands.length).toBe(1183);
+    expect(tauri.length).toBe(420);
+    expect(backend.length).toBe(763);
+    const releaseExecutable = (catalog.commands as Entry[]).filter(
+      (entry) => entry.registered && !entry.debugOnly,
+    );
+    expect(releaseExecutable.length).toBe(1179);
+  });
+
   test("has stable unique identifiers and valid references", () => {
     expect(byId.size).toBe(catalog.commands.length);
     for (const entry of catalog.commands as Entry[]) {

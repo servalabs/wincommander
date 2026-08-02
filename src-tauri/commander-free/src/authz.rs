@@ -167,6 +167,21 @@ pub async fn native_confirm_action(app: &tauri::AppHandle, action: DestructiveAc
 
 async fn native_confirm(app: &tauri::AppHandle, action: DestructiveAction) -> bool {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+    // The dialog is a control only because a human answers it. The CLI runtime's
+    // one window is built invisible and unfocused, and an unattended run has
+    // nobody at the keyboard at all, so this await would never complete — the
+    // process would hang forever still holding the CLI execution mutex, which
+    // then fails every other mutating CLI run with `cli_busy`. Fail closed: an
+    // unanswerable confirmation is a denied confirmation.
+    if crate::cli::tauri_runtime_active() {
+        crate::log_message(
+            "warn",
+            &format!(
+                "[Authz] refused {action:?}: interactive confirmation is unavailable in CLI mode"
+            ),
+        );
+        return false;
+    }
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .message(format!(

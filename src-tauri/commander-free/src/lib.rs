@@ -1441,8 +1441,12 @@ pub fn run() {
     // it BEFORE the single-instance guard so it always acts locally instead of
     // being forwarded to (and ignored by) a running instance. Multi-select
     // launches this once per item; safe_clip coalesces them under a mutex.
+    // Skipped in CLI mode: `run` has already committed to one specific command,
+    // and this scan looks at the whole argv. A `--safe-copy` token that reached
+    // argv as some option's value would otherwise hijack the requested command
+    // and exit 0 without ever running it.
     #[cfg(windows)]
-    {
+    if !cli_mode {
         let cli_args: Vec<String> = std::env::args().collect();
         if cli_args.iter().any(|a| a == "--safe-copy") {
             safe_clip::handle_safe_copy_cli(&cli_args);
@@ -1547,7 +1551,17 @@ pub fn run() {
         // own independent instance, so multiple RDP users can run simultaneously.
         .setup(move |app| {
             if cli_mode {
-                return setup_tauri_cli_runtime(app);
+                // Tauri turns a setup Err into `panic!("Failed to setup app")`,
+                // which exits 101 with nothing on stdout — the one thing the CLI
+                // contract promises never happens. Report it as JSON ourselves.
+                return match setup_tauri_cli_runtime(app) {
+                    Ok(()) => Ok(()),
+                    Err(error) => cli::abort_tauri_cli(
+                        9,
+                        "runtime_error",
+                        &format!("the CLI runtime failed to start: {error}"),
+                    ),
+                };
             }
             dev_startup_trace("setup entered");
             log_message(
