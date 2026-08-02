@@ -536,6 +536,7 @@ export function Checkbox({
   className,
   style,
   children,
+  ariaLabel,
 }: {
   checked?: boolean;
   defaultChecked?: boolean;
@@ -548,6 +549,7 @@ export function Checkbox({
   large?: boolean;
   style?: React.CSSProperties;
   children?: React.ReactNode;
+  ariaLabel?: string;
 }) {
   return (
     <label
@@ -564,6 +566,7 @@ export function Checkbox({
         disabled={disabled}
         indeterminate={indeterminate}
         onChange={onChange}
+        ariaLabel={ariaLabel}
       />
       {(label ?? children) != null && <span>{label ?? children}</span>}
     </label>

@@ -134,6 +134,7 @@ export default function CleanupTraceCard({
           className="grid place-items-center flex-shrink-0 rounded transition-colors"
           style={{ width: 22, height: 22, border: "none", cursor: "help" }}
           data-trace-card-action="info"
+          aria-label={`About ${category.label}`}
           title={`About ${category.label}`}
           onClick={(e) => {
             e.preventDefault();
@@ -158,6 +159,7 @@ export default function CleanupTraceCard({
   const scheduleControl =
     showScheduler && !isActionOnly ? (
       <CleanupScheduleControl
+        categoryLabel={category.label}
         minInterval={minInterval}
         scheduleMinutes={scheduleMinutes}
         scheduleBusy={scheduleBusy}
@@ -183,7 +185,8 @@ export default function CleanupTraceCard({
           border: "none",
           cursor: loading ? "not-allowed" : "pointer",
         }}
-        title="Rescan"
+        aria-label={`Rescan ${category.label}`}
+        title={`Rescan ${category.label}`}
       >
         <Icon icon="refresh" size={14} color="currentColor" />
       </button>
@@ -204,6 +207,9 @@ export default function CleanupTraceCard({
         transition={{ duration: 0.2 }}
         className={`relative overflow-hidden flex flex-col text-center${compact ? " cleanup-trace-card--compact" : ""}`}
         data-cleanup-trace-card
+        data-cleanup-category={category.id}
+        role="group"
+        aria-label={`${category.label} cleanup status`}
         style={{
           height: compact ? "100%" : TRACE_CARD_HEIGHT,
           padding: 0,
@@ -318,6 +324,9 @@ export default function CleanupTraceCard({
       transition={{ duration: 0.2 }}
       className="relative overflow-hidden flex flex-col"
       data-cleanup-trace-card
+      data-cleanup-category={category.id}
+      role="group"
+      aria-label={`${category.label} cleanup status`}
       style={{
         height: TRACE_CARD_HEIGHT,
         background: "var(--color-bg-secondary)",
@@ -493,6 +502,7 @@ export default function CleanupTraceCard({
                   e.stopPropagation();
                   onLoad();
                 }}
+                aria-label={`Scan ${category.label}`}
                 className="flex items-center gap-1.5 rounded transition-colors duration-150"
                 style={{
                   height: 26,
@@ -560,6 +570,7 @@ export default function CleanupTraceCard({
                 e.stopPropagation();
                 onViewDetails();
               }}
+              aria-label={`View details for ${category.label}`}
               className="flex items-center gap-1 rounded flex-1 justify-center transition-colors duration-150"
               style={{
                 height: 24,
@@ -620,6 +631,7 @@ export default function CleanupTraceCard({
                   clearing={clearing}
                   disabled={!!clearDisabled}
                   isMenu
+                  actionLabel={category.label}
                   onClear={onClear}
                 />
               </Popover>
@@ -627,6 +639,7 @@ export default function CleanupTraceCard({
               <ClearButton
                 clearing={clearing}
                 disabled={!!clearDisabled}
+                actionLabel={category.label}
                 onClear={(e) => {
                   e.stopPropagation();
                   onClear();
@@ -695,17 +708,20 @@ function ClearButton({
   disabled,
   onClear,
   isMenu,
+  actionLabel,
 }: {
   clearing: boolean;
   disabled: boolean;
   onClear?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   isMenu?: boolean;
+  actionLabel: string;
 }) {
   return (
     <button
       type="button"
       disabled={clearing || disabled}
       onClick={onClear}
+      aria-label={isMenu ? `Choose clear scope for ${actionLabel}` : `Clear ${actionLabel}`}
       className="flex items-center justify-center gap-1 flex-1 rounded transition-colors duration-150
         disabled:opacity-40 disabled:cursor-not-allowed"
       style={{

@@ -35,15 +35,21 @@ export default function FileStatsPanel() {
     const { getStorageStats } = useBackend();
     const [fileStats, setFileStats] = useState<StorageStats | null>(() => fileStatsSession);
     const [statsScanning, setStatsScanning] = useState(false);
+    const [scanError, setScanError] = useState<string | null>(null);
 
     const runScan = useCallback(async () => {
         setStatsScanning(true);
+        setScanError(null);
         try {
             const res = await getStorageStats();
             if (res.success && res.data) {
                 fileStatsSession = res.data;
                 setFileStats(res.data);
+            } else {
+                setScanError(res.error || "File statistics could not be collected.");
             }
+        } catch (cause) {
+            setScanError(String(cause));
         } finally {
             setStatsScanning(false);
         }
@@ -75,7 +81,7 @@ export default function FileStatsPanel() {
                     </button>
                 </div>
 
-                {!fileStats && !statsScanning && (
+                {!fileStats && !statsScanning && !scanError && (
                     <div className="da-stats-empty">
                         <div className="da-empty-icon-wrap">
                             <FileScan size={32} strokeWidth={1.5} />
@@ -87,9 +93,9 @@ export default function FileStatsPanel() {
                 )}
 
                 {statsScanning && (
-                    <div className="da-stats-empty scanning">
+                    <div className="da-stats-empty scanning" role="status" aria-live="polite">
                         <div className="da-empty-icon-wrap">
-                            <img src={ui["searching.gif"]} alt="Searching..." className="da-searching-gif" style={{ width: 80, height: 80 }} />
+                            <img src={ui["searching.gif"]} alt="" className="da-searching-gif" style={{ width: 80, height: 80 }} />
                         </div>
                         <span className="da-empty-text">
                             Analysing files & folders<span className="wc-loading-dots">...</span>
@@ -97,19 +103,29 @@ export default function FileStatsPanel() {
                     </div>
                 )}
 
+                {scanError && !statsScanning && (
+                    <div className="da-stats-empty" role="alert">
+                        <div className="da-empty-icon-wrap"><FileScan size={32} strokeWidth={1.5} /></div>
+                        <span className="da-empty-text">File statistics could not be collected.<br />{scanError}</span>
+                    </div>
+                )}
+
                 {fileStats && !statsScanning && (
-                    <div className="da-stats-rows">
+                    <div className="da-stats-rows" role="table" aria-label="File type statistics">
+                        <div className="sr-only" role="row">
+                            <span role="columnheader">File type</span><span role="columnheader">File count</span><span role="columnheader">Storage used</span>
+                        </div>
                         {FILE_ROWS.map(({ key, label, icon }) => {
                             const entry = fileStats[key];
                             if (!entry) return null;
                             const barPct = Math.round(((entry.sizeGb ?? 0) / maxFileSizeGb) * 100);
                             return (
-                                <div key={key} className="da-stat-row">
+                                <div key={key} className="da-stat-row" role="row">
                                     <div className="da-stat-top">
-                                        <div className="da-sr-icon">{icon}</div>
-                                        <div className="da-sr-label">{label}</div>
-                                        <div className="da-sr-count">{fmt(entry.count)}</div>
-                                        <div className="da-sr-size">{fmtGb(entry.sizeGb)}</div>
+                                        <div className="da-sr-icon" aria-hidden="true">{icon}</div>
+                                        <div className="da-sr-label" role="cell">{label}</div>
+                                        <div className="da-sr-count" role="cell" aria-label={`${fmt(entry.count)} files`}>{fmt(entry.count)}</div>
+                                        <div className="da-sr-size" role="cell">{fmtGb(entry.sizeGb)}</div>
                                     </div>
                                     <div className="da-stat-bottom">
                                         <div className="da-sr-bar-wrap">

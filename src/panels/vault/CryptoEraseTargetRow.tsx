@@ -74,6 +74,7 @@ export default function CryptoEraseTargetRow({
           intent="danger"
           icon="trash"
           text="Crypto-Erase"
+          aria-label={`Crypto-erase ${targetSubject(target)}`}
           disabled={!target.eligible || busy}
           onClick={() => onErase(target)}
         />

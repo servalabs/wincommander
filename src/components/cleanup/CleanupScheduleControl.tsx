@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Button, Icon, InputGroup, Menu, MenuDivider, MenuItem } from "@/components/ui/bp";
 
 interface CleanupScheduleControlProps {
+  categoryLabel: string;
   minInterval: number;
   scheduleMinutes?: number | null;
   scheduleBusy?: boolean;
@@ -29,6 +30,7 @@ function formatInterval(minutes: number): string {
 }
 
 export default function CleanupScheduleControl({
+  categoryLabel,
   minInterval,
   scheduleMinutes,
   scheduleBusy = false,
@@ -103,6 +105,7 @@ export default function CleanupScheduleControl({
         data-trace-card-action="schedule"
         data-cleanup-schedule-control="true"
         data-active={isScheduled ? "true" : "false"}
+        aria-label={isScheduled ? `Change ${categoryLabel} auto-clean schedule` : `Unlock ${categoryLabel} auto-clean scheduling`}
         title={isScheduled ? `Auto-clean every ${formatInterval(scheduleMinutes!)} · Pro required to change` : "Unlock scheduled auto-clean"}
         onClick={event => {
           event.preventDefault();
@@ -148,6 +151,7 @@ export default function CleanupScheduleControl({
         data-trace-card-action="schedule"
         data-cleanup-schedule-control="true"
         data-active={isScheduled ? "true" : "false"}
+        aria-label={isScheduled ? `Change ${categoryLabel} auto-clean schedule` : `Schedule auto-clean for ${categoryLabel}`}
         title={isScheduled ? `Auto-clean every ${formatInterval(scheduleMinutes!)}` : "Schedule auto-clean"}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
@@ -167,7 +171,7 @@ export default function CleanupScheduleControl({
           ref={surfaceRef}
           id={surfaceId}
           role="dialog"
-          aria-label="Auto-clean schedule"
+          aria-label={`${categoryLabel} auto-clean schedule`}
           data-cleanup-schedule-surface
           data-cleanup-schedule-menu="true"
           data-state="open"

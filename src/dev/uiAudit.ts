@@ -275,6 +275,29 @@ export function uiAuditBackendResponse(command: string): unknown {
       return { systemInfo: AUDIT_SYSTEM_INFO, productivity: { installed: true, running: true, details: { server: true, input: true, active: true } } };
     case "Get-SystemInfo":
       return AUDIT_SYSTEM_INFO;
+    case "Get-UserProfiles":
+      return {
+        profiles: [
+          {
+            name: "AuditAnalyst",
+            displayName: "Audit Analyst",
+            path: "C:\\Users\\AuditAnalyst",
+            sid: "S-1-5-21-1000-1000-1000-1001",
+            isCurrent: true,
+          },
+          {
+            name: "AuditReviewer",
+            displayName: "Audit Reviewer",
+            path: "C:\\Users\\AuditReviewer",
+            sid: "S-1-5-21-1000-1000-1000-1002",
+            isCurrent: false,
+          },
+        ],
+        total: 2,
+        currentUser: "AuditAnalyst",
+        currentSid: "S-1-5-21-1000-1000-1000-1001",
+        isAdmin: true,
+      };
     case "Get-DependencyStatus":
       return {
         cacheAgeSecs: 0,

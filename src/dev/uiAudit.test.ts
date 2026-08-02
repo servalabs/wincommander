@@ -73,6 +73,19 @@ describe("UI audit fixture", () => {
     expect((uiAuditDirectResponse("runtime_visibility_state") as { state: { entries: unknown[] } }).state.entries.length).toBeGreaterThan(0);
   });
 
+  test("populates cleanup account scope instead of leaving the profile selector loading", () => {
+    const profiles = uiAuditBackendResponse("Get-UserProfiles") as {
+      profiles: Array<{ name: string; displayName: string; isCurrent: boolean }>;
+      currentUser: string;
+      isAdmin: boolean;
+    };
+
+    expect(profiles.isAdmin).toBe(true);
+    expect(profiles.currentUser).toBe("AuditAnalyst");
+    expect(profiles.profiles).toHaveLength(2);
+    expect(profiles.profiles.find((profile) => profile.isCurrent)?.displayName).toBe("Audit Analyst");
+  });
+
   test("supplies the activation shape consumed by the Settings panel", () => {
     expect(uiAuditBackendResponse("Get-ActivationStatus")).toEqual({
       windows: { activated: true, edition: "Windows 11 Pro" },

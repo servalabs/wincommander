@@ -1060,7 +1060,7 @@ function PrivateMeshPanel() {
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ duration: DURATION_S.normal, ease: EASE.enter }}
                         >
-                            <p className="p-3 bg-amber-500/10 text-amber-400 text-xs rounded border border-amber-500/20">
+                            <p role="alert" className="p-3 bg-amber-500/10 text-amber-400 text-xs rounded border border-amber-500/20">
                                 <strong>Private Mesh service unreachable.</strong> {cleanErr}
                                 <br />
                                 <span className="text-amber-300/80">
@@ -1130,6 +1130,7 @@ function PrivateMeshPanel() {
                                                 className={`mesh-gw-chip ${(!staging.exitNodeIP && !staging.advertiseExitNode) ? "on" : ""}`}
                                                 onClick={() => setStaging(s => ({ ...s, exitNodeIP: "", advertiseExitNode: false }))}
                                                 disabled={actionLoading || isLoggedOut}
+                                                aria-pressed={!staging.exitNodeIP && !staging.advertiseExitNode}
                                                 title="No external route — traffic leaves this device directly"
                                             >
                                                 <Icon icon="globe" size={14} />
@@ -1150,6 +1151,7 @@ function PrivateMeshPanel() {
                                                             className={`mesh-gw-chip ${active ? "on" : ""}`}
                                                             onClick={() => setStaging(s => ({ ...s, exitNodeIP: cleanIp, advertiseExitNode: false }))}
                                                             disabled={actionLoading || isLoggedOut}
+                                                            aria-pressed={active}
                                                             title={`Route via ${p.Hostname} (${p.OS || "unknown OS"}) · ${cleanIp}`}
                                                         >
                                                             <OsLogo os={p.OS} size={18} />
@@ -1167,6 +1169,8 @@ function PrivateMeshPanel() {
                                             className={`mesh-mini-toggle ${staging.allowLanAccess ? "active" : ""}`}
                                             disabled={actionLoading || !staging.exitNodeIP || isLoggedOut}
                                             onClick={() => setStaging(s => ({ ...s, allowLanAccess: !s.allowLanAccess }))}
+                                            aria-pressed={staging.allowLanAccess}
+                                            aria-label={`Allow local network access: ${staging.allowLanAccess ? "on" : "off"}`}
                                         >
                                             <span className="mesh-mini-toggle-copy">
                                                 <strong>LAN</strong>
@@ -1185,6 +1189,8 @@ function PrivateMeshPanel() {
                                                 advertiseExitNode: !s.advertiseExitNode,
                                                 exitNodeIP: !s.advertiseExitNode ? "" : s.exitNodeIP
                                             }))}
+                                            aria-pressed={staging.advertiseExitNode}
+                                            aria-label={`Share this device as a tunnel gateway: ${staging.advertiseExitNode ? "on" : "off"}`}
                                         >
                                             <span className="mesh-mini-toggle-copy">
                                                 <strong>Share</strong>

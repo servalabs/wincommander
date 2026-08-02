@@ -866,6 +866,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                             className="refresh-btn"
                             onClick={() => { void handleDnsRefresh(); }}
                             disabled={dnsLoading}
+                            aria-label="Refresh encrypted DNS status"
                             title="Re-scan"
                         >
                             <Icon icon="refresh" size={14} className={dnsLoading ? "spinning" : ""} />
@@ -1280,7 +1281,14 @@ function NetworkSecurityControls() {
                                     />
                                 </div>
                             )}
-                            <button className="refresh-btn" onClick={(e) => { e.stopPropagation(); loadStatus(); }} disabled={isScanning || anyLoading}>
+                            <button
+                                type="button"
+                                className="refresh-btn"
+                                onClick={(e) => { e.stopPropagation(); loadStatus(); }}
+                                disabled={isScanning || anyLoading}
+                                aria-label="Refresh hosts protection status"
+                                title="Refresh hosts protection status"
+                            >
                                 <Icon icon="refresh" size={14} className={isScanning ? 'spinning' : ''} />
                             </button>
                     </div>

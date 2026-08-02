@@ -260,6 +260,7 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
                             intent="danger"
                             onClick={() => removeApp(idx)}
                             title="Remove app"
+                            aria-label={`Remove ${row.name}`}
                             className="manage-app-delete"
                         />
                     </div>

@@ -165,83 +165,39 @@ interface FlatListProps {
 
 function FlatList({ windows }: FlatListProps) {
   return (
-    <div className="flex flex-col gap-1.5 max-h-[260px] overflow-y-auto pr-1">
+    <div className="max-h-[260px] overflow-auto rounded border border-[var(--color-border)]" role="region" aria-label="Recent app-usage window records">
+      <table className="w-full text-left text-[11px]" aria-label="Recent app-usage window records">
+        <thead className="sticky top-0 bg-[var(--color-bg-secondary)] text-[var(--shield-text-muted)]">
+          <tr>
+            <th scope="col" className="px-2 py-1.5">Time</th>
+            <th scope="col" className="px-2 py-1.5">Category</th>
+            <th scope="col" className="px-2 py-1.5 text-right">Active</th>
+            <th scope="col" className="px-2 py-1.5 text-right">Idle</th>
+            <th scope="col" className="px-2 py-1.5 text-right">Active share</th>
+            <th scope="col" className="px-2 py-1.5">Top scores</th>
+          </tr>
+        </thead>
+        <tbody>
       {[...windows].reverse().map((slot, i) => {
         const ratio = activeRatio(slot);
-        const total = slot.activeSeconds + slot.idleSeconds;
-        const tier = ratioTier(ratio);
         const pct = Math.round(ratio * 100);
-        const tierColor: Record<RatioTier, string> = {
-          high: 'var(--color-success)',
-          mid: 'var(--color-warning)',
-          low: 'var(--color-text-muted)',
-        };
         const topScores = Object.entries(slot.categoryScores)
           .sort(([, a], [, b]) => b - a)
           .slice(0, 3);
 
         return (
-          <div
-            key={`${slot.windowStart}-${i}`}
-            className="rounded border px-3 py-2 flex flex-col gap-1"
-            style={{
-              background: 'var(--color-bg-secondary)',
-              borderColor: 'var(--color-border)',
-            }}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[10px] font-mono opacity-50">
-                {slot.windowStart.slice(11, 16)} – {slot.windowEnd.slice(11, 16)}
-              </span>
-              <span
-                className="text-[10px] px-1.5 py-0.5 rounded border font-mono flex-shrink-0"
-                style={{
-                  color: 'var(--color-accent, #00a0ff)',
-                  borderColor: 'color-mix(in srgb, var(--color-accent, #00a0ff) 30%, transparent)',
-                  background: 'color-mix(in srgb, var(--color-accent, #00a0ff) 10%, transparent)',
-                }}
-              >
-                {slot.topCategory}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex-1 h-1 rounded-full overflow-hidden bg-[var(--color-border)]">
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{
-                    width: `${pct}%`,
-                    background: tierColor[tier],
-                  }}
-                />
-              </div>
-              <div className="flex items-center gap-3 flex-shrink-0">
-                <span className="font-mono text-[10px]" style={{ color: 'var(--color-success)' }}>
-                  {formatDuration(slot.activeSeconds)} active
-                </span>
-                <span className="font-mono text-[10px] opacity-50">
-                  {formatDuration(slot.idleSeconds)} idle
-                </span>
-                <span className="font-mono text-[10px] opacity-30">
-                  / {formatDuration(total)}
-                </span>
-              </div>
-            </div>
-            {topScores.length > 0 && (
-              <div className="flex items-center gap-2 flex-wrap mt-0.5">
-                {topScores.map(([cat, score]) => (
-                  <span
-                    key={cat}
-                    className="text-[9px] font-mono opacity-60 px-1 py-0.5 rounded"
-                    style={{ background: 'var(--color-border)' }}
-                  >
-                    {cat} {Math.round(score * 100)}%
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
+          <tr key={`${slot.windowStart}-${i}`} className="border-t border-[var(--color-border)]">
+            <td className="whitespace-nowrap px-2 py-1.5 font-mono opacity-70">{slot.windowStart.slice(0, 16).replace('T', ' ')}–{slot.windowEnd.slice(11, 16)}</td>
+            <td className="px-2 py-1.5">{slot.topCategory}</td>
+            <td className="px-2 py-1.5 text-right font-mono">{formatDuration(slot.activeSeconds)}</td>
+            <td className="px-2 py-1.5 text-right font-mono">{formatDuration(slot.idleSeconds)}</td>
+            <td className="px-2 py-1.5 text-right font-mono">{pct}%</td>
+            <td className="px-2 py-1.5 font-mono opacity-70">{topScores.map(([cat, score]) => `${cat} ${Math.round(score * 100)}%`).join(', ') || '—'}</td>
+          </tr>
         );
       })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -294,6 +250,7 @@ export default function ProductivityTimeline({ windows }: ProductivityTimelinePr
             className={`pt-toggle-btn${view === 'list' ? ' pt-toggle-btn--active' : ''}`}
             onClick={() => setView('list')}
             aria-pressed={view === 'list'}
+            aria-label="Show app-usage table"
           >
             <AlignJustify size={10} />
             List
@@ -303,6 +260,7 @@ export default function ProductivityTimeline({ windows }: ProductivityTimelinePr
             className={`pt-toggle-btn${view === 'timeline' ? ' pt-toggle-btn--active' : ''}`}
             onClick={() => setView('timeline')}
             aria-pressed={view === 'timeline'}
+            aria-label="Show app-usage timeline"
           >
             <Clock size={10} />
             Timeline

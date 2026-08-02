@@ -231,8 +231,8 @@ function SelectionActionBar({ count, bytesLabel, onRemove }: { count: number; by
 
 function SelectionRow({ checked, disabled = false, onClick, icon, label, detail, retained = false }: { checked: boolean; disabled?: boolean; onClick: () => void; icon?: IconName; label: string; detail: string; retained?: boolean }) {
   return (
-    <div onClick={() => !disabled && onClick()} className={`flex w-full items-start gap-3 rounded-[var(--r)] px-3 py-2 text-left transition-colors hover:bg-[var(--surface-2)] ${disabled ? "cursor-default opacity-70" : "cursor-pointer"}`}>
-      <CheckboxControl checked={checked} disabled={disabled} ariaLabel={`Select ${label}`} onChange={onClick} onClick={(event) => event.stopPropagation()} />
+    <div className={`flex w-full items-start gap-3 rounded-[var(--r)] px-3 py-2 text-left transition-colors hover:bg-[var(--surface-2)] ${disabled ? "cursor-default opacity-70" : "cursor-pointer"}`}>
+      <CheckboxControl checked={checked} disabled={disabled} ariaLabel={`${checked ? "Deselect" : "Select"} ${label}`} onChange={onClick} />
       {icon && <Icon icon={icon} size={14} className="mt-0.5 shrink-0 text-[var(--text-mute)]" />}
       <span className="min-w-0">
         <span className="flex items-center gap-2">

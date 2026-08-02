@@ -158,7 +158,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
                         size="icon"
                         variant="ghost"
                         title={expanded ? "Hide extracted text" : "Preview extracted text"}
-                        aria-label={expanded ? "Hide extracted text" : "Preview extracted text"}
+                        aria-label={`${expanded ? "Hide extracted text for" : "Preview extracted text for"} ${row.name}`}
                         aria-expanded={expanded}
                         onClick={(e) => { e.stopPropagation(); onToggleExpand(row.docId); }}
                       >
@@ -168,7 +168,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
                         size="icon"
                         variant="ghost"
                         title="Open file"
-                        aria-label="Open file"
+                        aria-label={`Open ${row.name}`}
                         onClick={(e) => { e.stopPropagation(); onOpenFile(row.path); }}
                       >
                         <Icon icon="document-open" size={14} />
@@ -177,7 +177,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
                         size="icon"
                         variant="ghost"
                         title="Open containing folder"
-                        aria-label="Open containing folder"
+                        aria-label={`Open the containing folder for ${row.name}`}
                         onClick={(e) => { e.stopPropagation(); onOpenFolder(contentRowDir(row.path)); }}
                       >
                         <Icon icon="folder-open" size={14} />
@@ -186,7 +186,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
                         size="icon"
                         variant="ghost"
                         title="Copy full path"
-                        aria-label="Copy full path"
+                        aria-label={`Copy the full path for ${row.name}`}
                         className={copiedPath === row.path ? "text-[var(--color-success)]" : undefined}
                         onClick={(e) => { e.stopPropagation(); onCopyPath(row.path); }}
                       >
@@ -226,7 +226,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
                       </div>
                     )}
                     {expandedError && (
-                      <div className="sfp-doc-expand-error">
+                      <div className="sfp-doc-expand-error" role="alert">
                         <Icon icon="warning-sign" size={12} />
                         <span>{expandedError}</span>
                       </div>

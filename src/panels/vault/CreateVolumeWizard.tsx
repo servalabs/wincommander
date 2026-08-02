@@ -290,14 +290,14 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                 return (
                     <div className="wizard-step-content">
                         <div className="fs-grid" style={{ marginBottom: 16 }}>
-                            <div className={`fs-card ${!isDual ? "selected" : ""}`} onClick={() => setVolumeType("standard")}>
+                            <button type="button" className={`fs-card ${!isDual ? "selected" : ""}`} aria-pressed={!isDual} onClick={() => setVolumeType("standard")}>
                                 <strong>Standard</strong>
                                 <span>One encrypted volume</span>
-                            </div>
-                            <div className={`fs-card ${isDual ? "selected" : ""}`} onClick={() => setVolumeType("dual")}>
+                            </button>
+                            <button type="button" className={`fs-card ${isDual ? "selected" : ""}`} aria-pressed={isDual} onClick={() => setVolumeType("dual")}>
                                 <strong>Two-password</strong>
                                 <span>One container, two passwords</span>
-                            </div>
+                            </button>
                         </div>
                         <p className="step-description">Choose where to save the container file. You can use any extension, or none at all.</p>
                         <FormGroup label="Container Folder" labelFor="vol-folder">
@@ -309,7 +309,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                 onChange={e => setVolumeFolder(e.target.value)}
                                 onKeyDown={handleAdvanceFromInput}
                                 rightElement={
-                                    <Button icon="folder-open" minimal onClick={handleBrowse} />
+                                    <Button icon="folder-open" minimal aria-label="Browse for a container folder" onClick={handleBrowse} />
                                 }
                             />
                         </FormGroup>
@@ -412,14 +412,16 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                         <p className="step-description">Select the filesystem for the volume contents.</p>
                         <div className="fs-grid">
                             {FS_TYPES.map(f => (
-                                <div
+                                <button
+                                    type="button"
                                     key={f.value}
                                     className={`fs-card ${filesystem === f.value ? "selected" : ""}`}
+                                    aria-pressed={filesystem === f.value}
                                     onClick={() => setFilesystem(f.value)}
                                 >
                                     <strong>{f.label}</strong>
                                     <span>{f.desc}</span>
-                                </div>
+                                </button>
                             ))}
                         </div>
                     </div>
@@ -442,7 +444,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                 onChange={e => setPassword(e.target.value)}
                                 onKeyDown={handleAdvanceFromInput}
                                 rightElement={
-                                    <Button icon={showPassword ? "eye-off" : "eye-open"} minimal onClick={() => setShowPassword(p => !p)} />
+                                    <Button icon={showPassword ? "eye-off" : "eye-open"} minimal aria-label={showPassword ? "Hide new volume password" : "Show new volume password"} onClick={() => setShowPassword(p => !p)} />
                                 }
                             />
                             {password && (
@@ -470,11 +472,11 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                 onKeyDown={handleAdvanceFromInput}
                             />
                             {passwordConfirm && password !== passwordConfirm && (
-                                <div className="pw-mismatch">Passwords do not match</div>
+                                <div className="pw-mismatch" role="alert">Passwords do not match</div>
                             )}
                         </FormGroup>
                         {password.length > 0 && password.length < 8 && (
-                            <div className="pw-mismatch">Minimum 8 characters required</div>
+                            <div className="pw-mismatch" role="alert">Minimum 8 characters required</div>
                         )}
                         {isDual && (
                             <>
@@ -498,10 +500,10 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                         onKeyDown={handleAdvanceFromInput}
                                     />
                                     {secondPasswordConfirm && secondPassword !== secondPasswordConfirm && (
-                                        <div className="pw-mismatch">The two passwords do not match</div>
+                                        <div className="pw-mismatch" role="alert">The two passwords do not match</div>
                                     )}
                                     {secondPassword.length > 0 && secondPassword === password && (
-                                        <div className="pw-mismatch">The second password must differ from the first</div>
+                                        <div className="pw-mismatch" role="alert">The second password must differ from the first</div>
                                     )}
                                 </FormGroup>
                             </>
@@ -516,7 +518,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                 onChange={e => setKeyfile(e.target.value)}
                                 onKeyDown={handleAdvanceFromInput}
                                 rightElement={
-                                    <Button icon="folder-open" minimal onClick={handleBrowseKeyfile} />
+                                    <Button icon="folder-open" minimal aria-label="Browse for a new volume keyfile" onClick={handleBrowseKeyfile} />
                                 }
                             />
                         </FormGroup>

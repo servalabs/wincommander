@@ -116,7 +116,15 @@ export default function BrandingLicensingSection() {
                     placeholder="C:\\Path\\To\\Logo.bmp"
                     value={logoPath}
                     onChange={(e) => setLogoPath(e.target.value)}
-                    rightElement={<Button icon="folder-open" minimal onClick={handleBrowseLogo} />}
+                    rightElement={
+                        <Button
+                            icon="folder-open"
+                            minimal
+                            onClick={handleBrowseLogo}
+                            aria-label="Browse for OEM logo"
+                            title="Browse for OEM logo"
+                        />
+                    }
                 />
             </FormGroup>
             <div className="flex justify-end">

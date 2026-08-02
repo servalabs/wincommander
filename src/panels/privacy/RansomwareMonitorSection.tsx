@@ -20,6 +20,7 @@ import {
 } from "../../hooks/useRansomwareMonitor";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
+import PrivacyEventTable from './PrivacyEventTable';
 import type { RansomwareAction } from "../../types/settings";
 
 interface RansomwareDetection {
@@ -426,64 +427,7 @@ export default function RansomwareMonitorSection({
                         Clear
                       </Button>
                     </div>
-                    <div className="flex flex-col gap-2 max-h-[200px] overflow-y-auto">
-                      {[...recent].reverse().map((r, i) => (
-                        <div
-                          key={`${r.detected_at}-${i}`}
-                          className="flex flex-col gap-1 px-3 py-2 rounded bg-[var(--color-bg-secondary)] border"
-                          style={{ borderColor: 'var(--color-danger, #f87171)' }}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] text-[var(--shield-text-subtle)] font-medium">
-                              {r.count} files in {r.window_seconds}s
-                            </span>
-                            <span className="text-[10px] text-[var(--shield-text-muted)] font-mono flex-shrink-0">
-                              {formatRelative(r.detected_at)}
-                            </span>
-                          </div>
-                          {r.image_name && (
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <Icon icon="application" size={11} color="var(--color-danger, #f87171)" />
-                              <span
-                                className="text-[11px] font-mono text-[var(--shield-text-subtle)] truncate"
-                                title={r.image_path || r.image_name}
-                              >
-                                {r.image_name}{r.pid ? ` · PID ${r.pid}` : ""}
-                              </span>
-                              {r.action_taken && r.action_taken !== "none" && (
-                                <span
-                                  className={`text-[9px] px-1.5 py-0.5 rounded font-medium uppercase tracking-wide border ${
-                                    r.action_taken.endsWith("_failed")
-                                      ? "bg-[var(--color-warning)]/15 text-[var(--color-warning)] border-[var(--color-warning)]/40"
-                                      : "bg-[var(--color-success)]/15 text-[var(--color-success)] border-[var(--color-success)]/40"
-                                  }`}
-                                >
-                                  {actionLabel(r.action_taken)}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          {r.sample_paths.length > 0 && (
-                            <div className="flex flex-col gap-0.5">
-                              {r.sample_paths.slice(0, 3).map((p, j) => (
-                                <span
-                                  key={j}
-                                  className="text-[10px] text-[var(--shield-text-muted)] font-mono truncate"
-                                  title={p}
-                                >
-                                  · {shortPath(p)}
-                                </span>
-                              ))}
-                              {r.sample_paths.length > 3 && (
-                                <span className="text-[10px] text-[var(--shield-text-muted)]">
-                                  · +{r.sample_paths.length - 3} more…
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                    <PrivacyEventTable title="Mass-encryption alerts" columns={["Time", "Files", "Window", "Process", "Action", "Sample paths"]} rows={recent.map((r, i) => ({ id: `${r.detected_at}-${i}`, search: `${r.image_name ?? ''} ${r.action_taken ?? ''} ${r.sample_paths.join(' ')}`, sort: [r.detected_at, String(r.count), String(r.window_seconds), r.image_name ?? '', r.action_taken ?? '', r.sample_paths.join(' ')], cells: [formatRelative(r.detected_at), String(r.count), `${r.window_seconds}s`, r.image_name ? `${r.image_name}${r.pid ? ` · PID ${r.pid}` : ''}` : '—', r.action_taken ? actionLabel(r.action_taken) : '—', <span className="font-mono" title={r.sample_paths.join('\n')}>{r.sample_paths.slice(0, 3).map(shortPath).join(', ') || '—'}{r.sample_paths.length > 3 ? ` +${r.sample_paths.length - 3}` : ''}</span>] }))} />
                   </div>
                 )}
               </div>

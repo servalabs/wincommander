@@ -135,7 +135,9 @@ function collectDatasets(
         path,
         scalarRows.map((item) => ({
           ...context,
-          ...(typeof item === "string" ? parseFallbackItem(item) : { Value: item }),
+          ...(typeof item === "string"
+            ? parseFallbackItem(item)
+            : { Type: item === null ? "Empty" : humanizeTraceKey(typeof item), Value: item }),
         })),
       );
     }
@@ -185,7 +187,7 @@ function parseFallbackItem(item: string): TraceTableRow {
   const timestamped = item.match(/^(\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?)\s+(?:[|–—-])\s+(.+)$/);
   if (timestamped) return { Timestamp: timestamped[1], Entry: timestamped[2] };
 
-  return { Entry: item };
+  return { Type: "Text record", Entry: item };
 }
 
 function orderedColumns(rows: TraceTableRow[]): string[] {

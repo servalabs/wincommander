@@ -30,6 +30,7 @@ import SectionCard from '../../components/shared/SectionCard';
 import { formatTrustScore, trustScoreTone } from '../../lib/usbTrust';
 import { showSuccess, showError } from '../../utils/toast';
 import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
+import PrivacyEventTable from './PrivacyEventTable';
 
 // U-C: shape returned by get_usb_hid_alerts (timing + device identity — no keystroke content).
 interface HidInjectionAlert {
@@ -1068,29 +1069,7 @@ export default function UsbDevicesSection() {
           {hidAlerts.length > 0 && (
             <div className="flex flex-col gap-1 mt-1">
               <div className="text-xs font-semibold opacity-70">Recent injection alerts</div>
-              {hidAlerts.map((a, i) => (
-                <div
-                  key={`${a.deviceKey}-${a.detectedAt}-${i}`}
-                  className="flex items-start gap-2 border-t border-white/10 pt-1"
-                >
-                  <Tag
-                    minimal
-                    intent={a.severity === 'danger' ? 'danger' : 'warning'}
-                    className="font-mono"
-                  >
-                    {a.redFlag === 'composite' ? 'COMPOSITE' : a.redFlag === 'hidOnly' ? 'HID-ONLY' : 'HID'}
-                  </Tag>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium">{a.friendlyName}</div>
-                    <div className="font-mono text-xs opacity-60">
-                      {a.gapsSampled} keys &middot; median {a.medianGapMs}ms
-                    </div>
-                    <div className="font-mono text-xs opacity-50">
-                      {new Date(a.detectedAt).toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-              ))}
+              <PrivacyEventTable title="USB injection alerts" columns={["Time", "Device", "Flag", "Keys", "Median gap"]} rows={hidAlerts.map((a, i) => ({ id: `${a.deviceKey}-${a.detectedAt}-${i}`, search: `${a.friendlyName} ${a.redFlag} ${a.severity}`, sort: [a.detectedAt, a.friendlyName, a.redFlag, String(a.gapsSampled), String(a.medianGapMs)], cells: [new Date(a.detectedAt).toLocaleString(), a.friendlyName, a.redFlag, String(a.gapsSampled), `${a.medianGapMs}ms`] }))} />
             </div>
           )}
 
@@ -1182,39 +1161,7 @@ export default function UsbDevicesSection() {
           {autoActions.length > 0 && (
             <div className="flex flex-col gap-1 mt-1">
               <div className="text-xs font-semibold opacity-70">Recent auto-actions</div>
-              {autoActions.map((a, i) => (
-                <div
-                  key={`${a.deviceKey}-${a.time}-${i}`}
-                  className="flex items-start gap-2 border-t border-white/10 pt-1"
-                >
-                  <Tag
-                    minimal
-                    intent={
-                      a.action === 'quarantine'
-                        ? a.enforced
-                          ? 'danger'
-                          : 'warning'
-                        : a.action === 'alert'
-                          ? 'warning'
-                          : undefined
-                    }
-                    className="font-mono"
-                  >
-                    {a.action === 'quarantine'
-                      ? a.enforced
-                        ? 'QUARANTINED'
-                        : 'QUAR-FAILED'
-                      : a.action === 'alert'
-                        ? 'ALERT'
-                        : 'IGNORE'}
-                  </Tag>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium">{a.friendlyName}</div>
-                    <div className="font-mono text-xs opacity-60">{a.detail}</div>
-                    <div className="font-mono text-xs opacity-50">{a.time}</div>
-                  </div>
-                </div>
-              ))}
+              <PrivacyEventTable title="USB auto-isolate actions" columns={["Time", "Action", "Device", "Detail", "Enforced"]} rows={autoActions.map((a, i) => ({ id: `${a.deviceKey}-${a.time}-${i}`, search: `${a.action} ${a.friendlyName} ${a.detail}`, sort: [a.time, a.action, a.friendlyName, a.detail, String(a.enforced)], cells: [a.time, a.action, a.friendlyName, a.detail, a.enforced ? 'Yes' : 'No'] }))} />
             </div>
           )}
 

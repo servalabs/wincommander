@@ -55,6 +55,8 @@
                       background-color var(--dur-normal, 200ms) var(--ease),
                       transform var(--dur-normal, 200ms) var(--ease);
           user-select: none;
+          font: inherit;
+          text-align: left;
         }
         .watcher-badge:hover {
           color: var(--color-accent);

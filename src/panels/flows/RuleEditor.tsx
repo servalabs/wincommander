@@ -142,7 +142,7 @@ export default function RuleEditor({ rule, commands, settingOptions, onSave, onC
             addLabel="Add trigger"
           >
             {draft.triggers.map((t, i) => (
-              <BlockRow key={i} onRemove={locked || draft.triggers.length === 1 ? undefined : () => patch({ triggers: draft.triggers.filter((_, j) => j !== i) })}>
+              <BlockRow key={i} removeLabel={`Remove trigger ${i + 1}`} onRemove={locked || draft.triggers.length === 1 ? undefined : () => patch({ triggers: draft.triggers.filter((_, j) => j !== i) })}>
                 <TriggerEditor
                   trigger={t}
                   settingOptions={settingOptions}
@@ -163,7 +163,7 @@ export default function RuleEditor({ rule, commands, settingOptions, onSave, onC
           >
             {draft.conditions.length === 0 && <p className="flow-empty">Always (no conditions).</p>}
             {draft.conditions.map((c, i) => (
-              <BlockRow key={i} onRemove={locked ? undefined : () => patch({ conditions: draft.conditions.filter((_, j) => j !== i) })}>
+              <BlockRow key={i} removeLabel={`Remove condition ${i + 1}`} onRemove={locked ? undefined : () => patch({ conditions: draft.conditions.filter((_, j) => j !== i) })}>
                 <ConditionEditor
                   condition={c}
                   settingOptions={settingOptions}
@@ -182,7 +182,7 @@ export default function RuleEditor({ rule, commands, settingOptions, onSave, onC
             addLabel="Add action"
           >
             {draft.actions.map((a, i) => (
-              <BlockRow key={i} onRemove={locked || draft.actions.length === 1 ? undefined : () => patch({ actions: draft.actions.filter((_, j) => j !== i) })}>
+              <BlockRow key={i} removeLabel={`Remove action ${i + 1}`} onRemove={locked || draft.actions.length === 1 ? undefined : () => patch({ actions: draft.actions.filter((_, j) => j !== i) })}>
                 <ActionEditor
                   action={a}
                   commands={commands}
@@ -194,7 +194,7 @@ export default function RuleEditor({ rule, commands, settingOptions, onSave, onC
           </Section>
         </div>
 
-        {error && <p className="flow-editor__error">{error}</p>}
+        {error && <p className="flow-editor__error" role="alert">{error}</p>}
 
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
@@ -242,12 +242,12 @@ function Section({
   );
 }
 
-function BlockRow({ children, onRemove }: { children: React.ReactNode; onRemove?: () => void }) {
+function BlockRow({ children, onRemove, removeLabel }: { children: React.ReactNode; onRemove?: () => void; removeLabel: string }) {
   return (
     <div className="flow-block">
       <div className="flow-block__main">{children}</div>
       {onRemove && (
-        <button type="button" className="flow-block__remove" aria-label="Remove" onClick={onRemove}>
+        <button type="button" className="flow-block__remove" aria-label={removeLabel} onClick={onRemove}>
           <Icon icon="cross" size={12} />
         </button>
       )}
@@ -514,6 +514,7 @@ function ActionEditor({ action, commands, disabled, onChange }: { action: Action
         <>
           <Input
             list="flow-command-list"
+            aria-label="Command to run"
             placeholder="Search any app command…"
             disabled={disabled}
             value={action.command}
@@ -528,7 +529,7 @@ function ActionEditor({ action, commands, disabled, onChange }: { action: Action
       )}
       {action.type === "NotifyAction" && (
         <span className="flow-inline">
-          <Input placeholder="Message" disabled={disabled} value={action.message} onChange={(e) => onChange({ ...action, message: e.target.value })} />
+          <Input aria-label="Notification message" placeholder="Message" disabled={disabled} value={action.message} onChange={(e) => onChange({ ...action, message: e.target.value })} />
           <Sel ariaLabel="Severity" value={action.severity} onChange={(severity) => onChange({ ...action, severity })} options={[{ value: "info", label: "info" }, { value: "warning", label: "warning" }, { value: "danger", label: "danger" }]} />
         </span>
       )}
@@ -540,8 +541,8 @@ function ActionEditor({ action, commands, disabled, onChange }: { action: Action
       )}
       {action.type === "SignalAction" && (
         <span className="flow-inline">
-          <Input placeholder="Role" disabled={disabled} value={action.targetRole} onChange={(e) => onChange({ ...action, targetRole: e.target.value })} />
-          <Input placeholder="Signal" disabled={disabled} value={action.signalType} onChange={(e) => onChange({ ...action, signalType: e.target.value })} />
+          <Input aria-label="Target role" placeholder="Role" disabled={disabled} value={action.targetRole} onChange={(e) => onChange({ ...action, targetRole: e.target.value })} />
+          <Input aria-label="Signal type" placeholder="Signal" disabled={disabled} value={action.signalType} onChange={(e) => onChange({ ...action, signalType: e.target.value })} />
         </span>
       )}
       {action.type === "LockdownAction" && (

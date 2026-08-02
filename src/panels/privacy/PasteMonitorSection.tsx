@@ -37,6 +37,7 @@ import useEntitlements from "../../hooks/useEntitlements";
 import type { PasteMonitorCategories } from "../../types/settings";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
+import PrivacyEventTable from './PrivacyEventTable';
 
 interface DetectionRow {
   pattern: string;
@@ -461,43 +462,11 @@ export default function PasteMonitorSection({
                       <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--shield-text-muted)]">
                         Recent ({recent.length})
                       </span>
-                      <Button small minimal onClick={onClearRecent}>
+                      <Button small minimal onClick={onClearRecent} aria-label="Clear paste-monitor detections">
                         Clear
                       </Button>
                     </div>
-                    <div className="flex flex-col gap-1 max-h-[160px] overflow-y-auto">
-                      {[...recent].reverse().map((r, i) => {
-                        const isDanger = r.severity === "danger";
-                        return (
-                          <div
-                            key={`${r.detected_at}-${i}`}
-                            className="flex items-center justify-between px-3 py-1.5 rounded bg-[var(--color-bg-secondary)] border"
-                            style={{
-                              borderColor: isDanger
-                                ? 'var(--color-danger, #f87171)'
-                                : 'var(--shield-inner-border)',
-                            }}
-                          >
-                            <span className="flex items-center gap-1.5 min-w-0">
-                              {isDanger && (
-                                <span
-                                  className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-danger)]/15 text-[var(--color-danger,#f87171)] border border-[var(--color-danger,#f87171)]/30 flex-shrink-0 font-mono"
-                                  title="Suspicious command — likely malware"
-                                >
-                                  !
-                                </span>
-                              )}
-                              <span className="text-[11px] text-[var(--shield-text-subtle)] font-medium truncate">
-                                {r.pattern}
-                              </span>
-                            </span>
-                            <span className="text-[10px] text-[var(--shield-text-muted)] font-mono flex-shrink-0">
-                              {formatRelative(r.detected_at)}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <PrivacyEventTable title="Paste-monitor detections" columns={["Time", "Severity", "Pattern"]} rows={recent.map((r, i) => ({ id: `${r.detected_at}-${i}`, search: `${r.severity ?? ""} ${r.pattern ?? ""}`, sort: [r.detected_at, r.severity ?? "", r.pattern ?? ""], cells: [formatRelative(r.detected_at), r.severity, r.pattern] }))} />
                   </div>
                 )}
               </div>

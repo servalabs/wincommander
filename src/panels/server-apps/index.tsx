@@ -25,7 +25,7 @@
 // ══════════════════════════════════════════════════════════════════════════
 
 import { useState, useCallback } from 'react';
-import { Icon, NonIdealState, IconName } from "@/components/ui/bp";
+import { Button, Icon, NonIdealState, IconName } from "@/components/ui/bp";
 import { usePatchSettings, useSettingsQuery } from '../../hooks/queries/useSettingsQuery';
 import EmbeddedWebView from '../../components/shared/EmbeddedWebView';
 import ManageAppsDialog from './ManageAppsDialog';
@@ -167,11 +167,20 @@ export default function ServerAppsPanel() {
 
     if (!apps.length) {
         return (
-            <NonIdealState
-                icon="applications"
-                title="No Server Apps Configured"
-                description="Add apps in Settings > Server Apps to get started."
-            />
+            <div className="panel-container server-apps-panel">
+                <NonIdealState
+                    icon="applications"
+                    title="No Server Apps Configured"
+                    description="Add an app to open it here in a dedicated tab."
+                    action={<Button onClick={() => setManageOpen(true)}>Manage Server Apps</Button>}
+                />
+                <ManageAppsDialog
+                    isOpen={manageOpen}
+                    onClose={() => setManageOpen(false)}
+                    apps={apps}
+                    onSave={handleSaveApps}
+                />
+            </div>
         );
     }
 
@@ -186,10 +195,13 @@ export default function ServerAppsPanel() {
                 </p>
             </header>
             {/* Browser-style tab bar at top — spatially above the native webview */}
-            <div className="server-tabs-bar">
+            <div className="server-tabs-bar" role="tablist" aria-label="Server applications">
                 {apps.map((app) => (
                     <button
                         key={app.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={activeAppId === app.id}
                         className={`server-tab ${activeAppId === app.id ? 'active' : ''}`}
                         onClick={() => handleAppChange(app.id)}
                     >
@@ -200,6 +212,7 @@ export default function ServerAppsPanel() {
 
                 {/* Manage apps button — pinned to the right of the tab bar */}
                 <button
+                    type="button"
                     className="server-tab server-tab-manage"
                     onClick={() => setManageOpen(true)}
                     title="Manage Server Apps"

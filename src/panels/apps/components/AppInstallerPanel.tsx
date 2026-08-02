@@ -843,6 +843,7 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
             onChange={() => toggleApp(app.id)}
             className="app-checkbox"
             disabled={!canSelect}
+            ariaLabel={`Select ${app.name}`}
           />
         </span>
       )}
@@ -868,6 +869,8 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
           className="app-update-btn app-card-action--update"
           onClick={(e) => handleUpgradeSingle(app.id, e)}
           disabled={upgradingApp !== null || installing}
+          aria-label={`Update ${app.name}`}
+          title={`Update ${app.name}`}
         >
           {upgradingApp === app.id && <Spinner size={12} />}
         </Button>
@@ -887,6 +890,8 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
             onClick={(e) => { e.stopPropagation(); void installApps([app.id]); }}
             disabled={isThisInstalling || wingetStatus === "failed"}
             loading={isThisInstalling}
+            aria-label={`Install ${app.name}`}
+            title={`Install ${app.name}`}
           />
         );
       })()}
@@ -913,6 +918,7 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
           checked={selectedApps.has(item.id)}
           onChange={() => toggleApp(item.id)}
           className="app-checkbox"
+          ariaLabel={`Select ${item.name || item.id}`}
         />
       </span>
       <AppIcon id={item.id} category="misc" iconData={item.iconData} />
@@ -929,6 +935,8 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
         className="app-update-btn app-card-action--update"
         onClick={(e) => handleUpgradeSingle(item.id, e)}
         disabled={upgradingApp !== null || installing}
+        aria-label={`Update ${item.name || item.id}`}
+        title={`Update ${item.name || item.id}`}
       >
         {upgradingApp === item.id && <Spinner size={12} />}
       </Button>

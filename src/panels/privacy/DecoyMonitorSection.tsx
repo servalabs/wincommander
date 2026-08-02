@@ -23,6 +23,7 @@ import { showSuccess, showError } from "../../utils/toast";
 import { DecoyMonitorIntro } from "./MonitorIntros";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
+import PrivacyEventTable from './PrivacyEventTable';
 
 interface DecoyInfoRow {
   path: string;
@@ -431,32 +432,7 @@ export default function DecoyMonitorSection({
                         Clear
                       </Button>
                     </div>
-                    <div className="flex flex-col gap-1 max-h-[160px] overflow-y-auto">
-                      {[...recent].reverse().map((r, i) => (
-                        <div
-                          key={`${r.detected_at}-${i}`}
-                          className="flex items-center justify-between gap-2 px-3 py-1.5 rounded bg-[var(--color-bg-secondary)] border"
-                          style={{ borderColor: 'var(--color-danger, #f87171)' }}
-                        >
-                          <span className="flex items-center gap-1.5 min-w-0">
-                            <span
-                              className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-danger)]/15 text-[var(--color-danger,#f87171)] border border-[var(--color-danger,#f87171)]/30 flex-shrink-0 font-mono"
-                            >
-                              {r.kind}
-                            </span>
-                            <span
-                              className="text-[11px] text-[var(--shield-text-subtle)] font-mono truncate"
-                              title={r.path}
-                            >
-                              {shortPath(r.path)}
-                            </span>
-                          </span>
-                          <span className="text-[10px] text-[var(--shield-text-muted)] font-mono flex-shrink-0">
-                            {formatRelative(r.detected_at)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                    <PrivacyEventTable title="Decoy file access events" columns={["Time", "Kind", "Decoy path"]} rows={recent.map((r, i) => ({ id: `${r.detected_at}-${i}`, search: `${r.kind} ${r.path}`, sort: [r.detected_at, r.kind, r.path], cells: [formatRelative(r.detected_at), r.kind, <span className="font-mono" title={r.path}>{shortPath(r.path)}</span>] }))} />
                   </div>
                 )}
               </div>

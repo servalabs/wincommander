@@ -21,6 +21,7 @@ import { Switch, Icon, Button, Spinner, Tag } from "@/components/ui/bp";
 import { useState } from "react";
 import useScreenCapture from "./useScreenCapture";
 import SectionCard from "../../components/shared/SectionCard";
+import PrivacyEventTable from "./PrivacyEventTable";
 import "./ScreenCaptureSection.css";
 
 interface Props {
@@ -170,24 +171,7 @@ export default function ScreenCaptureSection({
                     : "Arm detection to start watching."}
                 </p>
               ) : (
-                <div className="screencap-recent-list">
-                  {recent.map((h, i) => (
-                    <div key={`${h.detectedAt}-${i}`} className="screencap-hit">
-                      <span className="screencap-hit-main">
-                        <Tag
-                          minimal
-                          intent={h.confidence === "high" ? "warning" : "none"}
-                          className="screencap-badge"
-                        >
-                          {h.confidence.toUpperCase()}
-                        </Tag>
-                        <span className="screencap-hit-tool">{h.tool}</span>
-                        <span className="screencap-hit-proc">{h.processName}</span>
-                      </span>
-                      <span className="screencap-hit-time">{formatTime(h.detectedAt)}</span>
-                    </div>
-                  ))}
-                </div>
+                <PrivacyEventTable title="Screen-capture detections" columns={["Time", "Confidence", "Tool", "Process"]} rows={recent.map((h, i) => ({ id: `${h.detectedAt}-${i}`, search: `${h.confidence} ${h.tool} ${h.processName}`, sort: [h.detectedAt, h.confidence, h.tool, h.processName], cells: [formatTime(h.detectedAt), <Tag minimal intent={h.confidence === "high" ? "warning" : "none"}>{h.confidence.toUpperCase()}</Tag>, h.tool, h.processName] }))} />
               )}
             </>
           )}

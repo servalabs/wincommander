@@ -119,7 +119,7 @@ export default function FlowsPanel() {
             </div>
           )}
 
-          {error && <div className="flows-error">{error}</div>}
+          {error && <div className="flows-error" role="alert">{error}</div>}
 
           <div className="flows-list">
             <AnimatePresence initial={false}>
@@ -157,14 +157,14 @@ export default function FlowsPanel() {
                         <span className={`flow-chip flow-chip--risk-${rule.riskLevel}`}>{rule.riskLevel}</span>
                       )}
                       <span className="flow-card__actions">
-                        <button type="button" title="Run now" onClick={() => void fireNow(rule.id)}>
+                        <button type="button" title={`Run ${rule.name} now`} aria-label={`Run ${rule.name} now`} onClick={() => void fireNow(rule.id)}>
                           <Icon icon="play" size={13} />
                         </button>
-                        <button type="button" title="Edit" onClick={() => setEditing(rule)}>
+                        <button type="button" title={`Edit ${rule.name}`} aria-label={`Edit ${rule.name}`} onClick={() => setEditing(rule)}>
                           <Icon icon="edit" size={13} />
                         </button>
                         {!locked && (
-                          <button type="button" title="Delete" onClick={() => void deleteRule(rule.id)}>
+                          <button type="button" title={`Delete ${rule.name}`} aria-label={`Delete ${rule.name}`} onClick={() => void deleteRule(rule.id)}>
                             <Icon icon="trash" size={13} />
                           </button>
                         )}

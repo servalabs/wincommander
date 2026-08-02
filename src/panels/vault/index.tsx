@@ -382,7 +382,7 @@ function EncryptedVolumesTab({ volumes, refreshVault }: EncryptedVolumesTabProps
                 onChange={(e) => setMountPath(e.target.value)}
                 onKeyDown={handleMountFieldEnter}
                 rightElement={
-                  <Button icon="folder-open" minimal onClick={handleBrowse} />
+                  <Button icon="folder-open" minimal aria-label="Browse for an encrypted volume" onClick={handleBrowse} />
                 }
               />
             </FormGroup>
@@ -471,6 +471,7 @@ function EncryptedVolumesTab({ volumes, refreshVault }: EncryptedVolumesTabProps
                 <Button
                   icon={showPassword ? "eye-off" : "eye-open"}
                   minimal
+                  aria-label={showPassword ? "Hide volume password" : "Show volume password"}
                   onClick={() => setShowPassword(!showPassword)}
                 />
               }
@@ -486,7 +487,7 @@ function EncryptedVolumesTab({ volumes, refreshVault }: EncryptedVolumesTabProps
               onChange={(e) => setMountKeyfile(e.target.value)}
               onKeyDown={handleMountFieldEnter}
               rightElement={
-                <Button icon="folder-open" minimal onClick={handleBrowseKeyfile} />
+                <Button icon="folder-open" minimal aria-label="Browse for a volume keyfile" onClick={handleBrowseKeyfile} />
               }
             />
           </FormGroup>

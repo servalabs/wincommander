@@ -88,6 +88,16 @@ describe("trace table view model", () => {
     });
   });
 
+  test("never falls back to a one-column forensic dataset", () => {
+    const plainText = buildTraceView({ entries: ["unstructured artifact"] }, []);
+    const scalars = buildTraceView({ values: [42, false, null] }, []);
+
+    expect(plainText.datasets[0].columns).toEqual(["Type", "Entry"]);
+    expect(plainText.datasets[0].rows[0]).toEqual({ Type: "Text record", Entry: "unstructured artifact" });
+    expect(scalars.datasets[0].columns).toEqual(["Type", "Value"]);
+    expect(scalars.datasets[0].rows.map((row) => row.Type)).toEqual(["Number", "Boolean", "Empty"]);
+  });
+
   test("paginates large datasets deterministically and clamps stale pages", () => {
     const rows = Array.from({ length: 205 }, (_, index) => ({ index }));
     const second = paginateTraceRows(rows, 1);

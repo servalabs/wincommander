@@ -77,7 +77,13 @@ function DgzTile({ icon, title, desc, checked, warn, loading, onChange, children
                     <div className="dgz-tile-title">{title}</div>
                     <div className="dgz-tile-desc">{desc}</div>
                 </div>
-                <Switch checked={checked} disabled={loading} onCheckedChange={onChange} />
+                <Switch
+                    checked={checked}
+                    disabled={loading}
+                    onCheckedChange={onChange}
+                    aria-label={title}
+                    title={title}
+                />
             </div>
             {children}
         </div>

@@ -53,6 +53,49 @@ describe("Maintenance multi-row control accessibility", () => {
     expect(diskAnalyzer).toContain("aria-pressed={largeFilter === id}");
     expect(diskAnalyzer).toContain('aria-label={`Open folder containing ${row.name}`}');
     expect(diskAnalyzer).toContain('aria-label={`Delete ${row.name}`}');
-    expect(diskAnalyzer).toContain('<th className="da-th-del">Actions</th>');
+    expect(diskAnalyzer).toContain('<th className="da-th-del" scope="col">Actions</th>');
+  });
+
+  test("keeps maintenance-specific loading, error, and detail contracts intact", async () => {
+    const [fileStats, hygiene, fileHygiene, routinePreview, startupDrivers, security, malware, registry, diskAnalyzer] = await Promise.all([
+      Bun.file("src/panels/maintenance/FileStatsPanel.tsx").text(),
+      Bun.file("src/panels/maintenance/SystemHygieneTools.tsx").text(),
+      Bun.file("src/panels/maintenance/FileHygieneTools.tsx").text(),
+      Bun.file("src/panels/maintenance/RoutineCleanerPreview.tsx").text(),
+      Bun.file("src/panels/maintenance/StartupDriverTools.tsx").text(),
+      Bun.file("src/panels/maintenance/SecurityData.tsx").text(),
+      Bun.file("src/panels/maintenance/MalwareCenter.tsx").text(),
+      Bun.file("src/panels/maintenance/RegistryTools.tsx").text(),
+      Bun.file("src/panels/maintenance/DiskSpaceAnalyzerDialog.tsx").text(),
+    ]);
+
+    expect(fileStats).toContain('role="table" aria-label="File type statistics"');
+    expect(fileStats).toContain('role="columnheader">File type</span>');
+    expect(fileStats).toContain('role="alert"');
+    expect(fileStats).toContain('!fileStats && !statsScanning && !scanError');
+
+    expect(hygiene).toContain('aria-pressed={checked}');
+    expect(hygiene).toContain('aria-label={`${checked ? "Deselect" : "Select"} ${title}`}');
+    expect(hygiene).toContain('Reviewing {tools.tool === "shortcuts"');
+    expect(hygiene).toContain('xl:grid-cols-2');
+    expect(fileHygiene).toContain('ariaLabel={`${checked ? "Deselect" : "Select"} ${label}`}');
+    expect(routinePreview).toContain('ariaLabel={`${selected ? "Deselect" : "Select"} ${item.label}`}');
+    expect(routinePreview).not.toContain('onClick={() => !disabled && onToggle(item.id)}');
+
+    expect(startupDrivers).toContain('aria-controls={`maintenance-manager-panel-${id}`}');
+    expect(startupDrivers).toContain('tabIndex={active ? 0 : -1}');
+    expect(startupDrivers).toContain("const moveManagerTab = (key: string)");
+    expect(startupDrivers).toContain('role="tabpanel"');
+    expect(security).toContain('Collecting local security posture and Windows CVE coverage');
+    expect(security).toContain('aria-busy={loading}');
+    expect(malware).toContain('Loading quarantine inventory');
+    expect(malware).toContain('role="progressbar"');
+    expect(malware).toContain('xl:grid-cols-2');
+    expect(registry).toContain('Reviewing {tools.tool === "orphans"');
+
+    expect(diskAnalyzer).toContain('aria-label="Folder or drive to analyse"');
+    expect(diskAnalyzer).toContain('aria-label={`Close details for ${infoItem.name}`}');
+    expect(diskAnalyzer).toContain('scope="col">Allocated</th>');
+    expect(diskAnalyzer).toContain('role="status" aria-live="polite"');
   });
 });

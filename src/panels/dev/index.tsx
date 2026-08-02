@@ -61,6 +61,7 @@ function StatusDot({ ok }: { ok: boolean }) {
   return (
     <span
       className="dev-status-dot"
+      aria-hidden="true"
       style={{ background: ok ? "var(--color-success)" : "var(--color-danger)" }}
     />
   );
@@ -184,7 +185,7 @@ function DevPanelInner() {
                 : "—"}
             </span>
             <Button
-              text="Ping"
+              text="Ping Pro sidecar"
               icon="refresh"
               className="dev-btn-sm"
               loading={sidecarLoading}
@@ -202,7 +203,7 @@ function DevPanelInner() {
                 : "—"}
             </span>
             <Button
-              text="Refresh"
+              text="Refresh fleet agent status"
               icon="refresh"
               className="dev-btn-sm"
               loading={fleetLoading}

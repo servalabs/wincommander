@@ -359,6 +359,7 @@ export default function ActivePorts() {
                         className="refresh-btn"
                         onClick={() => refresh(false)}
                         disabled={loading}
+                        aria-label="Refresh active ports"
                         title="Refresh now"
                     >
                         <Icon icon="refresh" size={14} className={loading ? "spinning" : ""} />

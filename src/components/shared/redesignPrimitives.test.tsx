@@ -78,6 +78,11 @@ describe("redesign shared primitives", () => {
     expect(html).toContain("Modified");
     expect(html).toContain("Filter every field");
     expect(html).toContain("Clear");
+    expect(html).toContain('aria-label="Dismiss Sample Trace details"');
+    expect(html).toContain('aria-label="Close Sample Trace details"');
+    expect(html).toContain('aria-label="Copy Entries as TSV"');
+    expect(html).toContain('aria-label="Sort Entries by Name"');
+    expect(html).toContain('aria-label="Clear Sample Trace"');
   });
 
   test("trace detail dialog pages large forensic datasets instead of rendering every artifact", () => {

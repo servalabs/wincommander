@@ -43,6 +43,8 @@ export function RegistryTools() {
       {tools.error && <Notice tone="danger" text={tools.error} />}
       {tools.result && <Notice tone="success" text={`Changed ${"removed" in tools.result ? tools.result.removed : tools.result.changed} entries. ${tools.result.backupLocations.length} registry backups retained.`} />}
 
+      {tools.busy && !entries && <Card><CardContent className="py-6 text-center text-sm text-[var(--text-mute)]" role="status" aria-live="polite">Reviewing {tools.tool === "orphans" ? "registry orphan" : "Explorer context-menu"} entries…</CardContent></Card>}
+
       {tools.tool === "orphans" && tools.registryScan && (
         <Card>
           <CardHeader><CardTitle>Registry Orphans</CardTitle><CardDescription>Windows still has a pointer for an app component, but the program file it points to no longer exists. Removing a selected entry clears that stale pointer only; it does not uninstall an app.</CardDescription></CardHeader>
@@ -125,5 +127,5 @@ function PathDetail({ icon, label, path, onCopy, onReveal }: { icon: "database" 
   </div>;
 }
 
-function Notice({ tone, text }: { tone: "success" | "danger"; text: string }) { return <Card><CardContent className="flex items-center gap-3 py-4"><Badge tone={tone}>{tone}</Badge><p className="text-sm text-[var(--text-dim)]">{text}</p></CardContent></Card>; }
+function Notice({ tone, text }: { tone: "success" | "danger"; text: string }) { return <Card role={tone === "danger" ? "alert" : "status"}><CardContent className="flex items-center gap-3 py-4"><Badge tone={tone}>{tone}</Badge><p className="text-sm text-[var(--text-dim)]">{text}</p></CardContent></Card>; }
 function EmptyState() { return <p className="py-6 text-center text-sm text-[var(--text-mute)]">No safe candidates found.</p>; }

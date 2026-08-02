@@ -17,6 +17,7 @@ import {
 import "./LogViewer.css";
 
 const SOURCES: SourceFilter[] = ["ALL", "UI", "CORE", "PRO"];
+type LogSort = "time" | "level" | "source";
 
 const LEVEL_COLOR: Record<LevelFilter, string> = {
     ALL: "var(--color-text-muted)",
@@ -67,6 +68,8 @@ export default function LogViewer() {
     const [source, setSource] = useState<SourceFilter>("ALL");
     const [search, setSearch] = useState("");
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
+    const [sort, setSort] = useState<LogSort>("time");
+    const [sortDescending, setSortDescending] = useState(true);
 
     const refresh = useCallback(async () => {
         setLoading(true);
@@ -114,10 +117,18 @@ export default function LogViewer() {
     const deduped = useMemo(() => dedupNearSimultaneous(filtered), [filtered]);
 
     const grouped = useMemo(() => groupLogRecords(deduped), [deduped]);
+    const sorted = useMemo(() => [...grouped].sort((left, right) => {
+        const comparison = sort === "time"
+            ? `${left.date} ${left.timestamp}`.localeCompare(`${right.date} ${right.timestamp}`)
+            : sort === "level"
+                ? left.level.localeCompare(right.level)
+                : left.source.localeCompare(right.source);
+        return sortDescending ? -comparison : comparison;
+    }), [grouped, sort, sortDescending]);
     const runtimeOsLabel = useMemo(() => getRuntimeOsLabel(), []);
 
     const handleCopy = useCallback(async () => {
-        const text = grouped
+        const text = sorted
             .map((r) => `${r.date} ${r.timestamp} [${r.level}] [${r.source}] [${r.os ?? runtimeOsLabel}] ${r.message}`)
             .join("\n");
         try {
@@ -126,7 +137,15 @@ export default function LogViewer() {
         } catch {
             showError("Failed to copy logs.");
         }
-    }, [grouped, runtimeOsLabel]);
+    }, [runtimeOsLabel, sorted]);
+
+    const selectSort = (next: LogSort) => {
+        if (next === sort) setSortDescending((value) => !value);
+        else {
+            setSort(next);
+            setSortDescending(true);
+        }
+    };
 
     const toggleRow = useCallback((key: string) => {
         setExpanded((prev) => {
@@ -169,6 +188,20 @@ export default function LogViewer() {
                             </button>
                         ))}
                     </div>
+                    <div className="log-level-chips" role="group" aria-label="Log sort order">
+                        {(["time", "level", "source"] as const).map((key) => (
+                            <button
+                                key={key}
+                                type="button"
+                                onClick={() => selectSort(key)}
+                                aria-pressed={sort === key}
+                                aria-label={`Sort logs by ${key}${sort === key ? (sortDescending ? ", descending" : ", ascending") : ""}`}
+                                className={`log-level-chip${sort === key ? " active" : ""}`}
+                            >
+                                {key.toUpperCase()}{sort === key ? (sortDescending ? " ↓" : " ↑") : ""}
+                            </button>
+                        ))}
+                    </div>
                 </div>
                 <div className="flex gap-2">
                     <Button
@@ -182,7 +215,7 @@ export default function LogViewer() {
                         text="Copy (plaintext)"
                         icon="duplicate"
                         className="compact-action-btn"
-                        disabled={grouped.length === 0}
+                        disabled={sorted.length === 0}
                         onClick={handleCopy}
                     />
                     <Button
@@ -205,7 +238,7 @@ export default function LogViewer() {
             />
 
             <div className="log-viewer-list" role="table" aria-label="WinCommander diagnostic log records">
-                {grouped.length > 0 && (
+                {sorted.length > 0 && (
                     <div className="log-viewer-row log-viewer-header" role="row">
                         <span role="columnheader">Date &amp; time</span>
                         <span role="columnheader">Level</span>
@@ -215,13 +248,13 @@ export default function LogViewer() {
                         <span role="columnheader" className="log-viewer-count-header">Count</span>
                     </div>
                 )}
-                {grouped.length === 0 && (
+                {sorted.length === 0 && (
                     <div className="log-viewer-empty">
                         <Icon icon="document" size={18} />
                         <span>{loading ? "Loading…" : "No records."}</span>
                     </div>
                 )}
-                {grouped.map((r) => {
+                {sorted.map((r) => {
                     const key = recordKey(r);
                     const osLabel = r.os ?? runtimeOsLabel;
                     return (
@@ -266,8 +299,8 @@ export default function LogViewer() {
             </div>
 
             <div className="log-viewer-footer">
-                {grouped.length > 0 && (
-                    <span>{grouped.length} record{grouped.length !== 1 ? "s" : ""} — encrypted on disk</span>
+                {sorted.length > 0 && (
+                    <span>{sorted.length} record{sorted.length !== 1 ? "s" : ""} — encrypted on disk</span>
                 )}
             </div>
         </div>

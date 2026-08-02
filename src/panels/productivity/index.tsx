@@ -80,15 +80,6 @@ export default function ProductivityPanel() {
   const activeConfig = VIEW_CONFIGS.find(v => v.id === activeView)!;
   const activeUrl = activeConfig.buildUrl(hostname);
 
-  // The watcher badges are <a> with no href (open() handles navigation), so
-  // make them keyboard-operable: Enter/Space fires the same onClick.
-  const onWatcherKey = (e: React.KeyboardEvent<HTMLAnchorElement>) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      e.currentTarget.click();
-    }
-  };
-
   return (
     <div className="panel-container productivity-panel">
       <div className="productivity-header">
@@ -101,15 +92,15 @@ export default function ProductivityPanel() {
         <div className="productivity-watchers">
           <span className="watchers-label">WATCHERS</span>
           <div className="watcher-links">
-            <a onClick={() => open('https://chromewebstore.google.com/detail/activitywatch-web-watcher/nglaklhklhcoonedhgnpgddginnjdadi')} onKeyDown={onWatcherKey} role="button" tabIndex={0} className="watcher-badge" title="Chrome Extension">
+            <button type="button" onClick={() => open('https://chromewebstore.google.com/detail/activitywatch-web-watcher/nglaklhklhcoonedhgnpgddginnjdadi')} className="watcher-badge" title="Chrome Extension">
               <Icon icon="globe-network" size={12} /> Chrome
-            </a>
-            <a onClick={() => open('https://addons.mozilla.org/en-US/firefox/addon/aw-watcher-web/')} onKeyDown={onWatcherKey} role="button" tabIndex={0} className="watcher-badge" title="Firefox Add-on">
+            </button>
+            <button type="button" onClick={() => open('https://addons.mozilla.org/en-US/firefox/addon/aw-watcher-web/')} className="watcher-badge" title="Firefox Add-on">
               <Icon icon="globe-network" size={12} /> Firefox
-            </a>
-            <a onClick={() => open('https://marketplace.visualstudio.com/items?itemName=activitywatch.aw-watcher-vscode')} onKeyDown={onWatcherKey} role="button" tabIndex={0} className="watcher-badge" title="VS Code Extension">
+            </button>
+            <button type="button" onClick={() => open('https://marketplace.visualstudio.com/items?itemName=activitywatch.aw-watcher-vscode')} className="watcher-badge" title="VS Code Extension">
               <Icon icon="code" size={12} /> VS Code
-            </a>
+            </button>
           </div>
         </div>
       </div>

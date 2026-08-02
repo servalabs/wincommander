@@ -37,6 +37,15 @@ export function StartupDriverTools() {
     setShowAllDrivers(true);
     if (!tools.drivers) void scanChecks();
   };
+  const moveManagerTab = (key: string) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) return;
+    const current = MANAGER_TAB_ORDER.indexOf(managerTab);
+    const next = key === 'Home' ? 0 : key === 'End' ? MANAGER_TAB_ORDER.length - 1
+      : (current + (key === 'ArrowRight' ? 1 : MANAGER_TAB_ORDER.length - 1)) % MANAGER_TAB_ORDER.length;
+    const nextTab = MANAGER_TAB_ORDER[next];
+    setManagerTab(nextTab);
+    window.requestAnimationFrame(() => document.getElementById(`maintenance-manager-tab-${nextTab}`)?.focus());
+  };
 
   return <div className="flex flex-col gap-4">
     <Card>
@@ -45,11 +54,11 @@ export function StartupDriverTools() {
           <CardTitle>System Managers</CardTitle>
           <div className={`manager-tab-switch manager-tab-switch--${MANAGER_TAB_ORDER.indexOf(managerTab)}`} role="tablist" aria-label="System managers">
             <span className="manager-tab-switch__thumb" aria-hidden="true" />
-            <ManagerTabButton active={managerTab === "startup"} icon="play" label="Startup" onClick={() => setManagerTab("startup")} />
-            <ManagerTabButton active={managerTab === "users"} icon="people" label="Users" onClick={() => setManagerTab("users")} />
-            <ManagerTabButton active={managerTab === "tasks"} icon="time" label="Tasks" onClick={() => setManagerTab("tasks")} />
-            <ManagerTabButton active={managerTab === "services"} icon="settings" label="Services" onClick={() => setManagerTab("services")} />
-            <ManagerTabButton active={managerTab === "conceal"} icon="eye-off" label="Conceal" onClick={() => setManagerTab("conceal")} />
+            <ManagerTabButton active={managerTab === "startup"} icon="play" label="Startup" onClick={() => setManagerTab("startup")} onNavigate={moveManagerTab} />
+            <ManagerTabButton active={managerTab === "users"} icon="people" label="Users" onClick={() => setManagerTab("users")} onNavigate={moveManagerTab} />
+            <ManagerTabButton active={managerTab === "tasks"} icon="time" label="Tasks" onClick={() => setManagerTab("tasks")} onNavigate={moveManagerTab} />
+            <ManagerTabButton active={managerTab === "services"} icon="settings" label="Services" onClick={() => setManagerTab("services")} onNavigate={moveManagerTab} />
+            <ManagerTabButton active={managerTab === "conceal"} icon="eye-off" label="Conceal" onClick={() => setManagerTab("conceal")} onNavigate={moveManagerTab} />
           </div>
           <Button size="sm" variant="primary" className="system-manager-scan" disabled={tools.busy} onClick={() => void scanChecks()}>
             <Icon icon={tools.busy ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} />
@@ -59,7 +68,7 @@ export function StartupDriverTools() {
         <CardDescription>Startup entries, users, tasks, services, runtime visibility, and drivers are scanned once here. Switching views reuses those results until you scan again.</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <div hidden={managerTab !== "startup"}>
+        <div id="maintenance-manager-panel-startup" role="tabpanel" aria-labelledby="maintenance-manager-tab-startup" hidden={managerTab !== "startup"}>
           <StartupManager embedded scanKey={managerScanKey} />
           {tools.startup && <div className="startup-impact-section">
             <div className="startup-impact-section__heading"><p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Signature &amp; launch-impact review</p><p className="text-xs text-[var(--text-mute)]">Review unsigned or unverifiable launchers. The manager above remains the live enable/disable list.</p></div>
@@ -67,14 +76,14 @@ export function StartupDriverTools() {
             {!tools.startup.entries.length && <Empty text="No startup entries found." />}
           </div>}
         </div>
-        <div hidden={managerTab !== "users"}><LocalUsersManager embedded scanKey={managerScanKey} /></div>
-        <div hidden={managerTab !== "tasks"}><ScheduledTasksManager embedded scanKey={managerScanKey} /></div>
-        <div hidden={managerTab !== "services"}><ServiceManager embedded scanKey={managerScanKey} /></div>
-        <div hidden={managerTab !== "conceal"}><RuntimeVisibilityManager embedded scanKey={managerScanKey} /></div>
+        <div id="maintenance-manager-panel-users" role="tabpanel" aria-labelledby="maintenance-manager-tab-users" hidden={managerTab !== "users"}><LocalUsersManager embedded scanKey={managerScanKey} /></div>
+        <div id="maintenance-manager-panel-tasks" role="tabpanel" aria-labelledby="maintenance-manager-tab-tasks" hidden={managerTab !== "tasks"}><ScheduledTasksManager embedded scanKey={managerScanKey} /></div>
+        <div id="maintenance-manager-panel-services" role="tabpanel" aria-labelledby="maintenance-manager-tab-services" hidden={managerTab !== "services"}><ServiceManager embedded scanKey={managerScanKey} /></div>
+        <div id="maintenance-manager-panel-conceal" role="tabpanel" aria-labelledby="maintenance-manager-tab-conceal" hidden={managerTab !== "conceal"}><RuntimeVisibilityManager embedded scanKey={managerScanKey} /></div>
       </CardContent>
     </Card>
 
-    {tools.error && <Card><CardContent className="flex items-center gap-3 py-4"><Badge tone="danger">error</Badge><p className="text-sm text-[var(--text-dim)]">{tools.error}</p></CardContent></Card>}
+    {tools.error && <Card role="alert"><CardContent className="flex items-center gap-3 py-4"><Badge tone="danger">error</Badge><p className="text-sm text-[var(--text-dim)]">{tools.error}</p></CardContent></Card>}
 
     <Card>
       <CardHeader className="gap-2">
@@ -88,8 +97,9 @@ export function StartupDriverTools() {
   </div>;
 }
 
-function ManagerTabButton({ active, icon, label, onClick }: { active: boolean; icon: string; label: string; onClick: () => void }) {
-  return <Button size="sm" variant="ghost" role="tab" aria-selected={active} className={`manager-tab-switch__btn${active ? " manager-tab-switch__btn--active" : ""}`} onClick={onClick}><Icon icon={icon} />{label}</Button>;
+function ManagerTabButton({ active, icon, label, onClick, onNavigate }: { active: boolean; icon: string; label: string; onClick: () => void; onNavigate: (key: string) => void }) {
+  const id = label.toLowerCase();
+  return <Button size="sm" variant="ghost" id={`maintenance-manager-tab-${id}`} role="tab" tabIndex={active ? 0 : -1} aria-selected={active} aria-controls={`maintenance-manager-panel-${id}`} className={`manager-tab-switch__btn${active ? " manager-tab-switch__btn--active" : ""}`} onClick={onClick} onKeyDown={(event) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); onNavigate(event.key); } }}><Icon icon={icon} />{label}</Button>;
 }
 
 function DriverRow({ driver }: { driver: { deviceName: string | null; deviceClass: string | null; manufacturer: string | null; signer: string | null; driverVersion: string | null; driverDate: string | null; isSigned: boolean | null } }) {

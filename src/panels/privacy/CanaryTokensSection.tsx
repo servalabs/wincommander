@@ -23,6 +23,7 @@ import { Button, HTMLSelect, InputGroup, Spinner, Tag } from '@/components/ui/bp
 import type { Intent } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
 import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
+import PrivacyEventTable from './PrivacyEventTable';
 import { showError, showSuccess } from '../../utils/toast';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -453,28 +454,7 @@ export default function CanaryTokensSection() {
             <div className="text-sm opacity-60">No hits recorded.</div>
           )}
           {recent.length > 0 && (
-            <div className="flex flex-col gap-1 max-h-[220px] overflow-y-auto">
-              {recent.map((h, i) => (
-                <div
-                  key={`${h.tokenId}-${h.firedAt}-${i}`}
-                  className="flex items-start gap-2 px-3 py-1.5 rounded-[var(--r-lg)] border border-[var(--color-danger,#f87171)]/30 bg-[var(--color-danger,#f87171)]/5"
-                >
-                  <Tag minimal intent="danger" className="font-mono shrink-0">
-                    HIT
-                  </Tag>
-                  <div className="flex flex-col flex-1 min-w-0">
-                    <span className="text-[13px] truncate">{h.label || h.tokenId}</span>
-                    <span className="font-mono text-[10px] opacity-60 truncate">
-                      {h.remoteAddr}
-                      {h.userAgent ? ` · ${h.userAgent}` : ''}
-                    </span>
-                  </div>
-                  <span className="font-mono text-[10px] opacity-40 shrink-0">
-                    {formatRelative(h.firedAt)}
-                  </span>
-                </div>
-              ))}
-            </div>
+            <PrivacyEventTable title="Canary token hits" columns={["Time", "Token", "Remote address", "User agent"]} rows={recent.map((h, i) => ({ id: `${h.tokenId}-${h.firedAt}-${i}`, search: `${h.label} ${h.tokenId} ${h.remoteAddr} ${h.userAgent ?? ''}`, sort: [h.firedAt, h.label || h.tokenId, h.remoteAddr, h.userAgent ?? ''], cells: [<span className="font-mono">{formatRelative(h.firedAt)}</span>, <><Tag minimal intent="danger">HIT</Tag> {h.label || h.tokenId}</>, h.remoteAddr, h.userAgent || '—'] }))} />
           )}
         </div>
       </div>

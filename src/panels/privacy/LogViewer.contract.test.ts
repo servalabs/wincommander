@@ -10,6 +10,8 @@ describe("Error Center multi-column viewer", () => {
 
     expect(source).toContain('role="group" aria-label="Log severity filters"');
     expect(source).toContain('role="group" aria-label="Log source filters"');
+    expect(source).toContain('role="group" aria-label="Log sort order"');
+    expect(source).toContain('aria-label={`Sort logs by ${key}');
     expect(source).toContain("aria-pressed={level === l}");
     expect(source).toContain("aria-pressed={source === s}");
     expect(source).toContain('aria-label="Search log messages"');

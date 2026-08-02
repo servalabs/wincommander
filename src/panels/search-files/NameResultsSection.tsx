@@ -102,7 +102,7 @@ export default function NameResultsSection({
                       size="icon"
                       variant="ghost"
                       title="Open file"
-                      aria-label="Open file"
+                      aria-label={`Open ${r.name}`}
                       onClick={(e) => { e.stopPropagation(); onOpenFile(r.full_path); }}
                     >
                       <Icon icon="document-open" size={14} />
@@ -111,7 +111,7 @@ export default function NameResultsSection({
                       size="icon"
                       variant="ghost"
                       title="Open containing folder"
-                      aria-label="Open containing folder"
+                      aria-label={`Open the containing folder for ${r.name}`}
                       onClick={(e) => { e.stopPropagation(); onOpenFolder(r.directory); }}
                     >
                       <Icon icon="folder-open" size={14} />
@@ -120,7 +120,7 @@ export default function NameResultsSection({
                       size="icon"
                       variant="ghost"
                       title="Copy full path"
-                      aria-label="Copy full path"
+                      aria-label={`Copy the full path for ${r.name}`}
                       className={copiedPath === r.full_path ? "text-[var(--color-success)]" : undefined}
                       onClick={(e) => { e.stopPropagation(); onCopyPath(r.full_path); }}
                     >

@@ -250,7 +250,14 @@ export default function AdvisorPanel() {
       {/* ── Pull progress ── */}
       {advisor.pulling && (
         <div className="advisor-pull-progress">
-          <div className="advisor-pull-bar" role="progressbar" aria-valuenow={pullPercent ?? undefined}>
+          <div
+            className="advisor-pull-bar"
+            role="progressbar"
+            aria-label={`Downloading ${model}`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={pullPercent ?? undefined}
+          >
             <div
               className="advisor-pull-fill"
               data-indeterminate={pullPercent === null}
@@ -283,7 +290,7 @@ export default function AdvisorPanel() {
 
       {/* ── Error ── */}
       {advisor.error && (
-        <div className="advisor-error">
+        <div className="advisor-error" role="alert">
           <Icon icon="warning-sign" size={14} />
           <span>{advisor.error}</span>
         </div>

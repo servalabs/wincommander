@@ -54,7 +54,8 @@ export function SecurityData() {
             <Button size="icon" variant="outline" disabled={loading} onClick={() => void refresh()} title={hasLoaded ? "Refresh security data" : "Scan security data"} aria-label={hasLoaded ? "Refresh security data" : "Scan security data"}><Icon icon={hasLoaded ? "refresh" : "search"} className={loading ? "animate-spin" : undefined} /></Button>
           </div>
         </CardHeader>
-        {error && <CardContent><p className="text-sm text-[var(--danger)]">{error}</p></CardContent>}
+        {loading && <CardContent><p className="text-sm text-[var(--text-dim)]" role="status" aria-live="polite">Collecting local security posture and Windows CVE coverage…</p></CardContent>}
+        {error && <CardContent><p className="text-sm text-[var(--danger)]" role="alert">Security data could not be refreshed: {error}</p></CardContent>}
       </Card>
 
       <Card>
@@ -62,7 +63,7 @@ export function SecurityData() {
           <div className="flex items-center justify-between gap-2"><CardTitle>Local threat posture</CardTitle><Badge tone={defenderTone}>{threat?.defender.status ?? "loading"}</Badge></div>
           <CardDescription>Microsoft Defender summary plus aggregate adapter activity from this device.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-3">
+        <CardContent className="grid gap-3 sm:grid-cols-3" aria-busy={loading}>
           <Metric label="Real-time protection" value={threat?.defender.realTimeEnabled ? "Enabled" : threat ? "Unavailable" : "Loading"} />
           <Metric label="Recent detections" value={String(threat?.defender.recentThreatCount ?? "—")} />
           <Metric label="Active adapters" value={threat ? `${threat.network.activeInterfaceCount} / ${threat.network.interfaceCount}` : "—"} />
@@ -75,7 +76,7 @@ export function SecurityData() {
           <div className="flex items-center justify-between gap-2"><CardTitle>Windows CVE coverage</CardTitle><Badge tone={cve?.status === "ok" ? "success" : "warning"}>{cve?.status === "ok" ? "Available" : "Provider required"}</Badge></div>
           <CardDescription>{cve?.status === "ok" ? `${cve.results.length} bounded result${cve.results.length === 1 ? "" : "s"} for Windows ${cve.queriedVersion}.` : "OSV is pinned for package-version data, but it does not map Windows OS versions. An approved Windows provider is required."}</CardDescription>
         </CardHeader>
-        <CardContent><p className="font-mono text-xs text-[var(--text-mute)]">Source: {cve?.source ?? "osv"} · updated: {cve?.sourceTimestamp ?? "—"}</p></CardContent>
+        <CardContent><p className="font-mono text-xs text-[var(--text-mute)]">Source: {cve?.source ?? "osv"} · updated: {cve?.sourceTimestamp ?? "—"}</p>{cve?.status !== "ok" && !loading && <p className="mt-2 text-sm text-[var(--text-dim)]" role="status">No Windows-specific coverage is available from the configured provider yet.</p>}</CardContent>
       </Card>
     </div>
   );

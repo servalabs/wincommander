@@ -409,12 +409,12 @@ export default function FleetConnectView() {
             </p>
           )}
           {agentError && (
-            <p className="fleet-connect-error">
+            <p className="fleet-connect-error" role="alert">
               <Icon icon="warning-sign" size={13} intent="danger" /> {agentError}
             </p>
           )}
           {error && (
-            <p className="fleet-connect-error">
+            <p className="fleet-connect-error" role="alert">
               <Icon icon="warning-sign" size={13} intent="danger" /> {error}
             </p>
           )}
@@ -440,7 +440,7 @@ export default function FleetConnectView() {
             <Icon icon="refresh" size={13} /> Reconnecting to the fleet server — this device stays enrolled while it retries.
           </p>
           {agentError && (
-            <p className="fleet-connect-error">
+            <p className="fleet-connect-error" role="alert">
               <Icon icon="warning-sign" size={13} intent="danger" /> {agentError}
             </p>
           )}
@@ -502,14 +502,14 @@ export default function FleetConnectView() {
 
           {/* Agent-level error from fleet_status poll (enrollment errors from Pro) */}
           {agentError && !error && !enrolling && (
-            <p className="fleet-connect-error">
+            <p className="fleet-connect-error" role="alert">
               <Icon icon="warning-sign" size={13} intent="danger" /> {agentError}
             </p>
           )}
 
           {/* Error from the connect() call itself (spawn failure, hash, license) */}
           {error && (
-            <p className="fleet-connect-error">
+            <p className="fleet-connect-error" role="alert">
               <Icon icon="warning-sign" size={13} intent="danger" /> {error}
             </p>
           )}

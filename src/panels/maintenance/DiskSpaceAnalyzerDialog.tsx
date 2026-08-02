@@ -130,7 +130,7 @@ function SizeBar({ value, max }: { value: number; max: number }) {
 function PageFlipAnimation({ size = 64 }: { size?: number }) {
     return (
         <div className="da-searching-gif-wrap" style={{ width: size, height: size }}>
-            <img src={ui["searching.gif"]} alt="Searching..." className="da-searching-gif" />
+            <img src={ui["searching.gif"]} alt="" className="da-searching-gif" />
         </div>
     );
 }
@@ -312,7 +312,7 @@ function SquarifiedTreemap({ items, totalSize, onDrill, onOpen }: {
                     <div className="da-sq-info-header">
                         <Icon icon={infoItem.isDir ? "folder-close" : "document"} size={14} />
                         <span className="da-sq-info-name">{infoItem.name}</span>
-                        <button type="button" className="da-sq-info-close" onClick={() => setInfoItem(null)}>×</button>
+                        <button type="button" className="da-sq-info-close" onClick={() => setInfoItem(null)} aria-label={`Close details for ${infoItem.name}`} title="Close details">×</button>
                     </div>
                     <div className="da-sq-info-path">{infoItem.fullPath}</div>
                     <div className="da-sq-info-stats">
@@ -351,6 +351,7 @@ function SquarifiedTreemap({ items, totalSize, onDrill, onOpen }: {
                                 borderColor: getTileBorder(item),
                             }}
                             title={`${item.fullPath}\n${formatBytes(item.size)} (${pct(item.size, totalSize)}%)`}
+                            aria-label={`${item.name}, ${formatBytes(item.size)}, ${pct(item.size, totalSize)} percent of this folder. Show details.`}
                             onClick={(e) => {
                                 e.stopPropagation();
                                 if (didDragRef.current) return;
@@ -584,6 +585,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                             <Icon icon="folder-open" size={16} />
                             <input
                                 className="da-path-input"
+                                aria-label="Folder or drive to analyse"
                                 value={scanPath}
                                 onChange={e => setScanPathPersisted(e.target.value)}
                                 onKeyDown={e => e.key === "Enter" && startScan()}
@@ -591,7 +593,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                                 spellCheck={false}
                             />
                         </div>
-                        <Button icon="folder-open" title="Browse for folder" onClick={browseFolderPicker} disabled={scanning} className="da-browse-btn" minimal />
+                        <Button icon="folder-open" title="Browse for folder" aria-label="Browse for folder to analyse" onClick={browseFolderPicker} disabled={scanning} className="da-browse-btn" minimal />
                         <Button
                             intent="primary"
                             icon={meta || largeItems.length ? "refresh" : "search"}
@@ -685,7 +687,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                             {/* Nav bar */}
                             {viewMode === "space" && crumbs.length > 0 && (
                                 <div className="da-navbar">
-                                    <Button icon="arrow-up" minimal small disabled={!canGoUp || !!loadingPath} onClick={goUp} className="da-up-btn" title="Go to parent directory" />
+                                    <Button icon="arrow-up" minimal small disabled={!canGoUp || !!loadingPath} onClick={goUp} className="da-up-btn" title="Go to parent directory" aria-label="Go to parent directory" />
                                     <div className="da-breadcrumbs">
                                         {crumbs.map((c, i) => (
                                             <span key={c} className="da-crumb-wrap">
@@ -720,7 +722,7 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                             {/* Table */}
                             <div className={`da-table-wrap ${spaceViewStyle === "treemap" ? "with-treemap" : ""}`}>
                                 {scanning ? (
-                                    <div className="da-center"><PageFlipAnimation size={120} /><div className="da-scan-caption">Searching files & folders<span className="wc-loading-dots">...</span></div></div>
+                                    <div className="da-center" role="status" aria-live="polite"><PageFlipAnimation size={120} /><div className="da-scan-caption">Searching files & folders<span className="wc-loading-dots">...</span></div></div>
                                 ) : viewMode === "large" ? (
                                     largeItems.length === 0 && meta ? (
                                         <div className="da-center"><Icon icon="search-around" size={32} color="var(--text-muted)" /><div className="da-scan-caption">No large files above this threshold</div></div>
@@ -751,12 +753,12 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                                             <table className="da-table da-large-table">
                                                 <thead>
                                                     <tr>
-                                                        <th className="da-th-check"></th>
-                                                        <th className="da-th-name">Name</th>
-                                                        <th className="da-th-size">Size</th>
-                                                        <th className="da-th-items">Type</th>
-                                                        <th className="da-th-date">Modified</th>
-                                                        <th className="da-th-actions">Actions</th>
+                                                        <th className="da-th-check" scope="col"><span className="sr-only">Select</span></th>
+                                                        <th className="da-th-name" scope="col">Name</th>
+                                                        <th className="da-th-size" scope="col">Size</th>
+                                                        <th className="da-th-items" scope="col">Type</th>
+                                                        <th className="da-th-date" scope="col">Modified</th>
+                                                        <th className="da-th-actions" scope="col">Actions</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -799,16 +801,16 @@ export default function DiskSpaceAnalyzerDialog({ isOpen, onClose, initialMode =
                                     <table className="da-table">
                                         <thead>
                                             <tr>
-                                                <th className="da-th-check" onClick={toggleSelectAll}>
+                                                <th className="da-th-check" scope="col" onClick={toggleSelectAll}>
                                                     <CheckboxControl checked={allSelected} indeterminate={someSelected} ariaLabel="Select all items" onChange={toggleSelectAll} onClick={e => e.stopPropagation()} />
                                                 </th>
-                                                <th className="da-th-name">Name</th>
-                                                <th className="da-th-bar"></th>
-                                                <th className="da-th-size">Size</th>
-                                                <th className="da-th-alloc">Alloc</th>
-                                                <th className="da-th-items">Items</th>
-                                                <th className="da-th-date">Modified</th>
-                                                <th className="da-th-del">Actions</th>
+                                                <th className="da-th-name" scope="col">Name</th>
+                                                <th className="da-th-bar" scope="col"><span className="sr-only">Relative size</span></th>
+                                                <th className="da-th-size" scope="col">Size</th>
+                                                <th className="da-th-alloc" scope="col">Allocated</th>
+                                                <th className="da-th-items" scope="col">Items</th>
+                                                <th className="da-th-date" scope="col">Modified</th>
+                                                <th className="da-th-del" scope="col">Actions</th>
                                             </tr>
                                         </thead>
                                         <tbody>

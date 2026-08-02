@@ -18,6 +18,7 @@ import { Button, Icon, Spinner, Switch, Tag } from '@/components/ui/bp';
 import useEntitlements from '@/hooks/useEntitlements';
 import { argus, type ArgusCollectorStatus, type ArgusSignalEntry } from '@/hooks/useArgus';
 import SectionCard from '../../components/shared/SectionCard';
+import ArgusSignalTable from './ArgusSignalTable';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -33,12 +34,6 @@ function formatRelative(iso: string): string {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
-}
-
-function severityColor(sev: string): string {
-  if (sev === 'critical' || sev === 'high') return 'var(--color-danger, #f87171)';
-  if (sev === 'warn' || sev === 'medium') return 'var(--color-warning, #fbbf24)';
-  return 'var(--color-text-muted)';
 }
 
 function classLabel(cls: string): string {
@@ -188,57 +183,8 @@ export default function ArgusTamperSection() {
             </div>
           )}
 
-          {/* Recent tamper signals — aggregate only */}
           {recent.length > 0 && (
-            <div className="flex flex-col gap-2">
-              <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--shield-text-muted)]">
-                Recent events ({recent.length})
-              </span>
-              <div className="flex flex-col gap-1.5 max-h-[260px] overflow-y-auto pr-1">
-                {[...recent].reverse().map((entry, i) => (
-                  <div
-                    key={`${entry.windowStart}-${entry.class}-${i}`}
-                    className="rounded border px-3 py-2 flex flex-col gap-1"
-                    style={{
-                      background: 'var(--color-bg-secondary)',
-                      borderColor: `${severityColor(entry.severity)}40`,
-                    }}
-                  >
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="text-[10px] px-1.5 py-0.5 rounded border font-mono flex-shrink-0"
-                          style={{
-                            color: severityColor(entry.severity),
-                            borderColor: `${severityColor(entry.severity)}50`,
-                            background: `${severityColor(entry.severity)}15`,
-                          }}
-                        >
-                          {entry.severity.toUpperCase()}
-                        </span>
-                        <span
-                          className="text-[10px] font-semibold"
-                          style={{ color: severityColor(entry.severity) }}
-                        >
-                          {classLabel(entry.class)}
-                        </span>
-                      </div>
-                      <span className="text-[10px] font-mono opacity-50 flex-shrink-0">
-                        {entry.windowStart.slice(11, 16)} – {entry.windowEnd.slice(11, 16)}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-mono text-[var(--shield-text-muted)] opacity-70">
-                        count:
-                      </span>
-                      <span className="text-[10px] font-mono font-semibold" style={{ color: severityColor(entry.severity) }}>
-                        {entry.magnitude}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <ArgusSignalTable entries={recent} title="Recent tamper events" formatClass={classLabel} formatMagnitude={(entry) => String(entry.magnitude)} />
           )}
 
           {recent.length === 0 && isRunning && (

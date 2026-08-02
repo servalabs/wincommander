@@ -22,6 +22,7 @@ export default function SearchHeader({ hotkey }: { hotkey: SearchHotkeyState }) 
           <input
             autoFocus
             className="search-hk-input"
+            aria-label="New search hotkey"
             placeholder="Press keys…"
             onKeyDown={hotkey.onRecordKeyDown}
             onBlur={hotkey.stopRecording}

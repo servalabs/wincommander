@@ -26,6 +26,7 @@ import { useCallback, useEffect, useState } from "react";
 import { showError } from "../../utils/toast";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
+import PrivacyEventTable from './PrivacyEventTable';
 
 interface ToolEntry {
   id: string;
@@ -269,11 +270,7 @@ export default function RemoteAccessMonitorSection({
                         Clear
                       </Button>
                     </div>
-                    <div className="flex flex-col gap-1 max-h-[200px] overflow-y-auto">
-                      {[...recent].reverse().map((r, i) => (
-                        <RecentRow key={`${r.detectedAt}-${i}`} hit={r} />
-                      ))}
-                    </div>
+                    <PrivacyEventTable title="Remote access detections" columns={["Time", "Status", "Tool", "Peer"]} rows={recent.map((r, i) => ({ id: `${r.detectedAt}-${i}`, search: `${r.confidence} ${r.tool} ${r.peer ?? ''}`, sort: [r.detectedAt, r.confidence, r.tool, r.peer ?? ''], cells: [formatRelative(r.detectedAt), r.confidence === 'high' ? 'SESSION' : 'Running', r.tool, r.peer || '—'] }))} />
                   </div>
                 )}
               </div>
@@ -284,42 +281,6 @@ export default function RemoteAccessMonitorSection({
   );
 }
 
-/** One recent-detection row. `high` = danger styling (active session);
- *  `info` = muted styling (tool merely running, no session). */
-function RecentRow({ hit }: { hit: RemoteAccessHit }) {
-  const isHigh = hit.confidence === "high";
-  return (
-    <div
-      className="flex items-center justify-between gap-2 px-3 py-1.5 rounded bg-[var(--color-bg-secondary)] border"
-      style={{
-        borderColor: isHigh ? "var(--color-danger, #f87171)" : "var(--shield-inner-border)",
-      }}
-    >
-      <span className="flex items-center gap-1.5 min-w-0">
-        <span
-          className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 font-mono border ${
-            isHigh
-              ? "bg-[var(--color-danger)]/15 text-[var(--color-danger,#f87171)] border-[var(--color-danger,#f87171)]/30"
-              : "bg-[var(--color-text-muted)]/10 text-[var(--shield-text-muted)] border-[var(--shield-inner-border)]"
-          }`}
-        >
-          {isHigh ? "SESSION" : "running"}
-        </span>
-        <span className="text-[11px] text-[var(--shield-text-subtle)] truncate" title={hit.tool}>
-          {hit.tool}
-        </span>
-        {hit.peer && (
-          <span className="text-[10px] text-[var(--shield-text-muted)] font-mono truncate" title={hit.peer}>
-            {hit.peer}
-          </span>
-        )}
-      </span>
-      <span className="text-[10px] text-[var(--shield-text-muted)] font-mono flex-shrink-0">
-        {formatRelative(hit.detectedAt)}
-      </span>
-    </div>
-  );
-}
 
 function formatRelative(iso: string): string {
   const t = Date.parse(iso);

@@ -96,6 +96,12 @@ export function SystemHygieneTools() {
       {tools.error && <Notice tone="danger" text={tools.error} />}
       {tools.summary && <Notice tone="success" text={tools.summary} />}
 
+      {tools.busy && !items && (
+        <Card><CardContent className="py-6 text-center text-sm text-[var(--text-mute)]" role="status" aria-live="polite">
+          Reviewing {tools.tool === "shortcuts" ? "broken shortcuts" : tools.tool === "environment" ? "environment entries" : "uninstall leftovers"}…
+        </CardContent></Card>
+      )}
+
       {tools.tool === "shortcuts" && tools.shortcuts && (
         <Card>
           <CardHeader>
@@ -108,7 +114,7 @@ export function SystemHygieneTools() {
               </CardDescription>
             </div>
           </CardHeader>
-          <CardContent className="max-h-[min(30rem,calc(100vh-20rem))] overflow-y-auto overscroll-contain pr-1">
+          <CardContent className="grid max-h-[min(30rem,calc(100vh-20rem))] gap-2 overflow-y-auto overscroll-contain pr-1 xl:grid-cols-2">
             {tools.shortcuts.shortcuts.map((item) => (
               <Row
                 key={item.id}
@@ -132,7 +138,7 @@ export function SystemHygieneTools() {
               Current registry values are re-read and backed up before repair.
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col gap-2">
+          <CardContent className="grid gap-2 xl:grid-cols-2">
             {tools.environment.entries.map((item) => (
               <Row
                 key={item.id}
@@ -157,7 +163,7 @@ export function SystemHygieneTools() {
               protected, and linked folders are excluded.
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col gap-2">
+          <CardContent className="grid gap-2 xl:grid-cols-2">
             {tools.leftovers.entries.map((item) => (
               <Row
                 key={item.id}
@@ -226,9 +232,12 @@ function Row({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={checked}
+      aria-label={`${checked ? "Deselect" : "Select"} ${title}`}
       className="flex w-full items-start gap-3 rounded-[var(--r)] border border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--surface-2)]"
     >
       <span
+        aria-hidden="true"
         className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[var(--r-sm)] border ${checked ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]" : "border-[var(--border-strong)]"}`}
       >
         {checked && <Icon icon="check" />}
@@ -244,7 +253,7 @@ function Row({
 }
 function Notice({ tone, text }: { tone: "success" | "danger"; text: string }) {
   return (
-    <Card>
+    <Card role={tone === "danger" ? "alert" : "status"}>
       <CardContent className="flex items-center gap-3 py-4">
         <Badge tone={tone}>{tone}</Badge>
         <p className="text-sm text-[var(--text-dim)]">{text}</p>

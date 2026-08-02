@@ -73,7 +73,7 @@ export default function TraceDetailDialog({
             <p>{category.description}</p>
           </div>
           <div className="trace-dialog__actions">
-            <Button icon="cross" minimal aria-label="Close" onClick={onClose} />
+            <Button icon="cross" minimal aria-label={`Dismiss ${category.label} details`} onClick={onClose} />
           </div>
         </header>
         <div className="trace-dialog__toolbar">
@@ -91,7 +91,7 @@ export default function TraceDetailDialog({
               aria-label={`Filter ${category.label} details`}
             />
             {query ? (
-              <button type="button" onClick={() => setQuery("")} aria-label="Clear filter">
+              <button type="button" onClick={() => setQuery("")} aria-label={`Clear ${category.label} filter`}>
                 <Icon icon="cross" size={11} />
               </button>
             ) : null}
@@ -135,13 +135,14 @@ export default function TraceDetailDialog({
           )}
         </div>
         <footer className="trace-dialog__footer">
-          <Button text="Close" minimal onClick={onClose} />
+          <Button text="Close" minimal aria-label={`Close ${category.label} details`} onClick={onClose} />
           {onClear ? (
             <Button
               text={clearLabel}
               intent="danger"
               loading={clearing}
               disabled={clearDisabled || clearing}
+              aria-label={`${clearLabel} ${category.label}`}
               onClick={onClear}
             />
           ) : null}
@@ -227,6 +228,7 @@ function TraceDataTable({ dataset, query }: { dataset: TraceDataset; query: stri
             small
             loading={copyState === "copying"}
             disabled={matchingRows.length === 0 || copyState === "copying"}
+            aria-label={`Copy ${dataset.title} as TSV`}
             onClick={() => void copyRows()}
           />
         </div>
@@ -240,7 +242,11 @@ function TraceDataTable({ dataset, query }: { dataset: TraceDataset; query: stri
                 <th className="trace-dialog__row-number" scope="col">#</th>
                 {dataset.columns.map((column) => (
                   <th key={column} scope="col" aria-sort={sortColumn === column ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}>
-                    <button type="button" onClick={() => toggleSort(column)}>
+                    <button
+                      type="button"
+                      aria-label={`Sort ${dataset.title} by ${column}`}
+                      onClick={() => toggleSort(column)}
+                    >
                       <span>{column}</span>
                       {sortColumn === column ? <Icon icon={sortDirection === "asc" ? "chevron-up" : "chevron-down"} size={10} /> : null}
                     </button>
@@ -267,11 +273,11 @@ function TraceDataTable({ dataset, query }: { dataset: TraceDataset; query: stri
                 Rows {pageView.startIndex + 1}–{pageView.startIndex + pageView.rows.length} of {matchingRows.length}
               </span>
               <div>
-                <button type="button" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={pageView.page === 0} aria-label="Previous page">
+                <button type="button" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={pageView.page === 0} aria-label={`Previous ${dataset.title} page`}>
                   <Icon icon="chevron-left" size={11} />
                 </button>
                 <strong>{pageView.page + 1} / {pageView.totalPages}</strong>
-                <button type="button" onClick={() => setPage((current) => Math.min(pageView.totalPages - 1, current + 1))} disabled={pageView.page === pageView.totalPages - 1} aria-label="Next page">
+                <button type="button" onClick={() => setPage((current) => Math.min(pageView.totalPages - 1, current + 1))} disabled={pageView.page === pageView.totalPages - 1} aria-label={`Next ${dataset.title} page`}>
                   <Icon icon="chevron-right" size={11} />
                 </button>
               </div>
