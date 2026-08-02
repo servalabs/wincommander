@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::{
-    atomic::{AtomicI32, Ordering},
-    Arc,
+    atomic::{AtomicBool, AtomicI32, Ordering},
+    Arc, LazyLock, Mutex,
 };
 
 const CATALOG_JSON: &str = include_str!("cli_catalog.generated.json");
@@ -71,6 +71,7 @@ struct CommandDescription {
     name: String,
     transport: Transport,
     registered: bool,
+    debug_only: bool,
     frontend_references: Vec<String>,
     tier: String,
     risk: Risk,
@@ -81,9 +82,78 @@ struct CommandDescription {
 #[derive(Debug)]
 struct RunRequest {
     id: String,
-    params: HashMap<String, String>,
+    params: Value,
     dry_run: bool,
     confirmation: Option<String>,
+    timeout_ms: u64,
+    timeout_explicit: bool,
+}
+
+#[derive(Clone, Debug)]
+struct TauriRunSpec {
+    id: String,
+    command: String,
+    params: Value,
+    timeout_ms: Option<u64>,
+}
+
+static TAURI_RUN: LazyLock<Mutex<Option<TauriRunSpec>>> = LazyLock::new(|| Mutex::new(None));
+static TAURI_RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
+static TAURI_RUN_BRIDGE_READY: AtomicBool = AtomicBool::new(false);
+static TAURI_RUN_EXIT_CODE: AtomicI32 = AtomicI32::new(9);
+
+struct CliExecutionLock {
+    #[cfg(windows)]
+    handle: isize,
+}
+
+impl CliExecutionLock {
+    #[cfg(windows)]
+    fn acquire() -> Result<Self, String> {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+
+        const WAIT_OBJECT_0: u32 = 0;
+        const WAIT_ABANDONED: u32 = 0x80;
+        const WAIT_TIMEOUT: u32 = 0x102;
+        let name: Vec<u16> = "WinCommander_CliExecution_lock\0".encode_utf16().collect();
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if handle.is_null() {
+            return Err("failed to create the cross-process CLI execution lock".to_string());
+        }
+        match unsafe { WaitForSingleObject(handle, 30_000) } {
+            WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(Self {
+                handle: handle as isize,
+            }),
+            WAIT_TIMEOUT => {
+                unsafe { CloseHandle(handle) };
+                Err("another mutating WinCommander CLI command is still running".to_string())
+            }
+            _ => {
+                unsafe { CloseHandle(handle) };
+                Err("failed to acquire the cross-process CLI execution lock".to_string())
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn acquire() -> Result<Self, String> {
+        Ok(Self {})
+    }
+}
+
+impl Drop for CliExecutionLock {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if self.handle != 0 {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::ReleaseMutex;
+            unsafe {
+                ReleaseMutex(self.handle as _);
+                CloseHandle(self.handle as _);
+            }
+        }
+    }
 }
 
 pub fn main(args: Vec<String>) -> i32 {
@@ -98,7 +168,7 @@ pub fn main(args: Vec<String>) -> i32 {
                 "usage": [
                     "wincommander-free commands list [--transport tauri|backend-script] [--risk read-only|mutating|destructive]",
                     "wincommander-free commands describe <tauri:name|backend:name>",
-                    "wincommander-free run <backend:name> [--params <json|@file|->] [--dry-run] [--confirm <token>]",
+                    "wincommander-free run <backend:name|tauri:name> [--params <json|@file|->] [--dry-run] [--confirm <token>] [--timeout-ms <milliseconds> (read-only only)]",
                     "wincommander-free audit catalog"
                 ],
                 "output": "JSON on stdout; process exit code reports success or failure"
@@ -158,9 +228,11 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
         ["commands", "describe", id] => Ok(Action::Describe((*id).to_string())),
         ["audit", "catalog"] => Ok(Action::AuditCatalog),
         ["run", id, rest @ ..] => {
-            let mut params = HashMap::new();
+            let mut params = json!({});
             let mut dry_run = false;
             let mut confirmation = None;
+            let mut timeout_ms = 300_000u64;
+            let mut timeout_explicit = false;
             let mut index = 0;
             while index < rest.len() {
                 match rest[index] {
@@ -178,6 +250,17 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
                         confirmation = Some((*value).to_string());
                         index += 2;
                     }
+                    "--timeout-ms" => {
+                        let value = rest.get(index + 1).ok_or("--timeout-ms requires a value")?;
+                        timeout_ms = value
+                            .parse::<u64>()
+                            .map_err(|_| "--timeout-ms must be an integer")?;
+                        if !(100..=3_600_000).contains(&timeout_ms) {
+                            return Err("--timeout-ms must be between 100 and 3600000".to_string());
+                        }
+                        timeout_explicit = true;
+                        index += 2;
+                    }
                     other => return Err(format!("unknown run argument: {other}")),
                 }
             }
@@ -186,6 +269,8 @@ fn parse_action(args: &[String]) -> Result<Action, String> {
                 params,
                 dry_run,
                 confirmation,
+                timeout_ms,
+                timeout_explicit,
             }))
         }
         _ => Err("unknown command; run `wincommander-cli help`".to_string()),
@@ -209,7 +294,7 @@ fn parse_risk(value: &str) -> Result<Risk, String> {
     }
 }
 
-fn parse_params(spec: &str) -> Result<HashMap<String, String>, String> {
+fn parse_params(spec: &str) -> Result<Value, String> {
     let raw = if spec == "-" {
         let mut input = String::new();
         std::io::stdin()
@@ -224,6 +309,13 @@ fn parse_params(spec: &str) -> Result<HashMap<String, String>, String> {
     };
     let value: Value = serde_json::from_str(&raw)
         .map_err(|error| format!("params must be a JSON object: {error}"))?;
+    if !value.is_object() {
+        return Err("params must be a JSON object".to_string());
+    }
+    Ok(value)
+}
+
+fn backend_params(value: &Value) -> Result<HashMap<String, String>, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "params must be a JSON object".to_string())?;
@@ -260,13 +352,26 @@ fn describe(entry: &GeneratedCommand) -> CommandDescription {
         id: entry.id.clone(),
         name: entry.name.clone(),
         transport: entry.transport,
-        registered: entry.registered,
+        registered: available_in_this_build(entry),
+        debug_only: is_debug_only(entry),
         frontend_references: entry.frontend_references.clone(),
         tier,
         risk,
         headless_support,
         confirmation,
     }
+}
+
+fn is_debug_only(entry: &GeneratedCommand) -> bool {
+    entry.transport == Transport::Tauri
+        && matches!(
+            entry.name.as_str(),
+            "open_devtools" | "dev_reset_state" | "dev_simulate_event" | "test_pro_dispatch"
+        )
+}
+
+fn available_in_this_build(entry: &GeneratedCommand) -> bool {
+    entry.registered && (cfg!(debug_assertions) || !is_debug_only(entry))
 }
 
 fn classify_risk(entry: &GeneratedCommand) -> Risk {
@@ -282,11 +387,21 @@ fn classify_risk(entry: &GeneratedCommand) -> Risk {
                 || name.starts_with("format-")
                 || name.contains("ssdtrim")
         }
-        Transport::Tauri => [
-            "clear", "delete", "remove", "erase", "destroy", "shred", "wipe", "clean", "format",
-        ]
-        .iter()
-        .any(|word| name.split('_').any(|token| token == *word)),
+        Transport::Tauri => {
+            [
+                "clear", "delete", "remove", "erase", "destroy", "shred", "wipe", "clean", "format",
+            ]
+            .iter()
+            .any(|word| name.split('_').any(|token| token == *word))
+                || matches!(
+                    name.as_str(),
+                    "lockdown"
+                        | "full_lockdown"
+                        | "fire_flow"
+                        | "run_backend_script"
+                        | "test_pro_dispatch"
+                )
+        }
     };
     if destructive {
         return Risk::Destructive;
@@ -316,7 +431,7 @@ fn classify_risk(entry: &GeneratedCommand) -> Risk {
 }
 
 fn classify_headless_support(entry: &GeneratedCommand) -> HeadlessSupport {
-    if entry.transport == Transport::BackendScript && entry.registered {
+    if available_in_this_build(entry) {
         return HeadlessSupport::Executable;
     }
     let name = entry.name.as_str();
@@ -377,7 +492,13 @@ fn audit_catalog() -> i32 {
     let descriptions: Vec<CommandDescription> = catalog.commands.iter().map(describe).collect();
     let missing: Vec<&CommandDescription> = descriptions
         .iter()
-        .filter(|entry| !entry.registered && !entry.frontend_references.is_empty())
+        .filter(|entry| {
+            !entry.registered && !entry.debug_only && !entry.frontend_references.is_empty()
+        })
+        .collect();
+    let missing_headless: Vec<&CommandDescription> = descriptions
+        .iter()
+        .filter(|entry| entry.registered && entry.headless_support != HeadlessSupport::Executable)
         .collect();
     let count = |risk| {
         descriptions
@@ -386,7 +507,7 @@ fn audit_catalog() -> i32 {
             .count()
     };
     print_json(&json!({
-        "ok": missing.is_empty(),
+        "ok": missing.is_empty() && missing_headless.is_empty(),
         "schemaVersion": catalog.schema_version,
         "total": descriptions.len(),
         "transports": {
@@ -398,9 +519,15 @@ fn audit_catalog() -> i32 {
             "mutating": count(Risk::Mutating),
             "destructive": count(Risk::Destructive)
         },
-        "missingDispatchers": missing
+        "headless": {
+            "executable": descriptions.iter().filter(|entry| entry.headless_support == HeadlessSupport::Executable).count(),
+            "uiOnly": descriptions.iter().filter(|entry| entry.headless_support == HeadlessSupport::UiOnly).count(),
+            "cataloged": descriptions.iter().filter(|entry| entry.headless_support == HeadlessSupport::Cataloged).count()
+        },
+        "missingDispatchers": missing,
+        "missingHeadlessAdapters": missing_headless
     }));
-    if missing.is_empty() {
+    if missing.is_empty() && missing_headless.is_empty() {
         0
     } else {
         6
@@ -440,6 +567,14 @@ fn run_command(request: RunRequest) -> i32 {
             ),
         );
     }
+    if description.risk != Risk::ReadOnly && request.timeout_explicit {
+        return fail(
+            2,
+            "invalid_arguments",
+            "--timeout-ms is only supported for read-only commands; mutating and destructive commands run to completion"
+                .to_string(),
+        );
+    }
     if let Some(expected) = &description.confirmation {
         if request.confirmation.as_deref() != Some(expected.as_str()) {
             print_json(&json!({
@@ -452,7 +587,38 @@ fn run_command(request: RunRequest) -> i32 {
             return 3;
         }
     }
-    run_backend(entry.name.clone(), request.params)
+    let _execution_lock = if description.risk == Risk::ReadOnly {
+        None
+    } else {
+        match CliExecutionLock::acquire() {
+            Ok(lock) => Some(lock),
+            Err(error) => return fail(11, "cli_busy", error),
+        }
+    };
+    // The desktop handler terminates its event loop before an IPC response can
+    // be delivered. In a one-shot CLI process, successful return is itself the
+    // requested exit operation, so emit the machine-readable acknowledgement
+    // directly instead of starting a runtime that cannot reply.
+    if entry.transport == Transport::Tauri && entry.name == "exit_app" {
+        print_json(&json!({
+            "ok": true,
+            "command": description.id,
+            "result": { "exited": true }
+        }));
+        return 0;
+    }
+    match entry.transport {
+        Transport::BackendScript => match backend_params(&request.params) {
+            Ok(params) => run_backend(entry.name.clone(), params),
+            Err(error) => fail(2, "invalid_arguments", error),
+        },
+        Transport::Tauri => run_tauri(
+            description.id,
+            entry.name.clone(),
+            request.params,
+            (description.risk == Risk::ReadOnly).then_some(request.timeout_ms),
+        ),
+    }
 }
 
 fn run_backend(command: String, params: HashMap<String, String>) -> i32 {
@@ -460,6 +626,9 @@ fn run_backend(command: String, params: HashMap<String, String>) -> i32 {
     let output_id = command_id.clone();
     let execution_code = Arc::new(AtomicI32::new(9));
     let result_code = execution_code.clone();
+    let mut context = tauri::generate_context!();
+    context.config_mut().app.windows.clear();
+    context.config_mut().build.dev_url = None;
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
@@ -487,7 +656,7 @@ fn run_backend(command: String, params: HashMap<String, String>) -> i32 {
             });
             Ok(())
         });
-    match builder.run(tauri::generate_context!()) {
+    match builder.run(context) {
         Ok(()) => result_code.load(Ordering::SeqCst),
         Err(error) => fail(
             9,
@@ -495,6 +664,202 @@ fn run_backend(command: String, params: HashMap<String, String>) -> i32 {
             format!("failed to run {command_id}: {error}"),
         ),
     }
+}
+
+fn run_tauri(id: String, command: String, params: Value, timeout_ms: Option<u64>) -> i32 {
+    match TAURI_RUN.lock() {
+        Ok(mut slot) if slot.is_none() => {
+            *slot = Some(TauriRunSpec {
+                id,
+                command,
+                params,
+                timeout_ms,
+            });
+        }
+        Ok(_) => {
+            return fail(
+                9,
+                "runtime_error",
+                "a Tauri CLI command is already active".into(),
+            )
+        }
+        Err(_) => return fail(9, "runtime_error", "Tauri CLI state is poisoned".into()),
+    }
+    TAURI_RUN_EXIT_CODE.store(9, Ordering::SeqCst);
+    TAURI_RUN_BRIDGE_READY.store(false, Ordering::SeqCst);
+    TAURI_RUN_ACTIVE.store(true, Ordering::SeqCst);
+    crate::run();
+    if TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst) {
+        let spec = TAURI_RUN.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(spec) = spec.filter(|spec| is_terminal_tauri_command(&spec.command)) {
+            print_json(&json!({
+                "ok": true,
+                "command": spec.id,
+                "result": { "detached": true, "processExitRequested": true }
+            }));
+            0
+        } else {
+            fail(
+                9,
+                "runtime_exited",
+                "the Tauri runtime exited before the command returned".into(),
+            )
+        }
+    } else {
+        TAURI_RUN_EXIT_CODE.load(Ordering::SeqCst)
+    }
+}
+
+fn is_terminal_tauri_command(command: &str) -> bool {
+    matches!(command, "lockdown" | "full_lockdown")
+}
+
+pub(crate) fn tauri_runtime_active() -> bool {
+    TAURI_RUN_ACTIVE.load(Ordering::SeqCst)
+}
+
+pub(crate) fn tauri_initialization_script() -> Result<String, String> {
+    let spec = TAURI_RUN
+        .lock()
+        .map_err(|_| "Tauri CLI state is poisoned".to_string())?
+        .clone()
+        .ok_or_else(|| "Tauri CLI request is unavailable".to_string())?;
+    let command = serde_json::to_string(&spec.command)
+        .map_err(|error| format!("failed to encode command: {error}"))?;
+    let params = serde_json::to_string(&spec.params)
+        .map_err(|error| format!("failed to encode params: {error}"))?;
+    Ok(format!(
+        r#"
+(() => {{
+  if (window.__WINCOMMANDER_CLI_STARTED__) return;
+  window.__WINCOMMANDER_CLI_STARTED__ = true;
+  const command = {command};
+  const params = {params};
+  const normalize = (value) => {{
+    if (value == null) return null;
+    if (value instanceof Error) return {{ name: value.name, message: value.message, stack: value.stack }};
+    try {{ JSON.stringify(value); return value; }} catch (_) {{ return String(value); }}
+  }};
+  const waitForInvoke = async () => {{
+    for (let attempt = 0; attempt < 500; attempt += 1) {{
+      const invoke = window.__TAURI_INTERNALS__?.invoke;
+      if (typeof invoke === "function") return invoke;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }}
+    throw new Error("Tauri invoke bridge did not initialize");
+  }};
+  void (async () => {{
+    let invoke = null;
+    try {{
+      invoke = await waitForInvoke();
+      await invoke("mark_tauri_cli_ready");
+      const result = await invoke(command, params);
+      await invoke("complete_tauri_cli", {{ ok: true, payload: normalize(result) }});
+    }} catch (error) {{
+      try {{
+        const bridge = invoke ?? await waitForInvoke();
+        await bridge("complete_tauri_cli", {{ ok: false, payload: normalize(error) }});
+      }} catch (_) {{}}
+    }}
+  }})();
+}})();
+"#
+    ))
+}
+
+pub(crate) fn start_tauri_watchdog(app: tauri::AppHandle) -> Result<(), String> {
+    let spec = TAURI_RUN
+        .lock()
+        .map_err(|_| "Tauri CLI state is poisoned".to_string())?
+        .clone()
+        .ok_or_else(|| "Tauri CLI request is unavailable".to_string())?;
+    let bridge_app = app.clone();
+    let bridge_spec = spec.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        if !TAURI_RUN_BRIDGE_READY.load(Ordering::SeqCst)
+            && TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst)
+        {
+            print_json(&json!({
+                "ok": false,
+                "command": bridge_spec.id,
+                "error": "bridge_unavailable",
+                "message": "the hidden Tauri invoke bridge did not initialize"
+            }));
+            TAURI_RUN_EXIT_CODE.store(9, Ordering::SeqCst);
+            terminate_tauri_cli(&bridge_app, 9);
+        }
+    });
+    if let Some(timeout_ms) = spec.timeout_ms {
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
+            if TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst) {
+                print_json(&json!({
+                    "ok": false,
+                    "command": spec.id,
+                    "error": "timeout",
+                    "message": format!("read-only command exceeded {timeout_ms} ms; this is a wait limit, not transactional cancellation")
+                }));
+                TAURI_RUN_EXIT_CODE.store(10, Ordering::SeqCst);
+                terminate_tauri_cli(&app, 10);
+            }
+        });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn mark_tauri_cli_ready() -> Result<(), String> {
+    if !TAURI_RUN_ACTIVE.load(Ordering::SeqCst) {
+        return Err("no Tauri CLI command is active".to_string());
+    }
+    TAURI_RUN_BRIDGE_READY.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn complete_tauri_cli(
+    app: tauri::AppHandle,
+    ok: bool,
+    payload: Value,
+) -> Result<(), String> {
+    if !TAURI_RUN_ACTIVE.swap(false, Ordering::SeqCst) {
+        return Err("no Tauri CLI command is active".to_string());
+    }
+    let spec = TAURI_RUN
+        .lock()
+        .map_err(|_| "Tauri CLI state is poisoned".to_string())?
+        .take()
+        .ok_or_else(|| "Tauri CLI request is unavailable".to_string())?;
+    let code = if ok { 0 } else { 8 };
+    if ok {
+        print_json(&json!({ "ok": true, "command": spec.id, "result": payload }));
+    } else {
+        print_json(&json!({
+            "ok": false,
+            "command": spec.id,
+            "error": "execution_failed",
+            "message": payload
+        }));
+    }
+    TAURI_RUN_EXIT_CODE.store(code, Ordering::SeqCst);
+    terminate_tauri_cli(&app, code)
+}
+
+fn terminate_tauri_cli(app: &tauri::AppHandle, code: i32) -> ! {
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    app.cleanup_before_exit();
+    std::process::exit(code)
+}
+
+pub(crate) fn abort_tauri_cli(code: i32, kind: &str, message: &str) -> ! {
+    use std::io::Write;
+    print_json(&json!({ "ok": false, "error": kind, "message": message }));
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(code)
 }
 
 fn print_json(value: &Value) {
@@ -564,6 +929,26 @@ mod tests {
         };
         assert_eq!(classify_risk(&scan_and_clean), Risk::Destructive);
 
+        for id in [
+            "tauri:lockdown",
+            "tauri:full_lockdown",
+            "tauri:fire_flow",
+            "tauri:run_backend_script",
+            "tauri:test_pro_dispatch",
+        ] {
+            let entry = catalog
+                .commands
+                .iter()
+                .find(|entry| entry.id == id)
+                .unwrap();
+            assert_eq!(classify_risk(entry), Risk::Destructive, "{id}");
+            assert_eq!(
+                describe(entry).confirmation,
+                Some(format!("DESTROY:{id}")),
+                "{id}"
+            );
+        }
+
         let export_report = GeneratedCommand {
             id: "backend:Export-Report".to_string(),
             name: "Export-Report".to_string(),
@@ -577,9 +962,44 @@ mod tests {
     #[test]
     fn params_accept_primitives_and_structures_without_shell_parsing() {
         let params = parse_params(r#"{"flag":true,"count":2,"names":["a","b"]}"#).unwrap();
-        assert_eq!(params["flag"], "true");
-        assert_eq!(params["count"], "2");
-        assert_eq!(params["names"], r#"["a","b"]"#);
+        assert_eq!(params["flag"], true);
+        assert_eq!(params["count"], 2);
+        assert_eq!(params["names"], json!(["a", "b"]));
+
+        let backend = backend_params(&params).unwrap();
+        assert_eq!(backend["flag"], "true");
+        assert_eq!(backend["count"], "2");
+        assert_eq!(backend["names"], r#"["a","b"]"#);
+    }
+
+    #[test]
+    fn every_registered_tauri_handler_is_cli_executable() {
+        let catalog = catalog().expect("catalog parses");
+        let tauri_commands: Vec<_> = catalog
+            .commands
+            .iter()
+            .filter(|entry| entry.transport == Transport::Tauri)
+            .collect();
+        assert_eq!(tauri_commands.len(), 420);
+        assert!(tauri_commands.iter().all(|entry| entry.registered));
+        assert_eq!(
+            tauri_commands
+                .iter()
+                .filter(|entry| is_debug_only(entry))
+                .count(),
+            4
+        );
+        assert!(tauri_commands
+            .iter()
+            .filter(|entry| available_in_this_build(entry))
+            .all(|entry| classify_headless_support(entry) == HeadlessSupport::Executable));
+        assert_eq!(
+            tauri_commands
+                .iter()
+                .filter(|entry| available_in_this_build(entry))
+                .count(),
+            if cfg!(debug_assertions) { 420 } else { 416 }
+        );
     }
 
     #[test]

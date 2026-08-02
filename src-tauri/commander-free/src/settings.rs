@@ -2337,6 +2337,9 @@ pub fn set_settings(settings: serde_json::Value) -> Result<serde_json::Value, St
 /// resets to OFF on relaunch, matching the frontend's in-memory AuthMode.
 static DECOY_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(test)]
+pub(crate) static GLOBAL_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 /// Enable/disable decoy read-only mode. Called from the calculator-gate auth
 /// handler with `on = (mode == "decoy")`.
 #[tauri::command]
@@ -3145,14 +3148,11 @@ mod tests {
     //
     // DECOY_MODE and SETTINGS_CACHE are process-global statics shared by every
     // test in this binary (cargo test runs #[test] fns on separate threads in
-    // parallel). GLOBAL_STATE_TEST_LOCK below serializes every test in this
-    // section so one test's cache warm-up / decoy toggle can never interleave
-    // with another's — without it, two of these tests running concurrently
-    // could race on SETTINGS_CACHE/DECOY_MODE and flake.
-    static GLOBAL_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
-
+    // parallel). GLOBAL_STATE_TEST_LOCK serializes tests that mutate or rely
+    // on those values so a cache warm-up / decoy toggle cannot interleave with
+    // another global-state assertion.
     /// Held for the lifetime of one decoy-mode test: serializes against the
-    /// other tests in this section (via GLOBAL_STATE_TEST_LOCK) and flips
+    /// other global-state tests (via GLOBAL_STATE_TEST_LOCK) and flips
     /// DECOY_MODE on immediately, guaranteeing it's always flipped back off
     /// on drop (even on panic) so no later test can observe it stuck on.
     struct DecoyModeGuard<'a> {
@@ -3160,7 +3160,7 @@ mod tests {
     }
     impl DecoyModeGuard<'_> {
         fn engage() -> Self {
-            let lock = GLOBAL_STATE_TEST_LOCK
+            let lock = super::GLOBAL_STATE_TEST_LOCK
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             DECOY_MODE.store(true, std::sync::atomic::Ordering::Relaxed);

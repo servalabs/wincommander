@@ -333,7 +333,7 @@ async fn run_cycle(app: &AppHandle) -> Duration {
 
 /// Spawn the background scheduler. Call once from `run()`'s setup hook.
 pub fn init(app: &AppHandle) {
-    app.manage(StagedState::default());
+    init_headless(app);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(INITIAL_DELAY).await;
@@ -342,6 +342,15 @@ pub fn init(app: &AppHandle) {
             tokio::time::sleep(wait).await;
         }
     });
+}
+
+/// Register only the in-memory updater state required by updater commands.
+/// The CLI uses this path so invoking an unrelated command never starts the
+/// background update scheduler or performs network I/O as a startup side effect.
+pub(crate) fn init_headless(app: &AppHandle) {
+    if app.try_state::<StagedState>().is_none() {
+        app.manage(StagedState::default());
+    }
 }
 
 /// Install the update staged in the background, then the frontend relaunches.

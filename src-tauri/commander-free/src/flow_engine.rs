@@ -1348,6 +1348,22 @@ fn queue_trigger_event(
 /// Initialize the flow engine. Called from lib.rs setup().
 /// Spawns the main event loop and registers listeners for all enabled flows.
 pub fn init(app: &AppHandle) {
+    init_headless(app);
+
+    ensure_default_flows_persisted();
+
+    // Start listeners for all enabled flows from settings
+    start_all_listeners(app);
+}
+
+/// Register the in-memory engine and execution loop without persisting default
+/// flows or starting ambient trigger listeners. Tauri CLI commands need the
+/// managed state, but a read-only command must not arm automations as an
+/// incidental process-start side effect.
+pub(crate) fn init_headless(app: &AppHandle) {
+    if app.try_state::<FlowEngineState>().is_some() {
+        return;
+    }
     let (tx, rx) = mpsc::unbounded_channel::<TriggerEvent>();
 
     let state = FlowEngineState {
@@ -1364,11 +1380,6 @@ pub fn init(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         event_loop(app_handle, rx).await;
     });
-
-    ensure_default_flows_persisted();
-
-    // Start listeners for all enabled flows from settings
-    start_all_listeners(app);
 }
 
 /// Read flows from settings and start listeners for all enabled ones.

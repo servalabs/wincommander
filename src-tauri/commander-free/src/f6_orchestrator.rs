@@ -515,6 +515,14 @@ mod tests {
     const TEST_DEVICE: &str = "test-device-f6-orch-001";
     const TEST_NOW: i64 = 1_751_000_000;
 
+    fn real_session_guard() -> std::sync::MutexGuard<'static, ()> {
+        let guard = crate::settings::GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::settings::set_decoy_mode(false);
+        guard
+    }
+
     fn deterministic_key() -> SigningKey {
         SigningKey::from_bytes(&[0x7Bu8; 32])
     }
@@ -585,6 +593,7 @@ mod tests {
 
     #[test]
     fn gate_refuses_when_self_destruct_disabled() {
+        let _session = real_session_guard();
         let counts = Arc::new(Mutex::new(CallCounts::default()));
         let deps = all_success_deps(counts.clone(), None);
 
@@ -615,6 +624,7 @@ mod tests {
 
     #[test]
     fn gate_refuses_when_reboot_to_usb_not_enabled() {
+        let _session = real_session_guard();
         let counts = Arc::new(Mutex::new(CallCounts::default()));
         let deps = all_success_deps(counts.clone(), None);
 
@@ -634,6 +644,7 @@ mod tests {
 
     #[test]
     fn gate_refuses_when_both_flags_none() {
+        let _session = real_session_guard();
         let counts = Arc::new(Mutex::new(CallCounts::default()));
         let deps = all_success_deps(counts.clone(), None);
 
@@ -649,6 +660,7 @@ mod tests {
     /// invariant from spec §6 rule 1 and SAFETY rule 2.
     #[test]
     fn keys_before_reboot_bitlocker_fail_aborts_all() {
+        let _session = real_session_guard();
         let counts = Arc::new(Mutex::new(CallCounts::default()));
         let c = counts.clone();
         let deps = F6Deps {
@@ -726,6 +738,7 @@ mod tests {
 
     #[test]
     fn keys_before_reboot_veracrypt_fail_aborts_reboot() {
+        let _session = real_session_guard();
         let counts = Arc::new(Mutex::new(CallCounts::default()));
         let c = counts.clone();
         let deps = F6Deps {
@@ -798,6 +811,7 @@ mod tests {
 
     #[test]
     fn no_usb_stage2_skipped_reboot_not_called() {
+        let _session = real_session_guard();
         // find_wipe_usb scans real removable drives; in test environments no drive
         // will have a wipe/pubkey.bin marker, so it always returns None.
         // On non-Windows it always returns None unconditionally.
@@ -883,6 +897,7 @@ mod tests {
     /// write side and by the orchestrator's sequential structure for ordering.
     #[test]
     fn stage1_all_steps_run_in_order_when_armed() {
+        let _session = real_session_guard();
         let counts = Arc::new(Mutex::new(CallCounts::default()));
         let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -986,6 +1001,7 @@ mod tests {
 
     #[test]
     fn escrow_warning_is_not_abort_proceeds_to_stage2() {
+        let _session = real_session_guard();
         let counts = Arc::new(Mutex::new(CallCounts::default()));
         let c = counts.clone();
         let deps = F6Deps {

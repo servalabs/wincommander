@@ -2,7 +2,7 @@
 
 > How it's built. Code blocks and diagrams welcome. Facts here are derived from the source under
 > `src-tauri/` and `src/`; the code is authoritative. Deeper references live in [`docs/`](docs/) —
-> see [docs/ipc.md](docs/ipc.md) for the full Free ↔ Pro wire protocol and [docs/settings-reference.md](docs/settings-reference.md) for the settings tree.
+> see [docs/ipc.md](docs/ipc.md) for the full Free ↔ Pro wire protocol, [docs/cli.md](docs/cli.md) for same-executable automation, and [docs/settings-reference.md](docs/settings-reference.md) for the settings tree.
 
 ## Overview
 
@@ -106,7 +106,7 @@ flowchart LR
 
 ## Executable open-core model
 
-- **`wincommander-free.exe`** — the general desktop UI, all `free`-tier backend, encrypted free PowerShell modules, the licence/entitlement layer, Privacy Shield orchestration, and the broker that spawns the Pro sidecar. It does not embed the Investigator workflow.
+- **`wincommander-free.exe`** — the general desktop UI, all `free`-tier backend, encrypted free PowerShell modules, the licence/entitlement layer, Privacy Shield orchestration, and the broker that spawns the Pro sidecar. Explicit CLI verbs reuse this same executable for one-shot JSON automation over all 763 backend-script commands and all 416 shipping Tauri handlers; native calls run in a minimal hidden Tauri runtime rather than mounting the dashboard. It does not embed the Investigator workflow.
 - **`wincommander-pro.exe`** — headless, no UI of its own. Contains the `paid`-tier handlers, dispatched by `feature_id` in `commander-pro/src/handlers.rs`: Defender/USB/BitLocker/RDP tweaks, ~20 Deep Clean clearers + Privacy Clean deep erasers (including the `Invoke-7Erase` shredder — a legacy dispatch name; it runs a single durable NIST SP 800-88 RNG-overwrite pass by default, user-configurable up to 7 — and the `cipher /w` unallocated-space erase), vault (VeraCrypt-CLI) volume ops, Tailscale mesh, identity/activation/branding/Quiet Mode, contingency/USB-key, the auto-erase scheduler, and productivity. It also owns the **behavioural network-intelligence watchers**: network honeypot (`honeypot.rs`), Wi-Fi Guard / rogue-AP detector (`wifi_guard.rs`), ExifTool metadata scrubber (`metadata_scrubber.rs`), WizTree disk analyzer (`disk_analyzer.rs`), and print audit — pushing proactive `Notification` frames over the pipe; the Free-side wrappers are thin `require_paid` + `dispatch_paid_command` stubs. **Fleet-product additions (2026-06):**
 - **`wincommander-investigator.exe`** — a separate private Tauri application downloaded only for verified licences carrying the literal `advanced` entitlement. It owns the case workflow UI and PDF renderer, and calls a version-matched `wincommander-pro.exe` through the authenticated named-pipe protocol.
 - **`wci-verify.exe`** — an independently distributable CLI verifier for case bundles, delivery receipts, and detached report-integrity signatures.
@@ -402,6 +402,7 @@ fleet-server/
 - [SECURITY.md](SECURITY.md) — trust boundaries & posture.
 - [OPEN_CORE.md](OPEN_CORE.md) — licence & tier rationale.
 - [docs/ipc.md](docs/ipc.md) — full Free ↔ Pro wire protocol reference.
+- [docs/cli.md](docs/cli.md) — same-executable JSON automation and safety contract.
 - [docs/settings-reference.md](docs/settings-reference.md) — complete settings-tree catalogue.
 - `wincmd-shared/src/lib.rs` — IPC wire-format source of truth.
 - `fleet-proto/src/lib.rs` — fleet wire-protocol SSOT: signing preimages + golden vectors.

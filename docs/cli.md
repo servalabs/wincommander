@@ -7,8 +7,10 @@ Run it from an elevated terminal because the shipped executable retains WinComma
 ```powershell
 wincommander-free.exe commands list
 wincommander-free.exe commands describe backend:Get-SystemInfo
+wincommander-free.exe commands describe tauri:get_log_records
 wincommander-free.exe audit catalog
 wincommander-free.exe run backend:Get-SystemInfo --params '{}'
+wincommander-free.exe run tauri:get_log_records --params '{"limit":10,"levels":["error"]}'
 ```
 
 The executable remains a Windows-subsystem application so Explorer and context-menu launches never flash a console. For deterministic PowerShell automation, wait for the process and redirect its streams:
@@ -30,8 +32,10 @@ exit $process.ExitCode
 - Mutating commands require `--confirm RUN:<command-id>`.
 - Destructive commands require `--confirm DESTROY:<command-id>`.
 - `--dry-run` never invokes the backend and reports what would execute.
+- `--timeout-ms` is available only for read-only native Tauri commands and sets a wait deadline from 100 ms to 60 minutes. It is not transactional cancellation.
+- Mutating and destructive CLI commands run to completion and are serialized across CLI processes in the current Windows session.
 - Parameters must be a JSON object supplied inline, as `@path`, or as `-` for stdin. They are parsed as data and are never evaluated as shell text.
-- Existing licence, module, administrator, investigator-mode, and Pro-sidecar checks are preserved because CLI backend commands use the same dispatcher as the GUI.
+- Existing licence, module, administrator, investigator-mode, and Pro-sidecar checks are preserved because CLI commands use the same backend and Tauri dispatchers as the GUI.
 
 Examples:
 
@@ -44,7 +48,9 @@ wincommander-free.exe run backend:Clear-DnsCache `
   --confirm DESTROY:backend:Clear-DnsCache
 ```
 
-Backend-script commands are executable headlessly. Native Tauri commands are included in the catalog; commands without a shared headless adapter report `cataloged`, while window-only operations report `ui-only`. Attempting either returns `headless_not_enabled` instead of silently opening the GUI.
+All 763 backend-script commands and all 416 release Tauri handlers are executable from the shipped Free binary. Debug builds additionally expose the four debug-only handlers, for 1,183 executable commands in total. Release builds keep those four entries cataloged for drift auditing but refuse to execute them.
+
+Native commands run through a minimal hidden Tauri runtime. CLI mode does not mount the React dashboard, create a tray icon, show a taskbar window, register hotkeys, start ambient monitors, write autostart state, or begin updater polling. The process exits after one response. A read-only wait timeout returns exit code 10; mutating commands cannot be cut off with this option while external work may still be running. Terminal Lockdown commands may return a detached acknowledgement because the production handler requests application exit after launching its cleanup worker.
 
 ## Developer checks
 

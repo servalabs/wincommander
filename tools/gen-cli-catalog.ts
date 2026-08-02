@@ -25,6 +25,7 @@ const ROOT = resolve(import.meta.dir, "..");
 const LIB_RS = resolve(ROOT, "src-tauri/commander-free/src/lib.rs");
 const BACKEND_RS = resolve(ROOT, "src-tauri/commander-free/src/backend.rs");
 const OUT = resolve(ROOT, "src-tauri/commander-free/src/cli_catalog.generated.json");
+const INTERNAL_TAURI_HANDLERS = new Set(["mark_tauri_cli_ready", "complete_tauri_cli"]);
 
 function normalizePath(path: string): string {
   return relative(ROOT, path).replaceAll("\\", "/");
@@ -108,6 +109,7 @@ async function buildCatalog(): Promise<CommandCatalog> {
   const libSource = readFileSync(LIB_RS, "utf8");
   const backendSource = readFileSync(BACKEND_RS, "utf8");
   const handlers = extractHandlerNames(libSource);
+  for (const internal of INTERNAL_TAURI_HANDLERS) handlers.delete(internal);
   const registeredBackendNames = extractBackendNames(backendSource);
   const backendNames = new Set(registeredBackendNames);
   const tauriRefs = new Map<string, Set<string>>();

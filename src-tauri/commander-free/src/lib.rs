@@ -1349,10 +1349,70 @@ fn dev_startup_trace(stage: &str) {
 #[cfg(not(wincommander_dev_profile))]
 fn dev_startup_trace(_stage: &str) {}
 
+fn setup_tauri_cli_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // Keep the CLI runtime deliberately quiet: no startup registry writes,
+    // scheduled tasks, monitors, hotkey registration, updater polling, or
+    // visible windows. Commands still receive a real AppHandle, WebviewWindow,
+    // plugins, managed state, and the exact production invoke handler.
+    sidecar::set_app_handle(app.handle().clone());
+
+    let shield_i = MenuItem::with_id(
+        app,
+        "shield_toggle",
+        "Enable Privacy Shield",
+        true,
+        None::<&str>,
+    )?;
+    app.manage(TrayShieldState::new(shield_i));
+    app.manage(PanicHotkeyState(Mutex::new("Ctrl+Shift+Q".to_string())));
+    app.manage(SearchHotkeyState(Mutex::new("Ctrl+Space".to_string())));
+    app.manage(Mutex::new(
+        file_watch_trigger::FileWatchTriggerState::default(),
+    ));
+    app.manage(HideHotkeyState(Mutex::new("Ctrl+Shift+G".to_string())));
+    app.manage(CalcModeState(Mutex::new(false)));
+
+    updater::init_headless(app.handle());
+    flow_engine::init_headless(app.handle());
+
+    let initialization_script = cli::tauri_initialization_script()?;
+    let page_load_script = initialization_script.clone();
+    let runner_window = tauri::WebviewWindowBuilder::new(
+        app,
+        "main",
+        tauri::WebviewUrl::App("cli-runtime.html".into()),
+    )
+    .title("WinCommander CLI Runtime")
+    .visible(false)
+    .focused(false)
+    .skip_taskbar(true)
+    .initialization_script(initialization_script)
+    .on_page_load(move |window, _payload| {
+        if let Err(error) = window.eval(&page_load_script) {
+            eprintln!("[wincommander-cli] failed to evaluate runner: {error}");
+        }
+    })
+    .build()?;
+    let delayed_window = runner_window.clone();
+    let delayed_script = cli::tauri_initialization_script()?;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        if let Err(error) = delayed_window.eval(&delayed_script) {
+            eprintln!("[wincommander-cli] delayed runner failed: {error}");
+        }
+    });
+
+    cli::start_tauri_watchdog(app.handle().clone())?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let cli_mode = cli::tauri_runtime_active();
     dev_startup_trace("process start");
-    log_message("info", "[System] WinCommander process starting...");
+    if !cli_mode {
+        log_message("info", "[System] WinCommander process starting...");
+    }
     // Route every panic — including ones in spawned always-on monitor threads
     // (ransomware/decoy/clipboard) — into the unified log before the default
     // handler runs. The release bin is windows_subsystem="windows", so a bare
@@ -1407,7 +1467,7 @@ pub fn run() {
     #[cfg(windows)]
     {
         let cli_args: Vec<String> = std::env::args().collect();
-        if !session_instance::acquire(&cli_args) {
+        if !cli_mode && !session_instance::acquire(&cli_args) {
             // Primary instance already running in this session and has received
             // the forwarded args.  Nothing more to do.
             std::process::exit(0);
@@ -1418,6 +1478,13 @@ pub fn run() {
     // host). ReviOS 11 keeps WebView2, so this is a guardrail for other hosts.
     #[cfg(windows)]
     if tauri::webview_version().is_err() {
+        if cli_mode {
+            cli::abort_tauri_cli(
+                9,
+                "runtime_prerequisite",
+                "Microsoft Edge WebView2 Runtime is required",
+            );
+        }
         unsafe {
             use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
             let text: Vec<u16> =
@@ -1436,12 +1503,23 @@ pub fn run() {
     }
 
     // Encrypt any legacy plaintext log lines, then trim records older than 7 days.
-    if let Ok(log_dir) = paths::user_logs_dir() {
-        let log_file = log_dir.join("wincommander.log");
-        log::migrate_plaintext_logs(&log_file);
-        log::purge_old_log_records(&log_file, 7);
+    if !cli_mode {
+        if let Ok(log_dir) = paths::user_logs_dir() {
+            let log_file = log_dir.join("wincommander.log");
+            log::migrate_plaintext_logs(&log_file);
+            log::purge_old_log_records(&log_file, 7);
+        }
     }
     dev_startup_trace("pre-builder work complete");
+    let mut context = tauri::generate_context!();
+    if cli_mode {
+        // The configured desktop window is visible and carries the full React
+        // UI. CLI mode builds its own invisible main webview in setup instead.
+        context.config_mut().app.windows.clear();
+        // Debug builds normally resolve App URLs through Vite. The CLI must be
+        // self-contained, so force Tauri's trusted bundled-asset protocol.
+        context.config_mut().build.dev_url = None;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -1467,7 +1545,10 @@ pub fn run() {
         // (called above in run()) and session_instance::start_pipe_listener()
         // (called inside setup() below).  Each Windows logon session gets its
         // own independent instance, so multiple RDP users can run simultaneously.
-        .setup(|app| {
+        .setup(move |app| {
+            if cli_mode {
+                return setup_tauri_cli_runtime(app);
+            }
             dev_startup_trace("setup entered");
             log_message(
                 "info",
@@ -2261,6 +2342,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Internal response sink for the invisible CLI runtime. It is
+            // inert during a normal desktop launch.
+            cli::mark_tauri_cli_ready,
+            cli::complete_tauri_cli,
             exit_app,
             open_log_file,
             // ── Destructive-action capability (mints a token for catastrophic ops) ──
@@ -2759,11 +2844,13 @@ pub fn run() {
             // ── Track A — selective in-Windows crypto-erase orchestrator (paid) ──
             selective_erase::erase_encrypted_container,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 
     // Release the per-session mutex so a fast restart in the same session
     // can acquire it without waiting for the OS to clean up the exited process.
     #[cfg(windows)]
-    session_instance::release();
+    if !cli_mode {
+        session_instance::release();
+    }
 }
