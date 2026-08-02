@@ -161,6 +161,7 @@ export default function ArgusDlpSection() {
               small
               disabled={monitorBusy}
               onClick={() => void refreshStatus()}
+              aria-label="Refresh DLP signals"
             >
               Refresh
             </Button>

@@ -315,6 +315,7 @@ export default function CanaryTokensSection() {
                 small
                 disabled={listenerBusy}
                 onClick={() => void stopListener()}
+                aria-label="Stop canary listener"
               >
                 Stop
               </Button>
@@ -325,6 +326,7 @@ export default function CanaryTokensSection() {
                 small
                 disabled={listenerBusy}
                 onClick={() => void startListener()}
+                aria-label="Start canary listener"
               >
                 Start
               </Button>
@@ -345,6 +347,7 @@ export default function CanaryTokensSection() {
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <HTMLSelect
+              aria-label="Canary token type"
               options={TOKEN_TYPES}
               value={tokenType}
               onChange={(e) => setTokenType(e.target.value as 'docx' | 'url')}
@@ -384,6 +387,7 @@ export default function CanaryTokensSection() {
               small
               onClick={() => void refreshTokens()}
               disabled={tokensBusy}
+              aria-label="Refresh canary tokens"
             >
               Refresh
             </Button>
@@ -440,6 +444,7 @@ export default function CanaryTokensSection() {
               small
               disabled={clearBusy || recent.length === 0}
               onClick={() => void clearRecent()}
+              aria-label="Clear canary hit history"
             >
               Clear
             </Button>

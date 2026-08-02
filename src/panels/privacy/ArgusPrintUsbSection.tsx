@@ -176,6 +176,7 @@ export default function ArgusPrintUsbSection() {
               small
               disabled={monitorBusy}
               onClick={() => void refreshStatus()}
+              aria-label="Refresh print and USB signals"
             >
               Refresh
             </Button>

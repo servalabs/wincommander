@@ -197,6 +197,7 @@ export default function RansomwareMonitorSection({
               <button
                 type="button"
                 onClick={() => setShowIntro(true)}
+                aria-label="How mass-encryption detection works"
                 className="text-[10px] px-1.5 py-0.5 rounded border border-[var(--color-accent)]/30 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10 transition-colors"
               >
                 How it works?
@@ -211,6 +212,7 @@ export default function RansomwareMonitorSection({
           <Switch
             checked={enabled}
             onChange={(e) => onPatchRansomware({ enabled: e.currentTarget.checked })}
+            aria-label="Enable mass-encryption sentinel"
           />
         </div>
 
@@ -220,6 +222,8 @@ export default function RansomwareMonitorSection({
               type="button"
               className="flex items-center justify-between w-full cursor-pointer hover:opacity-80 transition-opacity"
               onClick={() => setExpanded((v) => !v)}
+              aria-label="Configure mass-encryption sentinel"
+              aria-expanded={expanded}
             >
               <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--shield-text-muted)]">
                 Configure
@@ -245,6 +249,7 @@ export default function RansomwareMonitorSection({
                       <span className="font-mono tabular-nums text-[var(--color-accent)]">{threshold}</span>
                     </div>
                     <Slider
+                      ariaLabel="Mass-encryption file threshold"
                       min={10}
                       max={200}
                       stepSize={5}
@@ -265,6 +270,7 @@ export default function RansomwareMonitorSection({
                       <span className="font-mono tabular-nums text-[var(--color-accent)]">{windowSeconds}s</span>
                     </div>
                     <Slider
+                      ariaLabel="Mass-encryption detection window in seconds"
                       min={5}
                       max={120}
                       stepSize={5}
@@ -310,6 +316,7 @@ export default function RansomwareMonitorSection({
                           type="button"
                           onClick={() => onPatchRansomware({ action: opt.value })}
                           title={opt.hint}
+                          aria-pressed={active}
                           className={`px-2 py-1.5 rounded border text-[11px] font-medium transition-colors ${
                             active
                               ? "bg-[var(--color-accent)]/15 text-[var(--color-accent)] border-[var(--color-accent)]/50"
@@ -415,7 +422,7 @@ export default function RansomwareMonitorSection({
                       <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--color-danger,#f87171)]">
                         Recent ({recent.length})
                       </span>
-                      <Button small minimal onClick={onClearRecent}>
+                      <Button small minimal onClick={onClearRecent} aria-label="Clear mass-encryption alerts">
                         Clear
                       </Button>
                     </div>

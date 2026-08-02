@@ -201,6 +201,7 @@ export default function RemoteAccessMonitorSection({
           <Switch
             checked={enabled}
             onChange={(e) => onPatch({ enabled: e.currentTarget.checked })}
+            aria-label="Enable remote access monitoring"
           />
         </div>
 
@@ -210,6 +211,8 @@ export default function RemoteAccessMonitorSection({
               type="button"
               className="flex items-center justify-between w-full cursor-pointer hover:opacity-80 transition-opacity"
               onClick={() => setExpanded((v) => !v)}
+              aria-label="Configure remote access monitor"
+              aria-expanded={expanded}
             >
               <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--shield-text-muted)]">
                 Configure
@@ -248,6 +251,7 @@ export default function RemoteAccessMonitorSection({
                           checked={t.enabled}
                           onChange={(e) => onToggleTool(t.id, e.currentTarget.checked)}
                           className="!mb-0"
+                          aria-label={`Watch ${t.label}`}
                         />
                       </div>
                     ))}
@@ -261,7 +265,7 @@ export default function RemoteAccessMonitorSection({
                       <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--shield-text-muted)]">
                         Recent ({recent.length})
                       </span>
-                      <Button small minimal onClick={onClearRecent}>
+                      <Button small minimal onClick={onClearRecent} aria-label="Clear remote access detections">
                         Clear
                       </Button>
                     </div>

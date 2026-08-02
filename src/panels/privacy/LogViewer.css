@@ -103,8 +103,37 @@
     cursor: pointer;
 }
 
+.log-viewer-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    cursor: default;
+    background: var(--surface-2);
+    color: var(--text-mute);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1.2;
+    text-transform: uppercase;
+}
+
+.log-viewer-header:hover {
+    background: var(--surface-2);
+}
+
+.log-viewer-count-header,
+.log-viewer-count-cell {
+    min-width: 3ch;
+    text-align: right;
+}
+
 .log-viewer-row:hover {
     background: var(--surface-2);
+}
+
+.log-viewer-row[tabindex]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
 }
 
 .log-viewer-row:last-child {
@@ -178,6 +207,16 @@
     .log-viewer-row {
         grid-template-columns: 1fr auto auto;
         gap: 4px 8px;
+    }
+
+    .log-viewer-header {
+        display: none;
+    }
+
+    .log-viewer-src,
+    .log-viewer-os,
+    .log-viewer-count-cell {
+        text-align: right;
     }
 
     .log-viewer-ts {

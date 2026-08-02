@@ -169,6 +169,7 @@ export default function ArgusTamperSection() {
               small
               disabled={monitorBusy}
               onClick={() => void refreshStatus()}
+              aria-label="Refresh tamper events"
             >
               Refresh
             </Button>

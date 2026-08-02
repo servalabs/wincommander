@@ -69,15 +69,17 @@ interface ActionBtnProps {
     loading?: boolean;
     disabled?: boolean;
     onClick?: () => void;
+    ariaLabel: string;
 }
 
-function ActionBtn({ icon, className, intent, loading, disabled, onClick }: ActionBtnProps) {
+function ActionBtn({ icon, className, intent, loading, disabled, onClick, ariaLabel }: ActionBtnProps) {
     return (
         <button
             type="button"
             className={cn("action-btn", intent === "danger" && "action-btn--danger", className)}
             disabled={disabled}
             onClick={onClick}
+            aria-label={ariaLabel}
         >
             {loading ? <Spinner size={20} /> : <Icon icon={icon} size={20} />}
         </button>
@@ -707,6 +709,7 @@ export default function RightSidebar() {
                             loading={loadingAction === "dismount"}
                             disabled={!dismountAvailable}
                             onClick={dismountAvailable ? handleDismountClick : undefined}
+                            ariaLabel="Emergency dismount volumes and RAM disks"
                         />
                         <span className="action-label dismount-label">Dismount</span>
                     </div>
@@ -727,6 +730,7 @@ export default function RightSidebar() {
                             large
                             loading={qmMountingIdx !== null}
                             onClick={handleQmOpen}
+                            ariaLabel="Quick mount encrypted volume"
                         />
                         <span className="action-label">Mount</span>
                     </div>
@@ -740,6 +744,7 @@ export default function RightSidebar() {
                                 minimal
                                 large
                                 onClick={() => window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "advisor" }))}
+                                ariaLabel="Open AI Security Advisor"
                             />
                             <span className="action-label">Advisor</span>
                         </div>
@@ -753,6 +758,7 @@ export default function RightSidebar() {
                                 minimal
                                 large
                                 onClick={() => window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "search-files" }))}
+                                ariaLabel="Open instant file search"
                             />
                             <span className="action-label">Search</span>
                         </div>
@@ -775,6 +781,7 @@ export default function RightSidebar() {
                             large
                             loading={loadingAction === "shredder"}
                             onClick={handleOpenShredder}
+                            ariaLabel="Open secure file and folder deletion"
                         />
                         <span className="action-label">Delete</span>
                     </div>
@@ -794,6 +801,7 @@ export default function RightSidebar() {
                                 minimal
                                 large
                                 onClick={() => setScrubDialogOpen(true)}
+                                ariaLabel="Open metadata scrubber"
                             />
                             <span className="action-label">Scrub Meta</span>
                         </div>
@@ -825,6 +833,7 @@ export default function RightSidebar() {
                             minimal
                             large
                             loading={loadingAction === "selfDestruct"}
+                            ariaLabel={sdCountdown !== null ? "Abort lockdown countdown" : "Run configured lockdown"}
                         />
                         <span className="action-label">
                             {sdCountdown !== null

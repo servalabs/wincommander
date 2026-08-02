@@ -140,12 +140,13 @@ export default function LogViewer() {
         <div className="log-viewer">
             <div className="log-viewer-toolbar">
                 <div className="log-viewer-filters">
-                    <div className="log-level-chips">
+                    <div className="log-level-chips" role="group" aria-label="Log severity filters">
                         {LEVEL_FILTERS.map((l) => (
                             <button
                                 key={l}
                                 type="button"
                                 onClick={() => setLevel(l)}
+                                aria-pressed={level === l}
                                 className={`log-level-chip${level === l ? " active" : ""}`}
                                 style={level === l && l !== "ALL"
                                     ? { borderColor: LEVEL_COLOR[l], color: LEVEL_COLOR[l] }
@@ -155,12 +156,13 @@ export default function LogViewer() {
                             </button>
                         ))}
                     </div>
-                    <div className="log-level-chips">
+                    <div className="log-level-chips" role="group" aria-label="Log source filters">
                         {SOURCES.map((s) => (
                             <button
                                 key={s}
                                 type="button"
                                 onClick={() => setSource(s)}
+                                aria-pressed={source === s}
                                 className={`log-level-chip log-source-chip${source === s ? " active" : ""}`}
                             >
                                 {s}
@@ -196,12 +198,23 @@ export default function LogViewer() {
             <input
                 type="text"
                 className="log-viewer-search"
+                aria-label="Search log messages"
                 placeholder="Search messages…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
             />
 
-            <div className="log-viewer-list">
+            <div className="log-viewer-list" role="table" aria-label="WinCommander diagnostic log records">
+                {grouped.length > 0 && (
+                    <div className="log-viewer-row log-viewer-header" role="row">
+                        <span role="columnheader">Date &amp; time</span>
+                        <span role="columnheader">Level</span>
+                        <span role="columnheader">Source</span>
+                        <span role="columnheader">OS</span>
+                        <span role="columnheader">Message</span>
+                        <span role="columnheader" className="log-viewer-count-header">Count</span>
+                    </div>
+                )}
                 {grouped.length === 0 && (
                     <div className="log-viewer-empty">
                         <Icon icon="document" size={18} />
@@ -215,26 +228,38 @@ export default function LogViewer() {
                         <div
                             key={key}
                             className={`log-viewer-row${expanded.has(key) ? " expanded" : ""}`}
+                            role="row"
+                            tabIndex={0}
+                            aria-expanded={expanded.has(key)}
                             onClick={() => toggleRow(key)}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    toggleRow(key);
+                                }
+                            }}
                             title="Click to expand"
                         >
-                            <span className="log-viewer-ts">
+                            <span className="log-viewer-ts" role="cell">
                                 {r.date} {r.timestamp}
                             </span>
                             <span
                                 className="log-viewer-level"
+                                role="cell"
                                 style={{ color: colorForRecordLevel(r.level) }}
                             >
                                 {r.level}
                             </span>
-                            <span className="log-viewer-src">{r.source.toUpperCase()}</span>
-                            <span className="log-viewer-os" title={`Operating system: ${osLabel}`}>
+                            <span className="log-viewer-src" role="cell">{r.source.toUpperCase()}</span>
+                            <span className="log-viewer-os" role="cell" title={`Operating system: ${osLabel}`}>
                                 {osLabel}
                             </span>
-                            <span className="log-viewer-msg">{r.message}</span>
-                            {(r.occurrences ?? 1) > 1 && (
-                                <span className="log-viewer-count" title={`First ${r.firstSeen ?? ''} · Last ${r.lastSeen ?? ''}`}>×{r.occurrences}</span>
-                            )}
+                            <span className="log-viewer-msg" role="cell">{r.message}</span>
+                            <span role="cell" className="log-viewer-count-cell">
+                                {(r.occurrences ?? 1) > 1 && (
+                                    <span className="log-viewer-count" title={`First ${r.firstSeen ?? ''} · Last ${r.lastSeen ?? ''}`}>×{r.occurrences}</span>
+                                )}
+                            </span>
                         </div>
                     );
                 })}

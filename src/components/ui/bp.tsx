@@ -1579,6 +1579,8 @@ export function HTMLSelect({
   style,
   onKeyDown,
   children,
+  "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
 }: {
   options?: SelectOption[];
   value?: string | number;
@@ -1595,6 +1597,8 @@ export function HTMLSelect({
   style?: React.CSSProperties;
   onKeyDown?: React.KeyboardEventHandler<HTMLSelectElement>;
   children?: React.ReactNode;
+  "aria-label"?: string;
+  "aria-labelledby"?: string;
 }) {
   return (
     <div style={style} className={cn("relative inline-flex items-center", fill && "w-full", className)}>
@@ -1606,6 +1610,8 @@ export function HTMLSelect({
         disabled={disabled}
         id={id}
         name={name}
+        aria-label={ariaLabel}
+        aria-labelledby={ariaLabelledBy}
         className={cn(
           "h-9 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] pl-3 pr-8 text-[13px] text-[var(--text)] appearance-none focus:outline-none focus:ring-2 focus:ring-[var(--accent-line)] disabled:opacity-50 disabled:pointer-events-none",
           fill && "w-full"
@@ -2001,6 +2007,7 @@ export function Slider({
   onRelease,
   disabled,
   className,
+  ariaLabel,
 }: {
   min?: number;
   max?: number;
@@ -2014,6 +2021,7 @@ export function Slider({
   vertical?: boolean;
   className?: string;
   showTrackFill?: boolean;
+  ariaLabel?: string;
 }) {
   return (
     <UiSlider
@@ -2025,6 +2033,7 @@ export function Slider({
       onValueChange={(v: number[]) => onChange?.(v[0] ?? 0)}
       onValueCommit={(v: number[]) => onRelease?.(v[0] ?? 0)}
       className={className}
+      thumbAriaLabel={ariaLabel}
     />
   );
 }

@@ -126,7 +126,7 @@ export default function PrintActivitySection() {
             style={{ marginBottom: 0 }}
           />
           {toggling && <Spinner size={14} />}
-          <Button icon="refresh" minimal small onClick={refresh} disabled={loading}>
+          <Button icon="refresh" minimal small onClick={refresh} disabled={loading} aria-label="Refresh print audit events">
             Refresh
           </Button>
         </div>

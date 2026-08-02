@@ -115,6 +115,7 @@ export default function LockdownWordsSection({
           type="button"
           role="switch"
           aria-checked={enabled}
+          aria-label="Enable typed lockdown words"
           className={`lockdown-trigger-toggle ${enabled ? 'is-on' : ''}`}
           onClick={() => onPatch({ enabled: !enabled })}
         />
@@ -124,6 +125,7 @@ export default function LockdownWordsSection({
         <button
           type="button"
           onClick={() => setShowIntro(true)}
+          aria-label="How typed lockdown words work"
           style={{ background: 'none', border: 'none', padding: 0, color: 'var(--color-accent)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline' }}
         >
           How it works?
@@ -136,6 +138,8 @@ export default function LockdownWordsSection({
             type="button"
             className="flex items-center justify-between w-full cursor-pointer hover:opacity-80 transition-opacity"
             onClick={() => setExpanded(v => !v)}
+            aria-label="Configure typed lockdown words"
+            aria-expanded={expanded}
           >
             <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--shield-text-muted)]">
               {phrases.length} registered phrases
@@ -183,6 +187,7 @@ export default function LockdownWordsSection({
                         minimal
                         icon="cross"
                         onClick={() => onRemove(p.hash)}
+                        aria-label={`Remove ${p.label}`}
                       />
                     </div>
                   ))}
@@ -218,6 +223,7 @@ export default function LockdownWordsSection({
         <DialogBody>
           <FormGroup label="Label" labelInfo="(visible to you only)">
             <InputGroup
+              aria-label="Lockdown word label"
               value={newLabel}
               onChange={(e) => setNewLabel(e.currentTarget.value)}
               placeholder="e.g. Daily standup"
@@ -230,6 +236,7 @@ export default function LockdownWordsSection({
             helperText="Stored as SHA-256 only. Plaintext is discarded immediately."
           >
             <InputGroup
+              aria-label="Lockdown secret phrase"
               value={newPhrase}
               onChange={(e) => setNewPhrase(e.currentTarget.value)}
               placeholder="e.g. she sells seashells"

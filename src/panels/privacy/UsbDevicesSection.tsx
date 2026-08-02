@@ -799,7 +799,7 @@ export default function UsbDevicesSection() {
             onChange={(e) => toggleMetering((e.target as HTMLInputElement).checked)}
             label="Meter data transfer"
           />
-          <Button icon="refresh" minimal small onClick={() => void refresh()} disabled={busy}>
+          <Button icon="refresh" minimal small onClick={() => void refresh()} disabled={busy} aria-label="Refresh USB device timeline">
             Refresh
           </Button>
           <Button
@@ -808,6 +808,7 @@ export default function UsbDevicesSection() {
             small
             onClick={clear}
             disabled={busy || entries.length === 0}
+            aria-label="Clear USB device timeline"
           >
             Clear
           </Button>
@@ -975,6 +976,7 @@ export default function UsbDevicesSection() {
                         intent="danger"
                         minimal
                         small
+                        aria-label={`Block ${name}`}
                         disabled={busy || isBlocked || !proInstalled}
                         onClick={() => void blockDevice(entry)}
                         title={
@@ -989,6 +991,7 @@ export default function UsbDevicesSection() {
                         intent="success"
                         minimal
                         small
+                        aria-label={`Allow ${name}`}
                         disabled={busy || !proInstalled}
                         onClick={() => void allowDevice(entry)}
                         title={
@@ -1008,6 +1011,7 @@ export default function UsbDevicesSection() {
                             intent="warning"
                             minimal
                             small
+                            aria-label={`Make ${name} read-only`}
                             disabled={busy || !resolvedLetter}
                             onClick={() =>
                               resolvedLetter && void setVolumeReadonly(resolvedLetter, true)
@@ -1047,6 +1051,7 @@ export default function UsbDevicesSection() {
                 small
                 onClick={clearHidAlerts}
                 disabled={busy}
+                aria-label="Clear BadUSB alerts"
               >
                 Clear alerts
               </Button>
@@ -1118,6 +1123,7 @@ export default function UsbDevicesSection() {
                 small
                 onClick={clearAutoActions}
                 disabled={autoSandboxBusy}
+                aria-label="Clear USB auto-isolate actions"
               >
                 Clear
               </Button>
@@ -1134,7 +1140,7 @@ export default function UsbDevicesSection() {
 
           {/* Mode selector */}
           {autoSandboxRunning && (
-            <div className="flex items-center gap-2 mt-1">
+            <div className="flex items-center gap-2 mt-1" role="group" aria-label="USB auto-isolate mode">
               <div className="text-xs opacity-70">Mode:</div>
               {(['off', 'observe', 'enforce'] as AutoSandboxMode[]).map((m) => (
                 <Button
@@ -1151,6 +1157,7 @@ export default function UsbDevicesSection() {
                       : undefined
                   }
                   disabled={autoSandboxBusy}
+                  aria-pressed={autoSandboxMode === m}
                   onClick={() => void setAutoSandboxModeCmd(m)}
                 >
                   {m.charAt(0).toUpperCase() + m.slice(1)}

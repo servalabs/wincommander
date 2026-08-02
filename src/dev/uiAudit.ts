@@ -229,6 +229,28 @@ export function createUiAuditSettings(): AppSettings {
         branding: { companyName: "ServaLabs", productName: "WinCommander" },
         advancedToolsEnabled: false,
       },
+      privacy: {
+        pasteMonitorCryptoSwapEnabled: true,
+        decoyMonitor: {
+          enabled: true,
+          enrolledPaths: ["C:\\Audit\\Decoys\\Passwords.xlsx"],
+        },
+        ransomwareMonitor: {
+          enabled: true,
+          threshold: 50,
+          windowSeconds: 30,
+          customWatchDirs: ["C:\\Audit\\Cases"],
+          action: "monitor",
+        },
+        remoteAccessMonitor: {
+          enabled: true,
+          tools: { "audit-rdp": true },
+        },
+        screenCapture: {
+          detectionEnabled: true,
+          protectWindow: false,
+        },
+      },
     },
     current: {
       device: {
@@ -557,6 +579,56 @@ export function uiAuditDirectResponse(command: string): unknown {
       return { state: "checkout_pending", providerStatus: "created", amount: 7_900, currency: "USD", activated: false };
     case "vpn_kill_switch_status":
       return { armed: false, fired: false, tunnelState: "up", lastFiredAt: 0 };
+    case "usb_monitor_status":
+      return { running: true, notify: true };
+    case "usb_metering_status":
+      return true;
+    case "usb_hid_guard_status":
+      return { running: true, alertCount: 1 };
+    case "usb_autosandbox_status":
+      return { running: true, mode: "observe", recentCount: 1 };
+    case "usb_device_trust_score":
+      return {
+        deviceKey: "0781:5581:storage:AUDIT123",
+        score: 62,
+        signals: { serialStable: true, isHid: false, isMassStorage: true, knownVendor: true, hidAlerts: 0, quarantineActions: 0, transferBytes: 9437184 },
+      };
+    case "remote_access_monitor_status":
+      return { running: true, watchingTools: 1, triggered: true };
+    case "get_last_access_tracking_status":
+      return { enabled: false, raw_value: 2, system_managed: true };
+    case "screen_capture_watch_status":
+      return { running: true, lastTick: "2026-08-01T22:45:00Z" };
+    case "get_print_audit_status":
+      return { channelEnabled: true, channelPresent: true };
+    case "canary_listener_status":
+      return { running: true, port: 8765 };
+    case "argus_app_usage_status":
+      return { running: true, startedAt: "2026-08-01T21:00:00Z", intervalMs: 10_000 };
+    case "argus_dlp_status":
+    case "argus_tamper_status":
+    case "argus_print_usb_status":
+      return { running: true, startedAt: "2026-08-01T21:00:00Z" };
+    case "argus_app_usage_recent":
+      return [
+        { windowStart: "2026-08-01T22:30:00Z", windowEnd: "2026-08-01T22:45:00Z", activeSeconds: 780, idleSeconds: 120, topCategory: "development", categoryScores: { development: 0.72, communication: 0.18, other: 0.1 } },
+        { windowStart: "2026-08-01T22:15:00Z", windowEnd: "2026-08-01T22:30:00Z", activeSeconds: 640, idleSeconds: 260, topCategory: "communication", categoryScores: { communication: 0.61, development: 0.29, other: 0.1 } },
+      ];
+    case "argus_dlp_recent":
+      return [
+        { windowStart: "2026-08-01T22:30:00Z", windowEnd: "2026-08-01T22:45:00Z", kind: "usb_transfer", class: "removable_media", magnitude: 9437184, severity: "warning" },
+        { windowStart: "2026-08-01T22:15:00Z", windowEnd: "2026-08-01T22:30:00Z", kind: "clipboard_pattern", class: "credential_signal", magnitude: 2, severity: "high" },
+      ];
+    case "argus_tamper_recent":
+      return [
+        { windowStart: "2026-08-01T22:30:00Z", windowEnd: "2026-08-01T22:45:00Z", kind: "log_clear_attempt", class: "evidence_integrity", magnitude: 1, severity: "high" },
+        { windowStart: "2026-08-01T22:15:00Z", windowEnd: "2026-08-01T22:30:00Z", kind: "sidecar_restart", class: "runtime_integrity", magnitude: 1, severity: "warning" },
+      ];
+    case "argus_print_usb_recent":
+      return [
+        { windowStart: "2026-08-01T22:30:00Z", windowEnd: "2026-08-01T22:45:00Z", kind: "print", class: "paper_output", magnitude: 12, severity: "warning" },
+        { windowStart: "2026-08-01T22:15:00Z", windowEnd: "2026-08-01T22:30:00Z", kind: "removable_media", class: "device_attach", magnitude: 1, severity: "info" },
+      ];
     case "fleet_status":
       return { connected: false, deviceId: "", serverUrl: "", lastEnrollAt: null, lastError: null, retrying: false, pendingApproval: false };
     case "app_check_for_updates_doh":
@@ -648,8 +720,10 @@ export function uiAuditDirectResponse(command: string): unknown {
       };
     case "get_log_records":
       return [
+        { date: "2026-08-01", timestamp: "22:43:51", level: "ERROR", source: "ui", os: "Windows", message: "Audit panel boundary captured a representative rendering failure with a detailed component stack." },
+        { date: "2026-08-01", timestamp: "22:42:17", level: "WARN", source: "pro", os: "Windows", message: "Sidecar connection exceeded the expected response window; retry remains available." },
+        { date: "2026-08-01", timestamp: "22:41:42", level: "ERROR", source: "core", os: "Windows", message: "Settings snapshot verification rejected a stale revision and preserved the last known-good copy.", occurrences: 3, firstSeen: "2026-08-01 22:40:58", lastSeen: "2026-08-01 22:41:42" },
         { date: "2026-08-01", timestamp: "22:41:09", level: "INFO", source: "core", os: "Windows", message: "UI audit fixture loaded" },
-        { date: "2026-08-01", timestamp: "22:42:17", level: "WARN", source: "pro", os: "Windows", message: "Example structured warning for layout verification" },
       ];
     case "get_recent_downloads":
       return [
@@ -716,8 +790,17 @@ export function uiAuditDirectResponse(command: string): unknown {
             totalPluggedSecs: 1800,
             sessionCount: 3,
           },
+          auditKeyboard: {
+            identity: { key: "046d:c31c:hid:AUDITKBD", vid: "046d", pid: "c31c", friendlyName: "Audit Keyboard", isHid: true, isMassStorage: false, instanceId: "HID\\AUDITKBD" },
+            lastSeen: 1785623700,
+            totalPluggedSecs: 7200,
+            sessionCount: 8,
+          },
         },
-        sessions: [{ deviceKey: "0781:5581:storage:AUDIT123", attachedAt: 1785623100, detachedAt: null, volumeLetter: "E:" }],
+        sessions: [
+          { deviceKey: "0781:5581:storage:AUDIT123", attachedAt: 1785623100, detachedAt: null, volumeLetter: "E:" },
+          { deviceKey: "046d:c31c:hid:AUDITKBD", attachedAt: 1785616500, detachedAt: null, volumeLetter: null },
+        ],
       };
     default:
       if (command.endsWith("_list") || command.startsWith("list_") || command.includes("_recent")) return [];
@@ -821,6 +904,23 @@ export function installUiAuditMocks(): void {
     if (command === "fleet_disconnect") {
       fleetStatus = { ...fleetStatus, connected: false, retrying: false, pendingApproval: false };
       return null;
+    }
+    if (command === "usb_device_trust_score") {
+      const deviceKey = String(args.deviceKey ?? "");
+      const isHid = deviceKey.includes(":hid:");
+      return {
+        deviceKey,
+        score: isHid ? 24 : 62,
+        signals: {
+          serialStable: !isHid,
+          isHid,
+          isMassStorage: !isHid,
+          knownVendor: true,
+          hidAlerts: isHid ? 1 : 0,
+          quarantineActions: 0,
+          transferBytes: isHid ? 0 : 9_437_184,
+        },
+      };
     }
     return uiAuditDirectResponse(command);
   }, { shouldMockEvents: true });

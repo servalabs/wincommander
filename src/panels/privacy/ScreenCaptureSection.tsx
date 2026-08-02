@@ -98,6 +98,7 @@ export default function ScreenCaptureSection({
           checked={detectionEnabled}
           disabled={busy}
           onChange={(e) => void toggleDetection(e.currentTarget.checked)}
+          aria-label="Detect screen-capture tools"
         />
         <div className="screencap-row-text">
           <span className="screencap-row-label">Detect screen-capture tools</span>
@@ -116,6 +117,7 @@ export default function ScreenCaptureSection({
           checked={protectWindow}
           disabled={busy}
           onChange={(e) => void toggleProtection(e.currentTarget.checked)}
+          aria-label="Protect this window from capture"
         />
         <div className="screencap-row-text">
           <span className="screencap-row-label">Protect this window from capture</span>
@@ -140,6 +142,7 @@ export default function ScreenCaptureSection({
             type="button"
             className="screencap-disclosure"
             onClick={() => setExpanded(!expanded)}
+            aria-expanded={expanded}
           >
             <span className="screencap-disclosure-label">
               Recent detections ({recent.length})
@@ -155,7 +158,7 @@ export default function ScreenCaptureSection({
             <>
               {recent.length > 0 && (
                 <div className="screencap-recent-actions">
-                  <Button minimal small icon="trash" onClick={() => void clearRecent()}>
+                  <Button minimal small icon="trash" onClick={() => void clearRecent()} aria-label="Clear screen-capture detections">
                     Clear
                   </Button>
                 </div>

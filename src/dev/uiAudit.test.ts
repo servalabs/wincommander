@@ -219,6 +219,28 @@ describe("UI audit fixture", () => {
     };
     expect(Object.keys(usbTimeline.records).length).toBeGreaterThan(0);
     expect(usbTimeline.sessions.length).toBeGreaterThan(0);
+
+    const logs = uiAuditDirectResponse("get_log_records") as Array<{ level: string; source: string; occurrences?: number }>;
+    expect(logs.filter((record) => record.level === "ERROR" || record.level === "WARN").length).toBeGreaterThan(2);
+    expect(new Set(logs.map((record) => record.source)).size).toBeGreaterThan(2);
+    expect(logs.some((record) => (record.occurrences ?? 1) > 1)).toBe(true);
+
+    const usbStatus = uiAuditDirectResponse("usb_monitor_status") as { running: boolean; notify: boolean };
+    const usbTimelineRows = uiAuditDirectResponse("get_usb_timeline") as { records: Record<string, unknown>; sessions: unknown[] };
+    expect(usbStatus).toEqual({ running: true, notify: true });
+    expect(Object.keys(usbTimelineRows.records).length).toBeGreaterThan(1);
+    expect(usbTimelineRows.sessions.length).toBeGreaterThan(1);
+    expect(uiAuditDirectResponse("usb_metering_status")).toBe(true);
+    expect(uiAuditDirectResponse("usb_hid_guard_status")).toMatchObject({ running: true, alertCount: 1 });
+    expect(uiAuditDirectResponse("get_last_access_tracking_status")).toEqual({
+      enabled: false,
+      raw_value: 2,
+      system_managed: true,
+    });
+
+    for (const command of ["argus_dlp_recent", "argus_tamper_recent", "argus_print_usb_recent", "argus_app_usage_recent"]) {
+      expect((uiAuditDirectResponse(command) as unknown[]).length).toBeGreaterThan(1);
+    }
   });
 
   test("populates filename, indexed-content, drive, purchase, and drift contracts", () => {

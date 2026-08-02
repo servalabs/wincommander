@@ -257,7 +257,7 @@ export default function RdpIdleCard() {
                                             {isAdvanced ? "Closes outgoing RDP client sessions when you have been idle beyond the threshold." : "Automatically closes remote desktop sessions if you step away too long."}
                                         </p>
                                     </div>
-                                    <Switch checked={hasPaid && rdpIdleEnabled} disabled={rdpIdleLocked} onChange={(e) => {
+                                    <Switch checked={hasPaid && rdpIdleEnabled} disabled={rdpIdleLocked} aria-label="Close outgoing RDP sessions after idle timeout" onChange={(e) => {
                                         if (!hasPaid) { window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Idle Session Monitor" } })); return; }
                                         const next = e.currentTarget.checked;
                                         console.log("[RdpIdle] Toggle requested:", next);
@@ -272,6 +272,7 @@ export default function RdpIdleCard() {
                                         <div className="flex items-center justify-between gap-3">
                                             <span className="text-xs font-mono text-[var(--shield-text-subtle)]">{isAdvanced ? "Idle timeout" : "Disconnect after"}</span>
                                             <HTMLSelect
+                                                aria-label="Outgoing RDP idle timeout"
                                                 value={timeoutPreset}
                                                 onChange={(e) => {
                                                     const v = Number(e.currentTarget.value);
@@ -286,6 +287,7 @@ export default function RdpIdleCard() {
                                         {timeoutPreset === -1 && (
                                             <div className="flex items-center gap-2">
                                                 <input type="number" min={10} max={86400} value={rdpCustomTime}
+                                                    aria-label="Custom outgoing RDP idle timeout in seconds"
                                                     onChange={e => setRdpCustomTime(e.target.value)}
                                                     onKeyDown={e => {
                                                         if (e.key === 'Enter') {
@@ -305,6 +307,7 @@ export default function RdpIdleCard() {
                                         <div className="flex items-center justify-between gap-3">
                                             <span className="text-xs font-mono text-[var(--shield-text-subtle)]">{isAdvanced ? "Warning countdown" : "Warn before close"}</span>
                                             <HTMLSelect
+                                                aria-label="Outgoing RDP warning countdown"
                                                 value={warningPreset}
                                                 onChange={(e) => {
                                                     const v = Number(e.currentTarget.value);
@@ -319,6 +322,7 @@ export default function RdpIdleCard() {
                                         {warningPreset === -1 && (
                                             <div className="flex items-center gap-2">
                                                 <input type="number" min={5} max={3600} value={rdpCustomWarningTime}
+                                                    aria-label="Custom outgoing RDP warning countdown in seconds"
                                                     onChange={e => setRdpCustomWarningTime(e.target.value)}
                                                     onKeyDown={e => {
                                                         if (e.key === 'Enter') {
@@ -391,6 +395,7 @@ export default function RdpIdleCard() {
                                 <div className="flex items-center gap-2 flex-shrink-0">
                                     {applyingIncoming && <Spinner size={14} />}
                                     <Switch
+                                        aria-label="Sign out idle incoming RDP sessions"
                                         checked={hasPaid && rdpIncomingEnabled}
                                         disabled={applyingIncoming}
                                         onChange={(e) => {

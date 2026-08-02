@@ -40,7 +40,7 @@ function ShieldOption({ label, tooltip, checked, onChange, disabled }: {
                     <Icon icon="info-sign" size={11} className="physical-shield-info-icon" />
                 </Tooltip>
             </span>
-            <Switch checked={checked} onChange={(e) => onChange(e.currentTarget.checked)} disabled={disabled} />
+            <Switch checked={checked} onChange={(e) => onChange(e.currentTarget.checked)} disabled={disabled} aria-label={label} />
         </div>
     );
 }
@@ -55,7 +55,7 @@ function ShieldSlider({ label, value, min, max, step, val, onChange, disabled }:
                 <span>{label}</span>
                 <span className="font-mono tabular-nums text-[var(--color-accent)]">{value}</span>
             </div>
-            <Slider min={min} max={max} stepSize={step} labelRenderer={false} value={val} onChange={(v) => onChange(v)} disabled={disabled} />
+            <Slider ariaLabel={label} min={min} max={max} stepSize={step} labelRenderer={false} value={val} onChange={(v) => onChange(v)} disabled={disabled} />
         </div>
     );
 }

@@ -260,12 +260,14 @@ export default function DecoyMonitorSection({
           <Switch
             checked={enabled}
             onChange={(e) => onPatchDecoy({ enabled: e.currentTarget.checked })}
+            aria-label="Enable decoy file monitor"
           />
           <div className="flex flex-col gap-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
                 onClick={() => setShowIntro(true)}
+                aria-label="How decoy file monitoring works"
                 className="text-[10px] px-1.5 py-0.5 rounded border border-[var(--color-accent)]/30 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10 transition-colors"
               >
                 How it works?
@@ -290,6 +292,8 @@ export default function DecoyMonitorSection({
               type="button"
               className="flex items-center justify-between w-full cursor-pointer hover:opacity-80 transition-opacity"
               onClick={() => setExpanded((v) => !v)}
+              aria-label="Configure decoy file monitor"
+              aria-expanded={expanded}
             >
               <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--shield-text-muted)]">
                 Configure
@@ -423,7 +427,7 @@ export default function DecoyMonitorSection({
                       <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--color-danger,#f87171)]">
                         Recent ({recent.length})
                       </span>
-                      <Button small minimal onClick={onClearRecent}>
+                      <Button small minimal onClick={onClearRecent} aria-label="Clear decoy access events">
                         Clear
                       </Button>
                     </div>
