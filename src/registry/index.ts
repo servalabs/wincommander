@@ -67,7 +67,10 @@ export function getRadarRecommendationToggles(): ToggleDef[] {
  * Irreversible commands are excluded; action-style rows are allowed when they
  * still expose ideal/current state because the owner wants one-shot drift repair. */
 export function getRadarDriftToggles(): ToggleDef[] {
-  return ALL_TOGGLES.filter((t) => !t.irreversible);
+  // `radar-only` entries describe bespoke cards whose actions use direct
+  // Tauri commands. They are findings metadata, not generic backend toggles,
+  // and must never be sent through executeBackendCommand by auto-heal.
+  return ALL_TOGGLES.filter((t) => !t.irreversible && t.section !== "radar-only");
 }
 
 // ── Setup helpers ────────────────────────────────────────────────────

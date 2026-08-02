@@ -14,6 +14,7 @@ mod authz;
 mod autostart;
 mod backend;
 mod child_jobs;
+pub mod cli;
 pub use wincmd_shared::command_strings;
 mod auth_anomaly;
 mod canary_tokens;

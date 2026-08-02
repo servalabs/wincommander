@@ -29,6 +29,8 @@
     "tauri": "bun x tauri",
     "gen:types": "bun run tools/gen-types.ts",
     "gen:types:check": "bun run tools/gen-types.ts --check",
+    "gen:cli-catalog": "bun run tools/gen-cli-catalog.ts",
+    "gen:cli-catalog:check": "bun run tools/gen-cli-catalog.ts --check",
     "lint:tiers": "bun run tools/check-tier-invariants.ts && bun run tools/check-tier-drift.ts",
     "lint:strings-free": "powershell -ExecutionPolicy Bypass -File tools/strings-grep-free.ps1 -HardGate",
     "lint": "eslint . --ext .ts,.tsx --max-warnings=0"

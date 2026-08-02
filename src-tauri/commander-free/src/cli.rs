@@ -1,0 +1,593 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! Headless, machine-readable WinCommander command surface.
+//!
+//! The catalog is generated from the desktop handler registry, backend
+//! dispatcher, and frontend call sites. Backend-script commands execute through
+//! the same `run_backend_script` function used by the GUI, preserving licence,
+//! module, administrator, investigator-mode, and Pro-sidecar enforcement.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::io::Read;
+use std::sync::{
+    atomic::{AtomicI32, Ordering},
+    Arc,
+};
+
+const CATALOG_JSON: &str = include_str!("cli_catalog.generated.json");
+
+pub fn is_cli_invocation(args: &[String]) -> bool {
+    matches!(
+        args.first().map(String::as_str),
+        Some("commands" | "audit" | "run" | "help" | "--help" | "-h")
+    )
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeneratedCatalog {
+    schema_version: u32,
+    commands: Vec<GeneratedCommand>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeneratedCommand {
+    id: String,
+    name: String,
+    transport: Transport,
+    registered: bool,
+    frontend_references: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum Transport {
+    Tauri,
+    BackendScript,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum Risk {
+    ReadOnly,
+    Mutating,
+    Destructive,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum HeadlessSupport {
+    Executable,
+    UiOnly,
+    Cataloged,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommandDescription {
+    id: String,
+    name: String,
+    transport: Transport,
+    registered: bool,
+    frontend_references: Vec<String>,
+    tier: String,
+    risk: Risk,
+    headless_support: HeadlessSupport,
+    confirmation: Option<String>,
+}
+
+#[derive(Debug)]
+struct RunRequest {
+    id: String,
+    params: HashMap<String, String>,
+    dry_run: bool,
+    confirmation: Option<String>,
+}
+
+pub fn main(args: Vec<String>) -> i32 {
+    crate::backend::register_p2_commands();
+    crate::backend::register_p3_commands();
+    crate::backend::register_file_search_commands();
+
+    match parse_action(&args) {
+        Ok(Action::Help) => {
+            print_json(&json!({
+                "ok": true,
+                "usage": [
+                    "wincommander-free commands list [--transport tauri|backend-script] [--risk read-only|mutating|destructive]",
+                    "wincommander-free commands describe <tauri:name|backend:name>",
+                    "wincommander-free run <backend:name> [--params <json|@file|->] [--dry-run] [--confirm <token>]",
+                    "wincommander-free audit catalog"
+                ],
+                "output": "JSON on stdout; process exit code reports success or failure"
+            }));
+            0
+        }
+        Ok(Action::List { transport, risk }) => list_commands(transport, risk),
+        Ok(Action::Describe(id)) => describe_command(&id),
+        Ok(Action::AuditCatalog) => audit_catalog(),
+        Ok(Action::Run(request)) => run_command(request),
+        Err(error) => fail(2, "invalid_arguments", error),
+    }
+}
+
+enum Action {
+    Help,
+    List {
+        transport: Option<Transport>,
+        risk: Option<Risk>,
+    },
+    Describe(String),
+    AuditCatalog,
+    Run(RunRequest),
+}
+
+fn parse_action(args: &[String]) -> Result<Action, String> {
+    let filtered: Vec<&str> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|arg| *arg != "--json")
+        .collect();
+    if filtered.is_empty() || matches!(filtered[0], "help" | "--help" | "-h") {
+        return Ok(Action::Help);
+    }
+    match filtered.as_slice() {
+        ["commands", "list", rest @ ..] => {
+            let mut transport = None;
+            let mut risk = None;
+            let mut index = 0;
+            while index < rest.len() {
+                match rest[index] {
+                    "--transport" => {
+                        let value = rest.get(index + 1).ok_or("--transport requires a value")?;
+                        transport = Some(parse_transport(value)?);
+                        index += 2;
+                    }
+                    "--risk" => {
+                        let value = rest.get(index + 1).ok_or("--risk requires a value")?;
+                        risk = Some(parse_risk(value)?);
+                        index += 2;
+                    }
+                    other => return Err(format!("unknown commands list argument: {other}")),
+                }
+            }
+            Ok(Action::List { transport, risk })
+        }
+        ["commands", "describe", id] => Ok(Action::Describe((*id).to_string())),
+        ["audit", "catalog"] => Ok(Action::AuditCatalog),
+        ["run", id, rest @ ..] => {
+            let mut params = HashMap::new();
+            let mut dry_run = false;
+            let mut confirmation = None;
+            let mut index = 0;
+            while index < rest.len() {
+                match rest[index] {
+                    "--params" => {
+                        let value = rest.get(index + 1).ok_or("--params requires a value")?;
+                        params = parse_params(value)?;
+                        index += 2;
+                    }
+                    "--dry-run" => {
+                        dry_run = true;
+                        index += 1;
+                    }
+                    "--confirm" => {
+                        let value = rest.get(index + 1).ok_or("--confirm requires a value")?;
+                        confirmation = Some((*value).to_string());
+                        index += 2;
+                    }
+                    other => return Err(format!("unknown run argument: {other}")),
+                }
+            }
+            Ok(Action::Run(RunRequest {
+                id: (*id).to_string(),
+                params,
+                dry_run,
+                confirmation,
+            }))
+        }
+        _ => Err("unknown command; run `wincommander-cli help`".to_string()),
+    }
+}
+
+fn parse_transport(value: &str) -> Result<Transport, String> {
+    match value {
+        "tauri" => Ok(Transport::Tauri),
+        "backend-script" | "backend" => Ok(Transport::BackendScript),
+        _ => Err(format!("unknown transport: {value}")),
+    }
+}
+
+fn parse_risk(value: &str) -> Result<Risk, String> {
+    match value {
+        "read-only" | "readonly" => Ok(Risk::ReadOnly),
+        "mutating" => Ok(Risk::Mutating),
+        "destructive" => Ok(Risk::Destructive),
+        _ => Err(format!("unknown risk: {value}")),
+    }
+}
+
+fn parse_params(spec: &str) -> Result<HashMap<String, String>, String> {
+    let raw = if spec == "-" {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|error| format!("failed to read params from stdin: {error}"))?;
+        input
+    } else if let Some(path) = spec.strip_prefix('@') {
+        std::fs::read_to_string(path)
+            .map_err(|error| format!("failed to read params file '{path}': {error}"))?
+    } else {
+        spec.to_string()
+    };
+    let value: Value = serde_json::from_str(&raw)
+        .map_err(|error| format!("params must be a JSON object: {error}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "params must be a JSON object".to_string())?;
+    Ok(object
+        .iter()
+        .map(|(key, value)| {
+            let value = value
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| value.to_string());
+            (key.clone(), value)
+        })
+        .collect())
+}
+
+fn catalog() -> Result<GeneratedCatalog, String> {
+    serde_json::from_str(CATALOG_JSON)
+        .map_err(|error| format!("embedded catalog is invalid: {error}"))
+}
+
+fn describe(entry: &GeneratedCommand) -> CommandDescription {
+    let risk = classify_risk(entry);
+    let headless_support = classify_headless_support(entry);
+    let tier = match entry.transport {
+        Transport::BackendScript => crate::backend::get_command_tier(&entry.name).to_string(),
+        Transport::Tauri => "handler-enforced".to_string(),
+    };
+    let confirmation = match risk {
+        Risk::ReadOnly => None,
+        Risk::Mutating => Some(format!("RUN:{}", entry.id)),
+        Risk::Destructive => Some(format!("DESTROY:{}", entry.id)),
+    };
+    CommandDescription {
+        id: entry.id.clone(),
+        name: entry.name.clone(),
+        transport: entry.transport,
+        registered: entry.registered,
+        frontend_references: entry.frontend_references.clone(),
+        tier,
+        risk,
+        headless_support,
+        confirmation,
+    }
+}
+
+fn classify_risk(entry: &GeneratedCommand) -> Risk {
+    let name = entry.name.to_ascii_lowercase();
+    let destructive = match entry.transport {
+        Transport::BackendScript => {
+            [
+                "clear-", "delete-", "remove-", "erase-", "destroy-", "shred-", "wipe-",
+            ]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+                || name.starts_with("invoke-cleanup")
+                || name.starts_with("format-")
+                || name.contains("ssdtrim")
+        }
+        Transport::Tauri => [
+            "clear", "delete", "remove", "erase", "destroy", "shred", "wipe", "clean", "format",
+        ]
+        .iter()
+        .any(|word| name.split('_').any(|token| token == *word)),
+    };
+    if destructive {
+        return Risk::Destructive;
+    }
+    let read_only = match entry.transport {
+        Transport::BackendScript => [
+            "get-", "test-", "find-", "scan-", "search-", "measure-", "compare-",
+        ]
+        .iter()
+        .any(|prefix| name.starts_with(prefix)),
+        Transport::Tauri => {
+            [
+                "get_", "list_", "is_", "search_", "read_", "export_", "check_", "scan_",
+            ]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+                || name.ends_with("_status")
+                || name.ends_with("_preview")
+                || name.ends_with("_inventory")
+                || name.ends_with("_snapshot")
+        }
+    };
+    if read_only {
+        return Risk::ReadOnly;
+    }
+    Risk::Mutating
+}
+
+fn classify_headless_support(entry: &GeneratedCommand) -> HeadlessSupport {
+    if entry.transport == Transport::BackendScript && entry.registered {
+        return HeadlessSupport::Executable;
+    }
+    let name = entry.name.as_str();
+    if name.starts_with("open_")
+        || name.starts_with("show_")
+        || name.contains("server_app")
+        || name.contains("calculator_mode")
+        || name.contains("display_label")
+        || name.contains("tray_")
+    {
+        HeadlessSupport::UiOnly
+    } else {
+        HeadlessSupport::Cataloged
+    }
+}
+
+fn list_commands(transport: Option<Transport>, risk: Option<Risk>) -> i32 {
+    let catalog = match catalog() {
+        Ok(catalog) => catalog,
+        Err(error) => return fail(5, "catalog_error", error),
+    };
+    let commands: Vec<CommandDescription> = catalog
+        .commands
+        .iter()
+        .map(describe)
+        .filter(|entry| {
+            transport
+                .map(|value| entry.transport == value)
+                .unwrap_or(true)
+        })
+        .filter(|entry| risk.map(|value| entry.risk == value).unwrap_or(true))
+        .collect();
+    print_json(
+        &json!({ "ok": true, "schemaVersion": catalog.schema_version, "count": commands.len(), "commands": commands }),
+    );
+    0
+}
+
+fn describe_command(id: &str) -> i32 {
+    let catalog = match catalog() {
+        Ok(catalog) => catalog,
+        Err(error) => return fail(5, "catalog_error", error),
+    };
+    match catalog.commands.iter().find(|entry| entry.id == id) {
+        Some(entry) => {
+            print_json(&json!({ "ok": true, "command": describe(entry) }));
+            0
+        }
+        None => fail(4, "unknown_command", format!("command not found: {id}")),
+    }
+}
+
+fn audit_catalog() -> i32 {
+    let catalog = match catalog() {
+        Ok(catalog) => catalog,
+        Err(error) => return fail(5, "catalog_error", error),
+    };
+    let descriptions: Vec<CommandDescription> = catalog.commands.iter().map(describe).collect();
+    let missing: Vec<&CommandDescription> = descriptions
+        .iter()
+        .filter(|entry| !entry.registered && !entry.frontend_references.is_empty())
+        .collect();
+    let count = |risk| {
+        descriptions
+            .iter()
+            .filter(|entry| entry.risk == risk)
+            .count()
+    };
+    print_json(&json!({
+        "ok": missing.is_empty(),
+        "schemaVersion": catalog.schema_version,
+        "total": descriptions.len(),
+        "transports": {
+            "tauri": descriptions.iter().filter(|entry| entry.transport == Transport::Tauri).count(),
+            "backendScript": descriptions.iter().filter(|entry| entry.transport == Transport::BackendScript).count()
+        },
+        "risk": {
+            "readOnly": count(Risk::ReadOnly),
+            "mutating": count(Risk::Mutating),
+            "destructive": count(Risk::Destructive)
+        },
+        "missingDispatchers": missing
+    }));
+    if missing.is_empty() {
+        0
+    } else {
+        6
+    }
+}
+
+fn run_command(request: RunRequest) -> i32 {
+    let catalog = match catalog() {
+        Ok(catalog) => catalog,
+        Err(error) => return fail(5, "catalog_error", error),
+    };
+    let Some(entry) = catalog.commands.iter().find(|entry| entry.id == request.id) else {
+        return fail(
+            4,
+            "unknown_command",
+            format!("command not found: {}", request.id),
+        );
+    };
+    let description = describe(entry);
+    if request.dry_run {
+        print_json(&json!({
+            "ok": true,
+            "dryRun": true,
+            "command": description,
+            "params": request.params,
+            "wouldExecute": description.headless_support == HeadlessSupport::Executable
+        }));
+        return 0;
+    }
+    if description.headless_support != HeadlessSupport::Executable {
+        return fail(
+            7,
+            "headless_not_enabled",
+            format!(
+                "{} is cataloged but does not yet have a shared headless adapter",
+                description.id
+            ),
+        );
+    }
+    if let Some(expected) = &description.confirmation {
+        if request.confirmation.as_deref() != Some(expected.as_str()) {
+            print_json(&json!({
+                "ok": false,
+                "error": "confirmation_required",
+                "command": description.id,
+                "risk": description.risk,
+                "expectedConfirmation": expected
+            }));
+            return 3;
+        }
+    }
+    run_backend(entry.name.clone(), request.params)
+}
+
+fn run_backend(command: String, params: HashMap<String, String>) -> i32 {
+    let command_id = format!("backend:{command}");
+    let output_id = command_id.clone();
+    let execution_code = Arc::new(AtomicI32::new(9));
+    let result_code = execution_code.clone();
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
+        .setup(move |app| {
+            let app_handle = app.handle().clone();
+            let result_handle = app_handle.clone();
+            let command = command.clone();
+            let command_id = output_id.clone();
+            let execution_code = execution_code.clone();
+            tauri::async_runtime::spawn(async move {
+                let response = crate::backend::run_backend_script(result_handle.clone(), command, params).await;
+                match response {
+                    Ok(result) => {
+                        print_json(&json!({ "ok": true, "command": command_id, "result": result }));
+                        execution_code.store(0, Ordering::SeqCst);
+                        result_handle.exit(0);
+                    }
+                    Err(error) => {
+                        print_json(&json!({ "ok": false, "command": command_id, "error": "execution_failed", "message": error }));
+                        execution_code.store(8, Ordering::SeqCst);
+                        result_handle.exit(8);
+                    }
+                }
+            });
+            Ok(())
+        });
+    match builder.run(tauri::generate_context!()) {
+        Ok(()) => result_code.load(Ordering::SeqCst),
+        Err(error) => fail(
+            9,
+            "runtime_error",
+            format!("failed to run {command_id}: {error}"),
+        ),
+    }
+}
+
+fn print_json(value: &Value) {
+    println!(
+        "{}",
+        serde_json::to_string(value)
+            .unwrap_or_else(|_| "{\"ok\":false,\"error\":\"serialization_failed\"}".to_string())
+    );
+}
+
+fn fail(code: i32, kind: &str, message: String) -> i32 {
+    print_json(&json!({ "ok": false, "error": kind, "message": message }));
+    code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_catalog_is_valid_and_unique() {
+        let catalog = catalog().expect("catalog parses");
+        assert!(catalog.commands.len() > 400);
+        let mut ids: Vec<&str> = catalog
+            .commands
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), catalog.commands.len());
+    }
+
+    #[test]
+    fn destructive_and_read_only_commands_are_separated() {
+        let catalog = catalog().expect("catalog parses");
+        let get_shellbags = catalog
+            .commands
+            .iter()
+            .find(|entry| entry.id == "backend:Get-ShellBags")
+            .unwrap();
+        let clear_shellbags = catalog
+            .commands
+            .iter()
+            .find(|entry| entry.id == "backend:Clear-ShellBags")
+            .unwrap();
+        assert_eq!(classify_risk(get_shellbags), Risk::ReadOnly);
+        assert_eq!(classify_risk(clear_shellbags), Risk::Destructive);
+        assert!(describe(clear_shellbags)
+            .confirmation
+            .unwrap()
+            .starts_with("DESTROY:"));
+
+        let cleanup_summary = catalog
+            .commands
+            .iter()
+            .find(|entry| entry.id == "backend:Get-CleanupSummaryAllUsers")
+            .unwrap();
+        assert_eq!(classify_risk(cleanup_summary), Risk::ReadOnly);
+
+        let scan_and_clean = GeneratedCommand {
+            id: "tauri:scan_and_clean".to_string(),
+            name: "scan_and_clean".to_string(),
+            transport: Transport::Tauri,
+            registered: true,
+            frontend_references: vec![],
+        };
+        assert_eq!(classify_risk(&scan_and_clean), Risk::Destructive);
+
+        let export_report = GeneratedCommand {
+            id: "backend:Export-Report".to_string(),
+            name: "Export-Report".to_string(),
+            transport: Transport::BackendScript,
+            registered: true,
+            frontend_references: vec![],
+        };
+        assert_eq!(classify_risk(&export_report), Risk::Mutating);
+    }
+
+    #[test]
+    fn params_accept_primitives_and_structures_without_shell_parsing() {
+        let params = parse_params(r#"{"flag":true,"count":2,"names":["a","b"]}"#).unwrap();
+        assert_eq!(params["flag"], "true");
+        assert_eq!(params["count"], "2");
+        assert_eq!(params["names"], r#"["a","b"]"#);
+    }
+
+    #[test]
+    fn only_explicit_cli_verbs_replace_the_gui_launch() {
+        assert!(is_cli_invocation(&["commands".to_string()]));
+        assert!(is_cli_invocation(&["audit".to_string()]));
+        assert!(!is_cli_invocation(&[]));
+        assert!(!is_cli_invocation(&["--scrub".to_string()]));
+        assert!(!is_cli_invocation(&["--safe-paste".to_string()]));
+    }
+}

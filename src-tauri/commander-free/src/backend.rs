@@ -1400,7 +1400,7 @@ fn get_required_frontend_module(command: &str) -> Option<&'static str> {
 // Free binary won't even contain the strings/code for them, satisfying
 // Phase 7's strings-grep CI invariant. Until then, this gate is the
 // runtime enforcement layer.
-fn get_command_tier(command: &str) -> &'static str {
+pub(crate) fn get_command_tier(command: &str) -> &'static str {
     // Check the data-driven registry first (populated by P1/P2/P3 init).
     if let Some(tier) = registry_lookup(command) {
         return tier_label(tier);

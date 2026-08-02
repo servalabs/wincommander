@@ -79,6 +79,7 @@ Every release is built in public CI and verifiable end to end:
 | [FEATURES.md](FEATURES.md)         | Every feature, exhaustively — Free and Pro                    |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How it's built: two binaries, encrypted modules, IPC          |
 | [SECURITY.md](SECURITY.md)         | Threat model, security posture, how to report a vulnerability |
+| [docs/cli.md](docs/cli.md)         | Automate the same Free executable with JSON and safety gates   |
 | [POSITIONING.md](POSITIONING.md)   | Who it's for and how it compares to alternatives              |
 | [NON-GOALS.md](NON-GOALS.md)       | What WinCommander deliberately is not                         |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute                                             |

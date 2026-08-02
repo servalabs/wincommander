@@ -166,6 +166,9 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Registry",
   "Win32_System_Threading",
   "Win32_System_RemoteDesktop",
+  # The single wincommander-free.exe attaches to its parent terminal only
+  # when invoked in CLI mode; normal GUI/context-menu launches stay silent.
+  "Win32_System_Console",
   "Win32_Storage_FileSystem",
   # Privacy-shield orphan killer: assign the shield Python process to a
   # Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so end-tasking
