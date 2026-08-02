@@ -21,11 +21,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [[bin]]
 name = "wincommander-free"
 path = "src/main.rs"
-# The bin embeds app.manifest with requestedExecutionLevel=requireAdministrator,
-# so `cargo test` cannot LAUNCH its (empty) test harness on a non-elevated CI
-# runner — it fails with os error 740 (requires elevation) even though main.rs
-# has zero tests. All tests live in the lib; skip building/running the bin
-# harness so `cargo test --workspace` stays green on UAC-limited runners.
+# Release builds embed app.manifest with
+# requestedExecutionLevel=requireAdministrator. Debug builds use
+# an asInvoker transform of that canonical manifest so the same binary can be
+# exercised through `tauri dev` and its CLI without crossing a Windows
+# integrity boundary.
+# All tests live in the lib, so keep the empty bin harness disabled.
 test = false
 
 [features]

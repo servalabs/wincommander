@@ -51,8 +51,34 @@ fn main() {
         }
     }
 
+    // Production builds must always request elevation because many WinCommander
+    // operations mutate machine-wide state. Development builds run as the
+    // invoking user so `bun x tauri dev` and the built-in CLI remain launchable
+    // from a normal developer terminal. Privileged commands still fail at their
+    // existing administrator checks; this only removes the Windows launch-time
+    // integrity boundary for the debug profile.
+    let release_manifest = include_str!("app.manifest");
+    const ELEVATED_LEVEL: &str = r#"level="requireAdministrator""#;
+    assert!(
+        release_manifest.contains(ELEVATED_LEVEL),
+        "the release manifest must retain requestedExecutionLevel=requireAdministrator"
+    );
+    let is_development_profile = std::env::var("PROFILE").as_deref() == Ok("debug");
+    println!("cargo:rustc-check-cfg=cfg(wincommander_dev_profile)");
+    if is_development_profile {
+        println!("cargo:rustc-cfg=wincommander_dev_profile");
+    }
+    let development_manifest;
+    let app_manifest = if is_development_profile {
+        development_manifest = release_manifest.replacen(ELEVATED_LEVEL, r#"level="asInvoker""#, 1);
+        development_manifest.as_str()
+    } else {
+        release_manifest
+    };
+    println!("cargo:rerun-if-changed=app.manifest");
+
     let mut windows = tauri_build::WindowsAttributes::new();
-    windows = windows.app_manifest(include_str!("app.manifest"));
+    windows = windows.app_manifest(app_manifest);
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
     {

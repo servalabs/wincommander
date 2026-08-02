@@ -2017,11 +2017,24 @@ pub fn read_settings() -> Result<AppSettings, String> {
         settings.last_seen_at = now_iso8601();
         settings.app_version = get_app_version();
 
-        // Persist so first-run defaults / legacy migration land in the store.
-        // Skip in decoy mode: a read must never write to the real store under
-        // coercion (and write_settings_internal would refuse it anyway).
+        // Best-effort persistence: first-run defaults / legacy migration and
+        // lastSeenAt normally land in the store here. A read must still return
+        // the real decoded settings when the process has read-only access to
+        // the machine-wide store (notably an asInvoker `tauri dev` session).
+        // Making this auxiliary write fatal left SETTINGS_CACHE empty, so every
+        // startup probe repeated the decrypt/load and the WebView never reached
+        // its native backend. Explicit mutations still use write_settings() and
+        // continue to report write failures to their callers.
+        //
+        // Skip entirely in decoy mode: a read must never write to the real
+        // store under coercion (and write_settings_internal would refuse it).
         if !DECOY_MODE.load(std::sync::atomic::Ordering::Relaxed) {
-            write_settings_internal(&settings)?;
+            if let Err(error) = write_settings_internal(&settings) {
+                crate::log_message(
+                    "warn",
+                    &format!("[Settings] loaded read-only; metadata persistence skipped: {error}"),
+                );
+            }
         }
         if let Ok(mut guard) = SETTINGS_CACHE.lock() {
             *guard = Some(settings.clone());

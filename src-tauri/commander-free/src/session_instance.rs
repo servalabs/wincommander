@@ -88,6 +88,31 @@ fn encode_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+// A development build must be able to coexist with the installed elevated
+// release while `tauri dev` is being exercised. The build script emits this
+// cfg only for Cargo's debug profile, which is also the sole profile whose
+// manifest is transformed to asInvoker. Release object names remain byte-for-
+// byte compatible with existing installations.
+#[cfg(wincommander_dev_profile)]
+const INSTANCE_CHANNEL: &str = "Dev_";
+#[cfg(not(wincommander_dev_profile))]
+const INSTANCE_CHANNEL: &str = "";
+
+fn instance_object_name(sid: u32, purpose: &str) -> String {
+    format!("WinCommander_{}S{}_{}", INSTANCE_CHANNEL, sid, purpose)
+}
+
+fn primary_pid_value_name() -> &'static str {
+    #[cfg(wincommander_dev_profile)]
+    {
+        "DevelopmentPrimaryPid"
+    }
+    #[cfg(not(wincommander_dev_profile))]
+    {
+        "PrimaryPid"
+    }
+}
+
 /// Returns the Windows Terminal Services session ID for the current process.
 /// On a workstation this is typically 1; on RDP servers each user gets a
 /// unique value (e.g. 2, 3, …).
@@ -101,7 +126,7 @@ pub fn current_session_id() -> u32 {
 /// Named pipes are in a GLOBAL namespace on Windows, so we embed the session
 /// ID to give each user their own private channel.
 pub fn pipe_path(sid: u32) -> String {
-    format!(r"\\.\pipe\WinCommander_S{}_args", sid)
+    format!(r"\\.\pipe\{}", instance_object_name(sid, "args"))
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -116,7 +141,7 @@ pub fn acquire(cli_args: &[String]) -> bool {
 
     // The name has NO "Global\" prefix (stays in the session-local object
     // directory) AND contains the session ID for belt-and-suspenders safety.
-    let mutex_name = encode_wide(&format!("WinCommander_S{}_lock", sid));
+    let mutex_name = encode_wide(&instance_object_name(sid, "lock"));
 
     let hmutex = unsafe {
         CreateMutexW(
@@ -353,9 +378,10 @@ pub fn start_pipe_listener(app: tauri::AppHandle) {
 
 // ── Private helpers ──────────────────────────────────────────────────────────
 
-/// Persist our own PID to HKCU\SOFTWARE\WinCommander as REG_DWORD "PrimaryPid"
-/// so a future duplicate-instance can verify whether the mutex-holder is alive.
-/// HKCU avoids any elevation requirement. Non-fatal on failure — logged only.
+/// Persist our own PID to HKCU\SOFTWARE\WinCommander so a future
+/// duplicate-instance can verify whether the mutex-holder is alive. Debug and
+/// installed release instances use distinct value names. HKCU avoids any
+/// elevation requirement. Non-fatal on failure — logged only.
 fn persist_primary_pid() {
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_DWORD,
@@ -387,7 +413,9 @@ fn persist_primary_pid() {
             return;
         }
         let pid = GetCurrentProcessId();
-        let vn: Vec<u16> = "PrimaryPid\0".encode_utf16().collect();
+        let vn: Vec<u16> = format!("{}\0", primary_pid_value_name())
+            .encode_utf16()
+            .collect();
         let _ = RegSetValueExW(
             hkey,
             vn.as_ptr(),
@@ -407,7 +435,8 @@ fn persist_primary_pid() {
     );
 }
 
-/// Read the stored PrimaryPid from HKCU\SOFTWARE\WinCommander.
+/// Read the stored primary PID for this build channel from
+/// HKCU\SOFTWARE\WinCommander.
 /// Returns None if the key or value doesn't exist.
 fn read_stored_primary_pid() -> Option<u32> {
     use windows_sys::Win32::System::Registry::{
@@ -426,7 +455,9 @@ fn read_stored_primary_pid() -> Option<u32> {
         if r != 0 {
             return None;
         }
-        let vn: Vec<u16> = "PrimaryPid\0".encode_utf16().collect();
+        let vn: Vec<u16> = format!("{}\0", primary_pid_value_name())
+            .encode_utf16()
+            .collect();
         let mut data: u32 = 0;
         let mut data_size: u32 = 4;
         let mut reg_type: u32 = 0;
@@ -630,7 +661,25 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
 
 #[cfg(test)]
 mod resolve_context_menu_event_tests {
-    use super::resolve_context_menu_event;
+    use super::{
+        instance_object_name, pipe_path, primary_pid_value_name, resolve_context_menu_event,
+    };
+
+    #[cfg(wincommander_dev_profile)]
+    #[test]
+    fn development_instance_channel_isolated_from_installed_release() {
+        assert_eq!(instance_object_name(7, "lock"), "WinCommander_Dev_S7_lock");
+        assert_eq!(pipe_path(7), r"\\.\pipe\WinCommander_Dev_S7_args");
+        assert_eq!(primary_pid_value_name(), "DevelopmentPrimaryPid");
+    }
+
+    #[cfg(not(wincommander_dev_profile))]
+    #[test]
+    fn release_instance_channel_remains_backward_compatible() {
+        assert_eq!(instance_object_name(7, "lock"), "WinCommander_S7_lock");
+        assert_eq!(pipe_path(7), r"\\.\pipe\WinCommander_S7_args");
+        assert_eq!(primary_pid_value_name(), "PrimaryPid");
+    }
 
     #[test]
     fn safe_paste_flag_maps_to_safe_paste_event() {

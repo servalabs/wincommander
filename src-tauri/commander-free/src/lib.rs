@@ -1341,8 +1341,17 @@ fn lock_to_calculator(app: tauri::AppHandle) -> Result<(), String> {
     startup_auth::enter_calculator_mode_with(window, true)
 }
 
+#[cfg(wincommander_dev_profile)]
+fn dev_startup_trace(stage: &str) {
+    eprintln!("[wincommander-dev-startup] {stage}");
+}
+
+#[cfg(not(wincommander_dev_profile))]
+fn dev_startup_trace(_stage: &str) {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    dev_startup_trace("process start");
     log_message("info", "[System] WinCommander process starting...");
     // Route every panic — including ones in spawned always-on monitor threads
     // (ransomware/decoy/clipboard) — into the unified log before the default
@@ -1432,6 +1441,7 @@ pub fn run() {
         log::migrate_plaintext_logs(&log_file);
         log::purge_old_log_records(&log_file, 7);
     }
+    dev_startup_trace("pre-builder work complete");
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -1458,6 +1468,7 @@ pub fn run() {
         // (called inside setup() below).  Each Windows logon session gets its
         // own independent instance, so multiple RDP users can run simultaneously.
         .setup(|app| {
+            dev_startup_trace("setup entered");
             log_message(
                 "info",
                 "[System] setup() starting: Initializing tray and hotkeys...",
@@ -1506,6 +1517,7 @@ pub fn run() {
                     &format!("[Startup] flags: hidden={} calculator={}", is_hidden, is_calc),
                 );
             }
+            dev_startup_trace("startup flags loaded");
 
             // ── R2: re-enforce hidden state + start reapply watcher ─────────
             // runtime_visibility::actions::reenforce_hidden_on_startup() and
@@ -1514,6 +1526,7 @@ pub fn run() {
             // NOTE: reenforce_hidden_on_startup() is now deferred (see below);
             // spawn_reapply_watcher() stays synchronous (it's a background watcher, cheap).
             runtime_visibility::actions::spawn_reapply_watcher();
+            dev_startup_trace("runtime visibility watcher started");
 
             // ── R4: context menus ─────────────────────────────────────────────
             // NOTE: reregister_context_menus_if_enabled() is now deferred (see below).
@@ -1650,6 +1663,7 @@ pub fn run() {
             // "Error removing system tray icon".
             app.manage(tray);
             log_message("debug", "[System] Tray setup complete.");
+            dev_startup_trace("tray setup complete");
 
             // KT: search-overlay is created lazily on first Ctrl+Space press — NOT at startup.
             // Creating it here caused a Windows window-activation race: the always_on_top
@@ -1748,6 +1762,7 @@ pub fn run() {
                     set_wincommander_window_icon(&window);
                     let _ = window.set_focus();
                 }
+                dev_startup_trace("main window reveal requested");
 
                 // Deferred: nothing here gates the window appearing. license/entitlement probes
                 // and hide re-enforcement spawn PowerShell (cold WMI = tens of seconds on a
@@ -1976,6 +1991,7 @@ pub fn run() {
             }
 
             // Start the Recent Downloads watcher (Downloads folder → dashboard card).
+            dev_startup_trace("starting background services");
             downloads_watcher::init(app.handle());
 
             // Start the network-traffic sampler (emits metrics://network every 1s
@@ -1996,6 +2012,7 @@ pub fn run() {
             // Bootstrap the inactivity-timer watchdog. Idempotent —
             // safe to call repeatedly. Auto-resets the timer on startup.
             inactivity_timer::init(app.handle());
+            dev_startup_trace("background services initialized");
 
             // Fleet agent auto-connect on startup: if the user previously
             // enrolled this device (app.fleet.enabled + non-empty serverUrl),
@@ -2240,6 +2257,7 @@ pub fn run() {
             }
 
             log_message("info", "[System] setup() finished. Application ready.");
+            dev_startup_trace("setup complete");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

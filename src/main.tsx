@@ -26,8 +26,17 @@ import { applyMotionClass } from "./lib/motionPolicy";
 import GlobalErrorBoundary from "./components/ErrorBoundary";
 import { AppConfirmProvider } from "./components/shared/AppConfirmDialog";
 
-initUniversalLogging();
-console.log('[App] Frontend environment initialized.');
+const hasNativeBackend = Boolean((window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+
+// A plain browser can render the React shell but cannot execute a single
+// WinCommander command. Do not present empty/default cards as if they were real
+// host results: that looks like a working but data-less application. The
+// explicit UI-audit entry installs Tauri mocks before importing this module, so
+// it remains available for fixture-driven visual tests.
+if (hasNativeBackend) {
+  initUniversalLogging();
+  console.log('[App] Frontend environment initialized.');
+}
 
 // Resolve + apply the motion preference BEFORE first render so the splash
 // screen and every component see the correct `wc-no-motion` state immediately.
@@ -81,7 +90,23 @@ const windowLabel = (() => {
 
 const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
 
-if (windowLabel === "search-overlay") {
+if (!hasNativeBackend) {
+  root.render(
+    <main className="native-backend-required" role="alert" aria-labelledby="native-backend-required-title">
+      <img src="../assets/products/wincommander/logo.png" alt="" />
+      <p className="native-backend-required-kicker">WINCOMMANDER DEVELOPMENT</p>
+      <h1 id="native-backend-required-title">Native backend disconnected</h1>
+      <p>
+        This browser tab can display the frontend shell, but it cannot read real Windows data or run Tauri commands.
+      </p>
+      <code>bun run dev:tauri:free</code>
+      <p className="native-backend-required-note">
+        Use the WinCommander desktop window opened by that command. Synthetic UI fixtures are isolated at
+        <strong> /ui-audit.html</strong>.
+      </p>
+    </main>,
+  );
+} else if (windowLabel === "search-overlay") {
   // Mark html/body transparent so the Tauri transparent window actually shows through
   document.documentElement.classList.add("search-overlay-window");
   document.body.classList.add("search-overlay-window");
