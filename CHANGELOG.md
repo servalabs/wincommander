@@ -12,6 +12,73 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Fixed
 
+- **Commands that erase data asked for the weaker confirmation** (2026-08-03).
+  The headless CLI graded every command from its *name*, and the destructive name
+  lists were anchored to the start of the name — so the whole `Invoke-*Erase`
+  family (`Invoke-7Erase`, `Invoke-UnallocatedSpaceErase`, `Invoke-CrashDumpErase`,
+  `Invoke-PreviousWindowsInstallErase`) accepted `RUN:` instead of `DESTROY:`.
+  Worse, the guess disagreed with `authz::DESTRUCTIVE_COMMANDS` — the repo's own
+  CI-enforced catastrophic-command registry — so `fleet_connect` (re-pinning to a
+  different fleet server and signing key) and `internet_kill_switch_set` were
+  graded ordinary mutations. `classify_risk` now consults that registry **first**,
+  then a table of handlers hand-verified against their bodies, then the name
+  rules, then any name containing `erase`/`shred`/`wipe`/`destroy` — the last
+  applied only after the read-only allowlist, so `Get-AutoEraseSchedules` stays a
+  read. **17 commands were regraded, every one stricter.** Adding a command to the
+  registry now hardens the CLI automatically; a test enforces it.
+
+- **Three commands that write were graded read-only — no confirmation at all**
+  (2026-08-03). `search_rename_file` renames a file on disk but matched the
+  `search_` read prefix; the four `export_*` commands write an artefact yet were
+  eligible for the read-only wait deadline, so an export could be killed
+  part-written; `fleet_update_posture_snapshot` pushes posture to the fleet server
+  but matched the `_snapshot` read suffix.
+
+- **`--dry-run` could silently execute for real** (2026-08-03). The parser took
+  whatever token followed an option as its value, so `--confirm --dry-run`
+  consumed `--dry-run` as the confirmation string and left dry-run off. Read-only
+  commands never check the confirmation, so the preview ran live. The same
+  swallow smuggled `--safe-copy` past the parser into `lib.rs::run`'s argv scan,
+  hijacking the requested command and exiting `0` without running it. Flag-shaped
+  option values are now rejected, and that argv scan is skipped in CLI mode.
+
+- **A wedged backend command hung forever** (2026-08-03). `--timeout-ms` was
+  accepted on read-only backend-script commands and then ignored — the documented
+  behaviour, but a trap for unattended automation. Both transports now honour the
+  deadline (default 300,000 ms) and exit `10`. It remains a wait limit, not
+  transactional cancellation.
+
+- **An unanswerable confirmation dialog hung the process and blocked every other
+  job** (2026-08-03). `authz::native_confirm` awaits a dialog with no timeout. In
+  CLI mode the only window is invisible and unattended runs have nobody to click
+  it, so the process waited forever *while holding the cross-process execution
+  lock* — failing every other mutating CLI run with `cli_busy`. It now fails
+  closed when the CLI runtime is active: an unanswerable confirmation is a denied
+  confirmation.
+
+- **Two paths produced no JSON at all** (2026-08-03), breaking the
+  one-document-per-invocation contract. A CLI-runtime setup failure reached
+  Tauri's own `panic!`, exiting `101` with empty stdout; it now reports
+  `runtime_error` and exit `9`. And the `lockdown`/`full_lockdown` detached
+  acknowledgement sat *after* `crate::run()`, which never returns because Tauri's
+  `App::run` exits the process directly — so terminal lockdown printed nothing.
+  It is now emitted before dispatch, with a guard so no second document can
+  follow it. It still acknowledges only the dispatch, never the outcome.
+
+- **The debug-only command list could drift silently** (2026-08-03). Four
+  dev-panel handlers are `#[cfg(debug_assertions)]`-gated and must be refused by
+  release builds, but the CLI matched them against a hardcoded name list while the
+  catalog generator could not see `cfg` attributes at all. A fifth gated handler
+  would have been reported as executable in release, and every test would still
+  have passed. The generator now derives `debugOnly` from the attribute itself and
+  fails if the parse stops working; the catalog carries the flag (schema v2).
+
+- **A `__proto__` parameter key silently vanished** (2026-08-03). Parameters were
+  spliced into the runner script as JavaScript object syntax, so that key set the
+  prototype instead of becoming an ordinary parameter and the handler received
+  something other than what was asked for. They are now `JSON.parse`d from a
+  string literal.
+
 - **Multi-token searches returned nothing at all** (2026-07-28).
   `search_everything` passed the entire query to `es.exe` as a single argv entry,
   which `es.exe` reads as a quoted phrase — so any query combining a term with a

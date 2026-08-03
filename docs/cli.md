@@ -83,6 +83,16 @@ The process exits after one response. A read-only wait timeout returns exit code
 | `10` | Read-only command exceeded its requested/default wait deadline |
 | `11` | Another mutating or destructive CLI command holds the cross-process execution lock |
 
+## Known limitations
+
+Automation should account for these; they are open, not oversights.
+
+- Settings writes are last-writer-wins. The cross-process lock serialises CLI mutations against each other; the desktop app never takes it, so a concurrent GUI change and `run tauri:set_settings` can discard one side. Do not run CLI settings mutations against a machine someone is actively using.
+- A content reindex removes and rebuilds the search-index directory while read-only search commands, which take no lock, may be reading it.
+- Confirmation tokens are safeguards against mistakes and mis-targeting, not authentication. Anyone able to run the executable can supply them.
+- A destructive command's exit code reports dispatch, not completion. `lockdown` and `full_lockdown` in particular acknowledge only that the worker was launched — verify the result independently.
+- Risk grading is fail-closed and deliberately over-classifies a few commands that *schedule* erasure rather than perform it (`Set-AutoEraseSchedule`, `Set-MultiUserAutoEraseSchedule`, `Set-ShredPolicy`), so those require `DESTROY:`.
+
 ## Developer checks
 
 The catalog is generated from the actual Tauri handler registry, backend dispatcher/tier gate, and production frontend call sites. It records each handler's `#[cfg(debug_assertions)]` gate as `debugOnly`, so the four debug-only handlers the release binary refuses are derived from the gate itself rather than from a hardcoded name list that could drift past the drift check.
