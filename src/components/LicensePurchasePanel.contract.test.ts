@@ -106,6 +106,15 @@ describe("Purchase surface: shortest path to payment", () => {
     expect(gate).toContain('id={licenseKeyId}');
   });
 
+  test("the existing-key dialog stays open until explicitly closed", async () => {
+    const gate = await read("src/components/LicenseGate.tsx");
+
+    expect(gate).not.toContain('onClick={inline ? undefined : closeModal}');
+    expect(gate).toContain('if (event.key !== "Escape") return;');
+    expect(gate).toContain('ref={licenseKeyInputRef}');
+    expect(gate).toContain('licenseKeyInputRef.current?.focus()');
+  });
+
   test("the pending checkout state keeps its key box, hints and recovery buttons", async () => {
     const pending = await read("src/components/LicensePendingPurchase.tsx");
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -54,6 +54,7 @@ export default function LicenseGate({
   const titleId = useId();
   const subtitleId = useId();
   const licenseKeyId = useId();
+  const licenseKeyInputRef = useRef<HTMLInputElement>(null);
 
   const { data: licenseStatus } = useLicenseQuery();
   const invalidateLicense = useInvalidateLicense();
@@ -82,6 +83,24 @@ export default function LicenseGate({
     window.addEventListener("license-gate-open", handler);
     return () => window.removeEventListener("license-gate-open", handler);
   }, [inline]);
+
+  useEffect(() => {
+    if (inline || !openOnDemand) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpenOnDemand(false);
+      setLicenseMessage(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [inline, openOnDemand]);
+
+  useEffect(() => {
+    if (!openOnDemand || activeTab !== "activate") return;
+    const frame = window.requestAnimationFrame(() => licenseKeyInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, openOnDemand]);
 
   useEffect(() => {
     const refresh = async () => {
@@ -187,7 +206,6 @@ export default function LicenseGate({
       {openOnDemand && (
         <motion.div
           className={`license-gate-overlay${inline ? " license-gate-overlay--inline" : ""}`}
-          onClick={inline ? undefined : closeModal}
           variants={overlayVariants}
           initial="hidden"
           animate="visible"
@@ -244,13 +262,18 @@ export default function LicenseGate({
                     <input
                       id={licenseKeyId}
                       type="text"
+                      ref={licenseKeyInputRef}
                       className="license-gate-input"
                       placeholder="WC-PRO-XXXX-XXXX-XXXX-XXXX-XXXX"
                       value={licenseKey}
                       onChange={(event) => setLicenseKey(event.target.value)}
-                      onKeyDown={(event) => event.key === "Enter" && void handleActivate()}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter") return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void handleActivate();
+                      }}
                       disabled={licenseBusy}
-                      autoFocus
                     />
                   </div>
                   {licenseMessage && <div className="license-gate-message">{licenseMessage}</div>}
