@@ -24,8 +24,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
-use hickory_resolver::TokioAsyncResolver;
+use hickory_resolver::config::{CLOUDFLARE, ResolverConfig, ResolverOpts};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::TokioResolver;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::Client;
 
@@ -35,7 +36,7 @@ const SYSTEM_DNS_TIMEOUT: Duration = Duration::from_secs(3);
 const DOH_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct HybridResolver {
-    doh: Arc<TokioAsyncResolver>,
+    doh: Arc<TokioResolver>,
 }
 
 impl HybridResolver {
@@ -43,13 +44,17 @@ impl HybridResolver {
         // Cloudflare's published DoH endpoints, hostname-pinned (1.1.1.1 /
         // 1.0.0.1 with TLS SNI "cloudflare-dns.com"). No bootstrap DNS
         // needed since the IPs are literal.
-        let nameservers = NameServerConfigGroup::cloudflare_https();
-        let config = ResolverConfig::from_parts(None, vec![], nameservers);
-        let mut opts = ResolverOpts::default();
+        let mut builder = TokioResolver::builder_with_config(
+            ResolverConfig::https(&CLOUDFLARE),
+            TokioRuntimeProvider::default(),
+        );
+        let opts: &mut ResolverOpts = builder.options_mut();
         opts.timeout = Duration::from_secs(4);
         opts.attempts = 1;
         opts.cache_size = 64;
-        let inner = TokioAsyncResolver::tokio(config, opts);
+        let inner = builder
+            .build()
+            .expect("static Cloudflare DoH resolver configuration is valid");
         Self {
             doh: Arc::new(inner),
         }

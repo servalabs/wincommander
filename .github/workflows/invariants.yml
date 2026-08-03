@@ -242,9 +242,10 @@ jobs:
           bun run encrypt-backend
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
-  # F-11 — dependency-CVE audit for both Rust workspaces and npm.
-  # ESLint + cargo clippy are now BLOCKING gates above (promoted from
-  # report-only once the codebase was cleared).
+  # F-11 — dependency-CVE audit for both Rust workspaces and npm. This blocks
+  # known vulnerabilities; cargo-audit's unmaintained-crate notices remain
+  # visible in logs but do not fail the release gate because several come from
+  # the platform stack selected by Tauri, not a safe direct replacement.
   audit:
     name: Dependency audit (cargo + bun)
     runs-on: ubuntu-latest
@@ -259,7 +260,7 @@ jobs:
       - run: cargo install cargo-audit --locked
       - name: cargo audit (commander-free)
         working-directory: src-tauri
-        run: cargo audit --deny warnings
+        run: cargo audit
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
