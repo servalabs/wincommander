@@ -70,10 +70,35 @@ jobs:
       - name: Install locked JavaScript dependencies
         run: bun install --frozen-lockfile
 
+      - name: Normalize and validate updater signing key
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          $key = $env:TAURI_SIGNING_PRIVATE_KEY.Trim()
+          if ([string]::IsNullOrWhiteSpace($key)) {
+            throw "The release environment does not provide TAURI_SIGNING_PRIVATE_KEY."
+          }
+
+          try {
+            $decodedKey = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($key))
+          } catch [FormatException] {
+            if ($key -notmatch '^untrusted comment: minisign (encrypted )?secret key') {
+              throw "TAURI_SIGNING_PRIVATE_KEY must be the Tauri Base64 private key or a raw minisign secret-key file."
+            }
+            $key = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($key))
+            $decodedKey = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($key))
+          }
+
+          if ($decodedKey -notmatch '^untrusted comment: minisign (encrypted )?secret key') {
+            throw "TAURI_SIGNING_PRIVATE_KEY is not a Tauri private updater key. Do not use the public key from tauri.conf.json."
+          }
+
+          "TAURI_SIGNING_PRIVATE_KEY=$key" | Add-Content -Path $env:GITHUB_ENV
+
       - name: Build signed Free MSI
         env:
           RUST_MIN_STACK: "16777216"
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bun tauri build --config src-tauri/commander-free/tauri.conf.json
 
