@@ -265,8 +265,8 @@ jobs:
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
-      - name: bun pm audit (frontend)
-        run: bun pm audit --prod
+      - name: bun audit (frontend)
+        run: bun audit
 
   # Supply-chain policy gate (REPORT-ONLY). Surfaces licence-allow-list,
   # banned/duplicate-crate, and advisory violations from src-tauri/deny.toml
