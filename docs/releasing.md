@@ -10,6 +10,10 @@ Merge reviewed pull requests into `main` with a conventional-commit title:
 
 `chore:`, `ci:`, `docs:`, and `refactor:` do not create a release by themselves.
 
+To request one exact version, open **Actions** → **prepare release** → **Run
+workflow** and enter it in `release_as`. Use `3.2.5-rc.1` for a safe pre-release
+test; it does not become the updater's `latest` release.
+
 ## 2. Release pull request
 
 The `prepare release` workflow creates or updates one Release Please pull

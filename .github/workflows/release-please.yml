@@ -9,6 +9,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      release_as:
+        description: "Optional exact SemVer version, for example 3.2.5-rc.1"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -28,6 +33,7 @@ jobs:
           token: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          release-as: ${{ inputs.release_as }}
           # release.yml creates the public release only after the signed MSI,
           # checksum, SBOM, and provenance are ready to upload.
           skip-github-release: true
