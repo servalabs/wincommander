@@ -149,9 +149,9 @@ jobs:
           subject-path: ${{ env.MSI_PATH }}
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0 # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: wincommander-free-${{ github.ref_name }}
+          name: wincommander-free-${{ env.RELEASE_TAG }}
           path: |
             ${{ env.MSI_PATH }}
             ${{ env.MSI_SIGNATURE_PATH }}
