@@ -18,6 +18,7 @@
 - [POSITIONING.md](POSITIONING.md) — audience & positioning
 - [OPEN_CORE.md](OPEN_CORE.md) — open-core & dual-license model
 - Deep technical references in `docs/`:
+  - [docs/releasing.md](docs/releasing.md) — automated Free release and approval flow
   - [docs/settings-reference.md](docs/settings-reference.md) — settings schema + catalog
   - [docs/ipc.md](docs/ipc.md) — Tauri command / IPC surface
   - [docs/flows.md](docs/flows.md) — end-to-end operation flows
