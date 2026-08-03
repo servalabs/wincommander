@@ -8,6 +8,50 @@ commit timestamps). Shipped capabilities (not fixes) live in
 [ARCHITECTURE.md](ARCHITECTURE.md); the lessons worth not relearning live in
 [AGENTS.md](AGENTS.md) → *Gotchas*.
 
+## [3.3.0](https://github.com/servalabs/wincommander/compare/wincommander-free-v3.2.4...wincommander-free-v3.3.0) (2026-08-03)
+
+
+### Features
+
+* **apps:** compact unmatched package updates ([ed1738e](https://github.com/servalabs/wincommander/commit/ed1738e6ed67282ac1681a1ec0d086b567b5c64b))
+* **apps:** improve classic app status ([1bce722](https://github.com/servalabs/wincommander/commit/1bce722f9d54d1f793bc6deb8446f421e80bc391))
+* **apps:** install a second app into the running install, not a schedule ([dadc383](https://github.com/servalabs/wincommander/commit/dadc383c1dd819a31a4868a2517c27b5925f301c))
+* **apps:** prefer native debloat icons ([e6d0a7a](https://github.com/servalabs/wincommander/commit/e6d0a7a96616d8720110c753591c1937108fe385))
+* **context:** run explorer actions directly ([43de8a7](https://github.com/servalabs/wincommander/commit/43de8a793a9e5c16161d0157b29d8feae171215c))
+* **flows:** expand settings and test coverage ([19d010d](https://github.com/servalabs/wincommander/commit/19d010d71a102bd4a305b266577fe6bcb7b821c7))
+* **license:** shorten the path to payment, fix the sidebar licence card ([8fe276a](https://github.com/servalabs/wincommander/commit/8fe276a86ba7ab0670596a4b33427f0e9522823c))
+* **maintenance:** align cleanup scans and storage ([8d76afa](https://github.com/servalabs/wincommander/commit/8d76afaf2936153f726a1a518743ed525267256e))
+* **maintenance:** align storage review controls ([3cde099](https://github.com/servalabs/wincommander/commit/3cde099969a67caadf77f55f7b8885d39e8ec9ad))
+* **maintenance:** streamline cleanup and system scans ([2d43f3c](https://github.com/servalabs/wincommander/commit/2d43f3c0f2ad066fe61e573a6718444db9a9500e))
+* **network,vault:** finish the diagnostics, crypto-erase and stego surfaces ([a44b912](https://github.com/servalabs/wincommander/commit/a44b91294311a0bf7ecd9f8b86d764a8765ed291))
+* **network:** align private network controls ([c9a24f5](https://github.com/servalabs/wincommander/commit/c9a24f568ca1d9a81db668896956ace71a6fefb8))
+* **privacy:** clarify shield triggers and flows ([be29cd7](https://github.com/servalabs/wincommander/commit/be29cd7a0592eb233ad5b6ef4e472c8faae11299))
+* **privacy:** put Privacy Shield's advanced controls behind one disclosure ([7a2addb](https://github.com/servalabs/wincommander/commit/7a2addb2273a5c8876a6c7fcc06af7c77f5c955b))
+* **settings:** refine Windows controls ([4a75d8b](https://github.com/servalabs/wincommander/commit/4a75d8ba4eed7853c77612ae3f7040fce4200a38))
+* **titlebar:** split the notification bell into Alerts and Processes icons ([b63d877](https://github.com/servalabs/wincommander/commit/b63d877aba82fe9929655356ebd858680296d39a))
+* **vault:** simplify secure storage workflows ([16dd526](https://github.com/servalabs/wincommander/commit/16dd526103c720d34201411b9f7c24dd98dcf2db))
+
+
+### Bug Fixes
+
+* build Pro before starting Vite ([58d7ff9](https://github.com/servalabs/wincommander/commit/58d7ff9e3187914e325c971e9ed12cc526c80ddd))
+* Classic Windows apps false-detected Paint/Snipping as needing repair ([24cc307](https://github.com/servalabs/wincommander/commit/24cc3070a861db562ad150dcbb2c0bb6c1d99740))
+* **cleanup:** allow independent tab scans ([c7c8669](https://github.com/servalabs/wincommander/commit/c7c8669ac34ead53274398ed112de8cf92af2d0e))
+* **dashboard:** refine network traffic alerts ([fcb4bfe](https://github.com/servalabs/wincommander/commit/fcb4bfe2f97f556c8a5437166ebdab22554034cb))
+* guide-tour deep-links and stale test assertions after tab refactors ([d6a5ccd](https://github.com/servalabs/wincommander/commit/d6a5ccd2f6081973821435f911b95bb8ab21f063))
+* **guide:** adapt tours to current controls ([92b32b5](https://github.com/servalabs/wincommander/commit/92b32b578691a547c0e9be31d572f5742c7641bf))
+* harden Scoop install against security-software blocks ([4eb22c8](https://github.com/servalabs/wincommander/commit/4eb22c8353aab17eff57c1f76fe86cdc92d06a6a))
+* **maintenance:** constrain storage review layout ([9c4097f](https://github.com/servalabs/wincommander/commit/9c4097fcf3d5da37cef827e205498ccb91b5c70c))
+* **maintenance:** preserve file hygiene workspace ([2126edb](https://github.com/servalabs/wincommander/commit/2126edb334665e6ba501cd4f079073a0b11966cd))
+* scope entitlement errors and fleet polling ([45d953d](https://github.com/servalabs/wincommander/commit/45d953d4dca9144e0edf9e71b99009e58f7f4c18))
+* **search:** shred results without modal ([e48dfac](https://github.com/servalabs/wincommander/commit/e48dfaccffdd3b9677cb9482edcc92cab72265a5))
+* silence PowerShell console flash during startup-impact scan ([0eb477e](https://github.com/servalabs/wincommander/commit/0eb477e227e2743b63baf15cd8bb59b93bc3c716))
+* silence PowerShell/netsh console flash on ARP and firewall scans ([a0200ab](https://github.com/servalabs/wincommander/commit/a0200abc1d6dab3921694873a12fcb33a596b01e))
+* stabilize privacy monitoring layout ([1cf4e8a](https://github.com/servalabs/wincommander/commit/1cf4e8a6bc7c037f1a9b8eb2cde82c8df0afbd72))
+* **tour:** stop Guided/Casual mode hiding steps the tour anchors to ([f62d6a2](https://github.com/servalabs/wincommander/commit/f62d6a297b34c5853db908e3126526cdb59e20d1))
+* **tweaks:** show what vm_enable_feature actually did ([2505671](https://github.com/servalabs/wincommander/commit/25056719ff5a7c20aad4b7ea1170fccda532a9e5))
+* **window:** make the tray reliably reveal the main window ([c183313](https://github.com/servalabs/wincommander/commit/c18331352567fe61c447c6cbfb3aa8c0300a7972))
+
 ## [Unreleased]
 
 ### Fixed
