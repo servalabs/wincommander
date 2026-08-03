@@ -26,6 +26,9 @@ request. It updates the three Free version sources together:
 Review its CI and diff like any other pull request. Merging it creates the
 protected `vX.Y.Z` tag.
 
+The configuration is anchored to the existing `v3.2.4` commit. Do not remove
+that baseline until a Release Please-generated release PR has been merged.
+
 ## 3. Signed MSI publication
 
 The tag starts `release.yml`. It pauses at the protected `release` environment.

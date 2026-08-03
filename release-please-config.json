@@ -1,9 +1,9 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "last-release-sha": "1e473cf55399ad8f143dadb06e03613058623584",
   "packages": {
     ".": {
       "release-type": "node",
-      "package-name": "wincommander-free",
       "include-v-in-tag": true,
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
