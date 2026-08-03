@@ -1,47 +1,41 @@
 name: release
 
-# Builds the AGPL Free binary from public source and publishes verifiable
-# build metadata for it: a SLSA build-provenance attestation (Sigstore /
-# Rekor-backed), a CycloneDX SBOM, and a cargo-auditable dependency manifest
-# embedded in the binary. Anyone can then confirm a Free binary was built from
-# the exact public commit on GitHub, and scan its dependency tree, WITHOUT
-# cloning the repo:
-#
-#   gh attestation verify wincommander-free.exe -R servalabs/wincommander
-#   cargo audit bin wincommander-free.exe
-#
-# NOTE: this workflow does NOT sign or publish the end-user MSI. The
-# signed-installer release + R2 upload pipeline lives in the private
-# commander-pro repo (see tools/release.ps1). This is the public, secret-free
-# verifiability layer for the Free build only.
-#
-# The local commander-pro release script publishes the signed MSI and R2
-# manifests first. Its version tag then starts this public, secret-free
-# attestation build for the same source revision.
-
+# A protected version tag is the only release trigger. The job pauses at the
+# protected `release` environment before GitHub exposes the Tauri signing key.
 on:
-  workflow_dispatch:
   push:
     tags:
       - "v*"
 
-# Keep duplicate runs for one version tag serialized. The local commander-pro
-# script remains the only authority for updater signing and R2 publication.
 concurrency:
   group: public-release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
-  contents: write # create/attach a GitHub Release on tag builds
-  id-token: write # OIDC for keyless Sigstore signing
-  attestations: write # write the build-provenance attestation
+  contents: write # publish GitHub Release assets
+  id-token: write # keyless Sigstore provenance
+  attestations: write # persist build provenance
 
 jobs:
-  build-free-attested:
-    name: Build + attest Free binary
+  build-free-release:
+    name: Build, sign, publish, and attest Free MSI
     runs-on: windows-latest
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout required Risk Matrix source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: servalabs/assets
+          ref: ff5e7829981b5ace5e9de0658b9ad9404d808064
+          path: assets
+          sparse-checkout: |
+            components/risk-matrix
+            entities
+            editorial
+            softwares
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -56,29 +50,13 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # Same build sequence as the green `strings-grep-free` invariants job:
-      # install deps, encrypt the PowerShell modules, build the frontend bundle
-      # (Tauri embeds it at build time), then build the Free binary.
-      - name: Install deps + build frontend
-        run: |
-          bun install --frozen-lockfile
-          bun run encrypt-backend
-          bun x vite build
-
-      # cargo-auditable embeds the exact dependency tree into the binary's
-      # .dep-v0 section so a researcher can run `cargo audit bin <exe>`.
-      - name: Install cargo-auditable
-        run: cargo install cargo-auditable --locked
-
-      - name: Build Free binary (release, auditable)
-        working-directory: src-tauri
+      - name: Build signed Free MSI
         env:
-          # rustc on Windows occasionally blows its default 8 MB thread stack
-          # compiling tauri proc-macros — same workaround as the dev/CI builds.
           RUST_MIN_STACK: "16777216"
-        run: cargo auditable build --release -p commander-free
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bun run tauri build --config src-tauri/commander-free/tauri.conf.json
 
-      # CycloneDX SBOM over the whole repo (Rust + JS dependency graph).
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
@@ -86,33 +64,109 @@ jobs:
           format: cyclonedx-json
           output-file: wincommander-free.sbom.cdx.json
 
-      # SLSA build provenance for the built binary (Sigstore keyless + Rekor).
-      - name: Attest build provenance
+      - name: Prepare signed release assets
+        id: assets
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if (-not $env:RELEASE_TAG.StartsWith("v")) {
+            throw "Release tags must start with 'v': $env:RELEASE_TAG"
+          }
+
+          $version = $env:RELEASE_TAG.Substring(1)
+          $config = Get-Content "src-tauri/commander-free/tauri.conf.json" -Raw | ConvertFrom-Json
+          if ($config.version -ne $version) {
+            throw "Tag $env:RELEASE_TAG does not match Tauri version $($config.version)."
+          }
+
+          $msis = @(Get-ChildItem "src-tauri/target/release/bundle" -Filter "WinCommander*${version}*_x64_en-US.msi" -Recurse | Where-Object { $_.Name -notlike "*.sig*" })
+          if ($msis.Count -ne 1) {
+            throw "Expected exactly one MSI for v$version; found $($msis.Count)."
+          }
+          $msi = $msis[0]
+          $signaturePath = "$($msi.FullName).sig"
+          if (-not (Test-Path $signaturePath)) {
+            throw "Tauri updater signature not found: $signaturePath"
+          }
+
+          $signature = (Get-Content $signaturePath -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($signature)) {
+            throw "Tauri updater signature is empty."
+          }
+          $signatureText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($signature))
+          if ($signatureText -notmatch [Regex]::Escape($msi.Name)) {
+            throw "The updater signature does not name $($msi.Name)."
+          }
+
+          $assetDirectory = Join-Path $env:RUNNER_TEMP "wincommander-release-assets"
+          New-Item -ItemType Directory -Path $assetDirectory -Force | Out-Null
+          $manifestPath = Join-Path $assetDirectory "latest.json"
+          $checksumPath = Join-Path $assetDirectory "SHA256SUMS.txt"
+          $assetName = [Uri]::EscapeDataString($msi.Name)
+          $manifest = @{
+            version = $version
+            notes = "WinCommander Free v$version"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $signature
+                url = "https://github.com/$env:REPOSITORY/releases/download/$env:RELEASE_TAG/$assetName"
+              }
+            }
+          } | ConvertTo-Json -Depth 6
+          [IO.File]::WriteAllText($manifestPath, $manifest, [Text.UTF8Encoding]::new($false))
+
+          $sha256 = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText($checksumPath, "$sha256 *$($msi.Name)`n", [Text.UTF8Encoding]::new($false))
+
+          "MSI_PATH=$($msi.FullName)" | Add-Content -Path $env:GITHUB_ENV
+          "MSI_SIGNATURE_PATH=$signaturePath" | Add-Content -Path $env:GITHUB_ENV
+          "LATEST_JSON_PATH=$manifestPath" | Add-Content -Path $env:GITHUB_ENV
+          "CHECKSUM_PATH=$checksumPath" | Add-Content -Path $env:GITHUB_ENV
+
+      - name: Attest signed MSI provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: src-tauri/target/release/wincommander-free.exe
+          subject-path: ${{ env.MSI_PATH }}
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0 # v7.0.1
         with:
           name: wincommander-free-${{ github.ref_name }}
           path: |
-            src-tauri/target/release/wincommander-free.exe
+            ${{ env.MSI_PATH }}
+            ${{ env.MSI_SIGNATURE_PATH }}
+            ${{ env.LATEST_JSON_PATH }}
+            ${{ env.CHECKSUM_PATH }}
             wincommander-free.sbom.cdx.json
           if-no-files-found: error
 
-      # On a tag push, also attach the binary + SBOM to the GitHub Release
-      # (created if absent). Uses the preinstalled gh CLI — no extra action.
-      - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish GitHub Release
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: pwsh
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release view "${{ github.ref_name }}" 2>$null `
-            || gh release create "${{ github.ref_name }}" `
-                 --title "${{ github.ref_name }}" `
-                 --notes "Automated build. Verify provenance with: gh attestation verify wincommander-free.exe -R ${{ github.repository }}"
-          gh release upload "${{ github.ref_name }}" `
-            src-tauri/target/release/wincommander-free.exe `
-            wincommander-free.sbom.cdx.json --clobber
+          $releaseAssets = @(
+            $env:MSI_PATH,
+            $env:MSI_SIGNATURE_PATH,
+            $env:LATEST_JSON_PATH,
+            $env:CHECKSUM_PATH,
+            "wincommander-free.sbom.cdx.json"
+          )
+          $notes = "Automated Free MSI release. Verify provenance with: gh attestation verify `"<installer>.msi`" -R ${{ github.repository }}"
+
+          gh release view $env:RELEASE_TAG 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG @releaseAssets --clobber
+            exit $LASTEXITCODE
+          }
+
+          $releaseArgs = @("release", "create", $env:RELEASE_TAG, "--title", $env:RELEASE_TAG, "--notes", $notes)
+          if ($env:RELEASE_TAG.Contains("-")) {
+            $releaseArgs += "--prerelease"
+          }
+          $releaseArgs += $releaseAssets
+          gh @releaseArgs

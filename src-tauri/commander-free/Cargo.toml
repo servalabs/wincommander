@@ -74,7 +74,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # Cloudflare DoH resolver to circumvent ISP-level DNS blocks of our update
 # host. Pinned to a major because tauri-plugin-updater pulls reqwest 0.13
 # transitively and we need binary-compatible TLS roots.
-hickory-resolver = { version = "0.24", default-features = false, features = ["dns-over-https-rustls", "tokio-runtime"] }
+hickory-resolver = { version = "0.26.1", default-features = false, features = ["https-ring", "tokio"] }
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core"] }
 # `rand_core` feature on ed25519-dalek above pulls in the trait;
 # the OsRng implementation lives in `rand_core` with `getrandom`.

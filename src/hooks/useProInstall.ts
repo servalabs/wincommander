@@ -12,8 +12,8 @@
 // caller it was missing.
 //
 // Flow:
-//   1. On first mount, fetch /pro/latest.json from the same updater
-//      domain that hosts the Free auto-updater. Manifest shape matches
+//   1. On first mount, fetch /pro/latest.json from the Pro artifact
+//      origin. Manifest shape matches
 //      what tools/release.ps1's Pro variant publishes:
 //        { version, pub_date, notes, url, sha256, size }
 //   2. Also call get_pro_install_status to know if Pro is already on disk.
@@ -33,8 +33,8 @@ import { getVersion } from "@tauri-apps/api/app";
 // only downloads the Pro binary that was tested alongside it, preventing
 // hash mismatches when Pro is released separately. Falls back to /pro/latest.json
 // if the version-specific path 404s (not_published), so forward-compatibility
-// is maintained. Must stay in lock-step with tauri.conf.json's updater endpoint
-// and pro_install.rs's ALLOWED_UPDATE_HOST.
+// is maintained. Must stay in lock-step with pro_install.rs's
+// ALLOWED_UPDATE_HOST.
 const PRO_MANIFEST_BASE = "https://winupdates.servalabs.com";
 
 // Cached Free version (resolved once per session).

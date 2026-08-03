@@ -37,16 +37,15 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 // install_pro_binary into "download arbitrary EXE from attacker URL,
 // run it under the user's session". See ref/security-audit-report.md F-1.
 //
-// This must stay in lock-step with tauri.conf.json's updater endpoint
-// and src/hooks/useProInstall.ts's PRO_MANIFEST_URL — they all point at
-// the same origin (default: the Cloudflare R2 origin behind
-// winupdates.servalabs.com).
+// This must stay in lock-step with src/hooks/useProInstall.ts's
+// PRO_MANIFEST_BASE. It governs only Pro manifests and binaries; the Free
+// Tauri updater has its own minisign-verified GitHub Release endpoint.
 //
 // White-label: an OEM build overrides the pinned host at compile time via the
 // WINCMD_UPDATE_HOST env var. This does NOT relax F-1 — the binary still pins to
 // exactly ONE host that a compromised webview cannot influence; only *which*
-// host is baked in changes. An OEM build MUST set the matching updater endpoint
-// (tauri.conf override) and PRO_MANIFEST_URL so all three stay in lock-step.
+// host is baked in changes. An OEM build MUST set the matching
+// PRO_MANIFEST_BASE so the two remain in lock-step.
 pub(crate) const ALLOWED_UPDATE_HOST: &str = match option_env!("WINCMD_UPDATE_HOST") {
     Some(v) => v,
     None => "winupdates.servalabs.com",
