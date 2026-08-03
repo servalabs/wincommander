@@ -25,8 +25,13 @@ jobs:
       url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout required Risk Matrix source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          submodules: recursive
+          repository: servalabs/assets
+          ref: ff5e7829981b5ace5e9de0658b9ad9404d808064
+          path: assets
+          sparse-checkout: components/risk-matrix
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
