@@ -31,7 +31,11 @@ jobs:
           repository: servalabs/assets
           ref: ff5e7829981b5ace5e9de0658b9ad9404d808064
           path: assets
-          sparse-checkout: components/risk-matrix
+          sparse-checkout: |
+            components/risk-matrix
+            entities
+            editorial
+            softwares
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
