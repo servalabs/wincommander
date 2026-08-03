@@ -83,15 +83,15 @@ jobs:
           try {
             $decodedKey = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($key))
           } catch [FormatException] {
-            if ($key -notmatch '^untrusted comment: minisign (encrypted )?secret key') {
-              throw "TAURI_SIGNING_PRIVATE_KEY must be the Tauri Base64 private key or a raw minisign secret-key file."
+            if ($key -notmatch '^untrusted comment:') {
+              throw "TAURI_SIGNING_PRIVATE_KEY must be an outer Base64 signing key or a raw signing-key file."
             }
             $key = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($key))
             $decodedKey = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($key))
           }
 
-          if ($decodedKey -notmatch '^untrusted comment: minisign (encrypted )?secret key') {
-            throw "TAURI_SIGNING_PRIVATE_KEY is not a Tauri private updater key. Do not use the public key from tauri.conf.json."
+          if ($decodedKey -notmatch '^untrusted comment:') {
+            throw "TAURI_SIGNING_PRIVATE_KEY is not an outer Base64 updater signing key. Do not use the public key from tauri.conf.json."
           }
 
           "TAURI_SIGNING_PRIVATE_KEY=$key" | Add-Content -Path $env:GITHUB_ENV
