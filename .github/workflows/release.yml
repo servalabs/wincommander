@@ -67,12 +67,15 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Install locked JavaScript dependencies
+        run: bun install --frozen-lockfile
+
       - name: Build signed Free MSI
         env:
           RUST_MIN_STACK: "16777216"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: bun run tauri build --config src-tauri/commander-free/tauri.conf.json
+        run: bun tauri build --config src-tauri/commander-free/tauri.conf.json
 
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
