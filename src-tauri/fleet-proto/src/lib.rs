@@ -483,6 +483,22 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         payload_schema: None,
     },
     CommandMeta {
+        catalog_id: "cleanup.shred_folders",
+        action_class: ActionClass::Irreversible,
+        summary: "Securely erase the specified folders (single-pass shred)",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}}},"required":["paths"]}"#,
+        ),
+    },
+    CommandMeta {
+        catalog_id: "lockdown.full",
+        action_class: ActionClass::Irreversible,
+        summary: "Full lockdown: dismount encrypted volumes, erase specified folders and privacy traces, then shut down",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"shredPaths":{"type":"array","items":{"type":"string"}},"clearTraces":{"type":"boolean"}}}"#,
+        ),
+    },
+    CommandMeta {
         catalog_id: "policy.reapply",
         action_class: ActionClass::Safe,
         summary: "Re-check and re-apply the latest policy immediately",
