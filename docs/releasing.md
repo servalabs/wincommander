@@ -14,7 +14,7 @@ version sources together:
 - `src-tauri/commander-free/Cargo.toml`
 
 Review its CI and diff like any other pull request. Merging it automatically
-creates the protected `vX.Y.Z` tag.
+creates the protected `vX.Y.Z` tag and starts the signed release workflow.
 
 ## 2. Signed MSI publication
 

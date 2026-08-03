@@ -1,7 +1,8 @@
 name: publish release tag
 
-# Only a merged release/vX.Y.Z PR can create the protected tag. The PAT is used
-# because tags created with GITHUB_TOKEN do not trigger the separate MSI workflow.
+# Only a merged release/vX.Y.Z PR can create the protected tag and start the
+# separate signed-MSI workflow. GitHub suppresses tag-triggered workflows when
+# the tag is made by an Actions run, so this workflow calls it directly.
 on:
   pull_request:
     branches:
@@ -11,6 +12,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   create-release-tag:
@@ -19,6 +22,8 @@ jobs:
       startsWith(github.event.pull_request.head.ref, 'release/v')
     name: Create protected version tag
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.tag.outputs.release_tag }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -26,6 +31,7 @@ jobs:
           fetch-depth: 0
 
       - name: Validate release PR and push tag
+        id: tag
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
           RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
@@ -59,3 +65,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v${version}" -m "release: v${version}"
           git push origin "v${version}"
+          echo "release_tag=v${version}" >> "$GITHUB_OUTPUT"
+
+  build-signed-free-msi:
+    name: Build, sign, publish, and attest Free MSI
+    needs: create-release-tag
+    uses: ./.github/workflows/release.yml
+    with:
+      release_tag: ${{ needs.create-release-tag.outputs.release_tag }}
+    secrets: inherit

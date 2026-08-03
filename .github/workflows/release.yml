@@ -6,9 +6,24 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing vX.Y.Z tag to build and publish
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Existing vX.Y.Z tag to build and publish
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
 
 concurrency:
-  group: public-release-${{ github.ref }}
+  group: public-release-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -22,9 +37,11 @@ jobs:
     runs-on: windows-latest
     environment:
       name: release
-      url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ env.RELEASE_TAG }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Checkout required Risk Matrix source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -68,7 +85,7 @@ jobs:
         id: assets
         shell: pwsh
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
           REPOSITORY: ${{ github.repository }}
         run: |
           if (-not $env:RELEASE_TAG.StartsWith("v")) {
@@ -147,7 +164,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           $releaseAssets = @(
             $env:MSI_PATH,
