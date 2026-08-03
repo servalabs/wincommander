@@ -59,18 +59,17 @@ Everything in this repo is free and open source. **Pro** is closed source and pr
 
 ## Verify your download
 
-Every release is built in public CI and verifiable end to end:
+Every release is built in public CI and verifiable end to end. The signed MSI,
+updater manifest, signature, SBOM, and SHA-256 checksum are published together
+on the GitHub Release:
 
-- **Build provenance (SLSA)** — each binary carries a Sigstore-backed attestation tying it to the exact public commit and CI run that built it:
-
-  ```powershell
-  gh attestation verify wincommander-free.exe -R servalabs/wincommander
-  ```
-- **Dependency audit** — binaries embed their full dependency tree (`cargo auditable`), and every release ships a CycloneDX SBOM, so you can scan for known CVEs without cloning:
+- **Build provenance (SLSA)** — each installer carries a Sigstore-backed attestation tying it to the exact public commit and CI run that built it:
 
   ```powershell
-  cargo audit bin wincommander-free.exe
+  gh attestation verify ".\WinCommander_<version>_x64_en-US.msi" -R servalabs/wincommander
   ```
+
+- **Dependency inventory** — every release includes a CycloneDX SBOM for offline vulnerability scanning.
 
 ## Learn more
 

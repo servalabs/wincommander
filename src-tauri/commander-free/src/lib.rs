@@ -861,8 +861,7 @@ fn open_log_file() -> Result<(), String> {
 // ── DoH-aware update check ──────────────────────────────────────────
 //
 // Replaces the frontend's `@tauri-apps/plugin-updater` `check()` with a
-// flow that resolves our update host via Cloudflare DoH first. ISPs that
-// DNS-block winupdates.servalabs.com can't stop the lookup that way.
+// flow that resolves its configured update host via Cloudflare DoH first.
 // Safety: the artifact is still minisign-verified by the Tauri updater
 // downstream, so a hostile DoH response can't smuggle a fake update.
 
@@ -976,7 +975,7 @@ async fn app_check_for_updates_doh(app: tauri::AppHandle) -> Result<DohUpdateInf
     // already has its own short timeouts, this is the seatbelt of last resort.
     //
     // Cache-buster: append `?t=<unix_ms>` to every manifest URL so any CDN /
-    // intermediate proxy between us and winupdates.servalabs.com can't serve
+    // intermediate proxy between us and the manifest host can't serve
     // a stale latest.json. The frontend retry in 3ef0cbe flushed our own
     // in-process cache; this closes the remaining HTTP-layer hole.
     let updater = app

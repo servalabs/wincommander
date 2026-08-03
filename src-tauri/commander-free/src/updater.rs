@@ -185,10 +185,7 @@ async fn run_cycle(app: &AppHandle) -> Duration {
     crate::log_message_src(
         "info",
         "core",
-        &format!(
-            "[Updater] manifest fetch: host={}",
-            crate::pro_install::ALLOWED_UPDATE_HOST
-        ),
+        "[Updater] manifest fetch: configured endpoint",
     );
     let checked = match tokio::time::timeout(CHECK_TIMEOUT, updater.check()).await {
         // Timed out → treat like offline; retry soon so a reconnect recovers.
