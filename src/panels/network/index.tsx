@@ -1421,57 +1421,53 @@ function AdaptersWifiGuardDiagnosticsTab() {
 
     return (
         <div className="network-panel-sections">
-            {/* Audit and diagnostics lead the tab; adapter privacy controls stay
-                together in the second card without changing either workflow. */}
             <div className="network-control-row network-control-row--active">
                 <div className="ncr-main">
-                    <NetworkMaintenanceTools />
-                </div>
-            </div>
-
-            <div className="network-control-row network-control-row--active">
-                <div className="ncr-main">
-                    <SectionCard
-                        title={"Adapters & Wi-Fi Guard"}
-                        icon="globe-network"
-                        className="ncr-stretch-card"
-                    >
-                        <div className="merged-adapters-wifi-guard">
-                            {/* Segment 1 — Adapters. Shown to every density (was
-                                expert-only) — MAC randomization is a useful privacy
-                                control for Guided users too, not just power users. */}
-                            <section className="merged-segment merged-segment--adapters">
-                                <header className="merged-segment__header">
-                                    <Icon icon="globe-network" size={11} />
-                                    <span className="merged-segment__title">Network Adapters</span>
-                                    <span className="merged-segment__count">
-                                        {adapters ? `${(adapters ?? []).filter(a => a.status === 'Up').length} up` : '—'}
-                                    </span>
-                                </header>
-                                <p className="merged-segment__blurb">
-                                    Randomize a MAC address so the adapter can't be tracked by hardware ID.
-                                </p>
-                                <div className="merged-segment__body">
-                                    <AdaptersList
-                                        adapters={adapters}
-                                        adaptersLoading={adaptersLoading}
-                                        adapterBusyId={adapterBusyId}
-                                        modeOverrides={modeOverrides}
-                                        showInactiveAdapters={showInactiveAdapters}
-                                        onModeChange={handleAdapterModeChange}
-                                        onShowInactiveToggle={setShowInactiveAdapters}
-                                        embedded
-                                    />
+                    <NetworkMaintenanceTools
+                        adapterControls={
+                            <SectionCard
+                                title={"Adapters & Wi-Fi Guard"}
+                                icon="globe-network"
+                                className="ncr-stretch-card"
+                            >
+                                <div className="merged-adapters-wifi-guard">
+                                    {/* Segment 1 — Adapters. Shown to every density (was
+                                        expert-only) — MAC randomization is a useful privacy
+                                        control for Guided users too, not just power users. */}
+                                    <section className="merged-segment merged-segment--adapters">
+                                        <header className="merged-segment__header">
+                                            <Icon icon="globe-network" size={11} />
+                                            <span className="merged-segment__title">Network Adapters</span>
+                                            <span className="merged-segment__count">
+                                                {adapters ? `${(adapters ?? []).filter(a => a.status === 'Up').length} up` : '—'}
+                                            </span>
+                                        </header>
+                                        <p className="merged-segment__blurb">
+                                            Randomize a MAC address so the adapter can't be tracked by hardware ID.
+                                        </p>
+                                        <div className="merged-segment__body">
+                                            <AdaptersList
+                                                adapters={adapters}
+                                                adaptersLoading={adaptersLoading}
+                                                adapterBusyId={adapterBusyId}
+                                                modeOverrides={modeOverrides}
+                                                showInactiveAdapters={showInactiveAdapters}
+                                                onModeChange={handleAdapterModeChange}
+                                                onShowInactiveToggle={setShowInactiveAdapters}
+                                                embedded
+                                            />
+                                        </div>
+                                    </section>
+                                    {/* Segment 2 — Wi-Fi Guard (fake hotspot / rogue AP detector) */}
+                                    <section className="merged-segment merged-segment--wifi">
+                                        <div className="merged-segment__body">
+                                            <WifiGuardSection embedded />
+                                        </div>
+                                    </section>
                                 </div>
-                            </section>
-                            {/* Segment 2 — Wi-Fi Guard (fake hotspot / rogue AP detector) */}
-                            <section className="merged-segment merged-segment--wifi">
-                                <div className="merged-segment__body">
-                                    <WifiGuardSection embedded />
-                                </div>
-                            </section>
-                        </div>
-                    </SectionCard>
+                            </SectionCard>
+                        }
+                    />
                 </div>
             </div>
         </div>

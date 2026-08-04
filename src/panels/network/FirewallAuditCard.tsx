@@ -56,9 +56,14 @@ export function FirewallAuditCard({ firewall }: { firewall: ReturnType<typeof us
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {audit && !firewall.busy ? (
-              <Button variant="outline" size="sm" onClick={() => void firewall.inspect()}>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => void firewall.inspect()}
+                title="Re-audit firewall rules"
+                aria-label="Re-audit firewall rules"
+              >
                 <Icon icon="refresh" />
-                Re-audit
               </Button>
             ) : null}
             <InfoPopover title="Firewall audit">

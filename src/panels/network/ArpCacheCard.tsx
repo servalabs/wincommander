@@ -85,13 +85,14 @@ export function ArpCacheCard({ arp }: { arp: ReturnType<typeof useArpMaintenance
                   {copied ? "Copied" : "Copy"}
                 </Button>
                 <Button
-                  variant="outline"
-                  size="sm"
+                  variant="ghost"
+                  size="icon"
                   disabled={arp.busy}
                   onClick={() => void arp.inspect()}
+                  title="Rescan neighbour cache"
+                  aria-label="Rescan neighbour cache"
                 >
                   <Icon icon="refresh" className={arp.inspecting ? "animate-spin" : undefined} />
-                  Rescan
                 </Button>
               </>
             ) : null}

@@ -2005,17 +2005,27 @@ html.light .blocklist-count {
    or a long program path must never push the panel into horizontal overflow.
    ───────────────────────────────────────────────────────────────────────── */
 
-/* The neighbour table has four meaningful columns. It gets the larger desktop
-   share so its normal IP/MAC rows fit without an avoidable horizontal scroll. */
-.network-maintenance-grid {
+/* Keep the neighbour table wide enough to read normally. The smaller adapter
+   controls occupy the right side; Firewall Audit deliberately spans the row
+   below instead of being squeezed into that side column. */
+.network-maintenance-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+    gap: 24px;
+}
+
+.network-maintenance-layout__top {
+    display: grid;
+    grid-template-columns: minmax(38rem, 1fr) minmax(19rem, 0.55fr);
     gap: 24px;
     align-items: start;
 }
 
-@media (max-width: 1100px) {
-    .network-maintenance-grid {
+.network-maintenance-layout__adapters {
+    min-width: 0;
+}
+
+@media (max-width: 1120px) {
+    .network-maintenance-layout__top {
         grid-template-columns: 1fr;
     }
 }
