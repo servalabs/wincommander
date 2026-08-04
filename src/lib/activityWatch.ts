@@ -1,26 +1,23 @@
 // src/lib/activityWatch.ts
 //
 // Pure client + domain logic for reading ActivityWatch's local REST API
-// (http://localhost:5600) directly — no embedded webview, no CSS hacking of
+// (http://127.0.0.1:5600) directly — no embedded webview, no CSS hacking of
 // AW's own Vue UI. This module owns bucket discovery, the window/AFK
 // intersection math, and category classification.
 //
-// AUTHORITATIVE REFERENCE: this mirrors the semantics of
-// `commander-pro/src/productivity_detail.rs` (fleet agent's device-side
-// productivity collector, sibling private repo) function-for-function —
-// `selectActivityBuckets` ~ `select_activity_buckets`, `activeIntervals` ~
-// `active_intervals`, `intersectTimeline` ~ `intersect_timeline`,
-// `compileCategories`/`classifyEvent`/`inheritedCategoryColor` ~ their Rust
-// namesakes. Kept in lockstep deliberately: both read the same on-device AW
-// instance and must agree on what "active" and "categorized" mean. One
-// intentional divergence: the Rust collector truncates app/title to bound a
-// network upload; this module renders locally only, so it does not truncate
-// for fidelity (see `sanitizeWindowEvent`).
+// Active-time and category semantics are implemented independently here for
+// the public local viewer. Rendered app/title strings remain local and are
+// not reduced for classification (see `sanitizeWindowEvent`).
 
 import type { ActivityItem, ActivityTimelineEvent } from "@/components/activity/activityData";
 
-const AW_BASE = "http://localhost:5600";
+const AW_BASE = "http://127.0.0.1:5600";
 const HTTP_TIMEOUT_MS = 4_000;
+/** A local ActivityWatch response beyond this cannot be safely held and parsed
+ * in the privileged renderer. This is a hard refusal, never a truncation. */
+export const MAX_AW_RESPONSE_BYTES = 64 * 1024 * 1024;
+/** Limits parallel localhost I/O without omitting any selected bucket. */
+export const AW_BUCKET_FETCH_CONCURRENCY = 4;
 /** A legitimate window-focus event cannot span more than a device-local day. */
 const MAX_EVENT_DURATION_SECS = 86_400;
 
@@ -31,20 +28,67 @@ export class AwUnavailableError extends Error {
   }
 }
 
-async function fetchAwJson<T>(path: string, params?: Record<string, string>): Promise<T> {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function readAwJson(response: Response, controller: AbortController): Promise<unknown> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_AW_RESPONSE_BYTES) {
+    controller.abort();
+    throw new AwUnavailableError("ActivityWatch returned an oversized response.");
+  }
+  if (!response.body) throw new AwUnavailableError("ActivityWatch returned an empty response.");
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_AW_RESPONSE_BYTES) {
+        controller.abort();
+        throw new AwUnavailableError("ActivityWatch returned an oversized response.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    throw new AwUnavailableError("ActivityWatch returned invalid JSON.");
+  }
+}
+
+async function fetchAwJson<T>(path: string, params?: Record<string, string>, signal?: AbortSignal): Promise<T> {
   const url = new URL(path, AW_BASE);
   if (params) for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) controller.abort();
   try {
     const response = await fetch(url.toString(), { signal: controller.signal });
     if (!response.ok) throw new AwUnavailableError(`ActivityWatch returned HTTP ${response.status}.`);
-    return (await response.json()) as T;
+    return (await readAwJson(response, controller)) as T;
   } catch (error) {
     if (error instanceof AwUnavailableError) throw error;
     throw new AwUnavailableError();
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
   }
 }
 
@@ -76,10 +120,29 @@ export function eventData(data: unknown): Record<string, unknown> {
     : {};
 }
 
-export const fetchBuckets = (): Promise<AwBucketsMap> => fetchAwJson<AwBucketsMap>("/api/0/buckets");
-export const fetchServerInfo = (): Promise<AwServerInfo> => fetchAwJson<AwServerInfo>("/api/0/info");
+export async function fetchBuckets(signal?: AbortSignal): Promise<AwBucketsMap> {
+  const payload = await fetchAwJson<unknown>("/api/0/buckets", undefined, signal);
+  if (!isRecord(payload)) throw new AwUnavailableError("ActivityWatch returned invalid bucket data.");
 
-export const fetchBucketEvents = (
+  const buckets: AwBucketsMap = {};
+  for (const [id, info] of Object.entries(payload)) {
+    if (!isRecord(info)) continue;
+    buckets[id] = {
+      hostname: typeof info.hostname === "string" ? info.hostname : undefined,
+      type: typeof info.type === "string" ? info.type : undefined,
+      client: typeof info.client === "string" ? info.client : undefined,
+    };
+  }
+  return buckets;
+}
+
+export async function fetchServerInfo(signal?: AbortSignal): Promise<AwServerInfo> {
+  const payload = await fetchAwJson<unknown>("/api/0/info", undefined, signal);
+  if (!isRecord(payload)) throw new AwUnavailableError("ActivityWatch returned invalid server information.");
+  return { hostname: typeof payload.hostname === "string" ? payload.hostname : undefined };
+}
+
+export const fetchBucketEvents = async (
   bucketId: string,
   startIso: string,
   endIso: string,
@@ -87,12 +150,38 @@ export const fetchBucketEvents = (
   // drops late-day activity on busy machines, leaving the native timeline
   // incomplete while looking valid.
   limit = -1,
-): Promise<AwEvent[]> =>
-  fetchAwJson<AwEvent[]>(`/api/0/buckets/${encodeURIComponent(bucketId)}/events`, {
+  signal?: AbortSignal,
+): Promise<AwEvent[]> => {
+  const payload = await fetchAwJson<unknown>(`/api/0/buckets/${encodeURIComponent(bucketId)}/events`, {
     start: startIso,
     end: endIso,
     limit: String(limit),
-  });
+  }, signal);
+  if (!Array.isArray(payload)) throw new AwUnavailableError("ActivityWatch returned invalid event data.");
+  return payload.filter((event): event is AwEvent =>
+    isRecord(event) && typeof event.timestamp === "string" && typeof event.duration === "number",
+  ).map((event) => ({ timestamp: event.timestamp, duration: event.duration, data: event.data }));
+};
+
+export async function mapWithConcurrency<T, U>(
+  items: T[],
+  concurrency: number,
+  operation: (item: T, index: number) => Promise<U>,
+  signal?: AbortSignal,
+): Promise<U[]> {
+  if (!Number.isInteger(concurrency) || concurrency < 1) throw new RangeError("Concurrency must be a positive integer.");
+  const results = new Array<U>(items.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      if (signal?.aborted) throw new AwUnavailableError("ActivityWatch request was cancelled.");
+      const index = nextIndex++;
+      results[index] = await operation(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
 
 // ── Local day bounds ─────────────────────────────────────────────────────
 
@@ -273,6 +362,8 @@ export interface CompiledCategory {
  * code-point bound. This constrains only the regex input; the viewer keeps
  * the original app/title strings intact for local display. */
 export const CLASSIFY_INPUT_LIMIT = 512;
+const MAX_CATEGORY_REGEX_CHARS = 512;
+const MAX_CATEGORY_REGEX_QUANTIFIERS = 1;
 
 function classificationInput(value: string): string {
   return [...value].slice(0, CLASSIFY_INPUT_LIMIT).join("");
@@ -280,6 +371,47 @@ function classificationInput(value: string): string {
 
 function sameName(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/** JavaScript regexes run on the renderer's main thread. Categories are a
+ * display aid, so reject patterns outside this small linear-time subset
+ * instead of allowing a local settings payload to freeze the application. */
+export function isSafeCategoryRegex(source: string): boolean {
+  if (!source || source.length > MAX_CATEGORY_REGEX_CHARS) return false;
+  if (/\\[1-9]|\\k<|\(\?(?:=|!|<=|<!)/.test(source)) return false;
+
+  let inCharacterClass = false;
+  let escaped = false;
+  let quantifiers = 0;
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "[") {
+      inCharacterClass = true;
+      continue;
+    }
+    if (char === "]") {
+      inCharacterClass = false;
+      continue;
+    }
+    if (inCharacterClass) continue;
+
+    const isNonCapturingGroupPrefix = char === "?" && source[index - 1] === "(" && source[index + 1] === ":";
+    const isBraceQuantifier = char === "{" && /^\{\d+(?:,\d*)?\}/.test(source.slice(index));
+    if (char === ")" && /^(?:[+*?]|\{\d+(?:,\d*)?\})/.test(source.slice(index + 1))) return false;
+    if (!isNonCapturingGroupPrefix && (char === "*" || char === "+" || char === "?" || isBraceQuantifier)) {
+      quantifiers++;
+      if (quantifiers > MAX_CATEGORY_REGEX_QUANTIFIERS) return false;
+    }
+  }
+  return !escaped && !inCharacterClass;
 }
 
 /** A category with no colour of its own inherits its nearest ANCESTOR's
@@ -299,6 +431,7 @@ export function compileCategories(classes: AwCategory[]): CompiledCategory[] {
   const compiled: CompiledCategory[] = [];
   for (const category of classes) {
     if (category.rule?.type !== "regex" || !category.name?.length || !category.rule.regex) continue;
+    if (!isSafeCategoryRegex(category.rule.regex)) continue;
     let regex: RegExp;
     try {
       // "m" (multiline ^/$) matches Rust's `RegexBuilder::multi_line(true)`.
@@ -325,10 +458,12 @@ export function classifyEvent(app: string, title: string, categories: CompiledCa
   return best ? { path: best.path, color: best.color } : { path: ["Uncategorized"], color: "#CCC" };
 }
 
-export async function loadCategories(): Promise<CompiledCategory[]> {
+export async function loadCategories(signal?: AbortSignal): Promise<CompiledCategory[]> {
   try {
-    const settings = await fetchAwJson<AwSettings>("/api/0/settings");
-    return compileCategories(settings.classes ?? []);
+    const settings = await fetchAwJson<unknown>("/api/0/settings", undefined, signal);
+    return isRecord(settings) && Array.isArray(settings.classes)
+      ? compileCategories(settings.classes as AwCategory[])
+      : [];
   } catch {
     // Categories are a display nicety — never block the timeline on them.
     return [];

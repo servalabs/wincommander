@@ -1,10 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import {
+  AW_BUCKET_FETCH_CONCURRENCY,
+  AwUnavailableError,
   CLASSIFY_INPUT_LIMIT,
+  MAX_AW_RESPONSE_BYTES,
   classifyEvent,
   compileCategories,
   dayBoundsLocal,
   fetchBucketEvents,
+  fetchBuckets,
+  isSafeCategoryRegex,
+  mapWithConcurrency,
   sanitizeWindowEvent,
   selectActivityBuckets,
   toActivityTimelineEvents,
@@ -27,7 +33,88 @@ describe("ActivityWatch event retrieval", () => {
       globalThis.fetch = originalFetch;
     }
 
-    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("-1");
+    const url = new URL(requestedUrl);
+    expect(url.origin).toBe("http://127.0.0.1:5600");
+    expect(url.searchParams.get("limit")).toBe("-1");
+  });
+
+  it("aborts an in-flight local request when its caller changes view", async () => {
+    const originalFetch = globalThis.fetch;
+    let receivedSignal: AbortSignal | undefined;
+    globalThis.fetch = (_input, init) => new Promise<Response>((_resolve, reject) => {
+      receivedSignal = init?.signal ?? undefined;
+      receivedSignal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    });
+
+    const controller = new AbortController();
+    const pending = fetchBuckets(controller.signal);
+    controller.abort();
+    let failed = false;
+    try {
+      await pending;
+    } catch (error) {
+      failed = error instanceof AwUnavailableError;
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(failed).toBe(true);
+  });
+
+  it("rejects an oversized response instead of buffering an unbounded payload", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response("[]", {
+      status: 200,
+      headers: { "content-length": String(MAX_AW_RESPONSE_BYTES + 1) },
+    });
+
+    let failed = false;
+    try {
+      await fetchBuckets();
+    } catch (error) {
+      failed = error instanceof AwUnavailableError;
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(failed).toBe(true);
+  });
+
+  it("bounds optional bucket requests while retaining result order", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const result = await mapWithConcurrency(Array.from({ length: 10 }, (_, index) => index), AW_BUCKET_FETCH_CONCURRENCY, async (value) => {
+      active++;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise<void>((resolve) => setTimeout(resolve, 1));
+      active--;
+      return value * 2;
+    });
+
+    expect(maximumActive).toBe(AW_BUCKET_FETCH_CONCURRENCY);
+    expect(result).toEqual([0, 2, 4, 6, 8, 10, 12, 14, 16, 18]);
+  });
+
+  it("does not dequeue later bucket requests after cancellation", async () => {
+    const controller = new AbortController();
+    let started = 0;
+    const pending = mapWithConcurrency(Array.from({ length: 10 }, (_, index) => index), AW_BUCKET_FETCH_CONCURRENCY, async () => {
+      started++;
+      await new Promise<void>((resolve) => controller.signal.addEventListener("abort", () => resolve(), { once: true }));
+      return 0;
+    }, controller.signal);
+    controller.abort();
+
+    let failed = false;
+    try {
+      await pending;
+    } catch (error) {
+      failed = error instanceof AwUnavailableError;
+    }
+
+    expect(started).toBe(AW_BUCKET_FETCH_CONCURRENCY);
+    expect(failed).toBe(true);
   });
 });
 
@@ -39,6 +126,19 @@ describe("ActivityWatch category classification", () => {
     const app = `${"😀".repeat(CLASSIFY_INPUT_LIMIT - 1)}x-after-the-bound`;
 
     expect(classifyEvent(app, "", categories).path).toEqual(["Bounded"]);
+  });
+
+  it("rejects patterns that can backtrack catastrophically on the renderer thread", () => {
+    expect(isSafeCategoryRegex("(a+)+$")).toBe(false);
+    expect(isSafeCategoryRegex("^(a|aa)+$")).toBe(false);
+    expect(isSafeCategoryRegex(".*project.*")).toBe(false);
+    expect(isSafeCategoryRegex("^(?=admin).*")).toBe(false);
+    expect(isSafeCategoryRegex("^Code\\.exe$")).toBe(true);
+
+    expect(compileCategories([
+      { name: ["Unsafe"], rule: { type: "regex", regex: "(a+)+$" } },
+      { name: ["Safe"], rule: { type: "regex", regex: "^Code\\.exe$" } },
+    ])).toHaveLength(1);
   });
 });
 

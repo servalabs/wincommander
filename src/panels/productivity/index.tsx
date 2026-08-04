@@ -1,14 +1,14 @@
 // ══════════════════════════════════════════════════════════════════════════
 // Productivity Panel — native ActivityWatch viewer
 // ══════════════════════════════════════════════════════════════════════════
-// Reads ActivityWatch's local REST API (http://localhost:5600) directly and
+// Reads ActivityWatch's local REST API (http://127.0.0.1:5600) directly and
 // renders with this app's own UI kit, instead of embedding AW's Vue web UI
 // in a WebView2 and CSS-hacking its navbar/header/footer away. That embed
 // broke whenever AW changed markup and needed webview lifecycle workarounds
 // (hide_all_server_apps on unmount, remount-by-hostname keys) — gone now.
 //
 // Data + domain logic: src/lib/activityWatch.ts (window/AFK/category
-// semantics, mirrors commander-pro/src/productivity_detail.rs),
+// semantics),
 // src/lib/activityWatchExtras.ts (browser/VS Code/input/generic buckets),
 // src/hooks/useActivityWatchDay.ts (orchestration + explicit non-happy
 // states). Presentational components: src/components/activity/ (canonical

@@ -2,8 +2,7 @@
 //
 // Orchestrates a single day's worth of ActivityWatch data for the
 // Productivity panel: bucket discovery, window/AFK intersection, category
-// classification (all in src/lib/activityWatch.ts, mirroring
-// commander-pro/src/productivity_detail.rs), plus the extra bucket types
+// classification (all in src/lib/activityWatch.ts), plus the extra bucket types
 // (src/lib/activityWatchExtras.ts). Degrades explicitly through three
 // distinct non-happy states — AW unreachable, no buckets recorded yet, and
 // an empty day — so the panel never shows an endless spinner or a crash.
@@ -11,6 +10,7 @@
 import { useEffect, useState } from "react";
 import {
   activeIntervals,
+  AW_BUCKET_FETCH_CONCURRENCY,
   clipEventInterval,
   dayBoundsLocal,
   eventData,
@@ -19,6 +19,7 @@ import {
   fetchServerInfo,
   intersectTimeline,
   loadCategories,
+  mapWithConcurrency,
   sanitizeWindowEvent,
   selectActivityBuckets,
   summarizeByField,
@@ -164,6 +165,7 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setState({ status: "loading" });
 
     (async () => {
@@ -173,7 +175,7 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
 
       let buckets: AwBucketsMap;
       try {
-        buckets = await fetchBuckets();
+        buckets = await fetchBuckets(controller.signal);
       } catch {
         if (!cancelled) {
           setState({
@@ -190,7 +192,7 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
       }
 
       try {
-        const [categories, serverInfo] = await Promise.all([loadCategories(), fetchServerInfo()]);
+        const [categories, serverInfo] = await Promise.all([loadCategories(controller.signal), fetchServerInfo(controller.signal)]);
         const activityHostname = localHostname ?? (serverInfo.hostname?.trim() || null);
         if (!activityHostname) {
           if (!cancelled) {
@@ -205,13 +207,13 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
 
         let timelineEvents: RawTimelineEvent[] = [];
         if (selected) {
-          const windowEvents = await fetchBucketEvents(selected.windowId, bounds.startIso, bounds.endIso);
+          const windowEvents = await fetchBucketEvents(selected.windowId, bounds.startIso, bounds.endIso, -1, controller.signal);
           const sanitized = windowEvents
             .map((event) => sanitizeWindowEvent(event, bounds.startMs, bounds.endMs, categories))
             .filter((event): event is RawTimelineEvent => event !== null);
 
           const afkEvents = selected.afkId
-            ? await fetchBucketEvents(selected.afkId, bounds.startIso, bounds.endIso).catch(() => [] as AwEvent[])
+            ? await fetchBucketEvents(selected.afkId, bounds.startIso, bounds.endIso, -1, controller.signal).catch(() => [] as AwEvent[])
             : [];
           const active = selected.afkId ? activeIntervals(afkEvents, bounds.startMs, bounds.endMs) : null;
           // null => no usable AFK state, fall back to raw window events.
@@ -225,20 +227,26 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
         const inputIds = bucketIdsOfKind(buckets, "input", activityHostname);
         const genericIds = bucketIdsOfKind(buckets, "generic", activityHostname);
 
-        const fetchAll = (ids: string[]) =>
-          Promise.all(ids.map((id) => fetchBucketEvents(id, bounds.startIso, bounds.endIso).catch(() => [] as AwEvent[])));
-        const [webEventLists, vscodeEventLists, inputEventLists] = await Promise.all([
-          fetchAll(webIds),
-          fetchAll(vscodeIds),
-          fetchAll(inputIds),
-        ]);
-        const webEvents = webEventLists.flat();
-        const vscodeEvents = vscodeEventLists.flat();
-        const inputEvents = inputEventLists.flat();
+        const requests = [
+          ...webIds.map((id) => ({ id, source: "web" as const })),
+          ...vscodeIds.map((id) => ({ id, source: "vscode" as const })),
+          ...inputIds.map((id) => ({ id, source: "input" as const })),
+          ...genericIds.map((id) => ({ id, source: "generic" as const })),
+        ];
+        const fetched = await mapWithConcurrency(requests, AW_BUCKET_FETCH_CONCURRENCY, async (request) => ({
+          ...request,
+          events: await fetchBucketEvents(request.id, bounds.startIso, bounds.endIso, -1, controller.signal)
+            .catch(() => [] as AwEvent[]),
+        }), controller.signal);
+        if (cancelled) return;
+        const eventsById = new Map(fetched.map((result) => [result.id, result.events]));
+        const webEvents = webIds.flatMap((id) => eventsById.get(id) ?? []);
+        const vscodeEvents = vscodeIds.flatMap((id) => eventsById.get(id) ?? []);
+        const inputEvents = inputIds.flatMap((id) => eventsById.get(id) ?? []);
 
         const generic: GenericBucketSummary[] = [];
         for (const id of genericIds) {
-          const events = await fetchBucketEvents(id, bounds.startIso, bounds.endIso).catch(() => [] as AwEvent[]);
+          const events = eventsById.get(id) ?? [];
           if (events.length > 0) generic.push(summarizeGenericBucket(id, buckets[id]?.type ?? "unknown", events));
         }
 
@@ -289,6 +297,7 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [date, localHostname]);
 
