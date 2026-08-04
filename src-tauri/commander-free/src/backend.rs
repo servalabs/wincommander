@@ -2791,12 +2791,20 @@ fn get_settings_sync_patch(
         }
         "Enable-DetailedBSOD" => Some(json!({"tweaks":{"os":{"detailedBsodEnabled": true}}})),
         "Disable-DetailedBSOD" => Some(json!({"tweaks":{"os":{"detailedBsodEnabled": false}}})),
-        "Disable-AutomaticMaintenance" => Some(json!({"tweaks":{"os":{"automaticMaintenanceDisabled": true}}})),
-        "Enable-AutomaticMaintenance" => Some(json!({"tweaks":{"os":{"automaticMaintenanceDisabled": false}}})),
+        "Disable-AutomaticMaintenance" => {
+            Some(json!({"tweaks":{"os":{"automaticMaintenanceDisabled": true}}}))
+        }
+        "Enable-AutomaticMaintenance" => {
+            Some(json!({"tweaks":{"os":{"automaticMaintenanceDisabled": false}}}))
+        }
         "Enable-Win32LongPaths" => Some(json!({"tweaks":{"os":{"win32LongPathsEnabled": true}}})),
         "Disable-Win32LongPaths" => Some(json!({"tweaks":{"os":{"win32LongPathsEnabled": false}}})),
-        "Disable-SmbBandwidthThrottling" => Some(json!({"tweaks":{"os":{"smbBandwidthThrottlingDisabled": true}}})),
-        "Enable-SmbBandwidthThrottling" => Some(json!({"tweaks":{"os":{"smbBandwidthThrottlingDisabled": false}}})),
+        "Disable-SmbBandwidthThrottling" => {
+            Some(json!({"tweaks":{"os":{"smbBandwidthThrottlingDisabled": true}}}))
+        }
+        "Enable-SmbBandwidthThrottling" => {
+            Some(json!({"tweaks":{"os":{"smbBandwidthThrottlingDisabled": false}}}))
+        }
         // Set-PowerPlan writes the top-level tweaks.powerPlan path that
         // the UI actually reads (the old tweaks.os.powerPlan field is
         // gone — see chore(settings) commit).
@@ -2901,10 +2909,18 @@ fn get_settings_sync_patch(
         }
         "Disable-WPBT" => Some(json!({"tweaks":{"security":{"wpbtDisabled": true}}})),
         "Enable-WPBT" => Some(json!({"tweaks":{"security":{"wpbtDisabled": false}}})),
-        "Disable-RemoteAssistance" => Some(json!({"tweaks":{"security":{"remoteAssistanceDisabled": true}}})),
-        "Enable-RemoteAssistance" => Some(json!({"tweaks":{"security":{"remoteAssistanceDisabled": false}}})),
-        "Block-AnonymousSamEnumeration" => Some(json!({"tweaks":{"security":{"anonymousSamEnumerationBlocked": true}}})),
-        "Allow-AnonymousSamEnumeration" => Some(json!({"tweaks":{"security":{"anonymousSamEnumerationBlocked": false}}})),
+        "Disable-RemoteAssistance" => {
+            Some(json!({"tweaks":{"security":{"remoteAssistanceDisabled": true}}}))
+        }
+        "Enable-RemoteAssistance" => {
+            Some(json!({"tweaks":{"security":{"remoteAssistanceDisabled": false}}}))
+        }
+        "Block-AnonymousSamEnumeration" => {
+            Some(json!({"tweaks":{"security":{"anonymousSamEnumerationBlocked": true}}}))
+        }
+        "Allow-AnonymousSamEnumeration" => {
+            Some(json!({"tweaks":{"security":{"anonymousSamEnumerationBlocked": false}}}))
+        }
         "Disable-SmartScreen" => Some(json!({"tweaks":{"security":{"smartScreenDisabled": true}}})),
         "Enable-SmartScreen" => Some(json!({"tweaks":{"security":{"smartScreenDisabled": false}}})),
         "Set-OOBEBypass" => Some(json!({"tweaks":{"security":{"oobeBypassEnabled": true}}})),
@@ -6633,7 +6649,10 @@ mod es_query_tests {
         // across every real name in the corpus (see the KNOWN GAP test below
         // for the one place typed, non-filename input breaks it).
         let cases: &[(&str, &[&str])] = &[
-            ("[2025-01-01 (12.03 AM)] ReviOS", &["[2025-01-01", "(12.03", "AM)]", "ReviOS"]),
+            (
+                "[2025-01-01 (12.03 AM)] ReviOS",
+                &["[2025-01-01", "(12.03", "AM)]", "ReviOS"],
+            ),
             ("Only Work (2nd User)", &["Only", "Work", "(2nd", "User)"]),
             ("Program Files (x86)", &["Program", "Files", "(x86)"]),
             ("Beginner's Tutorial.html", &["Beginner's", "Tutorial.html"]),
@@ -6652,10 +6671,16 @@ mod es_query_tests {
                 "Clipchamp.Clipchamp_4.4.10720.0_neutral_~_yxz26nhyzhsrt",
                 &["Clipchamp.Clipchamp_4.4.10720.0_neutral_~_yxz26nhyzhsrt"],
             ),
-            ("D%3A%5CGitHub%5Cwincommander", &["D%3A%5CGitHub%5Cwincommander"]),
+            (
+                "D%3A%5CGitHub%5Cwincommander",
+                &["D%3A%5CGitHub%5Cwincommander"],
+            ),
             ("$$.cdf-ms", &["$$.cdf-ms"]),
             ("HWiNFO\u{ae} 64", &["HWiNFO\u{ae}", "64"]),
-            ("Intel\u{ae} Graphics Software", &["Intel\u{ae}", "Graphics", "Software"]),
+            (
+                "Intel\u{ae} Graphics Software",
+                &["Intel\u{ae}", "Graphics", "Software"],
+            ),
         ];
         for &(name, expected_tokens) in cases {
             let expected: Vec<String> = expected_tokens.iter().map(|s| s.to_string()).collect();
@@ -6716,12 +6741,22 @@ mod es_query_tests {
         let cases: &[&[&str]] = &[
             &["01a", "-", "Windows", "PowerShell.lnk"],
             &["03", "-", "Computer", "Management.lnk"],
-            &["Microsoft", ".NET", "Runtime", "-", "8.0.29", "(x64).swidtag"],
+            &[
+                "Microsoft",
+                ".NET",
+                "Runtime",
+                "-",
+                "8.0.29",
+                "(x64).swidtag",
+            ],
         ];
         for tokens in cases {
             let owned: Vec<String> = tokens.iter().map(|s| s.to_string()).collect();
             let err = validate_es_tokens(&owned).unwrap_err();
-            assert!(err.contains("'-'"), "unexpected message for {owned:?}: {err}");
+            assert!(
+                err.contains("'-'"),
+                "unexpected message for {owned:?}: {err}"
+            );
         }
     }
 }

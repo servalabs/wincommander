@@ -24,7 +24,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hickory_resolver::config::{CLOUDFLARE, ResolverConfig, ResolverOpts};
+use hickory_resolver::config::{ResolverConfig, ResolverOpts, CLOUDFLARE};
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::TokioResolver;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};

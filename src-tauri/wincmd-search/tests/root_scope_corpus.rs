@@ -113,9 +113,8 @@ fn load_corpus() -> Option<Vec<CorpusEntry>> {
 /// module doc) sampled none of the office/PDF/ODF/RTF formats, so those are
 /// covered separately in `real_document_extraction_success_rates_by_format`.
 const TEXT_EXTS: &[&str] = &[
-    "txt", "md", "json", "xml", "yaml", "yml", "toml", "log", "rs", "py", "js", "ts", "tsx",
-    "jsx", "html", "css", "sh", "ini", "csv", "c", "cpp", "h", "java", "go", "sql", "ps1", "conf",
-    "rst",
+    "txt", "md", "json", "xml", "yaml", "yml", "toml", "log", "rs", "py", "js", "ts", "tsx", "jsx",
+    "html", "css", "sh", "ini", "csv", "c", "cpp", "h", "java", "go", "sql", "ps1", "conf", "rst",
 ];
 
 // ── Real-file helpers ────────────────────────────────────────────────────────
@@ -244,7 +243,10 @@ fn path_in_roots_matches_hundreds_of_real_nested_paths() {
         }
     }
     println!("real (file, real parent dir) pairs checked: {checked}");
-    assert!(checked > 100, "expected a substantial real sample, got {checked}");
+    assert!(
+        checked > 100,
+        "expected a substantial real sample, got {checked}"
+    );
     assert!(
         mismatches.is_empty(),
         "{} of {checked} real files were wrongly scoped OUT of their own parent:\n  {}",
@@ -287,7 +289,10 @@ fn path_in_roots_rejects_real_sibling_prefix_directories_at_scale() {
     // proves nothing about the live scoping code.
     let dirs: Vec<String> = dirs.into_iter().filter(|d| Path::new(d).is_dir()).collect();
     let lower: Vec<String> = dirs.iter().map(|d| d.to_lowercase()).collect();
-    println!("real, currently-existing directories under test: {}", dirs.len());
+    println!(
+        "real, currently-existing directories under test: {}",
+        dirs.len()
+    );
 
     let t0 = Instant::now();
     let mut gotcha_pairs = 0usize;
@@ -364,7 +369,10 @@ fn pick_real_multi_file_dirs(
         if !meta.is_file() || meta.len() < 20 || meta.len() > 2_000_000 {
             continue;
         }
-        by_dir.entry(e.dir.clone()).or_default().push(p.to_path_buf());
+        by_dir
+            .entry(e.dir.clone())
+            .or_default()
+            .push(p.to_path_buf());
     }
     let mut dirs: Vec<(String, Vec<PathBuf>)> = by_dir
         .into_iter()
@@ -412,7 +420,11 @@ fn multi_root_real_directory_trees_partition_correctly() {
     }
     let t0 = Instant::now();
     let indexed = index_real_files(&engine, &all_paths);
-    println!("indexed {indexed}/{} real files in {:?}", all_paths.len(), t0.elapsed());
+    println!(
+        "indexed {indexed}/{} real files in {:?}",
+        all_paths.len(),
+        t0.elapsed()
+    );
 
     // All extensions used, comma-joined — a filters-only query (`ext:` with
     // no free text) matches every doc we just indexed regardless of its
@@ -495,7 +507,11 @@ fn scoped_paging_and_case_insensitive_scope_path_on_real_files() {
         println!("[skip] no real multi-file directory found");
         return;
     };
-    assert!(files.len() >= 6, "need enough real files to page through, got {}", files.len());
+    assert!(
+        files.len() >= 6,
+        "need enough real files to page through, got {}",
+        files.len()
+    );
 
     let index_dir = TempDir::new().unwrap();
     let engine = open_engine(index_dir.path());
@@ -519,7 +535,12 @@ fn scoped_paging_and_case_insensitive_scope_path_on_real_files() {
     let mut offset = 0usize;
     loop {
         let page = engine
-            .search(&query(&ext_filter, &[PathBuf::from(&dir)], page_size, offset))
+            .search(&query(
+                &ext_filter,
+                &[PathBuf::from(&dir)],
+                page_size,
+                offset,
+            ))
             .unwrap();
         if page.is_empty() {
             break;
@@ -604,7 +625,10 @@ fn sibling_prefix_wincommander_vs_pro_real_repos_no_leak() {
 
     let a_files = top_level_files(&wincommander);
     let b_files = top_level_files(&wincommander_pro);
-    assert!(!a_files.is_empty() && !b_files.is_empty(), "both real repos must have top-level files");
+    assert!(
+        !a_files.is_empty() && !b_files.is_empty(),
+        "both real repos must have top-level files"
+    );
     println!(
         "indexing {} real top-level files from {:?} and {} from {:?}",
         a_files.len(),
@@ -630,12 +654,18 @@ fn sibling_prefix_wincommander_vs_pro_real_repos_no_leak() {
     let hits_b = unscoped
         .iter()
         .any(|h| path_in_roots(&h.path, std::slice::from_ref(&wincommander_pro)));
-    println!("unscoped {term:?} hits: {} (from wincommander: {hits_a}, from -pro: {hits_b})", unscoped.len());
+    println!(
+        "unscoped {term:?} hits: {} (from wincommander: {hits_a}, from -pro: {hits_b})",
+        unscoped.len()
+    );
 
     let scoped_a = engine
         .search(&query(term, std::slice::from_ref(&wincommander), 200, 0))
         .unwrap();
-    assert!(!scoped_a.is_empty(), "scoping to the real wincommander repo must still find real hits");
+    assert!(
+        !scoped_a.is_empty(),
+        "scoping to the real wincommander repo must still find real hits"
+    );
     for h in &scoped_a {
         assert!(
             !h.path.to_lowercase().contains("wincommander-pro"),
@@ -645,9 +675,17 @@ fn sibling_prefix_wincommander_vs_pro_real_repos_no_leak() {
     }
 
     let scoped_b = engine
-        .search(&query(term, std::slice::from_ref(&wincommander_pro), 200, 0))
+        .search(&query(
+            term,
+            std::slice::from_ref(&wincommander_pro),
+            200,
+            0,
+        ))
         .unwrap();
-    assert!(!scoped_b.is_empty(), "scoping to the real wincommander-pro repo must still find real hits");
+    assert!(
+        !scoped_b.is_empty(),
+        "scoping to the real wincommander-pro repo must still find real hits"
+    );
     for h in &scoped_b {
         assert!(
             path_in_roots(&h.path, std::slice::from_ref(&wincommander_pro)),
@@ -691,11 +729,19 @@ fn write_overfetch_corpus(base: &Path, term: &str, n: usize, m: usize) {
     fs::create_dir_all(&out_dir).unwrap();
     fs::create_dir_all(&in_dir).unwrap();
     for i in 0..n {
-        fs::write(out_dir.join(format!("o{i}.txt")), format!("{term} short doc {i}")).unwrap();
+        fs::write(
+            out_dir.join(format!("o{i}.txt")),
+            format!("{term} short doc {i}"),
+        )
+        .unwrap();
     }
     let filler = "filler word repeated many times to dilute term frequency ".repeat(300);
     for i in 0..m {
-        fs::write(in_dir.join(format!("i{i}.txt")), format!("{filler} {term} tail {i}")).unwrap();
+        fs::write(
+            in_dir.join(format!("i{i}.txt")),
+            format!("{filler} {term} tail {i}"),
+        )
+        .unwrap();
     }
 }
 
@@ -722,12 +768,12 @@ fn scoped_search_underreports_once_fetch_window_is_exceeded() {
     ] {
         let scope_root = vec![PathBuf::from("PLACEHOLDER")]; // replaced per sub-case below
         let fetch = scoped_fetch(limit + offset, &scope_root);
-        println!("\n── {label}: scoped_fetch({}, roots) = {fetch} ──", limit + offset);
+        println!(
+            "\n── {label}: scoped_fetch({}, roots) = {fetch} ──",
+            limit + offset
+        );
 
-        for (n, expect_survives) in [
-            (fetch.saturating_sub(20), true),
-            (fetch + 200, false),
-        ] {
+        for (n, expect_survives) in [(fetch.saturating_sub(20), true), (fetch + 200, false)] {
             let data = TempDir::new().unwrap();
             let index_dir = TempDir::new().unwrap();
             let term = "overfetchboundarymarker";
@@ -761,7 +807,11 @@ fn scoped_search_underreports_once_fetch_window_is_exceeded() {
                  {} in-scope hits returned, indexed+searched in {:?} [{}]",
                 hits.len(),
                 t0.elapsed(),
-                if survived == expect_survives { "as predicted" } else { "UNEXPECTED" }
+                if survived == expect_survives {
+                    "as predicted"
+                } else {
+                    "UNEXPECTED"
+                }
             );
             assert_eq!(
                 survived, expect_survives,
@@ -815,13 +865,20 @@ fn scoped_search_hits_absolute_fetch_ceiling_regardless_of_limit() {
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .collect();
-    all.extend(fs::read_dir(&in_dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()));
+    all.extend(
+        fs::read_dir(&in_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path()),
+    );
     let t0 = Instant::now();
     let indexed = index_real_files(&engine, &all);
     let index_ms = t0.elapsed();
 
     let t1 = Instant::now();
-    let hits = engine.search(&query(term, &[in_dir], probe_limit, 0)).unwrap();
+    let hits = engine
+        .search(&query(term, &[in_dir], probe_limit, 0))
+        .unwrap();
     println!(
         "n={n} out-of-scope + m={m} in-scope, indexed={indexed} in {index_ms:?}, \
          searched (limit={probe_limit}) in {:?} → {} in-scope hits (expected 0: n > ceiling {fetch_at_probe})",
@@ -980,16 +1037,26 @@ fn filter_tokens_on_real_files_ext_comma_vs_semicolon_date_and_size() {
     );
 
     // size:, real sizes: split the same real files at their real median size.
-    let mut sizes: Vec<u64> = boundary_files.iter().map(|p| fs::metadata(p).unwrap().len()).collect();
+    let mut sizes: Vec<u64> = boundary_files
+        .iter()
+        .map(|p| fs::metadata(p).unwrap().len())
+        .collect();
     sizes.sort_unstable();
     let median = sizes[sizes.len() / 2];
     let small_q = format!("size:<{median}");
     let hits = engine2.search(&query(&small_q, &[], 500, 0)).unwrap();
     for h in &hits {
         let sz = fs::metadata(&h.path).map(|m| m.len()).unwrap_or(u64::MAX);
-        assert!(sz < median, "size:<{median} returned {:?} with real size {sz}", h.path);
+        assert!(
+            sz < median,
+            "size:<{median} returned {:?} with real size {sz}",
+            h.path
+        );
     }
-    println!("size:<{median} correctly returned only real files below the real median size ({} hits)", hits.len());
+    println!(
+        "size:<{median} correctly returned only real files below the real median size ({} hits)",
+        hits.len()
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1033,24 +1100,40 @@ fn real_document_extraction_success_rates_by_format() {
         candidates.truncate(40);
 
         for p in &candidates {
-            let ext = if p.extension().and_then(|e| e.to_str()) == Some("md") { "md" } else { "txt" };
+            let ext = if p.extension().and_then(|e| e.to_str()) == Some("md") {
+                "md"
+            } else {
+                "txt"
+            };
             let t = tally.entry(ext).or_default();
             t.found_on_disk += 1;
-            let Some(meta) = meta_for_real(p) else { continue };
-            let Ok(raw) = fs::read_to_string(p) else { continue };
-            let Some(word) = probe_word(&raw, 6) else { continue };
+            let Some(meta) = meta_for_real(p) else {
+                continue;
+            };
+            let Ok(raw) = fs::read_to_string(p) else {
+                continue;
+            };
+            let Some(word) = probe_word(&raw, 6) else {
+                continue;
+            };
             match extract_text(meta.clone()) {
                 Ok(doc) if doc.body.to_lowercase().contains(&word) => {
                     t.extracted_ok += 1;
                     let hits = engine.search(&query(&word, &[], 50, 0)).unwrap();
-                    if hits.iter().any(|h| h.path.eq_ignore_ascii_case(&p.to_string_lossy())) {
+                    if hits
+                        .iter()
+                        .any(|h| h.path.eq_ignore_ascii_case(&p.to_string_lossy()))
+                    {
                         t.searchable += 1;
                     } else {
                         // Not yet indexed (batched below) — index individually so
                         // per-file probe words don't collide across a shared batch.
                         engine.index_files_sync(vec![meta]).unwrap();
                         let hits = engine.search(&query(&word, &[], 50, 0)).unwrap();
-                        if hits.iter().any(|h| h.path.eq_ignore_ascii_case(&p.to_string_lossy())) {
+                        if hits
+                            .iter()
+                            .any(|h| h.path.eq_ignore_ascii_case(&p.to_string_lossy()))
+                        {
                             t.searchable += 1;
                         }
                     }
@@ -1068,22 +1151,37 @@ fn real_document_extraction_success_rates_by_format() {
     // writing this test; the fallback entries and graceful skip keep the
     // test honest on a machine where a specific cache path has since churned.
     let candidates_by_ext: &[(&str, &[&str])] = &[
-        ("pdf", &[
-            r"C:\Program Files\smartmontools\doc\smartctl.8.pdf",
-            r"C:\Program Files\VeraCrypt\docs\EFI-DCS\dcs_tpm_owner_02.pdf",
-        ]),
-        ("docx", &[
-            r"C:\Users\Admin\.codex\plugins\cache\openai-curated-remote\openai-templates\0.1.0\skills\artifact-template-minimal-letterhead\assets\reference.docx",
-        ]),
-        ("xlsx", &[
-            r"C:\Users\Admin\AppData\Local\Vivaldi\User Data\Default\Extensions\hehggadaopoacecdllhhajmbjkdcmajg\1.2.27221.15725_0\codex-sidepanel\assets\budget-planner-B_xX3PJl.xlsx",
-        ]),
-        ("pptx", &[
-            r"C:\Users\Admin\.codex\plugins\cache\openai-curated-remote\openai-templates\0.1.0\skills\artifact-template-business-review\assets\reference.pptx",
-        ]),
-        ("rtf", &[
-            r"C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\VBCSharp\ExpressionEvaluators\EULA.rtf",
-        ]),
+        (
+            "pdf",
+            &[
+                r"C:\Program Files\smartmontools\doc\smartctl.8.pdf",
+                r"C:\Program Files\VeraCrypt\docs\EFI-DCS\dcs_tpm_owner_02.pdf",
+            ],
+        ),
+        (
+            "docx",
+            &[
+                r"C:\Users\Admin\.codex\plugins\cache\openai-curated-remote\openai-templates\0.1.0\skills\artifact-template-minimal-letterhead\assets\reference.docx",
+            ],
+        ),
+        (
+            "xlsx",
+            &[
+                r"C:\Users\Admin\AppData\Local\Vivaldi\User Data\Default\Extensions\hehggadaopoacecdllhhajmbjkdcmajg\1.2.27221.15725_0\codex-sidepanel\assets\budget-planner-B_xX3PJl.xlsx",
+            ],
+        ),
+        (
+            "pptx",
+            &[
+                r"C:\Users\Admin\.codex\plugins\cache\openai-curated-remote\openai-templates\0.1.0\skills\artifact-template-business-review\assets\reference.pptx",
+            ],
+        ),
+        (
+            "rtf",
+            &[
+                r"C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\VBCSharp\ExpressionEvaluators\EULA.rtf",
+            ],
+        ),
     ];
     // ODF (odt/ods/odp): confirmed via `es -n 10 ext:odt,ods,odp` that this
     // machine has ZERO real files in any ODF format — honestly reported as
@@ -1094,11 +1192,15 @@ fn real_document_extraction_success_rates_by_format() {
     for (ext, candidates) in candidates_by_ext {
         let t = tally.entry(ext).or_default();
         let Some(real_path) = candidates.iter().map(PathBuf::from).find(|p| p.exists()) else {
-            println!("[skip] no candidate .{ext} file exists on this machine (tried {candidates:?})");
+            println!(
+                "[skip] no candidate .{ext} file exists on this machine (tried {candidates:?})"
+            );
             continue;
         };
         t.found_on_disk += 1;
-        let Some(meta) = meta_for_real(&real_path) else { continue };
+        let Some(meta) = meta_for_real(&real_path) else {
+            continue;
+        };
         match extract_text(meta.clone()) {
             Ok(doc) => {
                 let Some(word) = probe_word(&doc.body, 6) else {
@@ -1108,10 +1210,16 @@ fn real_document_extraction_success_rates_by_format() {
                 t.extracted_ok += 1;
                 engine.index_files_sync(vec![meta]).unwrap();
                 let hits = engine.search(&query(&word, &[], 50, 0)).unwrap();
-                if hits.iter().any(|h| h.path.eq_ignore_ascii_case(&real_path.to_string_lossy())) {
+                if hits
+                    .iter()
+                    .any(|h| h.path.eq_ignore_ascii_case(&real_path.to_string_lossy()))
+                {
                     t.searchable += 1;
                 }
-                println!("  .{ext}: {real_path:?} → probe word {word:?}, searchable={}", t.searchable == t.extracted_ok);
+                println!(
+                    "  .{ext}: {real_path:?} → probe word {word:?}, searchable={}",
+                    t.searchable == t.extracted_ok
+                );
             }
             Err(e) => println!("  .{ext}: {real_path:?} → extract_text FAILED: {e}"),
         }
