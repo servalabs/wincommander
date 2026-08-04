@@ -150,6 +150,7 @@ export default function ContextMenuIntegrationCard({
                     <UniversalToggle
                         label="Delete"
                         description="Add 'Delete' to right-click on files + folders. Permanent secure deletion."
+                        icon="trash"
                         checked={contextMenuEnabled}
                         onChange={handleShredToggle}
                         disabled={loadingShred}
@@ -159,6 +160,7 @@ export default function ContextMenuIntegrationCard({
                     <UniversalToggle
                         label="Scrub"
                         description="Add 'Scrub metadata' to right-click. Strips EXIF / GPS / author info before sharing photos, videos, and documents."
+                        icon="eraser"
                         checked={scrubContextMenuEnabled}
                         onChange={handleScrubToggle}
                         disabled={loadingScrub}
@@ -168,6 +170,7 @@ export default function ContextMenuIntegrationCard({
                     <UniversalToggle
                         label="Safe Copy / Safe Paste"
                         description="Add 'Safe Copy' + 'Safe Paste' to right-click. Safe Copy remembers your selection; Safe Paste drops a copy into a folder — same filename, with metadata stripped. (Metadata scrub is a Pro feature.)"
+                        icon="clipboard"
                         checked={safeCopyContextMenuEnabled}
                         onChange={handleSafeCopyToggle}
                         disabled={loadingSafeCopy}

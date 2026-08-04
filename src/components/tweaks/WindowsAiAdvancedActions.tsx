@@ -4,7 +4,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
-import { Icon } from "../ui/icon";
+import { Icon, type IconName } from "../ui/icon";
 import { Switch } from "../ui/switch";
 import { useAppState } from "../../context/AppContext";
 import { type AiComponentCleanupOperation } from "../../types/settings";
@@ -14,17 +14,18 @@ interface AdvancedAction {
   operation: AiComponentCleanupOperation;
   label: string;
   description: string;
+  icon: IconName;
   needsConfirmation?: boolean;
 }
 
 const ADVANCED_ACTIONS: AdvancedAction[] = [
-  { operation: "package-guard", label: "Reinstall guard", description: "Keeps removed AI packages deprovisioned after Windows servicing." },
-  { operation: "appx-packages", label: "AI app packages", description: "Removes Copilot, Recall, AIX, and Core AI app packages.", needsConfirmation: true },
-  { operation: "recall-feature", label: "Recall feature payload", description: "Removes the optional Windows Recall feature payload.", needsConfirmation: true },
-  { operation: "cbs-packages", label: "AI system packages", description: "Removes matching Windows component-store packages.", needsConfirmation: true },
-  { operation: "ai-files", label: "Remaining AI files", description: "Backs up and removes residual AI files and handlers.", needsConfirmation: true },
-  { operation: "scheduled-tasks", label: "AI scheduled tasks", description: "Disables Windows AI and Office Actions scheduled tasks." },
-  { operation: "update-cleanup", label: "Post-update cleanup", description: "Runs a bounded cleanup after Windows servicing changes the build." },
+  { operation: "package-guard", label: "Reinstall guard", description: "Keeps removed AI packages deprovisioned after Windows servicing.", icon: "shield-check" },
+  { operation: "appx-packages", label: "AI app packages", description: "Removes Copilot, Recall, AIX, and Core AI app packages.", icon: "applications", needsConfirmation: true },
+  { operation: "recall-feature", label: "Recall feature payload", description: "Removes the optional Windows Recall feature payload.", icon: "eye-open", needsConfirmation: true },
+  { operation: "cbs-packages", label: "AI system packages", description: "Removes matching Windows component-store packages.", icon: "cube", needsConfirmation: true },
+  { operation: "ai-files", label: "Remaining AI files", description: "Backs up and removes residual AI files and handlers.", icon: "document", needsConfirmation: true },
+  { operation: "scheduled-tasks", label: "AI scheduled tasks", description: "Disables Windows AI and Office Actions scheduled tasks.", icon: "properties" },
+  { operation: "update-cleanup", label: "Post-update cleanup", description: "Runs a bounded cleanup after Windows servicing changes the build.", icon: "refresh" },
 ];
 
 interface PendingChange {
@@ -87,6 +88,7 @@ export default function WindowsAiAdvancedActions() {
             <div key={action.operation} className="flex items-start justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
+                  <Icon icon={action.icon} size={16} className="shrink-0 text-[var(--color-danger)]" aria-hidden="true" />
                   <p className="text-[13px] font-bold text-[var(--text)]">{action.label}</p>
                   <span className={`text-[11px] font-medium ${busy ? "text-[var(--text-dim)]" : enabled ? "text-[var(--success)]" : "text-[var(--text-dim)]"}`}>
                     {busy ? "Applying…" : enabled ? "Enabled" : "Off"}

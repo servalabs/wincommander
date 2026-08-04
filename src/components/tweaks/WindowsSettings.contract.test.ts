@@ -35,4 +35,25 @@ describe("Windows Settings layout contracts", () => {
     expect(extras).not.toContain("Vulnerable driver scan");
     expect(extras).not.toContain("Microsoft’s vulnerable-driver blocklist");
   });
+
+  test("context actions and every security or performance tile have an icon", async () => {
+    const contextMenu = await read("src/components/tweaks/ContextMenuIntegrationCard.tsx");
+    const registry = await read("src/registry/tweaks.toggles.ts");
+
+    expect(contextMenu).toContain('label="Delete"');
+    expect(contextMenu).toContain('icon="trash"');
+    expect(contextMenu).toContain('label="Scrub"');
+    expect(contextMenu).toContain('icon="eraser"');
+    expect(contextMenu).toContain('label="Safe Copy / Safe Paste"');
+    expect(contextMenu).toContain('icon="clipboard"');
+
+    const cards = registry.split(/^  \{\n/m);
+    for (const section of ["security", "performance"]) {
+      const sectionCards = cards.filter((card) => card.includes(`section: "${section}"`));
+      expect(sectionCards.length).toBeGreaterThan(0);
+      for (const card of sectionCards) {
+        expect(card).toMatch(/\n\s*icon:\s*"[^"]+",/);
+      }
+    }
+  });
 });
