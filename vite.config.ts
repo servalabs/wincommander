@@ -7,17 +7,22 @@ const tauriDevHost = process.env.TAURI_DEV_HOST;
 const host = tauriDevHost || "localhost";
 // Runtime artwork is supplied by the pinned `assets` submodule. Production
 // builds and local development deliberately use the same source tree.
-const bundledAssetsRoot = path.resolve(__dirname, "./assets");
+const bundledAssetsRoot = path.resolve(__dirname, "../assets");
+const localAssetsRoot = path.resolve(__dirname, "./assets");
 
 export default defineConfig(({ command }): UserConfig => ({
   plugins: [...react(), ...tailwindcss()],
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
+    alias: [
+      { find: "@", replacement: path.resolve(__dirname, "./src") },
       // `@assets` also exposes the local React RiskMatrix component, which
       // resolves its own React dependency through this app's node_modules.
-      "@assets": path.resolve(__dirname, "./assets"),
-    },
+      { find: "@assets", replacement: localAssetsRoot },
+      // Vite emits the external glob imports under `/assets/...` while
+      // developing. Resolve that URL-shaped module id back to the shared
+      // workspace tree so its `?url` module can be transformed normally.
+      { find: /^\/assets\//, replacement: `${bundledAssetsRoot}/` },
+    ],
   },
   // KT: Disable source maps in production to prevent frontend code recovery.
   // Vite still generates them in dev for debugging.
@@ -64,6 +69,7 @@ export default defineConfig(({ command }): UserConfig => ({
     fs: {
       allow: [
         searchForWorkspaceRoot(process.cwd()),
+        localAssetsRoot,
         bundledAssetsRoot,
       ],
     },

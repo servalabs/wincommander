@@ -25,6 +25,7 @@ import { initUniversalLogging } from "./lib/logger";
 import { applyMotionClass } from "./lib/motionPolicy";
 import GlobalErrorBoundary from "./components/ErrorBoundary";
 import { AppConfirmProvider } from "./components/shared/AppConfirmDialog";
+import { logo as brandLogo } from "./assets";
 
 const hasNativeBackend = Boolean((window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
@@ -93,7 +94,7 @@ const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement)
 if (!hasNativeBackend) {
   root.render(
     <main className="native-backend-required" role="alert" aria-labelledby="native-backend-required-title">
-      <img src="../assets/products/wincommander/logo.png" alt="" />
+      <img src={brandLogo} alt="" />
       <p className="native-backend-required-kicker">WINCOMMANDER DEVELOPMENT</p>
       <h1 id="native-backend-required-title">Native backend disconnected</h1>
       <p>
