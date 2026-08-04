@@ -11,7 +11,7 @@
 // Fleet wire: fleet_push.rs + session_monitor::take_pending_sample()
 
 import { useCallback, useEffect, useState } from 'react';
-import { Button, Icon, Spinner, Switch, Tag } from '@/components/ui/bp';
+import { Button, Icon, Spinner, Tag } from '@/components/ui/bp';
 import useEntitlements from '@/hooks/useEntitlements';
 import { argus, type ArgusAppUsageStatus, type ArgusWindowSlot } from '@/hooks/useArgus';
 import ProductivityTimeline from './ProductivityTimeline';
@@ -47,7 +47,6 @@ export default function ArgusAppUsageSection() {
   // Monitor
   const [status, setStatus] = useState<ArgusStatus | null>(null);
   const [recent, setRecent] = useState<ArgusWindowSlot[]>([]);
-  const [monitorBusy, setMonitorBusy] = useState(false);
   const [monitorError, setMonitorError] = useState<string | null>(null);
 
   const isRunning = status?.running === true;
@@ -74,25 +73,6 @@ export default function ArgusAppUsageSection() {
     const id = setInterval(() => void refreshStatus(), isRunning ? 10_000 : 30_000);
     return () => clearInterval(id);
   }, [isRunning, refreshStatus]);
-
-  // ── Monitor actions ────────────────────────────────────────────────────
-
-  const toggleMonitor = useCallback(async (on: boolean) => {
-    setMonitorBusy(true);
-    setMonitorError(null);
-    try {
-      if (on) {
-        await argus.appUsageStart();
-      } else {
-        await argus.appUsageStop();
-      }
-      await refreshStatus();
-    } catch (e) {
-      setMonitorError(String(e));
-    } finally {
-      setMonitorBusy(false);
-    }
-  }, [refreshStatus]);
 
   // ── Status pill ────────────────────────────────────────────────────────
 
@@ -135,29 +115,25 @@ export default function ArgusAppUsageSection() {
       {(
         <div className="flex flex-col gap-3">
           <p className="text-xs text-[var(--shield-text-subtle)] text-pretty max-w-[360px]">
-            Tracks active and idle time per application category. Window titles and
-            exe paths are used only to compute categories locally - the fleet
-            receives only aggregate scores and active/idle seconds.
+            Starts automatically after this device enrolls in Fleet and stops when it
+            disconnects. Reporting is managed by the Fleet connection; this view shows
+            the monitor's current local status.
           </p>
-          {/* Start / Stop row */}
           <div className="flex items-center gap-3 flex-wrap">
-            <Switch
-              checked={isRunning}
-              disabled={monitorBusy || statusLoading}
-              onChange={(e) => void toggleMonitor((e.target as HTMLInputElement).checked)}
-              label="App-usage monitoring active"
-            />
+            <span className="inline-flex items-center gap-2 text-[11px] font-mono text-[var(--shield-text-muted)]">
+              <Icon icon="endorsed" size={12} /> Fleet-managed reporting
+            </span>
             <Button
               icon="refresh"
               minimal
               small
-              disabled={monitorBusy || statusLoading}
+              disabled={statusLoading}
               onClick={() => void refreshStatus()}
               aria-label="Refresh app-usage windows"
             >
               Refresh
             </Button>
-            {(monitorBusy || statusLoading) && <Spinner size={14} />}
+            {statusLoading && <Spinner size={14} />}
           </div>
 
           {monitorError && (
