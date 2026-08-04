@@ -228,8 +228,8 @@ export type CreateGroupRequest = { name: string, };
 /**
  * Per-device Argus monitoring-coverage view for the admin (Feature B —
  * transparency). Tells the admin whether Argus is actually observing a device,
- * under which disclosure version, whether consent is in good standing (no recent
- * consent/disclosure-mismatch ingest denial in the audit log), and which signal
+ * under which disclosure version, whether disclosure is in good standing (no
+ * recent disclosure-mismatch ingest denial in the audit log), and which signal
  * kinds have been seen. Aggregate/opaque scalars only — no PII.
  */
 export type DeviceArgusCoverage = { device_id: DeviceId, hostname: string | null, 
@@ -255,14 +255,14 @@ kinds_observed: Array<string>,
  */
 signal_count: bigint, 
 /**
- * False when a consent/disclosure-mismatch ingest denial was recorded for
- * this device in the audit log within the window (consent out of standing).
+ * False when a disclosure-mismatch ingest denial was recorded for this
+ * device in the audit log within the window.
  */
-consent_in_good_standing: boolean, 
+disclosure_in_good_standing: boolean, 
 /**
- * RFC 3339 timestamp of the most recent consent-mismatch denial, else `None`.
+ * RFC 3339 timestamp of the most recent disclosure-mismatch denial, else `None`.
  */
-last_consent_denial_at: string | null, };
+last_disclosure_mismatch_at: string | null, };
 
 /**
  * Per-device Argus signal rollup for the admin dashboard.
