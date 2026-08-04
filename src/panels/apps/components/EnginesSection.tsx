@@ -145,7 +145,6 @@ export default function EnginesSection() {
   const [installingIds, setInstallingIds] = useState<Set<string>>(new Set());
   const [installingAll, setInstallingAll] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [showInstalled, setShowInstalled] = useState(false);
 
   const handleInstall = useCallback(async (dep: DependencyInfo) => {
     setInstallingIds((prev) => new Set([...prev, dep.id]));
@@ -297,30 +296,6 @@ export default function EnginesSection() {
         </div>
       )}
 
-      {/* Installed collapsible */}
-      {installed.length > 0 && (
-        <div className="eng-installed">
-          <button
-            className="eng-installed-toggle"
-            onClick={() => setShowInstalled((v) => !v)}
-          >
-            <Icon icon={showInstalled ? "chevron-down" : "chevron-right"} size={10} />
-            <span>Installed ({installed.length})</span>
-          </button>
-          {showInstalled && (
-            <div className="eng-app-grid">
-              {installed.map((dep) => (
-                <EngineCard
-                  key={dep.id} dep={dep}
-                  importance={engineImportance(dep.id)}
-                  isBusy={installingIds.has(dep.id)}
-                  onInstall={handleInstall}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

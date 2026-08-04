@@ -5,12 +5,15 @@
           gap: 16px;
         }
 
-        .app-installer-status-row {
+        .installer-toolbar-context {
           display: flex;
           align-items: center;
+          justify-content: space-between;
           flex-wrap: wrap;
           gap: 10px;
-          margin: -6px 0 16px;
+          padding: 10px 16px;
+          border-bottom: 1px solid var(--color-border);
+          background: var(--color-bg-secondary);
         }
 
         .panel-subtitle {
@@ -105,7 +108,8 @@
           font-weight: 500;
           letter-spacing: 0.5px;
           padding: 4px 10px;
-          border-radius: 2px;
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-sm);
         }
 
         .winget-status.installed {
@@ -243,8 +247,18 @@
           grid-column: 1;
           grid-row: 1;
           display: flex;
-          align-items: stretch;
+          flex-direction: column;
+          gap: 6px;
           min-width: 0;
+        }
+
+        .installer-control-label {
+          color: var(--color-text-muted);
+          font-family: var(--font-mono);
+          font-size: 9px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
         }
 
         /* No border here — the outer .installer-card is already the single

@@ -656,6 +656,24 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
           fn: async () => {
             const response = await installWingetApps([id]);
             if (!response.success) throw new Error(response.error || `Install failed.`);
+            // Move a successful install immediately. Waiting for the full
+            // inventory refresh made the same app remain in the install grid
+            // long enough to invite duplicate clicks and look duplicated.
+            setInstalledApps(prev => new Set(prev).add(id));
+            setUpdateAvailableApps(prev => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+            setSelectedApps(prev => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+            setApps(prev => prev.map(app => app.id === id
+              ? { ...app, installed: true, updateAvailable: false }
+              : app));
+            if (uniqueIds.length === 1) setInstallerView("installed");
             setInstallingIds(prev => {
               const next = new Set(prev);
               next.delete(id);
@@ -945,23 +963,23 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
 
   return (
     <div className="app-installer-panel">
-      <div className="app-installer-status-row">
-        <span className={`winget-status ${wingetStatus === "installed" ? "installed" : wingetStatus === "not-installed" ? "not-installed" : ""}`}>
-          {wingetStatus === "checking" && <Spinner size={14} />}
-          {wingetStatus === "installed" && <><Icon icon="tick-circle" size={14} /> PACKAGE MANAGER INSTALLED</>}
-          {wingetStatus === "not-installed" && <><Icon icon="cross-circle" size={14} /> PACKAGE MANAGER MISSING</>}
-          {wingetStatus === "installing" && <><Spinner size={14} /> INSTALLING...</>}
-          {wingetStatus === "failed" && <><Icon icon="error" size={14} /> PACKAGE MANAGER FAILED</>}
-        </span>
-        <span className={`vulnerability-badge ${vulnerabilityBadge.tone}`}>
-          <Icon icon={vulnerabilityBadge.tone === "is-safe" ? "shield" : vulnerabilityBadge.tone === "is-risk" ? "warning-sign" : vulnerabilityBadge.tone === "is-warning" ? "issue" : "info-sign"} size={12} />
-          <span>{vulnerabilityBadge.text}</span>
-        </span>
-      </div>
-
       <Card className="installer-card">
+        <div className="installer-toolbar-context">
+          <span className={`winget-status ${wingetStatus === "installed" ? "installed" : wingetStatus === "not-installed" ? "not-installed" : ""}`}>
+            {wingetStatus === "checking" && <Spinner size={14} />}
+            {wingetStatus === "installed" && <><Icon icon="tick-circle" size={14} /> PACKAGE MANAGER INSTALLED</>}
+            {wingetStatus === "not-installed" && <><Icon icon="cross-circle" size={14} /> PACKAGE MANAGER MISSING</>}
+            {wingetStatus === "installing" && <><Spinner size={14} /> INSTALLING...</>}
+            {wingetStatus === "failed" && <><Icon icon="error" size={14} /> PACKAGE MANAGER FAILED</>}
+          </span>
+          <span className={`vulnerability-badge ${vulnerabilityBadge.tone}`}>
+            <Icon icon={vulnerabilityBadge.tone === "is-safe" ? "shield" : vulnerabilityBadge.tone === "is-risk" ? "warning-sign" : vulnerabilityBadge.tone === "is-warning" ? "issue" : "info-sign"} size={12} />
+            <span>{vulnerabilityBadge.text}</span>
+          </span>
+        </div>
         <div className="installer-toolbar-layout">
           <div className="installer-toolbar-search">
+            <span className="installer-control-label">Search</span>
             <div className="installer-search-box">
               <Icon icon="search" className="installer-search-icon" />
               <InputGroup
@@ -975,6 +993,7 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
           </div>
 
           <div className="installer-filter-row">
+            <span className="installer-control-label">Category</span>
             <div className="category-chips" role="group" aria-label="App categories">
               {CATEGORY_TABS.map((tab) => (
                 <button
@@ -1147,9 +1166,9 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
         <div ref={appsGridRef}>
           <Tabs value={installerView} onValueChange={(value) => setInstallerView(value as typeof installerView)}>
             <TabsList className="w-full flex-wrap justify-start">
-              <TabsTrigger value="not-installed">Not Installed</TabsTrigger>
-              <TabsTrigger value="updates">Updates</TabsTrigger>
-              <TabsTrigger value="installed">Installed</TabsTrigger>
+              <TabsTrigger value="not-installed">Not Installed ({notInstalledApps.length})</TabsTrigger>
+              <TabsTrigger value="updates">Updates ({outdatedInstalledCount})</TabsTrigger>
+              <TabsTrigger value="installed">Installed ({noActionApps.length})</TabsTrigger>
             </TabsList>
 
             {/* Tour anchor: wraps only the curated/installable catalog so the

@@ -27,4 +27,13 @@ describe("Packages and Apps layout", () => {
     expect(panel).not.toContain("ClassicWindowsApps");
     expect(panel).not.toContain("classic-photo-viewer");
   });
+
+  test("moves successful installs to Installed without waiting for the inventory refresh", async () => {
+    const installer = await read("src/panels/apps/components/AppInstallerPanel.tsx");
+    const engines = await read("src/panels/apps/components/EnginesSection.tsx");
+
+    expect(installer).toContain("setInstalledApps(prev => new Set(prev).add(id));");
+    expect(installer).toContain('setInstallerView("installed")');
+    expect(engines).not.toContain("eng-installed");
+  });
 });
