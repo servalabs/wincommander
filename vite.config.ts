@@ -1,6 +1,7 @@
-import { defineConfig, searchForWorkspaceRoot, type UserConfig } from "vite";
+import { defineConfig, searchForWorkspaceRoot, type Plugin, type UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import fs from "node:fs";
 import path from "path";
 
 const tauriDevHost = process.env.TAURI_DEV_HOST;
@@ -10,18 +11,71 @@ const host = tauriDevHost || "localhost";
 const bundledAssetsRoot = path.resolve(__dirname, "../assets");
 const localAssetsRoot = path.resolve(__dirname, "./assets");
 
+const assetContentTypes: Record<string, string> = {
+  ".avif": "image/avif",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+};
+
+/** Serves the shared workspace artwork that Vite otherwise treats as an SPA route. */
+function serveSharedAssetsInDevelopment(): Plugin {
+  return {
+    name: "wincommander-shared-assets",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use("/assets", (request, response, next) => {
+        const requestUrl = new URL(request.url ?? "/", "http://vite.local");
+        // Preserve Vite's JavaScript `?url` module transform. This middleware
+        // handles only the final image/media URL returned by that module.
+        if (requestUrl.searchParams.has("import")) {
+          next();
+          return;
+        }
+
+        const requestedPath = decodeURIComponent(requestUrl.pathname);
+        const filePath = path.resolve(bundledAssetsRoot, `.${requestedPath}`);
+        const relativePath = path.relative(bundledAssetsRoot, filePath);
+        if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+          next();
+          return;
+        }
+
+        fs.stat(filePath, (error, stats) => {
+          if (error || !stats.isFile()) {
+            next();
+            return;
+          }
+
+          response.statusCode = 200;
+          response.setHeader(
+            "Content-Type",
+            assetContentTypes[path.extname(filePath).toLowerCase()] ?? "application/octet-stream",
+          );
+          response.setHeader("Cache-Control", "no-store");
+          if (request.method === "HEAD") {
+            response.end();
+            return;
+          }
+          fs.createReadStream(filePath).pipe(response);
+        });
+      });
+    },
+  };
+}
+
 export default defineConfig(({ command }): UserConfig => ({
-  plugins: [...react(), ...tailwindcss()],
+  plugins: [serveSharedAssetsInDevelopment(), ...react(), ...tailwindcss()],
   resolve: {
     alias: [
       { find: "@", replacement: path.resolve(__dirname, "./src") },
       // `@assets` also exposes the local React RiskMatrix component, which
       // resolves its own React dependency through this app's node_modules.
       { find: "@assets", replacement: localAssetsRoot },
-      // Vite emits the external glob imports under `/assets/...` while
-      // developing. Resolve that URL-shaped module id back to the shared
-      // workspace tree so its `?url` module can be transformed normally.
-      { find: /^\/assets\//, replacement: `${bundledAssetsRoot}/` },
     ],
   },
   // KT: Disable source maps in production to prevent frontend code recovery.
