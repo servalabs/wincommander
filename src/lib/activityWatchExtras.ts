@@ -11,7 +11,7 @@
 // from.
 
 import type { ActivityItem } from "@/components/activity/activityData";
-import type { AwEvent } from "./activityWatch";
+import { eventData, type AwEvent } from "./activityWatch";
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -33,7 +33,7 @@ function summarizeByFields(events: AwEvent[], fields: string[]): ActivityItem[][
   for (const event of events) {
     if (!Number.isFinite(event.duration) || event.duration <= 0) continue;
     fields.forEach((field, index) => {
-      const value = stringField(event.data ?? {}, field);
+      const value = stringField(eventData(event.data), field);
       if (!value) return;
       totals[index].set(value, (totals[index].get(value) ?? 0) + event.duration);
     });
@@ -84,7 +84,7 @@ export interface InputSummary {
 export function summarizeInputEvents(events: AwEvent[]): InputSummary {
   let presses = 0, clicks = 0, scrolls = 0, movementPx = 0;
   for (const event of events) {
-    const data = event.data ?? {};
+    const data = eventData(event.data);
     if (isFiniteNumber(data.presses)) presses += data.presses;
     if (isFiniteNumber(data.clicks)) clicks += data.clicks;
     if (isFiniteNumber(data.scrolls)) scrolls += data.scrolls;
@@ -111,7 +111,7 @@ const MAX_SAMPLE_CHARS = 300;
 
 export function summarizeGenericBucket(bucketId: string, bucketType: string, events: AwEvent[]): GenericBucketSummary {
   const samples = events.slice(0, MAX_GENERIC_SAMPLES).map((event) => {
-    const json = JSON.stringify(event.data ?? {});
+    const json = JSON.stringify(eventData(event.data));
     return json.length > MAX_SAMPLE_CHARS ? `${json.slice(0, MAX_SAMPLE_CHARS)}…` : json;
   });
   return { bucketId, bucketType, eventCount: events.length, samples };

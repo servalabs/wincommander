@@ -13,8 +13,10 @@ import {
   activeIntervals,
   clipEventInterval,
   dayBoundsLocal,
+  eventData,
   fetchBucketEvents,
   fetchBuckets,
+  fetchServerInfo,
   intersectTimeline,
   loadCategories,
   sanitizeWindowEvent,
@@ -81,19 +83,21 @@ export type ActivityWatchDayState =
  * single-machine install. Only an EXPLICIT mismatch excludes a bucket, so a
  * synced multi-device AW database never mixes another device's browsing or
  * coding activity into this one's report. */
-function belongsToHost(bucket: AwBucketInfo, hostname: string | null): boolean {
-  if (!hostname) return true;
-  if (!bucket.hostname || !bucket.hostname.trim()) return true;
-  return bucket.hostname.toLowerCase() === hostname.toLowerCase();
+function belongsToHost(bucketId: string, bucket: AwBucketInfo, hostname: string): boolean {
+  if (bucket.hostname?.trim()) return bucket.hostname.toLowerCase() === hostname.toLowerCase();
+  // Metadata-less watcher buckets must still carry the local machine suffix.
+  // An unscoped bucket is deliberately excluded rather than attributed to the
+  // current device when an ActivityWatch store has been synchronised.
+  return bucketId.toLowerCase().endsWith(`_${hostname.toLowerCase()}`);
 }
 
 function formatDateLabel(date: Date): string {
   return date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 }
 
-function bucketIdsOfKind(buckets: AwBucketsMap, kind: string, hostname: string | null): string[] {
+function bucketIdsOfKind(buckets: AwBucketsMap, kind: string, hostname: string): string[] {
   return Object.entries(buckets)
-    .filter(([id, info]) => classifyBucketId(id) === kind && belongsToHost(info, hostname))
+    .filter(([id, info]) => classifyBucketId(id) === kind && belongsToHost(id, info, hostname))
     .map(([id]) => id);
 }
 
@@ -117,8 +121,9 @@ function buildCombinedEvents(
   for (const event of webEvents) {
     const interval = clipEventInterval(event, dayStartMs, dayEndMs);
     if (!interval) continue;
-    const url = typeof event.data.url === "string" ? event.data.url : "";
-    const title = typeof event.data.title === "string" ? event.data.title : "";
+    const data = eventData(event.data);
+    const url = typeof data.url === "string" ? data.url : "";
+    const title = typeof data.title === "string" ? data.title : "";
     if (!url && !title) continue;
     combined.push({
       timestampMs: interval.startMs,
@@ -132,9 +137,10 @@ function buildCombinedEvents(
   for (const event of vscodeEvents) {
     const interval = clipEventInterval(event, dayStartMs, dayEndMs);
     if (!interval) continue;
-    const file = typeof event.data.file === "string" ? event.data.file : "";
-    const project = typeof event.data.project === "string" ? event.data.project : "";
-    const language = typeof event.data.language === "string" ? event.data.language : "";
+    const data = eventData(event.data);
+    const file = typeof data.file === "string" ? data.file : "";
+    const project = typeof data.project === "string" ? data.project : "";
+    const language = typeof data.language === "string" ? data.language : "";
     if (!file && !project) continue;
     combined.push({
       timestampMs: interval.startMs,
@@ -184,8 +190,18 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
       }
 
       try {
-        const categories = await loadCategories();
-        const selected = selectActivityBuckets(buckets, localHostname);
+        const [categories, serverInfo] = await Promise.all([loadCategories(), fetchServerInfo()]);
+        const activityHostname = localHostname ?? (serverInfo.hostname?.trim() || null);
+        if (!activityHostname) {
+          if (!cancelled) {
+            setState({
+              status: "unavailable",
+              message: "ActivityWatch did not identify its local device, so this app will not show potentially synced activity from another machine.",
+            });
+          }
+          return;
+        }
+        const selected = selectActivityBuckets(buckets, activityHostname);
 
         let timelineEvents: RawTimelineEvent[] = [];
         if (selected) {
@@ -204,10 +220,10 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
           timelineEvents = active === null ? sanitized : intersectTimeline(sanitized, active);
         }
 
-        const webIds = bucketIdsOfKind(buckets, "web", localHostname);
-        const vscodeIds = bucketIdsOfKind(buckets, "vscode", localHostname);
-        const inputIds = bucketIdsOfKind(buckets, "input", localHostname);
-        const genericIds = bucketIdsOfKind(buckets, "generic", localHostname);
+        const webIds = bucketIdsOfKind(buckets, "web", activityHostname);
+        const vscodeIds = bucketIdsOfKind(buckets, "vscode", activityHostname);
+        const inputIds = bucketIdsOfKind(buckets, "input", activityHostname);
+        const genericIds = bucketIdsOfKind(buckets, "generic", activityHostname);
 
         const fetchAll = (ids: string[]) =>
           Promise.all(ids.map((id) => fetchBucketEvents(id, bounds.startIso, bounds.endIso).catch(() => [] as AwEvent[])));
@@ -222,7 +238,7 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
 
         const generic: GenericBucketSummary[] = [];
         for (const id of genericIds) {
-          const events = await fetchBucketEvents(id, bounds.startIso, bounds.endIso, 200).catch(() => [] as AwEvent[]);
+          const events = await fetchBucketEvents(id, bounds.startIso, bounds.endIso).catch(() => [] as AwEvent[]);
           if (events.length > 0) generic.push(summarizeGenericBucket(id, buckets[id]?.type ?? "unknown", events));
         }
 
@@ -230,7 +246,7 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
         const vscode = vscodeIds.length > 0 ? summarizeVscodeEvents(vscodeEvents) : null;
         const input = inputIds.length > 0 ? summarizeInputEvents(inputEvents) : null;
 
-        const timelineForChart = toActivityTimelineEvents(timelineEvents, bounds.startMs);
+        const timelineForChart = toActivityTimelineEvents(timelineEvents);
         const hasAnyData =
           timelineEvents.length > 0 ||
           (web !== null && (web.topUrls.length > 0 || web.topTitles.length > 0)) ||

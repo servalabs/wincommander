@@ -25,6 +25,7 @@ import DateNav from "./DateNav";
 import ActivityTimelineLog from "./ActivityTimelineLog";
 import ActivitySearchView from "./ActivitySearchView";
 import ExtraSourcesSection from "./ExtraSourcesSection";
+import { productivitySubtitle, type FleetConnectionState } from "./productivitySubtitle";
 import "./index.css";
 
 type ProductivityView = "activity" | "timeline" | "search";
@@ -48,23 +49,22 @@ function startOfToday(): Date {
 function useProductivitySubtitle(): string {
   const { appSettings } = useAppState();
   const fleetEnabledSetting = appSettings?.app?.fleet?.enabled === true;
-  const [fleetConnected, setFleetConnected] = useState(false);
+  const [fleetConnection, setFleetConnection] = useState<FleetConnectionState>("checking");
 
   useEffect(() => {
     if (!fleetEnabledSetting) {
-      setFleetConnected(false);
+      setFleetConnection("disconnected");
       return;
     }
     let cancelled = false;
+    setFleetConnection("checking");
     getFleetStatus()
-      .then((status) => { if (!cancelled) setFleetConnected(status.connected); })
-      .catch(() => { if (!cancelled) setFleetConnected(false); });
+      .then((status) => { if (!cancelled) setFleetConnection(status.connected ? "connected" : "disconnected"); })
+      .catch(() => { if (!cancelled) setFleetConnection("unverified"); });
     return () => { cancelled = true; };
   }, [fleetEnabledSetting]);
 
-  return fleetEnabledSetting && fleetConnected
-    ? "This device is fleet-enrolled: app names, window titles, URLs, file paths, and activity are reported to the fleet."
-    : "Data stays on this device — not fleet-enrolled, so nothing here is uploaded.";
+  return productivitySubtitle(fleetEnabledSetting, fleetConnection);
 }
 
 export default function ProductivityPanel() {

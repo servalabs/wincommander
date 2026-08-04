@@ -57,19 +57,36 @@ export interface AwBucketInfo {
 }
 export type AwBucketsMap = Record<string, AwBucketInfo>;
 
+export interface AwServerInfo {
+  hostname?: string;
+}
+
 export interface AwEvent {
   timestamp: string;
   duration: number;
-  data: Record<string, unknown>;
+  data?: Record<string, unknown> | null;
+}
+
+/** ActivityWatch data comes from a separately running local service. Treat a
+ * malformed event payload as an empty object so it cannot take down the
+ * complete day's viewer. */
+export function eventData(data: unknown): Record<string, unknown> {
+  return data !== null && typeof data === "object" && !Array.isArray(data)
+    ? data as Record<string, unknown>
+    : {};
 }
 
 export const fetchBuckets = (): Promise<AwBucketsMap> => fetchAwJson<AwBucketsMap>("/api/0/buckets");
+export const fetchServerInfo = (): Promise<AwServerInfo> => fetchAwJson<AwServerInfo>("/api/0/info");
 
 export const fetchBucketEvents = (
   bucketId: string,
   startIso: string,
   endIso: string,
-  limit = 5000,
+  // ActivityWatch uses -1 for an unbounded result set. A fixed cap silently
+  // drops late-day activity on busy machines, leaving the native timeline
+  // incomplete while looking valid.
+  limit = -1,
 ): Promise<AwEvent[]> =>
   fetchAwJson<AwEvent[]>(`/api/0/buckets/${encodeURIComponent(bucketId)}/events`, {
     start: startIso,
@@ -88,14 +105,15 @@ export interface DayBounds {
 
 /** Device-local calendar day for `date`. If `date` is today, the upper bound
  * is "now" (there's nothing to report past the current moment); otherwise
- * it's the following local midnight. Mirrors `productivity_detail.rs`'s
+ * it's the following local midnight. Mirrors the collector's
  * `[local midnight, now]` window for today, generalized to any past day. */
 export function dayBoundsLocal(date: Date): DayBounds {
   const start = new Date(date);
   start.setHours(0, 0, 0, 0);
   const now = new Date();
   const isToday = start.toDateString() === now.toDateString();
-  const end = isToday ? now : new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  const end = isToday ? now : new Date(start);
+  if (!isToday) end.setDate(end.getDate() + 1);
   return { startIso: start.toISOString(), endIso: end.toISOString(), startMs: start.getTime(), endMs: end.getTime() };
 }
 
@@ -125,9 +143,12 @@ export function selectActivityBuckets(buckets: AwBucketsMap, computerName: strin
     if (bucket.hostname && bucket.hostname.toLowerCase() === local.toLowerCase()) return 1;
     return 2;
   };
-  // Array.prototype.sort is stable — ties keep the prior id-ascending order,
-  // matching Rust's two sequential stable `sort_by`/`sort_by_key` calls.
+  // Array.prototype.sort is stable — ties keep the prior id-ascending order.
   windowEntries.sort((a, b) => rank(a) - rank(b));
+
+  // A synced ActivityWatch store can contain buckets from several machines.
+  // Never substitute another machine's events when this device has no match.
+  if (local && rank(windowEntries[0]) === 2) return null;
 
   const [windowId, windowBucket] = windowEntries[0];
   const windowHostname = windowBucket.hostname?.trim()
@@ -175,7 +196,7 @@ export function activeIntervals(events: AwEvent[], lowerMs: number, upperMs: num
   let sawUsableState = false;
   const intervals: UtcInterval[] = [];
   for (const event of events) {
-    const status = event.data?.status;
+    const status = eventData(event.data).status;
     if (status !== "afk" && status !== "not-afk") continue;
     const interval = clipEventInterval(event, lowerMs, upperMs);
     if (!interval) continue;
@@ -248,6 +269,15 @@ export interface CompiledCategory {
   color?: string;
 }
 
+/** Keep classification aligned with the fleet collector's explicit
+ * code-point bound. This constrains only the regex input; the viewer keeps
+ * the original app/title strings intact for local display. */
+export const CLASSIFY_INPUT_LIMIT = 512;
+
+function classificationInput(value: string): string {
+  return [...value].slice(0, CLASSIFY_INPUT_LIMIT).join("");
+}
+
 function sameName(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
@@ -284,9 +314,11 @@ export function compileCategories(classes: AwCategory[]): CompiledCategory[] {
 /** The DEEPEST matching category wins; on a tie, the LAST one encountered
  * wins (matches Rust `Iterator::max_by_key`, which returns the last max). */
 export function classifyEvent(app: string, title: string, categories: CompiledCategory[]): { path: string[]; color?: string } {
+  const classificationApp = classificationInput(app);
+  const classificationTitle = classificationInput(title);
   let best: CompiledCategory | null = null;
   for (const category of categories) {
-    if (category.regex.test(app) || category.regex.test(title)) {
+    if (category.regex.test(classificationApp) || category.regex.test(classificationTitle)) {
       if (!best || category.path.length >= best.path.length) best = category;
     }
   }
@@ -330,8 +362,9 @@ export function sanitizeWindowEvent(
   const durationSecs = (clippedEnd - clippedStart) / 1000;
   if (durationSecs <= 0) return null;
 
-  const app = truncate(typeof event.data.app === "string" ? event.data.app : "", MAX_FIELD_CHARS);
-  const title = truncate(typeof event.data.title === "string" ? event.data.title : "", MAX_FIELD_CHARS);
+  const data = eventData(event.data);
+  const app = truncate(typeof data.app === "string" ? data.app : "", MAX_FIELD_CHARS);
+  const title = truncate(typeof data.title === "string" ? data.title : "", MAX_FIELD_CHARS);
   if (!app && !title) return null;
 
   const { path, color } = classifyEvent(app, title, categories);
@@ -340,9 +373,17 @@ export function sanitizeWindowEvent(
 
 // ── Aggregation into the shared viewer components' shapes ────────────────
 
-export function toActivityTimelineEvents(events: RawTimelineEvent[], dayStartMs: number): ActivityTimelineEvent[] {
+function localClockSeconds(timestampMs: number): number {
+  const timestamp = new Date(timestampMs);
+  return timestamp.getHours() * 3600 + timestamp.getMinutes() * 60 + timestamp.getSeconds();
+}
+
+/** Timeline coordinates are local wall-clock time, not elapsed milliseconds
+ * from midnight. The two differ after a DST fallback; elapsed time would
+ * push the final local hour past this viewer's 24-hour axis and erase it. */
+export function toActivityTimelineEvents(events: RawTimelineEvent[]): ActivityTimelineEvent[] {
   return events.map((event, index) => {
-    const startSeconds = Math.max(0, Math.round((event.timestampMs - dayStartMs) / 1000));
+    const startSeconds = localClockSeconds(event.timestampMs);
     const endSeconds = Math.max(startSeconds, startSeconds + Math.round(event.duration));
     return {
       id: `${event.timestampMs}-${index}`,
