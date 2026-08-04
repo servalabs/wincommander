@@ -20,6 +20,7 @@ import {
 } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import type { BrokenShortcut } from "../../hooks/useBackend";
 import { formatBytes } from "./routineCleanerHelpers";
 import { useSystemHygiene, type SystemHygieneTool } from "./useSystemHygiene";
 
@@ -116,12 +117,11 @@ export function SystemHygieneTools() {
           </CardHeader>
           <CardContent className="grid max-h-[min(30rem,calc(100vh-20rem))] gap-2 overflow-y-auto overscroll-contain pr-1 xl:grid-cols-2">
             {tools.shortcuts.shortcuts.map((item) => (
-              <Row
+              <BrokenShortcutRow
                 key={item.id}
                 checked={tools.selected.has(item.id)}
                 onClick={() => tools.select(item.id)}
-                title={item.name}
-                detail={`${item.path} → ${item.target}`}
+                shortcut={item}
               />
             ))}
             {!tools.shortcuts.shortcuts.length && <Empty />}
@@ -214,6 +214,61 @@ export function SystemHygieneTools() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+function BrokenShortcutRow({
+  checked,
+  onClick,
+  shortcut,
+}: {
+  checked: boolean;
+  onClick: () => void;
+  shortcut: BrokenShortcut;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={checked}
+      aria-label={`${checked ? "Deselect" : "Select"} broken shortcut ${shortcut.name}`}
+      className="flex w-full items-start gap-3 rounded-[var(--r)] border border-[var(--border)] px-3 py-2 text-left hover:bg-[var(--surface-2)]"
+    >
+      <span
+        aria-hidden="true"
+        className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[var(--r-sm)] border ${checked ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-contrast)]" : "border-[var(--border-strong)]"}`}
+      >
+        {checked && <Icon icon="check" />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5 text-sm text-[var(--text)]">
+          <Icon icon="document" size={14} className="shrink-0 text-[var(--text-mute)]" />
+          <span className="truncate">{shortcut.name}</span>
+        </span>
+        <ShortcutPath icon="folder-open" label="Shortcut location" path={shortcut.path} />
+        <ShortcutPath icon="warning-sign" label="Missing target" path={shortcut.target} />
+      </span>
+    </button>
+  );
+}
+
+function ShortcutPath({
+  icon,
+  label,
+  path,
+}: {
+  icon: "folder-open" | "warning-sign";
+  label: string;
+  path: string;
+}) {
+  return (
+    <span className="mt-1 grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-1.5">
+      <Icon icon={icon} size={12} className="mt-0.5 text-[var(--text-mute)]" />
+      <span className="min-w-0">
+        <span className="block text-[10px] uppercase tracking-wide text-[var(--text-mute)]">{label}</span>
+        <span className="block break-all font-mono text-[11px] text-[var(--text-dim)] line-clamp-2" title={path}>{path}</span>
+      </span>
+    </span>
   );
 }
 

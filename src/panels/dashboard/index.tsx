@@ -94,6 +94,7 @@ export default function DashboardPanel() {
     installWinget,
     getAppInventory,
     upgradeApp,
+    invokeDiskCleanup,
   } = useBackend();
 
 
@@ -545,6 +546,17 @@ export default function DashboardPanel() {
         });
         return res;
       };
+    } else if (f.id === 'disk-cleanup') {
+      fn = async () => {
+        const res = await invokeDiskCleanup();
+        const previous = appSettings?.ideal?.tweaks?.maintenanceRuns?.cleanup;
+        await patchAppSettings({
+          ideal: { tweaks: { maintenanceRuns: {
+            cleanup: { lastRunAt: new Date().toISOString(), runCount: (previous?.runCount ?? 0) + 1 },
+          } } },
+        });
+        return res;
+      };
     } else if (f.id === 'paste-monitor') {
       fn = async () => {
         await patchAppSettings({ ideal: { privacy: { clipboard: { pasteMonitorEnabled: true } } } });
@@ -569,7 +581,7 @@ export default function DashboardPanel() {
       }
     }
     return fn ? { label: f.label, fn: wrap(fn) } : null;
-  }, [toggleContextMenu, getContextMenuStatus, toggleScrubContextMenu, getScrubContextMenuStatus, appSettings?.ideal?.tweaks?.maintenanceRuns?.services, patchAppSettings, refreshDependencies, testWingetInstalled, installWinget, getAppInventory, upgradeApp, pro, setUpdateFlowOpen]);
+  }, [toggleContextMenu, getContextMenuStatus, toggleScrubContextMenu, getScrubContextMenuStatus, appSettings?.ideal?.tweaks?.maintenanceRuns?.services, appSettings?.ideal?.tweaks?.maintenanceRuns?.cleanup, patchAppSettings, refreshDependencies, testWingetInstalled, installWinget, getAppInventory, upgradeApp, invokeDiskCleanup, pro, setUpdateFlowOpen]);
 
   // Run a set of findings through the operation overlay, then re-read state so
   // the radar, score, and toggles update. Used by both Fix-all and per-item Fix.
@@ -753,7 +765,7 @@ export default function DashboardPanel() {
 
   return (
     <div
-      className={`dashboard-panel${hideCenterChrome ? " dashboard-panel--watermark" : ""}`}
+      className={`dashboard-panel dashboard-panel--${effectiveViewMode}${hideCenterChrome ? " dashboard-panel--watermark" : ""}`}
       ref={containerRef}
       style={{ "--dash-glow": glowColor } as React.CSSProperties}
     >

@@ -25,18 +25,20 @@ export function RegistryTools() {
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center gap-3">
-            <CardTitle>Registry and Explorer hygiene</CardTitle>
-            <Tabs value={tools.tool} onValueChange={(value) => tools.changeTool(value as "orphans" | "context")} className="min-w-0">
-              <TabsList><TabsTrigger value="orphans">Registry orphans</TabsTrigger><TabsTrigger value="context">Context menu</TabsTrigger></TabsList>
-            </Tabs>
-            <div className="ml-auto flex shrink-0 items-center gap-2">
-              {entries && <Badge tone="accent">{entries.length} candidate{entries.length === 1 ? "" : "s"}</Badge>}
-              <Button size="icon" variant="primary" disabled={tools.busy} onClick={() => void tools.scan()} title={scanLabel} aria-label={scanLabel}><Icon icon={tools.busy || entries ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} /></Button>
+        <CardHeader className="flex-row items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <CardTitle>Registry and Explorer hygiene</CardTitle>
+              <Tabs value={tools.tool} onValueChange={(value) => tools.changeTool(value as "orphans" | "context")} className="min-w-0">
+                <TabsList><TabsTrigger value="orphans">Registry orphans</TabsTrigger><TabsTrigger value="context">Context menu</TabsTrigger></TabsList>
+              </Tabs>
             </div>
+            <CardDescription>Pre-scanned once for this Maintenance session. Windows and WinCommander entries stay protected; use Refresh only when you want a new snapshot.</CardDescription>
           </div>
-          <CardDescription>Pre-scanned once for this Maintenance session. Windows and WinCommander entries stay protected; use Refresh only when you want a new snapshot.</CardDescription>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {entries && <Badge tone="accent">{entries.length} candidate{entries.length === 1 ? "" : "s"}</Badge>}
+            <Button size="icon" variant="primary" disabled={tools.busy} onClick={() => void tools.scan()} title={scanLabel} aria-label={scanLabel}><Icon icon={tools.busy || entries ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} /></Button>
+          </div>
         </CardHeader>
       </Card>
 

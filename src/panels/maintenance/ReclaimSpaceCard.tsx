@@ -1,8 +1,9 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import DiskCleanupGranular from "../../components/tweaks/managers/DiskCleanupGranular";
 import { FileHygieneTools } from "./FileHygieneTools";
-import { RoutineCleanerPanel } from "./RoutineCleanerPanel";
+import { RoutineCleanerHeaderActions, RoutineCleanerPanel } from "./RoutineCleanerPanel";
 import { APP_CACHE_CLEANUP_CATEGORIES } from "./routineCleanerHelpers";
+import { useRoutineCleaner } from "./useRoutineCleaner";
 
 /** Kept as a compatibility export for callers that need both reclaim scopes. */
 export default function ReclaimSpaceCard() {
@@ -34,13 +35,18 @@ export function WindowsStorageCard() {
 }
 
 export function AppBrowserCacheCard() {
+  const cleaner = useRoutineCleaner(APP_CACHE_CLEANUP_CATEGORIES);
+
   return (
     <Card className="maintenance-storage-card maintenance-app-cache-card">
-      <CardHeader>
-        <CardTitle>App &amp; browser cache</CardTitle>
-        <CardDescription>Preview browser, application, game-launcher, and SQLite cache data before cleaning. Windows storage is not included here.</CardDescription>
+      <CardHeader className="flex-row items-start gap-3">
+        <div className="min-w-0">
+          <CardTitle>App &amp; browser cache</CardTitle>
+          <CardDescription>Preview browser, application, game-launcher, and SQLite cache data before cleaning. Windows storage is not included here.</CardDescription>
+        </div>
+        <RoutineCleanerHeaderActions cleaner={cleaner} />
       </CardHeader>
-      <CardContent className="maintenance-app-cache-content"><RoutineCleanerPanel categories={APP_CACHE_CLEANUP_CATEGORIES} /></CardContent>
+      <CardContent className="maintenance-app-cache-content"><RoutineCleanerPanel cleaner={cleaner} categories={APP_CACHE_CLEANUP_CATEGORIES} /></CardContent>
     </Card>
   );
 }

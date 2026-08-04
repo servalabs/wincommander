@@ -218,6 +218,21 @@ export function buildRadarReport({
     });
   }
 
+  if (
+    appSettings.app.firstRunComplete &&
+    isModuleEnabled(appSettings.app.modules, "cleanup") &&
+    !isMaintenanceRunFresh(appSettings, "cleanup")
+  ) {
+    findings.push({
+      id: "disk-cleanup",
+      category: "performance",
+      label: "Windows Storage Cleanup",
+      impact: "Windows temporary files and servicing leftovers have not been cleaned recently",
+      severity: "info",
+      safeDefault: true,
+    });
+  }
+
   return {
     findings,
     cpuUsage: systemInfo ? Math.round(systemInfo.cpuUsage ?? 0) : 0,

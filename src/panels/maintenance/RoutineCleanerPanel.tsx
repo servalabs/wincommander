@@ -18,19 +18,16 @@ import type { RoutineCleanerCategory, RoutineCleanerCleanResult } from "../../ho
 import { showError, showSuccess } from "../../utils/toast";
 import { formatBytes, getRoutineCleanerCategories } from "./routineCleanerHelpers";
 import { RoutineCleanerPreview } from "./RoutineCleanerPreview";
-import { useRoutineCleaner } from "./useRoutineCleaner";
+import { type useRoutineCleaner } from "./useRoutineCleaner";
 
-interface RoutineCleanerPanelProps {
-  categories: RoutineCleanerCategory[];
-}
+type RoutineCleaner = ReturnType<typeof useRoutineCleaner>;
 
 /**
  * Preview-and-confirm cache cleaner. Renders bare (no card chrome of its own)
  * because it is one scope inside the "Reclaim disk space" card — the caller
  * owns the heading and the categories.
  */
-export function RoutineCleanerPanel({ categories: allowedCategories }: RoutineCleanerPanelProps) {
-  const cleaner = useRoutineCleaner(allowedCategories);
+export function RoutineCleanerPanel({ cleaner, categories: allowedCategories }: { cleaner: RoutineCleaner; categories: RoutineCleanerCategory[] }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const { categories, operation, scan, selectedItems, result, error } = cleaner;
   const isRunning = operation !== "idle";
@@ -53,7 +50,7 @@ export function RoutineCleanerPanel({ categories: allowedCategories }: RoutineCl
   };
 
   return <div className="maintenance-routine-cleaner flex min-h-0 flex-1 flex-col gap-4">
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-start gap-2">
       {/* Chips share the surface-2 bar background with their inactive state,
           so the row reads as one tab bar with a single accent-soft "active"
           pill — the same visual language as TabsList/TabsTrigger (see
@@ -64,12 +61,6 @@ export function RoutineCleanerPanel({ categories: allowedCategories }: RoutineCl
         {categoryOptions.map((category) => <Chip key={category.id} active={categories.includes(category.id)} onClick={() => cleaner.setCategory(category.id)} className="rounded-[var(--r-sm)] border-0 text-left">{category.label}</Chip>)}
       </div>
       {!categories.length && <span className="text-xs text-[var(--warn)]">Choose at least one category.</span>}
-      <div className="ml-auto flex items-center gap-2">
-        {isRunning && <Button size="icon" variant="outline" onClick={() => void cleaner.cancel()} title="Cancel cache operation" aria-label="Cancel cache operation"><Icon icon="stop" /></Button>}
-        <Button size="icon" variant="primary" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={scanLabel} aria-label={scanLabel}>
-          <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} />
-        </Button>
-      </div>
     </div>
     {!scan && (
       <CacheScanIdleState
@@ -87,6 +78,26 @@ export function RoutineCleanerPanel({ categories: allowedCategories }: RoutineCl
       <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clean selected cache data?</AlertDialogTitle><AlertDialogDescription>WinCommander will clean {selectedItems.length} selected target{selectedItems.length === 1 ? "" : "s"} and attempt to recover {formatBytes(selectedItems.reduce((total, item) => total + item.bytes, 0))}. This cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Back</AlertDialogCancel><AlertDialogAction onClick={() => void runClean()}>Clean selected</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
     </AlertDialog>
   </div>;
+}
+
+/** The owning card renders this in its header so refresh remains fixed to the card edge. */
+export function RoutineCleanerHeaderActions({ cleaner }: { cleaner: RoutineCleaner }) {
+  const { categories, operation, scan } = cleaner;
+  const isRunning = operation !== "idle";
+  const scanLabel = scan ? "Rescan application caches" : "Scan application caches";
+
+  return (
+    <div className="ml-auto flex shrink-0 items-center gap-2">
+      {isRunning && (
+        <Button size="icon" variant="outline" onClick={() => void cleaner.cancel()} title="Cancel cache operation" aria-label="Cancel cache operation">
+          <Icon icon="stop" />
+        </Button>
+      )}
+      <Button size="icon" variant="primary" onClick={() => void cleaner.scanSelected()} disabled={isRunning || !categories.length} title={scanLabel} aria-label={scanLabel}>
+        <Icon icon={isRunning || scan ? "refresh" : "search"} className={operation === "scanning" ? "animate-spin" : undefined} />
+      </Button>
+    </div>
+  );
 }
 
 function CacheScanIdleState({ isScanning, onScan, disabled, label }: { isScanning: boolean; onScan: () => void; disabled: boolean; label: string }) {

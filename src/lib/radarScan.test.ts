@@ -119,4 +119,15 @@ describe("radar scan filtering", () => {
     expect(ids).toContain("hideQuickAccessFrequent");
     expect(ids).toContain("disableSearchHistory");
   });
+
+  test("surfaces stale Windows storage cleanup when the cleanup module is enabled", () => {
+    const settings = makeSettings(
+      { privacy: false, network: false, tweaks: false, cleanup: true },
+    );
+    settings.app.firstRunComplete = true;
+
+    const report = buildRadarReport({ appSettings: settings });
+
+    expect(report.findings.some((finding) => finding.id === "disk-cleanup")).toBe(true);
+  });
 });

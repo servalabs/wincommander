@@ -60,9 +60,8 @@ export function StartupDriverTools() {
             <ManagerTabButton active={managerTab === "services"} icon="settings" label="Services" onClick={() => setManagerTab("services")} onNavigate={moveManagerTab} />
             <ManagerTabButton active={managerTab === "conceal"} icon="eye-off" label="Conceal" onClick={() => setManagerTab("conceal")} onNavigate={moveManagerTab} />
           </div>
-          <Button size="sm" variant="primary" className="system-manager-scan" disabled={tools.busy} onClick={() => void scanChecks()}>
+          <Button size="icon" variant="primary" className="system-manager-scan" disabled={tools.busy} onClick={() => void scanChecks()} title={tools.busy ? "Scanning system managers" : "Scan system managers"} aria-label={tools.busy ? "Scanning system managers" : "Scan system managers"}>
             <Icon icon={tools.busy ? "refresh" : "search"} className={tools.busy ? "animate-spin" : undefined} />
-            {tools.busy ? "Scanning" : "Scan checks"}
           </Button>
         </div>
         <CardDescription>Startup entries, users, tasks, services, runtime visibility, and drivers are scanned once here. Switching views reuses those results until you scan again.</CardDescription>

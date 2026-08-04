@@ -842,14 +842,9 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
 
     const headerRight = (
                     <div className="dns-header-right">
-                        {/* Plain ON/OFF switch — replaces the old "DoH OFF" pill
-                            which read as jargon to non-technical users (owner
-                            2026-06-11). Same wiring as the previous toggle card. */}
                         <AutoApplyPill status={dnsDebounce.status} secsLeft={dnsDebounce.secsLeft} />
-                        <span className="dns-toggle-cluster" title={effectiveDns ? "Encrypted DNS is ON — click to disable" : "Encrypted DNS is OFF — click to enable"}>
-                            <span className={`dns-toggle-label${effectiveDns ? ' dns-toggle-label--on' : ''}`}>
-                                {secureDNS === null ? "…" : effectiveDns ? "ON" : "OFF"}
-                            </span>
+                        <span className="dns-toggle-cluster">
+                            <span className="recommended-pill__label">Recommended</span>
                             <WCSwitch
                                 checked={effectiveDns}
                                 onChange={(next) => handleDnsToggle(next)}
@@ -1426,6 +1421,14 @@ function AdaptersWifiGuardDiagnosticsTab() {
 
     return (
         <div className="network-panel-sections">
+            {/* Audit and diagnostics lead the tab; adapter privacy controls stay
+                together in the second card without changing either workflow. */}
+            <div className="network-control-row network-control-row--active">
+                <div className="ncr-main">
+                    <NetworkMaintenanceTools />
+                </div>
+            </div>
+
             <div className="network-control-row network-control-row--active">
                 <div className="ncr-main">
                     <SectionCard
@@ -1469,17 +1472,6 @@ function AdaptersWifiGuardDiagnosticsTab() {
                             </section>
                         </div>
                     </SectionCard>
-                </div>
-            </div>
-
-            {/* Diagnostics & audit — was its own tab; merged in as a second row
-                (not squeezed into the row above) since neither had enough
-                content alone (owner 2026-07-27). NetworkMaintenanceTools owns
-                its own internal layout (ArpCacheCard above FirewallAuditCard) —
-                rendered as-is, unchanged from the old Diagnostics tab. */}
-            <div className="network-control-row network-control-row--active">
-                <div className="ncr-main">
-                    <NetworkMaintenanceTools />
                 </div>
             </div>
         </div>
