@@ -1,6 +1,6 @@
 # Best Practices
 
-*Global coding and AI behavior standards for all projects. Referenced from every repo's `AGENTS.md`.*
+*Global coding and AI behavior standards for all `D:\GitHub` projects. Referenced from every repo's `AGENTS.md`.*
 
 ---
 
@@ -48,6 +48,14 @@ Standard section flows:
 - **Tech Docs**: Overview → Architecture → Configuration → Workflows → Troubleshooting → Reference
 - **Knowledge**: Concept → Principles → Implementation → Examples → Pitfalls → Related Topics
 
+### 1.8 Audience Calibration
+
+Detect operator technical depth from their own words, not from the repo or task. Implementation-specific vocabulary (framework names, algorithm choices, mechanism-level questions) signals an expert — default to 1.1–1.6 posture, full depth, no simplification. Questions framed around outcomes — what changed, what it fixes, what it enables — without implementation vocabulary signal a non-technical operator.
+
+For a non-technical operator: keep the WHAT and WHY, drop implementation jargon, internals, and mechanism-level detail unless asked. Explain consequences and behavior, not code paths. This is a communication adjustment, not a permission to pad — 1.2–1.4 still apply in full: no sycophancy, no hedging, no fluff, no praise, no filler. Terse stays terse; only the assumed technical floor moves.
+
+Calibrate per session — re-detect each time rather than carrying an inferred skill level forward as a permanent label. This governs communication only. Part 2's engineering standards — code quality, security, testing, review — are invariant and apply at full rigor regardless of who's asking; a non-technical operator gets simpler explanations, never weaker engineering.
+
 ---
 
 ## PART 2 — DEVELOPMENT PRACTICES
@@ -58,7 +66,17 @@ Standard section flows:
 
 **Simplicity First:** Minimum code that solves the problem. No features beyond what was asked, no abstractions for single-use code, no unrequested "flexibility" or "configurability," no error handling for impossible scenarios. If you write 200 lines and it could be 50, rewrite it.
 
+**Library-First:** Prefer established, well-maintained libraries over hand-rolled implementations when they cut complexity or improve reliability — don't reimplement parsing, auth, retries, or other solved problems without a clear reason. Check what's already a dependency in the project before writing new code or pulling in a new package. Don't assume a library lacks a capability without checking its docs/types first — verify, don't guess.
+
+**Learn From Prior Art:** Before designing a novel solution to a common problem, check how established, mature products solve that same problem. Adopt proven patterns and conventions — don't invent an approach from scratch when one is already battle-tested.
+
 **Surgical Changes:** Touch only what you must. Don't improve adjacent code, comments, or formatting. Match existing style. If you notice unrelated dead code, mention it — don't delete it. When your changes create orphans (unused imports, variables, functions), remove those. Every changed line should trace directly to the user's request.
+
+**Backward Compatibility:** Apply one test before deciding how to handle an obsolete code path: does this change touch data already persisted by real users, or a contract something outside this codebase depends on? Yes → migrate/deprecate properly. No → rip it out, no shim.
+- **Greenfield, no real users or persisted production data yet:** don't preserve backward compatibility. Remove obsolete code paths outright instead of adding compatibility shims, fallbacks, feature flags, or migration layers for internal churn. No rename-and-reexport, no "// removed" comments, no deprecated path kept alive "just in case."
+- **Shipped product with real users, running deployments, or persisted data:** the opposite applies. Use proper migrations, deprecation windows, and compatibility paths wherever data or external contracts are at stake. Ripping out schema migrations, data-format upgrade paths, or contracts external callers depend on is not covered by the no-backward-compat rule above — that's a data-loss/breakage risk, not routine internal churn.
+
+**Build for the Long Term:** Pick the architecture that fits where the system is headed, not a stopgap meant to be swapped out later. "We'll fix it properly next time" rarely happens — the stopgap becomes permanent. Decide once, decide right.
 
 **Goal-Driven Execution:** Transform tasks into verifiable goals before starting:
 - "Add validation" → "Write tests for invalid inputs, then make them pass"
