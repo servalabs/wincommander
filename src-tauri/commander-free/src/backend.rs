@@ -4394,6 +4394,21 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
                                     serde_json::json!({ "lookingAway": true }),
                                 );
 
+                                // Fleet receives only the detected class. The Pro sidecar
+                                // queues it for the next authenticated check-in; a Fleet
+                                // outage or absent sidecar must never disrupt local shielding.
+                                if let Err(error) = crate::sidecar::dispatch_paid_command(
+                                    "record_privacy_shield_event",
+                                    serde_json::json!({ "class": gaze_kind }),
+                                )
+                                .await
+                                {
+                                    crate::flow_bridge::flow_trace(format!(
+                                        "shield-reader: Fleet attention event not queued: {}",
+                                        error
+                                    ));
+                                }
+
                                 // ── UX side effects (may be slow; time-bounded) ──
                                 let detail = if reason.is_empty() {
                                     "Presence check failed".to_string()
