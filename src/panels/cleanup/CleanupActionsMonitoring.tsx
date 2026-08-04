@@ -36,7 +36,7 @@ export default function CleanupActionsMonitoring({
                         <div className="flex-1 h-px bg-[var(--color-border)] opacity-50" />
                         <span className="text-[9px] italic opacity-60 whitespace-nowrap" style={{ color: 'var(--color-text-muted)' }}>run on demand</span>
                     </div>
-                    <div className="flex flex-col gap-2">
+                    <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
                         {/* Force SSD TRIM lives in OsRepairCard, rendered by SystemCleanupPanel
                             just below this section (Maintenance's old "Repair & hygiene" tab that
                             used to host it is gone, 2026-07) — ACTION_CATEGORIES no longer carries it. */}
@@ -45,8 +45,7 @@ export default function CleanupActionsMonitoring({
                             return (
                                 <div
                                     key={cat.id}
-                                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg"
-                                    style={{ background: 'var(--color-bg-secondary)', border: '1px dashed var(--color-border)' }}
+                                    className="flex items-center gap-3 border-b border-[var(--color-border)] px-3 py-2.5 last:border-b-0"
                                 >
                                     <div
                                         className="flex-shrink-0 flex items-center justify-center"
