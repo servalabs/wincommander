@@ -433,9 +433,9 @@ describe("redesign surface copy guardrails", () => {
     expect(panel).toContain('text="SELECT ALL"');
     expect(panel).toContain('text="CLEAR"');
     expect(panel).toContain('text="UPDATE ALL"');
-    expect(panel).toContain('<TabsTrigger value="not-installed">Not Installed</TabsTrigger>');
-    expect(panel).toContain('<TabsTrigger value="updates">Updates</TabsTrigger>');
-    expect(panel).toContain('<TabsTrigger value="installed">Installed</TabsTrigger>');
+    expect(panel).toContain('<TabsTrigger value="not-installed">Not Installed (');
+    expect(panel).toContain('<TabsTrigger value="updates">Updates (');
+    expect(panel).toContain('<TabsTrigger value="installed">Installed (');
     // The action row spans the full toolbar width so the controls no longer
     // compete with the search and category chips. The filter area receives the
     // flexible column; search remains a readable fixed-width control.

@@ -11,9 +11,7 @@
           justify-content: space-between;
           flex-wrap: wrap;
           gap: 10px;
-          padding: 10px 16px;
-          border-bottom: 1px solid var(--color-border);
-          background: var(--color-bg-secondary);
+          padding: 0 0 10px;
         }
 
         .panel-subtitle {
@@ -217,9 +215,9 @@
         }
 
         .installer-card {
-          background-color: var(--color-bg-card) !important;
-          border: 1px solid var(--color-border) !important;
-          border-radius: var(--radius-xl) !important;
+          background-color: transparent !important;
+          border: 0 !important;
+          border-radius: 0 !important;
           padding: 0 !important;
         }
 
@@ -238,9 +236,9 @@
           column-gap: 16px;
           row-gap: 10px;
           align-items: stretch;
-          padding: 14px 16px;
+          padding: 14px 0;
           border-bottom: 1px solid var(--color-border);
-          background: var(--color-bg-card);
+          background: transparent;
         }
 
         .installer-toolbar-search {
@@ -261,13 +259,8 @@
           text-transform: uppercase;
         }
 
-        /* No border here — the outer .installer-card is already the single
-           bordered container around the toolbar (including this search box).
-           A prior partial fix stripped the innermost input's own border but
-           left this box's border alongside .installer-card's, i.e. two nested
-           bordered boxes around the search field. Background-only keeps the
-           field visually distinct without reintroducing that "box inside a
-           box" look. */
+        /* Keep the actual text input border-free so the search control stays
+           as one surface, not a box nested inside another box. */
         .installer-search-box {
           display: flex;
           align-items: center;

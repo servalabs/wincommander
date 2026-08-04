@@ -38,8 +38,8 @@ export function SystemHygieneTools() {
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <CardHeader className="flex-row items-start gap-3">
-          <div className="min-w-0">
+        <CardHeader className="flex-row items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
             <CardTitle>System hygiene</CardTitle>
             <CardDescription>
               Audit broken shortcuts, stale environment paths, and conservative
