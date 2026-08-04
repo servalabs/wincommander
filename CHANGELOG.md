@@ -10,7 +10,44 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ## [Unreleased]
 
+### Changed
+
+- **Productivity panel no longer embeds ActivityWatch's web UI** (2026-08-04).
+  The panel used to host ActivityWatch's own Vue app in a WebView2 pointed at
+  `http://localhost:5600` and inject an `AW_HIDE_CSS` string to hide its navbar,
+  header and footer. That did not theme with the app, broke whenever upstream
+  changed its markup, and dragged in webview lifecycle workarounds
+  (`hide_all_server_apps` on unmount, a remount `key` keyed on hostname). It now
+  reads ActivityWatch's REST API directly and renders native components from
+  `src/components/activity/` — an independent AGPL-3.0 viewer layer, deliberately
+  not shared with the Pro fleet console (see [AGENTS.md](AGENTS.md) → *Gotchas*).
+  Adds a date picker: ActivityWatch keeps months of local history, but the embed
+  only ever showed today. Reads the web and VS Code watcher buckets too, which
+  the panel had advertised installing for a long time without ever reading.
+
+### Removed
+
+- **Employee-facing monitor kill-switches** (2026-08-04). The "What my employer
+  sees" section's three switches (Session Assurance, Access & Session, App Usage)
+  are gone; the cards are now read-only status. Monitoring on a fleet-enrolled
+  device is unconditional — the lawful basis is the employment agreement, not a
+  per-device opt-in. The switches were also misleading: the fleet agent's
+  productivity-detail collector reads ActivityWatch directly and never consulted
+  them, so switching "App Usage Monitor" off never stopped the upload.
+
 ### Fixed
+
+- **The Monitoring Mirror understated what leaves the machine** (2026-08-04).
+  Its header declared a privacy invariant that "window titles, exe paths, URLs,
+  filenames... and usernames NEVER leave the device", and the panel subtitle read
+  "Data stays on this device. Never uploaded." Both were false on a fleet-enrolled
+  device: application names, window titles, URLs, file paths and the username are
+  reported to the fleet. The copy now states what is actually transmitted, and
+  what genuinely still is not (keystroke content — input is counts only —
+  screenshots, webcam frames, clipboard contents, and file contents as distinct
+  from file paths). `AGENTS.md` carried the same false blanket claim; it is now
+  scoped to the `ArgusSignal` wire, where it does hold, and it no longer documents
+  a `consent_store.rs` module that never existed in any commit.
 
 - **Commands that erase data asked for the weaker confirmation** (2026-08-03).
   The headless CLI graded every command from its *name*, and the destructive name

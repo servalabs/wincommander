@@ -1,91 +1,87 @@
 // ══════════════════════════════════════════════════════════════════════════
-// Productivity Panel — ActivityWatch via EmbeddedWebView (native WebView2)
+// Productivity Panel — native ActivityWatch viewer
 // ══════════════════════════════════════════════════════════════════════════
-// Uses EmbeddedWebView (components/shared/EmbeddedWebView.tsx) so we bypass
-// iframe CSP restrictions from ActivityWatch localhost server.
+// Reads ActivityWatch's local REST API (http://localhost:5600) directly and
+// renders with this app's own UI kit, instead of embedding AW's Vue web UI
+// in a WebView2 and CSS-hacking its navbar/header/footer away. That embed
+// broke whenever AW changed markup and needed webview lifecycle workarounds
+// (hide_all_server_apps on unmount, remount-by-hostname keys) — gone now.
 //
-// HOSTNAME: Pulled from systemInfo.hostname (COMPUTERNAME) at runtime.
-// ActivityWatch uses $env:COMPUTERNAME as its bucket hostname, so this is
-// the correct value across all machines. Falls back to "localhost" while
-// systemInfo is loading (AW also accepts this for the status page).
-//
-// GROUP: "productivity" — webview IDs match view IDs: activity, timeline, search.
-// key=`${activeView}-${hostname}` on EmbeddedWebView forces re-mount when
-// either the tab OR the resolved hostname changes.
-// ══════════════════════════════════════════════════════════════════════════
+// Data + domain logic: src/lib/activityWatch.ts (window/AFK/category
+// semantics, mirrors commander-pro/src/productivity_detail.rs),
+// src/lib/activityWatchExtras.ts (browser/VS Code/input/generic buckets),
+// src/hooks/useActivityWatchDay.ts (orchestration + explicit non-happy
+// states). Presentational components: src/components/activity/ (canonical
+// copies of the Fleet console's productivity views).
 
-import { useState, useEffect } from 'react';
-import { H5, Text, Icon } from "@/components/ui/bp";
-import EmbeddedWebView from '../../components/shared/EmbeddedWebView';
-import { useAppState } from '../../context/AppContext';
-import { invoke } from "@tauri-apps/api/core";
-import { open } from '@tauri-apps/plugin-shell';
-import './index.css';
+import { useEffect, useState } from "react";
+import { H5, Icon, NonIdealState, Spinner, Text } from "@/components/ui/bp";
+import { WinCommanderActivityProductivity } from "@/components/activity/WinCommanderActivityProductivity";
+import { useActivityWatchDay } from "@/hooks/useActivityWatchDay";
+import { getFleetStatus } from "@/hooks/fleetStatus";
+import { useAppState } from "../../context/AppContext";
+import { open } from "@tauri-apps/plugin-shell";
+import DateNav from "./DateNav";
+import ActivityTimelineLog from "./ActivityTimelineLog";
+import ActivitySearchView from "./ActivitySearchView";
+import ExtraSourcesSection from "./ExtraSourcesSection";
+import "./index.css";
 
-// CSS injected via initialization_script to strip ActivityWatch chrome
-const AW_HIDE_CSS = `
-.navbar-expand-lg.navbar-light.aw-navbar.navbar { display: none !important; }
-div.container > .mb-2 { display: none !important; }
-.my-2.float-md-left.float-none { display: none !important; }
-.my-2.float-md-right.float-none { display: none !important; }
-footer, .footer, .aw-footer { display: none !important; }
-`.trim();
+type ProductivityView = "activity" | "timeline" | "search";
 
-type ProductivityView = 'activity' | 'timeline' | 'search';
-
-interface ViewConfig {
-  id: ProductivityView;
-  label: string;
-  icon: string;
-  buildUrl: (hostname: string) => string;
-}
-
-const VIEW_CONFIGS: ViewConfig[] = [
-  {
-    id: 'activity',
-    label: 'Activity',
-    icon: '📊',
-    // AW uses COMPUTERNAME as bucket hostname — must match exactly
-    buildUrl: (h) => `http://localhost:5600/#/activity/${h}/view/`,
-  },
-  {
-    id: 'timeline',
-    label: 'Timeline',
-    icon: '🕐',
-    buildUrl: () => 'http://localhost:5600/#/timeline',
-  },
-  {
-    id: 'search',
-    label: 'Search',
-    icon: '🔍',
-    buildUrl: () => 'http://localhost:5600/#/search',
-  },
+const VIEW_TABS: Array<{ id: ProductivityView; label: string; icon: "dashboard" | "time" | "search" }> = [
+  { id: "activity", label: "Activity", icon: "dashboard" },
+  { id: "timeline", label: "Timeline", icon: "time" },
+  { id: "search", label: "Search", icon: "search" },
 ];
 
-export default function ProductivityPanel() {
-  const [activeView, setActiveView] = useState<ProductivityView>('activity');
-  const { systemInfo } = useAppState();
+function startOfToday(): Date {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
 
-  // On unmount, make sure we hide the webview to prevent overlaps
+/** Task 2c: this used to unconditionally claim "never uploaded", which was
+ * false the moment a device is fleet-enrolled — the fleet agent's detail
+ * collector reads this same ActivityWatch instance independently of any
+ * consent toggle. State the truth for whichever mode this device is in. */
+function useProductivitySubtitle(): string {
+  const { appSettings } = useAppState();
+  const fleetEnabledSetting = appSettings?.app?.fleet?.enabled === true;
+  const [fleetConnected, setFleetConnected] = useState(false);
+
   useEffect(() => {
-    return () => {
-      invoke('hide_all_server_apps', { group: 'productivity' }).catch(console.error);
-    };
-  }, []);
+    if (!fleetEnabledSetting) {
+      setFleetConnected(false);
+      return;
+    }
+    let cancelled = false;
+    getFleetStatus()
+      .then((status) => { if (!cancelled) setFleetConnected(status.connected); })
+      .catch(() => { if (!cancelled) setFleetConnected(false); });
+    return () => { cancelled = true; };
+  }, [fleetEnabledSetting]);
 
-  // Use real hostname once loaded; "localhost" lets AW render the home/status
-  // page while systemInfo is still being fetched on startup.
-  const hostname = systemInfo?.hostname || 'localhost';
+  return fleetEnabledSetting && fleetConnected
+    ? "This device is fleet-enrolled: app names, window titles, URLs, file paths, and activity are reported to the fleet."
+    : "Data stays on this device — not fleet-enrolled, so nothing here is uploaded.";
+}
 
-  const activeConfig = VIEW_CONFIGS.find(v => v.id === activeView)!;
-  const activeUrl = activeConfig.buildUrl(hostname);
+export default function ProductivityPanel() {
+  const [activeView, setActiveView] = useState<ProductivityView>("activity");
+  const [selectedDate, setSelectedDate] = useState<Date>(() => startOfToday());
+  const { systemInfo } = useAppState();
+  const subtitle = useProductivitySubtitle();
+
+  const hostname = systemInfo?.hostname || null;
+  const state = useActivityWatchDay(selectedDate, hostname);
 
   return (
     <div className="panel-container productivity-panel">
       <div className="productivity-header">
         <div>
           <H5 className="header-title">Productivity</H5>
-          <Text className="header-subtext">Data stays on this device. Never uploaded.</Text>
+          <Text className="header-subtext">{subtitle}</Text>
         </div>
 
         {/* Browser & IDE Extension links */}
@@ -105,36 +101,88 @@ export default function ProductivityPanel() {
         </div>
       </div>
 
-      {/* Tab bar — spatially above native webview (no z-order conflict) */}
-      <div className="productivity-view-tabs">
-        {VIEW_CONFIGS.map((v) => (
-          <button
-            key={v.id}
-            type="button"
-            aria-pressed={activeView === v.id}
-            className={`productivity-view-tab ${activeView === v.id ? 'active' : ''}`}
-            onClick={() => activeView !== v.id && setActiveView(v.id)}
-          >
-            <span className="tab-icon">{v.icon}</span>
-            <span className="tab-label">{v.label}</span>
-          </button>
-        ))}
+      <div className="productivity-toolbar">
+        <div className="productivity-view-tabs">
+          {VIEW_TABS.map((v) => (
+            <button
+              key={v.id}
+              type="button"
+              aria-pressed={activeView === v.id}
+              className={`productivity-view-tab ${activeView === v.id ? "active" : ""}`}
+              onClick={() => activeView !== v.id && setActiveView(v.id)}
+            >
+              <Icon icon={v.icon} size={14} />
+              <span className="tab-label">{v.label}</span>
+            </button>
+          ))}
+        </div>
+        <DateNav date={selectedDate} onChange={setSelectedDate} />
       </div>
 
-      {/* key includes hostname so webview re-mounts once real hostname resolves */}
-      <EmbeddedWebView
-        key={`${activeView}-${hostname}`}
-        group="productivity"
-        id={activeView}
-        url={activeUrl}
-        customCss={AW_HIDE_CSS}
-        label={activeConfig.label}
-        style={{
-          borderRadius: 12,
-          border: '1px solid var(--color-border)',
-          background: 'var(--color-bg-primary)',
-        }}
-      />
+      <div className="productivity-body">
+        {state.status === "loading" && (
+          <div className="productivity-loading">
+            <Spinner size={24} />
+            <Text>Reading ActivityWatch…</Text>
+          </div>
+        )}
+
+        {state.status === "unavailable" && (
+          <NonIdealState
+            icon="offline"
+            title="ActivityWatch isn't reachable"
+            description={state.message}
+          />
+        )}
+
+        {state.status === "no-buckets" && (
+          <NonIdealState
+            icon="history"
+            title="No activity recorded yet"
+            description="ActivityWatch is running but hasn't recorded any buckets yet. Give it a minute after startup, or install the browser/VS Code watchers above for fuller coverage."
+          />
+        )}
+
+        {state.status === "empty" && (
+          <NonIdealState
+            icon="calendar"
+            title={`No activity for ${state.dateLabel}`}
+            description={`Nothing was recorded for ${state.deviceName} on this date.`}
+          />
+        )}
+
+        {state.status === "ready" && activeView === "activity" && (
+          <>
+            <WinCommanderActivityProductivity
+              deviceName={state.day.deviceName}
+              dateLabel={state.day.dateLabel}
+              applications={state.day.applications}
+              windowTitles={state.day.windowTitles}
+              timelineEvents={state.day.timelineEvents}
+              categories={state.day.categories}
+              timezoneLabel={state.day.timezoneLabel}
+            />
+            <ExtraSourcesSection
+              web={state.day.web}
+              vscode={state.day.vscode}
+              input={state.day.input}
+              generic={state.day.generic}
+              emptyMessage={`No activity was reported for this device and date.`}
+            />
+          </>
+        )}
+
+        {state.status === "ready" && activeView === "timeline" && (
+          <ActivityTimelineLog
+            events={state.day.combinedEvents}
+            emptyMessage={`No activity recorded for ${state.day.dateLabel}.`}
+          />
+        )}
+
+        {state.status === "ready" && activeView === "search" && (
+          <ActivitySearchView events={state.day.combinedEvents} />
+        )}
+      </div>
     </div>
   );
 }

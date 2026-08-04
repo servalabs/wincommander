@@ -25,6 +25,13 @@ import { isModuleEnabled } from "../types/modules";
 import { showWarning, showError, showSuccess } from "../utils/toast";
 import { recordEvidence } from "../lib/evidence";
 import useAutoHeal from "../hooks/useAutoHeal";
+import { getFleetStatus } from "../hooks/fleetStatus";
+import {
+  authAnomalyStatus,
+  sessionMonitorStatus,
+  startAuthAnomalyMonitor,
+  startSessionMonitor,
+} from "../hooks/monitorStatus";
 import useAdoptCurrentState from "../hooks/useAdoptCurrentState";
 import type { PanelId } from "../types/panels";
 
@@ -413,6 +420,33 @@ export default function BackgroundPollers({
       }
     }, 5000);
 
+    // ── One-shot: workplace monitors on a fleet-enrolled device ──────
+    // Monitoring is unconditional once this device is enrolled — the lawful
+    // basis is the employment agreement, so there is no consent gate and no
+    // employee-facing switch (the Monitoring Mirror only DISCLOSES state now).
+    // Enrollment is the gate: an unenrolled Pro install has no employer
+    // relationship and nowhere to report to, so it must not start these.
+    // Delayed to clear the splash storm; best-effort, never blocks startup.
+    const workplaceMonitorTimer = setTimeout(async () => {
+      try {
+        const fleet = await getFleetStatus();
+        if (!fleet.connected) return;
+        // Each monitor is started independently: one failing (unsupported
+        // platform, sidecar mid-restart) must not prevent the others.
+        await Promise.allSettled([
+          sessionMonitorStatus()
+            .then((s) => (s.running ? null : startSessionMonitor()))
+            .catch(() => null),
+          authAnomalyStatus()
+            .then((s) => (s.running ? null : startAuthAnomalyMonitor()))
+            .catch(() => null),
+        ]);
+      } catch {
+        // Fleet status unavailable (sidecar not up yet) — the next app launch
+        // retries. Deliberately silent: this is not a user-actionable failure.
+      }
+    }, 7000);
+
     const productivityMaintenanceTimer = setInterval(async () => {
       if (!isModuleEnabled(modulesRef.current, 'productivity')) return;
       if (!productivityQuietManagedRef.current) return;
@@ -550,6 +584,7 @@ export default function BackgroundPollers({
         p.then(f => { try { f(); } catch { /* already torn down */ } });
       }
       clearTimeout(autoStartTimer);
+      clearTimeout(workplaceMonitorTimer);
       clearInterval(productivityMaintenanceTimer);
       clearTimeout(ramdiskAutostartTimer);
       clearTimeout(driverScanTimer);

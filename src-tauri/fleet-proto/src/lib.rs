@@ -102,7 +102,7 @@ pub struct CommandMeta {
 /// Catalog metadata SSOT, feature-gated so it can never compile into the
 /// AV-scanned Free binary (commander-free does not, and must not, depend on
 /// this feature). Exactly one entry per `commander-pro::fleet_dispatch::COMMAND_CATALOG`
-/// entry (57), same `catalog_id` + `action_class` — cross-checked by the
+/// entry, same `catalog_id` + `action_class` — cross-checked by the
 /// `fleet_dispatch` drift-guard test. `summary` is written from the
 /// `catalog_id`'s meaning (never copied/paraphrased from `feature_id`) and is
 /// AV-token-free.
@@ -190,7 +190,7 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         action_class: ActionClass::Safe,
         summary: "Search a device's files by name and return matching names and paths",
         payload_schema: Some(
-            r#"{"type":"object","properties":{"terms":{"type":"string"},"scope":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["keyword","semantic","forensic"]}},"required":["terms","mode"]}"#,
+            r#"{"type":"object","properties":{"terms":{"type":"string"},"scope":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["keyword","semantic","forensic"]},"predicates":{"type":"object","properties":{"ext_in":{"type":"array","items":{"type":"string"}},"size_min":{"type":"integer"},"size_max":{"type":"integer"},"modified_after":{"type":"integer"},"modified_before":{"type":"integer"},"path_exclude":{"type":"array","items":{"type":"string"}}}},"rank":{"type":"string","enum":["ModifiedDesc","SizeDesc","TraversalOrder"]}},"required":["terms","mode"]}"#,
         ),
     },
     // Per-device recent-downloads listing — metadata only (name/path/size/
@@ -210,6 +210,104 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         catalog_id: "files.fetch_content",
         action_class: ActionClass::Safe,
         summary: "Fetch a specific file's content from a device (path must come from a prior search/listing)",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"path":{"type":"string"},"transfer_token":{"type":"string"}},"required":["path","transfer_token"]}"#,
+        ),
+    },
+    // ── File operations (browse + manage a device's files) ───────────────────
+    // Classes follow the repo's reversibility taxonomy, NOT sensitivity: Safe
+    // reads only; Destructive is disruptive-but-reversible (recycle is
+    // Destructive precisely because the Recycle Bin keeps it restorable);
+    // Irreversible loses data (permanent delete / overwrite-shred / content
+    // overwrite). Sensitivity is gated out-of-band server-side (role floor +
+    // audit), the same "Safe = reversibility, not sensitivity" split
+    // files.search / files.fetch_content already draw. Every path is
+    // server-disclosed (files.search / files.recent_downloads / files.list_dir)
+    // before any mutation can name it.
+    CommandMeta {
+        catalog_id: "files.list_dir",
+        action_class: ActionClass::Safe,
+        summary: "List a directory's entries (names, sizes, dates — no content)",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
+        ),
+    },
+    CommandMeta {
+        catalog_id: "files.stat",
+        action_class: ActionClass::Safe,
+        summary: "Read a file or folder's size, timestamps, and attributes",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
+        ),
+    },
+    CommandMeta {
+        catalog_id: "files.hash",
+        action_class: ActionClass::Safe,
+        summary: "Compute a file's SHA-256 hash",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"path":{"type":"string"},"algo":{"type":"string","enum":["sha256"]}},"required":["path","algo"]}"#,
+        ),
+    },
+    CommandMeta {
+        catalog_id: "files.mkdir",
+        action_class: ActionClass::Destructive,
+        summary: "Create a new directory",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
+        ),
+    },
+    CommandMeta {
+        catalog_id: "files.rename",
+        action_class: ActionClass::Destructive,
+        summary: "Rename a file or folder in place",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"path":{"type":"string"},"new_name":{"type":"string"}},"required":["path","new_name"]}"#,
+        ),
+    },
+    CommandMeta {
+        catalog_id: "files.move",
+        action_class: ActionClass::Destructive,
+        summary: "Move a file or folder into another directory",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"path":{"type":"string"},"dest_dir":{"type":"string"}},"required":["path","dest_dir"]}"#,
+        ),
+    },
+    CommandMeta {
+        catalog_id: "files.copy",
+        action_class: ActionClass::Destructive,
+        summary: "Copy a file or folder into another directory",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"path":{"type":"string"},"dest_dir":{"type":"string"}},"required":["path","dest_dir"]}"#,
+        ),
+    },
+    CommandMeta {
+        catalog_id: "files.recycle",
+        action_class: ActionClass::Destructive,
+        summary: "Send a file or folder to the Recycle Bin",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
+        ),
+    },
+    CommandMeta {
+        catalog_id: "files.delete_permanent",
+        action_class: ActionClass::Irreversible,
+        summary: "Permanently delete a file or folder (no Recycle Bin)",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
+        ),
+    },
+    CommandMeta {
+        catalog_id: "files.shred",
+        action_class: ActionClass::Irreversible,
+        summary: "Overwrite a file's data, then delete it so it cannot be recovered",
+        payload_schema: Some(
+            r#"{"type":"object","properties":{"path":{"type":"string"},"passes":{"type":"integer","minimum":1}},"required":["path"]}"#,
+        ),
+    },
+    CommandMeta {
+        catalog_id: "files.write_content",
+        action_class: ActionClass::Irreversible,
+        summary: "Overwrite a file's contents with uploaded data",
         payload_schema: Some(
             r#"{"type":"object","properties":{"path":{"type":"string"},"transfer_token":{"type":"string"}},"required":["path","transfer_token"]}"#,
         ),
@@ -756,6 +854,58 @@ pub enum SearchMode {
     Forensic,
 }
 
+/// Result predicates evaluated ON THE DEVICE, during the walk and *before* the
+/// row cap.
+///
+/// This exists because the cap truncates, it does not rank: `fleet_search_walk`
+/// returns the moment it reaches `FLEET_SEARCH_MAX_ROWS` in depth-first
+/// traversal order. Filtering those rows in the console therefore filters an
+/// arbitrary sample — a search for spreadsheets could return none while the
+/// device holds hundreds, because the cap was spent on rows the operator was
+/// about to discard. Pushing the predicate down makes the capped set 200
+/// *relevant* rows.
+///
+/// Every field is `#[serde(default)]`: the whole struct is optional in a signed
+/// payload, and an omitted predicate means "no constraint", never "match
+/// nothing".
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct SearchPredicates {
+    /// Lowercase extensions WITHOUT the leading dot (`["xlsx", "csv"]`).
+    /// Empty ⇒ any extension.
+    #[serde(default)]
+    pub ext_in: Vec<String>,
+    /// Inclusive size bounds in bytes.
+    #[serde(default)]
+    pub size_min: Option<u64>,
+    #[serde(default)]
+    pub size_max: Option<u64>,
+    /// Inclusive mtime bounds, Unix seconds.
+    #[serde(default)]
+    pub modified_after: Option<u64>,
+    #[serde(default)]
+    pub modified_before: Option<u64>,
+    /// Case-insensitive path substrings to skip (e.g. `node_modules`). Applied
+    /// to the full path, and used to prune directory recursion where possible.
+    #[serde(default)]
+    pub path_exclude: Vec<String>,
+}
+
+/// Which rows survive the cap when more match than it allows. `TraversalOrder`
+/// is the pre-predicate behaviour, kept so an explicit request can still get it;
+/// `ModifiedDesc` is the default because "what changed most recently" is the
+/// question an operator is nearly always actually asking.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub enum SearchRank {
+    #[default]
+    ModifiedDesc,
+    SizeDesc,
+    TraversalOrder,
+}
+
 /// Reserved seam for future remote file-search; carried in a command payload +
 /// returned via the command result endpoint. Not yet wired to any catalog entry
 /// or handler.
@@ -770,6 +920,13 @@ pub struct RemoteSearchRequest {
     #[serde(default)]
     pub scope: Vec<String>,
     pub mode: SearchMode,
+    /// Device-side filters applied before the row cap. `#[serde(default)]` keeps
+    /// the JSON-Schema `required` at `[terms, mode]`, so an older console that
+    /// omits this is unaffected.
+    #[serde(default)]
+    pub predicates: SearchPredicates,
+    #[serde(default)]
+    pub rank: SearchRank,
 }
 
 /// Cross-device file search — one result row. Wired to `FILES_SEARCH_CATALOG_ID`
@@ -803,6 +960,20 @@ pub struct RemoteSearchResult {
     pub command_id: String,
     pub rows: Vec<RemoteSearchResultRow>,
     pub index_status: Option<Value>,
+    /// Whether this device actually evaluated `RemoteSearchRequest::predicates`.
+    ///
+    /// Serde ignores unknown fields, so an agent older than the predicate
+    /// contract accepts a filtered search and answers with UNFILTERED rows. The
+    /// console would then render an arbitrary capped sample as though it were
+    /// the filtered answer — a wrong result presented as a right one. Agents
+    /// that honour predicates set this true; `#[serde(default)]` makes every
+    /// older ack read false, so the console can say "this device ignored your
+    /// filters" instead of quietly lying.
+    ///
+    /// False is also correct for a request that carried no predicates at all;
+    /// the console only surfaces the warning when it actually sent some.
+    #[serde(default)]
+    pub predicates_applied: bool,
 }
 
 /// Catalog id for the cross-device file-search command (`ActionClass::Safe`).
@@ -861,6 +1032,91 @@ pub struct FetchContentPayload {
 /// opt-in + full audit, the same "Safe = reversibility, not sensitivity"
 /// split `files.search` already draws).
 pub const FILES_FETCH_CONTENT_CATALOG_ID: &str = "files.fetch_content";
+
+// ── File-operations catalog result types ─────────────────────────────────────
+// Result shapes for the "file operations" fleet feature (files.list_dir / stat /
+// hash / mkdir / rename / move / copy / recycle / delete_permanent / shred /
+// write_content). commander-pro's `fleet_files` handlers build these; the
+// console renders them. Every result carries at least `{ok, path}` (+ `detail`
+// when `ok` is false); the reads (list_dir / stat / hash) add their own fields.
+// `path` echoes the (server-disclosed) request path for correlation.
+//
+// write_content REUSES `FetchContentPayload` above ({path, transfer_token}) —
+// the payload shape is identical; only the byte direction (console → device) is
+// reversed.
+
+/// One row of a `files.list_dir` result — metadata only, never content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size_bytes: u64,
+    /// RFC3339 last-modified time, or `None` if unavailable.
+    pub modified_at: Option<String>,
+}
+
+/// `files.list_dir` result — a bounded directory listing (see the handler's
+/// entry cap). `entries` is empty when `ok` is false.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct ListDirResult {
+    pub ok: bool,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub entries: Vec<FileEntry>,
+}
+
+/// `files.stat` result — size / timestamps / attributes for one path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct FileStatResult {
+    pub ok: bool,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub is_dir: bool,
+    pub size_bytes: u64,
+    /// RFC3339 last-modified time, or `None` if unavailable.
+    pub modified_at: Option<String>,
+    /// RFC3339 creation time, or `None` if the platform doesn't record it.
+    pub created_at: Option<String>,
+    /// Windows file-attribute bitmask (0 on non-Windows agents).
+    pub attributes: u32,
+}
+
+/// `files.hash` result — a content digest (currently SHA-256 only).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct HashResult {
+    pub ok: bool,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub algo: String,
+    pub hex: String,
+    pub size_bytes: u64,
+}
+
+/// Result of a `files.*` MUTATION (mkdir / rename / move / copy / recycle /
+/// delete_permanent / shred / write_content). `ok` is ALWAYS derived from a
+/// post-op re-stat of the effect on the device — never hardcoded — so a
+/// denied / locked / still-present target reports `ok:false` with `detail`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct FileOpResult {
+    pub ok: bool,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
 
 /// Aggregate productivity sample sent by an agent. Carries NO raw titles, URLs,
 /// or keystrokes — only scalars + category scores (raw signals stay AES-GCM

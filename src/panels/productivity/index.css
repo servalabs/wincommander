@@ -109,3 +109,157 @@
           box-shadow: 0 0 20px color-mix(in srgb, var(--accent) 12%, transparent);
         }
         .tab-icon { font-size: 14px; }
+
+        /* ── Toolbar: tab bar + date navigation ─────────────────────────── */
+        .productivity-toolbar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+        .productivity-toolbar .productivity-view-tabs { margin-bottom: 0; }
+        .productivity-date-nav {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .productivity-date-input {
+          height: 30px;
+          padding: 0 8px;
+          border-radius: var(--radius-md);
+          border: 1px solid var(--border);
+          background: var(--surface-2);
+          color: var(--text);
+          font-size: 12px;
+          font-family: var(--font-mono);
+        }
+
+        /* ── Scrollable content area ────────────────────────────────────── */
+        .productivity-body {
+          flex: 1;
+          min-height: 0;
+          overflow-y: auto;
+          margin-top: 16px;
+          display: flex;
+          flex-direction: column;
+          gap: 24px;
+        }
+        .productivity-loading {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          padding: 60px 0;
+          color: var(--text-mute);
+        }
+
+        /* ── Extra sources (web / vscode / input / generic) ─────────────── */
+        .productivity-extra-sources {
+          display: flex;
+          flex-direction: column;
+          gap: 28px;
+          padding: 24px;
+          border: 1px solid var(--border);
+          border-radius: var(--radius-xl);
+          background: var(--surface);
+        }
+        .productivity-extra-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          gap: 32px;
+        }
+        .productivity-input-stats-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 16px;
+          margin-top: 10px;
+          font-size: 13px;
+          color: var(--text-dim);
+        }
+        .productivity-input-stats-row strong { color: var(--text); font-family: var(--font-mono); }
+        .productivity-input-stats-note {
+          display: block;
+          margin-top: 8px;
+          font-size: 11px;
+          color: var(--text-mute);
+        }
+        .productivity-generic-bucket {
+          margin-top: 10px;
+          padding: 10px 12px;
+          border-radius: var(--radius-md);
+          background: var(--surface-2);
+        }
+        .productivity-generic-bucket-title {
+          display: block;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          color: var(--text-dim);
+          margin-bottom: 4px;
+        }
+        .productivity-generic-sample {
+          display: block;
+          font-family: var(--font-mono);
+          font-size: 10.5px;
+          color: var(--text-mute);
+          overflow-wrap: anywhere;
+        }
+
+        /* ── Timeline log (Timeline + Search tabs) ──────────────────────── */
+        .productivity-timeline-log {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          margin: 0;
+          padding: 0;
+          list-style: none;
+        }
+        .productivity-timeline-row {
+          display: grid;
+          grid-template-columns: 72px 20px minmax(0, 1fr) auto auto;
+          align-items: center;
+          gap: 10px;
+          padding: 6px 10px;
+          border-radius: var(--radius-md);
+          font-size: 12px;
+        }
+        .productivity-timeline-row:hover { background: var(--surface-2); }
+        .productivity-timeline-time {
+          font-family: var(--font-mono);
+          color: var(--text-mute);
+          font-size: 11px;
+        }
+        .productivity-timeline-source { display: flex; align-items: center; color: var(--text-dim); }
+        .productivity-timeline-body { display: flex; flex-direction: column; min-width: 0; }
+        .productivity-timeline-title { color: var(--text); overflow-wrap: anywhere; }
+        .productivity-timeline-detail {
+          color: var(--text-mute);
+          font-size: 11px;
+          overflow-wrap: anywhere;
+        }
+        .productivity-timeline-category {
+          font-family: var(--font-mono);
+          font-size: 10.5px;
+          color: var(--text-mute);
+          white-space: nowrap;
+        }
+        .productivity-timeline-duration {
+          font-family: var(--font-mono);
+          font-size: 11px;
+          color: var(--text-dim);
+          white-space: nowrap;
+        }
+        .productivity-timeline-empty {
+          padding: 40px 0;
+          text-align: center;
+          color: var(--text-mute);
+          font-size: 13px;
+        }
+
+        /* ── Search view ─────────────────────────────────────────────────── */
+        .productivity-search-view {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }

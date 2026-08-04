@@ -395,6 +395,40 @@ export type DiskMetric = { name: string, total_gb: number, free_gb: number, };
 export type FetchContentPayload = { path: string, transfer_token: string, };
 
 /**
+ * One row of a `files.list_dir` result — metadata only, never content.
+ */
+export type FileEntry = { name: string, path: string, is_dir: boolean, size_bytes: bigint,
+/**
+ * RFC3339 last-modified time, or `None` if unavailable.
+ */
+modified_at: string | null, };
+
+/**
+ * Result of a `files.*` MUTATION (mkdir / rename / move / copy / recycle /
+ * delete_permanent / shred / write_content). `ok` is ALWAYS derived from a
+ * post-op re-stat of the effect on the device — never hardcoded — so a
+ * denied / locked / still-present target reports `ok:false` with `detail`.
+ */
+export type FileOpResult = { ok: boolean, path: string, detail: string | null, };
+
+/**
+ * `files.stat` result — size / timestamps / attributes for one path.
+ */
+export type FileStatResult = { ok: boolean, path: string, detail: string | null, is_dir: boolean, size_bytes: bigint,
+/**
+ * RFC3339 last-modified time, or `None` if unavailable.
+ */
+modified_at: string | null,
+/**
+ * RFC3339 creation time, or `None` if the platform doesn't record it.
+ */
+created_at: string | null,
+/**
+ * Windows file-attribute bitmask (0 on non-Windows agents).
+ */
+attributes: number, };
+
+/**
  * Typed failure surface shared with the admin panel so the UI can branch on
  * the kind rather than parsing error strings.
  */
@@ -423,6 +457,17 @@ summary: string,
  * Structured PII-free detail (e.g. drifted toggle paths + desired values).
  */
 detail: JsonValue, device_id: DeviceId | null, hostname: string | null, read: boolean, created_at: string, };
+
+/**
+ * `files.hash` result — a content digest (currently SHA-256 only).
+ */
+export type HashResult = { ok: boolean, path: string, detail: string | null, algo: string, hex: string, size_bytes: bigint, };
+
+/**
+ * `files.list_dir` result — a bounded directory listing (see the handler's
+ * entry cap). `entries` is empty when `ok` is false.
+ */
+export type ListDirResult = { ok: boolean, path: string, detail: string | null, entries: Array<FileEntry>, };
 
 /**
  * Admin login credentials. Transport security (Tailscale/TLS) protects these.
@@ -553,13 +598,34 @@ export type RemoteSearchRequest = { terms: string,
  * (the common user-profile dirs). `#[serde(default)]` so the payload can
  * omit it and the JSON-Schema `required` stays `[terms, mode]`.
  */
-scope: Array<string>, mode: SearchMode, };
+scope: Array<string>, mode: SearchMode,
+/**
+ * Device-side filters applied before the row cap. `#[serde(default)]` keeps
+ * the JSON-Schema `required` at `[terms, mode]`, so an older console that
+ * omits this is unaffected.
+ */
+predicates: SearchPredicates, rank: SearchRank, };
 
 /**
  * Cross-device file search result, returned via the command result endpoint
  * (§3.4) / the search fan-out aggregation route.
  */
-export type RemoteSearchResult = { command_id: string, rows: Array<RemoteSearchResultRow>, index_status: JsonValue | null, };
+export type RemoteSearchResult = { command_id: string, rows: Array<RemoteSearchResultRow>, index_status: JsonValue | null,
+/**
+ * Whether this device actually evaluated `RemoteSearchRequest::predicates`.
+ *
+ * Serde ignores unknown fields, so an agent older than the predicate
+ * contract accepts a filtered search and answers with UNFILTERED rows. The
+ * console would then render an arbitrary capped sample as though it were
+ * the filtered answer — a wrong result presented as a right one. Agents
+ * that honour predicates set this true; `#[serde(default)]` makes every
+ * older ack read false, so the console can say "this device ignored your
+ * filters" instead of quietly lying.
+ *
+ * False is also correct for a request that carried no predicates at all;
+ * the console only surfaces the warning when it actually sent some.
+ */
+predicates_applied: boolean, };
 
 /**
  * Cross-device file search — one result row. Wired to `FILES_SEARCH_CATALOG_ID`
@@ -600,6 +666,50 @@ intents: Array<PolicyIntent>, };
  * new variants may be added as backends are built (Keyword ships first).
  */
 export type SearchMode = "keyword" | "semantic" | "forensic";
+
+/**
+ * Result predicates evaluated ON THE DEVICE, during the walk and *before* the
+ * row cap.
+ *
+ * This exists because the cap truncates, it does not rank: `fleet_search_walk`
+ * returns the moment it reaches `FLEET_SEARCH_MAX_ROWS` in depth-first
+ * traversal order. Filtering those rows in the console therefore filters an
+ * arbitrary sample — a search for spreadsheets could return none while the
+ * device holds hundreds, because the cap was spent on rows the operator was
+ * about to discard. Pushing the predicate down makes the capped set 200
+ * *relevant* rows.
+ *
+ * Every field is `#[serde(default)]`: the whole struct is optional in a signed
+ * payload, and an omitted predicate means "no constraint", never "match
+ * nothing".
+ */
+export type SearchPredicates = {
+/**
+ * Lowercase extensions WITHOUT the leading dot (`["xlsx", "csv"]`).
+ * Empty ⇒ any extension.
+ */
+ext_in: Array<string>,
+/**
+ * Inclusive size bounds in bytes.
+ */
+size_min: bigint | null, size_max: bigint | null,
+/**
+ * Inclusive mtime bounds, Unix seconds.
+ */
+modified_after: bigint | null, modified_before: bigint | null,
+/**
+ * Case-insensitive path substrings to skip (e.g. `node_modules`). Applied
+ * to the full path, and used to prune directory recursion where possible.
+ */
+path_exclude: Array<string>, };
+
+/**
+ * Which rows survive the cap when more match than it allows. `TraversalOrder`
+ * is the pre-predicate behaviour, kept so an explicit request can still get it;
+ * `ModifiedDesc` is the default because "what changed most recently" is the
+ * question an operator is nearly always actually asking.
+ */
+export type SearchRank = "ModifiedDesc" | "SizeDesc" | "TraversalOrder";
 
 /**
  * What an agent receives when it polls — the signed, executable envelope. The

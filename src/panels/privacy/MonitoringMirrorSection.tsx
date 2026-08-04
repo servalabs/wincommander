@@ -1,13 +1,28 @@
 // src/panels/privacy/MonitoringMirrorSection.tsx
 //
-// My Monitoring Mirror — employee-facing proof of exactly what leaves this
-// machine (Pro). It renders the same aggregate scalars the fleet already
-// receives and owns the three monitor switches.
+// My Monitoring Mirror — employee-facing disclosure of what leaves this
+// machine (Pro). It renders the transmission state of each workplace monitor.
 //
-// PRIVACY INVARIANT (see AGENTS.md): window titles, exe paths, URLs,
-// filenames, printer names, document names, usernames, keystrokes,
-// screenshots, and webcam frames NEVER leave the device and are NEVER shown
-// here — this section only surfaces what the fleet actually collects.
+// The monitors are NOT switchable from here. Monitoring on a fleet-enrolled
+// device is unconditional: the lawful basis is the employment agreement, not a
+// per-device opt-in, so there is no consent gate and no employee kill-switch.
+// This section exists to DISCLOSE, not to control.
+//
+// WHAT IS TRANSMITTED (fleet-enrolled devices only — keep this list true; it
+// is the whole point of the section, and it is read by the person being
+// monitored). The productivity-detail collector reads this device's
+// ActivityWatch instance directly and reports: application names, full window
+// titles, full URLs and page titles, source-file paths, project and language
+// names, aggregate input counts, the activity timeline, idle periods, and the
+// interactive username. See commander-pro/src/productivity_detail.rs.
+//
+// STILL NEVER COLLECTED: keystroke content (input is counts only), screenshots,
+// webcam frames, clipboard contents, and file CONTENTS as distinct from paths.
+//
+// An earlier version of this header claimed window titles, URLs, paths and
+// usernames never left the device. That was false — and it was false even
+// before collection broadened, because the detail collector never consulted
+// the monitor switches this section used to render.
 //
 // Backend: commander-pro/src/fleet_push.rs::monitoring_mirror (non-draining
 //   peek of argus_signals + the last-sent ProductivitySample summary + the
@@ -17,18 +32,11 @@
 //   commander-pro/src/handlers.rs → fleet_push::monitoring_mirror.
 
 import { useCallback, useEffect, useState } from 'react';
-import { Button, Icon, Spinner, Switch } from '@/components/ui/bp';
+import { Button, Icon, Spinner } from '@/components/ui/bp';
 import argus from '@/hooks/useArgus';
 import { getFleetStatus } from '@/hooks/fleetStatus';
 import { useLicenseQuery } from '@/hooks/queries/useLicenseQuery';
-import {
-  authAnomalyStatus,
-  sessionMonitorStatus,
-  startAuthAnomalyMonitor,
-  startSessionMonitor,
-  stopAuthAnomalyMonitor,
-  stopSessionMonitor,
-} from '@/hooks/monitorStatus';
+import { authAnomalyStatus, sessionMonitorStatus } from '@/hooks/monitorStatus';
 import SectionCard from '../../components/shared/SectionCard';
 
 // Response shapes (MonitoringMirror + friends) are hand-typed in useArgus.ts —
@@ -42,7 +50,6 @@ type MonitorStates = {
   appUsage: boolean;
 };
 
-type MonitorKey = keyof MonitorStates;
 
 const INITIAL_MONITOR_STATES: MonitorStates = {
   sessionAssurance: false,
@@ -56,8 +63,6 @@ type MonitorStatusCardProps = {
   description: string;
   running: boolean;
   transmissionAllowed: boolean;
-  busy: boolean;
-  onToggle: (enabled: boolean) => void;
 };
 
 function MonitorStatusCard({
@@ -66,8 +71,6 @@ function MonitorStatusCard({
   description,
   running,
   transmissionAllowed,
-  busy,
-  onToggle,
 }: MonitorStatusCardProps) {
   const sending = running && transmissionAllowed;
   const status = sending ? 'SENDING' : running ? 'LOCAL ONLY' : 'OFF';
@@ -87,13 +90,6 @@ function MonitorStatusCard({
       <div className="employer-visibility-status-card__title">{title}</div>
       <p className="employer-visibility-status-card__copy">{description}</p>
       <span className="employer-visibility-status-card__detail">{detail}</span>
-      <Switch
-        checked={running}
-        disabled={busy}
-        onChange={(event) => onToggle((event.target as HTMLInputElement).checked)}
-        label="Monitoring active"
-        className="employer-visibility-status-card__switch"
-      />
     </div>
   );
 }
@@ -111,7 +107,6 @@ export default function MonitoringMirrorSection() {
 
   const [monitorStates, setMonitorStates] = useState<MonitorStates>(INITIAL_MONITOR_STATES);
   const [fleetConnected, setFleetConnected] = useState<boolean | null>(null);
-  const [busyMonitor, setBusyMonitor] = useState<MonitorKey | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -160,25 +155,6 @@ export default function MonitoringMirrorSection() {
     return () => clearInterval(id);
   }, [fleetEntitled, licenseLoading, refresh]);
 
-  const toggleMonitor = useCallback(async (monitor: MonitorKey, enabled: boolean) => {
-    setBusyMonitor(monitor);
-    setError(null);
-    try {
-      if (monitor === "sessionAssurance") {
-        await (enabled ? startSessionMonitor() : stopSessionMonitor());
-      } else if (monitor === "accessSession") {
-        await (enabled ? startAuthAnomalyMonitor() : stopAuthAnomalyMonitor());
-      } else {
-        await (enabled ? argus.appUsageStart() : argus.appUsageStop());
-      }
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyMonitor(null);
-    }
-  }, [refresh]);
-
   // ── Entitlement gate ─────────────────────────────────────────────────────
 
   if (!fleetEntitled || !fleetConnected) return null;
@@ -208,8 +184,13 @@ export default function MonitoringMirrorSection() {
       <div className="employer-visibility-card">
         <div className="employer-visibility-card__intro">
           <p>
-            Status and controls for the workplace monitors on this device. Only aggregate counts and
-            scores can be transmitted — never file names, URLs, keystrokes, screenshots, or webcam frames.
+            Workplace monitoring is active on this device under your employment agreement and cannot be
+            switched off here. What is reported: application names, window titles, web addresses and page
+            titles, file paths, project names, activity times and idle periods, and your username.
+          </p>
+          <p>
+            Never reported: what you type (only counts of keystrokes and clicks), screenshots, webcam
+            frames, clipboard contents, and the contents of your files.
           </p>
           <span className="employer-visibility-card__summary">
             {activeStatusCount} of 3 monitor{activeStatusCount === 1 ? '' : 's'} running
@@ -223,8 +204,6 @@ export default function MonitoringMirrorSection() {
             description="Attention and session-risk signals."
             running={monitorStates.sessionAssurance}
             transmissionAllowed={fleetConnected}
-            busy={busyMonitor === "sessionAssurance"}
-            onToggle={(enabled) => void toggleMonitor("sessionAssurance", enabled)}
           />
           <MonitorStatusCard
             icon="shield"
@@ -232,17 +211,13 @@ export default function MonitoringMirrorSection() {
             description="Aggregate sign-in anomaly signals."
             running={monitorStates.accessSession}
             transmissionAllowed={fleetConnected}
-            busy={busyMonitor === "accessSession"}
-            onToggle={(enabled) => void toggleMonitor("accessSession", enabled)}
           />
           <MonitorStatusCard
             icon="desktop"
             title="App Usage Monitor"
-            description="Aggregate active and idle time by category."
+            description="Application, window-title and web activity detail."
             running={monitorStates.appUsage}
             transmissionAllowed={fleetConnected}
-            busy={busyMonitor === "appUsage"}
-            onToggle={(enabled) => void toggleMonitor("appUsage", enabled)}
           />
         </div>
 
