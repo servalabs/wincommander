@@ -5,10 +5,9 @@ import path from "path";
 
 const tauriDevHost = process.env.TAURI_DEV_HOST;
 const host = tauriDevHost || "localhost";
-// The workspace-level assets checkout is the canonical asset source shared by
-// WinCommander and the other products. The local `assets` submodule is a
-// compatibility snapshot and doesn't contain product or blocklist artwork.
-const sharedAssetsRoot = path.resolve(__dirname, "../assets");
+// Runtime artwork is supplied by the pinned `assets` submodule. Production
+// builds and local development deliberately use the same source tree.
+const bundledAssetsRoot = path.resolve(__dirname, "./assets");
 
 export default defineConfig(({ command }): UserConfig => ({
   plugins: [...react(), ...tailwindcss()],
@@ -65,7 +64,7 @@ export default defineConfig(({ command }): UserConfig => ({
     fs: {
       allow: [
         searchForWorkspaceRoot(process.cwd()),
-        sharedAssetsRoot,
+        bundledAssetsRoot,
       ],
     },
     port: 1420,

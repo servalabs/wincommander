@@ -8,10 +8,15 @@
 // PowerShell command-name tokens in tools/strings-grep-forbidden.txt.
 
 import type { GuideTopic } from "./types";
-import scrubGif from "../../assets/tour/scrub.gif";
-import browserExtensionImage from "../../assets/tour/browser-extension.png";
-import lockdownVideo from "../../assets/tour/lockdown.mp4";
+import { products } from "../../assets";
 import PrivacyShieldAnimation from "../../panels/privacy/PrivacyShieldAnimation";
+
+// Guide media belongs to the same pinned asset map as the rest of the app.
+// Keeping URLs in that map lets Vite bundle them while Bun unit tests remain
+// independent of binary-file module loading.
+const scrubGif = products["wincommander/Scrub.gif"] ?? "";
+const browserExtensionImage = products["wincommander/Extention.png"] ?? "";
+const lockdownVideo = products["wincommander/videos/wc-lockdown.mp4"] ?? "";
 
 export const GUIDE_TOPICS: GuideTopic[] = [
   // ── Concept / navigation topics ──────────────────────────────────────
