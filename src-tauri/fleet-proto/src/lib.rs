@@ -1324,8 +1324,8 @@ pub struct DeviceArgusSummary {
 
 /// Per-device Argus monitoring-coverage view for the admin (Feature B —
 /// transparency). Tells the admin whether Argus is actually observing a device,
-/// under which disclosure version, whether consent is in good standing (no recent
-/// consent/disclosure-mismatch ingest denial in the audit log), and which signal
+/// under which disclosure version, whether disclosure is in good standing (no
+/// recent disclosure-mismatch ingest denial in the audit log), and which signal
 /// kinds have been seen. Aggregate/opaque scalars only — no PII.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
@@ -1344,11 +1344,11 @@ pub struct DeviceArgusCoverage {
     pub kinds_observed: Vec<String>,
     /// Number of signal records ingested for this device in the window.
     pub signal_count: i64,
-    /// False when a consent/disclosure-mismatch ingest denial was recorded for
-    /// this device in the audit log within the window (consent out of standing).
-    pub consent_in_good_standing: bool,
-    /// RFC 3339 timestamp of the most recent consent-mismatch denial, else `None`.
-    pub last_consent_denial_at: Option<String>,
+    /// False when a disclosure-mismatch ingest denial was recorded for this
+    /// device in the audit log within the window.
+    pub disclosure_in_good_standing: bool,
+    /// RFC 3339 timestamp of the most recent disclosure-mismatch denial, else `None`.
+    pub last_disclosure_mismatch_at: Option<String>,
 }
 
 /// One raw Argus signal record in a device's drill-down window (Feature C). The
