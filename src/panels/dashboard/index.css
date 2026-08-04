@@ -2056,6 +2056,13 @@ html.light .storage-scan-btn {
     opacity: 0.075;
 }
 
+/* Risk Matrix and More Products own their full stage. The dashboard wordmark
+   is a map-only texture, so it must not sit above either view's controls. */
+.dashboard-panel--risk .dashboard-radar-watermark,
+.dashboard-panel--products .dashboard-radar-watermark {
+    display: none;
+}
+
 html.light .dashboard-radar-watermark {
     opacity: 0.07;
 }
