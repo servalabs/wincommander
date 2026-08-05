@@ -2186,7 +2186,7 @@ export function useBackend() {
       invoke<void>("disk_delete_item", { path }),
 
     // Productivity
-    getProductivityStatus: () => execute<{ running: boolean; details: { server: boolean; input: boolean; active: boolean } }>("Get-ProductivityStatus"),
+    getProductivityStatus: () => execute<{ installed: boolean; running: boolean; details: { server: boolean; input: boolean; active: boolean } }>("Get-ProductivityStatus"),
     startProductivityTracker: () => execute("Start-ProductivityTracker"),
     stopProductivityTracker: () => execute("Stop-ProductivityTracker"),
     invokeProductivityEngineMaintenance: () => execute("Invoke-ProductivityEngineMaintenance"),

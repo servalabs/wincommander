@@ -25,6 +25,7 @@
 
 import type { IconName } from "@/components/ui/bp";
 import { isVisible, type Visibility, type VisibilityCtx } from "../lib/visibility";
+import DashboardPanel from "../panels/dashboard";
 
 export type PanelId =
   | "dashboard"
@@ -112,7 +113,9 @@ export const PANEL_MANIFESTS: PanelManifest[] = [
     id: "dashboard",
     label: "Dashboard",
     icon: "dashboard",
-    importFn: () => import("../panels/dashboard"),
+    // KT: Dashboard is deliberately eager — it is the app's initial surface and
+    // must not depend on a second Vite module request during startup.
+    importFn: () => Promise.resolve({ default: DashboardPanel }),
     navTier: "primary",
     searchKeywords: ["overview", "status", "risk", "map"],
     refreshKey: "refreshDashboard",

@@ -10,6 +10,7 @@
 // not reduced for classification (see `sanitizeWindowEvent`).
 
 import type { ActivityItem, ActivityTimelineEvent } from "@/components/activity/activityData";
+import { invoke } from "@tauri-apps/api/core";
 
 const AW_BASE = "http://127.0.0.1:5600";
 const HTTP_TIMEOUT_MS = 4_000;
@@ -74,6 +75,20 @@ async function readAwJson(response: Response, controller: AbortController): Prom
 async function fetchAwJson<T>(path: string, params?: Record<string, string>, signal?: AbortSignal): Promise<T> {
   const url = new URL(path, AW_BASE);
   if (params) for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  // ActivityWatch's loopback server intentionally does not emit CORS headers.
+  // In a Tauri WebView that makes a healthy local API look "unreachable".
+  // Ask the native process to perform the fixed, validated loopback request;
+  // regular browser/test environments retain the direct-fetch fallback.
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    try {
+      return await invoke<T>("activity_watch_request", {
+        path: `${url.pathname}${url.search}`,
+      });
+    } catch (error) {
+      if (error instanceof AwUnavailableError) throw error;
+      throw new AwUnavailableError(typeof error === "string" ? error : undefined);
+    }
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
   const abort = () => controller.abort();

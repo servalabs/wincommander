@@ -6,9 +6,15 @@
 function Get-ProductivityStatus {
     try {
         $binaries = Get-ProductivityBinaries
-        $installed = -not [string]::IsNullOrEmpty($binaries.server)
+        # Treat ActivityWatch as installed only when the server and both
+        # first-party watchers are present.  A server alone is detectable but
+        # cannot record useful activity, so the auto-start path must not claim
+        # it is ready.
+        $installed = -not [string]::IsNullOrEmpty($binaries.server) -and
+            -not [string]::IsNullOrEmpty($binaries.afk) -and
+            -not [string]::IsNullOrEmpty($binaries.window)
         
-        $processes = Get-Process -Name "aw-server", "aw-watcher-afk", "aw-watcher-window" -ErrorAction SilentlyContinue
+        $processes = Get-Process -Name "aw-server", "aw-server-rust", "aw-watcher-afk", "aw-watcher-window" -ErrorAction SilentlyContinue
         $running = @{
             server = $false
             input  = $false
@@ -16,7 +22,7 @@ function Get-ProductivityStatus {
         }
 
         foreach ($p in $processes) {
-            if ($p.Name -eq "aw-server") { $running.server = $true }
+            if ($p.Name -eq "aw-server" -or $p.Name -eq "aw-server-rust") { $running.server = $true }
             if ($p.Name -eq "aw-watcher-afk") { $running.input = $true }
             if ($p.Name -eq "aw-watcher-window") { $running.active = $true }
         }
@@ -40,17 +46,25 @@ function Start-ProductivityTracker {
         }
 
         $binaries = Get-ProductivityBinaries
-        if (-not $binaries.server) {
-            return @{ error = $true; message = "Tracking Engine binaries not found. Please install via 'Packages & Apps'." }
+        $missing = @()
+        if (-not $binaries.server) { $missing += "server" }
+        if (-not $binaries.afk) { $missing += "AFK watcher" }
+        if (-not $binaries.window) { $missing += "window watcher" }
+        if ($missing.Count -gt 0) {
+            return @{ error = $true; message = "ActivityWatch is incomplete (missing $($missing -join ', ')). Reinstall it from Packages & Apps." }
         }
 
-        # Start server
-        $serverInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $serverInfo.FileName = $binaries.server
-        $serverInfo.WorkingDirectory = Split-Path $binaries.server
-        $serverInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-        $serverInfo.CreateNoWindow = $true
-        [System.Diagnostics.Process]::Start($serverInfo) | Out-Null
+        # Start only the components that are absent.  Starting aw-server a
+        # second time when it already owns port 5600 produces a false-success
+        # result and leaves the two actual watchers idle.
+        if (-not $status.details.server) {
+            $serverInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $serverInfo.FileName = $binaries.server
+            $serverInfo.WorkingDirectory = Split-Path $binaries.server
+            $serverInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+            $serverInfo.CreateNoWindow = $true
+            [System.Diagnostics.Process]::Start($serverInfo) | Out-Null
+        }
 
         # Poll until server is ready
         $baseUri = "http://localhost:5600/api/0"
@@ -68,11 +82,12 @@ function Start-ProductivityTracker {
             return @{ error = $true; message = "Server failed to start. Port 5600 may still be in use. Try again in a few seconds." }
         }
 
-        # Start watchers
-        if ($binaries.afk -and (Test-Path $binaries.afk)) {
+        # Start whichever watcher is missing; preserve any existing watcher
+        # state rather than creating duplicate instances.
+        if (-not $status.details.input) {
             Start-Process -FilePath $binaries.afk -WorkingDirectory (Split-Path $binaries.afk) -WindowStyle Hidden -CreateNoWindow
         }
-        if ($binaries.window -and (Test-Path $binaries.window)) {
+        if (-not $status.details.active) {
             Start-Process -FilePath $binaries.window -WorkingDirectory (Split-Path $binaries.window) -WindowStyle Hidden -CreateNoWindow
         }
 
@@ -108,7 +123,7 @@ function Get-ProductivityBinaries {
         if (-not (Test-Path $dir)) { continue }
 
         # Possible relative paths within the base dir
-        $serverSubPaths = @("aw-server-rust\aw-server.exe", "aw-server\aw-server.exe", "aw-server.exe")
+        $serverSubPaths = @("aw-server\aw-server.exe", "aw-server-rust\aw-server-rust.exe", "aw-server-rust\aw-server.exe", "aw-server.exe")
         $afkSubPaths = @("aw-watcher-afk\aw-watcher-afk.exe", "aw-watcher-afk.exe")
         $windowSubPaths = @("aw-watcher-window\aw-watcher-window.exe", "aw-watcher-window.exe")
 
@@ -162,47 +177,9 @@ function Invoke-ProductivityEngineMaintenance {
             Stop-Process -Name "aw-qt" -Force -ErrorAction SilentlyContinue
         }
 
-        # Check and start backends if missing
-        $awServer = $null
-        $possiblePaths = @(
-            "$env:LOCALAPPDATA\Programs\ActivityWatch\aw-server.exe",
-            "$env:LOCALAPPDATA\Programs\ActivityWatch\aw-server\aw-server.exe",
-            "$env:ProgramFiles\ActivityWatch\aw-server.exe",
-            "${env:ProgramFiles(x86)}\ActivityWatch\aw-server.exe"
-        )
-        foreach ($path in $possiblePaths) {
-            if (Test-Path $path) { $awServer = $path; break }
-        }
-
-        if (-not $awServer) {
-            return @{ error = $true; message = "Productivity Engine binaries not found." }
-        }
-
-        $binDir = Split-Path $awServer
-        $components = @(
-            "aw-server-rust\aw-server.exe",
-            "aw-server\aw-server.exe",
-            "aw-server.exe",
-            "aw-watcher-afk\aw-watcher-afk.exe",
-            "aw-watcher-window\aw-watcher-window.exe"
-        )
-
-        foreach ($comp in $components) {
-            $compPath = Join-Path $binDir $comp
-            if (-not (Test-Path $compPath)) {
-                # Try relative to parent if binDir is a subfolder
-                $compPath = Join-Path (Split-Path $binDir) $comp
-            }
-            
-            if (Test-Path $compPath) {
-                $procName = [System.IO.Path]::GetFileNameWithoutExtension($compPath)
-                if (-not (Get-Process -Name $procName -ErrorAction SilentlyContinue)) {
-                    Start-Process -FilePath $compPath -WorkingDirectory (Split-Path $compPath) -WindowStyle Hidden -CreateNoWindow -ErrorAction SilentlyContinue
-                }
-            }
-        }
-
-        return @{ success = $true; message = "Productivity Engine maintenance complete." }
+        # Reuse the authoritative launcher so maintenance and normal
+        # autostart use the same discovery rules and never duplicate aw-server.
+        return Start-ProductivityTracker
     }
     catch {
         return @{ error = $true; message = $_.Exception.Message }

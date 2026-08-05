@@ -76,6 +76,7 @@ import { getModuleForPanel, isModuleEnabled } from "./types/modules";
 import { setSoundEnabled } from "./utils/sound";
 import { importPanelWithRetry } from "./lib/panelLoading";
 import { isTourActive } from "./lib/tourActive";
+import DashboardPanel from "./panels/dashboard";
 
 // INACTIVITY TIMER: After this amount of no mouse or keyboard activity, 
 // we pause all active panel polling to save resources on Rust sysinfo calls,
@@ -83,6 +84,10 @@ import { isTourActive } from "./lib/tourActive";
 // Polling resumes on any activity.
 
 const IDLE_PAUSE_MS = 3 * 60 * 1000;
+// Keep a WebView/asset hiccup from permanently hiding the whole app behind the
+// splash. Startup data is progressive, so the shell is safe to show while any
+// slow backend probes continue.
+const SPLASH_ESCAPE_HATCH_MS = 8_000;
 
 function compareVersionStrings(a: string | null | undefined, b: string | null | undefined): number | null {
   const parse = (value: string | null | undefined): number[] | null => {
@@ -148,6 +153,10 @@ function PanelRoute({
 }) {
   const manifest = PANEL_MANIFESTS.find((candidate) => candidate.id === panelId)
     ?? PANEL_MANIFESTS.find((candidate) => candidate.id === "dashboard");
+  // KT: Dashboard is the initial, always-visible surface. Keeping it out of the
+  // lazy-import path prevents a Vite module fetch from replacing the app's
+  // main view with a panel error while the remaining panels prefetch.
+  if (manifest?.id === "dashboard") return <DashboardPanel />;
   const LazyPanel = getLazyPanel(panelId, recoveryGeneration);
   if (!manifest || !LazyPanel) return null;
   if (manifest.requiresDependency) {
@@ -166,7 +175,7 @@ function PanelRoute({
 function preloadAllPanels() {
   Promise.all(
     PANEL_MANIFESTS
-      .filter((m) => m.navTier === "primary")
+      .filter((m) => m.navTier === "primary" && m.id !== "dashboard")
       .map((m) => m.importFn())
   ).catch(() => { /* best-effort — panels still lazy-load on demand */ });
 }
@@ -197,6 +206,14 @@ function AppContent() {
   const [shredPaths, setShredPaths] = useState<string[]>([]);
   const [isShredDialogOpen, setIsShredDialogOpen] = useState(false);
   const { hasPaid, isLoading: entitlementLoading } = useEntitlements();
+
+  // SplashScreen has its own timer, but this parent-level guard still runs if
+  // that component's image or animation lifecycle never settles in WebView2.
+  useEffect(() => {
+    if (splashDone) return;
+    const timer = window.setTimeout(() => setSplashDone(true), SPLASH_ESCAPE_HATCH_MS);
+    return () => window.clearTimeout(timer);
+  }, [splashDone]);
   const canUseDevTools = entitlementLoading || hasPaid;
   // Free-side signal for the combined UpdateFlowDialog auto-trigger below.
   const updaterSnapshot = useUpdater();

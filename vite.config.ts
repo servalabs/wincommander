@@ -15,10 +15,13 @@ const tauriDevHost = requestedTauriDevHost
   ? requestedTauriDevHost
   : undefined;
 const host = tauriDevHost || "127.0.0.1";
-// Runtime artwork is supplied by the pinned `assets` submodule. Production
-// builds and local development deliberately use the same source tree.
-const bundledAssetsRoot = path.resolve(__dirname, "../assets");
-const localAssetsRoot = path.resolve(__dirname, "./assets");
+// Runtime artwork imported as `/assets/...` is supplied by WinCommander's
+// pinned `assets` submodule. The workspace-level catalogue is kept separate:
+// a few product media imports intentionally reference it through `/@fs/...`.
+// Development must serve each URL from the same source Vite imported, or a
+// same-named icon from the workspace can silently replace the app's asset.
+const appAssetsRoot = path.resolve(__dirname, "./assets");
+const workspaceAssetsRoot = path.resolve(__dirname, "../assets");
 
 const assetContentTypes: Record<string, string> = {
   ".avif": "image/avif",
@@ -33,10 +36,10 @@ const assetContentTypes: Record<string, string> = {
   ".webm": "video/webm",
 };
 
-/** Serves the shared workspace artwork that Vite otherwise treats as an SPA route. */
-function serveSharedAssetsInDevelopment(): Plugin {
+/** Serves WinCommander's imported `/assets` media without shadowing Vite modules. */
+function serveAppAssetsInDevelopment(): Plugin {
   return {
-    name: "wincommander-shared-assets",
+    name: "wincommander-app-assets",
     apply: "serve",
     configureServer(server) {
       server.middlewares.use("/assets", (request, response, next) => {
@@ -49,8 +52,8 @@ function serveSharedAssetsInDevelopment(): Plugin {
         }
 
         const requestedPath = decodeURIComponent(requestUrl.pathname);
-        const filePath = path.resolve(bundledAssetsRoot, `.${requestedPath}`);
-        const relativePath = path.relative(bundledAssetsRoot, filePath);
+        const filePath = path.resolve(appAssetsRoot, `.${requestedPath}`);
+        const relativePath = path.relative(appAssetsRoot, filePath);
         if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
           next();
           return;
@@ -88,13 +91,13 @@ function serveSharedAssetsInDevelopment(): Plugin {
 }
 
 export default defineConfig(({ command }): UserConfig => ({
-  plugins: [serveSharedAssetsInDevelopment(), ...react(), ...tailwindcss()],
+  plugins: [serveAppAssetsInDevelopment(), ...react(), ...tailwindcss()],
   resolve: {
     alias: [
       { find: "@", replacement: path.resolve(__dirname, "./src") },
       // `@assets` also exposes the local React RiskMatrix component, which
       // resolves its own React dependency through this app's node_modules.
-      { find: "@assets", replacement: localAssetsRoot },
+      { find: "@assets", replacement: appAssetsRoot },
     ],
   },
   // KT: Disable source maps in production to prevent frontend code recovery.
@@ -142,8 +145,8 @@ export default defineConfig(({ command }): UserConfig => ({
     fs: {
       allow: [
         searchForWorkspaceRoot(process.cwd()),
-        localAssetsRoot,
-        bundledAssetsRoot,
+        appAssetsRoot,
+        workspaceAssetsRoot,
       ],
     },
     port: 1420,

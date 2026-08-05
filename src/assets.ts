@@ -120,19 +120,19 @@ const entitiesMods = (CAN_LOAD_BROWSER_ASSET_MAPS
   ? import.meta.glob("../assets/entities/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const appsMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../assets/apps/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob("../assets/apps/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const editorialMods = (CAN_LOAD_BROWSER_ASSET_MAPS
   ? import.meta.glob("../assets/editorial/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const contingencyProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/products/contingency/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob("../../assets/products/contingency/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const privateServerProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/products/private-server/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob("../../assets/products/private-server/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const winCommanderProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/products/wincommander/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob("../../assets/products/wincommander/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 
 // — app icons (svg/png/ico/gif), keyed by full filename incl. extension —
