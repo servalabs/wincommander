@@ -143,7 +143,7 @@ Both `ideal` and `current` hold this shape:
 part of system state. Notable groups (see the struct for the complete list):
 
 - **Display/UX:** `theme`, `experienceLevel`, `density`, `sidebarCollapsed`, `lastPanel`, `dashboardViewMode`, `dashboardOpenCards`.
-  - `dashboardViewMode` persists the requested Home center view (`map`, `risk`, or `products`), but the frontend resolves an `effectiveViewMode` before render. If Risk Matrix or More Products is disabled or hidden by Borrowed Mode, the visible view falls back to `map` and the setting is rewritten accordingly.
+  - `dashboardViewMode` persists the requested Home center view (`map`, `risk`, or `products`), but the frontend resolves an `effectiveViewMode` before render. If Risk Matrix lacks its paid entitlement, or either view is disabled or hidden by Borrowed Mode, the visible view falls back to `map` and the setting is rewritten accordingly.
 - **Setup:** `firstRunComplete`, `firstRun.selectedBlocklists`.
 - **Hotkeys:** `panicHotkey`, `searchHotkey`.
 - **Self-update:** `autoUpdate` (updates *WinCommander itself* — distinct from `ideal.apps.autoUpdate`, the winget installed-apps policy), `disableUpdates`.

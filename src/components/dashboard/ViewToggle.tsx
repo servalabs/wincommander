@@ -5,41 +5,32 @@ type ViewMode = "map" | "risk" | "products";
 interface ViewToggleProps {
   viewMode: ViewMode;
   setViewMode: (mode: ViewMode) => void;
-  showProductsTab: boolean;
   showRiskMatrix: boolean;
   showMoreProducts: boolean;
 }
 
-export default function ViewToggle({ viewMode, setViewMode, showProductsTab, showRiskMatrix, showMoreProducts }: ViewToggleProps) {
-  // The Live Map toggle always *could* render, but a single lonely toggle is
-  // pointless: if neither the Risk Matrix nor More Products button would show,
-  // suppress the whole toggle group. The map still renders as default content;
-  // only the toggle chrome is hidden.
-  const showProducts = showMoreProducts && showProductsTab;
-  if (!showRiskMatrix && !showProducts) return null;
+export default function ViewToggle({ viewMode, setViewMode, showRiskMatrix, showMoreProducts }: ViewToggleProps) {
+  // Live Map is the dashboard default, so it does not need its own selector.
+  // Selecting the active tag again returns to the default map view.
+  if (!showRiskMatrix && !showMoreProducts) return null;
 
   return (
-    <div className="view-toggle-container">
-      <button
-        className={`view-toggle-btn ${viewMode === "map" ? "active" : ""}`}
-        onClick={() => setViewMode("map")}
-      >
-        <Icon icon="globe" size={14} />
-        <span>LIVE MAP</span>
-      </button>
+    <div className="view-toggle-container" role="toolbar" aria-label="Dashboard views">
       {showRiskMatrix && (
         <button
           className={`view-toggle-btn ${viewMode === "risk" ? "active" : ""}`}
-          onClick={() => setViewMode("risk")}
+          aria-pressed={viewMode === "risk"}
+          onClick={() => setViewMode(viewMode === "risk" ? "map" : "risk")}
         >
           <Icon icon="shield" size={14} />
           <span>RISK MATRIX</span>
         </button>
       )}
-      {showProducts && (
+      {showMoreProducts && (
         <button
           className={`view-toggle-btn ${viewMode === "products" ? "active" : ""}`}
-          onClick={() => setViewMode("products")}
+          aria-pressed={viewMode === "products"}
+          onClick={() => setViewMode(viewMode === "products" ? "map" : "products")}
         >
           <Icon icon="clean" size={14} />
           <span>MORE PRODUCTS</span>

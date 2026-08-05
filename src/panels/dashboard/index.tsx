@@ -169,22 +169,17 @@ export default function DashboardPanel() {
     hasPaid &&
     appSettings?.ideal?.identity?.riskMatrixEnabled === true &&
     !(borrowedActive && borrowedHidden.includes("risk-matrix"));
-  // No Pro gate — visibility is driven solely by the moreProductsEnabled flag
-  // (set from Help & Setup or the Settings "Product Showcase"
-  // switch). Density visibility still applies in ViewToggle.
+  // No Pro or density gate — an enabled showcase must be reachable from Home.
   const showMoreProducts =
     appSettings?.ideal?.identity?.moreProductsEnabled === true &&
     !(borrowedActive && borrowedHidden.includes("more-products"));
-  const productsTabAvailable = visibility.isVisible({ minDensity: "expert" });
-  const canShowProductsView = showMoreProducts && productsTabAvailable;
-  // ViewToggle only renders when there's more than one view to switch between
-  // (Risk Matrix or More Products). When both are off, its ~40px reserved
-  // gap above the radar should collapse instead of leaving dead space.
-  const viewToggleVisible = showRiskMatrix || canShowProductsView;
+  // Optional title tags only render when their corresponding dashboard view is
+  // available. With neither enabled, keep the default map compact.
+  const viewToggleVisible = showRiskMatrix || showMoreProducts;
   const effectiveViewMode: "map" | "risk" | "products" =
     viewMode === "risk" && showRiskMatrix
       ? "risk"
-      : viewMode === "products" && canShowProductsView
+      : viewMode === "products" && showMoreProducts
         ? "products"
         : "map";
 
@@ -807,17 +802,12 @@ export default function DashboardPanel() {
 
         {/* ── Left: Radar / Risk / Products ─────────────────────── */}
         <div className="dash-left">
-          {!(effectiveViewMode === "map" && hideCenterChrome) && (
-            <div>
-              <ViewToggle
-                viewMode={effectiveViewMode}
-                setViewMode={setViewMode}
-                showProductsTab={productsTabAvailable}
-                showRiskMatrix={showRiskMatrix}
-                showMoreProducts={showMoreProducts}
-              />
-            </div>
-          )}
+          <ViewToggle
+            viewMode={effectiveViewMode}
+            setViewMode={setViewMode}
+            showRiskMatrix={showRiskMatrix}
+            showMoreProducts={showMoreProducts}
+          />
 
           <div className="map-stage">
             <AnimatePresence mode="wait">

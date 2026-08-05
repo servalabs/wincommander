@@ -1780,10 +1780,8 @@ html.light .inner-text.free {
 }
 
 .view-toggle-container {
-    position: absolute;
-    top: 10px;
-    left: 50%;
-    transform: translateX(-50%);
+    position: relative;
+    align-self: center;
     display: flex;
     gap: 6px;
     z-index: 100;
@@ -1794,6 +1792,8 @@ html.light .inner-text.free {
     border: 1px solid color-mix(in srgb, var(--color-border-light) 52%, transparent);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
     white-space: nowrap;
+    margin: 8px auto 0;
+    flex-shrink: 0;
 }
 
 .view-toggle-btn {
@@ -2090,8 +2090,8 @@ html.light .dashboard-panel--watermark .dashboard-radar-watermark {
     /* Positioning context for the .dashboard-radar-watermark child — so
        the wordmark sits behind the disc no matter how the column reflows. */
     position: relative;
-    /* View-toggle bar is ~40px at top:10px; 48px clears it with a small gap. */
-    padding-top: 48px;
+    /* The optional dashboard-view tags live above this group in normal flow. */
+    padding-top: 14px;
     padding-bottom: 0;
     gap: 10px;
     overflow: visible;
@@ -2107,11 +2107,8 @@ html.light .dashboard-panel--watermark .dashboard-radar-watermark {
     gap: 4px;
 }
 
-/* ViewToggle (Risk Matrix / More Products switcher) only renders when at
-   least one of those views is available. With both off, the default 48px
-   padding-top (reserved to clear the toggle bar) leaves a dead gap — shrink
-   it to match the .dashboard-top-bar ~14px rhythm instead. Never combines
-   with --expanded (mutually exclusive at the call site). */
+/* The title-area tags are in normal document flow. When no optional view is
+   enabled, keep the map in the same compact vertical rhythm. */
 .radar-center-group--no-toggle {
     padding-top: 14px;
 }

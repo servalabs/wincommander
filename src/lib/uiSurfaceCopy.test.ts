@@ -448,11 +448,20 @@ describe("redesign surface copy guardrails", () => {
 
   test("dashboard resolves hidden Risk Matrix and More Products before rendering views", async () => {
     const dashboard = await read("src/panels/dashboard/index.tsx");
+    const toggle = await read("src/components/dashboard/ViewToggle.tsx");
 
     expect(dashboard).toContain("const effectiveViewMode");
     expect(dashboard).toContain('viewMode={effectiveViewMode}');
     expect(dashboard).toContain('effectiveViewMode === "risk"');
     expect(dashboard).toContain('effectiveViewMode === "products"');
+    expect(dashboard).toContain('viewMode === "products" && showMoreProducts');
+    expect(dashboard).not.toContain("productsTabAvailable");
+    expect(toggle).not.toContain("showProductsTab");
+    expect(toggle).not.toContain("LIVE MAP");
+    expect(toggle).toContain('viewMode === "risk" ? "map" : "risk"');
+    expect(toggle).toContain('viewMode === "products" ? "map" : "products"');
+    expect(dashboard).toContain('<ViewToggle\n            viewMode={effectiveViewMode}');
+    expect(dashboard).not.toContain('{!(effectiveViewMode === "map" && hideCenterChrome) && (');
   });
 
   test("dashboard view toggle boosts label contrast in light mode", async () => {
