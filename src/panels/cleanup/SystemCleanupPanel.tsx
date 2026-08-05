@@ -204,7 +204,7 @@ export default function SystemCleanupPanel() {
 
                         {hasSafeguards && (
                             <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as CleanupUsabilityTier | "actions-monitoring")}>
-                                <CleanupTabNavigation activeTab={activeTab} scan={scan} isInvestigator={isInvestigator} />
+                                <CleanupTabNavigation scan={scan} isInvestigator={isInvestigator} />
                                 <CleanupSummaryStats scan={scan} />
                                 <TabsContent value="low-impact">
                                     <CleanupCategoryGrid
@@ -373,16 +373,14 @@ export default function SystemCleanupPanel() {
 }
 
 /**
- * Keeps the scan action physically with the cleanup tab navigation. The scan
- * scope intentionally follows the selected tab: an operator reviewing one
- * risk tier should not unexpectedly start every other maintenance check.
+ * Keeps the two global cleanup actions physically with the tab navigation.
+ * Scanning and cleaning always operate over the whole cleanup catalogue so
+ * operators have one obvious action for each operation.
  */
 function CleanupTabNavigation({
-    activeTab,
     scan,
     isInvestigator,
 }: {
-    activeTab: CleanupUsabilityTier | "actions-monitoring";
     scan: ReturnType<typeof useCleanupScan>;
     isInvestigator: boolean;
 }) {
@@ -393,23 +391,16 @@ function CleanupTabNavigation({
         isCategoryBatchScanning,
         handleClearAllCategories,
     } = scan;
-    const categories = activeTab === "actions-monitoring"
-        ? VIEW_ONLY_CATEGORIES
-        : orderedScanCategories.filter((category) => category.usabilityTier === activeTab);
     const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];
-    const isScanningThisTab = isCategoryBatchScanning(categories);
     const isScanningAll = isCategoryBatchScanning(allScanCategories);
     const canClearAll = orderedScanCategories.some(category =>
         !!category.clearDataKey && (cardDataMap[category.id]?.count ?? 0) > 0,
     );
-    const scanAllTourState = isScanningThisTab
+    const scanAllTourState = isScanningAll
         ? "scanning"
-        : categories.some((category) => cardDataMap[category.id]?.count !== -1)
+        : allScanCategories.some((category) => cardDataMap[category.id]?.count !== -1)
             ? "done"
             : undefined;
-    const activeTabLabel = activeTab === "actions-monitoring"
-        ? "One-time actions and monitoring"
-        : CLEANUP_TAB_LABELS[activeTab];
 
     return (
         <div className="flex flex-wrap items-center gap-2">
@@ -423,26 +414,15 @@ function CleanupTabNavigation({
             <div className="flex items-center gap-2">
                 <Button
                     small
-                    minimal
-                    icon={isScanningThisTab ? undefined : "refresh"}
-                    text={isScanningThisTab ? "Scanning section..." : "Scan section"}
-                    aria-label={isScanningThisTab ? `Scanning ${activeTabLabel}` : `Scan ${activeTabLabel}`}
-                    loading={isScanningThisTab}
-                    disabled={isScanningThisTab || isScanningAll || categories.length === 0}
-                    onClick={() => loadCategoryBatch(categories, "standard")}
-                    data-tour-state={scanAllTourState}
-                    style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.4px" }}
-                />
-                <Button
-                    small
                     intent="primary"
                     icon={isScanningAll ? undefined : "refresh"}
-                    text={isScanningAll ? "Scanning cleanup..." : "Scan all cleanup"}
+                    text={isScanningAll ? "Scanning All..." : "Scan All"}
                     aria-label={isScanningAll ? "Scanning all cleanup categories" : "Scan all cleanup categories"}
                     loading={isScanningAll}
                     disabled={isScanningAll}
                     onClick={() => loadCategoryBatch(allScanCategories, "standard")}
                     className="cleanup-scan-all-btn"
+                    data-tour-state={scanAllTourState}
                     style={{
                         fontSize: 11,
                         fontWeight: 800,
@@ -454,7 +434,7 @@ function CleanupTabNavigation({
                     small
                     intent="danger"
                     icon="trash"
-                    text="Clear all findings"
+                    text="Clean All"
                     aria-label="Clear every scanned cleanup category with findings"
                     disabled={isInvestigator || !canClearAll || isScanningAll}
                     onClick={() => void handleClearAllCategories()}
@@ -464,13 +444,6 @@ function CleanupTabNavigation({
         </div>
     );
 }
-
-const CLEANUP_TAB_LABELS: Record<CleanupUsabilityTier, string> = {
-    "low-impact": "Low impact",
-    "history-cache": "History and cache",
-    "rebuilds-apps-connectivity": "Rebuilds apps or connectivity",
-    "data-accounts-recovery": "Data accounts and recovery",
-};
 
 // Cross-tab summary counts (needs cleaning / clean / excluded / scanning).
 // Rendered immediately below the tab navigation so it remains visible on

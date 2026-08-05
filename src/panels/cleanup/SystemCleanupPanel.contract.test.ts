@@ -189,17 +189,18 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(traceCard).toContain("showScheduler && !isActionOnly");
   });
 
-  test("Scan All tracks each tab batch independently", async () => {
+  test("the cleanup toolbar exposes only global Scan All and Clean All actions", async () => {
     const scan = await read("src/panels/cleanup/useCleanupScan.ts");
     const panel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
 
     expect(scan).toContain("_scanningBatchIds");
     expect(scan).toContain("getCleanupScanBatchId");
     expect(scan).toContain("isCategoryBatchScanning");
-    expect(panel).toContain("const isScanningThisTab = isCategoryBatchScanning(categories);");
-    expect(panel).toContain("disabled={isScanningThisTab || isScanningAll || categories.length === 0}");
     expect(panel).toContain("const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];");
     expect(panel).toContain("handleClearAllCategories");
+    expect(panel).toContain('text={isScanningAll ? "Scanning All..." : "Scan All"}');
+    expect(panel).toContain('text="Clean All"');
+    expect(panel).not.toContain('text={isScanningThisTab ? "Scanning section..." : "Scan section"}');
   });
 
   test("the scheduler is a stable non-Radix control with runtime test hooks", async () => {
