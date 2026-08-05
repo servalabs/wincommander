@@ -1,40 +1,33 @@
-# Release workflow
+# R2 release workflow
 
-## 1. Prepare an exact version
+The Free updater reads `https://winupdates.servalabs.com/free/latest.json`.
+Release the signed MSI and its Tauri manifest from the private
+`wincommander-pro` checkout, which uploads the versioned artifact and promotes
+the R2 `free/latest.json` pointer.
 
-Open **Actions** → **prepare release** → **Run workflow** and enter the exact
-version. Use `3.2.5-rc.1` for a safe pre-release test; it does not become the
-updater's `latest` release.
+## Publish an exact version
 
-The workflow creates one normal release pull request and updates these Free
-version sources together:
+First commit and push the exact Free and Pro source to their `main` branches.
+The release tool refuses dirty worktrees so the built installer always matches
+the tagged source.
 
-- `package.json`
-- `src-tauri/commander-free/tauri.conf.json`
-- `src-tauri/commander-free/Cargo.toml`
+From `wincommander-pro`, run:
 
-Review its CI and diff like any other pull request. Merging it automatically
-creates the protected `vX.Y.Z` tag and starts the signed release workflow.
+```powershell
+.\tools\release.ps1 -Version 3.2.7 -Variant free -SkipFleet
+```
 
-## 2. Signed MSI publication
+Use `-Variant both` instead when the matching Pro, Investigator, and Fleet
+artifacts must also be published. The tool updates aligned version metadata,
+builds and Tauri-signs the Free MSI, uploads the MSI/signature/versioned
+manifest to R2, promotes `free/latest.json`, then commits, tags, and pushes the
+release source.
 
-The tag starts `release.yml`. It pauses at the protected `release` environment.
-An approved reviewer must select **Review deployments** then **Approve and
-deploy**. The workflow builds, Tauri-signs, attests, and uploads the Free MSI,
-signature, manifest, checksum, and SBOM to that GitHub Release.
+## Required local secrets
 
-## 3. Required one-time configuration
+The private `wincommander-pro/.env` must provide the R2 credentials and update
+domain, and the release shell must have the Tauri signing key/password. The
+tool validates the signed MSI before it publishes the update pointer.
 
-Create the `RELEASE_AUTOMATION_TOKEN` repository Actions secret. Use a
-fine-grained personal access token owned by the approved release account,
-restricted to this repository with only these permissions:
-
-- Contents — Read and write
-- Pull requests — Read and write
-- Metadata — Read-only
-
-The release-tag ruleset must allow the token account to create `v*` tags. This
-token creates release PRs and tags only; it is not a signing key.
-
-Tauri signing keys stay in the protected `release` environment. Do not put them
-in ordinary repository secrets.
+The public GitHub release workflow is manual-only, so pushing the legacy
+release tag does not publish a second GitHub release.

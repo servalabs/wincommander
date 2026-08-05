@@ -3,9 +3,6 @@ name: release
 # A protected version tag is the only release trigger. The job pauses at the
 # protected `release` environment before GitHub exposes the Tauri signing key.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       release_tag:
