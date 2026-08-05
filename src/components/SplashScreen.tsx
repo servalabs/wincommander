@@ -71,22 +71,6 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
     const [logoReady, setLogoReady] = useState(false);
     const [scrambleText, setScrambleText] = useState(() => scrambleWord(branding.companyLabel, 0));
     const [animDone, setAnimDone] = useState(false);
-    // Seed phase text from the window global: AppContext may have already emitted
-    // (and finished) its startup phases before this component mounts, because
-    // StartupAuthGate withholds our render until the PIN check resolves.
-    const [phaseText, setPhaseText] = useState(
-        () => (window as Window & { __wcStartupProgress?: { phase: string } }).__wcStartupProgress?.phase ?? 'initializing'
-    );
-
-    // Phase text follows the real startup events when they arrive in time.
-    useEffect(() => {
-        const handler = (e: Event) => {
-            const { phase } = (e as CustomEvent<{ pct: number; phase: string }>).detail;
-            if (phase) setPhaseText(phase);
-        };
-        window.addEventListener('startup-progress', handler);
-        return () => window.removeEventListener('startup-progress', handler);
-    }, []);
 
     // Canvas matrix rain — brightness-grid approach.
     // Every cell has a float brightness [0..1] that decays each frame; drops
@@ -275,7 +259,6 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
 
     // When the app reports ready, show the final phase.
     useEffect(() => {
-        if (isAppReady) setPhaseText('control online');
     }, [isAppReady]);
 
     // Gate: dismiss only when animation is done AND app data is ready.
@@ -371,14 +354,6 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
                     />
                 </div>
 
-                <p className="sp-status">
-                    <span className="sp-status-prompt">&gt;</span>
-                    {' '}
-                    <span key={phaseText} className="sp-status-phase">
-                        {phaseText}
-                    </span>
-                    <span className="sp-status-caret">_</span>
-                </p>
             </div>
         </div>
     );

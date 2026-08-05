@@ -411,20 +411,6 @@ html.light .sp-scramble {
     animation: sp-slide-up 0.5s ease 0.4s both;
 }
 
-.sp-loader-orb::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: var(--radius-full, 999px);
-    background: radial-gradient(circle,
-            var(--color-bg-primary) 0%,
-            color-mix(in srgb, var(--color-bg-primary) 94%, transparent) 48%,
-            color-mix(in srgb, var(--color-bg-primary) 62%, transparent) 68%,
-            transparent 82%);
-    backdrop-filter: blur(1.5px);
-    pointer-events: none;
-}
-
 .sp-loader-orb canvas {
     position: relative;
     filter: contrast(1.22);
