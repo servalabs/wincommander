@@ -1253,9 +1253,10 @@ pub struct AssignGroupRequest {
 
 /// Argus security-signal sample sent by an agent. Carries NO filenames, paths,
 /// URLs, printer names, document names, or usernames — only kind + class +
-/// magnitude + severity + consent coupling. Ingest is refused unless
-/// `consent_version` matches `disclosure_version` (fail-closed at the server
-/// boundary). kind ∈ {"dlp_exfil","tamper","print","removable_media"}.
+/// magnitude + severity + a disclosure-notice version. `consent_version` is
+/// vestigial (hardcoded `1`, never read) — there is no consent gate; ingest is
+/// never refused for a disclosure_version mismatch, only recorded as one.
+/// kind ∈ {"dlp_exfil","tamper","print","removable_media"}.
 /// class = sub-type label (e.g. "usb_large_transfer", "log_cleared").
 /// magnitude = aggregate scalar (bytes / pages / count).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
