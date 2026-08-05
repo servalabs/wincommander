@@ -1,8 +1,8 @@
 {
-  "pub_date": "2026-08-01T01:41:54Z",
-  "notes": "WinCommander Pro v3.2.4",
-  "size": 18769408,
-  "url": "https://winupdates.servalabs.com/pro/v3.2.4/wincommander-pro.exe",
-  "sha256": "2ec94c26c4b7fad7fc287baec51f6c442df23988afec9ef19c96332ab451f0fa",
-  "version": "3.2.4"
+  "version": "3.2.7",
+  "notes": "WinCommander Pro v3.2.7",
+  "url": "https://winupdates.servalabs.com/pro/v3.2.7/wincommander-pro.exe",
+  "sha256": "d2b1c972e7eff36b600c85532aab076b868ce8fe386de5540aec62e60cefbe35",
+  "size": 19260928,
+  "pub_date": "2026-08-05T22:01:11Z"
 }
