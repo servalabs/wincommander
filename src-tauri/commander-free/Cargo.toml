@@ -1,6 +1,6 @@
 [package]
 name = "commander-free"
-version = "3.2.5"
+version = "3.2.6"
 description = "WinCommander Free — open-source primary (AGPL-3.0-or-later)"
 authors = ["ServaLabs"]
 license = "AGPL-3.0-or-later"
