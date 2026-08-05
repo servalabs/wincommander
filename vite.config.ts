@@ -4,8 +4,17 @@ import tailwindcss from "@tailwindcss/vite";
 import fs from "node:fs";
 import path from "path";
 
-const tauriDevHost = process.env.TAURI_DEV_HOST;
-const host = tauriDevHost || "localhost";
+// Tauri injects TAURI_DEV_HOST=localhost for ordinary desktop development.
+// Do not let that hostname choose the bind address: WebView2 can resolve
+// localhost differently between the document and a later module fetch. Remote
+// device development still supplies a non-loopback host and keeps its HMR
+// configuration below.
+const requestedTauriDevHost = process.env.TAURI_DEV_HOST;
+const tauriDevHost = requestedTauriDevHost
+  && !["localhost", "127.0.0.1", "::1"].includes(requestedTauriDevHost)
+  ? requestedTauriDevHost
+  : undefined;
+const host = tauriDevHost || "127.0.0.1";
 // Runtime artwork is supplied by the pinned `assets` submodule. Production
 // builds and local development deliberately use the same source tree.
 const bundledAssetsRoot = path.resolve(__dirname, "../assets");
@@ -17,9 +26,11 @@ const assetContentTypes: Record<string, string> = {
   ".ico": "image/x-icon",
   ".jpeg": "image/jpeg",
   ".jpg": "image/jpeg",
+  ".mp4": "video/mp4",
   ".png": "image/png",
   ".svg": "image/svg+xml",
   ".webp": "image/webp",
+  ".webm": "video/webm",
 };
 
 /** Serves the shared workspace artwork that Vite otherwise treats as an SPA route. */
@@ -45,6 +56,17 @@ function serveSharedAssetsInDevelopment(): Plugin {
           return;
         }
 
+        // `/assets` also contains source modules such as
+        // components/risk-matrix/index.ts. Only serve known binary media here;
+        // Vite must transform TypeScript/CSS/JSON module requests itself.
+        // Serving an unknown extension as application/octet-stream makes
+        // WebView2 reject it as a module script and leaves the app blank.
+        const contentType = assetContentTypes[path.extname(filePath).toLowerCase()];
+        if (!contentType) {
+          next();
+          return;
+        }
+
         fs.stat(filePath, (error, stats) => {
           if (error || !stats.isFile()) {
             next();
@@ -52,10 +74,7 @@ function serveSharedAssetsInDevelopment(): Plugin {
           }
 
           response.statusCode = 200;
-          response.setHeader(
-            "Content-Type",
-            assetContentTypes[path.extname(filePath).toLowerCase()] ?? "application/octet-stream",
-          );
+          response.setHeader("Content-Type", contentType);
           response.setHeader("Cache-Control", "no-store");
           if (request.method === "HEAD") {
             response.end();
