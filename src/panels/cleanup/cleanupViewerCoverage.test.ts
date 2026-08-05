@@ -13,7 +13,11 @@ function source(path: string) {
     /^\/([A-Za-z]:\/)/,
     "$1",
   );
-  return readFileSync(sourcePath, "utf8");
+  // Normalise CRLF -> LF: the assertions below match multi-line source
+  // snippets, and this repo has mixed line endings (git converts on checkout),
+  // so a `"a\n  b"` expectation would fail on a CRLF checkout for a reason
+  // unrelated to the coverage being enforced.
+  return readFileSync(sourcePath, "utf8").replace(/\r\n/g, "\n");
 }
 
 describe("complete cleanup forensic viewer coverage", () => {
@@ -99,7 +103,9 @@ describe("complete cleanup forensic viewer coverage", () => {
     expect(card).toContain("aria-label={`Rescan ${category.label}`}");
     expect(card).toContain("actionLabel={category.label}");
     expect(schedule).toContain("categoryLabel: string");
-    expect(schedule).toContain("`Schedule auto-clean for ${categoryLabel}`");
+    // The control's wording moved from "auto-clean" to "scheduled wipe"; what
+    // this guards is that the label stays category-specific, not the noun.
+    expect(schedule).toContain("`Schedule a wipe for ${categoryLabel}`");
     expect(dialog).toContain("`Dismiss ${category.label} details`");
     expect(dialog).toContain("`Close ${category.label} details`");
     expect(dialog).toContain("`Copy ${dataset.title} as TSV`");

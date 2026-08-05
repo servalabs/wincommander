@@ -6,8 +6,13 @@ declare const Bun: {
   };
 };
 
-function read(path: string): Promise<string> {
-  return Bun.file(path).text();
+// Normalise CRLF -> LF. These guardrails assert on multi-line source snippets,
+// and this repo carries mixed line endings (git converts on checkout, see the
+// "LF will be replaced by CRLF" warnings), so a `"a\n  b"` expectation fails on
+// a CRLF checkout for a reason that has nothing to do with what is being
+// guarded. The line ending is never the thing under test.
+async function read(path: string): Promise<string> {
+  return (await Bun.file(path).text()).replace(/\r\n/g, "\n");
 }
 
 describe("redesign surface copy guardrails", () => {
@@ -284,7 +289,9 @@ describe("redesign surface copy guardrails", () => {
     expect(cleanupGrid).toContain('data-cleanup-summary="true"');
     expect(cleanupGrid).not.toContain('className="cleanup-scan-all-btn"');
     expect(cleanupPanel).toContain("function CleanupTabNavigation");
-    expect(cleanupPanel).toContain("<CleanupTabNavigation activeTab={activeTab} scan={scan} />");
+    expect(cleanupPanel).toContain(
+      "<CleanupTabNavigation activeTab={activeTab} scan={scan} isInvestigator={isInvestigator} />",
+    );
     expect(cleanupPanel).toContain("loadCategoryBatch(categories, \"standard\")");
     expect(cleanupPanel).toContain("<CleanupSummaryStats scan={scan} />");
     expect(cleanupGrid).not.toContain("{(summaryStats.needsCleaning > 0 || summaryStats.clean > 0) && (");
