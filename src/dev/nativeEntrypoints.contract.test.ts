@@ -21,7 +21,7 @@ describe("native and UI-audit entrypoints", () => {
     expect(cliHtml).not.toContain("uiAuditBootstrap");
 
     const config = JSON.parse(tauriConfig) as { build: { devUrl: string } };
-    expect(config.build.devUrl).toBe("http://localhost:1420");
+    expect(config.build.devUrl).toBe("http://127.0.0.1:1420");
     expect(nativeSource).toMatch(
       /"search-overlay",\s*tauri::WebviewUrl::App\("index\.html"\.into\(\)\)/s,
     );

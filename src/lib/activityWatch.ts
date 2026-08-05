@@ -10,7 +10,7 @@
 // not reduced for classification (see `sanitizeWindowEvent`).
 
 import type { ActivityItem, ActivityTimelineEvent } from "@/components/activity/activityData";
-import { invoke } from "@tauri-apps/api/core";
+import { activityWatchRequest } from "@/hooks/activityWatchIpc";
 
 const AW_BASE = "http://127.0.0.1:5600";
 const HTTP_TIMEOUT_MS = 4_000;
@@ -81,9 +81,7 @@ async function fetchAwJson<T>(path: string, params?: Record<string, string>, sig
   // regular browser/test environments retain the direct-fetch fallback.
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
     try {
-      return await invoke<T>("activity_watch_request", {
-        path: `${url.pathname}${url.search}`,
-      });
+      return await activityWatchRequest<T>(`${url.pathname}${url.search}`);
     } catch (error) {
       if (error instanceof AwUnavailableError) throw error;
       throw new AwUnavailableError(typeof error === "string" ? error : undefined);
