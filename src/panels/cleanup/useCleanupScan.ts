@@ -36,6 +36,28 @@ export function getCleanupScanConcurrency(logicalCores?: number): number {
     return Math.max(3, Math.floor((detectedCores || 1) / 2));
 }
 
+/** Runs independent cleanup work with the same bounded worker policy as scans. */
+export async function runCleanupWorkers<T>(
+    items: readonly T[],
+    worker: (item: T) => Promise<void>,
+    concurrency = getCleanupScanConcurrency(),
+): Promise<void> {
+    const queue = [...items];
+    const takeNext = async (): Promise<void> => {
+        const item = queue.shift();
+        if (item === undefined) return;
+        try {
+            await worker(item);
+        } finally {
+            await takeNext();
+        }
+    };
+    await Promise.all(Array.from(
+        { length: Math.min(Math.max(1, concurrency), items.length) },
+        takeNext,
+    ));
+}
+
 // Sentinel "account" for the combined All-Users view (#7).
 export const ALL_USERS_KEY = '__all__';
 // Must match the allowlist implemented by Get-CleanupSummaryAllUsers and
@@ -198,8 +220,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         error,
     } = backend;
 
-    // Bulk cleanup only targets low-impact categories. These exclusions offer
-    // a further opt-out without allowing a bulk action to reach higher tiers.
+    // Exclusions apply to every bulk cleanup scope. They let an operator keep
+    // a category out of a universal sweep without making that card unavailable.
     // wlanProfiles (Wi-Fi Profiles) and browserFootprints (Browser Audit) are
     // pre-excluded every session so a new user can't lose saved Wi-Fi
     // passwords or browsing footprints to a one-click sweep before they've
@@ -677,18 +699,8 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         _scanningBatchIds.add(batchId);
         publishScanningBatches();
         const concurrency = getCleanupScanConcurrency();
-        const queue = [...cats];
-        const workers: Promise<void>[] = [];
-        const spawn = (): Promise<void> => {
-            const next = queue.shift();
-            if (!next) return Promise.resolve();
-            return loadSingleCategory(next).then(spawn);
-        };
-        for (let i = 0; i < Math.min(concurrency, cats.length); i++) {
-            workers.push(spawn());
-        }
         try {
-            await Promise.allSettled(workers);
+            await runCleanupWorkers(cats, loadSingleCategory, concurrency);
         } finally {
             _scanningBatchIds.delete(batchId);
             publishScanningBatches();
@@ -717,6 +729,33 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // Clear a category for the CURRENT user (in-process single-user clear).
     // `onDriveWipe` opens the drive-wipe selector dialog (owned by the caller)
     // instead of running the generic confirm+clear flow.
+    type ClearResult = 'cleared' | 'reduced' | 'unchanged' | 'failed';
+
+    const clearAndReconcile = async (cat: CleanupCategory): Promise<{
+        result: ClearResult;
+        before: number;
+        after: number;
+    }> => {
+        const before = Math.max(0, _cleanupCache[cat.id]?.count ?? cardDataMap[cat.id]?.count ?? 0);
+        const clearer = clearerMap[cat.id];
+        if (!clearer) return { result: 'failed', before, after: before };
+
+        updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: before, items: [] }), clearing: true, loading: false });
+        try {
+            const res = await clearer();
+            await loadSingleCategory(cat);
+            const after = Math.max(0, _cleanupCache[cat.id]?.count ?? before);
+            if (!res.success && !res.data) return { result: 'failed', before, after };
+            if (after === 0) return { result: 'cleared', before, after };
+            if (after < before) return { result: 'reduced', before, after };
+            return { result: 'unchanged', before, after };
+        } catch {
+            await loadSingleCategory(cat);
+            const after = Math.max(0, _cleanupCache[cat.id]?.count ?? before);
+            return { result: 'failed', before, after };
+        }
+    };
+
     const handleCardClear = async (cat: CleanupCategory, onDriveWipe?: () => void) => {
         if (cat.id === 'unallocatedErase') {
             onDriveWipe?.();
@@ -730,40 +769,46 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             });
             if (!accepted) return;
         }
-        const clearer = clearerMap[cat.id];
-        if (!clearer) return;
-
-        updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: 0, items: [] }), clearing: true, loading: false });
-        try {
-            const res = await clearer();
-            if (res.success || res.data) {
-                updateCacheEntry(cat.id, { count: 0, items: [], loading: false, clearing: false });
-                await loadSingleCategory(cat);
-                // Background tasks (Free Space Cleanup, Virtual Memory) return a PID
-                // immediately — the actual work runs for minutes. Reflect this in the toast.
-                const isBackground = cat.id === 'unallocatedErase' || cat.id === 'virtualMemory';
-                if (isBackground) {
+        // Background tasks return before the actual drive work completes.
+        if (cat.id === 'unallocatedErase' || cat.id === 'virtualMemory') {
+            const clearer = clearerMap[cat.id];
+            if (!clearer) return;
+            updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: 0, items: [] }), clearing: true, loading: false });
+            try {
+                const res = await clearer();
+                if (res.success || res.data) {
+                    updateCacheEntry(cat.id, { count: 0, items: [], loading: false, clearing: false });
                     showSuccess(`${cat.label} started in background — this may take 30+ minutes.`);
                 } else {
-                    showSuccess(`${cat.label} cleared.`);
+                    showError(res.error || `Failed to start ${cat.label}.`);
+                    updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: 0, items: [] }), clearing: false, loading: false });
                 }
-            } else {
-                showError(res.error || `Failed to clear ${cat.label}.`);
+            } catch (e) {
+                showError(`Failed to start ${cat.label}: ${e}`);
                 updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: 0, items: [] }), clearing: false, loading: false });
             }
-        } catch (e) {
-            showError(`Failed to clear ${cat.label}: ${e}`);
-            updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: 0, items: [] }), clearing: false, loading: false });
+            return;
+        }
+
+        const outcome = await clearAndReconcile(cat);
+        if (outcome.result === 'cleared') {
+            showSuccess(`${cat.label} cleared.`);
+        } else if (outcome.result === 'reduced') {
+            showSuccess(`${cat.label} reduced from ${outcome.before} to ${outcome.after}.`);
+        } else if (outcome.result === 'unchanged') {
+            showError(`${cat.label} still reports ${outcome.after} traces after cleanup.`);
+        } else {
+            showError(`Failed to clear ${cat.label}.`);
         }
     };
 
-    const handleClearTier = async (tier: CleanupUsabilityTier, excludedIds = new Set<string>()) => {
-        const tierLabel = tier === 'low-impact'
-            ? 'low-impact traces'
-            : CLEANUP_USABILITY_TIERS.find((item) => item.id === tier)?.label ?? 'this section';
-        const withFindings = orderedScanCategories.filter(cat =>
+    const handleClearCategories = async (
+        categories: CleanupCategory[],
+        label: string,
+        excludedIds = new Set<string>(),
+    ) => {
+        const withFindings = categories.filter(cat =>
             !cat.actionOnly &&
-            cat.usabilityTier === tier &&
             (cardDataMap[cat.id]?.count ?? 0) > 0 &&
             clearerMap[cat.id] &&
             !excludedIds.has(cat.id)
@@ -777,44 +822,52 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             ? ` (excluding ${excludedNames.join(', ')})`
             : '';
         const accepted = await requestConfirm({
-            title: `Clear ${tierLabel}?`,
+            title: `Clear ${label}?`,
             description: `Clear findings across ${withFindings.length} categories${excludeNote}? Each category will be re-scanned after cleanup.`,
             confirmLabel: "Clear categories",
         });
         if (!accepted) return;
-        const stillHasData: string[] = [];
-        for (const cat of withFindings) {
-            const clearer = clearerMap[cat.id];
-            if (!clearer) continue;
-            updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] ?? { count: 0, items: [] }), clearing: true, loading: false });
-            try {
-                const res = await clearer();
-                if (res.success || res.data) {
-                    // Reconcile against a fresh Get-* scan instead of assuming the
-                    // clear removed everything — mirrors handleCardClear so a
-                    // backend ok:false (no-op) surfaces as a residual count here too.
-                    await loadSingleCategory(cat);
-                    if ((_cleanupCache[cat.id]?.count ?? 0) > 0) {
-                        stillHasData.push(cat.label);
-                    }
-                } else {
-                    await loadSingleCategory(cat);
-                    stillHasData.push(cat.label);
-                }
-            } catch {
-                await loadSingleCategory(cat);
-                stillHasData.push(cat.label);
-            }
+        const results = new Map<string, ClearResult>();
+        await runCleanupWorkers(withFindings, async cat => {
+            results.set(cat.id, (await clearAndReconcile(cat)).result);
+        });
+        const cleared = withFindings.filter(cat => results.get(cat.id) === 'cleared');
+        const reduced = withFindings.filter(cat => results.get(cat.id) === 'reduced');
+        const unchanged = withFindings.filter(cat => results.get(cat.id) === 'unchanged');
+        const failed = withFindings.filter(cat => results.get(cat.id) === 'failed');
+        if (cleared.length || reduced.length) {
+            const summary = [
+                cleared.length ? `${cleared.length} cleared` : '',
+                reduced.length ? `${reduced.length} reduced` : '',
+            ].filter(Boolean).join(', ');
+            showSuccess(`${label}: ${summary}.`);
         }
-        if (stillHasData.length) {
-            showError(`Some traces could not be cleared: ${stillHasData.join(', ')}.`);
-        } else {
-            showSuccess(`${tierLabel} cleared.`);
+        if (unchanged.length || failed.length) {
+            const unchangedLabels = unchanged.map(cat => cat.label);
+            const failedLabels = failed.map(cat => cat.label);
+            const parts = [
+                unchangedLabels.length ? `unchanged: ${unchangedLabels.join(', ')}` : '',
+                failedLabels.length ? `failed: ${failedLabels.join(', ')}` : '',
+            ].filter(Boolean).join('; ');
+            showError(`${label}: ${parts}.`);
         }
+    };
+
+    const handleClearTier = async (tier: CleanupUsabilityTier, excludedIds = new Set<string>()) => {
+        const tierLabel = tier === 'low-impact'
+            ? 'low-impact traces'
+            : CLEANUP_USABILITY_TIERS.find((item) => item.id === tier)?.label ?? 'this section';
+        await handleClearCategories(
+            orderedScanCategories.filter(cat => cat.usabilityTier === tier),
+            tierLabel,
+            excludedIds,
+        );
     };
     // Low impact keeps its existing exclusion picker. Other tabs clear only
     // their own eligible findings through the shared tier action above.
     const handleClearAllTraces = async () => handleClearTier('low-impact', clearAllExcludes);
+    const handleClearAllCategories = async () =>
+        handleClearCategories(orderedScanCategories, 'all cleanup findings', clearAllExcludes);
 
     // ── Other-users sub-section ─────────────────────────────────────────
     // Clears for the selected OTHER user (or all users) write into the
@@ -896,6 +949,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         handleCardLoad,
         handleCardClear,
         handleClearAllTraces,
+        handleClearAllCategories,
         handleClearTier,
         clearAllExcludes,
         setClearAllExcludes,

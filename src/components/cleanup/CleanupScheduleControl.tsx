@@ -125,8 +125,8 @@ export default function CleanupScheduleControl({
         data-trace-card-action="schedule"
         data-cleanup-schedule-control="true"
         data-active={isScheduled ? "true" : "false"}
-        aria-label={isScheduled ? `Change ${categoryLabel} auto-clean schedule` : `Unlock ${categoryLabel} auto-clean scheduling`}
-        title={isScheduled ? `Auto-clean every ${formatInterval(scheduleMinutes!)} · Pro required to change` : "Unlock scheduled auto-clean"}
+        aria-label={isScheduled ? `Change ${categoryLabel} scheduled wipe` : `Unlock ${categoryLabel} scheduled wipe`}
+        title={isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)} · Pro required to change` : "Unlock scheduled wipe"}
         onClick={event => {
           event.preventDefault();
           event.stopPropagation();
@@ -171,8 +171,8 @@ export default function CleanupScheduleControl({
         data-trace-card-action="schedule"
         data-cleanup-schedule-control="true"
         data-active={isScheduled ? "true" : "false"}
-        aria-label={isScheduled ? `Change ${categoryLabel} auto-clean schedule` : `Schedule auto-clean for ${categoryLabel}`}
-        title={isScheduled ? `Auto-clean every ${formatInterval(scheduleMinutes!)}` : "Schedule auto-clean"}
+        aria-label={isScheduled ? `Change ${categoryLabel} scheduled wipe` : `Schedule a wipe for ${categoryLabel}`}
+        title={isScheduled ? `Scheduled wipe every ${formatInterval(scheduleMinutes!)}` : "Schedule wipe"}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
         aria-controls={isOpen ? surfaceId : undefined}
@@ -191,7 +191,7 @@ export default function CleanupScheduleControl({
           ref={surfaceRef}
           id={surfaceId}
           role="dialog"
-          aria-label={`${categoryLabel} auto-clean schedule`}
+          aria-label={`${categoryLabel} scheduled wipe`}
           aria-busy={scheduleBusy}
           data-cleanup-schedule-surface
           data-cleanup-schedule-menu="true"
@@ -211,7 +211,7 @@ export default function CleanupScheduleControl({
           onClick={event => event.stopPropagation()}
         >
           <Menu>
-            <MenuDivider title={isScheduled ? `Currently every ${formatInterval(scheduleMinutes!)}` : "Auto-clean interval"} />
+            <MenuDivider title={isScheduled ? `Wipes every ${formatInterval(scheduleMinutes!)}` : "Wipe interval"} />
             {PRESET_INTERVALS.filter(preset => preset.minutes >= minInterval).map(preset => (
               <MenuItem
                 key={preset.minutes}
@@ -227,7 +227,7 @@ export default function CleanupScheduleControl({
                 <InputGroup
                   small
                   type="number"
-                  aria-label={`${categoryLabel} custom auto-clean interval in minutes`}
+                  aria-label={`${categoryLabel} custom wipe interval in minutes`}
                   placeholder={`Custom (min ${minInterval})`}
                   value={customMinutes}
                   onChange={event => setCustomMinutes(event.target.value)}
@@ -257,7 +257,7 @@ export default function CleanupScheduleControl({
                 <MenuDivider />
                 <MenuItem
                   icon="cross"
-                  text="Turn off auto-clean"
+                  text="Turn off scheduled wipe"
                   intent="danger"
                   disabled={scheduleBusy}
                   onClick={() => void clearSchedule()}

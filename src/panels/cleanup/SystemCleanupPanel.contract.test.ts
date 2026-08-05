@@ -197,7 +197,9 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(scan).toContain("getCleanupScanBatchId");
     expect(scan).toContain("isCategoryBatchScanning");
     expect(panel).toContain("const isScanningThisTab = isCategoryBatchScanning(categories);");
-    expect(panel).toContain("disabled={isScanningThisTab || categories.length === 0}");
+    expect(panel).toContain("disabled={isScanningThisTab || isScanningAll || categories.length === 0}");
+    expect(panel).toContain("const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];");
+    expect(panel).toContain("handleClearAllCategories");
   });
 
   test("the scheduler is a stable non-Radix control with runtime test hooks", async () => {

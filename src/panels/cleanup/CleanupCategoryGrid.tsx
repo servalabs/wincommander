@@ -428,7 +428,7 @@ export default function CleanupCategoryGrid({
                 minimal
                 icon="trash"
                 text="Clear Low-Impact"
-                intent="primary"
+                intent="danger"
                 disabled={lowImpactFindings === 0 || isInvestigator}
                 onClick={handleClearAllTraces}
                 style={{
@@ -613,7 +613,7 @@ export default function CleanupCategoryGrid({
               <Button
                 small
                 minimal
-                intent="primary"
+                intent="danger"
                 icon="trash"
                 text={`Clear ${tierMeta.label}`}
                 disabled={!isViewingCurrentUser || tierClearableCount === 0 || isInvestigator}

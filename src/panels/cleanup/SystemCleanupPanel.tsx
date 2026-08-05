@@ -204,7 +204,7 @@ export default function SystemCleanupPanel() {
 
                         {hasSafeguards && (
                             <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as CleanupUsabilityTier | "actions-monitoring")}>
-                                <CleanupTabNavigation activeTab={activeTab} scan={scan} />
+                                <CleanupTabNavigation activeTab={activeTab} scan={scan} isInvestigator={isInvestigator} />
                                 <CleanupSummaryStats scan={scan} />
                                 <TabsContent value="low-impact">
                                     <CleanupCategoryGrid
@@ -380,15 +380,28 @@ export default function SystemCleanupPanel() {
 function CleanupTabNavigation({
     activeTab,
     scan,
+    isInvestigator,
 }: {
     activeTab: CleanupUsabilityTier | "actions-monitoring";
     scan: ReturnType<typeof useCleanupScan>;
+    isInvestigator: boolean;
 }) {
-    const { orderedScanCategories, loadCategoryBatch, cardDataMap, isCategoryBatchScanning } = scan;
+    const {
+        orderedScanCategories,
+        loadCategoryBatch,
+        cardDataMap,
+        isCategoryBatchScanning,
+        handleClearAllCategories,
+    } = scan;
     const categories = activeTab === "actions-monitoring"
         ? VIEW_ONLY_CATEGORIES
         : orderedScanCategories.filter((category) => category.usabilityTier === activeTab);
+    const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];
     const isScanningThisTab = isCategoryBatchScanning(categories);
+    const isScanningAll = isCategoryBatchScanning(allScanCategories);
+    const canClearAll = orderedScanCategories.some(category =>
+        !!category.clearDataKey && (cardDataMap[category.id]?.count ?? 0) > 0,
+    );
     const scanAllTourState = isScanningThisTab
         ? "scanning"
         : categories.some((category) => cardDataMap[category.id]?.count !== -1)
@@ -407,24 +420,47 @@ function CleanupTabNavigation({
                 <TabsTrigger value="data-accounts-recovery">Data, accounts &amp; recovery</TabsTrigger>
                 <TabsTrigger value="actions-monitoring">One-time actions &amp; monitoring</TabsTrigger>
             </TabsList>
-            <Button
-                small
-                intent="primary"
-                icon={isScanningThisTab ? undefined : "refresh"}
-                text={isScanningThisTab ? "Scanning..." : "Scan All"}
-                aria-label={isScanningThisTab ? `Scanning ${activeTabLabel}` : `Scan all ${activeTabLabel}`}
-                loading={isScanningThisTab}
-                disabled={isScanningThisTab || categories.length === 0}
-                onClick={() => loadCategoryBatch(categories, "standard")}
-                className="cleanup-scan-all-btn"
-                data-tour-state={scanAllTourState}
-                style={{
-                    fontSize: 11,
-                    fontWeight: 800,
-                    letterSpacing: "0.6px",
-                    padding: "6px 14px",
-                }}
-            />
+            <div className="flex items-center gap-2">
+                <Button
+                    small
+                    minimal
+                    icon={isScanningThisTab ? undefined : "refresh"}
+                    text={isScanningThisTab ? "Scanning section..." : "Scan section"}
+                    aria-label={isScanningThisTab ? `Scanning ${activeTabLabel}` : `Scan ${activeTabLabel}`}
+                    loading={isScanningThisTab}
+                    disabled={isScanningThisTab || isScanningAll || categories.length === 0}
+                    onClick={() => loadCategoryBatch(categories, "standard")}
+                    data-tour-state={scanAllTourState}
+                    style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.4px" }}
+                />
+                <Button
+                    small
+                    intent="primary"
+                    icon={isScanningAll ? undefined : "refresh"}
+                    text={isScanningAll ? "Scanning cleanup..." : "Scan all cleanup"}
+                    aria-label={isScanningAll ? "Scanning all cleanup categories" : "Scan all cleanup categories"}
+                    loading={isScanningAll}
+                    disabled={isScanningAll}
+                    onClick={() => loadCategoryBatch(allScanCategories, "standard")}
+                    className="cleanup-scan-all-btn"
+                    style={{
+                        fontSize: 11,
+                        fontWeight: 800,
+                        letterSpacing: "0.6px",
+                        padding: "6px 14px",
+                    }}
+                />
+                <Button
+                    small
+                    intent="danger"
+                    icon="trash"
+                    text="Clear all findings"
+                    aria-label="Clear every scanned cleanup category with findings"
+                    disabled={isInvestigator || !canClearAll || isScanningAll}
+                    onClick={() => void handleClearAllCategories()}
+                    style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.4px" }}
+                />
+            </div>
         </div>
     );
 }
