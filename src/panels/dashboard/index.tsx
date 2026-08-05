@@ -17,7 +17,6 @@ import StorageOverviewCard from "../../components/dashboard/StorageOverviewCard"
 import RecentDownloadsCard from "../../components/dashboard/RecentDownloadsCard";
 import NetworkTrafficCard from "../../components/dashboard/NetworkTrafficCard";
 import TierGate from "../../components/shared/TierGate";
-import ViewToggle from "../../components/dashboard/ViewToggle";
 import UpdaterStatus from "../../components/UpdaterStatus";
 import UpdateFlowDialog from "../../components/UpdateFlowDialog";
 import { useUpdater } from "../../hooks/updaterStore";
@@ -125,17 +124,31 @@ export default function DashboardPanel() {
   const branding = getDisplayBranding(appSettings);
 
   const [displayScore, setDisplayScore] = useState(0);
-  // Dashboard view mode persists to app.dashboardViewMode (roadmap: state
-  // discipline — every preference has one persisted owner). Seeded from
-  // settings (pre-cached ~5ms before mount), written on every change.
+  // Dashboard is the stable default. A legacy saved "map" value resolves to
+  // Dashboard because Live Map is no longer a navigation state.
+  const DASHBOARD_VIEW_STORAGE_KEY = "wincommander.dashboard-view";
   const persistedViewMode = appSettings?.app?.dashboardViewMode;
-  const [viewMode, setViewModeState] = useState<"map" | "risk" | "products">(
-    persistedViewMode === "risk" || persistedViewMode === "products" ? persistedViewMode : "map"
+  const initialDashboardView = window.sessionStorage.getItem(DASHBOARD_VIEW_STORAGE_KEY);
+  const [viewMode, setViewModeState] = useState<"dashboard" | "risk" | "products">(
+    initialDashboardView === "risk" || initialDashboardView === "products"
+      ? initialDashboardView
+      : persistedViewMode === "risk" || persistedViewMode === "products"
+        ? persistedViewMode
+        : "dashboard"
   );
-  const setViewMode = useCallback((mode: "map" | "risk" | "products") => {
+  const setViewMode = useCallback((mode: "dashboard" | "risk" | "products") => {
     setViewModeState(mode);
+    window.sessionStorage.setItem(DASHBOARD_VIEW_STORAGE_KEY, mode);
     patchAppSettings({ app: { dashboardViewMode: mode } }).catch(() => { });
   }, [patchAppSettings]);
+  useEffect(() => {
+    const handleDashboardView = (event: Event) => {
+      const mode = (event as CustomEvent<"dashboard" | "risk" | "products">).detail;
+      if (mode === "dashboard" || mode === "risk" || mode === "products") setViewMode(mode);
+    };
+    window.addEventListener("dashboard-view", handleDashboardView);
+    return () => window.removeEventListener("dashboard-view", handleDashboardView);
+  }, [setViewMode]);
   // Right-column collapsible cards (System Info / Storage / Network Traffic).
   // At most MAX_OPEN_CARDS are expanded at once; opening another evicts the
   // longest-ago-opened one. The open set is an ordered list (oldest first)
@@ -165,23 +178,16 @@ export default function DashboardPanel() {
   const isExpert = visibility.density === "expert";
   const borrowedActive = useBorrowedActive();
   const borrowedHidden = appSettings?.app?.borrowedHidden ?? [];
-  const showRiskMatrix =
-    hasPaid &&
-    appSettings?.ideal?.identity?.riskMatrixEnabled === true &&
-    !(borrowedActive && borrowedHidden.includes("risk-matrix"));
-  // No Pro or density gate — an enabled showcase must be reachable from Home.
-  const showMoreProducts =
-    appSettings?.ideal?.identity?.moreProductsEnabled === true &&
-    !(borrowedActive && borrowedHidden.includes("more-products"));
-  // Optional title tags only render when their corresponding dashboard view is
-  // available. With neither enabled, keep the default map compact.
-  const viewToggleVisible = showRiskMatrix || showMoreProducts;
-  const effectiveViewMode: "map" | "risk" | "products" =
+  // These top-level dashboard destinations remain available in normal mode;
+  // a retired Live Map must not leave the dashboard without a visible route.
+  const showRiskMatrix = !(borrowedActive && borrowedHidden.includes("risk-matrix"));
+  const showMoreProducts = !(borrowedActive && borrowedHidden.includes("more-products"));
+  const effectiveViewMode: "dashboard" | "risk" | "products" =
     viewMode === "risk" && showRiskMatrix
       ? "risk"
       : viewMode === "products" && showMoreProducts
         ? "products"
-        : "map";
+        : "dashboard";
 
   useEffect(() => {
     if (viewMode !== effectiveViewMode) {
@@ -784,7 +790,7 @@ export default function DashboardPanel() {
             one would overlap the next. Now a real flex-column in the scaler row.
             Collapses to w-0 on non-map views so the center takes full width.
             On small screens, constrains to max-w-[20vw] to preserve center space. */}
-        <div className={`dashboard-top-bar transition-all duration-300 ${effectiveViewMode !== "map" ? "w-0 opacity-0 pointer-events-none" : "w-[260px] opacity-100"}`}>
+        <div className={`dashboard-top-bar transition-all duration-300 ${effectiveViewMode !== "dashboard" ? "w-0 opacity-0 pointer-events-none" : "w-[260px] opacity-100"}`}>
           <RecentDownloadsCard />
           <div data-tour="dashboard-privacy-toggles">
             <PrivacyTogglesCard
@@ -802,13 +808,6 @@ export default function DashboardPanel() {
 
         {/* ── Left: Radar / Risk / Products ─────────────────────── */}
         <div className="dash-left">
-          <ViewToggle
-            viewMode={effectiveViewMode}
-            setViewMode={setViewMode}
-            showRiskMatrix={showRiskMatrix}
-            showMoreProducts={showMoreProducts}
-          />
-
           <div className="map-stage">
             <AnimatePresence mode="wait">
               {effectiveViewMode === "risk" ? (
@@ -849,7 +848,7 @@ export default function DashboardPanel() {
                   {/* Radar stays vertically centered (flex:1); the fix-actions
                       sit below in their own flex-none row so the Clean /
                       Update-All-Apps footer is never clipped. */}
-                  <div className={`radar-center-group${hideCenterChrome ? ' radar-center-group--expanded' : !viewToggleVisible ? ' radar-center-group--no-toggle' : ''}`}>
+                  <div className={`radar-center-group${hideCenterChrome ? ' radar-center-group--expanded' : ''}`}>
                   {/* Score count-up + pop is rendered inside SovereigntyRadar's
                       core via <AnimatedNumber> (visible, layout-safe). */}
                   <SovereigntyRadar
@@ -918,7 +917,7 @@ export default function DashboardPanel() {
             KT: Was position:absolute (same problem as left sidebar above).
             Now a real flex-column sibling; collapses to w-0 on non-map views.
             On small screens, constrains to max-w-[22vw] to preserve center space. */}
-        <div className={`dashboard-right-bar transition-all duration-300 ${effectiveViewMode !== "map" ? "w-0 opacity-0 pointer-events-none" : "w-[320px] opacity-100"}`}>
+        <div className={`dashboard-right-bar transition-all duration-300 ${effectiveViewMode !== "dashboard" ? "w-0 opacity-0 pointer-events-none" : "w-[320px] opacity-100"}`}>
           <div data-tour="dashboard-hardware-specs">
             <HardwareSpecsCard
               isLoading={isLoading}

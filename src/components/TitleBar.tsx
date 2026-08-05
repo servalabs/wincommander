@@ -28,6 +28,12 @@ function openPalette() {
   window.dispatchEvent(new CustomEvent("open-command-palette"));
 }
 
+type DashboardView = "dashboard" | "risk" | "products";
+
+function openDashboardView(view: DashboardView) {
+  window.dispatchEvent(new CustomEvent("navigate-dashboard-view", { detail: view }));
+}
+
 interface TitleBarProps {
   activePanel: PanelId;
 }
@@ -188,13 +194,28 @@ function TitleBar({ activePanel }: TitleBarProps) {
         onClick={openPalette}
         data-tauri-drag-region={false}
         data-tour="search"
-        className="absolute left-1/2 top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-[var(--text-mute)] transition-colors duration-150 hover:border-[var(--border-strong)] hover:text-[var(--text-dim)]"
+        className={`absolute top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-[var(--text-mute)] transition-colors duration-150 hover:border-[var(--border-strong)] hover:text-[var(--text-dim)] ${activePanel === "dashboard" ? "left-[calc(50%-160px)]" : "left-1/2"}`}
         title="Search settings, files & actions"
       >
         <Icon icon="search" size={14} />
         <span className="text-[12.5px]">Search settings &amp; tools</span>
         <span className="ml-2 rounded-[var(--r-sm)] border border-[var(--border)] bg-[var(--surface-3)] px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-mute)]">⌘K</span>
       </button>
+
+      {activePanel === "dashboard" && authMode !== "decoy" && (
+        <div
+          className="absolute left-[calc(50%+10px)] top-1/2 z-10 flex -translate-y-1/2 items-center gap-1"
+          data-tauri-drag-region={false}
+          aria-label="Dashboard views"
+        >
+          <button type="button" onClick={() => openDashboardView("risk")} className="flex items-center gap-1 rounded-[var(--r-sm)] px-2 py-1.5 text-[11px] font-semibold text-[var(--text-mute)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text)]" title="Risk Matrix">
+            <Icon icon="shield" size={13} /><span>Risk Matrix</span>
+          </button>
+          <button type="button" onClick={() => openDashboardView("products")} className="flex items-center gap-1 rounded-[var(--r-sm)] px-2 py-1.5 text-[11px] font-semibold text-[var(--text-mute)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text)]" title="More Products">
+            <Icon icon="clean" size={13} /><span>More Products</span>
+          </button>
+        </div>
+      )}
 
       {/* ── Posture pill ── */}
       <div

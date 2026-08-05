@@ -845,6 +845,12 @@ function AppContent() {
     if (moduleId && !isModuleEnabled(appSettings?.app?.modules, moduleId) && !isTourActive()) {
       return;
     }
+    // Sidebar Dashboard always returns to the dashboard overview rather than
+    // leaving a previously selected Risk Matrix/Product showcase on screen.
+    if (panel === "dashboard") {
+      window.sessionStorage.setItem("wincommander.dashboard-view", "dashboard");
+      window.dispatchEvent(new CustomEvent("dashboard-view", { detail: "dashboard" }));
+    }
     if (panel === activePanel) {
       window.dispatchEvent(new Event("panel-scroll-top"));
       return;
@@ -866,6 +872,24 @@ function AppContent() {
     window.addEventListener('navigate-panel', handleNavigation as EventListener);
     return () => window.removeEventListener('navigate-panel', handleNavigation as EventListener);
   }, [handlePanelChange]);
+
+  // Title-bar shortcuts select a specific dashboard destination. Persist the
+  // choice before navigation so it survives the Dashboard component mounting.
+  useEffect(() => {
+    const handleDashboardViewNavigation = (event: CustomEvent<"dashboard" | "risk" | "products">) => {
+      const view = event.detail;
+      if (view !== "dashboard" && view !== "risk" && view !== "products") return;
+      window.sessionStorage.setItem("wincommander.dashboard-view", view);
+      if (activePanel === "dashboard") {
+        window.dispatchEvent(new CustomEvent("dashboard-view", { detail: view }));
+        return;
+      }
+      setActivePanel("dashboard");
+      patchAppSettings({ app: { lastPanel: "dashboard" } }).catch(() => { });
+    };
+    window.addEventListener("navigate-dashboard-view", handleDashboardViewNavigation as EventListener);
+    return () => window.removeEventListener("navigate-dashboard-view", handleDashboardViewNavigation as EventListener);
+  }, [activePanel, patchAppSettings]);
 
   // KT: Sidebar hover prefetch — silently pre-fetches data when user hovers a nav item.
   // 300ms debounce (handled in Sidebar) prevents spam on quick mouse passes.
