@@ -300,15 +300,28 @@ pub(crate) fn force_window_foreground(window: &tauri::WebviewWindow) {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
-        ShowWindow, SW_RESTORE,
+        SetWindowPos, ShowWindowAsync, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+        SW_RESTORE,
     };
     let Ok(raw_hwnd) = window.hwnd() else { return };
     let target: HWND = raw_hwnd.0 as HWND;
     unsafe {
-        // Tray clicks must restore a minimized window as well as show a hidden
-        // one. SW_SHOW leaves an iconic window minimized, which made the tray
-        // appear unresponsive after a minimize-to-tray session.
-        ShowWindow(target, SW_RESTORE);
+        // Do not use the synchronous ShowWindow from a tray callback. At logon
+        // Explorer and the app can be on different input queues; ShowWindow can
+        // wait on the shell while the shell is waiting for this callback to
+        // return. ShowWindowAsync restores a minimized window without that
+        // circular wait, while SetWindowPos gives a never-before-visible
+        // --minimized launch an explicit visible top-level placement.
+        ShowWindowAsync(target, SW_RESTORE);
+        SetWindowPos(
+            target,
+            HWND_TOP,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        );
 
         // Microsoft-documented workaround: a synthetic Alt keystroke resets
         // the foreground-window lock for the current input desktop, so any
@@ -387,13 +400,8 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
         let _ = window.set_skip_taskbar(false);
         let _ = window.unminimize();
         let _ = window.show();
-        // KT: tao caches WindowFlags::VISIBLE and only ever writes that cache from
-        // set_visible — it is never re-synced from Windows, and apply_diff
-        // early-returns when the cached flag already matches the request. Our own
-        // force_window_foreground calls raw ShowWindow(SW_SHOW), so the cache can
-        // drift to "visible" while the window is actually hidden, and show() then
-        // emits no ShowWindow at all. A hide()→show() pair forces a real flag
-        // transition when the OS disagrees with the cache.
+        // A hide/show transition forces a new native visibility transition if
+        // Windows still reports the HWND hidden after Tauri's show request.
         if !window.is_visible().unwrap_or(false) {
             log_message_src(
                 "warn",
@@ -405,18 +413,23 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
         }
         set_wincommander_window_icon(&window);
         let _ = window.set_focus();
-        // KT: tray callbacks run on the shell message pump.  Foregrounding
-        // synchronously from that callback races WM_SHOWWINDOW and can leave a
-        // live WinCommander process with no reachable UI.  Yield one cycle so
-        // Windows has registered the restored window before the Win32 focus
-        // workaround runs. KT: a plain OS thread, not the Tokio pool — a saturated
-        // pool would strand window activation with the window already on screen.
+        // Tray callbacks run on the shell message pump. Yield before activating
+        // so Windows has registered the restored window. A cold post-logon
+        // WebView2 window can miss the first visibility transition, so retry
+        // only while the native HWND remains hidden; never steal focus later
+        // after the user has moved to another application.
         let window_for_foreground = window.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            force_window_foreground(&window_for_foreground);
-            std::thread::sleep(std::time::Duration::from_millis(150));
-            let _ = window_for_foreground.set_focus();
+            for delay_ms in [50_u64, 250, 800] {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                force_window_foreground(&window_for_foreground);
+                let _ = window_for_foreground.set_focus();
+                if window_for_foreground.is_visible().unwrap_or(true) {
+                    break;
+                }
+                let _ = window_for_foreground.hide();
+                let _ = window_for_foreground.show();
+            }
         });
         // Signal the (authenticated) app was revealed so the frontend re-arms the
         // update prompt — a dismissed-then-reopened window shows it again. Not
