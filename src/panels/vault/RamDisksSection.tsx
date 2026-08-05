@@ -8,6 +8,7 @@ import { useAppState } from "../../context/AppContext";
 import { showSuccess, showError } from "../../utils/toast";
 import type { RamDisk, RamDiskStatus, SystemRamInfo } from "../../hooks/useBackend";
 import type { RamDiskAutostartSettings } from "../../types/settings";
+import { MIN_RAM_DISK_SIZE_MB, normalizeRamDiskSizeMB } from "../../lib/ramDisk";
 import CreateRamDiskDialog from "./CreateRamDiskDialog";
 
 function fmtMB(mb: number): string {
@@ -40,7 +41,7 @@ function RamDisksSection() {
   const { appSettings, patchAppSettings } = useAppState();
   const savedAutostart: RamDiskAutostartSettings = appSettings?.app?.vault?.ramdiskAutostart ?? {};
   const [autostartEnabled, setAutostartEnabled] = useState<boolean>(!!savedAutostart.enabled);
-  const [asSizeMB, setAsSizeMB] = useState<number>(savedAutostart.sizeMB ?? 1024);
+  const [asSizeMB, setAsSizeMB] = useState<number>(normalizeRamDiskSizeMB(savedAutostart.sizeMB));
   const [asLetter, setAsLetter] = useState<string>(savedAutostart.driveLetter ?? "R");
   const [asFs, setAsFs] = useState<"NTFS" | "FAT32" | "exFAT">(savedAutostart.filesystem ?? "NTFS");
   const [asLabel, setAsLabel] = useState<string>(savedAutostart.label ?? "TEMP");
@@ -51,7 +52,7 @@ function RamDisksSection() {
 
   useEffect(() => {
     setAutostartEnabled(!!savedAutostart.enabled);
-    setAsSizeMB(savedAutostart.sizeMB ?? 1024);
+    setAsSizeMB(normalizeRamDiskSizeMB(savedAutostart.sizeMB));
     setAsLetter(savedAutostart.driveLetter ?? "R");
     setAsFs(savedAutostart.filesystem ?? "NTFS");
     setAsLabel(savedAutostart.label ?? "TEMP");
@@ -70,7 +71,7 @@ function RamDisksSection() {
   const saveAutostart = useCallback(async (override?: Partial<RamDiskAutostartSettings>) => {
     const next: RamDiskAutostartSettings = {
       enabled: autostartEnabled,
-      sizeMB: asSizeMB > 0 ? Math.round(asSizeMB) : 1024,
+      sizeMB: normalizeRamDiskSizeMB(asSizeMB),
       driveLetter: asLetter,
       filesystem: asFs,
       label: asLabel || "TEMP",
@@ -200,9 +201,9 @@ function RamDisksSection() {
   const totalUsedMB = disks.reduce((sum, d) => sum + Math.round(d.sizeBytes / (1024 * 1024)), 0);
 
   // Slider bounds for autostart size
-  const sliderMin = 256;
+  const sliderMin = MIN_RAM_DISK_SIZE_MB;
   const sliderMax = sysRam && sysRam.totalMB > 0
-    ? Math.max(1024, Math.round(sysRam.totalMB - 3072))
+    ? Math.max(sliderMin, Math.round(sysRam.totalMB - 3072))
     : 32768;
   const fillPct = sliderMax > sliderMin
     ? Math.max(0, Math.min(100, ((asSizeMB - sliderMin) / (sliderMax - sliderMin)) * 100))
@@ -391,7 +392,7 @@ function RamDisksSection() {
                 style={{ '--fill': `${fillPct.toFixed(1)}%` } as React.CSSProperties}
               />
               <div className="vault-range-limits">
-                <span>256 MB</span>
+                <span>{MIN_RAM_DISK_SIZE_MB} MB</span>
                 <span>{fmtMB(sliderMax)} max</span>
               </div>
             </div>

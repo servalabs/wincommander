@@ -461,8 +461,11 @@ function New-RamDisk {
     if ([string]::IsNullOrWhiteSpace($DriveLetter)) { return @{ status = 'error'; error = 'DriveLetter is required' } }
 
     $sizeInt = 0
-    if (-not [int]::TryParse($SizeMB, [ref]$sizeInt) -or $sizeInt -le 0) {
+    if (-not [int]::TryParse($SizeMB, [ref]$sizeInt)) {
         return @{ status = 'error'; error = "Invalid SizeMB: '$SizeMB'" }
+    }
+    if ($sizeInt -lt 256) {
+        return @{ status = 'error'; error = 'RAM disks must be at least 256 MB' }
     }
 
     # Cap: total RAM minus a 3 GB headroom reserved for Windows itself and

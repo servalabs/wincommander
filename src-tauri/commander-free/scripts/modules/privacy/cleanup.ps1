@@ -931,6 +931,92 @@ function Get-SearchHistoryStatus {
     return @{ disabled = ($v.IsDeviceSearchHistoryEnabled -eq 0) }
 }
 
+# --- PowerShell terminal command history
+# Windows Terminal does not retain command history itself; PSReadLine does. A
+# profile block covers both Windows PowerShell and PowerShell 7 while leaving
+# every user-owned profile line intact when the control is later turned off.
+$script:WcTerminalHistoryStart = '# >>> WinCommander terminal history >>>'
+$script:WcTerminalHistoryEnd = '# <<< WinCommander terminal history <<<'
+
+function Get-WcTerminalHistoryProfiles {
+    $documents = [Environment]::GetFolderPath('MyDocuments')
+    @(
+        (Join-Path $documents 'WindowsPowerShell\profile.ps1'),
+        (Join-Path $documents 'PowerShell\profile.ps1')
+    )
+}
+
+function Get-WcTerminalHistoryBlock {
+    @"
+$script:WcTerminalHistoryStart
+if (Get-Module -ListAvailable -Name PSReadLine) {
+    Import-Module PSReadLine -ErrorAction SilentlyContinue
+    Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction SilentlyContinue
+}
+$script:WcTerminalHistoryEnd
+"@.Trim()
+}
+
+function Test-WcTerminalHistoryProfile {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    try {
+        $content = [System.IO.File]::ReadAllText($Path)
+        return $content.Contains($script:WcTerminalHistoryStart) -and $content.Contains($script:WcTerminalHistoryEnd)
+    }
+    catch { return $false }
+}
+
+function Disable-TerminalHistory {
+    try {
+        $block = Get-WcTerminalHistoryBlock
+        foreach ($profile in Get-WcTerminalHistoryProfiles) {
+            $directory = Split-Path -Parent $profile
+            if (-not (Test-Path -LiteralPath $directory)) {
+                [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+            }
+            if (Test-WcTerminalHistoryProfile -Path $profile) { continue }
+
+            $existing = if (Test-Path -LiteralPath $profile -PathType Leaf) {
+                [System.IO.File]::ReadAllText($profile)
+            } else { '' }
+            $separator = if ([string]::IsNullOrWhiteSpace($existing)) { '' } else { [Environment]::NewLine + [Environment]::NewLine }
+            [System.IO.File]::WriteAllText($profile, $existing + $separator + $block + [Environment]::NewLine)
+        }
+        @{ status = 'disabled' }
+    }
+    catch {
+        @{ error = $true; message = "Failed to disable terminal history: $($_.Exception.Message)" }
+    }
+}
+
+function Enable-TerminalHistory {
+    try {
+        $pattern = '(?ms)^# >>> WinCommander terminal history >>>\r?\n.*?^# <<< WinCommander terminal history <<<\r?\n?'
+        foreach ($profile in Get-WcTerminalHistoryProfiles) {
+            if (-not (Test-Path -LiteralPath $profile -PathType Leaf)) { continue }
+            $existing = [System.IO.File]::ReadAllText($profile)
+            $updated = [regex]::Replace($existing, $pattern, '')
+            if ($updated -eq $existing) { continue }
+            if ([string]::IsNullOrWhiteSpace($updated)) {
+                Remove-Item -LiteralPath $profile -Force
+            } else {
+                [System.IO.File]::WriteAllText($profile, $updated.TrimEnd() + [Environment]::NewLine)
+            }
+        }
+        @{ status = 'enabled' }
+    }
+    catch {
+        @{ error = $true; message = "Failed to enable terminal history: $($_.Exception.Message)" }
+    }
+}
+
+function Get-TerminalHistoryStatus {
+    $profiles = @(Get-WcTerminalHistoryProfiles)
+    $protected = @($profiles | Where-Object { Test-WcTerminalHistoryProfile -Path $_ })
+    @{ disabled = ($protected.Count -eq $profiles.Count); configuredProfiles = $protected.Count; totalProfiles = $profiles.Count }
+}
+
 function Disable-ThumbnailCache {
     $path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
     Set-ItemProperty -Path $path -Name 'DisableThumbnailCache' -Value 1 -Type DWord -Force

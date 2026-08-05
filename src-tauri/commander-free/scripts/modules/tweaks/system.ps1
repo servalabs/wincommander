@@ -533,6 +533,7 @@ function Get-HardeningStatus {
         hideQuickAccessFrequent  = [bool](Get-QuickAccessFrequentStatus).disabled
         hideRunMRU               = [bool](Get-RunMRUStatus).disabled
         disableSearchHistory     = [bool](Get-SearchHistoryStatus).disabled
+        terminalHistoryDisabled  = [bool](Get-TerminalHistoryStatus).disabled
 
         # RDP stability
         rdpKeepAlive    = [bool]$rdpKeepAlive

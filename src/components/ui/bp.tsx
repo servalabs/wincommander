@@ -655,7 +655,7 @@ export function Dialog({
               {icon != null && (
                 <Icon icon={icon} size={16} className="text-[var(--text-dim)]" />
               )}
-              <RDialog.Title className="font-[family-name:var(--font-display)] text-[15px] font-semibold text-[var(--text)] flex-1">
+              <RDialog.Title className="min-w-0 flex-1 break-words font-[family-name:var(--font-display)] text-[15px] font-semibold leading-tight text-[var(--text)]">
                 {title}
               </RDialog.Title>
               {isCloseButtonShown && (

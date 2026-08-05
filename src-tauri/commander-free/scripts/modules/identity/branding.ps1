@@ -34,6 +34,36 @@ function Set-OEMInformation {
     }
 }
 
+# Rename the actual Windows device name. OEMInformation.Model is only cosmetic
+# and does not change the name used by Windows, networking, or ActivityWatch.
+function Rename-ComputerName {
+    param(
+        [string]$NewName
+    )
+
+    Assert-IsAdmin
+    try {
+        $name = $NewName.Trim()
+        if ($name.Length -lt 1 -or $name.Length -gt 15) {
+            return @{ status = 'error'; error = 'PC name must be between 1 and 15 characters.' }
+        }
+        if ($name -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$') {
+            return @{ status = 'error'; error = 'PC name may contain only letters, numbers, and hyphens, and cannot start or end with a hyphen.' }
+        }
+
+        $currentName = [System.Environment]::MachineName
+        if ($name.Equals($currentName, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return @{ status = 'success'; computerName = $currentName; restartRequired = $false; message = 'This PC already has that name.' }
+        }
+
+        Rename-Computer -NewName $name -Force -ErrorAction Stop
+        @{ status = 'success'; computerName = $name; restartRequired = $true; message = 'PC name updated. Restart Windows to finish applying the change.' }
+    }
+    catch {
+        @{ status = 'error'; error = "Failed to rename PC: $($_.Exception.Message)" }
+    }
+}
+
 
 
 # Hide Backend Apps (Tailscale, VeraCrypt, UniGetUI)

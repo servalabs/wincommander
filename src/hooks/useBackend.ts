@@ -444,6 +444,7 @@ export interface HardeningStatus {
   hideQuickAccessFrequent?: boolean;
   hideRunMRU?: boolean;
   disableSearchHistory?: boolean;
+  terminalHistoryDisabled?: boolean;
   internetCommRestricted?: boolean;
   recallSnapshotsDisabled?: boolean;
   transparencyDisabled?: boolean;
@@ -2046,6 +2047,10 @@ export function useBackend() {
         SupportURL: supportUrl,
         SupportProvider: supportProvider,
         Logo: logo || ""
+      }),
+    renameComputer: (computerName: string) =>
+      execute<{ status: string; computerName?: string; restartRequired?: boolean; message?: string; error?: string }>("Rename-ComputerName", {
+        NewName: computerName.trim(),
       }),
     setWinCommanderVisibility: (hidden: boolean) =>
       execute<{ status: string; itemsChanged: number; warnings?: string[] }>("Set-WinCommanderVisibility", { Hidden: hidden }),

@@ -446,6 +446,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                             quickAccessFrequentDisabled: h?.hideQuickAccessFrequent ?? undefined,
                             runMruDisabled: h?.hideRunMRU ?? undefined,
                             searchHistoryDisabled: h?.disableSearchHistory ?? undefined,
+                            terminalHistoryDisabled: h?.terminalHistoryDisabled ?? undefined,
                         },
                         internetCommunication: {
                             restrictedEnabled: h?.internetCommRestricted ?? null,

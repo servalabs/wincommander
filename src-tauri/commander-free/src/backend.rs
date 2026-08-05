@@ -361,8 +361,8 @@ pub fn register_file_search_commands() {
 }
 
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
 use sha2::{Digest, Sha256};
 
@@ -1664,6 +1664,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Get-AppBranding" => Some("identity/branding"),
         "Set-AppBranding" => Some("identity/branding"),
         "Set-OEMInformation" => Some("identity/branding"),
+        "Rename-ComputerName" => Some("identity/branding"),
         "Hide-BackendApps" => Some("dependencies/dependencies"),
         "Set-WinCommanderVisibility" => Some("dependencies/dependencies"),
         "Set-BackendAppsVisibility" => Some("dependencies/dependencies"),
@@ -1798,6 +1799,9 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         | "Get-QuickAccessFrequentStatus" => Some("privacy/cleanup"),
         "Disable-RunMRU" | "Enable-RunMRU" | "Get-RunMRUStatus" => Some("privacy/cleanup"),
         "Disable-SearchHistory" | "Enable-SearchHistory" | "Get-SearchHistoryStatus" => {
+            Some("privacy/cleanup")
+        }
+        "Disable-TerminalHistory" | "Enable-TerminalHistory" | "Get-TerminalHistoryStatus" => {
             Some("privacy/cleanup")
         }
         "Enable-RecentFilesTracking" => Some("privacy/cleanup"),
@@ -2412,6 +2416,7 @@ pub fn list_all_commands() -> Vec<String> {
         "Get-AppBranding",
         "Set-AppBranding",
         "Set-OEMInformation",
+        "Rename-ComputerName",
         "Get-ActivationStatus",
         "Get-DependencyStatus",
         "Install-Dependency",
@@ -3042,6 +3047,12 @@ fn get_settings_sync_patch(
         }
         "Enable-SearchHistory" => {
             Some(json!({"privacy":{"tracking":{"searchHistoryDisabled": false}}}))
+        }
+        "Disable-TerminalHistory" => {
+            Some(json!({"privacy":{"tracking":{"terminalHistoryDisabled": true}}}))
+        }
+        "Enable-TerminalHistory" => {
+            Some(json!({"privacy":{"tracking":{"terminalHistoryDisabled": false}}}))
         }
 
         // ── Privacy: Internet Communication (new) ────────────────────
@@ -4920,7 +4931,7 @@ pub async fn run_bleachbit_clean(
 // skipped. System Cleaner and the app-removal step are special-cased
 // because they're not regular `run_backend_script` commands.
 
-use crate::action_steps::{DestructGroup, DestructStepDef, DESTRUCT_STEPS};
+use crate::action_steps::{DESTRUCT_STEPS, DestructGroup, DestructStepDef};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DestructStep {
@@ -6550,10 +6561,12 @@ mod es_query_tests {
 
     #[test]
     fn ordinary_query_tokens_pass() {
-        assert!(validate_es_tokens(&tokenize_es_query(
-            "folder: ext:md;rs size:>100mb !ext:dll a|b"
-        ))
-        .is_ok());
+        assert!(
+            validate_es_tokens(&tokenize_es_query(
+                "folder: ext:md;rs size:>100mb !ext:dll a|b"
+            ))
+            .is_ok()
+        );
     }
 
     // ── Sort allowlist ──

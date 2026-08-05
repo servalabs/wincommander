@@ -857,6 +857,8 @@ export interface TrackingSettings {
   runMruDisabled: boolean | null;
   /** Windows Search box "recent searches" disabled (HKCU IsDeviceSearchHistoryEnabled=0) */
   searchHistoryDisabled: boolean | null;
+  /** PSReadLine persistence disabled in Windows PowerShell and PowerShell 7 profiles. */
+  terminalHistoryDisabled: boolean | null;
 }
 
 export interface LockScreenSettings {
@@ -1280,8 +1282,7 @@ export interface IdentitySettings {
   riskMatrixEnabled: boolean | null;
   /** When true, the Dashboard More Products view is available. Set from the
    *  Help & Setup start step or the Settings "Product Showcase" switch. Not
-   *  Pro-gated — the flag alone controls availability; density gating
-   *  still applies in the dashboard view switch. */
+   *  Pro-gated — the flag controls availability. */
   moreProductsEnabled: boolean | null;
   /** List of backend app IDs that the user wants to hide. */
   hideBackendAppsList?: string[];

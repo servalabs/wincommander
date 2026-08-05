@@ -24,6 +24,7 @@ import useEntitlements from "../hooks/useEntitlements";
 import { isModuleEnabled } from "../types/modules";
 import { showWarning, showError, showSuccess } from "../utils/toast";
 import { recordEvidence } from "../lib/evidence";
+import { normalizeRamDiskSizeMB } from "../lib/ramDisk";
 import useAutoHeal from "../hooks/useAutoHeal";
 import { getFleetStatus } from "../hooks/fleetStatus";
 import {
@@ -520,8 +521,9 @@ export default function BackgroundPollers({
           console.log(`[BackgroundPollers] RAM disk autostart skipped — ${letter}: drive letter is already occupied`);
           return;
         }
+        const sizeMB = normalizeRamDiskSizeMB(cfg.sizeMB);
         const r = await createRamDisk({
-          SizeMB: cfg.sizeMB ?? 1024,
+          SizeMB: sizeMB,
           DriveLetter: letter,
           Filesystem: cfg.filesystem ?? 'NTFS',
           Label: cfg.label ?? 'TEMP',
@@ -529,7 +531,7 @@ export default function BackgroundPollers({
           Quick: true,
         });
         if (r?.success) {
-          showSuccess(`RAM disk auto-started at ${letter}: (${cfg.sizeMB ?? 1024} MB).`);
+          showSuccess(`RAM disk auto-started at ${letter}: (${sizeMB} MB).`);
         } else {
           // RAM-disk mount result → Notifications tab, not System Alerts.
           showError((r?.error as string | undefined) || `RAM disk autostart failed at ${letter}:.`, undefined, { kind: "notification" });

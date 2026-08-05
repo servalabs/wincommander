@@ -8,7 +8,7 @@ import { showError, showSuccess } from "../../utils/toast";
 
 export default function BrandingLicensingSection() {
     const { appSettings, patchAppSettings, refreshHardening } = useAppState();
-    const { setOEMInformation, setAppBranding } = useBackend();
+    const { setOEMInformation, setAppBranding, renameComputer } = useBackend();
 
     const [computerName, setComputerNameInput] = useState("SovereignOS");
     const [manufacturer, setManufacturer] = useState("ServaLabs");
@@ -56,9 +56,19 @@ export default function BrandingLicensingSection() {
 
     const handleRename = async () => {
         await runWithLoading("rename", async () => {
-            const result = await setOEMInformation(computerName, manufacturer, supportUrl, supportProvider, logoPath);
+            const pcName = computerName.trim();
+            const renameResult = await renameComputer(pcName);
+            const renameData = renameResult.data;
+            if (!renameResult.success || renameData?.status === "error") {
+                showError(renameResult.error || renameData?.error || "Failed to rename this PC.");
+                return;
+            }
+
+            const result = await setOEMInformation(pcName, manufacturer, supportUrl, supportProvider, logoPath);
             if (result.success && result.data) {
-                showSuccess("OEM Information updated successfully!");
+                showSuccess(renameData?.restartRequired
+                    ? `PC renamed to ${pcName}. Restart Windows to finish applying the change.`
+                    : (renameData?.message || "PC name and OEM information updated successfully!"));
                 await refreshHardening();
                 await patchAppSettings({
                     ideal: {
@@ -68,7 +78,7 @@ export default function BrandingLicensingSection() {
                     },
                 }).catch(() => {});
             } else if (!result.success) {
-                showError(result.error || "Failed to update OEM information.");
+                showError(result.error || "PC renamed, but failed to update OEM information.");
             }
         });
     };
@@ -97,8 +107,8 @@ export default function BrandingLicensingSection() {
     return (
         <SectionCard title="OS Personalization & App Whitelabeling" icon="id-number">
             <div className="secret-form-grid mb-5">
-                <FormGroup label="OS Model Name" labelFor="os-model" className="compact-form">
-                    <InputGroup id="os-model" placeholder="SovereignOS" value={computerName} onChange={(e) => setComputerNameInput(e.target.value)} />
+                <FormGroup label="PC Name" labelFor="pc-name" className="compact-form">
+                    <InputGroup id="pc-name" placeholder="WORK-LAPTOP" maxLength={15} value={computerName} onChange={(e) => setComputerNameInput(e.target.value)} />
                 </FormGroup>
                 <FormGroup label="Manufacturer" labelFor="manufacturer" className="compact-form">
                     <InputGroup id="manufacturer" placeholder="ServaLabs" value={manufacturer} onChange={(e) => setManufacturer(e.target.value)} />
@@ -128,7 +138,7 @@ export default function BrandingLicensingSection() {
                 />
             </FormGroup>
             <div className="flex justify-end">
-                <Button text="Apply OEM Branding" icon="id-number" onClick={handleRename} loading={loadingMap.rename} className="compact-action-btn" />
+                <Button text="Apply PC Name & OEM Branding" icon="id-number" onClick={handleRename} loading={loadingMap.rename} className="compact-action-btn" />
             </div>
 
             <div className="sec-divider" />

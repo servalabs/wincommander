@@ -185,9 +185,42 @@
   margin: 4px 0;
 }
 
+/* The editor is opened from a compact card and is often used on small
+   laptop/tablet screens. Keep the dialog inside the viewport, let its long
+   title wrap, and give the form a usable one-column layout before anything
+   can be clipped by the dialog's GPU clipping boundary. */
+.ramdisk-autostart-dialog {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+}
+
+.ramdisk-autostart-dialog > :first-child {
+  min-width: 0;
+}
+
 @media (max-width: 520px) {
+  .ramdisk-autostart-form.ramdisk-autostart-form--modal {
+    gap: 14px;
+    padding: 16px;
+  }
+
   .ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-form-row {
     grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-footer {
+    align-items: stretch;
+  }
+
+  .ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-footer > button {
+    width: 100%;
+  }
+
+  .ramdisk-autostart-form.ramdisk-autostart-form--modal .vault-range-limits {
+    flex-wrap: wrap;
+    gap: 4px 12px;
   }
 }
 

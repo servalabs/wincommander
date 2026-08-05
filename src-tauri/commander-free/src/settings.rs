@@ -1152,6 +1152,8 @@ pub struct TrackingSettings {
     pub run_mru_disabled: Option<bool>,
     /// Windows Search box "recent searches" disabled (HKCU IsDeviceSearchHistoryEnabled=0)
     pub search_history_disabled: Option<bool>,
+    /// PSReadLine persistence disabled in Windows PowerShell and PowerShell 7 profiles
+    pub terminal_history_disabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -2867,6 +2869,8 @@ pub fn get_convergence_command(path: &str, desired: bool) -> Option<&'static str
         ("privacy.tracking.runMruDisabled", false) => Some("Enable-RunMRU"),
         ("privacy.tracking.searchHistoryDisabled", true) => Some("Disable-SearchHistory"),
         ("privacy.tracking.searchHistoryDisabled", false) => Some("Enable-SearchHistory"),
+        ("privacy.tracking.terminalHistoryDisabled", true) => Some("Disable-TerminalHistory"),
+        ("privacy.tracking.terminalHistoryDisabled", false) => Some("Enable-TerminalHistory"),
 
         // ── Privacy: Internet Communication (new) ────────────────────
         ("privacy.internetCommunication.restrictedEnabled", true) => {

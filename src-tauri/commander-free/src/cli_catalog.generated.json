@@ -2116,6 +2116,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Disable\u002dTerminalHistory",
+      "name": "Disable\u002dTerminalHistory",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/privacy.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Disable\u002dThumbnailCache",
       "name": "Disable\u002dThumbnailCache",
       "transport": "backend\u002dscript",
@@ -3739,6 +3749,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Enable\u002dTerminalHistory",
+      "name": "Enable\u002dTerminalHistory",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/privacy.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Enable\u002dThumbnailCache",
       "name": "Enable\u002dThumbnailCache",
       "transport": "backend\u002dscript",
@@ -5180,6 +5200,16 @@
       ]
     },
     {
+      "id": "backend:Get\u002dTerminalHistoryStatus",
+      "name": "Get\u002dTerminalHistoryStatus",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/privacy.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Get\u002dThumbnailCacheInfo",
       "name": "Get\u002dThumbnailCacheInfo",
       "transport": "backend\u002dscript",
@@ -6025,6 +6055,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Rename\u002dComputerName",
+      "name": "Rename\u002dComputerName",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Reset\u002dFeedbackFrequency",
       "name": "Reset\u002dFeedbackFrequency",
       "transport": "backend\u002dscript",
@@ -6729,6 +6767,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:activity_watch_request",
+      "name": "activity_watch_request",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/activityWatchIpc.ts"
       ]
     },
     {
@@ -8725,8 +8773,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/components/shared/EmbeddedWebView.tsx",
-        "src/panels/productivity/index.tsx"
+        "src/components/shared/EmbeddedWebView.tsx"
       ]
     },
     {

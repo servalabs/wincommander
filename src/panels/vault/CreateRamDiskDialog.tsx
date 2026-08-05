@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import useBackend from "../../hooks/useBackend";
 import { useTheme } from "../../context/ThemeContext";
 import { showError, showSuccess } from "../../utils/toast";
+import { MIN_RAM_DISK_SIZE_MB, normalizeRamDiskSizeMB } from "../../lib/ramDisk";
 
 interface Props {
   isOpen: boolean;
@@ -28,7 +29,7 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
   const { theme } = useTheme();
   const { createRamDisk, getAvailableDriveLetters } = useBackend();
 
-  const [sizeMB, setSizeMB] = useState(1024);
+  const [sizeMB, setSizeMB] = useState(MIN_RAM_DISK_SIZE_MB);
   const [letter, setLetter] = useState("R");
   const [letters, setLetters] = useState<string[]>([]);
   const [filesystem, setFilesystem] = useState<Filesystem>("NTFS");
@@ -38,15 +39,15 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
   const [creating, setCreating] = useState(false);
 
   const ramCapMB = totalRamMB > 0 ? Math.max(64, totalRamMB - HEADROOM_MB) : 0;
-  const sliderMin = 256;
-  const sliderMax = ramCapMB > 0 ? Math.max(1024, ramCapMB) : 32768;
+  const sliderMin = MIN_RAM_DISK_SIZE_MB;
+  const sliderMax = ramCapMB > 0 ? Math.max(sliderMin, ramCapMB) : 32768;
   const overCap = ramCapMB > 0 && sizeMB > ramCapMB;
   const fillPct = sliderMax > sliderMin
     ? Math.max(0, Math.min(100, ((sizeMB - sliderMin) / (sliderMax - sliderMin)) * 100))
     : 0;
 
   const reset = useCallback(() => {
-    setSizeMB(1024);
+    setSizeMB(MIN_RAM_DISK_SIZE_MB);
     setLetter("R");
     setFilesystem("NTFS");
     setLabel("TEMP");
@@ -74,14 +75,14 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
   }, [isOpen, getAvailableDriveLetters, reset]);
 
   const handleCreate = async () => {
-    if (sizeMB <= 0) {
-      showError("Select a valid size.");
+    if (sizeMB < MIN_RAM_DISK_SIZE_MB) {
+      showError(`RAM disks must be at least ${MIN_RAM_DISK_SIZE_MB} MB.`);
       return;
     }
     setCreating(true);
     try {
       const r = await createRamDisk({
-        SizeMB: sizeMB,
+        SizeMB: normalizeRamDiskSizeMB(sizeMB),
         DriveLetter: letter,
         Filesystem: filesystem,
         Label: label || "TEMP",
@@ -134,7 +135,7 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
             style={{ '--fill': `${fillPct.toFixed(1)}%` } as React.CSSProperties}
           />
           <div className="vault-range-limits">
-            <span>256 MB</span>
+            <span>{MIN_RAM_DISK_SIZE_MB} MB</span>
             {totalRamMB > 0 ? (
               <span className={overCap ? "vault-range-over-cap" : ""}>
                 {overCap
@@ -193,7 +194,7 @@ function CreateRamDiskDialog({ isOpen, onClose, onCreated, freeRamMB, totalRamMB
           text="CREATE"
           onClick={handleCreate}
           loading={creating}
-          disabled={sizeMB <= 0 || overCap || creating}
+          disabled={sizeMB < MIN_RAM_DISK_SIZE_MB || overCap || creating}
           className="modal-primary-btn"
         />
       </div>

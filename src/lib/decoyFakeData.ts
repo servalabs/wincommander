@@ -249,6 +249,7 @@ export const DECOY_APP_SETTINGS: AppSettings = {
         quickAccessFrequentDisabled: null,
         runMruDisabled: null,
         searchHistoryDisabled: null,
+        terminalHistoryDisabled: null,
       },
       lockscreen: { privacyDisabled: null },
       appCapabilities: {
@@ -570,6 +571,7 @@ export const DECOY_APP_SETTINGS: AppSettings = {
         quickAccessFrequentDisabled: null,
         runMruDisabled: null,
         searchHistoryDisabled: null,
+        terminalHistoryDisabled: null,
       },
       lockscreen: { privacyDisabled: null },
       appCapabilities: {
