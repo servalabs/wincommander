@@ -416,30 +416,7 @@ export function Switch({
 // Checkbox
 // ───────────────────────────────────────────────────────────────────────────
 
-// CheckDrawSvg — SVG check that "draws in" via stroke-dashoffset animation.
-// Remounting this element (via key change) replays the animation on re-check.
-// wc-no-motion collapses animation-duration to 0.01ms (v2-theme.css rule),
-// so the mark appears instantly under reduced motion — no JS branch needed.
-//
-// The keyframe lives here (not in v2-theme.css) because bp.tsx is the only
-// consumer of wc-check-draw; co-locating avoids an orphan CSS rule.
-const CHECK_KEYFRAME = `@keyframes wc-check-draw{to{stroke-dashoffset:0}}`;
 const CHECK_PATH = "M2 6 L5 9 L10 3"; // fits a 12×12 viewBox
-const CHECK_PATH_LEN = 11; // approximate stroke length for dasharray
-
-/** Injects the wc-check-draw keyframe once into the document head. */
-function useCheckKeyframe() {
-  React.useEffect(() => {
-    const id = "wc-check-draw-style";
-    if (document.getElementById(id)) return;
-    const el = document.createElement("style");
-    el.id = id;
-    el.textContent = CHECK_KEYFRAME;
-    document.head.appendChild(el);
-    // No cleanup — the keyframe is app-global and tiny; leaving it avoids
-    // re-injection cost when Checkbox mounts/unmounts frequently.
-  }, []);
-}
 
 function CheckDrawSvg() {
   return (
@@ -454,15 +431,9 @@ function CheckDrawSvg() {
       <path
         d={CHECK_PATH}
         stroke="currentColor"
-        strokeWidth={1.75}
+        strokeWidth={2.25}
         strokeLinecap="round"
         strokeLinejoin="round"
-        style={{
-          strokeDasharray: CHECK_PATH_LEN,
-          // Start fully hidden; the keyframe animates offset→0 to draw it in.
-          strokeDashoffset: CHECK_PATH_LEN,
-          animation: `wc-check-draw var(--dur-fast, ${DURATION.fast}ms) var(--ease) forwards`,
-        }}
       />
     </svg>
   );
@@ -489,8 +460,6 @@ export function CheckboxControl({
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
   ariaLabel?: string;
 }) {
-  useCheckKeyframe();
-
   const checkedState: CheckboxPrimitive.CheckedState | undefined =
     indeterminate ? "indeterminate" : checked;
 
