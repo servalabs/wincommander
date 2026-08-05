@@ -1,7 +1,7 @@
 import { Component, ErrorInfo, ReactNode } from "react";
 import { NonIdealState, Button } from "@/components/ui/bp";
 import { logRecord } from "../lib/logger";
-import { isViteHmrRuntimeError } from "../lib/panelLoading";
+import { isStalePanelLoadError } from "../lib/panelLoading";
 
 const AUTO_RECOVERY_KEY = "wc:panel-auto-recovery";
 const AUTO_RECOVERY_WINDOW_MS = 60_000;
@@ -53,7 +53,12 @@ export default class PanelErrorBoundary extends Component<Props, State> {
       `[PanelErrorBoundary${this.props.panelId ? ":" + this.props.panelId : ""}] [${referenceId}] ${error.message}\n${error.stack}\n${info.componentStack}`,
     );
     this.setState({ componentStack: info.componentStack ?? "", referenceId });
-    if (isViteHmrRuntimeError(error)) this.recoverStaleViteRuntime();
+    // KT: a rejected dynamic import is cached by the browser module map, so
+    // recreating React.lazy cannot recover after Vite restarts or briefly
+    // fails to transform a module. A guarded document reload gets a fresh map.
+    if (isStalePanelLoadError(error)) {
+      this.recoverStaleViteRuntime();
+    }
   }
 
   componentDidUpdate(prev: Props) {

@@ -5,7 +5,7 @@ import useBackend from "../../../hooks/useBackend";
 import { useAppState } from "../../../context/AppContext";
 import { beginOperation, runOperation } from "../../../context/OperationContext";
 import { claimFreeAppUpdates, clearAppUpdatesQueued, isAppUpdateQueued } from "../../../lib/appUpdateQueue";
-import { releasePackageOperation, tryAcquirePackageOperation } from "../../../lib/packageOperationLock";
+import { releasePackageOperation, tryAcquirePackageOperation, waitForPackageOperation } from "../../../lib/packageOperationLock";
 import { showWarning, showError, showSuccess } from "../../../utils/toast";
 import AppIcon from "./AppIcon";
 import { cn } from "../../../lib/utils";
@@ -618,22 +618,16 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       return;
     }
 
-    // A DIFFERENT package-manager surface (Update All / Update Selected) holds
-    // the lock. That work isn't ours to append to, so this one really does have
-    // to wait — roll the enqueue back rather than leaving ids stuck "installing".
-    if (!tryAcquirePackageOperation()) {
-      showWarning("Another package-manager operation is already running.");
-      uniqueIds.forEach(id => coveredIdsRef.current.delete(id));
-      pendingInstallRef.current = pendingInstallRef.current.filter(id => !uniqueIds.includes(id));
-      setInstallingIds(prev => {
-        const next = new Set(prev);
-        uniqueIds.forEach(id => next.delete(id));
-        return next;
-      });
-      return;
-    }
-
+    // A different package operation owns the manager (Update All, selected
+    // updates, or a package scan). Keep this install job in the global FIFO
+    // instead of rejecting it: its worker will begin as soon as that operation
+    // releases the shared lock.
+    const startsImmediately = tryAcquirePackageOperation();
     installWorkerRef.current = true;
+    if (!startsImmediately) {
+      showSuccess(`Queued ${uniqueIds.length} app${uniqueIds.length === 1 ? "" : "s"}; installation will start after the current package operation.`);
+      await waitForPackageOperation();
+    }
     const op = beginOperation("Installing apps", { accent: 'blue' });
     try {
       // ── Pre-flight (sequential) — package manager must be present

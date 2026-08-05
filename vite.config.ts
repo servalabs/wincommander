@@ -4,12 +4,24 @@ import tailwindcss from "@tailwindcss/vite";
 import fs from "node:fs";
 import path from "path";
 
-const tauriDevHost = process.env.TAURI_DEV_HOST;
-const host = tauriDevHost || "localhost";
-// Runtime artwork is supplied by the pinned `assets` submodule. Production
-// builds and local development deliberately use the same source tree.
-const bundledAssetsRoot = path.resolve(__dirname, "../assets");
-const localAssetsRoot = path.resolve(__dirname, "./assets");
+// Tauri injects TAURI_DEV_HOST=localhost for ordinary desktop development.
+// Do not let that hostname choose the bind address: WebView2 can resolve
+// localhost differently between the document and a later module fetch. Remote
+// device development still supplies a non-loopback host and keeps its HMR
+// configuration below.
+const requestedTauriDevHost = process.env.TAURI_DEV_HOST;
+const tauriDevHost = requestedTauriDevHost
+  && !["localhost", "127.0.0.1", "::1"].includes(requestedTauriDevHost)
+  ? requestedTauriDevHost
+  : undefined;
+const host = tauriDevHost || "127.0.0.1";
+// Runtime artwork imported as `/assets/...` is supplied by WinCommander's
+// pinned `assets` submodule. The workspace-level catalogue is kept separate:
+// a few product media imports intentionally reference it through `/@fs/...`.
+// Development must serve each URL from the same source Vite imported, or a
+// same-named icon from the workspace can silently replace the app's asset.
+const appAssetsRoot = path.resolve(__dirname, "./assets");
+const workspaceAssetsRoot = path.resolve(__dirname, "../assets");
 
 const assetContentTypes: Record<string, string> = {
   ".avif": "image/avif",
@@ -17,15 +29,17 @@ const assetContentTypes: Record<string, string> = {
   ".ico": "image/x-icon",
   ".jpeg": "image/jpeg",
   ".jpg": "image/jpeg",
+  ".mp4": "video/mp4",
   ".png": "image/png",
   ".svg": "image/svg+xml",
   ".webp": "image/webp",
+  ".webm": "video/webm",
 };
 
-/** Serves the shared workspace artwork that Vite otherwise treats as an SPA route. */
-function serveSharedAssetsInDevelopment(): Plugin {
+/** Serves WinCommander's imported `/assets` media without shadowing Vite modules. */
+function serveAppAssetsInDevelopment(): Plugin {
   return {
-    name: "wincommander-shared-assets",
+    name: "wincommander-app-assets",
     apply: "serve",
     configureServer(server) {
       server.middlewares.use("/assets", (request, response, next) => {
@@ -38,9 +52,20 @@ function serveSharedAssetsInDevelopment(): Plugin {
         }
 
         const requestedPath = decodeURIComponent(requestUrl.pathname);
-        const filePath = path.resolve(bundledAssetsRoot, `.${requestedPath}`);
-        const relativePath = path.relative(bundledAssetsRoot, filePath);
+        const filePath = path.resolve(appAssetsRoot, `.${requestedPath}`);
+        const relativePath = path.relative(appAssetsRoot, filePath);
         if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+          next();
+          return;
+        }
+
+        // `/assets` also contains source modules such as
+        // components/risk-matrix/index.ts. Only serve known binary media here;
+        // Vite must transform TypeScript/CSS/JSON module requests itself.
+        // Serving an unknown extension as application/octet-stream makes
+        // WebView2 reject it as a module script and leaves the app blank.
+        const contentType = assetContentTypes[path.extname(filePath).toLowerCase()];
+        if (!contentType) {
           next();
           return;
         }
@@ -52,10 +77,7 @@ function serveSharedAssetsInDevelopment(): Plugin {
           }
 
           response.statusCode = 200;
-          response.setHeader(
-            "Content-Type",
-            assetContentTypes[path.extname(filePath).toLowerCase()] ?? "application/octet-stream",
-          );
+          response.setHeader("Content-Type", contentType);
           response.setHeader("Cache-Control", "no-store");
           if (request.method === "HEAD") {
             response.end();
@@ -69,13 +91,13 @@ function serveSharedAssetsInDevelopment(): Plugin {
 }
 
 export default defineConfig(({ command }): UserConfig => ({
-  plugins: [serveSharedAssetsInDevelopment(), ...react(), ...tailwindcss()],
+  plugins: [serveAppAssetsInDevelopment(), ...react(), ...tailwindcss()],
   resolve: {
     alias: [
       { find: "@", replacement: path.resolve(__dirname, "./src") },
       // `@assets` also exposes the local React RiskMatrix component, which
       // resolves its own React dependency through this app's node_modules.
-      { find: "@assets", replacement: localAssetsRoot },
+      { find: "@assets", replacement: appAssetsRoot },
     ],
   },
   // KT: Disable source maps in production to prevent frontend code recovery.
@@ -123,8 +145,8 @@ export default defineConfig(({ command }): UserConfig => ({
     fs: {
       allow: [
         searchForWorkspaceRoot(process.cwd()),
-        localAssetsRoot,
-        bundledAssetsRoot,
+        appAssetsRoot,
+        workspaceAssetsRoot,
       ],
     },
     port: 1420,

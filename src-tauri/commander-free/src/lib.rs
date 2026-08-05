@@ -6,6 +6,7 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 mod action_steps;
+mod activity_watch_autostart;
 mod advisor;
 mod appearance;
 mod argus;
@@ -2086,6 +2087,7 @@ pub fn run() {
 
             // Start the Recent Downloads watcher (Downloads folder → dashboard card).
             dev_startup_trace("starting background services");
+            activity_watch_autostart::init();
             downloads_watcher::init(app.handle());
 
             // Start the network-traffic sampler (emits metrics://network every 1s
@@ -2389,6 +2391,7 @@ pub fn run() {
             update_tray_shield_label,
             set_app_display_label,
             backend::run_backend_script,
+            activity_watch_autostart::activity_watch_request,
             backend::toggle_context_menu,
             backend::get_context_menu_status,
             backend::toggle_scrub_context_menu,

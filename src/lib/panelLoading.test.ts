@@ -3,6 +3,7 @@ import {
   errorMessage,
   importPanelWithRetry,
   isChunkLoadError,
+  isStalePanelLoadError,
   isViteHmrRuntimeError,
 } from "./panelLoading";
 
@@ -21,6 +22,14 @@ describe("panel loading recovery", () => {
       "The requested module 'third-party-package' does not provide an export named 'default'",
     ))).toBe(false);
     expect(isViteHmrRuntimeError(new Error("Cannot read properties of undefined"))).toBe(false);
+  });
+
+  test("reloads only stale panel-loading failures", () => {
+    expect(isStalePanelLoadError(new TypeError(
+      "Failed to fetch dynamically imported module: /src/panels/dashboard/index.tsx",
+    ))).toBe(true);
+    expect(isStalePanelLoadError(new ReferenceError("__vite__updateStyle is not defined"))).toBe(true);
+    expect(isStalePanelLoadError(new Error("Panel render failed"))).toBe(false);
   });
 
   test("retries a transient chunk failure once", async () => {

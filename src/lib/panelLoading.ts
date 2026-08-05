@@ -36,6 +36,11 @@ export function isViteHmrRuntimeError(error: unknown): boolean {
   return VITE_HMR_RUNTIME_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
 
+/** Errors that require a guarded full reload because retrying React.lazy is insufficient. */
+export function isStalePanelLoadError(error: unknown): boolean {
+  return isChunkLoadError(error) || isViteHmrRuntimeError(error);
+}
+
 /**
  * Retry only transient chunk-loading failures. Module evaluation and render
  * errors are deterministic and must reach the panel boundary immediately.

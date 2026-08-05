@@ -7,7 +7,7 @@
 // This component now only handles:
 //   1. Tauri event listeners (shred-requested, tray-shield-toggle-requested)
 //   2. DOM event listeners (apps-install-missing)
-//   3. One-shot: Auto-start productivity tracker if it was enabled (5s delay)
+//   3. Auto-start ActivityWatch when a complete local install is detected
 //   4. Quiet-mode supervisor tick for ActivityWatch headless components
 //
 // REMOVED (moved to useActivePanelPoller + Rust sysinfo):
@@ -118,7 +118,6 @@ export default function BackgroundPollers({
   const { appSettings } = useAppState();
   const { hasPaid } = useEntitlements();
   const modules = appSettings?.app?.modules;
-  const productivityWasEnabled = appSettings?.ideal?.productivity?.trackerEnabled === true;
   const productivityQuietManaged = appSettings?.ideal?.identity?.hideBackendAppsList?.includes("productivityEngine") === true;
   // RAM disk autostart config — user opt-in toggle plus per-disk spec.
   // Off by default; when on, the autostart effect below creates the
@@ -134,7 +133,6 @@ export default function BackgroundPollers({
   // and opened the async-unlisten race that throws the "reading 'handlerId'"
   // rejection. The effect now registers once.
   const modulesRef = useRef(modules);
-  const productivityWasEnabledRef = useRef(productivityWasEnabled);
   const productivityQuietManagedRef = useRef(productivityQuietManaged);
   const ramdiskAutostartRef = useRef(ramdiskAutostart);
   const privacyShieldAutostartRef = useRef(privacyShieldAutostart);
@@ -142,13 +140,12 @@ export default function BackgroundPollers({
   const appSettingsRef = useRef(appSettings);
   useEffect(() => {
     modulesRef.current = modules;
-    productivityWasEnabledRef.current = productivityWasEnabled;
     productivityQuietManagedRef.current = productivityQuietManaged;
     ramdiskAutostartRef.current = ramdiskAutostart;
     privacyShieldAutostartRef.current = privacyShieldAutostart;
     hasPaidRef.current = hasPaid;
     appSettingsRef.current = appSettings;
-  }, [modules, productivityWasEnabled, productivityQuietManaged, ramdiskAutostart, privacyShieldAutostart, hasPaid, appSettings]);
+  }, [modules, productivityQuietManaged, ramdiskAutostart, privacyShieldAutostart, hasPaid, appSettings]);
 
   // Buffers for batching rapid-fire shred-requested events. When a user
   // shift/ctrl-selects N files in Explorer and picks "Shred with
@@ -398,27 +395,28 @@ export default function BackgroundPollers({
       },
     );
 
-    // ── One-shot: Auto-start productivity tracker if it was enabled ─────
-    // If the user had the tracker running before reboot/close, settings will
-    // have productivity.trackerEnabled = true.  The maintenance loop only
-    // keeps an existing process alive — it doesn't launch a new one.
-    // We delay 5s to avoid contention with the rest of the startup storm.
-    // Gate: only start if the productivity module is enabled.
-    const autoStartTimer = setTimeout(async () => {
-      if (!isModuleEnabled(modulesRef.current, 'productivity')) return;
-      if (!productivityWasEnabledRef.current) return;
+    // ── Auto-start a detected ActivityWatch install ─────────────────────
+    // Detection must lead to a usable tracker.  Do not require a stale
+    // trackerEnabled preference from a previous WinCommander session: it is
+    // common for ActivityWatch to be installed separately or to have been
+    // stopped during shutdown.  Retry while the native backend settles so a
+    // startup race cannot leave a detected install permanently idle.
+    const autoStartProductivity = async () => {
       try {
         const status = await getProductivityStatus();
-        if (status.success && status.data && !status.data.running) {
+        if (status.success && status.data?.installed && !status.data.running) {
           const r = await startProductivityTracker();
-          if (r?.success !== false) {
+          if (r?.success === true) {
             showSuccess("Productivity tracker auto-started.");
           }
         }
       } catch {
-        // Best-effort — don't block startup
+        // The scheduled retries below cover a backend still starting up.
       }
-    }, 5000);
+    };
+    const autoStartTimers = [5_000, 15_000, 30_000].map((delay) =>
+      setTimeout(() => { void autoStartProductivity(); }, delay),
+    );
 
     // ── One-shot: workplace monitors on a fleet-enrolled device ──────
     // Monitoring is unconditional once this device is enrolled — the lawful
@@ -583,7 +581,7 @@ export default function BackgroundPollers({
         unlistenTriggerTest, unlistenRemoteAccess, unlistenScreenCapture, unlistenDriverProblem]) {
         p.then(f => { try { f(); } catch { /* already torn down */ } });
       }
-      clearTimeout(autoStartTimer);
+      autoStartTimers.forEach(clearTimeout);
       clearTimeout(workplaceMonitorTimer);
       clearInterval(productivityMaintenanceTimer);
       clearTimeout(ramdiskAutostartTimer);

@@ -42,24 +42,10 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ env.RELEASE_TAG }}
-      # The frontend resolves runtime media and RiskMatrix from this checkout
-      # (`./assets`). Pin every directory that production code references so a
-      # release cannot silently contain empty image/icon maps.
-      - name: Checkout pinned shared build assets
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: servalabs/assets
-          ref: ff5e7829981b5ace5e9de0658b9ad9404d808064
-          path: assets
-          sparse-checkout: |
-            apps
-            components/risk-matrix
-            entities
-            editorial
-            products/contingency
-            products/private-server
-            products/wincommander
-            softwares
+          # Build from the exact assets commit recorded by the version tag.
+          # A hard-coded assets ref can drift from local development and ship
+          # a release with missing runtime logos despite a passing dev build.
+          submodules: recursive
 
       - name: Validate pinned shared build assets
         shell: pwsh
@@ -67,6 +53,7 @@ jobs:
           $checkedOutAssets = Join-Path $env:GITHUB_WORKSPACE "assets"
           $required = @(
             "apps/adguard-home.svg",
+            "apps/android.png",
             "components/risk-matrix/index.ts",
             "entities/rsa-logo.svg",
             "editorial/nsa-prism-slide.png",
@@ -76,7 +63,11 @@ jobs:
             "products/wincommander/Scrub.gif",
             "products/wincommander/Extention.png",
             "products/wincommander/videos/wc-lockdown.mp4",
-            "softwares/firefox.svg"
+            "softwares/firefox.svg",
+            "softwares/glasswire.png",
+            "softwares/lightburn.png",
+            "softwares/coreldraw.png",
+            "softwares/autodesk.png"
           )
 
           foreach ($relativePath in $required) {
@@ -148,7 +139,11 @@ jobs:
             "Scrub-*.gif",
             "Extention-*.png",
             "wc-lockdown-*.mp4",
-            "firefox-*.svg"
+            "firefox-*.svg",
+            "android-*.png",
+            "lightburn-*.png",
+            "coreldraw-*.png",
+            "autodesk-*.png"
           )
 
           foreach ($pattern in $requiredPatterns) {
