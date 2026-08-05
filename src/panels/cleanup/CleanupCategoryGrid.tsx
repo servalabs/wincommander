@@ -10,7 +10,6 @@ import { Button, Icon, Popover, Menu, MenuItem } from "@/components/ui/bp";
 import CleanupTraceCard from "../../components/cleanup/CleanupTraceCard";
 import {
   CLEANUP_USABILITY_TIERS,
-  isLowImpactCategory,
   type CleanupCategory,
   type CleanupUsabilityTier,
 } from "./cleanupCategories";
@@ -54,8 +53,6 @@ export default function CleanupCategoryGrid({
     orderedScanCategories,
     handleCardLoad,
     handleCardClear,
-    handleClearAllTraces,
-    handleClearTier,
     clearAllExcludes,
     setClearAllExcludes,
     availableUsers,
@@ -264,19 +261,7 @@ export default function CleanupCategoryGrid({
     );
   };
   const activeUserCats = userCats.filter((cat) => !isUserClean(cat));
-  const lowImpactFindings = orderedScanCategories.filter(
-    (cat) =>
-      isLowImpactCategory(cat) &&
-      (cardDataMap[cat.id]?.count ?? 0) > 0 &&
-      !clearAllExcludes.has(cat.id),
-  ).length;
   const userCardIds = new Set(userCats.map((cat) => cat.id));
-  const tierClearableCount = orderedScanCategories.filter(
-    (cat) =>
-      cat.usabilityTier === tier &&
-      !cat.actionOnly &&
-      (cardDataMap[cat.id]?.count ?? 0) > 0,
-  ).length;
   const cleanCardPacks = packCleanCards(
     orderedScanCategories.flatMap((cat) => {
       if (cat.usabilityTier !== tier) return [];
@@ -423,20 +408,6 @@ export default function CleanupCategoryGrid({
                   )}
                 ></Popover>
               </div>
-              <Button
-                small
-                minimal
-                icon="trash"
-                text="Clear Low-Impact"
-                intent="danger"
-                disabled={lowImpactFindings === 0 || isInvestigator}
-                onClick={handleClearAllTraces}
-                style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  letterSpacing: "0.5px",
-                }}
-              />
             </div>
           </div>
 
@@ -609,18 +580,6 @@ export default function CleanupCategoryGrid({
             >
               {tierMeta.description}
             </span>
-            {!isLowImpactTab && (
-              <Button
-                small
-                minimal
-                intent="danger"
-                icon="trash"
-                text={`Clear ${tierMeta.label}`}
-                disabled={!isViewingCurrentUser || tierClearableCount === 0 || isInvestigator}
-                onClick={() => void handleClearTier(tier)}
-                style={{ fontSize: 10, whiteSpace: "nowrap" }}
-              />
-            )}
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {activeSysCats.map((cat) => renderCard(cat))}

@@ -416,7 +416,6 @@ function CleanupTabNavigation({
                     small
                     intent="primary"
                     icon={isScanningAll ? undefined : "refresh"}
-                    text={isScanningAll ? "Scanning All..." : "Scan All"}
                     aria-label={isScanningAll ? "Scanning all cleanup categories" : "Scan all cleanup categories"}
                     loading={isScanningAll}
                     disabled={isScanningAll}
@@ -427,14 +426,13 @@ function CleanupTabNavigation({
                         fontSize: 11,
                         fontWeight: 800,
                         letterSpacing: "0.6px",
-                        padding: "6px 14px",
+                        padding: "6px 8px",
                     }}
                 />
                 <Button
                     small
                     intent="danger"
                     icon="trash"
-                    text="Clean All"
                     aria-label="Clear every scanned cleanup category with findings"
                     disabled={isInvestigator || !canClearAll || isScanningAll}
                     onClick={() => void handleClearAllCategories()}

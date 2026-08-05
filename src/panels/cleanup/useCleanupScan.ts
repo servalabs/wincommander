@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { showSuccess, showError } from "../../utils/toast";
 import useBackend from "../../hooks/useBackend";
-import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, CLEANUP_USABILITY_TIERS, type CleanupCategory, type CleanupUsabilityTier } from "./cleanupCategories";
+import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 const getSchedulerCategoryId = (categoryId: string): string =>
@@ -853,19 +853,6 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         }
     };
 
-    const handleClearTier = async (tier: CleanupUsabilityTier, excludedIds = new Set<string>()) => {
-        const tierLabel = tier === 'low-impact'
-            ? 'low-impact traces'
-            : CLEANUP_USABILITY_TIERS.find((item) => item.id === tier)?.label ?? 'this section';
-        await handleClearCategories(
-            orderedScanCategories.filter(cat => cat.usabilityTier === tier),
-            tierLabel,
-            excludedIds,
-        );
-    };
-    // Low impact keeps its existing exclusion picker. Other tabs clear only
-    // their own eligible findings through the shared tier action above.
-    const handleClearAllTraces = async () => handleClearTier('low-impact', clearAllExcludes);
     const handleClearAllCategories = async () =>
         handleClearCategories(orderedScanCategories, 'all cleanup findings', clearAllExcludes);
 
@@ -948,9 +935,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         loadCategoryBatch,
         handleCardLoad,
         handleCardClear,
-        handleClearAllTraces,
         handleClearAllCategories,
-        handleClearTier,
         clearAllExcludes,
         setClearAllExcludes,
         availableUsers,

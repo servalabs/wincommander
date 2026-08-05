@@ -198,9 +198,12 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(scan).toContain("isCategoryBatchScanning");
     expect(panel).toContain("const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];");
     expect(panel).toContain("handleClearAllCategories");
-    expect(panel).toContain('text={isScanningAll ? "Scanning All..." : "Scan All"}');
-    expect(panel).toContain('text="Clean All"');
+    expect(panel).not.toContain('text={isScanningAll ? "Scanning All..." : "Scan All"}');
+    expect(panel).not.toContain('text="Clean All"');
     expect(panel).not.toContain('text={isScanningThisTab ? "Scanning section..." : "Scan section"}');
+    const grid = await read("src/panels/cleanup/CleanupCategoryGrid.tsx");
+    expect(grid).not.toContain('text="Clear Low-Impact"');
+    expect(grid).not.toContain("text={`Clear ${tierMeta.label}`}");
   });
 
   test("the scheduler is a stable non-Radix control with runtime test hooks", async () => {
