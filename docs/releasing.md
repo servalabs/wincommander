@@ -1,33 +1,36 @@
-# R2 release workflow
+# Free GitHub Release workflow
 
-The Free updater reads `https://winupdates.servalabs.com/free/latest.json`.
-Release the signed MSI and its Tauri manifest from the private
-`wincommander-pro` checkout, which uploads the versioned artifact and promotes
-the R2 `free/latest.json` pointer.
+The Free updater reads GitHub Releases directly:
+
+`https://github.com/servalabs/wincommander/releases/latest/download/latest.json`
+
+The protected public release workflow builds and Tauri-signs the MSI, attests
+its provenance, then publishes the MSI, signature, `latest.json`, checksum,
+and SBOM to the versioned GitHub Release. Free does not use R2.
 
 ## Publish an exact version
 
-First commit and push the exact Free and Pro source to their `main` branches.
-The release tool refuses dirty worktrees so the built installer always matches
-the tagged source.
+1. Run **prepare release** in GitHub Actions with the new version. It opens a
+   `release/vX.Y.Z` pull request containing the aligned Free version files.
+2. Merge that PR. The tag workflow creates the protected `vX.Y.Z` tag and
+   invokes the release workflow.
+3. Approve the protected `release` environment. The workflow builds from the
+   tag and publishes the GitHub Release.
 
-From `wincommander-pro`, run:
+The Tauri updater manifest always points to the MSI in the same versioned
+GitHub Release, so the manifest and installer cannot drift.
+
+## Existing Free installations on the legacy R2 endpoint
+
+Installations released before this GitHub endpoint still query
+`/free/latest.json` on R2. After the new GitHub Release is live, run the
+one-time bridge from the private checkout:
 
 ```powershell
-.\tools\release.ps1 -Version 3.2.7 -Variant free -SkipFleet
+.\tools\migrate-free-updater-to-github.ps1 -Version X.Y.Z -Publish
 ```
 
-Use `-Variant both` instead when the matching Pro, Investigator, and Fleet
-artifacts must also be published. The tool updates aligned version metadata,
-builds and Tauri-signs the Free MSI, uploads the MSI/signature/versioned
-manifest to R2, promotes `free/latest.json`, then commits, tags, and pushes the
-release source.
-
-## Required local secrets
-
-The private `wincommander-pro/.env` must provide the R2 credentials and update
-domain, and the release shell must have the Tauri signing key/password. The
-tool validates the signed MSI before it publishes the update pointer.
-
-The public GitHub release workflow is manual-only, so pushing the legacy
-release tag does not publish a second GitHub release.
+It copies only the verified GitHub `latest.json` to the legacy R2 pointer. The
+manifest sends old clients to the signed MSI on GitHub; it never uploads a Free
+installer or signature to R2. Keep the bridge pointer while those versions are
+still supported.
