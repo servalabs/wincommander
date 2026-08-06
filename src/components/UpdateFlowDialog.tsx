@@ -67,7 +67,7 @@ export default function UpdateFlowDialog({ isOpen, onClose, hasPaid, updateAvail
     // consent for the whole Free+Pro update, so the Pro leg installs plainly
     // (no second consent gate) via useUpdateFlow's auto path.
     const [autoConsented, setAutoConsented] = useState(false);
-    const flow = useUpdateFlow(hasPaid, autoConsented);
+    const flow = useUpdateFlow(hasPaid, autoConsented ? true : null);
     const { phase, freeOutcome, freeError, proMismatch, pro, start, retryFree, finishAndRestart, reset, needsRestart } = flow;
     const [consent, setConsent] = useState(false);
 

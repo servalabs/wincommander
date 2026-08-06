@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
-import { Button, Icon } from "@/components/ui/bp";
+import { Button, Icon, Switch } from "@/components/ui/bp";
 import SectionCard from "../shared/SectionCard";
 import { useAppConfirm } from "../shared/AppConfirmDialog";
 import UpdateFlowDialog from "../UpdateFlowDialog";
 import useEntitlements from "../../hooks/useEntitlements";
 import useProInstall from "../../hooks/useProInstall";
 import { showError, showSuccess, showWarning } from "../../utils/toast";
+import { useAppState } from "../../context/AppContext";
 import "./VersionManagementCard.css";
 
 interface FreeUpdateInfo {
@@ -77,6 +78,8 @@ export default function VersionManagementCard() {
     const [freeChecking, setFreeChecking] = useState(false);
     const [updateFlowOpen, setUpdateFlowOpen] = useState(false);
     const { hasPaid } = useEntitlements();
+    const { appSettings, patchAppSettings } = useAppState();
+    const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
 
     const refreshVersions = useCallback(async () => {
         setFreeChecking(true);
@@ -125,6 +128,21 @@ export default function VersionManagementCard() {
             }
         >
             <div className="version-stack">
+                <div className="version-auto-update">
+                    <div>
+                        <div className="version-auto-update__title">Automatically update WinCommander{hasPaid ? " and Pro" : ""}</div>
+                        <div className="version-auto-update__description">
+                            Downloads and installs updates in the background, then restarts WinCommander when Free changes. Pro updates automatically after its one-time Defender approval. Turn this off to review each update first.
+                        </div>
+                    </div>
+                    <Switch
+                        checked={automaticUpdatesEnabled}
+                        onChange={(event) => {
+                            void patchAppSettings({ app: { autoUpdate: event.currentTarget.checked } });
+                        }}
+                        aria-label="Automatically update WinCommander"
+                    />
+                </div>
                 {/* Check/Update/Delete controls stay available inline per-row as a
                     fallback to the combined flow above — e.g. when Pro's release is
                     ahead of the running Free version (see useUpdateFlow's

@@ -71,6 +71,7 @@ import FlowActivityLogger from "./components/FlowActivityLogger";
 import GuideHost from "./components/guide/GuideHost";
 import UpdateFlowDialog from "./components/UpdateFlowDialog";
 import { startUpdaterListener, useUpdater } from "./hooks/updaterStore";
+import useAutomaticUpdate from "./hooks/useAutomaticUpdate";
 import { PANEL_MANIFESTS, type PanelId } from "./types/panels";
 import { getModuleForPanel, isModuleEnabled } from "./types/modules";
 import { setSoundEnabled } from "./utils/sound";
@@ -228,6 +229,8 @@ function AppContent() {
   // lockHiddenPanels) so the borrowed-panel redirect can read lockedPanelIds.
   const appState = useAppState();
   const { productivityStatus, appSettings, patchAppSettings, startupComplete } = appState;
+  const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
+  useAutomaticUpdate(automaticUpdatesEnabled, hasPaid);
 
   const lockHiddenPanels = useCallback(() => {
     setHiddenPanelsUnlocked(false);
@@ -389,6 +392,7 @@ function AppContent() {
   const updateFlowAutoPromptedRef = useRef(false);
   const freeUpdatePromptedRef = useRef(false);
   useEffect(() => {
+    if (automaticUpdatesEnabled) return;
     // Free side: the background scheduler has something to do. This has its OWN
     // guard (checked ABOVE the Pro guard) because the Rust updater has a ~30s
     // initial delay before its first check, while the Pro status/manifest probe
@@ -518,6 +522,7 @@ function AppContent() {
     proInstall.manifestError,
     lastAnnouncedUpdateVersion,
     patchAppSettings,
+    automaticUpdatesEnabled,
   ]);
 
   // RDP idle disconnect (Idle Session Monitor) -- runs globally so the

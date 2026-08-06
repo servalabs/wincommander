@@ -52,7 +52,14 @@ interface DohUpdateInfo {
     date?: string | null;
 }
 
-export function useUpdateFlow(hasPaid: boolean, autoInstallPro = false) {
+/**
+ * `automaticProInstallConsent` controls the Pro leg once it is needed:
+ * - `null`: leave the Pro action to the visible flow.
+ * - `true`: the visible flow has collected Defender consent.
+ * - `false`: background updates may replace an already-approved Pro install,
+ *   but Rust refuses to create a new Defender exclusion.
+ */
+export function useUpdateFlow(hasPaid: boolean, automaticProInstallConsent: boolean | null = null) {
     const updater = useUpdater();
     const pro = useProInstall();
     const { refreshForFreeVersion } = pro;
@@ -162,17 +169,16 @@ export function useUpdateFlow(hasPaid: boolean, autoInstallPro = false) {
         setPhase("pro-step");
     }, [phase, pro.manifest, pro.manifestError, pro.status, targetFreeVersion]);
 
-    // Combined-flow auto path: when the user consented upfront (autoInstallPro),
-    // the Pro leg is non-interactive — fire the install as soon as we reach the
-    // Pro step. The Defender consent is folded into autoInstall() (install(true)).
-    const { autoInstall } = pro;
+    // The visible flow supplies true after consent; the background coordinator
+    // supplies false and can therefore update only an existing approved install.
+    const { install } = pro;
     const proInstallKind = pro.installState.kind;
     useEffect(() => {
         if (phase !== "pro-step") return;
-        if (!autoInstallPro) return;
+        if (automaticProInstallConsent === null) return;
         if (proInstallKind !== "idle") return;
-        void autoInstall();
-    }, [phase, autoInstallPro, proInstallKind, autoInstall]);
+        void install(automaticProInstallConsent);
+    }, [phase, automaticProInstallConsent, proInstallKind, install]);
 
     // Pro step reports success → the combined flow is done. (Rendering never
     // shows renderProInstallStep's own "installed" screen in the embedded

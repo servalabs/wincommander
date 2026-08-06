@@ -387,11 +387,6 @@ export default function useProInstall() {
     }, [snap.manifest, snap.status, snap.defender, snap.manifestError]);
 
     const install = useCallback((consent: boolean) => installPro(consent), []);
-    // Non-interactive install for the combined UpdateFlowDialog: the Defender
-    // exclusion consent is captured upfront by that dialog's confirm screen, so
-    // this folds it straight into install_pro_binary (consent = true). Standalone
-    // callers keep using install(consent) behind their own consent gate.
-    const autoInstall = useCallback(() => installPro(true), []);
     const reset = useCallback(() => resetInstall(), []);
     const refresh = useCallback(async () => {
         await Promise.all([fetchManifest(), refreshStatus(), refreshDefender()]);
@@ -412,7 +407,6 @@ export default function useProInstall() {
         isInstalled: snap.status?.installed ?? false,
         installState: snap.install,
         install,
-        autoInstall,
         reset,
         refresh,
         refreshForFreeVersion,

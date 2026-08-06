@@ -399,6 +399,10 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
     } else {
         let _ = window.set_skip_taskbar(false);
         let _ = window.unminimize();
+        // Tray and peek-hotkey reveals are the primary way a hidden app is
+        // reopened. Match the normal startup experience instead of leaving a
+        // small/restored window behind after an update relaunch.
+        let _ = window.maximize();
         let _ = window.show();
         // A hide/show transition forces a new native visibility transition if
         // Windows still reports the HWND hidden after Tauri's show request.
@@ -445,6 +449,21 @@ pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
             window.is_visible().unwrap_or(false)
         ),
     );
+}
+
+/// Toggle the normal close-to-tray lifecycle from a single tray click.
+/// Delegating the hide branch to `close()` keeps calculator/borrowed-mode
+/// re-locking and tray visibility consistent with the window close button.
+fn toggle_main_window_from_tray(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        log_message_src("warn", "core", "[Tray] main window not found");
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        let _ = window.close();
+    } else {
+        reveal_main_window(app);
+    }
 }
 
 fn set_wincommander_window_icon(window: &tauri::WebviewWindow) {
@@ -1732,26 +1751,20 @@ pub fn run() {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    // A double-click never reports as two Click events on Windows —
-                    // without its own arm, an impatient double-click on the tray icon
-                    // reveals nothing.
-                    let is_reveal_click = matches!(
-                        event,
+                    match event {
                         TrayIconEvent::Click {
                             button: MouseButton::Left,
                             button_state: MouseButtonState::Up,
                             ..
-                        } | TrayIconEvent::DoubleClick {
+                        } => toggle_main_window_from_tray(tray.app_handle()),
+                        // Double-click is deliberately open-only. On Windows it is
+                        // delivered independently from single-click events, so it
+                        // must not turn a successful reveal straight back into hide.
+                        TrayIconEvent::DoubleClick {
                             button: MouseButton::Left,
                             ..
-                        }
-                    );
-                    if is_reveal_click {
-                        // Same reveal path as the "Show" menu — see reveal_main_window:
-                        // the foreground-lock workaround is what makes a cold
-                        // --minimized autostart open on the FIRST click (the bug where
-                        // the tray "does nothing" until you quit and relaunch).
-                        reveal_main_window(tray.app_handle());
+                        } => reveal_main_window(tray.app_handle()),
+                        _ => {}
                     }
                 });
 

@@ -563,6 +563,17 @@ fn parse_bool_lossy(s: &str) -> Option<bool> {
     }
 }
 
+#[cfg(windows)]
+fn defender_exclusion_already_set() -> bool {
+    let pro_bin = pro_install_path()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.display().to_string()))
+        .unwrap_or_default();
+    defender_pref_field("ExclusionPath -join '|'")
+        .map(|joined| joined.split('|').any(|path| path.eq_ignore_ascii_case(&pro_bin)))
+        .unwrap_or(false)
+}
+
 #[tauri::command]
 pub async fn get_defender_status() -> Result<DefenderStatus, String> {
     #[cfg(windows)]
@@ -588,13 +599,7 @@ pub async fn get_defender_status() -> Result<DefenderStatus, String> {
         };
         // ExclusionPath -- a string array. Probe by checking whether the
         // Pro install dir is in the joined output.
-        let pro_bin = pro_install_path()
-            .ok()
-            .and_then(|p| p.parent().map(|parent| parent.display().to_string()))
-            .unwrap_or_default();
-        let exclusion_already_set = defender_pref_field("ExclusionPath -join '|'")
-            .map(|joined| joined.split('|').any(|p| p.eq_ignore_ascii_case(&pro_bin)))
-            .unwrap_or(false);
+        let exclusion_already_set = defender_exclusion_already_set();
         Ok(DefenderStatus {
             tamper_protection: tamper,
             real_time_monitoring: real_time,
@@ -687,7 +692,12 @@ pub async fn install_pro_binary(
     //   "download:..."            -- HTTP fetch failed
     //   "sha256_mismatch:..."     -- byte hash didn't match the manifest
     //   "disk:..."                -- tmp create / write / fsync / rename
-    if !consent_defender_exclusion {
+    #[cfg(windows)]
+    let exclusion_already_set = defender_exclusion_already_set();
+    #[cfg(not(windows))]
+    let exclusion_already_set = false;
+
+    if !consent_defender_exclusion && !exclusion_already_set {
         return Err(
             "consent:Pro install requires explicit consent to add a Defender exclusion. \
              Confirm via the install modal first."
@@ -756,7 +766,9 @@ pub async fn install_pro_binary(
     //    get_defender_status pre-flight, but we tag the error so the
     //    dialog can still highlight the right next step.
     #[cfg(windows)]
-    add_defender_exclusion(true).map_err(|e| format!("defender_exclusion:{}", e))?;
+    if !exclusion_already_set {
+        add_defender_exclusion(true).map_err(|e| format!("defender_exclusion:{}", e))?;
+    }
 
     // 2. Download to a sibling .tmp.
     let tmp_path = install_path.with_extension("exe.tmp");
