@@ -21,6 +21,8 @@
 // "safe" panels (dashboard, tweaks, apps, system-identity).
 import type { PanelId } from "../types/panels";
 
+// "secret" is intentionally absent — it is gated solely by the title-bar
+// 5× brand-click reveal, never by Borrowed Mode (see Sidebar.tsx).
 export const DEFAULT_BORROWED_PANELS = [
   "privacy",
   "network",
@@ -31,7 +33,6 @@ export const DEFAULT_BORROWED_PANELS = [
   "productivity",
   "flows",
   "fleet",
-  "secret",
 ] satisfies PanelId[];
 
 export const DEFAULT_ALWAYS_PANELS = ["productivity", "server-apps", "flows"] satisfies PanelId[];

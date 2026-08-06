@@ -8,11 +8,12 @@
 
 import type { AppSettings, AppInventorySnapshot } from "../types/settings";
 import type { ModuleConfig } from "../types/modules";
+import { newUuidV4 } from "./uuid";
 import pkg from "../../package.json";
 
 // KT: per-session random device ID — stable within one decoy session but never
 // a hardcoded constant shared across installs, which would be trivially linkable.
-const DECOY_DEVICE_ID = crypto.randomUUID();
+const DECOY_DEVICE_ID = newUuidV4();
 
 // A convincing-looking but entirely fabricated hostname for the decoy session.
 const DECOY_HOSTNAME = "DESKTOP-K7MN3PR";

@@ -12,8 +12,14 @@ describe("applyProductAliases", () => {
     const source = await Bun.file("src/assets.ts").text();
     const moduleQueries = source.match(/query: "\?url&wc-module"/g) ?? [];
 
-    expect(moduleQueries).toHaveLength(7);
+    // softwares, entities, apps, editorial + 5 product roots
+    // (contingency, private-phone, private-server, theron, wincommander)
+    expect(moduleQueries).toHaveLength(9);
     expect(source).not.toContain('query: "?url"');
+    // Product media must load from the app's assets submodule, not a
+    // missing workspace sibling at ../../assets (that left the title logo empty).
+    expect(source).toContain('../assets/products/wincommander/**/*');
+    expect(source).not.toContain('../../assets/products/');
   });
 
   test("keeps legacy product keys wired to the renamed asset files", () => {

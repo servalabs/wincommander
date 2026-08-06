@@ -35,6 +35,7 @@ import AppLicensingSection from "./AppLicensingSection";
 import BrandingLicensingSection from "./BrandingLicensingSection";
 import ManagedPolicyBanner from "../../components/shared/ManagedPolicyBanner";
 import { useSecretSessionState } from "./secretSessionState";
+import { DEFAULT_BORROWED_PANELS } from "../../lib/visibilityDefaults";
 import "./index.css";
 import "../privacy/index.css";
 
@@ -471,8 +472,14 @@ function BorrowedModeSection() {
     const handleToggleBorrowed = useCallback(async (next: boolean) => {
         setBusy(true);
         try {
-            const ids = (appSettings?.app?.lockedPanelIds ?? []) as string[];
-            await patchAppSettings({ app: { lockedPanelIds: next ? ids : [] } });
+            // Turning ON must seed a non-empty locked list — borrowed-active is
+            // derived from lockedPanelIds.length > 0. An empty list left the
+            // switch looking "on" for one frame then effectively off.
+            const configured = (appSettings?.app?.lockedPanelIds ?? []) as string[];
+            const ids = next
+                ? (configured.length > 0 ? configured : [...DEFAULT_BORROWED_PANELS])
+                : [];
+            await patchAppSettings({ app: { lockedPanelIds: ids } });
             window.dispatchEvent(new CustomEvent(next ? "hidden-panels-lock" : "hidden-panels-unlock"));
             await refreshSettings();
             showSuccess(next ? "Borrowed mode on — sensitive panels hidden." : "Borrowed mode off — panels restored.");

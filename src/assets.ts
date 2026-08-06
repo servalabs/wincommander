@@ -1,8 +1,11 @@
+import { LOGO_DATA_URL } from "./assets/logoData";
+
 // Single source of truth for bundled asset URLs.
 //
-// Shared runtime assets live in the workspace-level `assets` checkout. Components reference
-// them through the maps below — keyed by file basename — instead of hard-coded
-// paths. Initialize submodules after cloning before building or running the app.
+// Runtime media lives in this repo's `assets/` git submodule (`servalabs/assets`).
+// Components reference it through the maps below — keyed by file basename or
+// product-relative path — instead of hard-coded URLs. After clone:
+//   git submodule update --init assets
 //
 // We use Vite `import.meta.glob` (not static `import` statements like the
 // servalabs.com website) because WinCommander resolves some assets dynamically
@@ -10,9 +13,12 @@
 // category — so we need the whole folder, keyed by name, available as a map.
 //
 // IMPORTANT: `import.meta.glob` does NOT resolve path aliases (`@assets`).
-// The glob patterns below MUST be RELATIVE to this file
-// (`../assets/<folder>/*`). Each match is eagerly resolved to its final
-// fingerprinted URL via `{ eager: true, query: '?url&wc-module', import: 'default' }`.
+// The glob patterns below MUST be RELATIVE to this file and point at the
+// app submodule (`../assets/<folder>/**`). Do NOT use `../../assets` — that
+// resolves to a sibling workspace folder that is often missing, which left
+// `products` / the title-bar logo empty (`undefined` img src).
+// Each match is eagerly resolved to its final fingerprinted URL via
+// `{ eager: true, query: '?url&wc-module', import: 'default' }`.
 // `wc-module` keeps WebView2's cache key distinct from the raw asset URL.
 //
 // KT: `import.meta.glob` is a Vite build-time transform with no Bun runtime
@@ -117,22 +123,29 @@ const softwaresMods = (CAN_LOAD_BROWSER_ASSET_MAPS
   ? import.meta.glob("../assets/softwares/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const entitiesMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../assets/entities/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob("../assets/entities/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const appsMods = (CAN_LOAD_BROWSER_ASSET_MAPS
   ? import.meta.glob("../assets/apps/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const editorialMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../assets/editorial/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob("../assets/editorial/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
+// Product media — same submodule root as softwares/entities (NOT workspace ../../assets).
 const contingencyProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/products/contingency/**/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob("../assets/products/contingency/**/*", { eager: true, query: "?url&wc-module", import: "default" })
+  : EMPTY_ASSET_MODS) as AssetMods;
+const privatePhoneProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
+  ? import.meta.glob("../assets/products/private-phone/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const privateServerProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/products/private-server/**/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob("../assets/products/private-server/**/*", { eager: true, query: "?url&wc-module", import: "default" })
+  : EMPTY_ASSET_MODS) as AssetMods;
+const theronProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
+  ? import.meta.glob("../assets/products/theron/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const winCommanderProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../../assets/products/wincommander/**/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob("../assets/products/wincommander/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 
 // — app icons (svg/png/ico/gif), keyed by full filename incl. extension —
@@ -179,7 +192,9 @@ export const serviceIcons: Record<string, string> = mergeByBasename(
 const productMap = mergeByRelativePath(
   "/products/",
   contingencyProductMods,
+  privatePhoneProductMods,
   privateServerProductMods,
+  theronProductMods,
   winCommanderProductMods,
 );
 export const products: Record<string, string> = applyProductAliases(productMap);
@@ -195,10 +210,12 @@ export const ui: Record<string, string> = mergeByBasename(
   winCommanderProductMods,
 );
 
-// — brand (WinCommander logo, ServaLabs wallpaper) keyed by "<dir>/<file>" —
+// — brand (WinCommander logo) keyed by "<dir>/<file>" —
+// Falls back to the inlined base64 data URL so the title bar never renders
+// with src={undefined} when the products glob is empty (missing submodule).
 export const brand: Record<string, string> = {
-  "wincommander/logo.png": products["wincommander/logo.png"],
+  "wincommander/logo.png": products["wincommander/logo.png"] ?? LOGO_DATA_URL,
 };
 
-/** WinCommander brand logo (was public/Logo.png). */
-export const logo: string = brand["wincommander/logo.png"];
+/** WinCommander brand logo (title bar, native-backend gate, etc.). */
+export const logo: string = brand["wincommander/logo.png"] ?? LOGO_DATA_URL;

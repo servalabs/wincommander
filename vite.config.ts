@@ -16,10 +16,10 @@ const tauriDevHost = requestedTauriDevHost
   : undefined;
 const host = tauriDevHost || "127.0.0.1";
 // Runtime artwork imported as `/assets/...` is supplied by WinCommander's
-// pinned `assets` submodule. The workspace-level catalogue is kept separate:
-// a few product media imports intentionally reference it through `/@fs/...`.
-// Development must serve each URL from the same source Vite imported, or a
-// same-named icon from the workspace can silently replace the app's asset.
+// pinned `assets` submodule (`./assets`). Product media globs in
+// `src/assets.ts` also resolve against this same root (`../assets/...` from
+// `src/`). The optional workspace sibling `../assets` is only allowed for
+// rare `/@fs/...` paths — do not point product globs at it.
 const appAssetsRoot = path.resolve(__dirname, "./assets");
 const workspaceAssetsRoot = path.resolve(__dirname, "../assets");
 

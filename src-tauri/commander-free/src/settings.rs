@@ -1903,6 +1903,19 @@ fn generate_device_id() -> String {
     Uuid::new_v4().to_string()
 }
 
+/// Keep the device identity compatible with Fleet's Postgres-backed routes.
+///
+/// Older/imported settings can contain a blank or legacy non-UUID identifier.
+/// Those values work until Fleet attempts a database-backed operation such as
+/// remote file search or transfer, where `devices.device_id` is a UUID column.
+/// Repair the local identity once while loading settings so every subsequent
+/// enrollment, command, and transfer uses the same durable UUID.
+fn ensure_valid_device_id(settings: &mut AppSettings) {
+    if Uuid::parse_str(&settings.device_id).is_err() {
+        settings.device_id = generate_device_id();
+    }
+}
+
 fn now_iso8601() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
@@ -1967,6 +1980,7 @@ fn parse_and_migrate_json_val(json: serde_json::Value) -> Result<AppSettings, St
     };
     let mut settings: AppSettings = serde_json::from_value(final_json)
         .map_err(|e| format!("Failed to deserialize settings: {e}"))?;
+    ensure_valid_device_id(&mut settings);
     apply_runtime_defaults(&mut settings);
     Ok(settings)
 }
@@ -3056,6 +3070,27 @@ mod tests {
             settings.app.permanently_hidden_panels,
             Some(vec!["productivity".to_string()])
         );
+    }
+
+    #[test]
+    fn invalid_legacy_device_id_is_replaced_with_a_uuid() {
+        let mut raw = serde_json::to_value(create_default_settings()).unwrap();
+        raw["deviceId"] = serde_json::json!("legacy-machine-42");
+
+        let settings = parse_and_migrate_json_val(raw).unwrap();
+
+        assert!(Uuid::parse_str(&settings.device_id).is_ok());
+        assert_ne!(settings.device_id, "legacy-machine-42");
+    }
+
+    #[test]
+    fn valid_device_id_is_preserved() {
+        let mut settings = create_default_settings();
+        let expected = settings.device_id.clone();
+
+        ensure_valid_device_id(&mut settings);
+
+        assert_eq!(settings.device_id, expected);
     }
 
     /// Asserts that after applying an admin config (both merge and overwrite

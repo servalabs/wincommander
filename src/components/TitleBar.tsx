@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppState } from "../context/AppContext";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, type MouseEvent } from "react";
 import { useSovereigntyScore } from "../hooks/useSovereigntyScore";
 import { getDisplayBranding } from "../lib/branding";
 import useProInstall from "../hooks/useProInstall";
@@ -130,21 +130,29 @@ function TitleBar({ activePanel }: TitleBarProps) {
     setPopupAlertsSuppressed(popupAlertsBorrowed);
   }, [popupAlertsBorrowed]);
 
-  // 5-click brand trigger → reveal the Secret Settings sidebar entry for this session.
+  // 5-click brand trigger → reveal Secret Settings for this session and open it.
+  // Uses a button (not a drag child) so WebView2 always delivers the clicks;
+  // a pure div under a data-tauri-drag-region header was unreliable on Windows.
   const brandClickCount = useRef(0);
   const brandClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleBrandClick = useCallback(() => {
+  const handleBrandClick = useCallback((e: MouseEvent) => {
     // Never reveal Secret Settings while in decoy auth mode.
     // decoyEnabled (from appSettings) is null in decoy mode, so we check
     // authMode directly — it stays accurate regardless of settings state.
     if (authMode === "decoy") return;
+    e.preventDefault();
+    e.stopPropagation();
     brandClickCount.current += 1;
     if (brandClickTimer.current) clearTimeout(brandClickTimer.current);
     if (brandClickCount.current >= 5) {
       brandClickCount.current = 0;
       window.dispatchEvent(new CustomEvent("secret-settings-reveal"));
+      // Open immediately — revealing only the sidebar entry made the gesture
+      // look like a no-op when the user didn't notice the new System row.
+      window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "secret" }));
     } else {
-      brandClickTimer.current = setTimeout(() => { brandClickCount.current = 0; }, 1000);
+      // 2s between clicks is more forgiving than 1s for deliberate multi-clicks.
+      brandClickTimer.current = setTimeout(() => { brandClickCount.current = 0; }, 2000);
     }
   }, [authMode]);
 
@@ -171,21 +179,28 @@ function TitleBar({ activePanel }: TitleBarProps) {
       className="relative z-40 flex h-[52px] shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[color-mix(in_srgb,var(--surface)_72%,transparent)] px-3 backdrop-blur-[14px]"
       data-tauri-drag-region
     >
-      {/* ── Brand — 5× click reveals Secret Settings for this session ── */}
-      <div className="flex items-center gap-2" data-tauri-drag-region={false} onClick={handleBrandClick}>
-        <img src={brandLogo} alt="" className="h-5 w-5" />
-        <span className="font-[family-name:var(--font-display)] text-[13px] font-semibold tracking-[0.13em] text-[var(--text)]">
+      {/* ── Brand — 5× click reveals + opens Secret Settings for this session ── */}
+      <button
+        type="button"
+        className="flex cursor-pointer select-none items-center gap-2 rounded-[var(--r-sm)] border-0 bg-transparent p-1 -ml-1 text-left"
+        data-tauri-drag-region={false}
+        onClick={handleBrandClick}
+        onMouseDown={(e) => e.stopPropagation()}
+        aria-label={authMode === "decoy" ? undefined : "WinCommander"}
+      >
+        <img src={brandLogo} alt="" className="h-5 w-5 pointer-events-none" draggable={false} />
+        <span className="font-[family-name:var(--font-display)] text-[13px] font-semibold tracking-[0.13em] text-[var(--text)] pointer-events-none">
           {/* KT: in decoy mode render empty — real branding blows cover to a coerced examiner.
                Normal mode (incl. non-decoy borrowed mode) keeps the real product name. */}
           {authMode === "decoy" ? '' : (appSettings ? branding.titleLabel : '')}
         </span>
         {version && (
-          <span className="rounded-[var(--r-sm)] border border-[var(--border)] px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-mute)]">
+          <span className="rounded-[var(--r-sm)] border border-[var(--border)] px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-mute)] pointer-events-none">
             v{version}
           </span>
         )}
         {edition === 'PRO' && !decoyEnabled && authMode !== 'decoy' && <Badge tone="accent">PRO</Badge>}
-      </div>
+      </button>
 
       <div className="flex-1" data-tauri-drag-region />
 

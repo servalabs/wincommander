@@ -51,22 +51,6 @@ export interface ArgusSignalEntry {
   severity: string;
 }
 
-/** Last productivity summary the fleet received (aggregate scalars only). */
-export interface MirrorProductivity {
-  windowStart: string;
-  windowEnd: string;
-  activeSeconds: number;
-  idleSeconds: number;
-  categoryScores: Record<string, number>;
-}
-
-/** Non-draining peek of what the fleet has queued and last sent.
- *  INVARIANT: aggregate scalars only — no names/paths/URLs/usernames. */
-export interface MonitoringMirror {
-  pendingSignals: ArgusSignalEntry[];
-  lastProductivity: MirrorProductivity | null;
-}
-
 async function optionalRecent<T>(command: string): Promise<T[]> {
   const result = await invoke<T[]>(command).catch(() => [] as T[]);
   return Array.isArray(result) ? result : [];
@@ -98,10 +82,6 @@ export const argus = {
   printUsbStatus: () => invoke<ArgusCollectorStatus>("argus_print_usb_status"),
   printUsbRecent: () => optionalRecent<ArgusSignalEntry>("argus_print_usb_recent"),
 
-  // ── Monitoring mirror ("what my employer sees") ──────────────────────
-  // Non-draining peek of pending argus signals + last-sent productivity
-  // summary. Forwarded opaque from fleet_push::monitoring_mirror.
-  monitoringMirror: () => invoke<MonitoringMirror>("argus_monitoring_mirror"),
 };
 
 export default argus;

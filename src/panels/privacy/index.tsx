@@ -21,7 +21,6 @@ import PasteMonitorSection from "./PasteMonitorSection";
 import DecoyMonitorSection from "./DecoyMonitorSection";
 import RansomwareMonitorSection from "./RansomwareMonitorSection";
 import RemoteAccessMonitorSection from "./RemoteAccessMonitorSection";
-import MonitoringMirrorSection from "./MonitoringMirrorSection";
 import ArgusDlpSection from "./ArgusDlpSection";
 import ArgusTamperSection from "./ArgusTamperSection";
 import ArgusPrintUsbSection from "./ArgusPrintUsbSection";
@@ -110,8 +109,7 @@ export default function PrivacyPanel() {
         patchAppSettings({ ideal: { privacy: { screenCapture: patch } } } as any).catch(() => {});
 
     // These six Pro monitors are not represented in appSettings. Poll their
-    // status endpoints so the top strip reflects the three controls now in
-    // What my employer sees alongside the remaining Argus monitor cards.
+    // status endpoints so the top strip includes their collector state.
     const [extraMonitorsRunning, setExtraMonitorsRunning] = useState(0);
     const refreshExtraMonitors = useCallback(async () => {
         const checks: Promise<boolean>[] = [
@@ -373,7 +371,6 @@ export default function PrivacyPanel() {
                                                     onPatchDecoy={patchDecoy}
                                                 />
                                             </div>
-                                            <div className="privacy-monitor-cell"><MonitoringMirrorSection /></div>
                                             <div className="privacy-monitor-cell"><ArgusTamperSection /></div>
                                             <div className="privacy-monitor-cell"><CanaryTokensSection /></div>
                                             <div className="privacy-monitor-cell">

@@ -171,11 +171,19 @@ export default function GlobalCommandPalette() {
   );
 
   // Visible nav destinations — exclude locked panels.
+  // Secret Settings is reveal-gated only (same rule as Sidebar) so Borrowed
+  // Mode never strands the user without a way back into the panel.
   const panels = useMemo(
-    () => getSidebarManifests(visibility).filter((p) => !lockedIds.has(p.id) && (p.id !== "secret" || secretSettingsRevealed)),
-    [visibility, lockedIds, secretSettingsRevealed]
+    () =>
+      getSidebarManifests(visibility).filter((p) =>
+        p.id === "secret" ? secretSettingsRevealed : !lockedIds.has(p.id),
+      ),
+    [visibility, lockedIds, secretSettingsRevealed],
   );
-  const canShowPanel = useCallback((id: PanelId) => !lockedIds.has(id) && (id !== "secret" || secretSettingsRevealed), [lockedIds, secretSettingsRevealed]);
+  const canShowPanel = useCallback(
+    (id: PanelId) => (id === "secret" ? secretSettingsRevealed : !lockedIds.has(id)),
+    [lockedIds, secretSettingsRevealed],
+  );
 
   // Settings/toggles — exclude those belonging to a locked panel.
   const settings = useMemo(() => {

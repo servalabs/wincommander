@@ -37,6 +37,25 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Fixed
 
+- **Desktop UUID generation now supports older WebView2 engines** (2026-08-06).
+  Shared app initialization no longer calls `crypto.randomUUID()` directly;
+  it uses the secure `getRandomValues()` UUIDv4 fallback when the convenience
+  method is unavailable. This prevents the device-side Fleet/search/download
+  surfaces from failing before their request can be sent.
+
+- **Removed the employee-facing “What my employer sees” card** (2026-08-06).
+  Fleet monitor lifecycle is now owned entirely by the Fleet agent instead of
+  a one-shot frontend timer. On Fleet enrollment it starts Session Assurance,
+  Access & Session, and all Argus collectors with their default settings; on
+  disconnect it stops them together. UI remounts can no longer flip Session
+  Assurance between on and off.
+
+- **Fleet now repairs legacy device IDs before enrollment** (2026-08-06).
+  A blank or non-UUID settings identity is replaced and persisted as one stable
+  UUID during settings load. This prevents Fleet's Postgres-backed search and
+  file-transfer paths from rejecting an enrolled device, and the Fleet panel
+  now shows the pending device ID while enrollment is in progress.
+
 - **The Monitoring Mirror understated what leaves the machine** (2026-08-04).
   Its header declared a privacy invariant that "window titles, exe paths, URLs,
   filenames... and usernames NEVER leave the device", and the panel subtitle read

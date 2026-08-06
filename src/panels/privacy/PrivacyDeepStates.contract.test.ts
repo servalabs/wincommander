@@ -41,7 +41,6 @@ describe("Privacy deep-state and responsive contracts", () => {
       "CheckInTimerSection.tsx",
       "DriverHealthSection.tsx",
       "FileWatchTriggerSection.tsx",
-      "MonitoringMirrorSection.tsx",
       "PrintActivitySection.tsx",
       "RdpIdleCard.tsx",
       "ScreenCaptureSection.tsx",

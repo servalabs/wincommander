@@ -167,7 +167,14 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
       : []) as string[];
 
     return navItems.filter(item => {
-      if (item.id === 'secret' && !secretSettingsRevealed) return false;
+      // Secret Settings is governed ONLY by the title-bar 5× brand-click
+      // reveal for this session — not Borrowed Mode, not permanently-hidden.
+      // KT: secret used to sit in DEFAULT_BORROWED_PANELS, so once Borrowed
+      // Mode was active the 5× click set secretSettingsRevealed=true but the
+      // lockedIds filter still dropped the row. That made Secret Settings
+      // unreachable (and Borrowed Mode un-exitable from the UI).
+      if (item.id === "secret") return secretSettingsRevealed;
+
       // Server Apps, Productivity and Fleet are
       // now governed by the Secret Settings visibility table like every other
       // panel — no hardwired hide flags. Defaults (visibilityDefaults):
