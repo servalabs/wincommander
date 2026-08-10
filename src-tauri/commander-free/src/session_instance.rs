@@ -186,6 +186,30 @@ pub fn acquire(cli_args: &[String]) -> bool {
         };
 
         if let Some(args) = payload {
+            // The duplicate was launched by the user and is therefore allowed
+            // to make a foreground activation request. Explicitly transfer
+            // that permission to the primary before it receives --focus.
+            // Without this handoff Windows may accept the named-pipe message
+            // yet silently reject the primary window's SetForegroundWindow,
+            // leaving an already-running WinCommander hidden behind the app
+            // the user was using.
+            if args.iter().any(|arg| arg == "--focus") {
+                if let Some(primary_pid) = read_stored_primary_pid() {
+                    unsafe {
+                        use windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+                        let granted = AllowSetForegroundWindow(primary_pid) != 0;
+                        crate::log_message_src(
+                            "info",
+                            "core",
+                            &format!(
+                                "[SessionInstance] foreground permission {} for primary pid {}",
+                                if granted { "granted" } else { "not granted" },
+                                primary_pid
+                            ),
+                        );
+                    }
+                }
+            }
             // KT: generous 3s timeout so a busy-but-alive primary is never
             // falsely declared dead. Only after exhausting it do we check PID.
             let (delivered, primary_pid) = forward_args_with_liveness(sid, &args);
