@@ -148,9 +148,9 @@
   color: #10b981;
 }
 
-.server-spec-card span {
-  color: var(--color-text-muted);
-  font-size: 10px;
+.server-spec-card div > span {
+  color: var(--color-text-secondary);
+  font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -159,8 +159,8 @@
 .server-spec-card strong {
   display: block;
   margin-top: 10px;
-  color: #10b981;
-  font-size: clamp(18px, 2vw, 24px);
+  color: var(--color-text-primary);
+  font-size: clamp(20px, 2.2vw, 26px);
   font-weight: 900;
   line-height: 1;
 }
@@ -274,7 +274,6 @@ html.light .server-feature-strip span {
   color: #047857;
 }
 
-html.light .server-spec-card strong,
 html.light .server-spec-card div {
   color: #059669;
 }
