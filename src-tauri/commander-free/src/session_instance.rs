@@ -609,31 +609,17 @@ fn handle_forwarded_args(app: &tauri::AppHandle, payload: &str) {
                 // enter_calculator_mode handles AUMID, icon, tray hide, and show.
                 let _ = crate::startup_auth::enter_calculator_mode_with(win.clone(), true);
             } else {
-                // KT: set_skip_taskbar(false) before show() so the window immediately
-                // appears in the taskbar. Without it the window shows visually but
-                // remains absent from Alt+Tab until the user interacts with it.
-                let _ = win.set_skip_taskbar(false);
-                let _ = win.unminimize();
-                let _ = win.show();
-                let _ = win.set_focus();
+                // Use the same complete reveal path as the tray. The previous
+                // bare show/unminimize sequence could report success while a
+                // hidden/minimized WebView remained behind the foreground app.
+                // A second launch is explicit user intent, so it must restore,
+                // maximize, and force foreground the already-running window.
+                crate::reveal_main_window(app);
                 // Tray should be visible in non-calculator, non-hidden mode.
                 let is_hidden = crate::wincommander_is_hidden();
                 if let Some(tray) = app.tray_by_id("tray") {
                     let _ = tray.set_visible(!is_hidden);
                 }
-                // KT: defer force_window_foreground — show()/unminimize() post
-                // WM_SHOWWINDOW/SW_RESTORE to the message queue and return before
-                // Windows has made the window visible. SetForegroundWindow called
-                // synchronously here is silently rejected (target not visible yet),
-                // leaving the window unactivated and black until the user clicks.
-                // 50 ms lets the pump drain; set_focus follows 150 ms later.
-                let win_clone = win.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    crate::force_window_foreground(&win_clone);
-                    std::thread::sleep(std::time::Duration::from_millis(150));
-                    let _ = win_clone.set_focus();
-                });
             }
             crate::log_message_src(
                 "info",
