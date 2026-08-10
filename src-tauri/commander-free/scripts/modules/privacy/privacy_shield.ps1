@@ -688,7 +688,14 @@ class ShieldWorker(QThread):
                 multi_clear = self.wake_delay_ms * self.multi_face_wake_multiplier if multi_in_reason else 0
                 required_clear_ms = max(device_clear, multi_clear, self.wake_delay_ms)
 
-                if self._attentive_ms >= required_clear_ms:
+                # A gaze/no-face overlay must disappear on the very first
+                # attentive frame.  Applying the general wake hysteresis here
+                # left Fleet-started sessions blank after the user looked back.
+                # Keep the stricter clear window only when the lock was caused
+                # by a phone or multiple faces, where a brief clear frame is
+                # not enough to safely reveal the screen.
+                clear_immediately = is_clear and not device_in_reason and not multi_in_reason
+                if clear_immediately or self._attentive_ms >= required_clear_ms:
                     self._is_locked = False
                     self._lock_reason = ""
                     self._captured_for_device = False
