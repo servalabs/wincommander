@@ -199,17 +199,17 @@ pub async fn fleet_connect(
                 "signingKeyPub": signing_key_pub,
                 "privacyShieldSessionOwned": false,
             },
-            // Default-on while enrolled, per Fleet policy. The server can
-            // immediately replace these with a signed epoch (including off),
-            // but an enrolled endpoint never waits for a local card click to
-            // begin the local-only privacy monitor.
+            // Fleet enrollment must not take ownership of the local camera or
+            // start Privacy Shield. An administrator can publish a signed
+            // policy from the Fleet console later; until then any Shield
+            // session is employee-started and remains locally controllable.
             "modules": { "privacyShield": true }
         },
         "ideal": {
             "privacy": {
                 "privacyShield": {
-                    "fleetManaged": true,
-                    "fleetMonitoringEnabled": true,
+                    "fleetManaged": false,
+                    "fleetMonitoringEnabled": false,
                 }
             }
         },
