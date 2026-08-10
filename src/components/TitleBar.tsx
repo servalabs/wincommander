@@ -11,7 +11,6 @@ import { useTheme } from "../context/ThemeContext";
 import { logo as brandLogo } from "@/assets";
 import { Icon } from "./ui/icon";
 import { Badge } from "./ui/badge";
-import AlertsMenu from "./AlertsMenu";
 import ProcessesMenu from "./ProcessesMenu";
 import { TITLEBAR_ICON_BTN } from "./ui/titleBarButtonClass";
 import { setNotificationsHidden, setPopupAlertsSuppressed } from "../lib/notificationStore";
@@ -270,12 +269,11 @@ function TitleBar({ activePanel }: TitleBarProps) {
         </button>
       </div>
 
-      {/* ── Alerts + Processes (two icons, split from one bell+tabs) — hidden when muted+locked ── */}
+      {/* Process activity is the only local title-bar inbox. Fleet/security
+          alerts belong in the Fleet console; a second local bell created two
+          notification surfaces and a misleading "All clear" state. */}
       {!hideNotificationIcons && (
-        <>
-          <AlertsMenu />
-          <ProcessesMenu />
-        </>
+        <ProcessesMenu />
       )}
       {/* ── Take the tour — single title-bar entry point for onboarding;
           also the tour's own anchor for its "find help later" stop ── */}
