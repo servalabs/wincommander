@@ -36,7 +36,7 @@ fleet-proto = { path = "../fleet-proto" }
 # WI-2 SSOT codegen: derive TypeScript types from these Rust types. Optional +
 # build-only — gated behind the `ts-codegen` feature so it is NEVER in a
 # production binary's dependency closure.
-ts-rs = { version = "10", optional = true, features = ["serde-json-impl"] }
+ts-rs = { version = "12", optional = true, features = ["serde-json-impl"] }
 
 [features]
 # Activate ONLY for the Rust->TS codegen step (build.rs / emit binaries).
