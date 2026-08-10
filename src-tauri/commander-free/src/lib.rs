@@ -1584,10 +1584,15 @@ pub fn run() {
         std::process::exit(1);
     }
 
-    // Encrypt any legacy plaintext log lines, then trim records older than 7 days.
+    // Release builds keep encrypted records on disk. Tauri dev/debug builds do
+    // the inverse conversion so ordinary tools can inspect the same log while
+    // developing; this code is compiled out of release artifacts.
     if !cli_mode {
         if let Ok(log_dir) = paths::user_logs_dir() {
             let log_file = log_dir.join("wincommander.log");
+            #[cfg(debug_assertions)]
+            log::migrate_logs_to_plaintext_for_debug(&log_file);
+            #[cfg(not(debug_assertions))]
             log::migrate_plaintext_logs(&log_file);
             log::purge_old_log_records(&log_file, 7);
         }
