@@ -1203,6 +1203,14 @@ pub struct PrivacyShieldSettings {
     /// and start/stop ownership belongs to the Fleet supervisor.
     #[serde(default)]
     pub fleet_managed: Option<bool>,
+    /// Maximum Fleet attention notifications in one rolling window. Zero or
+    /// absent means unlimited; this governs only the media-free Fleet alert
+    /// bridge and never suppresses local blur or local UI events.
+    #[serde(default)]
+    pub fleet_notification_limit: Option<u32>,
+    /// Length of the Fleet attention-notification rolling window in seconds.
+    #[serde(default)]
+    pub fleet_notification_window_seconds: Option<u32>,
     pub gaze_detection_enabled: Option<bool>,
     pub anti_peeping_enabled: Option<bool>,
     pub camera_hunter_enabled: Option<bool>,

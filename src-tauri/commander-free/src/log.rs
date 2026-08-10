@@ -167,7 +167,9 @@ pub fn purge_old_log_records(log_file: &Path, keep_days: u64) {
 }
 
 /// Re-encrypt any plaintext log lines left from before the encryption
-/// migration. Called once at startup before purge_old_log_records.
+/// migration. Called once at startup before purge_old_log_records in release
+/// builds. Debug builds deliberately use the inverse migration below so a
+/// local Tauri dev session can be inspected without app-side decryption.
 pub(crate) fn migrate_plaintext_logs(log_file: &Path) {
     let content = match std::fs::read_to_string(log_file) {
         Ok(c) => c,
@@ -209,6 +211,35 @@ pub(crate) fn migrate_plaintext_logs(log_file: &Path) {
     let _ = std::fs::write(log_file, new_content.as_bytes());
 }
 
+/// Debug builds only: rewrite decryptable records as the legacy readable
+/// format. This is intentionally compile-time gated — a production/release
+/// binary cannot enable plaintext logging through a setting or environment
+/// variable. An unreadable record is retained rather than silently discarded.
+#[cfg(debug_assertions)]
+pub(crate) fn migrate_logs_to_plaintext_for_debug(log_file: &Path) {
+    let content = match std::fs::read_to_string(log_file) {
+        Ok(content) => content,
+        Err(_) => return,
+    };
+    if !content.lines().any(|line| line.starts_with("L:")) {
+        return;
+    }
+    let lines: Vec<String> = content
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            if let Some((date, body)) = crate::datastore::log_decrypt_line(line) {
+                // `body` begins `[HH:MM:SS]`, so joining after its first
+                // bracket produces the regular `[YYYY-MM-DD HH:MM:SS]` form
+                // understood by the in-app viewer and ordinary text tools.
+                return format!("[{} {}", date, body.trim_start_matches('['));
+            }
+            line.to_string()
+        })
+        .collect();
+    let _ = std::fs::write(log_file, lines.join("\n") + "\n");
+}
+
 // Log sources tagged into each record so the in-app Error Center can show
 // where a line came from. `core` = Free backend, `ui` = frontend (console +
 // window errors), `pro` = the Pro sidecar (drained from its stderr).
@@ -225,7 +256,9 @@ pub fn log_message(level: &str, message: &str) {
     log_message_src(level, LOG_SRC_CORE, message);
 }
 
-/// Encrypt + append one already-formatted body line for `date`.
+/// Append one formatted body line. Debug/Tauri-development binaries keep it
+/// plaintext for direct troubleshooting; release binaries use the encrypted
+/// on-disk format. This is a compile-time distinction, never a user setting.
 fn write_log_line(date: &str, body: &str) {
     #[cfg(test)]
     {
@@ -241,6 +274,9 @@ fn write_log_line(date: &str, body: &str) {
             return;
         }
         let log_file = log_dir.join("wincommander.log");
+        #[cfg(debug_assertions)]
+        let line = format!("[{} {}", date, body.trim_start_matches('['));
+        #[cfg(not(debug_assertions))]
         let line = crate::datastore::log_encrypt_line(date, body);
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)

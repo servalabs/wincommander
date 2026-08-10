@@ -4280,6 +4280,54 @@ static SHIELD_READER_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::Atom
 static SHIELD_READER_ACTIVE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Runtime-only rate gate for media-free Fleet attention alerts. Local privacy
+/// enforcement must never depend on network policy, so the gate is applied
+/// only immediately before the Pro/Fleet dispatch. `0` is deliberately the
+/// default/unlimited mode; admins opt into a rolling cap through the signed
+/// Privacy Shield policy.
+#[derive(Default)]
+struct FleetPrivacyAlertRate {
+    config: Option<(u32, u32)>,
+    sent: Vec<std::time::Instant>,
+}
+
+fn fleet_privacy_alert_rate() -> &'static Mutex<FleetPrivacyAlertRate> {
+    static RATE: OnceLock<Mutex<FleetPrivacyAlertRate>> = OnceLock::new();
+    RATE.get_or_init(|| Mutex::new(FleetPrivacyAlertRate::default()))
+}
+
+fn allow_fleet_privacy_alert() -> bool {
+    let Ok(settings) = crate::settings::read_settings() else {
+        // A read failure must fail open for an admin-enabled Fleet alert; it
+        // must not interfere with the local detector or conceal an incident.
+        return true;
+    };
+    let shield = settings.ideal.privacy.privacy_shield;
+    let limit = shield.fleet_notification_limit.unwrap_or(0).min(1000);
+    if limit == 0 {
+        return true;
+    }
+    let window_secs = shield
+        .fleet_notification_window_seconds
+        .unwrap_or(60)
+        .clamp(1, 86_400);
+    let Ok(mut rate) = fleet_privacy_alert_rate().lock() else {
+        return true;
+    };
+    let config = (limit, window_secs);
+    if rate.config != Some(config) {
+        rate.config = Some(config);
+        rate.sent.clear();
+    }
+    let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(window_secs as u64);
+    rate.sent.retain(|at| *at > cutoff);
+    if rate.sent.len() >= limit as usize {
+        return false;
+    }
+    rate.sent.push(std::time::Instant::now());
+    true
+}
+
 /// Tail the shield's look-state sidecar and forward attention events to the
 /// local flow engine and Fleet. Detection never changes global webcam access.
 /// Lifetime is decoupled from the reported shield pid: the pid the wrapper
@@ -4365,16 +4413,22 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
                                 // Fleet receives only the detected class. The Pro sidecar
                                 // queues it for the next authenticated check-in; a Fleet
                                 // outage or absent sidecar must never disrupt local shielding.
-                                if let Err(error) = crate::sidecar::dispatch_paid_command(
-                                    "record_privacy_shield_event",
-                                    serde_json::json!({ "class": gaze_kind }),
-                                )
-                                .await
-                                {
-                                    crate::flow_bridge::flow_trace(format!(
-                                        "shield-reader: Fleet attention event not queued: {}",
-                                        error
-                                    ));
+                                if allow_fleet_privacy_alert() {
+                                    if let Err(error) = crate::sidecar::dispatch_paid_command(
+                                        "record_privacy_shield_event",
+                                        serde_json::json!({ "class": gaze_kind }),
+                                    )
+                                    .await
+                                    {
+                                        crate::flow_bridge::flow_trace(format!(
+                                            "shield-reader: Fleet attention event not queued: {}",
+                                            error
+                                        ));
+                                    }
+                                } else {
+                                    crate::flow_bridge::flow_trace(
+                                        "shield-reader: Fleet attention event rate-limited by signed policy",
+                                    );
                                 }
 
                                 // ── UX side effects (may be slow; time-bounded) ──
