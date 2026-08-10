@@ -4444,7 +4444,12 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
                     last_activity.elapsed().as_secs()
                 ));
             }
-            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+            // The overlay itself changes in the Python process, but this reader
+            // drives the local UI state and the Fleet event bridge. A 750 ms
+            // interval made both look-back state and Fleet alerts visibly late.
+            // The sidecar is a tiny append-only file, so a bounded 100 ms poll
+            // keeps the local and Fleet surfaces in step without busy-waiting.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         // Shield stopped — clear the visual look-away state. Camera access was
         // never modified by this reader.
