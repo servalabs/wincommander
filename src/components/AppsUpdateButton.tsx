@@ -12,7 +12,7 @@ import { releasePackageOperation, tryAcquirePackageOperation } from "../lib/pack
 // rendered inside the radar itself (see RadarScanAnimation `pendingAppUpdates`),
 // so the button stays clean: just a label + "Update All Apps".
 export default function AppsUpdateButton({ compact = false }: { compact?: boolean }) {
-    const { appInventory, refreshSettings } = useAppState();
+    const { appInventory, refreshSettings, runAppInventoryScan } = useAppState();
     const { testWingetInstalled, installWinget, getAppInventory, upgradeApp } = useBackend();
     const { tasks: activeTasks } = useTaskStatus();
     const pendingAppUpdates = appInventory?.pendingUpdates?.length ?? 0;
@@ -78,6 +78,7 @@ export default function AppsUpdateButton({ compact = false }: { compact?: boolea
                 steps,
                 { mode: 'sequential', failFast: false, accent: 'blue' }
             );
+            await runAppInventoryScan(true);
             await refreshSettings();
         } catch (err) {
             console.error("Update All Apps failed:", err);

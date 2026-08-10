@@ -35,7 +35,7 @@ function pickDefaultManager(managers: ManagerInventory[]): string | undefined {
  */
 export function PackageUpdateTools() {
   const backend = useBackend();
-  const { appInventory } = useAppState();
+  const { appInventory, runAppInventoryScan } = useAppState();
   const backendRef = useRef(backend);
   backendRef.current = backend;
   const [packages, setPackages] = useState<PackageUpdateInventory>();
@@ -93,6 +93,10 @@ export function PackageUpdateTools() {
     try {
       const result = await backendRef.current.packageUpdatesApply([...packageIds]);
       setMessage(result.cancelled ? `Package updates cancelled after ${result.updated} update(s).` : `Updated ${result.updated} package(s)${result.errors.length ? `; ${result.errors.length} failed.` : "."}`);
+      // Package-manager update data and the curated app inventory are two
+      // different views. Reconcile both after completion so cards immediately
+      // reflect real installed/not-installed state without a panel reload.
+      await runAppInventoryScan(true);
       setPackages(await backendRef.current.packageUpdatesInventory()); setPackageIds(new Set()); setActiveManager(undefined);
     } catch (cause) { setMessage(String(cause)); }
     finally { setBusy(false); releasePackageOperation(); }
@@ -104,7 +108,10 @@ export function PackageUpdateTools() {
     try {
       const result = await executeBackendCommand<unknown>("Install-Dependency", { Id: INSTALLABLE_MANAGERS[manager] });
       setMessage(result.success ? `${manager} installed.` : (result.error || `Failed to install ${manager}.`));
-      if (result.success) await inspectPackages();
+      if (result.success) {
+        await runAppInventoryScan(true);
+        await inspectPackages();
+      }
     } finally {
       setInstallingManagers((prev) => { const next = new Set(prev); next.delete(manager); return next; });
     }

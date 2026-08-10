@@ -6,6 +6,7 @@ import { useAppState } from "../../../context/AppContext";
 import { beginOperation, runOperation } from "../../../context/OperationContext";
 import { claimFreeAppUpdates, clearAppUpdatesQueued, isAppUpdateQueued } from "../../../lib/appUpdateQueue";
 import { releasePackageOperation, tryAcquirePackageOperation, waitForPackageOperation } from "../../../lib/packageOperationLock";
+import { recordPackageActivity, setPackageActivityStatus, usePackageActivities } from "../../../lib/packageActivityStore";
 import { showWarning, showError, showSuccess } from "../../../utils/toast";
 import AppIcon from "./AppIcon";
 import { cn } from "../../../lib/utils";
@@ -46,6 +47,12 @@ interface UpgradeItem {
   source?: string;
   iconData?: string | null;
 }
+
+// Navigation unmounts this panel; package work must not disappear with it.
+const coveredInstallIds = new Set<string>();
+const pendingInstallIds: Array<{ packageId: string; activityId: string }> = [];
+const activeInstallActivityIds = new Set<string>();
+let installWorkerRunning = false;
 
 const CATEGORY_TABS = [
   { id: "all", label: "All" },
@@ -98,8 +105,11 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
   // every install button at once — clicking download on one card put every
   // other card's button into the loading state too (and BlueprintJS's
   // .bp5-loading overlay rendered as a visible dark box in dark mode).
-  const [installingIds, setInstallingIds] = useState<Set<string>>(new Set());
-  const installing = installingIds.size > 0;
+  // Keep the durable activity journal as the source of truth for cards and
+  // queue recovery, but do not repeat it as a large page-level history. The
+  // operation/progress notification is the place users follow a running job.
+  const activePackageActivities = usePackageActivities().filter(item => item.status === "queued" || item.status === "running");
+  const installing = activePackageActivities.some(item => item.kind === "install");
   // Ids that finished installing THIS session — drives a one-shot wc-app-pop
   // on the row. Cleared shortly after so the pop fires exactly once.
   const [justInstalledIds, setJustInstalledIds] = useState<Set<string>>(new Set());
@@ -235,11 +245,19 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       // still serializes on the OS side, but concurrent `winget upgrade`
       // invocations queue cooperatively and the operation bar shows all
       // rows progressing instead of one-at-a-time.
+      const activities = new Map(queueEntries.map(([appId, name]) => [appId, recordPackageActivity({ packageId: appId, label: name, kind: "update" })]));
       const steps = queueEntries.map(([appId, name]) => ({
         label: `Upgrading ${name}`,
         fn: async () => {
+          const activityId = activities.get(appId)!;
+          setPackageActivityStatus(activityId, "running");
           const res = await upgradeApp(appId);
-          if (!res.success) throw new Error(res.error || `Upgrade failed for ${name}.`);
+          if (!res.success) {
+            const message = res.error || `Upgrade failed for ${name}.`;
+            setPackageActivityStatus(activityId, "failed", message);
+            throw new Error(message);
+          }
+          setPackageActivityStatus(activityId, "completed");
         }
       }));
 
@@ -293,11 +311,19 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
 
       // Upgrade steps run in parallel — one row per package in the
       // operation panel, all progressing concurrently.
+      const activities = new Map(myEntries.map(([appId, name]) => [appId, recordPackageActivity({ packageId: appId, label: name, kind: "update" })]));
       const steps = myEntries.map(([appId, name]) => ({
         label: `Upgrading ${name}`,
         fn: async () => {
+          const activityId = activities.get(appId)!;
+          setPackageActivityStatus(activityId, "running");
           const res = await upgradeApp(appId);
-          if (!res.success) throw new Error(res.error || `Upgrade failed for ${name}.`);
+          if (!res.success) {
+            const message = res.error || `Upgrade failed for ${name}.`;
+            setPackageActivityStatus(activityId, "failed", message);
+            throw new Error(message);
+          }
+          setPackageActivityStatus(activityId, "completed");
         }
       }));
 
@@ -340,6 +366,10 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
         setTeamsInstalled(false);
         patchAppSettings({ ideal: { apps: { teamsRemoved: true } } }).catch(() => { });
       }
+      // Reconcile the catalog with Windows after a successful removal. This
+      // moves a removed curated package back to Not Installed without
+      // touching the durable package activity queue/history.
+      await runAppInventoryScan(true);
     } catch {
       // error shown in status bar by runOperation
     } finally {
@@ -438,9 +468,11 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       }
     };
 
-    // If appInventory hasn't arrived yet (context hasn't scanned yet),
-    // trigger a scan. The useEffect above will populate local state when it lands.
-    if (!appInventory && !inventoryScanRequestedRef.current) {
+    // Entering Packages & Apps is an explicit request for the current machine
+    // inventory. Cached data remains visible while this refresh runs, but it
+    // is not authoritative: software can change outside WinCommander between
+    // visits. The context coalesces concurrent scans with package completion.
+    if (!inventoryScanRequestedRef.current) {
       inventoryScanRequestedRef.current = true;
       setInventoryScanPending(true);
       runAppInventoryScan(true).finally(() => setInventoryScanPending(false));
@@ -591,29 +623,25 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
   // coveredIds is the SYNCHRONOUS source of truth for "the running worker
   // already has this id". installingIds is state and two clicks landing in the
   // same tick would both read its pre-click value, enqueueing the app twice.
-  const coveredIdsRef = useRef<Set<string>>(new Set());
-  const pendingInstallRef = useRef<string[]>([]);
-  const installWorkerRef = useRef(false);
-
   const installApps = useCallback(async (appIds: string[]) => {
     const uniqueIds = Array.from(new Set(appIds))
-      .filter(id => !installedApps.has(id) && !coveredIdsRef.current.has(id));
+      .filter(id => !installedApps.has(id) && !coveredInstallIds.has(id));
     if (uniqueIds.length === 0) {
       showWarning("Those apps are already installed, or already in the running install.");
       return;
     }
 
-    uniqueIds.forEach(id => coveredIdsRef.current.add(id));
-    pendingInstallRef.current.push(...uniqueIds);
+    const queued = uniqueIds.map(packageId => ({
+      packageId,
+      activityId: recordPackageActivity({ packageId, label: apps.find(app => app.id === packageId)?.name || packageId, kind: "install" }),
+    }));
+    queued.forEach(item => coveredInstallIds.add(item.packageId));
+    queued.forEach(item => activeInstallActivityIds.add(item.activityId));
+    pendingInstallIds.push(...queued);
     setSelectedApps(new Set());
-    setInstallingIds(prev => {
-      const next = new Set(prev);
-      uniqueIds.forEach(id => next.add(id));
-      return next;
-    });
 
     // A run is already in flight — its drain loop picks these up next.
-    if (installWorkerRef.current) {
+    if (installWorkerRunning) {
       showSuccess(`Added ${uniqueIds.length} app${uniqueIds.length === 1 ? "" : "s"} to the running install.`);
       return;
     }
@@ -623,7 +651,7 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
     // instead of rejecting it: its worker will begin as soon as that operation
     // releases the shared lock.
     const startsImmediately = tryAcquirePackageOperation();
-    installWorkerRef.current = true;
+    installWorkerRunning = true;
     if (!startsImmediately) {
       showSuccess(`Queued ${uniqueIds.length} app${uniqueIds.length === 1 ? "" : "s"}; installation will start after the current package operation.`);
       await waitForPackageOperation();
@@ -643,44 +671,47 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       // finishes so its card stops spinning while siblings continue.
       // The loop re-checks the pending list after every batch, so apps added
       // mid-run are installed by this same worker under this same row.
-      while (pendingInstallRef.current.length > 0) {
-        const batch = pendingInstallRef.current.splice(0);
-        await op.add(batch.map(id => ({
-          label: `Installing ${apps.find(a => a.id === id)?.name || id}`,
+      while (pendingInstallIds.length > 0) {
+        const batch = pendingInstallIds.splice(0);
+        await op.add(batch.map(({ packageId, activityId }) => ({
+          label: `Installing ${apps.find(a => a.id === packageId)?.name || packageId}`,
           fn: async () => {
-            const response = await installWingetApps([id]);
-            if (!response.success) throw new Error(response.error || `Install failed.`);
+            setPackageActivityStatus(activityId, "running");
+            const response = await installWingetApps([packageId]);
+            if (!response.success) {
+              const message = response.error || "Install failed.";
+              setPackageActivityStatus(activityId, "failed", message);
+              activeInstallActivityIds.delete(activityId);
+              throw new Error(message);
+            }
+            setPackageActivityStatus(activityId, "completed");
+            activeInstallActivityIds.delete(activityId);
             // Move a successful install immediately. Waiting for the full
             // inventory refresh made the same app remain in the install grid
             // long enough to invite duplicate clicks and look duplicated.
-            setInstalledApps(prev => new Set(prev).add(id));
+            setInstalledApps(prev => new Set(prev).add(packageId));
             setUpdateAvailableApps(prev => {
               const next = new Set(prev);
-              next.delete(id);
+              next.delete(packageId);
               return next;
             });
             setSelectedApps(prev => {
               const next = new Set(prev);
-              next.delete(id);
+              next.delete(packageId);
               return next;
             });
-            setApps(prev => prev.map(app => app.id === id
+            setApps(prev => prev.map(app => app.id === packageId
               ? { ...app, installed: true, updateAvailable: false }
               : app));
             if (uniqueIds.length === 1) setInstallerView("installed");
-            setInstallingIds(prev => {
-              const next = new Set(prev);
-              next.delete(id);
-              return next;
-            });
             // One-shot "just installed" pop on this row. Cleared after the
             // animation window so re-renders don't replay it.
-            setJustInstalledIds(prev => new Set(prev).add(id));
+            setJustInstalledIds(prev => new Set(prev).add(packageId));
             setTimeout(() => {
               setJustInstalledIds(prev => {
-                if (!prev.has(id)) return prev;
+                if (!prev.has(packageId)) return prev;
                 const next = new Set(prev);
-                next.delete(id);
+                next.delete(packageId);
                 return next;
               });
             }, 600);
@@ -692,18 +723,20 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       // Engines section reflects newly installed CLI tools (e.g. es.exe for search).
       await Promise.all([runAppInventoryScan(true), forceRefreshDeps()]);
     } catch (err) {
+      // Pre-flight failures happen before a per-package step is entered.
+      // Finalize every remaining journal row so it cannot masquerade as a
+      // live queue when the user returns to this panel.
+      activeInstallActivityIds.forEach(activityId => setPackageActivityStatus(activityId, "failed", "Package operation did not start."));
+      activeInstallActivityIds.clear();
       // Pre-flight failures never reached a task row under the old code, so
       // "winget is missing" failed completely silently. Per-step failures are
       // still reported by the row itself.
       showError(err instanceof Error ? err.message : "Install failed.");
     } finally {
       op.finish();
-      installWorkerRef.current = false;
-      pendingInstallRef.current = [];
-      coveredIdsRef.current.clear();
-      // Clears any id still marked installing because its step threw before
-      // the per-step delete ran.
-      setInstallingIds(new Set());
+      installWorkerRunning = false;
+      pendingInstallIds.length = 0;
+      coveredInstallIds.clear();
       releasePackageOperation();
     }
   }, [ensureWinget, installWingetApps, installedApps, runAppInventoryScan, forceRefreshDeps, apps]);
@@ -729,6 +762,7 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       releasePackageOperation();
       return;
     }
+    const activityId = recordPackageActivity({ packageId: appId, label: friendlyName, kind: "update" });
     setUpgradingApp(appId);
     try {
       await runOperation(`Upgrade ${friendlyName}`, [
@@ -742,8 +776,14 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
         {
           label: `Upgrading ${friendlyName}...`,
           fn: async () => {
+            setPackageActivityStatus(activityId, "running");
             const response = await upgradeApp(appId);
-            if (!response.success) throw new Error(response.error || `Upgrade failed for ${friendlyName}.`);
+            if (!response.success) {
+              const message = response.error || `Upgrade failed for ${friendlyName}.`;
+              setPackageActivityStatus(activityId, "failed", message);
+              throw new Error(message);
+            }
+            setPackageActivityStatus(activityId, "completed");
           }
         },
         {
@@ -891,7 +931,7 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
           checkbox so users can either multi-select or one-click install.
           Loading/disabled is per-id so other cards don't show spinners. */}
       {!installedApps.has(app.id) && !updateAvailableApps.has(app.id) && (() => {
-        const isThisInstalling = installingIds.has(app.id);
+        const isThisInstalling = activePackageActivities.some(item => item.kind === "install" && item.packageId === app.id);
         return (
           <Button
             icon={isThisInstalling ? undefined : "download"}
