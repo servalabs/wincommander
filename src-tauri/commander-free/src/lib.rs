@@ -838,6 +838,12 @@ fn handle_search_hotkey(app: &tauri::AppHandle) {
                     .ok()
                     .and_then(|payload| payload.get("query")?.as_str().map(str::to_owned))
                     .unwrap_or_default();
+                // A second Ctrl+Space is an explicit request to leave the
+                // compact overlay and use full Search Files. The event alone
+                // changes React state in the hidden main WebView; it does not
+                // restore/maximize the native window. Reveal first so dev and
+                // release builds both make the full search actually visible.
+                reveal_main_window(&app_for_handoff);
                 if let Some(main) = app_for_handoff.get_webview_window("main") {
                     let _ = main.emit("open-search-files-panel", query);
                 }
@@ -903,10 +909,11 @@ fn handle_search_hotkey(app: &tauri::AppHandle) {
 }
 
 fn open_search_files_panel(app: &tauri::AppHandle) {
+    // Match the acknowledged query handoff above. This fallback is also
+    // reached if the overlay renderer failed to answer, so it must reveal the
+    // main native window instead of merely changing a hidden React panel.
+    reveal_main_window(app);
     if let Some(main) = app.get_webview_window("main") {
-        let _ = main.unminimize();
-        let _ = main.show();
-        let _ = main.set_focus();
         let _ = main.emit("open-search-files-panel", ());
     }
 }
