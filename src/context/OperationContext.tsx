@@ -129,6 +129,10 @@ export function runOperation(
 //   op.finish();
 
 export interface GrowingOperation {
+    /** Add visible waiting steps now, without starting their work yet. */
+    reserve: (labels: string[]) => number;
+    /** Run previously reserved steps, changing only those rows to running. */
+    runReserved: (steps: Array<{ index: number; fn: () => Promise<any> }>) => Promise<{ anyError: boolean }>;
     /** Append these steps to the live row and run them in parallel. */
     add: (steps: OperationStep[]) => Promise<{ anyError: boolean }>;
     /** Close the row: completed, or failed if any step so far errored. */
@@ -146,28 +150,40 @@ export function beginOperation(
     const id = _getOperationHandlers().addOperationTask?.(title, [], accent) ?? null;
     let anyError = false;
 
-    const add = async (steps: OperationStep[]): Promise<{ anyError: boolean }> => {
-        if (steps.length === 0) return { anyError };
+    const reserve = (labels: string[]): number => {
+        if (labels.length === 0) return -1;
         // Re-read the handlers per call: TaskStatusProvider re-registers them
         // whenever its callbacks change identity, so a set captured at
         // beginOperation time can go stale mid-operation.
         const h = _getOperationHandlers();
-        const base = id !== null && h.appendOperationSteps
-            ? h.appendOperationSteps(id, steps.map(s => s.label))
+        return id !== null && h.appendOperationSteps
+            ? h.appendOperationSteps(id, labels)
             : -1;
+    };
+
+    const runReserved = async (
+        steps: Array<{ index: number; fn: () => Promise<any> }>,
+    ): Promise<{ anyError: boolean }> => {
+        if (steps.length === 0) return { anyError };
+        const h = _getOperationHandlers();
         await Promise.allSettled(
-            steps.map(async (step, i) => {
-                if (base >= 0) h.updateOperationStep?.(id!, base + i, 'running');
+            steps.map(async (step) => {
+                if (step.index >= 0) h.updateOperationStep?.(id!, step.index, 'running');
                 try {
                     await step.fn();
-                    if (base >= 0) h.updateOperationStep?.(id!, base + i, 'done');
+                    if (step.index >= 0) h.updateOperationStep?.(id!, step.index, 'done');
                 } catch {
                     anyError = true;
-                    if (base >= 0) h.updateOperationStep?.(id!, base + i, 'error');
+                    if (step.index >= 0) h.updateOperationStep?.(id!, step.index, 'error');
                 }
             })
         );
         return { anyError };
+    };
+
+    const add = async (steps: OperationStep[]): Promise<{ anyError: boolean }> => {
+        const base = reserve(steps.map(step => step.label));
+        return runReserved(steps.map((step, index) => ({ index: base >= 0 ? base + index : -1, fn: step.fn })));
     };
 
     const finish = (): { anyError: boolean } => {
@@ -183,7 +199,7 @@ export function beginOperation(
         return { anyError };
     };
 
-    return { add, finish };
+    return { reserve, runReserved, add, finish };
 }
 
 // ── OperationOverlay ─────────────────────────────────────────────────────────

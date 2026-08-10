@@ -50,9 +50,17 @@ interface UpgradeItem {
 
 // Navigation unmounts this panel; package work must not disappear with it.
 const coveredInstallIds = new Set<string>();
-const pendingInstallIds: Array<{ packageId: string; activityId: string }> = [];
+type PendingInstall = {
+  packageId: string;
+  activityId: string;
+  /** Index of the already-visible Processes row; null until the operation exists. */
+  operationStepIndex: number | null;
+};
+
+const pendingInstallIds: PendingInstall[] = [];
 const activeInstallActivityIds = new Set<string>();
 let installWorkerRunning = false;
+let activeInstallOperation: ReturnType<typeof beginOperation> | null = null;
 
 const CATEGORY_TABS = [
   { id: "all", label: "All" },
@@ -631,9 +639,10 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       return;
     }
 
-    const queued = uniqueIds.map(packageId => ({
+    const queued: PendingInstall[] = uniqueIds.map(packageId => ({
       packageId,
       activityId: recordPackageActivity({ packageId, label: apps.find(app => app.id === packageId)?.name || packageId, kind: "install" }),
+      operationStepIndex: null,
     }));
     queued.forEach(item => coveredInstallIds.add(item.packageId));
     queued.forEach(item => activeInstallActivityIds.add(item.activityId));
@@ -642,6 +651,12 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
 
     // A run is already in flight — its drain loop picks these up next.
     if (installWorkerRunning) {
+      // Make the new requests visible immediately as queued rows in the
+      // global Processes menu. They stay idle until the worker reaches them.
+      if (activeInstallOperation) {
+        const base = activeInstallOperation.reserve(queued.map(({ packageId }) => `Installing ${apps.find(app => app.id === packageId)?.name || packageId}`));
+        if (base >= 0) queued.forEach((item, index) => { item.operationStepIndex = base + index; });
+      }
       showSuccess(`Added ${uniqueIds.length} app${uniqueIds.length === 1 ? "" : "s"} to the running install.`);
       return;
     }
@@ -657,6 +672,14 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       await waitForPackageOperation();
     }
     const op = beginOperation("Installing apps", { accent: 'blue' });
+    activeInstallOperation = op;
+    // Reserve every app already in the FIFO before package-manager setup. The
+    // Processes menu can therefore show the complete queue from the first
+    // moment, while each row remains visibly queued until its install starts.
+    const initialBase = op.reserve(pendingInstallIds.map(({ packageId }) => `Installing ${apps.find(app => app.id === packageId)?.name || packageId}`));
+    if (initialBase >= 0) {
+      pendingInstallIds.forEach((item, index) => { item.operationStepIndex = initialBase + index; });
+    }
     try {
       // ── Pre-flight (sequential) — package manager must be present
       // before we can spawn any parallel install workers.
@@ -673,8 +696,8 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       // mid-run are installed by this same worker under this same row.
       while (pendingInstallIds.length > 0) {
         const batch = pendingInstallIds.splice(0);
-        await op.add(batch.map(({ packageId, activityId }) => ({
-          label: `Installing ${apps.find(a => a.id === packageId)?.name || packageId}`,
+        await op.runReserved(batch.map(({ packageId, activityId, operationStepIndex }) => ({
+          index: operationStepIndex ?? -1,
           fn: async () => {
             setPackageActivityStatus(activityId, "running");
             const response = await installWingetApps([packageId]);
@@ -689,7 +712,8 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
             // Move a successful install immediately. Waiting for the full
             // inventory refresh made the same app remain in the install grid
             // long enough to invite duplicate clicks and look duplicated.
-            setInstalledApps(prev => new Set(prev).add(packageId));
+            const id = packageId;
+            setInstalledApps(prev => new Set(prev).add(id));
             setUpdateAvailableApps(prev => {
               const next = new Set(prev);
               next.delete(packageId);
@@ -734,6 +758,7 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       showError(err instanceof Error ? err.message : "Install failed.");
     } finally {
       op.finish();
+      activeInstallOperation = null;
       installWorkerRunning = false;
       pendingInstallIds.length = 0;
       coveredInstallIds.clear();
