@@ -55,7 +55,19 @@ interface UnenrollInfo {
 }
 
 // Result shape shared by the initial request and status refreshes.
-type UnenrollResult = { status: string; approvals: number; required_approvals: number };
+type UnenrollResult = {
+  status: string;
+  approvals: number;
+  required_approvals: number;
+  // Pro deliberately maps a post-revocation 401 to this value. The server
+  // cannot return the ordinary status body after it has invalidated the
+  // check-in secret, so status alone is not the authoritative approval bit.
+  approved?: boolean;
+};
+
+function isUnenrollApproved(result: UnenrollResult) {
+  return result.approved === true || result.status === "approved" || result.status === "revoked";
+}
 
 export default function FleetConnectView() {
   const { data: license, isLoading: licenseLoading } = useLicenseQuery();
@@ -236,7 +248,7 @@ export default function FleetConnectView() {
   async function requestOrPollUnenroll() {
     const res = await invoke<UnenrollResult>("fleet_request_unenroll");
     setUnenrollInfo({ status: res.status, approvals: res.approvals, required: res.required_approvals });
-    if (res.status === "approved") {
+    if (isUnenrollApproved(res)) {
       await finalizeApprovedUnenroll();
       return;
     }
@@ -247,7 +259,7 @@ export default function FleetConnectView() {
         const r = await invoke<UnenrollResult>("fleet_unenroll_status");
         consecutiveFailures = 0;
         setUnenrollInfo({ status: r.status, approvals: r.approvals, required: r.required_approvals });
-        if (r.status === "approved") await finalizeApprovedUnenroll();
+        if (isUnenrollApproved(r)) await finalizeApprovedUnenroll();
       } catch (err) {
         // Transient hiccups (Pro mid-restart, network blip) are common on a
         // multi-minute wait — tolerate a few before giving up so we don't
