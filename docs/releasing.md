@@ -1,12 +1,16 @@
-# Free GitHub Release workflow
+# Free R2 release workflow
 
-The Free updater reads GitHub Releases directly:
+The Free updater reads the R2-backed public update domain directly:
 
-`https://github.com/servalabs/wincommander/releases/latest/download/latest.json`
+`https://winupdates.servalabs.com/free/latest.json`
 
 The protected public release workflow builds and Tauri-signs the MSI, attests
-its provenance, then publishes the MSI, signature, `latest.json`, checksum,
-and SBOM to the versioned GitHub Release. Free does not use R2.
+its provenance, then uploads the MSI, minisign signature, SHA-256 checksum,
+and SBOM to R2 under `/free/vX.Y.Z/`. Once those immutable artifacts are
+available, it updates `/free/latest.json` as the signed updater pointer. The
+same artifacts remain attached to the versioned GitHub Release as the public
+release archive, but Free does not use GitHub Releases for update checks or
+downloads.
 
 ## Publish an exact version
 
@@ -15,22 +19,9 @@ and SBOM to the versioned GitHub Release. Free does not use R2.
 2. Merge that PR. The tag workflow creates the protected `vX.Y.Z` tag and
    invokes the release workflow.
 3. Approve the protected `release` environment. The workflow builds from the
-   tag and publishes the GitHub Release.
+   tag, copies the artifacts to R2 and its updater manifest, then publishes the
+   same files to the GitHub Release archive.
 
-The Tauri updater manifest always points to the MSI in the same versioned
-GitHub Release, so the manifest and installer cannot drift.
-
-## Existing Free installations on the legacy R2 endpoint
-
-Installations released before this GitHub endpoint still query
-`/free/latest.json` on R2. After the new GitHub Release is live, run the
-one-time bridge from the private checkout:
-
-```powershell
-.\tools\migrate-free-updater-to-github.ps1 -Version X.Y.Z -Publish
-```
-
-It copies only the verified GitHub `latest.json` to the legacy R2 pointer. The
-manifest sends old clients to the signed MSI on GitHub; it never uploads a Free
-installer or signature to R2. Keep the bridge pointer while those versions are
-still supported.
+The updater manifest points to the versioned R2 MSI, so the manifest and
+installer cannot drift. The release environment must provide `CF_UPDATE_DOMAIN`,
+`CF_R2_API`, `R2_KEY`, and `R2_SECRET`.

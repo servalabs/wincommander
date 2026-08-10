@@ -66,7 +66,7 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/servalabs/wincommander/releases/latest/download/latest.json"
+        "https://winupdates.servalabs.com/free/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI4ODY4MjkxOUU5QjJGNUEKUldSYUw1dWVrWUtHdUpyNURuLzFwQ2kwbDBzM0VmZUZtczIzU2EwNUpyaFFjMTRKOWVFUkMxRGkK"
     }

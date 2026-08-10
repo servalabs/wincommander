@@ -24,17 +24,17 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write # publish GitHub Release assets
+  contents: write # publish the GitHub Release archive
   id-token: write # keyless Sigstore provenance
   attestations: write # persist build provenance
 
 jobs:
   build-free-release:
-    name: Build, sign, publish, and attest Free MSI
+    name: Build, sign, publish to R2 and GitHub, and attest Free MSI
     runs-on: windows-latest
     environment:
       name: release
-      url: https://github.com/${{ github.repository }}/releases/tag/${{ env.RELEASE_TAG }}
+      url: https://winupdates.servalabs.com/free/latest.json
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -161,7 +161,7 @@ jobs:
         shell: pwsh
         env:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
-          REPOSITORY: ${{ github.repository }}
+          UPDATE_DOMAIN: ${{ secrets.CF_UPDATE_DOMAIN }}
         run: |
           if (-not $env:RELEASE_TAG.StartsWith("v")) {
             throw "Release tags must start with 'v': $env:RELEASE_TAG"
@@ -197,6 +197,13 @@ jobs:
           $manifestPath = Join-Path $assetDirectory "latest.json"
           $checksumPath = Join-Path $assetDirectory "SHA256SUMS.txt"
           $assetName = [Uri]::EscapeDataString($msi.Name)
+          $updateDomain = $env:UPDATE_DOMAIN.Trim().TrimEnd('/')
+          if ([string]::IsNullOrWhiteSpace($updateDomain)) {
+            throw "The release environment does not provide CF_UPDATE_DOMAIN."
+          }
+          if ($updateDomain -notmatch '^https?://') {
+            $updateDomain = "https://$updateDomain"
+          }
           $manifest = @{
             version = $version
             notes = "WinCommander Free v$version"
@@ -204,7 +211,7 @@ jobs:
             platforms = @{
               "windows-x86_64" = @{
                 signature = $signature
-                url = "https://github.com/$env:REPOSITORY/releases/download/$env:RELEASE_TAG/$assetName"
+                url = "$updateDomain/free/v$version/$assetName"
               }
             }
           } | ConvertTo-Json -Depth 6
@@ -235,7 +242,45 @@ jobs:
             wincommander-free.sbom.cdx.json
           if-no-files-found: error
 
-      - name: Publish GitHub Release
+      # Upload immutable artifacts before the mutable latest.json pointer. A
+      # client that sees a new manifest can therefore always fetch its MSI and
+      # minisign sidecar from the same R2 release.
+      - name: Publish signed Free release to R2
+        shell: pwsh
+        env:
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.CF_R2_API }}
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_KEY }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rcloneZip = Join-Path $env:RUNNER_TEMP "rclone.zip"
+          $rcloneDir = Join-Path $env:RUNNER_TEMP "rclone"
+          Invoke-WebRequest "https://downloads.rclone.org/rclone-current-windows-amd64.zip" -OutFile $rcloneZip
+          Expand-Archive -Path $rcloneZip -DestinationPath $rcloneDir -Force
+          $rclone = (Get-ChildItem $rcloneDir -Filter "rclone.exe" -Recurse | Select-Object -First 1).FullName
+          if (-not $rclone) { throw "rclone.exe was not found after download." }
+
+          $remote = "r2:wincommander-updates"
+          $version = $env:RELEASE_TAG.Substring(1)
+          $msiName = Split-Path -Leaf $env:MSI_PATH
+          & $rclone copyto $env:MSI_PATH "$remote/free/v$version/$msiName" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned MSI to R2." }
+          & $rclone copyto $env:MSI_SIGNATURE_PATH "$remote/free/v$version/$msiName.sig" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned MSI signature to R2." }
+          & $rclone copyto $env:CHECKSUM_PATH "$remote/free/v$version/SHA256SUMS.txt" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned checksum to R2." }
+          & $rclone copyto "wincommander-free.sbom.cdx.json" "$remote/free/v$version/wincommander-free.sbom.cdx.json" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned SBOM to R2." }
+          & $rclone copyto $env:MSI_PATH "$remote/free/latest.msi" "--ignore-times" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not promote the latest MSI to R2." }
+          & $rclone copyto $env:LATEST_JSON_PATH "$remote/free/latest.json" "--ignore-times" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish free/latest.json to R2." }
+
+      # GitHub Releases remain the public release archive. The installed app
+      # does not read this release or download its updater from GitHub.
+      - name: Publish GitHub Release archive
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

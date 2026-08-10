@@ -68,7 +68,7 @@ jobs:
           echo "release_tag=v${version}" >> "$GITHUB_OUTPUT"
 
   build-signed-free-msi:
-    name: Build, sign, publish, and attest Free MSI
+    name: Build, sign, publish to R2 and GitHub, and attest Free MSI
     needs: create-release-tag
     uses: ./.github/workflows/release.yml
     with:

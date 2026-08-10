@@ -39,7 +39,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 //
 // This must stay in lock-step with src/hooks/useProInstall.ts's
 // PRO_MANIFEST_BASE. It governs only Pro manifests and binaries; the Free
-// Tauri updater has its own minisign-verified GitHub Release endpoint.
+// Tauri updater has its own minisign-verified R2-backed endpoint.
 //
 // White-label: an OEM build overrides the pinned host at compile time via the
 // WINCMD_UPDATE_HOST env var. This does NOT relax F-1 — the binary still pins to
