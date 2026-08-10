@@ -147,7 +147,7 @@ webview2-com = "=0.38.2"
 #   Win32_UI_Shell_Common — ITEMIDLIST, which the two PIDL APIs above take.
 # GetForegroundWindow/GetAncestor/GetTopWindow/GetWindow deliberately stay on
 # windows-sys (already enabled below) so no UI feature is added here.
-windows = { version = "=0.61.3", features = [
+windows = { version = "=0.62.2", features = [
   "Win32_System_Com",
   "Win32_System_Ole",
   "Win32_System_Variant",
