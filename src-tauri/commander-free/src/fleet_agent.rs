@@ -197,6 +197,20 @@ pub async fn fleet_connect(
                 "serverUrl": server_url,
                 "dispatch": dispatch,
                 "signingKeyPub": signing_key_pub,
+                "privacyShieldSessionOwned": false,
+            },
+            // Default-on while enrolled, per Fleet policy. The server can
+            // immediately replace these with a signed epoch (including off),
+            // but an enrolled endpoint never waits for a local card click to
+            // begin the local-only privacy monitor.
+            "modules": { "privacyShield": true }
+        },
+        "ideal": {
+            "privacy": {
+                "privacyShield": {
+                    "fleetManaged": true,
+                    "fleetMonitoringEnabled": true,
+                }
             }
         },
         "policy": {
@@ -649,6 +663,31 @@ pub async fn fleet_update_posture_snapshot() -> Result<serde_json::Value, String
         .map_err(|e| e.to_string())
 }
 
+/// Send a privacy-shield *state* transition to the dedicated Fleet agent.
+/// This payload intentionally carries no frame, image, application content, or
+/// camera identifier. The Pro agent persists/delivers only this small status
+/// record to the Fleet console.
+#[tauri::command]
+pub async fn fleet_report_privacy_shield_status(
+    status: String,
+    detail: Option<String>,
+) -> Result<serde_json::Value, String> {
+    crate::license::require_service_feature("fleet")?;
+    let settings = crate::settings::read_settings()?;
+    if !settings.app.fleet.enabled {
+        return Err("Fleet is not enabled on this device.".to_string());
+    }
+    crate::sidecar::dispatch_paid_command(
+        "fleet_agent_privacy_shield_status",
+        serde_json::json!({
+            "status": status,
+            "detail": detail,
+            "framesUploaded": false,
+        }),
+    )
+    .await
+}
+
 /// Request to leave the fleet. Posts to the fleet server's unenroll-request
 /// endpoint so an admin (two Operator+ admins under MPA) can approve the
 /// departure. Idempotent — calling again while a pending request exists
@@ -744,7 +783,13 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
     // Approved: proceed with disconnect below.
 
     // Persist the disabled flag so the agent stays off on next launch.
-    let patch = serde_json::json!({ "app": { "fleet": { "enabled": false } } });
+    let patch = serde_json::json!({
+        "app": { "fleet": { "enabled": false, "privacyShieldSessionOwned": false } },
+        "ideal": { "privacy": { "privacyShield": {
+            "fleetManaged": false,
+            "fleetMonitoringEnabled": false,
+        } } }
+    });
     crate::settings::patch_settings(patch)?;
 
     crate::sidecar::dispatch_paid_command("fleet_agent_disconnect", serde_json::Value::Null).await
@@ -761,8 +806,8 @@ mod tests {
         let obsolete_gate = ["require", "_paid(\"fleet agent\")"].concat();
         assert_eq!(
             source.matches(&service_gate).count(),
-            7,
-            "connect, status, policy apply, posture, unenroll request/status, and disconnect must all require Fleet"
+            8,
+            "connect, status, policy apply, posture, privacy-shield status, unenroll request/status, and disconnect must all require Fleet"
         );
         assert!(!source.contains(&obsolete_gate));
     }

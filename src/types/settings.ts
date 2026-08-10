@@ -392,6 +392,8 @@ export interface FleetSettings {
   dispatch: boolean;
   /** base64 Ed25519 fleet public key */
   signingKeyPub: string;
+  /** True only for a Privacy Shield session that Fleet started. */
+  privacyShieldSessionOwned?: boolean;
 }
 
 /** Paid: one reusable metric alert. Hysteresis and sustained-breach
@@ -890,6 +892,10 @@ export interface AppCapabilitySettings {
 }
 
 export interface PrivacyShieldSettings {
+  /** Signed Fleet policy: enable local-only attention monitoring. */
+  fleetMonitoringEnabled?: boolean | null;
+  /** Signed Fleet policy owns start/stop and locks local controls. */
+  fleetManaged?: boolean | null;
   gazeDetectionEnabled: boolean | null;
   antiPeepingEnabled: boolean | null;
   cameraHunterEnabled: boolean | null;

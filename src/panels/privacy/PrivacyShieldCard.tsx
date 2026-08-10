@@ -5,7 +5,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { showSuccess, showError, showWarning } from "../../utils/toast";
+import { showSuccess, showError } from "../../utils/toast";
 import AIRuntimeInstaller from "./AIRuntimeInstaller";
 import useBackend, { executeBackendCommand } from "../../hooks/useBackend";
 import { useAppState } from "../../context/AppContext";
@@ -74,6 +74,11 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const { hasPaid } = useEntitlements();
     const { data: quota } = useShieldQuotaQuery();
     const invalidateShieldQuota = useInvalidateShieldQuota();
+    const fleetShieldManaged = appSettings?.app?.fleet?.enabled === true
+        && appSettings?.ideal?.privacy?.privacyShield?.fleetManaged === true
+        && appSettings?.app?.fleet?.privacyShieldSessionOwned === true;
+    const fleetShieldMonitoring = fleetShieldManaged
+        && appSettings?.ideal?.privacy?.privacyShield?.fleetMonitoringEnabled === true;
 
     const { density } = useVisibility();
     const isAdvanced = density === 'expert';
@@ -183,6 +188,25 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         _toggleHydratedFromSettings = true;
     }, [appSettings]);
 
+    // A signed Fleet epoch can update this card while it is mounted. Normal
+    // local edits stay protected by the one-time hydration guard above, but a
+    // Fleet-owned shield must immediately reflect the new policy and must not
+    // write stale local state back over it.
+    useEffect(() => {
+        if (!fleetShieldManaged || !appSettings) return;
+        const ps = appSettings.ideal.privacy?.privacyShield;
+        if (!ps) return;
+        setPrivacyConfig(prev => ({
+            ...prev,
+            blurOnLookAway: ps.gazeDetectionEnabled ?? prev.blurOnLookAway,
+            blurOnMultipleFaces: ps.antiPeepingEnabled ?? prev.blurOnMultipleFaces,
+            blurOnCamera: ps.cameraHunterEnabled ?? prev.blurOnCamera,
+            confidence: ps.confidenceThreshold ?? prev.confidence,
+            overlayOpacity: ps.blurOpacity ?? prev.overlayOpacity,
+        }));
+        setAutostart(ps.autostart ?? false);
+    }, [fleetShieldManaged, appSettings]);
+
     // Persist toggle + slider changes to settings as the user edits them
     // (debounced). Without this, toggles flipped ON in the UI never make
     // it to storage; the next appSettings poll then re-applies the stale
@@ -191,7 +215,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // render before hydration completes.
     useEffect(() => {
         if (!_toggleHydratedFromSettings) return;
-        if (privacyShieldRunning === true) return;
+        if (privacyShieldRunning === true || fleetShieldManaged) return;
         const t = setTimeout(() => {
             patchAppSettings({ ideal: { privacy: { privacyShield: {
                 gazeDetectionEnabled: privacyConfig.blurOnLookAway,
@@ -318,7 +342,9 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         invalidateShieldQuota();
     }, [consumeElapsedSession, invalidateShieldQuota, openShieldPaywall]);
 
-    useShieldQuotaTicker(privacyShieldRunning === true, handleShieldExhausted);
+    // Fleet-run sessions are charged/stopped by BackgroundPollers so the
+    // monitoring service remains correct even when this card is unmounted.
+    useShieldQuotaTicker(privacyShieldRunning === true && !fleetShieldManaged, handleShieldExhausted);
     const quotaMinutesRemaining = quota?.minutes_remaining;
     const quotaIsUnlimited = quota?.is_unlimited;
 
@@ -369,6 +395,10 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     }, [privacyShieldRunning, localLoading]);
 
     const handleToggle = async () => {
+        if (fleetShieldManaged) {
+            showError("Privacy Shield is managed by your Fleet administrator.");
+            return;
+        }
         const targetState = !privacyShieldRunning;
         if (targetState && !privacyConfig.blurOnLookAway && !privacyConfig.blurOnMultipleFaces && !privacyConfig.blurOnCamera) {
             showError("Enable at least one blur trigger before starting the Privacy Shield.");
@@ -402,12 +432,6 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     setPrivacyShieldRunning(true);
                     setAiRuntimeInstalled(true);
                     await invoke("update_tray_shield_label", { running: true });
-                    if (typeof window !== 'undefined' && window.screen) {
-                        const isMultiMonitor = (screen as any).isExtended === true
-                            || (window.screen.availWidth > window.screen.width * 1.3)
-                            || (window.outerWidth > window.screen.width * 1.1);
-                        if (isMultiMonitor) showWarning("External monitor detected — Privacy Shield only covers your primary display.");
-                    }
                     patchAppSettings({ ideal: { privacy: { privacyShield: {
                         gazeDetectionEnabled: privacyConfig.blurOnLookAway,
                         antiPeepingEnabled: privacyConfig.blurOnMultipleFaces,
@@ -462,7 +486,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             text={privacyShieldRunning ? (isAdvanced ? "Stop Shield" : "Turn Off") : (isAdvanced ? "Activate Shield" : "Turn On")}
             intent={privacyShieldRunning ? "danger" : "primary"}
             onClick={handleToggle}
-            disabled={privacyShieldRunning ? false : localLoading || cameraAvailable === false}
+            disabled={fleetShieldManaged || (privacyShieldRunning ? false : localLoading || cameraAvailable === false)}
             loading={privacyShieldRunning ? false : localLoading}
             className="shield-primary-btn physical-shield-header-btn"
         />
@@ -570,6 +594,11 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                 100% on-device - no camera frames or data sent to the cloud.
                             </p>
                         </div>
+                        {fleetShieldManaged && (
+                            <p className="text-[10px] text-[var(--color-accent)] mt-1">
+                                Fleet managed · {fleetShieldMonitoring ? "monitoring is on; blur follows the locked trigger policy." : "monitoring is off by Fleet policy."}
+                            </p>
+                        )}
                         {cameraAvailable === false && privacyShieldRunning !== true && (
                             <p className="text-[10px] text-[var(--color-warning)] mt-1 max-w-[320px]">
                                 {cameraMessage || "No usable webcam was detected on this PC, so Privacy Shield cannot monitor the screen."}
@@ -582,16 +611,16 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     <AIRuntimeInstaller onInstalled={() => { setAiRuntimeInstalled(true); refreshPrivacy(); }} />
                 )}
 
-                <div className="rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] p-4">
+                <div className={`rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] p-4 ${fleetShieldManaged ? "pointer-events-none opacity-70" : ""}`}>
                     {/* Blur conditions are intentionally kept together: these
                         are the three inputs that directly decide whether the
                         screen is obscured. */}
                     <div className="flex flex-col gap-3">
                         <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Blur triggers" : "Activation Triggers"}</span>
                         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,160px),1fr))] gap-3">
-                            <div><ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true} /></div>
-                            <div><ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true} /></div>
-                            <div><ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: blurs when a phone or camera is pointed at the screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true} /></div>
+                            <div><ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true || fleetShieldManaged} /></div>
+                            <div><ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true || fleetShieldManaged} /></div>
+                            <div><ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: blurs when a phone or camera is pointed at the screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true || fleetShieldManaged} /></div>
                         </div>
                     </div>
 
@@ -609,7 +638,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                 if (v && !hasPaid) { openShieldPaywall(); return; }
                                 setAutostart(v);
                             }}
-                            disabled={false}
+                            disabled={fleetShieldManaged}
                         />
 
                         <button type="button" className="flex w-full items-center justify-between cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setShowAdvanced(!showAdvanced)} aria-expanded={showAdvanced} aria-controls="privacy-shield-processing-parameters">

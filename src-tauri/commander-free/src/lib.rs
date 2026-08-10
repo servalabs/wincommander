@@ -1761,6 +1761,16 @@ pub fn run() {
                         if let Some(state) = app.try_state::<TrayShieldState>() {
                             if let Ok(mut running) = state.running.lock() {
                                 if *running {
+                                    let fleet_owns_shield = settings::read_settings()
+                                        .map(|s| s.app.fleet.privacy_shield_session_owned)
+                                        .unwrap_or(false);
+                                    if fleet_owns_shield {
+                                        // The endpoint may still close the application,
+                                        // but it cannot stop a shield session that Fleet
+                                        // started. Keep the tray state/menu unchanged.
+                                        let _ = app.emit("fleet-privacy-shield-control-denied", ());
+                                        return;
+                                    }
                                     // Flip state + update menu text while the lock is
                                     // held, then drop it before spawning the async kill
                                     // so we never block the callback.
@@ -2897,6 +2907,7 @@ pub fn run() {
             fleet_agent::fleet_status,
             fleet_agent::fleet_apply_pending_epoch,
             fleet_agent::fleet_update_posture_snapshot,
+            fleet_agent::fleet_report_privacy_shield_status,
             fleet_agent::fleet_request_unenroll,
             fleet_agent::fleet_unenroll_status,
             // ── F6 Phase-1 Piece 2 — BootNext UEFI setter (non-destructive) ──

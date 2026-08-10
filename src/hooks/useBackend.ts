@@ -2017,12 +2017,20 @@ export function useBackend() {
       deviceWakeMultiplier: number = 2,
       multiFaceWakeMultiplier: number = 2,
       bufferFrames: number = 2,
-      captureSpeed: number = 1
+      captureSpeed: number = 1,
+      // Fleet monitoring can enable all detectors while these three flags
+      // retain the local Privacy Shield card's independent blur choices.
+      blurGaze: boolean = checkGaze,
+      blurFaces: boolean = checkFaces,
+      blurPhone: boolean = checkPhone,
     ) => execute<{ success: boolean; processId?: number; message?: string }>("Start-PrivacyShield", {
       Camera: camera,
       CheckGaze: checkGaze,
       CheckFaces: checkFaces,
       CheckPhone: checkPhone,
+      BlurGaze: blurGaze,
+      BlurFaces: blurFaces,
+      BlurPhone: blurPhone,
       CaptureOnDevice: captureOnDevice,
       CaptureOnMultiFace: captureOnMultiFace,
       ModelLevel: modelLevel,

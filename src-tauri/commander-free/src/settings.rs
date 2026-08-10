@@ -526,6 +526,11 @@ pub struct FleetSettings {
     /// Base64-encoded Ed25519 fleet public key (pinned; used to verify signed commands).
     #[serde(default)]
     pub signing_key_pub: String,
+    /// Runtime ownership marker for a Privacy Shield session that Fleet started.
+    /// This is not an admin policy value: it prevents Fleet enrolment from
+    /// retroactively locking an employee's already-manual shield session.
+    #[serde(default)]
+    pub privacy_shield_session_owned: bool,
 }
 
 /// Paid: decoy-mode preference. Defaults OFF with an empty `display_name`,
@@ -1189,6 +1194,15 @@ pub struct AppCapabilitySettings {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PrivacyShieldSettings {
+    /// Fleet policy master switch. When true on an enrolled device, the
+    /// background supervisor starts the local detector and reports attention
+    /// events; it never uploads frames.
+    #[serde(default)]
+    pub fleet_monitoring_enabled: Option<bool>,
+    /// Set only by signed Fleet policy. While true the local card is read-only
+    /// and start/stop ownership belongs to the Fleet supervisor.
+    #[serde(default)]
+    pub fleet_managed: Option<bool>,
     pub gaze_detection_enabled: Option<bool>,
     pub anti_peeping_enabled: Option<bool>,
     pub camera_hunter_enabled: Option<bool>,

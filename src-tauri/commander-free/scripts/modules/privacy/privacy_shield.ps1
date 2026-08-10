@@ -140,6 +140,11 @@ function Start-PrivacyShield {
         [switch]$CheckGaze,
         [switch]$CheckFaces,
         [switch]$CheckPhone,
+        # Fleet can monitor every detector while these independent controls
+        # decide which detected conditions blur the endpoint displays.
+        [switch]$BlurGaze,
+        [switch]$BlurFaces,
+        [switch]$BlurPhone,
         [switch]$CaptureOnDevice,
         [switch]$CaptureOnMultiFace,
         [string]$ModelLevel = "nano",
@@ -689,6 +694,13 @@ class ShieldWorker(QThread):
                     self._captured_for_device = False
                     self._captured_for_multi_face = False
                     self.state_changed.emit(True, "")
+                elif reason and reason != self._lock_reason:
+                    # A new condition can arrive while a prior condition is
+                    # still active (for example look-away followed by phone
+                    # detection). Emit the new reason so its independent blur
+                    # toggle and Fleet alert are evaluated immediately.
+                    self._lock_reason = reason
+                    self.state_changed.emit(False, reason)
             else:
                 buffer_ms = self.buffer_frames * 30.0
                 if self._distracted_ms >= buffer_ms:
@@ -729,12 +741,14 @@ class ShieldWorker(QThread):
 
 # --- UI Overlay ---
 class ShieldOverlay(QWidget):
-    def __init__(self, opacity=200):
+    def __init__(self, screen, opacity=200):
         super().__init__()
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool | Qt.WindowType.WindowTransparentForInput | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setGeometry(QApplication.primaryScreen().virtualGeometry())
+        # One overlay per physical display is reliable on mixed-DPI and
+        # negative-coordinate monitor layouts.
+        self.setGeometry(screen.geometry())
         
         # Message Label
         self.label = QLabel(self)
@@ -765,6 +779,14 @@ class ShieldOverlay(QWidget):
             else:
                 self.label.hide()
 
+class ShieldOverlays:
+    def __init__(self, app, opacity=200):
+        self.overlays = [ShieldOverlay(screen, opacity) for screen in app.screens()]
+
+    def update_state(self, is_clear, reason):
+        for overlay in self.overlays:
+            overlay.update_state(is_clear, reason)
+
 # --- Main App ---
 class ShieldApp(QObject):
     def __init__(self):
@@ -777,6 +799,9 @@ class ShieldApp(QObject):
         parser.add_argument('--check-gaze', action='store_true')
         parser.add_argument('--check-faces', action='store_true')
         parser.add_argument('--check-phone', action='store_true')
+        parser.add_argument('--blur-gaze', action='store_true')
+        parser.add_argument('--blur-faces', action='store_true')
+        parser.add_argument('--blur-phone', action='store_true')
         parser.add_argument('--capture-on-device', action='store_true')
         parser.add_argument('--capture-on-multi-face', action='store_true')
         
@@ -832,7 +857,7 @@ class ShieldApp(QObject):
         except Exception:
             pass
 
-        self.overlay = ShieldOverlay(opacity=self.args.overlay_opacity)
+        self.overlay = ShieldOverlays(self.app, opacity=self.args.overlay_opacity)
         # Pass new configurations
         self.worker = ShieldWorker(
             camera_idx=self.args.camera, 
@@ -849,12 +874,23 @@ class ShieldApp(QObject):
             buffer_frames=self.args.buffer_frames,
             capture_speed=max(1, min(4, self.args.capture_speed))
         )
-        self.worker.state_changed.connect(self.overlay.update_state)
-        self.worker.state_changed.connect(self._emit_look_event)
+        self.worker.state_changed.connect(self._handle_state)
         self.worker.status_msg.connect(lambda msg: log(f"Status: {msg}"))
         self.worker.init_failed.connect(self.handle_init_fail)
         self.worker.start()
         log("Shield worker started")
+
+    def _handle_state(self, is_clear, reason):
+        # Fleet/flow receives every transition. The local blur toggles only
+        # control visual enforcement; an unchecked toggle never silences an
+        # attention event.
+        self._emit_look_event(is_clear, reason)
+        should_blur = is_clear or (
+            (("LOOK AWAY" in reason) or ("NO FACE" in reason)) and self.args.blur_gaze
+        ) or (("MULTIPLE FACES" in reason) and self.args.blur_faces) or (
+            ("PHONE DETECTED" in reason) and self.args.blur_phone
+        )
+        self.overlay.update_state(is_clear or not should_blur, reason)
 
     def _emit_look_event(self, is_clear, reason):
         # Qt look-state change -> NDJSON sidecar. `is_clear` True means the
@@ -912,6 +948,9 @@ if __name__ == "__main__":
         if ($CheckGaze) { $pythonArgs += "--check-gaze" }
         if ($CheckFaces) { $pythonArgs += "--check-faces" }
         if ($CheckPhone) { $pythonArgs += "--check-phone" }
+        if ($BlurGaze) { $pythonArgs += "--blur-gaze" }
+        if ($BlurFaces) { $pythonArgs += "--blur-faces" }
+        if ($BlurPhone) { $pythonArgs += "--blur-phone" }
         if ($CaptureOnDevice) { $pythonArgs += "--capture-on-device" }
         if ($CaptureOnMultiFace) { $pythonArgs += "--capture-on-multi-face" }
 

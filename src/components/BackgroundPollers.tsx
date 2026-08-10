@@ -120,6 +120,11 @@ export default function BackgroundPollers({
   // not ideal/current — it's a preference, not a system-state mirror.
   const ramdiskAutostart = appSettings?.app?.vault?.ramdiskAutostart;
   const privacyShieldAutostart = appSettings?.ideal?.privacy?.privacyShield?.autostart === true;
+  const fleetPrivacyShield = appSettings?.app?.fleet?.enabled === true
+    && (appSettings?.ideal?.privacy?.privacyShield?.fleetManaged === true
+      || appSettings?.app?.fleet?.privacyShieldSessionOwned === true);
+  const fleetPrivacyMonitoringEnabled = fleetPrivacyShield
+    && appSettings?.ideal?.privacy?.privacyShield?.fleetMonitoringEnabled === true;
 
   // Keep the changing values in refs so the listener-registration effect below
   // can read them WITHOUT depending on appSettings — otherwise every settings
@@ -132,6 +137,7 @@ export default function BackgroundPollers({
   const privacyShieldAutostartRef = useRef(privacyShieldAutostart);
   const hasPaidRef = useRef(hasPaid);
   const appSettingsRef = useRef(appSettings);
+  const fleetShieldReportedStateRef = useRef<string | null>(null);
   useEffect(() => {
     modulesRef.current = modules;
     productivityQuietManagedRef.current = productivityQuietManaged;
@@ -140,6 +146,112 @@ export default function BackgroundPollers({
     hasPaidRef.current = hasPaid;
     appSettingsRef.current = appSettings;
   }, [modules, productivityQuietManaged, ramdiskAutostart, privacyShieldAutostart, hasPaid, appSettings]);
+
+  // Fleet-managed Privacy Shield supervisor. Privacy Shield remains the sole
+  // local camera client; Fleet supplies signed policy and receives status/
+  // incident metadata only. If Meet, a browser, or another app owns the
+  // camera, the local start simply fails, is reported as `camera_busy`, and
+  // is retried on the next low-frequency tick without changing Windows camera
+  // permissions or uploading a frame.
+  useEffect(() => {
+    if (!fleetPrivacyShield) return;
+    let cancelled = false;
+    let starting = false;
+    const report = async (status: string, detail?: string) => {
+      const key = `${status}:${detail ?? ""}`;
+      if (fleetShieldReportedStateRef.current === key) return;
+      fleetShieldReportedStateRef.current = key;
+      await invoke("fleet_report_privacy_shield_status", { status, detail }).catch(() => {});
+    };
+    const tick = async () => {
+      if (cancelled || starting) return;
+      const settings = appSettingsRef.current;
+      const ps = settings?.ideal?.privacy?.privacyShield;
+      if (!settings?.app?.fleet?.enabled) return;
+      const fleetOwnsSession = settings.app.fleet.privacyShieldSessionOwned === true;
+      try {
+        const status = await executeBackendCommand<{ running?: boolean; cameraAvailable?: boolean; cameraMessage?: string }>("Get-PrivacyShieldStatus");
+        const running = status.success && status.data?.running === true;
+        // A new signed policy can entirely remove Fleet ownership. Stop only
+        // the process Fleet previously started; a manual session is untouched.
+        if (ps?.fleetManaged !== true) {
+          if (running && fleetOwnsSession) {
+            await executeBackendCommand("Stop-PrivacyShield", {});
+            await invoke("patch_settings_cmd", { patch: { app: { fleet: { privacyShieldSessionOwned: false } } } }).catch(() => {});
+          }
+          await report("disabled_by_policy");
+          return;
+        }
+        if (ps.fleetMonitoringEnabled !== true) {
+          if (running && fleetOwnsSession) {
+            await executeBackendCommand("Stop-PrivacyShield", {});
+            await invoke("patch_settings_cmd", { patch: { app: { fleet: { privacyShieldSessionOwned: false } } } }).catch(() => {});
+          }
+          await report("disabled_by_policy");
+          return;
+        }
+        if (running) {
+          // A pre-existing employee-started session remains employee-owned.
+          // Fleet can observe its attention events but neither locks nor
+          // charges/stops it through this supervisor.
+          if (!fleetOwnsSession) {
+            await report("running_local_session");
+            return;
+          }
+          // Fleet service is paid, but the local Free Privacy Shield quota is
+          // intentionally still enforced. Stop and report exhaustion rather
+          // than silently allowing unlimited Fleet-run camera monitoring.
+          const quota = await invoke<{ is_unlimited: boolean; minutes_remaining: number }>("consume_shield_minutes", { minutes: 1.0 });
+          if (!quota.is_unlimited && quota.minutes_remaining <= 0) {
+            await executeBackendCommand("Stop-PrivacyShield", {});
+            await report("quota_exhausted", "Daily Privacy Shield quota exhausted.");
+          } else {
+            await report("running");
+          }
+          return;
+        }
+        if (status.success && status.data?.cameraAvailable === false) {
+          await report("camera_busy", status.data.cameraMessage ?? "Camera unavailable or in use by another app.");
+          return;
+        }
+        starting = true;
+        const result = await startPrivacyShield(
+          0,
+          // Always collect all attention classes for Fleet. The last three
+          // arguments keep visual blur bound to the signed/local card toggles.
+          true, true, true,
+          false, false,
+          ps?.modelSize ?? "medium",
+          ps?.confidenceThreshold ?? 0.5,
+          ps?.blurOpacity ?? 200,
+          ps?.wakeDelaySeconds ?? 150,
+          ps?.deviceWakeMultiplier ?? 5,
+          ps?.multiFaceWakeMultiplier ?? 5,
+          ps?.detectionBufferFrames ?? 2,
+          ps?.captureSpeed ?? 1,
+          ps?.gazeDetectionEnabled === true,
+          ps?.antiPeepingEnabled === true,
+          ps?.cameraHunterEnabled === true,
+        );
+        if (result.success) {
+          await invoke("patch_settings_cmd", { patch: { app: { fleet: { privacyShieldSessionOwned: true } } } }).catch(() => {});
+          await invoke("update_tray_shield_label", { running: true }).catch(() => {});
+          await report("running");
+        } else {
+          const detail = result.error ?? "Privacy Shield did not start.";
+          await report(/camera|webcam|videocapture|in use/i.test(detail) ? "camera_busy" : "start_failed", detail);
+        }
+      } catch {
+        // The next tick retries. Never surface a noisy local toast for an
+        // administrator-managed background service.
+      } finally {
+        starting = false;
+      }
+    };
+    void tick();
+    const interval = setInterval(() => { void tick(); }, 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [fleetPrivacyShield, fleetPrivacyMonitoringEnabled, startPrivacyShield]);
 
   // Buffers for batching rapid-fire shred-requested events. When a user
   // shift/ctrl-selects N files in Explorer and picks "Shred with
@@ -189,6 +301,10 @@ export default function BackgroundPollers({
     // Fires when user clicks "Enable Shield" in the system tray menu.
     // Gate: only act if the privacyShield module is enabled.
     const unlistenTrayShield = listen("tray-shield-toggle-requested", async () => {
+      if (appSettingsRef.current?.ideal?.privacy?.privacyShield?.fleetManaged === true) {
+        showWarning("Privacy Shield is managed by Fleet.");
+        return;
+      }
       if (!isModuleEnabled(modulesRef.current, 'privacyShield')) return;
       try {
         const res = await startPrivacyShield(0, true, false, false, false, false, "medium", 0.5, 200, 150, 5, 5, 2, 1);
@@ -204,6 +320,9 @@ export default function BackgroundPollers({
         await invoke("update_tray_shield_label", { running: false }).catch(() => {});
         showError("Failed to start Privacy Shield.", undefined, { kind: "notification" });
       }
+    });
+    const unlistenFleetShieldDenied = listen("fleet-privacy-shield-control-denied", () => {
+      showWarning("Privacy Shield was started by Fleet and can only be stopped by a Fleet administrator.");
     });
 
     // ── Tauri event: F-1 paste monitor detected ─────────────────────────
@@ -544,7 +663,7 @@ export default function BackgroundPollers({
     return () => {
       window.removeEventListener("apps-install-missing", handleAppsInstallMissing as EventListener);
       window.removeEventListener("apps-open-package-updates", handleOpenPackageUpdates);
-      for (const p of [unlistenShred, unlistenTrayShield, unlistenPasteMonitor, unlistenDecoy,
+      for (const p of [unlistenShred, unlistenTrayShield, unlistenFleetShieldDenied, unlistenPasteMonitor, unlistenDecoy,
         unlistenRansomware, unlistenCoercion,
         unlistenTriggerTest, unlistenRemoteAccess, unlistenScreenCapture, unlistenDriverProblem]) {
         p.then(f => { try { f(); } catch { /* already torn down */ } });

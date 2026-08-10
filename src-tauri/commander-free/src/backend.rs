@@ -4202,9 +4202,10 @@ fn shield_events_sidecar_path() -> Option<PathBuf> {
     )
 }
 
-/// Marker recording that the shield has denied webcam access and not yet
-/// restored it. Survives a crash / hard-kill so the next launch can heal a
-/// camera that was left denied (see `reconcile_shield_webcam_on_startup`).
+/// Legacy marker from builds that changed the machine-wide Windows webcam
+/// policy after a look-away event. New Privacy Shield builds never alter that
+/// policy: Meet, browsers, and every other camera client must always retain
+/// priority over our best-effort local detector.
 fn shield_webcam_denied_marker_path() -> Option<PathBuf> {
     let base = std::env::var("LOCALAPPDATA").ok()?;
     Some(
@@ -4215,67 +4216,25 @@ fn shield_webcam_denied_marker_path() -> Option<PathBuf> {
     )
 }
 
-/// Deny (`allow=false`) or restore-to-Allow (`allow=true`) webcam access via
-/// the existing `Set-AppCapabilityAccess` module command. Reused for the
-/// look-away deny, the look-back restore, and the teardown restore so the
-/// enforcement stays in one place.
-async fn set_shield_webcam_access(app: AppHandle, allow: bool) {
-    // Persist a deny-marker BEFORE denying so an abnormal exit (crash, Task
-    // Manager kill, shutdown) while denied is still recoverable on next launch.
-    // The Set-AppCapabilityAccess deny is machine-wide policy that outlives the
-    // process, so without this the camera could be left off with no in-app path
-    // to restore it.
-    if !allow {
-        if let Some(marker) = shield_webcam_denied_marker_path() {
-            if let Some(dir) = marker.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            let _ = std::fs::write(&marker, b"1");
-        }
-    }
-    let mut params: HashMap<String, String> = HashMap::new();
-    params.insert("Capability".to_string(), "webcam".to_string());
-    params.insert(
-        "Access".to_string(),
-        if allow { "Allow" } else { "Deny" }.to_string(),
-    );
-    match run_backend_script(app, "Set-AppCapabilityAccess".to_string(), params).await {
-        Ok(_) => {
-            crate::log_message(
-                "info",
-                &format!(
-                    "[PrivacyShield] webcam access set to {}",
-                    if allow { "Allow" } else { "Deny" }
-                ),
-            );
-            // Clear the marker only after a CONFIRMED restore — if the Allow
-            // failed we keep the marker so startup reconciliation retries.
-            if allow {
-                if let Some(marker) = shield_webcam_denied_marker_path() {
-                    let _ = std::fs::remove_file(&marker);
-                }
-            }
-        }
-        Err(e) => crate::log_message(
-            "warn",
-            &format!("[PrivacyShield] failed to set webcam access: {}", e),
-        ),
+/// Remove a legacy deny marker without changing the user's current Windows
+/// camera policy. It is deliberately a no-op with respect to camera access:
+/// Privacy Shield is a low-priority observer, never a camera permission
+/// controller.
+async fn set_shield_webcam_access(_app: AppHandle, _allow: bool) {
+    if let Some(marker) = shield_webcam_denied_marker_path() {
+        let _ = std::fs::remove_file(&marker);
     }
 }
 
-/// Teardown restore for the tray Quit / Toggle paths (lib.rs). Called when
-/// the shield is being stopped from outside the running app so the webcam is
-/// never left denied after the shield is gone.
+/// Compatibility cleanup for tray Quit / Toggle paths. This no longer changes
+/// webcam access; it only clears an orphan marker written by an older build.
 pub async fn restore_shield_webcam_access(app: AppHandle) {
     set_shield_webcam_access(app, true).await;
 }
 
-/// Startup safety net: if a prior session denied the webcam (marker present)
-/// but never restored it — the app was killed / crashed / rebooted while
-/// looked-away — restore it to Allow now. The shield is never auto-launched at
-/// boot, so a present marker at startup always means an orphaned deny; healing
-/// it here is also what lets the shield restart at all (with the camera denied,
-/// its own camera probe would fail before any reader/restore could run).
+/// Startup safety net for old builds that may have left a deny marker. We do
+/// not mutate the global webcam policy here: doing so could override a choice
+/// the user or their organisation made outside Privacy Shield.
 pub async fn reconcile_shield_webcam_on_startup(app: AppHandle) {
     let present = shield_webcam_denied_marker_path()
         .map(|m| m.exists())
@@ -4283,7 +4242,7 @@ pub async fn reconcile_shield_webcam_on_startup(app: AppHandle) {
     if present {
         crate::log_message(
             "warn",
-            "[PrivacyShield] orphaned webcam deny found at startup — restoring camera access",
+            "[PrivacyShield] legacy webcam marker found at startup — clearing without changing camera policy",
         );
         set_shield_webcam_access(app, true).await;
     }
@@ -4321,9 +4280,8 @@ static SHIELD_READER_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::Atom
 static SHIELD_READER_ACTIVE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// Tail the shield's look-state sidecar and:
-///   • on `look_away`  → forward a gaze event to the flow engine + notify + DENY webcam
-///   • on `look_back`  → restore webcam access to Allow
+/// Tail the shield's look-state sidecar and forward attention events to the
+/// local flow engine and Fleet. Detection never changes global webcam access.
 /// Lifetime is decoupled from the reported shield pid: the pid the wrapper
 /// returns can be short-lived / wrong while the Python overlay keeps writing, so
 /// the reader keeps tailing until the process is gone AND the sidecar has been
@@ -4348,7 +4306,6 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
             offset,
             sidecar.display()
         ));
-        let mut denied = false;
         let mut last_activity = std::time::Instant::now();
         let mut ticks: u64 = 0;
         loop {
@@ -4430,18 +4387,10 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
                                     &app,
                                     "Privacy Shield — look-away",
                                     &format!(
-                                        "{} — screen blurred and webcam access blocked until you return.",
+                                        "{} — screen privacy action engaged.",
                                         detail
                                     ),
                                 );
-                                // Cap the webcam-deny so a hung PowerShell can't freeze
-                                // the reader (and thus every subsequent gaze event).
-                                let _ = tokio::time::timeout(
-                                    std::time::Duration::from_secs(10),
-                                    set_shield_webcam_access(app.clone(), false),
-                                )
-                                .await;
-                                denied = true;
                             }
                             Some("look_back") => {
                                 crate::flow_bridge::flow_trace("shield-reader: look_back");
@@ -4449,14 +4398,6 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
                                     "privacy-shield-look-state",
                                     serde_json::json!({ "lookingAway": false }),
                                 );
-                                if denied {
-                                    let _ = tokio::time::timeout(
-                                        std::time::Duration::from_secs(10),
-                                        set_shield_webcam_access(app.clone(), true),
-                                    )
-                                    .await;
-                                    denied = false;
-                                }
                             }
                             other => {
                                 crate::flow_bridge::flow_trace(format!(
@@ -4505,14 +4446,8 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
             }
             tokio::time::sleep(std::time::Duration::from_millis(750)).await;
         }
-        // Shield stopped — restore the webcam and clear the look-away state.
-        if denied {
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                set_shield_webcam_access(app.clone(), true),
-            )
-            .await;
-        }
+        // Shield stopped — clear the visual look-away state. Camera access was
+        // never modified by this reader.
         let _ = app.emit(
             "privacy-shield-look-state",
             serde_json::json!({ "lookingAway": false }),
