@@ -270,11 +270,11 @@ export default function GlobalCommandPalette() {
             </div>
             <span>Switch to {theme === "dark" ? "Daylight (light)" : "Anduril (dark)"}</span>
           </CommandItem>
-          <CommandItem value="processes tasks running operations" onSelect={() => fire("toggle-processes-menu")}>
+          <CommandItem value="notifications alerts processes tasks" onSelect={() => fire("toggle-notifications")}>
             <div className={ICON_TILE}>
-              <Icon icon="processes" size={13} className={ICON_CLS} />
+              <Icon icon="notifications" size={13} className={ICON_CLS} />
             </div>
-            <span>Processes</span>
+            <span>Notifications</span>
           </CommandItem>
           <CommandItem value="secure delete shred file folder" onSelect={() => fire("open-shred-dialog")}>
             <div className={ICON_TILE}>
