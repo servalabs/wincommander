@@ -302,9 +302,9 @@ pub(crate) fn force_window_foreground(window: &tauri::WebviewWindow) {
         keybd_event, SetActiveWindow, SetFocus, KEYEVENTF_KEYUP, VK_MENU,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
-        SetWindowPos, ShowWindowAsync, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-        SW_RESTORE,
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsZoomed,
+        SetForegroundWindow, SetWindowPos, ShowWindowAsync, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_SHOWWINDOW, SW_RESTORE, SW_SHOWMAXIMIZED,
     };
     let Ok(raw_hwnd) = window.hwnd() else { return };
     let target: HWND = raw_hwnd.0 as HWND;
@@ -312,10 +312,17 @@ pub(crate) fn force_window_foreground(window: &tauri::WebviewWindow) {
         // Do not use the synchronous ShowWindow from a tray callback. At logon
         // Explorer and the app can be on different input queues; ShowWindow can
         // wait on the shell while the shell is waiting for this callback to
-        // return. ShowWindowAsync restores a minimized window without that
-        // circular wait, while SetWindowPos gives a never-before-visible
-        // --minimized launch an explicit visible top-level placement.
-        ShowWindowAsync(target, SW_RESTORE);
+        // return. Keep a maximized window maximized: the old unconditional
+        // SW_RESTORE ran after reveal_main_window() had maximized the app,
+        // making a full-search handoff visibly shrink back to its saved size.
+        // SetWindowPos still gives a never-before-visible --minimized launch
+        // an explicit visible top-level placement.
+        let show_command = if IsZoomed(target) != 0 {
+            SW_SHOWMAXIMIZED
+        } else {
+            SW_RESTORE
+        };
+        ShowWindowAsync(target, show_command);
         SetWindowPos(
             target,
             HWND_TOP,
