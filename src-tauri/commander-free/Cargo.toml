@@ -81,7 +81,7 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std", "r
 # Used by `flow_bundle::generate_signing_key` to seed a per-bundle Ed25519
 # keypair on export.
 rand_core = { version = "0.6", features = ["getrandom"] }
-base64 = "0.22"
+base64 = "0.23"
 minisign-verify = "0.2.5"
 # Per-install key derivation for the app-data store (datastore.rs).
 # argon2id params: 64 MiB / 2 iterations / 1 lane — interactive tuning.
