@@ -30,8 +30,11 @@ import NameResultsSection from "./NameResultsSection";
 import ContentResultsSection, { contentRowDir } from "./ContentResultsSection";
 import "./index.css";
 
+const SEARCH_FILES_HANDOFF_KEY = "wincommander.search-files-query";
+
 export default function SearchFilesPanel() {
   const search = useFileSearch();
+  const setFileSearchQuery = search.setQuery;
   // KT: content search previously ignored the Type/Size/Modified chips
   // entirely — compose them into backend query tokens here so "Inside
   // files" results honor the same chips the filename group does.
@@ -59,6 +62,35 @@ export default function SearchFilesPanel() {
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  const acceptHandoffQuery = useCallback((value: unknown) => {
+    if (typeof value !== "string") return;
+    const query = value.trim();
+    if (!query) return;
+    // setQuery schedules the normal file + content searches, so a handoff is
+    // a real search rather than merely text prefilled into the input.
+    setFileSearchQuery(query);
+  }, [setFileSearchQuery]);
+
+  // The compact Ctrl+Space launcher deliberately caps its visible rows. When
+  // a query has more matches, it hands its text to this complete results view.
+  useEffect(() => {
+    const query = window.localStorage.getItem(SEARCH_FILES_HANDOFF_KEY);
+    if (query !== null) {
+      window.localStorage.removeItem(SEARCH_FILES_HANDOFF_KEY);
+      acceptHandoffQuery(query);
+    }
+
+    // This also covers a second Ctrl+Space while Search Files is already the
+    // active panel (there is no remount in that case), and avoids depending on
+    // WebView localStorage sharing between the two native windows.
+    const onHandoff = (event: Event) => {
+      const detail = (event as CustomEvent<{ query?: unknown }>).detail;
+      acceptHandoffQuery(detail?.query);
+    };
+    window.addEventListener("search-files-query-handoff", onHandoff);
+    return () => window.removeEventListener("search-files-query-handoff", onHandoff);
+  }, [acceptHandoffQuery]);
 
   // The same file matched by name AND by content must not list twice —
   // the filename row wins, the content row is dropped.

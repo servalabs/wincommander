@@ -39,6 +39,8 @@ import { useSearchResultContextMenu } from "@/hooks/useSearchResultContextMenu";
 import "./EverythingSearchBar.css";
 
 const esbIconCache = new Map<string, string | null>();
+const SEARCH_FILES_HANDOFF_KEY = "wincommander.search-files-query";
+const QUICK_RESULT_LIMIT = 300;
 
 function getFallbackSearchIcon(result: SearchResult) {
   if (isDirectoryResult(result)) return { icon: "folder-close" as const, className: "esb-result-icon esb-icon-folder" };
@@ -132,10 +134,12 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
   const lockKeywordRef = useRef("lock");
   // Caret position to apply once React has written the demoted text.
   const pendingCaretRef = useRef<number | null>(null);
+  const queryTextRef = useRef("");
   // Escape is handled by a window-level CAPTURE listener that cannot read state
   // directly, so the current chip count is mirrored here for it.
   const chipCountRef = useRef(0);
   useEffect(() => { chipCountRef.current = query.chips.length; }, [query.chips.length]);
+  useEffect(() => { queryTextRef.current = query.text; }, [query.text]);
 
   // KT: depend on `resetSearch` (a stable useCallback), never on the whole
   // `search` object — that gets a new identity every render, and resetState
@@ -289,6 +293,24 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       triggerOverlayFocus();
     }).then(fn => { unlistenExplicitFocus = fn; });
 
+    // A second Ctrl+Space press asks Rust to open the complete Search Files
+    // panel. A Tauri acknowledgement carries the exact text to the main
+    // WebView; localStorage remains a fallback for the in-window "View all"
+    // button and for a panel that mounts after navigation.
+    let unlistenHandoff: (() => void) | null = null;
+    win.listen("handoff-search-query", () => {
+      const text = queryTextRef.current.trim();
+      if (text) window.localStorage.setItem(SEARCH_FILES_HANDOFF_KEY, text);
+      // Rust registers its one-shot listener *before* requesting this event.
+      // Do not rely on a fixed timeout here: on a busy WebView the old 40 ms
+      // delay could hide the overlay and change panels before this renderer
+      // had a chance to write the query.
+      emit("search-query-handoff-ready", { query: text }).catch(() => {
+        // The localStorage fallback still covers in-window navigation if a
+        // native event cannot be delivered during shutdown.
+      });
+    }).then(fn => { unlistenHandoff = fn; });
+
     // Native browser focus / visibility events fire when the WebView2
     // child HWND actually becomes active inside the native window — this
     // happens AFTER Tauri's window-level events on Windows, and is the
@@ -319,6 +341,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       unlistenFocus?.();
       unlistenBlur?.();
       unlistenExplicitFocus?.();
+      unlistenHandoff?.();
       window.removeEventListener("focus", onWinFocus);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (focusPollRef.current !== null) {
@@ -469,6 +492,12 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
 
   const totalRows = primary.length + dedupedContentRows.length;
   const activeIndex = Math.min(selectedIndex, Math.max(0, totalRows - 1));
+  // The count request is intentionally best-effort. A full quick-search page
+  // still means there may be more results even when that slower request timed
+  // out, so never hide the complete-results escape hatch in that case.
+  const hasMoreResults = search.totalCount !== null
+    ? search.totalCount > primary.length
+    : primary.length >= QUICK_RESULT_LIMIT;
 
   // The ghost is the ONE thing Tab acts on: a trailing-word chip candidate.
   // The shortcut launcher must not silently inherit Explorer's active folder:
@@ -787,9 +816,26 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         </div>
       )}
 
-      {search.totalCount !== null && search.totalCount > primary.length && (
+      {hasMoreResults && (
         <div className="esb-count">
-          Showing {primary.length} of {search.totalCount.toLocaleString()}
+          <span>
+            {search.totalCount === null
+              ? `Showing the first ${primary.length.toLocaleString()} results`
+              : `Showing ${primary.length} of ${search.totalCount.toLocaleString()}`}
+          </span>
+          <button
+            type="button"
+            className="esb-open-full-search"
+            onClick={() => {
+              // The panel mounts after navigation, so retain the handoff until
+              // its first effect can consume it instead of racing an event.
+              window.localStorage.setItem(SEARCH_FILES_HANDOFF_KEY, query.text);
+              close();
+              window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "search-files" }));
+            }}
+          >
+            View all results
+          </button>
         </div>
       )}
 

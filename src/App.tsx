@@ -878,6 +878,24 @@ function AppContent() {
     return () => window.removeEventListener('navigate-panel', handleNavigation as EventListener);
   }, [handlePanelChange]);
 
+  // The native second-Ctrl+Space path sends this only after the overlay has
+  // acknowledged its current query.  Keeping this listener at App level is
+  // essential: the normal main window does not render EverythingSearchBar,
+  // so a listener inside that component silently dropped the native event.
+  useEffect(() => {
+    const unlisten = listen<string>("open-search-files-panel", (event) => {
+      const query = typeof event.payload === "string" ? event.payload.trim() : "";
+      if (query) {
+        window.localStorage.setItem("wincommander.search-files-query", query);
+      }
+      handlePanelChange("search-files");
+      if (query) {
+        window.dispatchEvent(new CustomEvent("search-files-query-handoff", { detail: { query } }));
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [handlePanelChange]);
+
   // Title-bar shortcuts select a specific dashboard destination. Persist the
   // choice before navigation so it survives the Dashboard component mounting.
   useEffect(() => {

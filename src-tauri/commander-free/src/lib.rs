@@ -1,8 +1,11 @@
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, WindowEvent,
+    Emitter, Listener, Manager, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 mod action_steps;
@@ -823,8 +826,37 @@ fn elevate_display_label(target: &str) -> Result<(), String> {
 fn handle_search_hotkey(app: &tauri::AppHandle) {
     if let Some(overlay) = app.get_webview_window("search-overlay") {
         if overlay.is_visible().unwrap_or(false) {
-            let _ = overlay.hide();
-            open_search_files_panel(app);
+            // The quick-search text lives in the overlay WebView. Register
+            // the acknowledgement before asking for it; a fixed delay here
+            // used to lose the query on busy Windows/WebView2 instances.
+            let handoff_received = Arc::new(AtomicBool::new(false));
+            let handoff_received_listener = Arc::clone(&handoff_received);
+            let app_for_handoff = app.clone();
+            let handoff_listener = app.once("search-query-handoff-ready", move |event| {
+                handoff_received_listener.store(true, Ordering::Release);
+                let query = serde_json::from_str::<serde_json::Value>(event.payload())
+                    .ok()
+                    .and_then(|payload| payload.get("query")?.as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                if let Some(main) = app_for_handoff.get_webview_window("main") {
+                    let _ = main.emit("open-search-files-panel", query);
+                }
+            });
+
+            let overlay_clone = overlay.clone();
+            let app_clone = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = overlay_clone.emit("handoff-search-query", ());
+                // This is only a no-query fallback for a renderer that has
+                // crashed or is still starting. Normal operation continues
+                // from the acknowledgement above, with no timing race.
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let _ = overlay_clone.hide();
+                if !handoff_received.load(Ordering::Acquire) {
+                    app_clone.unlisten(handoff_listener);
+                    open_search_files_panel(&app_clone);
+                }
+            });
             return;
         }
         let _ = overlay.show();
