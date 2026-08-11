@@ -570,7 +570,11 @@ fn defender_exclusion_already_set() -> bool {
         .and_then(|path| path.parent().map(|parent| parent.display().to_string()))
         .unwrap_or_default();
     defender_pref_field("ExclusionPath -join '|'")
-        .map(|joined| joined.split('|').any(|path| path.eq_ignore_ascii_case(&pro_bin)))
+        .map(|joined| {
+            joined
+                .split('|')
+                .any(|path| path.eq_ignore_ascii_case(&pro_bin))
+        })
         .unwrap_or(false)
 }
 

@@ -361,8 +361,8 @@ pub fn register_file_search_commands() {
 }
 
 use aes_gcm::{
-    Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
 };
 use sha2::{Digest, Sha256};
 
@@ -4386,10 +4386,7 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
                                 let _ = crate::native_notify::show_native_notification(
                                     &app,
                                     "Privacy Shield — look-away",
-                                    &format!(
-                                        "{} — screen privacy action engaged.",
-                                        detail
-                                    ),
+                                    &format!("{} — screen privacy action engaged.", detail),
                                 );
                             }
                             Some("look_back") => {
@@ -4871,7 +4868,7 @@ pub async fn run_bleachbit_clean(
 // skipped. System Cleaner and the app-removal step are special-cased
 // because they're not regular `run_backend_script` commands.
 
-use crate::action_steps::{DESTRUCT_STEPS, DestructGroup, DestructStepDef};
+use crate::action_steps::{DestructGroup, DestructStepDef, DESTRUCT_STEPS};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DestructStep {
@@ -6501,12 +6498,10 @@ mod es_query_tests {
 
     #[test]
     fn ordinary_query_tokens_pass() {
-        assert!(
-            validate_es_tokens(&tokenize_es_query(
-                "folder: ext:md;rs size:>100mb !ext:dll a|b"
-            ))
-            .is_ok()
-        );
+        assert!(validate_es_tokens(&tokenize_es_query(
+            "folder: ext:md;rs size:>100mb !ext:dll a|b"
+        ))
+        .is_ok());
     }
 
     // ── Sort allowlist ──

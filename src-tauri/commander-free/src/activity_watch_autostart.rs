@@ -30,7 +30,10 @@ pub fn init() {
         // Let the single-instance guard, tray, and WebView initialize first.
         thread::sleep(Duration::from_secs(3));
         if let Err(error) = ensure_started() {
-            crate::log_message("warn", &format!("[ActivityWatch] auto-start skipped: {error}"));
+            crate::log_message(
+                "warn",
+                &format!("[ActivityWatch] auto-start skipped: {error}"),
+            );
         }
     });
 }
@@ -45,10 +48,14 @@ struct Binaries {
 
 #[cfg(windows)]
 fn ensure_started() -> Result<(), String> {
-    let binaries = discover_binaries().ok_or_else(|| "ActivityWatch is not installed".to_string())?;
+    let binaries =
+        discover_binaries().ok_or_else(|| "ActivityWatch is not installed".to_string())?;
     let running = running_processes();
 
-    if !running.iter().any(|name| name == "aw-server" || name == "aw-server-rust") {
+    if !running
+        .iter()
+        .any(|name| name == "aw-server" || name == "aw-server-rust")
+    {
         start(&binaries.server)?;
     }
 
@@ -65,7 +72,10 @@ fn ensure_started() -> Result<(), String> {
         start(&binaries.window)?;
     }
 
-    crate::log_message("info", "[ActivityWatch] server and watchers ensured at startup");
+    crate::log_message(
+        "info",
+        "[ActivityWatch] server and watchers ensured at startup",
+    );
     Ok(())
 }
 
@@ -113,7 +123,10 @@ pub async fn activity_watch_request(path: String) -> Result<serde_json::Value, S
     if !response.status().is_success() {
         return Err(format!("ActivityWatch returned HTTP {}", response.status()));
     }
-    if response.content_length().is_some_and(|length| length > 64 * 1024 * 1024) {
+    if response
+        .content_length()
+        .is_some_and(|length| length > 64 * 1024 * 1024)
+    {
         return Err("ActivityWatch returned an oversized response.".to_string());
     }
     response
@@ -153,13 +166,23 @@ fn discover_binaries() -> Option<Binaries> {
     if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
         let local_app_data = PathBuf::from(local_app_data);
         roots.push(local_app_data.join("Programs").join("ActivityWatch"));
-        let winget_packages = local_app_data.join("Microsoft").join("WinGet").join("Packages");
+        let winget_packages = local_app_data
+            .join("Microsoft")
+            .join("WinGet")
+            .join("Packages");
         if let Ok(entries) = std::fs::read_dir(winget_packages) {
-            roots.extend(entries.filter_map(Result::ok).map(|entry| entry.path()).filter(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.to_ascii_lowercase().starts_with("activitywatch"))
-            }));
+            roots.extend(
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| {
+                                name.to_ascii_lowercase().starts_with("activitywatch")
+                            })
+                    }),
+            );
         }
     }
     if let Some(program_files) = env::var_os("ProgramFiles") {
@@ -181,6 +204,10 @@ fn discover_binaries() -> Option<Binaries> {
         .find(|path| path.is_file())?;
         let afk = root.join("aw-watcher-afk\\aw-watcher-afk.exe");
         let window = root.join("aw-watcher-window\\aw-watcher-window.exe");
-        (afk.is_file() && window.is_file()).then_some(Binaries { server, afk, window })
+        (afk.is_file() && window.is_file()).then_some(Binaries {
+            server,
+            afk,
+            window,
+        })
     })
 }
