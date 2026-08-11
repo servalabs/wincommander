@@ -19,7 +19,6 @@ import { Popover, PopoverTrigger, PopoverContent } from "./ui/popover";
 import { Icon } from "./ui/icon";
 import { NotificationRow } from "./NotificationRow";
 import { TITLEBAR_ICON_BTN } from "./ui/titleBarButtonClass";
-import { useSovereigntyScore } from "../hooks/useSovereigntyScore";
 import {
   listNotifications,
   dismissNotification,
@@ -37,7 +36,6 @@ export default function AlertsMenu() {
   const [badgePulsing, setBadgePulsing] = useState(false);
   const prevBadgeRef = useRef(0);
   const [notifs, setNotifs] = useState<AppNotification[]>(() => listNotifications());
-  const score = useSovereigntyScore();
 
   const { alertNotifs, opsNotifs } = useMemo(() => splitNotificationsByKind(notifs), [notifs]);
   const { count: badgeCount, color: badgeColor } = useMemo(() => alertsBadge(alertNotifs), [alertNotifs]);
@@ -98,13 +96,9 @@ export default function AlertsMenu() {
         <div className="flex items-center gap-2 border-b border-[var(--border)] px-3.5 py-2.5">
           <Icon icon="notifications" size={13} style={{ color: "var(--text-dim)" }} />
           <div className="text-[13px] font-semibold text-[var(--text)]">Alerts</div>
-          {badgeCount > 0 ? (
+          {badgeCount > 0 && (
             <span className="grid h-[18px] min-w-[18px] place-items-center rounded-full bg-[var(--surface-3)] px-1.5 font-[family-name:var(--font-mono)] text-[10px] font-bold leading-none text-[var(--text-dim)]">
               {badgeCount}
-            </span>
-          ) : (
-            <span className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-wider text-[var(--text-mute)]">
-              All clear
             </span>
           )}
           <button
@@ -158,15 +152,7 @@ export default function AlertsMenu() {
           )}
 
           {alertNotifs.length === 0 && opsNotifs.length === 0 && (
-            <div className="flex flex-col items-center gap-2 py-8 text-center">
-              <div className="grid h-10 w-10 place-items-center rounded-full border border-[var(--border)] bg-[var(--surface-2)] text-[var(--ok)]">
-                <Icon icon="tick-circle" size={20} />
-              </div>
-              <div className="text-[12.5px] font-semibold text-[var(--text)]">All clear</div>
-              <div className="max-w-[220px] text-[11.5px] text-[var(--text-mute)]">
-                No security alerts. Health {score.total}%.
-              </div>
-            </div>
+            <div className="py-8 text-center text-[11.5px] text-[var(--text-mute)]">No pending alerts or notifications.</div>
           )}
         </div>
       </PopoverContent>
