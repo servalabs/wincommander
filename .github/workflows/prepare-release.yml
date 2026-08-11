@@ -50,6 +50,15 @@ jobs:
           const updatedCargo = cargo.replace(/^version = ".*"$/m, `version = "${version}"`);
           if (updatedCargo === cargo) throw new Error('Free Cargo package version was not found.');
           fs.writeFileSync(cargoPath, updatedCargo);
+
+          const lockPath = 'src-tauri/Cargo.lock';
+          const lock = fs.readFileSync(lockPath, 'utf8');
+          const updatedLock = lock.replace(
+            /(\[\[package\]\]\nname = "commander-free"\nversion = ")[^"]+(")/,
+            `$1${version}$2`,
+          );
+          if (updatedLock === lock) throw new Error('Free Cargo.lock package version was not found.');
+          fs.writeFileSync(lockPath, updatedLock);
           NODE
 
       - name: Create release pull request
@@ -69,7 +78,7 @@ jobs:
           git switch -c "${branch}"
           git config user.name "WinCommander release automation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json src-tauri/commander-free/tauri.conf.json src-tauri/commander-free/Cargo.toml
+          git add package.json src-tauri/commander-free/tauri.conf.json src-tauri/commander-free/Cargo.toml src-tauri/Cargo.lock
           git commit -m "release: v${RELEASE_VERSION}"
           git push origin "${branch}"
           gh pr create \
