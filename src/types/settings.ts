@@ -896,6 +896,10 @@ export interface PrivacyShieldSettings {
   fleetMonitoringEnabled?: boolean | null;
   /** Signed Fleet policy owns start/stop and locks local controls. */
   fleetManaged?: boolean | null;
+  /** Maximum Fleet alert notifications per rolling window; 0 means unlimited. */
+  fleetNotificationLimit?: number | null;
+  /** Rolling-window duration for Fleet alerts, in seconds. */
+  fleetNotificationWindowSeconds?: number | null;
   gazeDetectionEnabled: boolean | null;
   antiPeepingEnabled: boolean | null;
   cameraHunterEnabled: boolean | null;

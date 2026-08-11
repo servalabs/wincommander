@@ -10,7 +10,7 @@ and SBOM to R2 under `/free/vX.Y.Z/`. Once those immutable artifacts are
 available, it updates `/free/latest.json` as the signed updater pointer. The
 same artifacts remain attached to the versioned GitHub Release as the public
 release archive, but Free does not use GitHub Releases for update checks or
-downloads.
+downloads. The Free release bucket is `windows`.
 
 ## Publish an exact version
 

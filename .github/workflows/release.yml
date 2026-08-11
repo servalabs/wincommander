@@ -262,7 +262,7 @@ jobs:
           $rclone = (Get-ChildItem $rcloneDir -Filter "rclone.exe" -Recurse | Select-Object -First 1).FullName
           if (-not $rclone) { throw "rclone.exe was not found after download." }
 
-          $remote = "r2:wincommander-updates"
+          $remote = "r2:windows"
           $version = $env:RELEASE_TAG.Substring(1)
           $msiName = Split-Path -Leaf $env:MSI_PATH
           & $rclone copyto $env:MSI_PATH "$remote/free/v$version/$msiName" "--s3-no-check-bucket"
