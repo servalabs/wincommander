@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/servalabs/wincommander/security/policy
+    about: |
+      Do not file security issues publicly. See SECURITY.md and email
+      security@servalabs.com instead.
+  - name: Question or design discussion
+    url: https://github.com/servalabs/wincommander/discussions
+    about: Use Discussions for questions, ideas, and design feedback.
+  - name: Commercial licensing / Enterprise
+    url: mailto:sales@servalabs.com
+    about: Sales, enterprise licensing, and procurement questions.

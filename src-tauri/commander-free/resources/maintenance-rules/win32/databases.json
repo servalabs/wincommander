@@ -1,0 +1,31 @@
+{
+  "$schema": "../schema/rules.schema.json",
+  "type": "databases",
+  "sharedDbFileSets": {
+    "chromium": ["History", "Cookies", "Network/Cookies", "Favicons", "Top Sites", "Web Data", "Shortcuts"],
+    "firefox": ["places.sqlite", "cookies.sqlite", "favicons.sqlite", "formhistory.sqlite", "webappsstore.sqlite", "content-prefs.sqlite"]
+  },
+  "targets": [
+    { "label": "Google Chrome", "basePath": "${LOCALAPPDATA}/Google/Chrome/User Data", "dbFiles": "$chromium", "multiProfile": true, "description": "Chrome browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Microsoft Edge", "basePath": "${LOCALAPPDATA}/Microsoft/Edge/User Data", "dbFiles": "$chromium", "multiProfile": true, "description": "Edge browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Brave", "basePath": "${LOCALAPPDATA}/BraveSoftware/Brave-Browser/User Data", "dbFiles": "$chromium", "multiProfile": true, "description": "Brave browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Vivaldi", "basePath": "${LOCALAPPDATA}/Vivaldi/User Data", "dbFiles": "$chromium", "multiProfile": true, "description": "Vivaldi browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Opera", "basePath": "${APPDATA}/Opera Software/Opera Stable", "dbFiles": "$chromium", "description": "Opera browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Opera GX", "basePath": "${APPDATA}/Opera Software/Opera GX Stable", "dbFiles": "$chromium", "description": "Opera GX browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Arc", "basePath": "${LOCALAPPDATA}/Arc/User Data", "dbFiles": "$chromium", "multiProfile": true, "description": "Arc browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Chromium", "basePath": "${LOCALAPPDATA}/Chromium/User Data", "dbFiles": "$chromium", "multiProfile": true, "description": "Chromium browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Thorium", "basePath": "${LOCALAPPDATA}/Thorium/User Data", "dbFiles": "$chromium", "multiProfile": true, "description": "Thorium browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Supermium", "basePath": "${LOCALAPPDATA}/Supermium/User Data", "dbFiles": "$chromium", "multiProfile": true, "description": "Supermium browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Helium", "basePath": "${LOCALAPPDATA}/imput/Helium/User Data", "dbFiles": "$chromium", "multiProfile": true, "description": "Helium browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Cromite", "basePath": "${LOCALAPPDATA}/Cromite/User Data", "dbFiles": "$chromium", "multiProfile": true, "description": "Cromite browsing history, cookies, favicons, autofill, and shortcut databases" },
+    { "label": "Firefox", "basePath": "${APPDATA}/Mozilla/Firefox/Profiles", "dbFiles": "$firefox", "multiProfile": true, "profilePattern": ["*.default*", "*.dev-edition*"], "description": "Firefox browsing history, cookies, favicons, form data, and site preferences" },
+    { "label": "Discord", "basePath": "${APPDATA}/discord", "dbFiles": ["Network/Cookies"], "description": "Discord network cookies database" },
+    { "label": "Slack", "basePath": "${APPDATA}/Slack", "dbFiles": ["Network/Cookies"], "description": "Slack network cookies database" },
+    { "label": "Microsoft Teams", "basePath": "${APPDATA}/Microsoft/Teams", "dbFiles": ["Network/Cookies"], "description": "Microsoft Teams network cookies database" },
+    { "label": "VS Code", "basePath": "${APPDATA}/Code", "dbFiles": ["Network/Cookies", "User/globalStorage/state.vscdb"], "description": "VS Code network cookies and global state database" },
+    { "label": "Cursor IDE", "basePath": "${APPDATA}/Cursor", "dbFiles": ["Network/Cookies", "User/globalStorage/state.vscdb"], "description": "Cursor IDE network cookies and global state database" },
+    { "label": "Figma", "basePath": "${APPDATA}/Figma", "dbFiles": ["Network/Cookies"], "description": "Figma network cookies database" },
+    { "label": "Postman", "basePath": "${APPDATA}/Postman", "dbFiles": ["Network/Cookies"], "description": "Postman network cookies database" },
+    { "label": "Thunderbird", "basePath": "${APPDATA}/Thunderbird/Profiles", "dbFiles": ["global-messages-db.sqlite", "places.sqlite", "cookies.sqlite"], "multiProfile": true, "profilePattern": ["*.default*"], "description": "Thunderbird global message index, places, and cookies databases" }
+  ]
+}

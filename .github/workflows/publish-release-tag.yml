@@ -1,0 +1,76 @@
+name: publish release tag
+
+# Only a merged release/vX.Y.Z PR can create the protected tag and start the
+# separate signed-MSI workflow. GitHub suppresses tag-triggered workflows when
+# the tag is made by an Actions run, so this workflow calls it directly.
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  create-release-tag:
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/v')
+    name: Create protected version tag
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.tag.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Validate release PR and push tag
+        id: tag
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          expected_branch="release/v${version}"
+          if [[ "${RELEASE_BRANCH}" != "${expected_branch}" ]]; then
+            echo "Release branch ${RELEASE_BRANCH} does not match package version ${version}." >&2
+            exit 1
+          fi
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid package version: ${version}" >&2
+            exit 1
+          fi
+          if [[ "$(node -p "require('./src-tauri/commander-free/tauri.conf.json').version")" != "${version}" ]]; then
+            echo "Tauri version does not match package version." >&2
+            exit 1
+          fi
+          if ! grep -q "^version = \"${version}\"$" src-tauri/commander-free/Cargo.toml; then
+            echo "Free Cargo version does not match package version." >&2
+            exit 1
+          fi
+
+          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null; then
+            echo "Tag v${version} already exists." >&2
+            exit 1
+          fi
+          git config user.name "WinCommander release automation"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${version}" -m "release: v${version}"
+          git push origin "v${version}"
+          echo "release_tag=v${version}" >> "$GITHUB_OUTPUT"
+
+  build-signed-free-msi:
+    name: Build, sign, publish to R2 and GitHub, and attest Free MSI
+    needs: create-release-tag
+    uses: ./.github/workflows/release.yml
+    with:
+      release_tag: ${{ needs.create-release-tag.outputs.release_tag }}
+    secrets: inherit

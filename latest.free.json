@@ -1,0 +1,11 @@
+{
+  "notes": "WinCommander Free v3.2.8",
+  "version": "3.2.8",
+  "pub_date": "2026-08-06T03:38:57Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSYUw1dWVrWUtHdU1QdjZKYmVLaDAxeG43SnpTc04weW9xL3BMaDRmQ0lBNmw5NVdBQm9KK0Z6amN2VmEyY0ZKYUtYVHlLRlJhUHJXcUllTk5yS083dStVd3M1V1YzVUFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg1OTY3NzM2CWZpbGU6V2luQ29tbWFuZGVyXzMuMi44X3g2NF9lbi1VUy5tc2kKQXVnSzlmZVpTVG5HWHJBN3NIUlVzbGhiTVBMTDZtbU5naE1HMUpIUCs2aFM2ZGcva0NoWnYzTThxdlNKUEp5YytuNExRdVlEeTBlRXlIZlZRQml3Q0E9PQo=",
+      "url": "https://winupdates.servalabs.com/free/v3.2.8/WinCommander_3.2.8_x64_en-US.msi"
+    }
+  }
+}

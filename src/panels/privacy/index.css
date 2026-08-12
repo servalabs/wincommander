@@ -1,0 +1,1031 @@
+.panic-hk-badge {
+    background: var(--color-danger-dim);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
+    border-radius: 5px;
+    color: var(--color-danger);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    padding: 4px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+}
+
+.panic-hk-badge:hover {
+    background: color-mix(in srgb, var(--color-danger) 22%, transparent);
+    border-color: color-mix(in srgb, var(--color-danger) 60%, transparent);
+}
+
+.panic-hk-input {
+    background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+    border: 1px solid var(--color-danger);
+    border-radius: 5px;
+    color: var(--color-danger);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    outline: none;
+    caret-color: transparent;
+    min-width: 130px;
+    text-align: center;
+    flex-shrink: 0;
+    animation: phk-pulse 0.8s ease-in-out infinite alternate;
+}
+
+.cleanup-scan-bar-inner {
+    animation: cleanup-scan-bar 1.5s ease-in-out infinite;
+}
+
+@keyframes cleanup-scan-bar {
+    0% { transform: translateX(-100%); }
+    50% { transform: translateX(150%); }
+    100% { transform: translateX(-100%); }
+}
+
+@keyframes phk-pulse {
+    from {
+        box-shadow: 0 0 4px color-mix(in srgb, var(--color-danger) 30%, transparent);
+    }
+
+    to {
+        box-shadow: 0 0 10px color-mix(in srgb, var(--color-danger) 70%, transparent);
+    }
+}
+
+/* Custom Tooltip Sizing for Execution Audit */
+.execution-audit-tooltip .bp6-popover-content {
+    max-width: none !important;
+    white-space: nowrap !important;
+    z-index: 99999 !important;
+}
+
+.panel-container {
+    width: 100%;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Responsive card grid — see the note in panels/tweaks/index.css. Cards fill
+   the width into as many ≥240px columns as fit, `dense` backfills gaps. */
+.panel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    grid-auto-flow: row dense;
+    gap: 12px;
+    align-items: start;
+}
+
+/* Alerts & Monitoring — two STATIC flex columns, not a grid and not CSS
+   multi-column. A grid's row track is sized to its tallest cell, so a short
+   card next to a tall one leaves a fixed gap that never closes (the
+   recurring "gap" bug). CSS multi-column was tried next and has the
+   opposite problem: the browser recomputes column membership on every
+   height change, so expanding one card can shuffle OTHER cards into a
+   different column — visible jumping, not just a gap. Each cell's column
+   is fixed at author-time in index.tsx (interleaved left/right) and never
+   changes. Each column is plain flex-column flow, so a card's height change
+   only pushes cards below it in that SAME column down by exactly that much
+   — no dead space, and the other column never moves. */
+.privacy-monitoring-columns {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding-right: 4px;
+}
+
+.privacy-monitoring-shell {
+    container-type: inline-size;
+    min-width: 0;
+}
+
+.privacy-monitor-col {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    flex: 1 1 0;
+}
+
+@container (max-width: 760px) {
+    .privacy-monitoring-columns {
+        flex-direction: column;
+        padding-right: 0;
+    }
+}
+
+.privacy-monitor-cell .section-card {
+    background-color: color-mix(in srgb, var(--color-bg-card) 78%, transparent) !important;
+}
+
+.privacy-monitor-cell .section-card .section-header-text,
+.privacy-monitor-cell .section-card .section-icon {
+    color: var(--color-accent);
+}
+
+.privacy-monitor-cell .section-card .section-content {
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid var(--shield-inner-border);
+    border-radius: var(--radius-xl);
+    background: var(--shield-bg-idle);
+}
+
+.privacy-monitor-cell .section-card.armed .section-content {
+    background: var(--shield-bg-running);
+    border-color: var(--accent-line);
+}
+
+.privacy-monitor-cell .section-card .section-content .section-content {
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+
+.privacy-monitor-cell .section-card .section-content [class*="bg-[var(--color-bg-secondary)]"],
+.privacy-monitor-cell .section-card .section-content [class*="bg-[var(--surface-2)]"] {
+    background: var(--shield-inner-bg) !important;
+}
+
+.physical-shield-head {
+    display: block;
+}
+
+.physical-privacy-card .section-header-row {
+    margin-bottom: 16px;
+}
+
+.physical-privacy-card .section-header-right {
+    flex-shrink: 0;
+}
+
+.physical-shield-copy {
+    min-width: 0;
+}
+
+/* NOTE: the title row (dot + name + info icon) and the badge row (Active /
+   Looking away / FREE / quota / Camera unavailable) are now separate flex
+   children, each with its own flex-wrap applied directly in the TSX — this
+   selector used to force-wrap the single crowded title+badges row and is no
+   longer needed. */
+
+.physical-shield-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    min-width: 0;
+}
+
+.physical-shield-autostart {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.physical-shield-autostart-row {
+    width: fit-content;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 9px;
+    border: 1px solid var(--shield-inner-border);
+    border-radius: 8px;
+    background: var(--shield-inner-bg);
+}
+
+/* Auto start moved into the advanced disclosure as a plain ShieldOption row,
+   so the standalone header pill this backed is gone (orphaned by that move —
+   removed here per "delete what you orphan"). */
+
+/* Was a rigid 2-col grid forcing the description and the on-device trust
+   line onto equal-width columns regardless of how long either text is. Flex
+   + wrap lets each flow at its natural width and only wrap when the row
+   actually runs out of room. */
+.physical-shield-summary-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 18px;
+    row-gap: 4px;
+}
+
+.physical-shield-summary-row p {
+    margin: 0;
+    max-width: none;
+}
+
+.physical-shield-actions .shield-primary-btn {
+    width: 180px;
+    min-width: 160px;
+}
+
+.physical-shield-header-btn.shield-primary-btn {
+    width: auto;
+    min-width: 150px;
+    height: 34px !important;
+    border-radius: 8px !important;
+}
+
+@media (max-width: 1180px) {
+    .physical-shield-actions {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+}
+
+/* Dedicated (i) icon used both next to the card title and inside every
+   ShieldOption row — same treatment as VpnKillSwitchSection's
+   .vpn-ks-info-icon so the affordance reads identically app-wide. */
+.physical-shield-info-icon {
+    color: var(--color-text-muted);
+    opacity: 0.7;
+    cursor: help;
+}
+
+/* ── Stats strip ── */
+/* margin-bottom removed 2026-07: .panel-container now provides the 12px
+   inter-section rhythm via flex gap — an extra margin here would double it. */
+.privacy-stats-strip {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 10px 16px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg, 8px);
+    flex-wrap: wrap;
+}
+
+.privacy-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    min-width: 48px;
+}
+
+.privacy-stat-n {
+    font-family: var(--font-mono);
+    font-size: 20px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.privacy-stat-total {
+    font-size: 12px;
+    opacity: 0.5;
+    font-weight: 400;
+}
+
+.privacy-stat-l {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+}
+
+.privacy-stat-divider {
+    width: 1px;
+    height: 28px;
+    background: var(--color-border);
+    flex-shrink: 0;
+}
+
+.privacy-stat-pills {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.privacy-pill {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.privacy-pill-ok {
+    background: var(--color-success-dim, rgba(121, 201, 143, 0.15));
+    color: var(--color-success);
+    border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
+}
+
+.privacy-pill-warn {
+    background: var(--color-warning-dim, rgba(245, 180, 84, 0.15));
+    color: var(--color-warning);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 30%, transparent);
+}
+
+.privacy-pill-mute {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
+}
+
+/* ── 3-column privacy toggle grid ── */
+.privacy-3col-grid {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    align-items: start !important;
+    gap: 12px;
+    padding-top: 8px;
+}
+
+.privacy-3col-grid .universal-toggle-row {
+    min-height: 72px !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 9px 12px !important;
+    min-width: 0 !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: flex-start !important;
+    overflow: visible !important;
+}
+
+.privacy-3col-grid .toggle-info {
+    flex: 1 !important;
+    min-width: 0 !important;
+    height: auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: flex-start !important;
+    overflow: visible !important;
+}
+
+.privacy-3col-grid .toggle-label {
+    font-size: 13px !important;
+    line-height: 1.25 !important;
+    letter-spacing: 0.45px !important;
+}
+
+.privacy-3col-grid .toggle-description {
+    font-size: 11px !important;
+    line-height: 1.3 !important;
+    margin-top: 2px !important;
+}
+
+@media (min-width: 1800px) {
+    .privacy-3col-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    }
+}
+
+@media (max-width: 900px) {
+    .privacy-3col-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+}
+
+@media (max-width: 600px) {
+    .privacy-3col-grid {
+        grid-template-columns: 1fr !important;
+    }
+}
+
+.privacy-compact-grid .universal-toggle-row {
+    padding: 12px 14px;
+}
+
+.privacy-compact-grid .toggle-label {
+    font-size: 13px;
+    letter-spacing: 0.45px;
+    line-height: 1.26;
+}
+
+.privacy-compact-grid .toggle-description {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    line-height: 1.4;
+}
+
+.privacy-compact-grid .status-text {
+    font-size: 9px;
+}
+
+.shield-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    min-width: 220px;
+}
+
+.shield-primary-btn {
+    width: 100%;
+    height: 44px !important;
+    border-radius: 12px !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    font-family: var(--font-mono) !important;
+    font-size: 11px !important;
+    font-weight: 800 !important;
+    letter-spacing: 0.8px !important;
+    text-transform: uppercase;
+    /* hover changes: transform, filter */
+    transition: transform 180ms var(--ease),
+                filter 180ms var(--ease) !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3) !important;
+}
+
+.shield-primary-btn.idle {
+    background: linear-gradient(135deg, var(--color-info) 0%, var(--color-accent) 100%) !important;
+    border-color: rgba(125, 211, 252, 0.7) !important;
+    color: var(--color-text-primary) !important;
+}
+
+.shield-primary-btn.running {
+    background: linear-gradient(135deg, var(--color-danger) 0%, var(--color-warning) 100%) !important;
+    border-color: rgba(253, 186, 116, 0.75) !important;
+    color: var(--color-text-primary) !important;
+}
+
+.shield-primary-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    filter: brightness(1.05);
+    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.38) !important;
+}
+
+.shield-secondary-btn {
+    width: 100%;
+    height: 34px !important;
+    border-radius: 10px !important;
+    border: 1px solid var(--color-border) !important;
+    background: var(--color-bg-card) !important;
+    color: var(--color-text-primary) !important;
+    font-family: var(--font-mono) !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.8px !important;
+    text-transform: uppercase;
+}
+
+.shield-secondary-btn:hover:not(:disabled) {
+    background: var(--color-bg-tertiary) !important;
+    border-color: var(--color-border-accent) !important;
+}
+
+.capability-grid {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    align-items: start !important;
+    gap: 12px;
+    padding-top: 8px;
+}
+
+.capability-grid .universal-toggle-row {
+    min-height: 72px !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 9px 12px !important;
+    min-width: 0 !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: flex-start !important;
+    overflow: visible !important;
+}
+
+.capability-grid .toggle-info {
+    flex: 1 !important;
+    min-width: 0 !important;
+    height: auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: flex-start !important;
+    overflow: visible !important;
+}
+
+.capability-grid .toggle-label {
+    font-size: 13px !important;
+    line-height: 1.25 !important;
+    letter-spacing: 0.45px !important;
+}
+
+.capability-grid .toggle-description {
+    font-size: 11px !important;
+    line-height: 1.3 !important;
+    margin-top: 2px !important;
+}
+
+@media (max-width: 1400px) {
+    .capability-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    }
+}
+
+@media (max-width: 1180px) {
+    .capability-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+}
+
+@media (max-width: 900px) {
+    .capability-grid {
+        grid-template-columns: 1fr !important;
+    }
+}
+
+.mount-dialog {
+    background: var(--color-bg-secondary) !important;
+    border: 1px solid var(--color-border) !important;
+    border-radius: var(--radius-xl) !important;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8) !important;
+    width: 580px !important;
+    /* Cap height so a long list never reaches up to the title bar (52px) — it
+       stays centered with breathing room and scrolls its body instead. */
+    max-height: calc(100vh - 96px) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+}
+
+/* The scrollable region inside these dialogs, so the header/footer stay put
+   and only the content scrolls when the dialog is height-capped. */
+.mount-dialog .wc-dialog-body,
+.mount-dialog .bp6-dialog-body {
+    overflow-y: auto !important;
+    min-height: 0 !important;
+}
+
+/* Higher specificity to win over vault/index.css .mount-dialog { width: 450px } */
+.mount-dialog.mount-dialog {
+    width: min(1160px, 90vw) !important;
+}
+
+.process-intel-dialog {
+    width: 90vw !important;
+    max-width: 1300px !important;
+}
+
+.mount-dialog .wc-dialog-header {
+    background: var(--color-bg-tertiary) !important;
+    border-bottom: 1px solid var(--color-border) !important;
+    border-radius: var(--radius-xl) !important;
+    padding: 12px 20px !important;
+}
+
+.mount-dialog .bp6-heading {
+    font-family: var(--font-mono);
+    font-size: 11px !important;
+    font-weight: 800;
+    letter-spacing: 2px;
+    color: var(--color-accent) !important;
+    text-transform: uppercase;
+}
+
+.mount-dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 24px;
+    background: var(--color-bg-tertiary);
+    border-top: 1px solid var(--color-border);
+}
+
+.intro-btn-solid {
+    background: var(--color-accent) !important;
+    color: var(--color-bg-primary) !important;
+    font-weight: 700 !important;
+    border: none !important;
+    padding: 8px 16px !important;
+    border-radius: 4px !important;
+}
+
+.modal-cancel-btn {
+    font-family: var(--font-mono) !important;
+    font-size: 10px !important;
+    font-weight: 600 !important;
+    color: var(--color-text-muted) !important;
+    letter-spacing: 1px !important;
+}
+
+.modal-primary-btn {
+    background: var(--color-accent-subtle) !important;
+    border: 1px solid var(--color-accent) !important;
+    color: var(--color-accent) !important;
+    font-family: var(--font-mono) !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    letter-spacing: 1px !important;
+    padding: 8px 18px !important;
+    border-radius: var(--radius-lg) !important;
+    /* hover changes: background, box-shadow, border-color */
+    transition: background-color var(--dur-normal, 200ms) var(--ease),
+                box-shadow var(--dur-normal, 200ms) var(--ease),
+                border-color var(--dur-normal, 200ms) var(--ease) !important;
+}
+
+.modal-primary-btn:hover:not(:disabled) {
+    background: var(--color-accent-dim) !important;
+    box-shadow: 0 0 15px color-mix(in srgb, var(--color-accent) 30%, transparent) !important;
+    border-color: #fff !important;
+}
+
+.modal-primary-btn.danger {
+    background: color-mix(in srgb, var(--color-danger) 5%, transparent) !important;
+    border-color: var(--color-danger) !important;
+    color: var(--color-danger) !important;
+}
+
+.modal-primary-btn.danger:hover:not(:disabled) {
+    background: var(--color-danger-dim) !important;
+    box-shadow: 0 0 15px color-mix(in srgb, var(--color-danger) 30%, transparent) !important;
+    border-color: #fff !important;
+}
+
+.dns-cache-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.dns-cache-table th {
+    text-align: left;
+    padding: 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.dns-cache-table td {
+    padding: 8px;
+    font-size: 11px;
+    color: var(--color-text-primary);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.dns-cache-table tr:hover {
+    background: var(--color-bg-tertiary);
+}
+
+/* Force white text in all dialog tables */
+.mount-dialog .wc-dialog-body table td,
+.mount-dialog .wc-dialog-body table th {
+    color: var(--color-text-primary) !important;
+}
+
+.mount-dialog .wc-dialog-body table .text-gray-400 {
+    color: var(--color-text-muted) !important;
+}
+
+/* Duplicate of the .panel-grid def above — kept consistent. */
+.panel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    grid-auto-flow: row dense;
+    gap: 12px;
+    align-items: start;
+}
+
+/* NOTE: .panel-columns / .column-stack are only USED by the Windows Settings
+   (tweaks) panel — their canonical (masonry) definition lives in
+   panels/tweaks/index.css. The duplicate flex definitions that used to live
+   here were dead AND overrode the tweaks masonry via the cascade, leaving the
+   blank-column gap — removed 2026-06-09. */
+
+.mono-cell {
+    color: var(--color-accent) !important;
+    font-weight: 600;
+}
+
+@media(max-width: 1000px) {
+    .panel-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.intro-btn-solid {
+    background: #081018 !important; /* Professional dark navy background */
+    border: 1px solid var(--color-accent) !important;
+}
+
+.intro-btn-solid,
+.intro-btn-solid * {
+    color: var(--color-accent) !important; /* Vibrant Cyan text */
+    font-family: var(--font-mono) !important;
+    font-size: 11px !important;
+    font-weight: 800 !important;
+    text-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 20%, transparent) !important;
+}
+
+.intro-btn-solid {
+    height: 42px !important;
+    border-radius: 8px !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1.5px !important;
+    /* hover changes: background, color, border-color, transform, box-shadow */
+    transition: background-color var(--dur-normal, 200ms) var(--ease),
+                border-color var(--dur-normal, 200ms) var(--ease),
+                transform var(--dur-normal, 200ms) var(--ease),
+                box-shadow var(--dur-normal, 200ms) var(--ease) !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+.intro-btn-solid:hover,
+.intro-btn-solid:hover * {
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent) !important;
+    color: var(--color-accent) !important; /* Stays Cyan on hover as requested */
+}
+
+.intro-btn-solid:hover {
+    border-color: #ffffff !important;
+    transform: translateY(-2px);
+    box-shadow: 0 12px 32px color-mix(in srgb, var(--color-accent) 25%, transparent) !important;
+}
+
+.intro-btn-solid:active {
+    transform: translateY(0);
+}
+
+/* ── Cleanup "Scan All" button ─────────────────────── */
+.cleanup-scan-all-btn.bp6-button {
+    background: color-mix(in srgb, var(--color-accent) 16%, transparent) !important;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent) !important;
+    border-radius: 4px !important;
+    color: var(--color-accent) !important;
+    text-transform: uppercase !important;
+    font-family: var(--font-mono) !important;
+    box-shadow: 0 0 16px color-mix(in srgb, var(--color-accent) 18%, transparent) !important;
+    transition: background 0.15s, box-shadow 0.15s, border-color 0.15s !important;
+}
+
+.cleanup-scan-all-btn.bp6-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-accent) 28%, transparent) !important;
+    border-color: var(--color-accent) !important;
+    box-shadow: 0 0 24px color-mix(in srgb, var(--color-accent) 35%, transparent) !important;
+    color: #ffffff !important;
+}
+
+.cleanup-scan-all-btn.bp6-button:disabled {
+    opacity: 0.6;
+}
+
+html.light .cleanup-scan-all-btn.bp6-button {
+    background: var(--color-accent-dim) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 55%, transparent) !important;
+    color: var(--color-accent) !important;
+    box-shadow: 0 0 12px color-mix(in srgb, var(--color-accent) 18%, transparent) !important;
+}
+
+html.light .cleanup-scan-all-btn.bp6-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-accent) 22%, transparent) !important;
+    border-color: var(--color-accent) !important;
+    color: var(--color-accent) !important;
+}
+
+/* ── Cleanup per-card action row buttons ─────────────────────────────
+ * Every Clear / Details button on every category card uses the same
+ * visual treatment, regardless of the backing CleanupCategory.severity
+ * (warning vs danger). Previously the merged grid mixed amber warning
+ * buttons with red danger buttons, which made a uniform 28-card grid
+ * look fragmented. Single palette now:
+ *   Clear  → muted danger (red)  for destructive action
+ *   Details → muted accent (cyan) for informational action
+ * ─────────────────────────────────────────────────────────────────── */
+.cleanup-clear-btn.bp6-button {
+    color: var(--color-danger) !important;
+    background: color-mix(in srgb, var(--color-danger) 10%, transparent) !important;
+    border: 1px solid color-mix(in srgb, var(--color-danger) 32%, transparent) !important;
+    border-radius: 4px !important;
+    padding: 4px 8px !important;
+    justify-content: center !important;
+    transition: background 0.12s, border-color 0.12s, color 0.12s !important;
+}
+.cleanup-clear-btn.bp6-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-danger) 22%, transparent) !important;
+    border-color: color-mix(in srgb, var(--color-danger) 55%, transparent) !important;
+    color: #ffffff !important;
+}
+.cleanup-clear-btn.bp6-button:disabled {
+    opacity: 0.55;
+}
+
+html.light .cleanup-clear-btn.bp6-button {
+    color: var(--color-danger) !important;
+    background: color-mix(in srgb, var(--color-danger) 8%, transparent) !important;
+    border-color: color-mix(in srgb, var(--color-danger) 32%, transparent) !important;
+}
+html.light .cleanup-clear-btn.bp6-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-danger) 18%, transparent) !important;
+    border-color: color-mix(in srgb, var(--color-danger) 55%, transparent) !important;
+    color: var(--color-danger) !important;
+}
+
+.cleanup-details-btn.bp6-button {
+    color: var(--color-accent) !important;
+    background: color-mix(in srgb, var(--color-accent) 8%, transparent) !important;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 32%, transparent) !important;
+    border-radius: 4px !important;
+    padding: 4px 8px !important;
+    justify-content: center !important;
+    transition: background 0.12s, border-color 0.12s, color 0.12s !important;
+}
+.cleanup-details-btn.bp6-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-accent) 18%, transparent) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 55%, transparent) !important;
+    color: #ffffff !important;
+}
+
+html.light .cleanup-details-btn.bp6-button {
+    color: var(--color-accent) !important;
+    background: color-mix(in srgb, var(--color-accent) 8%, transparent) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 32%, transparent) !important;
+}
+html.light .cleanup-details-btn.bp6-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-accent) 20%, transparent) !important;
+    border-color: var(--color-accent) !important;
+    color: var(--color-accent) !important;
+}
+
+.cleanup-account-picker {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    background: color-mix(in srgb, var(--color-bg-card) 72%, transparent);
+}
+
+.cleanup-account-picker__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+}
+
+.cleanup-account-select {
+    width: min(320px, 100%);
+    min-width: 220px;
+    height: 34px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+/* Interactive (Popover trigger) variant — the readonly chip has its own
+   chrome via --readonly, so this modifier owns the button's box + hover. */
+.cleanup-account-select--trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+
+.cleanup-account-select--trigger:hover:not(:disabled) {
+    border-color: var(--color-accent);
+}
+
+.cleanup-account-select--trigger:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.cleanup-account-select--readonly {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+}
+
+.cleanup-account-select__content {
+    z-index: calc(var(--z-modal, 1000) + 20);
+    min-width: 300px;
+    max-width: min(360px, 92vw);
+}
+
+.cleanup-exclude-popover {
+    z-index: calc(var(--z-modal, 1000) + 20);
+    min-width: 260px;
+    max-width: min(360px, 92vw);
+}
+
+.cleanup-account-option {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    column-gap: 8px;
+    row-gap: 1px;
+    align-items: center;
+    min-width: 0;
+}
+
+.cleanup-account-option span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cleanup-account-option small {
+    grid-column: 2;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+    color: var(--color-text-muted);
+}
+
+[data-trace-card-action] {
+    background: transparent !important;
+    border: 0 !important;
+}
+
+[data-trace-card-action]:hover:not(:disabled) {
+    background: transparent !important;
+    filter: brightness(1.25);
+}
+
+[data-trace-card-action="info"] {
+    color: var(--color-info) !important;
+}
+
+[data-trace-card-action="schedule"] {
+    color: var(--color-success) !important;
+}
+
+[data-trace-card-action="rescan"] {
+    color: var(--color-warning) !important;
+}
+
+[data-cleanup-trace-card] [data-trace-card-action="info"] {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+@media (max-width: 720px) {
+    .cleanup-account-picker {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .cleanup-account-select {
+        width: 100%;
+        min-width: 0;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Daylight (light) overrides — shield/modal buttons baked white-on-dark.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Primary shield button: 15% white border vanished on the light card. The
+   idle/running variants keep dark text on their saturated gradients (fine),
+   but the resting border needs a visible token. */
+html.light .shield-primary-btn {
+    border-color: var(--color-border) !important;
+}
+
+html.light .shield-primary-btn.idle,
+html.light .shield-primary-btn.running {
+    color: #ffffff !important;
+}
+
+/* Modal primary button hover used a pure-white border accent (invisible on
+   white). Use the accent / danger line instead. */
+html.light .modal-primary-btn:hover:not(:disabled) {
+    border-color: var(--color-accent) !important;
+}
+
+html.light .modal-primary-btn.danger:hover:not(:disabled) {
+    border-color: var(--color-danger) !important;
+}
+
+/* "Cyan text on dark navy" intro button: the #081018 fill stays dark in both
+   modes by design, so keep its accent text white-readable — leave as-is. */
+
+/* ── USB device risk stat ── */
+.usb-stat-high {
+    color: var(--color-danger);
+}

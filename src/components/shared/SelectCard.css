@@ -1,0 +1,79 @@
+/* SelectCard — generalized dns-card single-select. Tokens only. */
+.wc-selectcard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 140px;
+  padding: 12px 14px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-xl);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color var(--dur-fast, 150ms) var(--ease), background var(--dur-fast, 150ms) var(--ease), transform var(--dur-instant, 100ms) var(--ease), box-shadow var(--dur-fast, 150ms) var(--ease);
+}
+.wc-selectcard:hover {
+  border-color: var(--color-border-light);
+  background: var(--color-bg-tertiary);
+}
+.wc-selectcard:active {
+  transform: scale(0.99);
+}
+/* V2 ring vocabulary (accent-line + glow), matching input/button/chip/slider —
+   replaces the heavier solid accent outline. */
+.wc-selectcard:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-line), 0 0 12px -2px var(--glow);
+}
+
+.wc-selectcard.is-active {
+  border-color: var(--color-success);
+  border-left-color: var(--color-accent);
+  background: var(--color-success-dim);
+}
+
+.wc-selectcard.is-locked {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.wc-selectcard__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wc-selectcard__title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wc-selectcard__sub {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-muted);
+}
+.wc-selectcard__blurb {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+  flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.wc-selectcard__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+}

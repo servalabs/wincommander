@@ -1,0 +1,112 @@
+/* BrandCard — generalized hosts-blocklist card. Tokens only. */
+.wc-brandcard {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  background: var(--color-bg-card);
+  transition: border-color var(--dur-normal, 200ms) var(--ease),
+    background var(--dur-normal, 200ms) var(--ease),
+    box-shadow var(--dur-normal, 200ms) var(--ease);
+}
+
+.wc-brandcard.is-busy {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.wc-brandcard__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  border-left: 4px solid var(--color-border);
+}
+
+.wc-brandcard__logos {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wc-brandcard__meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.wc-brandcard__body {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: background var(--dur-normal, 200ms) var(--ease);
+}
+.wc-brandcard__body:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.wc-brandcard__body:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-line), 0 0 12px -2px var(--glow);
+}
+
+.wc-brandcard__text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding-right: 16px;
+}
+.wc-brandcard__title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--color-text-primary);
+  line-height: 1.2;
+}
+.wc-brandcard__desc {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.wc-brandcard__action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+/* ── Active (accent — default house language) ── */
+.wc-brandcard--accent.is-active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+.wc-brandcard--accent.is-active .wc-brandcard__top {
+  border-left-color: var(--color-accent);
+  background: linear-gradient(180deg, var(--color-accent-dim), var(--color-accent-subtle));
+}
+
+/* ── Active (success — "protected", e.g. hosts blocklist) ── */
+.wc-brandcard--success.is-active {
+  border-color: var(--color-success);
+  background: var(--color-success-dim);
+}
+.wc-brandcard--success.is-active .wc-brandcard__top {
+  border-left-color: var(--color-success);
+  background: linear-gradient(180deg, rgba(78, 217, 156, 0.15), rgba(78, 217, 156, 0.05));
+}

@@ -1,0 +1,98 @@
+name: Bug report
+description: Something is broken in WinCommander.
+title: "[bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please don't include licence keys,
+        device hashes, or screenshots that contain PII. For security
+        vulnerabilities, see [SECURITY.md](https://github.com/servalabs/wincommander/blob/main/SECURITY.md)
+        instead.
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Which binary?
+      options:
+        - Free (wincommander-free.exe)
+        - Pro (wincommander-pro.exe sidecar)
+        - Both / unsure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: |
+        Help → About shows the version + build hash. Paste both.
+      placeholder: "2.7.0 (abcdef0)"
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: |
+        Run `winver` and paste the version + build (e.g. "Windows 11
+        24H2 — Build 26100.2454").
+    validations:
+      required: true
+
+  - type: dropdown
+    id: privilege
+    attributes:
+      label: Were you running as Administrator?
+      options:
+        - "Yes (UAC-elevated)"
+        - "No (standard user)"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Privacy panel
+        2. Toggle "Block telemetry endpoints"
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        From `%APPDATA%\WinCommander\logs\`. Redact anything
+        sensitive before pasting.
+      render: shell
+
+  - type: checkboxes
+    id: confirms
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and didn't find a duplicate
+          required: true
+        - label: This isn't a security issue (those go to security@servalabs.com per SECURITY.md)
+          required: true

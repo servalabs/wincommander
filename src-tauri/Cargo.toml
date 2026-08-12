@@ -1,0 +1,61 @@
+# ═══════════════════════════════════════════════════════════════════════
+# Cargo workspace root — open-source side of the tier boundary
+# ═══════════════════════════════════════════════════════════════════════
+#
+#   wincmd-shared     — IPC types + schemas shared by Free and Pro.
+#                       Pure data, no side effects. A byte-identical
+#                       copy lives in the separate wincommander-pro
+#                       repo so it can build standalone.
+#   commander-free    — the open-source Tauri primary. All UI, all
+#                       `tier === "free"` backend, the licence layer,
+#                       and the broker that spawns the Pro sidecar.
+#   wci-verify        — standalone case-bundle verifier (investigator
+#                       subsystem). AGPL-3.0-or-later.
+#
+# A-6 split (2026-05-26): commander-pro moved out of this workspace
+# into its own repo at https://github.com/servalabs/wincommander-pro.
+# The Pro binary is no longer built from this monorepo. For local dev
+# of Pro changes you need a sibling clone at ../../wincommander-pro/ —
+# `bun run build:pro` shells out to cargo with that as the manifest
+# path. CI does the same via release.yml's repository_dispatch step.
+#
+# Build it with `cargo check --workspace` or `cargo build -p <crate>`.
+
+[workspace]
+members = ["commander-free", "wincmd-shared", "fleet-proto", "fleet-agent-core", "wci-verify", "wincmd-search", "commander-svc"]
+resolver = "2"
+
+# KT: Profile settings live at the workspace root so all three crates
+# share the same compile flags. (Per-crate overrides are possible but
+# would defeat the consistency we want.)
+
+[profile.dev]
+# Default debuginfo=2 (full DWARF) + 256 codegen-units exhausts RAM on
+# large crates. debuginfo=1 (line tables only) cuts memory ~60-70% with
+# no dev productivity loss. codegen-units=4 keeps incremental builds
+# fast without overwhelming the linker. split-debuginfo="unpacked"
+# keeps .pdb generation from ballooning the linker step.
+debug = 1
+codegen-units = 4
+split-debuginfo = "unpacked"
+incremental = true
+
+[profile.dev.package.wry]
+# Wry prints WebView2 PostMessage quota failures directly to stderr only
+# under debug_assertions. The failures are transient internal dispatcher
+# pressure, and release builds are already quiet; keep app debug assertions
+# enabled while silencing this dependency's terminal spam in dev.
+debug-assertions = false
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+strip = true
+
+[profile.release.build-override]
+# Build scripts + proc-macros only — never shipped. opt-level=0 + more codegen
+# units compiles them fast; the LTO'd release binary is byte-unaffected.
+opt-level = 0
+codegen-units = 16

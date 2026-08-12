@@ -1,0 +1,107 @@
+/* src/panels/dev/index.css
+   DEV panel styles — V2 token system only.
+   No hex/rgba literals, no hardcoded z-index, no Blueprint classes.
+*/
+
+.dev-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  max-width: 900px;
+}
+
+/* ── Release guard ── */
+.dev-panel-release-guard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 24px;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+/* ── Status grid ── */
+.dev-status-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dev-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+}
+
+.dev-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full, 999px);
+  flex-shrink: 0;
+}
+
+.dev-status-label {
+  font-weight: 500;
+  min-width: 110px;
+  font-size: 0.875rem;
+  color: var(--color-text-primary);
+}
+
+.dev-status-detail {
+  flex: 1;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Actions grid ── */
+.dev-actions-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dev-action-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dev-action-btn {
+  min-width: 160px;
+  flex-shrink: 0;
+}
+
+.dev-action-desc {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+/* ── Select ── */
+.dev-select {
+  appearance: none;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 4px);
+  color: var(--color-text-primary);
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+  min-width: 140px;
+}
+
+.dev-select:hover {
+  border-color: var(--color-border-light);
+}
+
+/* ── Compact button override ── */
+.dev-btn-sm {
+  min-width: 0 !important;
+}

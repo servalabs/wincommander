@@ -1,0 +1,535 @@
+.trace-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: start center;
+  /* Keep modal content below the title bar (52px header) with breathing room. */
+  padding: 76px 24px 24px;
+  /* Neutral dimming scrim (works in both themes). */
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.trace-dialog__panel {
+  width: min(1120px, 100%);
+  max-height: min(720px, calc(100vh - 120px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  /* Was var(--color-surface, #111827) — that token is undefined, so the
+     panel stayed dark in light mode. Use the real card token. */
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow, 0 24px 80px rgba(0, 0, 0, 0.38));
+}
+
+.trace-dialog__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 18px;
+  border-bottom: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+}
+
+.trace-dialog__icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+}
+
+.trace-dialog__icon--warning {
+  color: var(--color-warning, #f59e0b);
+}
+
+.trace-dialog__icon--danger {
+  color: var(--color-danger, #ef4444);
+}
+
+.trace-dialog__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trace-dialog h2,
+.trace-dialog p {
+  margin: 0;
+}
+
+.trace-dialog h2 {
+  font-size: 16px;
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+
+.trace-dialog p {
+  margin-top: 4px;
+  color: var(--color-text-secondary, #a7b0bf);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.trace-dialog__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.trace-dialog__summary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.trace-dialog__summary strong {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.trace-dialog__summary span {
+  color: var(--color-text-secondary, #a7b0bf);
+  font-size: 12px;
+}
+
+.trace-dialog__summary small {
+  margin-left: 6px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.trace-dialog__search {
+  width: min(320px, 45%);
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-card);
+  color: var(--color-text-muted);
+}
+
+.trace-dialog__search:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 15%, transparent);
+}
+
+.trace-dialog__search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 12px;
+}
+
+.trace-dialog__search button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.trace-dialog__items {
+  display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 18px 18px;
+}
+
+.trace-dialog__metadata {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.trace-dialog__metadata > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+}
+
+.trace-dialog__metadata span,
+.trace-dialog__metadata strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-dialog__metadata span {
+  margin-bottom: 3px;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.trace-dialog__metadata strong {
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.trace-dialog__group {
+  display: grid;
+  gap: 8px;
+  padding: 12px 0 14px;
+  border-top: 1px solid var(--color-border);
+}
+
+.trace-dialog__group:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.trace-dialog__group-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.trace-dialog__group-header strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+.trace-dialog__group-header span {
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.trace-dialog__group-items {
+  display: grid;
+  gap: 12px;
+}
+
+.trace-dialog__empty {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 8px 9px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.trace-dialog__dataset {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg-card);
+}
+
+.trace-dialog__dataset-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.trace-dialog__dataset-header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  letter-spacing: 0.2px;
+}
+
+.trace-dialog__dataset-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.trace-dialog__dataset-actions span {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+
+.trace-dialog__dataset-actions .bp6-button {
+  min-height: 26px;
+  padding-inline: 7px;
+  font-size: 10px;
+}
+
+.trace-dialog__table-scroll {
+  max-width: 100%;
+  max-height: 300px;
+  overflow: scroll;
+  /* Reserve only the scrollbar edge. `both-edges` shifted the header left
+     until the first vertical scroll, making the header and rows appear out of sync. */
+  scrollbar-gutter: stable;
+  border-top: 1px solid var(--color-border);
+}
+
+.trace-dialog table {
+  width: 100%;
+  min-width: max-content;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.trace-dialog th,
+.trace-dialog td {
+  max-width: 420px;
+  padding: 7px 10px;
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.trace-dialog__cell-value {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.trace-dialog__cell-value > span:first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+.trace-dialog__cell-actions {
+  display: inline-flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.trace-dialog__cell-actions button {
+  padding: 2px 5px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+}
+
+.trace-dialog__cell-actions button:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.trace-dialog__compact-path {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.trace-dialog__path-drive,
+.trace-dialog__path-root {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.2rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, var(--color-accent));
+  border-radius: var(--radius-sm);
+  padding: 0.08rem 0.28rem;
+  color: var(--color-text-secondary);
+  font-size: 0.9em;
+  line-height: 1.25;
+}
+
+.trace-dialog__path-root {
+  color: var(--color-accent);
+}
+
+.trace-dialog__path-suffix {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-dialog th:last-child,
+.trace-dialog td:last-child {
+  border-right: 0;
+}
+
+.trace-dialog tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.trace-dialog th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-family: var(--font-sans);
+  font-size: 9px;
+  letter-spacing: 0.45px;
+  text-transform: uppercase;
+}
+
+.trace-dialog th button {
+  width: 100%;
+  min-height: 31px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+.trace-dialog th button:hover {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+.trace-dialog td {
+  overflow-wrap: anywhere;
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+}
+
+.trace-dialog tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--color-bg-secondary) 55%, var(--color-bg-card));
+}
+
+.trace-dialog .trace-dialog__row-number {
+  width: 42px;
+  min-width: 42px;
+  max-width: 42px;
+  color: var(--color-text-muted);
+  text-align: right;
+  user-select: none;
+}
+
+.trace-dialog__pagination {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.trace-dialog__pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.trace-dialog__pagination strong {
+  min-width: 54px;
+  color: var(--color-text-secondary);
+  text-align: center;
+  font-weight: 600;
+}
+
+.trace-dialog__pagination button {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.trace-dialog__pagination button:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+}
+
+.trace-dialog__pagination button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.trace-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 18px 18px;
+  border-top: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+}
+
+@media (max-width: 760px) {
+  .trace-dialog {
+    padding-inline: 12px;
+  }
+
+  .trace-dialog__toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .trace-dialog__search {
+    width: 100%;
+  }
+
+  .trace-dialog__pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .trace-dialog__pagination > div {
+    justify-content: space-between;
+  }
+}

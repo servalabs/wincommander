@@ -1,0 +1,151 @@
+.sys-enc-section {
+          margin-top: 24px;
+          border: 1px solid var(--color-border);
+          background: var(--color-bg-card);
+        }
+
+        .sys-enc-section--hidden {
+          display: none;
+        }
+
+        .sys-enc-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 8px 14px;
+          background: var(--color-bg-tertiary);
+          border-bottom: 1px solid var(--color-border);
+        }
+
+        .sys-enc-title {
+          font-family: var(--font-mono);
+          font-size: 9px;
+          font-weight: 800;
+          letter-spacing: 2px;
+          color: var(--color-text-muted);
+        }
+
+        .sys-enc-refresh {
+          background: none;
+          border: none;
+          cursor: pointer;
+          color: var(--color-text-muted);
+          padding: 2px 4px;
+          display: flex;
+          align-items: center;
+          transition: color 0.15s;
+        }
+
+        .sys-enc-refresh:hover:not(:disabled) { color: var(--color-accent); }
+        .sys-enc-refresh:disabled { opacity: 0.3; cursor: default; }
+
+        .sys-enc-body {
+          padding: 10px 14px;
+        }
+
+        .sys-enc-loading {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          color: var(--color-text-muted);
+        }
+
+        .sys-enc-status {
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+          padding: 10px 12px;
+          border: 1px solid var(--color-border);
+        }
+
+        .sys-enc-status.protected {
+          border-color: rgba(67,160,71,0.4);
+          background: rgba(67,160,71,0.05);
+        }
+
+        .sys-enc-status.protected .bp6-icon { color: var(--color-success); }
+
+        .sys-enc-status.unprotected {
+          border-color: rgba(229,57,53,0.35);
+          background: rgba(229,57,53,0.04);
+        }
+
+        .sys-enc-status.unprotected .bp6-icon { color: var(--color-danger); }
+
+        .sys-enc-status.unknown .bp6-icon { color: var(--color-warning); }
+
+        .sys-enc-status-text {
+          display: flex;
+          flex-direction: row;
+          align-items: center;
+          gap: 6px;
+          flex-wrap: wrap;
+        }
+
+        .sys-enc-status-label {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 1.5px;
+          white-space: nowrap;
+        }
+
+        .sys-enc-status.protected .sys-enc-status-label { color: var(--color-success); }
+        .sys-enc-status.unprotected .sys-enc-status-label { color: var(--color-danger); }
+
+        .sys-enc-status-sep {
+          font-size: 11px;
+          color: var(--color-text-muted);
+          flex-shrink: 0;
+        }
+
+        .sys-enc-status-desc {
+          font-size: 11px;
+          color: var(--color-text-muted);
+          line-height: 1.4;
+        }
+
+        .sys-enc-progress {
+          margin-top: 10px;
+        }
+
+        .sys-enc-progress-label {
+          display: flex;
+          justify-content: space-between;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          color: var(--color-text-muted);
+          margin-bottom: 5px;
+        }
+
+        .sys-enc-progress-bar {
+          height: 3px;
+          background: var(--color-border);
+          border-radius: 2px;
+          overflow: hidden;
+        }
+
+        .sys-enc-progress-fill {
+          height: 100%;
+          background: var(--color-accent);
+          border-radius: 2px;
+          transition: width 0.5s ease;
+        }
+
+        .sys-enc-meta {
+          display: flex;
+          gap: 16px;
+          margin-top: 8px;
+          font-family: var(--font-mono);
+          font-size: 10px;
+          color: var(--color-text-secondary);
+        }
+
+        .meta-label {
+          font-size: 9px;
+          letter-spacing: 1px;
+          color: var(--color-text-muted);
+          margin-right: 4px;
+        }
