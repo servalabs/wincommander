@@ -1,0 +1,42 @@
+.vol-inline-btn {
+  color: var(--color-text-muted) !important;
+  border-radius: 4px !important;
+  padding: 4px !important;
+  opacity: 0.8;
+  /* hover changes: color, background, opacity */
+  transition: color var(--dur-normal, 200ms) var(--ease),
+              background-color var(--dur-normal, 200ms) var(--ease),
+              opacity var(--dur-normal, 200ms) var(--ease);
+}
+
+.vol-inline-btn:hover {
+  color: var(--color-accent) !important;
+  background: color-mix(in srgb, var(--accent) 8%, transparent) !important;
+  opacity: 1;
+}
+
+.vol-danger-btn {
+  color: var(--color-text-muted) !important;
+  border-radius: 4px !important;
+  padding: 4px !important;
+  /* hover changes: background, color, opacity */
+  transition: background-color var(--dur-normal, 200ms) var(--ease),
+              color var(--dur-normal, 200ms) var(--ease),
+              opacity var(--dur-normal, 200ms) var(--ease);
+  opacity: 0.8;
+}
+
+.vol-danger-btn .bp6-icon {
+  color: var(--color-text-muted) !important;
+  transition: color 0.2s ease;
+}
+
+.vol-danger-btn:hover {
+  background: var(--color-danger-dim) !important;
+  color: var(--color-danger) !important;
+  opacity: 1;
+}
+
+.vol-danger-btn:hover .bp6-icon {
+  color: var(--color-danger) !important;
+}

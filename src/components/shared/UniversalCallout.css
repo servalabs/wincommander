@@ -1,0 +1,50 @@
+.universal-callout {
+                    margin-bottom: 12px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    border-radius: 4px;
+                    padding: 10px 14px;
+                    display: flex;
+                    flex-direction: row;
+                    align-items: center;
+                    gap: 12px;
+                    font-family: var(--font-mono);
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                }
+
+                .universal-callout-warning {
+                    background: var(--color-warning-dim);
+                    border: 1px solid var(--color-warning-dim);
+                    color: var(--color-warning);
+                }
+
+                .universal-callout-danger {
+                    background: var(--color-danger-dim);
+                    border: 1px solid var(--color-danger-dim);
+                    color: var(--color-danger);
+                }
+
+                .universal-callout-success {
+                    background: var(--color-success-dim);
+                    border: 1px solid var(--color-success-dim);
+                    color: var(--color-success);
+                }
+
+                .universal-callout-primary {
+                    background: var(--color-accent-subtle);
+                    border: 1px solid var(--color-accent-dim);
+                    color: var(--color-accent);
+                }
+
+                .universal-callout .callout-icon {
+                    flex-shrink: 0;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }
+
+                .universal-callout .callout-message {
+                    flex: 1;
+                    line-height: 1.4;
+                }

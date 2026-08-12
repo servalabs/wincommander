@@ -1,0 +1,88 @@
+# tools/strings-grep-forbidden.txt
+#
+# Forbidden ASCII tokens for the Free binary AV-clean strings check.
+# One token per line. Lines starting with # and blank lines are ignored.
+#
+# P2 will append duress-feature symbols (lockdown_words, voice_lockdown).
+# P4 flips -HardGate on in CI after the sidecar split lands.
+#
+# ── Anti-Forensic: shadow / journal / event-log destruction ─────────────
+vssadmin
+cipher /w
+Clear-EventLog
+Clear-EventLogs
+fsutil usn deletejournal
+Clear-NTFSJournals
+Clear-ShadowCopies
+
+# ── Anti-Forensic: Defender disable ────────────────────────────────────
+Disable-WindowsDefender
+Disable-MpPreference
+Add-MpPreference -ExclusionPath
+
+# ── Anti-Forensic: Recall + execution traces ────────────────────────────
+Clear-RecallDatabase
+Clear-Amcache
+Invoke-CrashDumpWipe
+Invoke-VirtualMemoryPurge
+Invoke-MasterPrivacyClean
+
+# ── Anti-Forensic: secure shred / unallocated wipe ─────────────────────
+Invoke-7Wipe
+Invoke-UnallocatedSpaceWipe
+Invoke-SQLiteWALKiller
+
+# ── Anti-Forensic: Clear-* paid clearers ───────────────────────────────
+Clear-NTUserTraces
+Clear-NotepadState
+Clear-PCADatabase
+Clear-SearchIndex
+Clear-PrintSpooler
+Clear-Recall
+
+# ── A-5 additions (open-source.md Part 1 §4.3) ──────────────────────────
+Set-MpPreference
+USBSTOR
+VeraCrypt Format
+
+# ── P2: remaining DESTRUCT_STEPS commands (moved to Pro, absent from Free) ──
+# These were in lockdown_steps.rs command field before P2. Listing them
+# here means the CI gate (strings-grep-free.ps1) will fail if they ever
+# reappear in the Free binary.
+Clear-USBDeviceHistory
+Clear-ExecutionCache
+Clear-RDPHistory
+Clear-RDPPasswords
+Clear-SRUM
+Clear-BrowserFootprints
+Clear-Prefetch
+Clear-ShellBags
+Clear-ConnectivityHistory
+Clear-JumpLists
+Clear-RecentFiles
+Wipe-PowerShellHistory
+Remove-WlanProfile
+Clear-BluetoothDevices
+Clear-NetworkDrives
+Dismount-AllEncryptionVolumes
+Clear-EncryptionKeys
+Invoke-SSDTrim
+# remove_users step → Pro "Remove-LocalUsers" arm (account+profile deletion).
+# Substring match also covers the singular Remove-LocalUser cmdlet. Both must
+# stay out of the Free binary as plaintext — the destructive command lives only
+# in the private Pro sidecar.
+Remove-LocalUser
+
+# ── Track A destructive Pro IDs — Free reconstructs via join_parts; a contiguous literal must never ship
+Destroy-VeraCryptHeader
+Clear-BitLockerKeyProtectors
+
+# ── DN-07 tell-words — naming-rule leak markers (P4 — hard gate active) ───
+# If any of these strings appear in the Free binary, a naming-rule violation
+# has leaked through — the encrypted PS modules have been accidentally
+# compiled in as plaintext, or a new function was mis-named.
+Invoke-Lockdown
+Invoke-Panic
+Invoke-Honeypot
+Invoke-Tripwire
+Invoke-KillSwitch

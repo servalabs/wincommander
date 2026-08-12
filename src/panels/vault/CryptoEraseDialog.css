@@ -1,0 +1,107 @@
+/* Crypto-Erase confirmation ceremony — dialog only.
+   Split out of CryptoEraseSection.css so each file stays one responsibility.
+   Imported by CryptoEraseConfirmDialog.tsx. */
+
+/* The body scrolls rather than the dialog growing — a long consequence list
+   plus two callouts can exceed the viewport on a small screen. */
+.crypto-erase-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-height: min(70vh, 620px);
+}
+
+.crypto-erase-subject {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 4px);
+    background: var(--color-bg-tertiary);
+}
+
+.crypto-erase-subject-label {
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+}
+
+.crypto-erase-subject-value {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    overflow-wrap: anywhere;
+}
+
+.crypto-erase-subject-method {
+    font-size: 11.5px;
+    color: var(--color-text-secondary);
+}
+
+.crypto-erase-lede {
+    margin: 0 0 6px;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+
+.crypto-erase-lede strong {
+    color: var(--color-danger);
+}
+
+.crypto-erase-consequences {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--color-text-primary);
+}
+
+.crypto-erase-gate {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    border: 1px solid var(--color-border-light);
+    border-radius: var(--radius-md, 4px);
+    background: var(--color-bg-secondary);
+}
+
+.crypto-erase-gate-label {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+
+.crypto-erase-gate-label strong {
+    font-family: var(--font-mono);
+    color: var(--color-danger);
+}
+
+.crypto-erase-gate-hint {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--color-text-muted);
+}
+
+.crypto-erase-warn--nuclear {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-danger);
+}
+
+.crypto-erase-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.crypto-erase-progress-label {
+    font-size: 12px;
+    color: var(--color-text-primary);
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "../schema/rules.schema.json",
+  "type": "browsers",
+  "chromiumCacheDirs": {
+    "cache": "Cache/Cache_Data",
+    "codeCache": "Code Cache",
+    "gpuCache": "GPUCache",
+    "serviceWorker": "Service Worker/CacheStorage"
+  },
+  "chromium": [
+    { "key": "chrome", "base": "${LOCALAPPDATA}/Google/Chrome/User Data" },
+    { "key": "edge", "base": "${LOCALAPPDATA}/Microsoft/Edge/User Data" },
+    { "key": "brave", "base": "${LOCALAPPDATA}/BraveSoftware/Brave-Browser/User Data" },
+    { "key": "opera", "base": "${APPDATA}/Opera Software/Opera Stable" },
+    { "key": "operaGX", "base": "${APPDATA}/Opera Software/Opera GX Stable" },
+    { "key": "vivaldi", "base": "${LOCALAPPDATA}/Vivaldi/User Data" },
+    { "key": "arc", "base": "${LOCALAPPDATA}/Arc/User Data" },
+    { "key": "chromium", "base": "${LOCALAPPDATA}/Chromium/User Data" },
+    { "key": "thorium", "base": "${LOCALAPPDATA}/Thorium/User Data" },
+    { "key": "supermium", "base": "${LOCALAPPDATA}/Supermium/User Data" },
+    { "key": "helium", "base": "${LOCALAPPDATA}/imput/Helium/User Data" },
+    { "key": "cromite", "base": "${LOCALAPPDATA}/Cromite/User Data" },
+    { "key": "catsxp", "base": "${LOCALAPPDATA}/ArcSoft/CatsXP/User Data" }
+  ],
+  "firefox": {
+    "base": "${APPDATA}/Mozilla/Firefox/Profiles",
+    "cache": "${LOCALAPPDATA}/Mozilla/Firefox/Profiles"
+  },
+  "firefoxForks": [
+    { "key": "librewolf", "base": "${APPDATA}/LibreWolf/Profiles", "cache": "${LOCALAPPDATA}/LibreWolf/Profiles" },
+    { "key": "waterfox", "base": "${APPDATA}/Waterfox/Profiles", "cache": "${LOCALAPPDATA}/Waterfox/Profiles" },
+    { "key": "floorp", "base": "${APPDATA}/Floorp/Profiles", "cache": "${LOCALAPPDATA}/Floorp/Profiles" },
+    { "key": "zen", "base": "${APPDATA}/Zen/Profiles", "cache": "${LOCALAPPDATA}/Zen/Profiles" }
+  ],
+  "safari": null
+}

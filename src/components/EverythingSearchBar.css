@@ -1,0 +1,1077 @@
+/* ── EverythingSearchBar — Listary-style floating bar ──────────────── */
+
+/* Overlay window mode: transparent fullscreen backdrop inside dedicated window */
+.esb-overlay-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 18vh;
+  background: transparent;
+  cursor: default;
+}
+
+/* Non-overlay mode: dark veil inside main app */
+.esb-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 18vh;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+/* Motion wrapper used in non-overlay mode */
+.esb-container-wrapper {
+  display: contents;
+}
+
+.esb-container {
+  width: min(1080px, calc(100vw - 40px));
+  max-width: calc(100vw - 40px);
+  max-height: min(720px, calc(100vh - 18vh - 24px));
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow:
+    0 0 0 1px rgba(255, 122, 26, 0.06),
+    0 18px 48px -22px rgba(0, 0, 0, 0.85);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ── Input row ──────────────────────────────────────────────────────── */
+
+.esb-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 3fr) minmax(0, 2fr);
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.esb-search-control {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 40px;
+  gap: 9px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+
+.esb-search-tile {
+  width: 28px;
+  height: 28px;
+  background: var(--accent-soft);
+  border-radius: var(--r);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.esb-search-icon {
+  color: var(--accent);
+}
+
+/* Gmail-recipient field: chips, then the ghost, then the input flexing to fill.
+   The input keeps a 110px basis so a full chip row wraps it to the next line
+   instead of squeezing it to nothing, and the field scrolls past ~2 rows so a
+   long query can never push the card taller than the screen. */
+.esb-field {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-height: 68px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.esb-field::-webkit-scrollbar {
+  width: 3px;
+}
+.esb-field::-webkit-scrollbar-thumb {
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+}
+
+.esb-input {
+  flex: 1 1 110px;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 15px;
+  font-family: var(--font-ui);
+  color: var(--text);
+  caret-color: var(--accent);
+  min-width: 0;
+}
+
+.esb-input::placeholder {
+  color: var(--text-mute);
+}
+
+.esb-spinner {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+}
+
+.esb-clear {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-mute);
+  border-radius: var(--r-sm);
+  transition: background 0.1s, color 0.1s;
+  display: flex;
+  align-items: center;
+}
+
+.esb-clear:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+
+/* ── Hint row ───────────────────────────────────────────────────────── */
+
+.esb-hint {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 5px 14px;
+  font-size: 10.5px;
+  color: var(--text-mute);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+}
+
+.esb-hint kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-mute);
+  margin-right: 3px;
+}
+
+/* ">assets" mode marker — the hint row is where the user is already looking
+   for "what will Enter do", so the mode belongs there rather than in the field. */
+.esb-hint-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* ── Chips ──────────────────────────────────────────────────────────── */
+
+.esb-chip-wrap {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.esb-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 240px;
+  padding: 0; /* the inner buttons carry the padding */
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+/* KT: .esb-chip-solo must NOT reset border/background. It shares its element
+   with .esb-chip (a one-action chip IS the pill), and a `border: none` here
+   would land later in the cascade and erase the pill it is meant to be. Only
+   .esb-chip-main / .esb-chip-x-btn are separate inner buttons, so only they
+   strip their own chrome. */
+.esb-chip-solo {
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 9px;
+}
+
+.esb-chip-main,
+.esb-chip-x-btn {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  border: none;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.esb-chip-main {
+  gap: 5px;
+  padding: 4px 4px 4px 9px;
+}
+
+.esb-chip-icon {
+  flex-shrink: 0;
+  opacity: 0.95;
+}
+
+.esb-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esb-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0.55;
+  transition: opacity 0.1s;
+}
+
+.esb-chip-solo .esb-chip-x {
+  margin-left: 1px;
+  margin-right: -2px;
+}
+
+.esb-chip-x-btn {
+  padding: 4px 8px 4px 3px;
+}
+
+.esb-chip-solo:hover,
+.esb-chip-main:hover,
+.esb-chip-x-btn:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.esb-chip-solo:hover .esb-chip-x,
+.esb-chip-x-btn:hover {
+  opacity: 1;
+}
+
+.esb-chip-solo:focus-visible,
+.esb-chip-main:focus-visible,
+.esb-chip-x-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A STRICT time chip removes rows; a soft one only re-ranks them. The fill goes
+   solid so the difference is legible across the row at a glance, and the label
+   text ("Only today" vs "Today first") carries the meaning without a legend. */
+.esb-chip-strict {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+  font-weight: 600;
+}
+
+.esb-chip-strict .esb-chip-x {
+  opacity: 0.75;
+}
+
+.esb-chip-strict .esb-chip-main:hover,
+.esb-chip-strict .esb-chip-x-btn:hover {
+  background: color-mix(in srgb, var(--surface) 22%, transparent);
+}
+
+/* ── Ghost suggestion ───────────────────────────────────────────────── */
+/* Must read as "not yet real" at a glance: dashed border, no fill, dimmed
+   text, and a Tab cap that names the one key that promotes it. */
+
+.esb-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 240px;
+  padding: 3px 5px 3px 8px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0.72;
+  cursor: pointer;
+  transition: opacity 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.esb-ghost:hover,
+.esb-ghost:focus-visible {
+  opacity: 1;
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
+.esb-ghost-kbd {
+  padding: 1px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.3;
+}
+
+/* ── Section label + result count ───────────────────────────────────── */
+
+.esb-section-label {
+  padding: 6px 14px 3px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esb-count {
+  flex-shrink: 0;
+  padding: 5px 14px 6px;
+  border-top: 1px solid var(--border);
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.esb-filter-control {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  text-align: left;
+}
+.esb-filter-control:hover,.esb-filter-control:focus-visible { border-color: var(--accent-line); outline: none; }
+.esb-filter-control-label { color: var(--text-mute); font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; }
+.esb-filter-control strong { overflow: hidden; color: var(--text); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.esb-filter-menu { max-height: min(460px, 58vh); overflow-y: auto; }
+.esb-extension-icon {
+  display: inline-flex;
+  width: 24px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+.esb-extension-icon--pdf { color: var(--danger); }
+.esb-extension-icon--excel { color: var(--ok); }
+.esb-extension-icon--word,.esb-extension-icon--text,.esb-extension-icon--slides { color: var(--color-info); }
+.esb-extension-icon--images { color: var(--ok); }
+.esb-extension-icon--videos { color: var(--warn); }
+.esb-extension-icon--audio,.esb-extension-icon--code { color: var(--accent); }
+
+.esb-open-full-search {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 2px 0;
+}
+.esb-open-full-search:hover { color: var(--text); text-decoration: underline; }
+.esb-open-full-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Announcement-only: read by screen readers, never painted. */
+.esb-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ── Error ──────────────────────────────────────────────────────────── */
+
+.esb-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--danger);
+  background: rgba(255, 90, 69, 0.07);
+  border-bottom: 1px solid rgba(255, 90, 69, 0.15);
+}
+
+/* ── Results list ───────────────────────────────────────────────────── */
+
+.esb-results {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(340px, 44vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+}
+
+/* The selected mock-up direction uses two explicit result tabs. Content hits
+   get the full-height pane and a readable document preview instead of being
+   squeezed below filename rows. */
+.esb-result-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.esb-result-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-mute);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 11px;
+}
+
+.esb-result-tabs button:hover,
+.esb-result-tabs button:focus-visible,
+.esb-result-tabs button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  outline: none;
+}
+
+.esb-result-tabs span {
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.esb-result-area {
+  min-height: 0;
+}
+
+.esb-result-area-preview {
+  display: grid;
+  /* The selected shortcut mock-up reserves a compact result navigator for
+     file names and makes the readable match preview the dominant surface. */
+  grid-template-columns: minmax(0, 30%) minmax(0, 70%);
+  min-height: 300px;
+  max-height: min(430px, 48vh);
+}
+
+.esb-result-area-preview .esb-results {
+  max-height: none;
+  border-right: 1px solid var(--border);
+}
+
+.esb-preview {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 14px;
+  background: var(--surface-2);
+}
+
+.esb-preview-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+}
+
+.esb-preview-heading strong,
+.esb-preview-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esb-preview-heading strong { font-size: 12px; }
+.esb-preview-path { margin: 4px 0 10px; color: var(--text-mute); font-family: var(--font-mono); font-size: 10px; }
+
+.esb-preview-copy {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.esb-preview-actions { display: flex; gap: 6px; margin-top: 10px; }
+.esb-preview-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 27px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 10px;
+}
+.esb-preview-actions button:hover,.esb-preview-actions button:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+.esb-preview-actions .esb-icon-action { width: 28px; padding: 4px; }
+.esb-preview-empty { margin: auto; color: var(--text-mute); font-size: 11px; text-align: center; }
+
+.esb-results::-webkit-scrollbar {
+  width: 3px;
+}
+.esb-results::-webkit-scrollbar-thumb {
+  background: var(--accent-soft);
+  border-radius: 2px;
+}
+
+.esb-result-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background 0.08s, border-color 0.08s;
+}
+
+.esb-result-item:not(:last-child) {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.esb-result-item:hover {
+  background: rgba(255, 122, 26, 0.06);
+}
+
+.esb-result-item.esb-selected {
+  border-left-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-soft) 0%, transparent 75%);
+  padding-left: 12px;
+}
+
+.esb-result-icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+  color: var(--accent);
+}
+
+.esb-native-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.esb-icon-folder { color: #f0b060; opacity: 1; }
+.esb-icon-app    { color: var(--danger); opacity: 0.9; }
+.esb-icon-doc    { color: var(--color-info); opacity: 0.9; }
+.esb-icon-image  { color: var(--ok); opacity: 0.9; }
+.esb-icon-video  { color: #f472b6; opacity: 0.9; }
+.esb-icon-audio  { color: #818cf8; opacity: 0.9; }
+.esb-icon-archive{ color: var(--warn); opacity: 0.9; }
+.esb-icon-code   { color: #a78bfa; opacity: 0.9; }
+
+.esb-result-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.esb-result-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esb-result-path {
+  font-size: 10.5px;
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esb-result-size {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Search-result actions replace WebView2's developer context menu. */
+.esb-context-menu {
+  position: fixed;
+  z-index: var(--z-popover);
+  width: 236px;
+  max-height: min(70vh, 480px);
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  box-shadow: var(--shadow);
+}
+
+.esb-context-label {
+  padding: 6px 9px 7px;
+  overflow: hidden;
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esb-context-action {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  text-align: left;
+}
+
+.esb-context-action:hover:not(:disabled),
+.esb-context-action:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent);
+  outline: none;
+}
+
+.esb-context-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* ── No results ─────────────────────────────────────────────────────── */
+
+.esb-no-results {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 18px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-mute);
+}
+
+.esb-no-results-title {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+/* The plain-English query, so an empty list explains ITSELF rather than
+   leaving the user to guess which chip was too tight. */
+.esb-no-results-sub {
+  max-width: 90%;
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Light mode overrides ───────────────────────────────────────────── */
+
+.light .esb-backdrop {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.light .esb-container {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow:
+    0 0 0 1px rgba(5, 150, 105, 0.06),
+    0 18px 48px -22px rgba(28, 42, 34, 0.28);
+}
+
+.light .esb-input-row {
+  border-bottom-color: var(--border);
+}
+.light .esb-filter-control { background: var(--surface-2); border-color: var(--border); color: var(--text-dim); }
+.light .esb-filter-control strong { color: var(--text); }
+
+.light .esb-input {
+  color: var(--text);
+  caret-color: var(--accent);
+}
+
+.light .esb-input::placeholder {
+  color: var(--text-mute);
+}
+
+.light .esb-clear {
+  color: var(--text-mute);
+}
+
+.light .esb-clear:hover {
+  background: rgba(28, 42, 34, 0.07);
+  color: var(--text);
+}
+
+.light .esb-hint {
+  color: var(--text-mute);
+  border-bottom-color: var(--border);
+}
+
+.light .esb-hint kbd {
+  border-color: var(--border);
+  background: rgba(28, 42, 34, 0.04);
+  color: var(--text-mute);
+}
+
+.light .esb-hint-mode {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Chips / ghost — the accent-derived fills and borders resolve per theme via
+   color-mix, so light mode only has to restate what is hardcoded to a surface:
+   the scrollbar, the strict chip's knocked-out text, and the Tab cap. */
+.light .esb-field::-webkit-scrollbar-thumb {
+  background: var(--accent-soft);
+}
+
+.light .esb-chip {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.light .esb-chip-solo:hover,
+.light .esb-chip-main:hover,
+.light .esb-chip-x-btn:hover {
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+/* Daylight's accent is a mid green: knocked-out text on the raw accent lands at
+   ~4.0:1, under AA for 12px. Pulling the fill toward --text darkens it to ~5.5:1
+   without leaving the palette. The dark theme's orange is already ~7:1. */
+.light .esb-chip-strict {
+  border-color: color-mix(in srgb, var(--accent) 78%, var(--text));
+  background: color-mix(in srgb, var(--accent) 78%, var(--text));
+  color: var(--surface);
+}
+
+.light .esb-chip-strict .esb-chip-main:hover,
+.light .esb-chip-strict .esb-chip-x-btn:hover {
+  background: color-mix(in srgb, var(--surface) 26%, transparent);
+}
+
+.light .esb-ghost {
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  color: var(--text-dim);
+  opacity: 0.78;
+}
+
+.light .esb-ghost:hover,
+.light .esb-ghost:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  opacity: 1;
+}
+
+.light .esb-ghost-kbd {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--text-mute);
+}
+
+.light .esb-section-label {
+  border-bottom-color: var(--border);
+  color: var(--text-mute);
+}
+
+.light .esb-count {
+  border-top-color: var(--border);
+  color: var(--text-mute);
+}
+
+.light .esb-no-results-title {
+  color: var(--text-dim);
+}
+
+.light .esb-no-results-sub {
+  color: var(--text-mute);
+}
+
+.light .esb-error {
+  background: rgba(200, 66, 58, 0.07);
+  border-bottom-color: rgba(200, 66, 58, 0.18);
+}
+
+.light .esb-results::-webkit-scrollbar-thumb {
+  background: var(--accent-soft);
+}
+
+.light .esb-result-item:not(:last-child) {
+  border-bottom-color: rgba(28, 42, 34, 0.06);
+}
+
+.light .esb-result-item:hover {
+  background: rgba(5, 150, 105, 0.06);
+}
+
+.light .esb-result-item.esb-selected {
+  border-left-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-soft) 0%, transparent 75%);
+}
+
+.light .esb-result-icon {
+  color: var(--accent);
+}
+
+.light .esb-result-name {
+  color: var(--text);
+}
+
+.light .esb-result-path {
+  color: var(--text-mute);
+}
+
+.light .esb-result-size {
+  color: var(--text-mute);
+}
+
+.light .esb-no-results {
+  color: var(--text-mute);
+}
+
+/* ----- "Inside files" content section ----- */
+.esb-content-section {
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+  margin-top: 4px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.esb-content-section::-webkit-scrollbar {
+  width: 3px;
+}
+.esb-content-section::-webkit-scrollbar-thumb {
+  background: var(--accent-soft);
+  border-radius: 2px;
+}
+
+.esb-content-divider {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 4px 14px 2px;
+  font-family: var(--font-mono);
+}
+
+.esb-content-item {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 14px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background 0.08s, border-color 0.08s;
+}
+
+.esb-content-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.esb-content-item .esb-native-icon,
+.esb-content-item .esb-result-icon {
+  margin-top: 1px;
+}
+
+.esb-content-item:not(:last-child) {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.esb-content-item:hover {
+  background: rgba(255, 122, 26, 0.06);
+}
+
+.esb-content-item.esb-selected {
+  border-left-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-soft) 0%, transparent 75%);
+  padding-left: 12px;
+}
+
+.esb-content-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esb-content-snippet {
+  font-size: 11.5px;
+  color: var(--text-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esb-name-match-badge {
+  align-self: flex-start;
+  padding: 0 5px;
+  border-radius: var(--radius-sm, 2px);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono, monospace);
+  font-size: 9.5px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.esb-content-snippet mark {
+  background: var(--highlight-bg, #fff3b0);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* Light mode overrides */
+.light .esb-content-item:not(:last-child) {
+  border-bottom-color: rgba(28, 42, 34, 0.06);
+}
+
+.light .esb-content-item:hover {
+  background: rgba(5, 150, 105, 0.06);
+}
+
+.light .esb-content-item.esb-selected {
+  border-left-color: var(--accent);
+  background: linear-gradient(90deg, var(--accent-soft) 0%, transparent 75%);
+}
+
+.light .esb-content-name {
+  color: var(--text);
+}
+
+.light .esb-content-snippet {
+  color: var(--text-mute);
+}
+
+@media (max-width: 760px) {
+  .esb-overlay-fullscreen,.esb-backdrop { padding-top: 10vh; }
+  .esb-container { max-height: min(720px, calc(100vh - 10vh - 24px)); }
+  .esb-input-row { gap: 5px; padding: 9px; }
+  .esb-filter-control-label { display: none; }
+  .esb-filter-control { grid-template-columns: auto minmax(0, 1fr) auto; padding: 0 6px; }
+  .esb-filter-control strong { font-size: 10px; }
+  .esb-result-area-preview { grid-template-columns: 1fr; max-height: none; }
+  .esb-result-area-preview .esb-results { max-height: 220px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .esb-preview { min-height: 240px; }
+}

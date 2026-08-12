@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AppManager",
+  "identifier": "com.example.appmanager",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "App Manager",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": false,
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' tauri: asset: ipc:; script-src 'self' tauri: asset: ipc:; style-src 'self' 'unsafe-inline' tauri: asset:; img-src 'self' data: blob: tauri: asset: https:; font-src 'self' data: tauri: asset:; connect-src 'self' tauri: ipc: http://ipc.localhost http://tauri.localhost https://updates.example.com https://license.example.com http://localhost:1420 ws://localhost:1420 http://[::1]:1420 ws://[::1]:1420 http://localhost:8787 ws://localhost:8787 http://127.0.0.1:8787 ws://127.0.0.1:8787 http://*.ts.net:* https://*.ts.net:* ws://*.ts.net:* wss://*.ts.net:*; frame-src 'self' tauri: asset: https:; media-src 'self' tauri: asset: data: blob:; object-src 'none'; base-uri 'self'"
+    }
+  },
+  "bundle": {
+    "publisher": "Example Corp",
+    "homepage": "https://www.example.com"
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://updates.example.com/free/latest.json"
+      ],
+      "pubkey": "REPLACE_WITH_CUSTOMER_MINISIGN_PUBLIC_KEY"
+    }
+  }
+}

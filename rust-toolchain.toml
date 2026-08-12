@@ -1,0 +1,11 @@
+# Pins the Rust toolchain so every build — local or CI — uses exactly the
+# same compiler.  This is a prerequisite for reproducible builds and for
+# the SLSA provenance attestation to be meaningful (if the compiler differs
+# the binary differs even from the same source).
+#
+# To upgrade: change `channel` to the new stable version, commit, and the
+# next CI run will pick it up.  Dependabot can automate this.
+[toolchain]
+channel  = "1.97.1"
+targets  = ["x86_64-pc-windows-msvc"]
+components = ["rustfmt", "clippy"]

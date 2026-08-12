@@ -1,0 +1,138 @@
+/* StorageStatsCard — co-located so it styles correctly wherever it's used
+   (dashboard + the unified File Tools / Search panel). */
+
+.storage-stats-section {
+    padding-top: 4px;
+}
+
+.storage-scan-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    /* hover changes: border-color, color, background */
+    transition: border-color var(--dur-normal, 200ms) var(--ease),
+                color var(--dur-normal, 200ms) var(--ease),
+                background-color var(--dur-normal, 200ms) var(--ease);
+    margin-left: auto;
+}
+
+.storage-scan-btn:hover:not(:disabled) {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+    background: var(--color-accent-dim);
+}
+
+.storage-scan-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.storage-stats-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 20px 0;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-align: center;
+}
+
+.storage-stats-hint {
+    font-size: 9px;
+    opacity: 0.6;
+}
+
+.storage-stats-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 6px 0;
+}
+
+.storage-stat-row {
+    display: grid;
+    grid-template-columns: 14px 82px 1fr 36px 52px;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+}
+
+.ss-icon {
+    color: var(--color-text-muted);
+    opacity: 0.6;
+    display: flex;
+    align-items: center;
+}
+
+.ss-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ss-bar-wrap {
+    height: 4px;
+    background: var(--color-bg-tertiary);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.ss-bar {
+    height: 100%;
+    background: var(--color-accent);
+    border-radius: 2px;
+    opacity: 0.7;
+    transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    min-width: 2px;
+}
+
+.ss-count {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    text-align: right;
+}
+
+.ss-size {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    text-align: right;
+    opacity: 0.8;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+.spin {
+    animation: spin 1.2s linear infinite;
+}
+
+html.light .ss-bar {
+    opacity: 0.85;
+}
+
+html.light .storage-scan-btn {
+    border-color: var(--color-border);
+}

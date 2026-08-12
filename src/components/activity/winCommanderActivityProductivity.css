@@ -1,0 +1,170 @@
+/* src/components/activity/winCommanderActivityProductivity.css
+ *
+ * Styles for the local Productivity panel's activity viewers. AGPL-3.0, part
+ * of the Free app's own viewer layer.
+ *
+ * The Pro fleet console has separate styles under the WinCommander EULA. Do
+ * NOT sync or diff the two: `OPEN_CORE.md` places fleet services on the
+ * proprietary side of the boundary and this file on the public side.
+ *
+ * No token renaming was needed: this repo's V2 theme (src/styles/v2-theme.css)
+ * already defines the same custom-property names the Fleet console uses
+ * (--surface[-2/-3], --border[-strong], --text[-dim/-mute], --accent, --ok,
+ * --warn, --danger, --radius-xl, --radius-md, --font-display, --font-mono).
+ * `.fleet-view-head` in the last media query targets a Fleet-console page
+ * header this app doesn't have — inert here, left as-is for drift-diffing.
+ */
+
+.fleet-productivity-controls {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.wc-fleet-productivity {
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.wc-fleet-productivity-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 26px;
+}
+.wc-fleet-productivity-head p,
+.wc-fleet-productivity-head span { margin: 0; color: var(--text-mute); font-size: 12px; }
+.wc-fleet-productivity-head p { letter-spacing: .04em; text-transform: uppercase; }
+.wc-fleet-productivity-head p strong { color: var(--text-dim); font-weight: 600; }
+.wc-fleet-productivity-head h2 { margin: 3px 0; font-family: var(--font-display); font-size: 22px; font-weight: 500; }
+
+.wc-fleet-activity-grid,
+.wc-fleet-category-grid {
+  display: grid;
+  grid-template-columns: minmax(210px, .9fr) minmax(250px, 1.15fr) minmax(300px, 1fr);
+  gap: 40px;
+}
+.wc-fleet-section { min-width: 0; }
+.wc-fleet-section h3 { margin: 0; color: var(--text); font-family: var(--font-display); font-size: 17px; font-weight: 500; }
+.wc-fleet-empty { margin: 12px 0 0; color: var(--text-mute); font-size: 13px; }
+
+.wc-fleet-ranked-list,
+.wc-fleet-category-tree,
+.wc-fleet-category-tree ul { display: grid; gap: 5px; margin: 12px 0 0; padding: 0; list-style: none; }
+.wc-fleet-ranked-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  min-width: 0;
+  min-height: 46px;
+  overflow: hidden;
+  padding: 7px 9px;
+  border-radius: 5px;
+  background: var(--surface-3);
+}
+.wc-fleet-ranked-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 0;
+  min-width: 2px;
+  background: color-mix(in srgb, var(--text-mute) 34%, var(--surface));
+  transition: filter .15s ease;
+}
+.wc-fleet-ranked-item:hover .wc-fleet-ranked-fill { filter: brightness(.92); }
+.wc-fleet-ranked-label,
+.wc-fleet-ranked-item time { position: relative; z-index: 1; min-width: 0; }
+.wc-fleet-ranked-label { align-self: center; overflow-wrap: anywhere; color: var(--text); font-size: 14px; line-height: 1.25; }
+.wc-fleet-ranked-item time { align-self: end; color: var(--text-dim); font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wc-fleet-list-actions { display: flex; gap: 6px; min-height: 30px; margin-top: 5px; }
+.wc-fleet-list-actions button,
+.wc-fleet-sunburst-info button {
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+}
+.wc-fleet-list-actions button:hover,
+.wc-fleet-sunburst-info button:hover { border-color: var(--accent); color: var(--text); }
+
+.wc-fleet-chart { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 7px; height: 250px; margin-top: 12px; }
+.wc-fleet-y-axis { display: flex; height: 210px; flex-direction: column; justify-content: space-between; color: var(--text-mute); font-family: var(--font-mono); font-size: 10px; text-align: right; }
+.wc-fleet-plot { position: relative; min-width: 0; height: 100%; padding-bottom: 28px; border-bottom: 1px solid var(--border-strong); }
+.wc-fleet-grid-lines { position: absolute; inset: 0 0 28px; background: repeating-linear-gradient(to bottom, transparent 0 calc(25% - 1px), color-mix(in srgb, var(--border) 80%, transparent) calc(25% - 1px) 25%); border-left: 1px solid var(--border-strong); pointer-events: none; }
+.wc-fleet-bars { position: absolute; inset: 0 0 28px; display: grid; grid-template-columns: repeat(24, minmax(4px, 1fr)); align-items: end; padding-left: 1px; }
+.wc-fleet-bars button {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: transparent;
+  cursor: crosshair;
+}
+.wc-fleet-bars button i { display: block; width: min(72%, 10px); min-height: 0; background: var(--text-mute); opacity: .7; transition: background .12s ease, opacity .12s ease; }
+.wc-fleet-bars button:hover i,
+.wc-fleet-bars button:focus-visible i,
+.wc-fleet-bars button.is-selected i { background: var(--accent); opacity: 1; }
+.wc-fleet-bars button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.wc-fleet-x-axis { position: absolute; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(24, minmax(4px, 1fr)); color: var(--text-mute); font-family: var(--font-mono); font-size: 10px; }
+.wc-fleet-x-axis span { transform: rotate(-42deg); transform-origin: top center; text-align: center; }
+.wc-fleet-chart-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 24px; color: var(--text-mute); font-size: 12px; text-align: center; pointer-events: none; }
+.wc-fleet-chart-foot { display: flex; min-height: 34px; align-items: flex-start; justify-content: space-between; gap: 10px; margin: 4px 0 0 49px; color: var(--text-mute); font-size: 10px; }
+.wc-fleet-chart-foot output { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 8px; color: var(--text-dim); font-family: var(--font-mono); text-align: right; }
+.wc-fleet-chart-foot output b { color: var(--text); }
+
+.wc-fleet-category-section { margin-top: 42px; padding-top: 28px; border-top: 1px solid var(--border); }
+.wc-fleet-category-tree { gap: 1px; }
+.wc-fleet-category-tree ul { gap: 1px; margin: 0 0 0 18px; }
+.wc-fleet-category-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 29px; }
+.wc-fleet-category-row > button { display: grid; width: 16px; height: 16px; place-items: center; padding: 0; border: 1px solid var(--border-strong); border-radius: 3px; background: transparent; color: var(--text-dim); cursor: pointer; font-size: 12px; line-height: 1; }
+.wc-fleet-category-row > i { display: inline-block; width: 8px; height: 8px; margin-left: 4px; border-radius: 50%; }
+.wc-fleet-category-row > span { min-width: 0; overflow-wrap: anywhere; color: var(--text); font-size: 14px; }
+.wc-fleet-category-row time { color: var(--text-dim); font-family: var(--font-mono); font-size: 11px; white-space: nowrap; }
+.wc-fleet-percent-toggle { display: inline-flex; align-items: center; gap: 6px; margin-top: 15px; color: var(--text-dim); font-size: 13px; }
+.wc-fleet-percent-toggle input { accent-color: var(--accent); }
+
+.wc-fleet-sunburst-wrap { position: relative; display: grid; min-height: 250px; place-items: center; }
+.wc-fleet-sunburst { width: min(250px, 100%); height: auto; overflow: visible; }
+.wc-fleet-sunburst path { stroke: var(--surface); stroke-width: 1.25; cursor: pointer; transition: opacity .15s ease, filter .15s ease; }
+.wc-fleet-sunburst path:hover,
+.wc-fleet-sunburst path:focus-visible,
+.wc-fleet-sunburst path.is-active { filter: brightness(.9); opacity: .78; outline: none; }
+.wc-fleet-sunburst-hole { fill: var(--surface); }
+.wc-fleet-sunburst-total { fill: var(--text); font-family: var(--font-mono); font-size: 9px; }
+.wc-fleet-sunburst-caption { fill: var(--text-mute); font-family: var(--font-display); font-size: 7px; text-transform: uppercase; }
+.wc-fleet-sunburst-info { display: flex; min-height: 32px; align-items: center; justify-content: center; gap: 9px; color: var(--text-dim); font-size: 11px; text-align: center; }
+
+@media (max-width: 1120px) {
+  .fleet-view-head { flex-wrap: wrap; }
+  .wc-fleet-activity-grid,
+  .wc-fleet-category-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 30px; }
+  .wc-fleet-timeline,
+  .wc-fleet-sunburst-section { grid-column: 1 / -1; }
+}
+
+@media (max-width: 660px) {
+  .wc-fleet-productivity { padding: 16px; }
+  .wc-fleet-productivity-head { align-items: flex-start; flex-direction: column; }
+  .wc-fleet-activity-grid,
+  .wc-fleet-category-grid { grid-template-columns: 1fr; gap: 28px; }
+  .wc-fleet-timeline,
+  .wc-fleet-sunburst-section { grid-column: auto; }
+  .wc-fleet-chart { height: 215px; }
+  .wc-fleet-y-axis { height: 178px; }
+  .wc-fleet-chart-foot { margin-left: 0; }
+  .wc-fleet-ranked-item { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .wc-fleet-ranked-item time { justify-self: start; }
+}

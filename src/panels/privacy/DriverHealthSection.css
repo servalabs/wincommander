@@ -1,0 +1,207 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   DRIVER HEALTH SECTION — Device & Driver Health (#6)
+   Read-only PnP/Device-Manager diagnostics. Layout + color live here so
+   the component carries no inline layout/color styling (design-system
+   rule). Severity color comes from Blueprint `intent`, not hardcoded hex.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.driver-health-body {
+    display: flex;
+    flex-direction: column;
+    /* Tightened so the rows below the intro/controls sit closer together. */
+    gap: 7px;
+    /* Give the card a substantial height so it lines up with the taller
+       Performance & Gaming card in the opposite column instead of collapsing
+       to a short stub when only a few devices are listed. */
+    min-height: 280px;
+}
+
+.driver-health-intro {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    line-height: 1.5;
+}
+
+.driver-health-controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+/* Keep the inline Watch switch baseline-aligned with the buttons. */
+.driver-health-watch-switch.bp6-control {
+    margin-bottom: 0;
+}
+
+.driver-health-error {
+    padding: 8px;
+    background: var(--color-danger-dim);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 50%, transparent);
+    border-radius: var(--radius-md);
+    font-size: 11px;
+    color: var(--color-danger);
+}
+
+.driver-health-empty {
+    font-size: 12px;
+    color: var(--color-text-muted);
+}
+
+.driver-health-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 420px;
+    overflow-y: auto;
+}
+
+/* One problem-device row. */
+.driver-health-row {
+    padding: 8px 10px;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-left: 2px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    font-size: 11px;
+}
+
+/* Severity accent — left edge only; the badge carries the Blueprint intent. */
+.driver-health-row.is-critical {
+    border-left-color: var(--color-danger);
+}
+.driver-health-row.is-warning {
+    border-left-color: var(--color-warning);
+}
+.driver-health-row.is-info {
+    opacity: 0.62;
+}
+
+.driver-health-row-head {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.driver-health-row-name {
+    font-weight: 600;
+    flex: 1;
+    min-width: 140px;
+}
+
+.driver-health-row-problem {
+    margin-top: 4px;
+    color: var(--color-text-primary);
+}
+
+.driver-health-row-meta {
+    margin-top: 4px;
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    flex-wrap: wrap;
+    font-size: 10px;
+    color: var(--color-text-muted);
+}
+
+.driver-health-instance {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-muted);
+    word-break: break-all;
+}
+
+.driver-health-row-hint {
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--color-text-secondary);
+    line-height: 1.45;
+}
+.driver-health-row.is-info .driver-health-row-hint {
+    color: var(--color-text-muted);
+}
+
+.driver-health-byovd {
+    display: grid;
+    gap: 9px;
+    margin-top: 8px;
+    padding: 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    background: var(--color-bg-secondary);
+}
+
+.driver-health-byovd-header,
+.driver-health-byovd-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.driver-health-byovd-header {
+    justify-content: space-between;
+}
+
+.driver-health-byovd-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.driver-health-byovd-heading {
+    display: grid;
+    gap: 2px;
+}
+
+.driver-health-byovd-eyebrow {
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.driver-health-byovd-title {
+    color: var(--color-text-primary);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.driver-health-byovd-desc {
+    color: var(--color-text-secondary);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.driver-health-byovd-scanned {
+    display: inline-flex;
+    margin-left: 7px;
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.driver-health-byovd-empty {
+    padding: 9px 10px;
+    border: 1px solid color-mix(in srgb, var(--color-success) 36%, transparent);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--color-success) 8%, transparent);
+    color: var(--color-text-secondary);
+    font-size: 11px;
+}
+
+@media (max-width: 620px) {
+    .driver-health-byovd-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .driver-health-byovd-actions {
+        justify-content: flex-start;
+    }
+}

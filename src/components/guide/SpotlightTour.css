@@ -1,0 +1,312 @@
+/* SpotlightTour.css — dim scrim + gliding highlight ring + callout card.
+   Cosmetics only; positioning/size is set inline from measured rects. */
+
+.spotlight-root {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  /* Click- and scroll-through on every step (2026-07-20 fix — was only for
+     requiresAction steps, so the highlighted element was otherwise "frozen":
+     unclickable and unscrollable under this transparent overlay).
+     pointer-events: none removes this div from hit-testing entirely, so
+     clicks/wheel events fall straight through to the real app underneath;
+     the dim itself is purely visual (each .spotlight-scrim-panel already
+     carries its own pointer-events:none and was never what blocked
+     interaction). .spotlight-callout re-enables pointer-events on itself
+     below, so Next/Back/Skip stay clickable. */
+  pointer-events: none;
+}
+
+/* Dim+blur layer, built from panels that geometrically exclude the active
+   anchor + secondary anchor + sidebar (up to three cutouts) — see
+   computeScrimPanels()/Scrim in SpotlightTour.tsx. Previously a single SVG
+   rect masked around the same holes; backdrop-filter doesn't reliably
+   respect an SVG mask (it blurred the whole element's backdrop regardless,
+   only the fill color was masked), so the "highlighted" hole looked blurred
+   instead of crisp (2026-07-20 bug). Geometrically separate panels make
+   that impossible — a panel that doesn't cover a hole simply can't blur it. */
+.spotlight-scrim-panel {
+  position: fixed;
+  background: var(--bg);
+  opacity: 0.8;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.spotlight-ring {
+  position: fixed;
+  top: 0;
+  left: 0;
+  border-radius: var(--r);
+  pointer-events: none;
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 0 7px var(--accent-soft);
+}
+
+/* Bolder, filled inner ring nested inside the primary one — e.g. Secure
+   Storage's live MB counter, double-highlighted inside the whole Disk
+   Clean-Up card (2026-07-10 fix: "the space clearing should be more
+   highlighted ... with another rectangle highlighting box"). A tinted fill
+   + gentle pulse make it read as "look here specifically" rather than a
+   second identical outline. */
+.spotlight-ring--secondary {
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  animation: spotlight-secondary-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes spotlight-secondary-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px var(--accent), 0 0 14px 2px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--accent), 0 0 22px 6px color-mix(in srgb, var(--accent) 70%, transparent);
+  }
+}
+
+.spotlight-callout {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-family: var(--font-ui);
+  /* Stays clickable even though .spotlight-root now passes clicks straight
+     through to the real app underneath on every step. */
+  pointer-events: auto;
+  /* Second line of defense on top of the JS clamping in calloutStyle() — a
+     media-heavy step can still render taller than the JS estimate; this
+     keeps it on-screen (scrolling internally) instead of clipping. */
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+}
+
+.spotlight-callout-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.spotlight-counter {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-mute);
+}
+
+.spotlight-x {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm);
+  color: var(--text-mute);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.spotlight-x:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.spotlight-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.spotlight-summary {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.spotlight-dots {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+.spotlight-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  transition: background var(--dur-fast) var(--ease), width var(--dur-fast) var(--ease);
+}
+.spotlight-dot.active {
+  width: 16px;
+  background: var(--accent);
+}
+
+.spotlight-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.spotlight-nav {
+  display: flex;
+  gap: 6px;
+}
+
+.spotlight-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: var(--r);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+.spotlight-btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.spotlight-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+.spotlight-btn.primary:hover {
+  background: var(--accent-2);
+  border-color: var(--accent-2);
+  color: var(--accent-contrast);
+}
+
+.spotlight-btn.primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
+.spotlight-skip-step {
+  font-size: 11.5px;
+  color: var(--text-mute);
+  padding: 6px 4px;
+  transition: color var(--dur-fast) var(--ease);
+}
+.spotlight-skip-step:hover {
+  color: var(--accent);
+}
+
+/* ── Media (looping demo video) ── */
+.spotlight-media {
+  width: 100%;
+  display: block;
+  border-radius: var(--r);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+/* Browser Hardening's extension capture needs more context than an icon, but
+   its tall target reserves limited space above. Keeping its full 5:3 frame
+   under 180px lets useTour place the callout wholly above the card. */
+.spotlight-callout--privacy-tour-browser-hardening .spotlight-media {
+  max-height: min(180px, 24vh);
+  object-fit: contain;
+}
+
+/* ── Embedded live component (e.g. Privacy Shield's own animation, reused
+   as-is instead of a separate recording or dialog) ── */
+.spotlight-component-box {
+  width: 100%;
+  height: 260px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: var(--r);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+/* ── Do-it-yourself warning note ── */
+.spotlight-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: var(--r);
+  background: var(--color-warning-dim);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.spotlight-warning svg {
+  flex-shrink: 0;
+  color: var(--color-warning);
+  margin-top: 1px;
+}
+
+/* ── Hero variant: circular ring + centered modal + connector line ──
+   Used for standout, self-contained demos (Scrub, Lockdown) instead of the
+   anchored callout — a bigger moment, not just a pointer. */
+.spotlight-ring--hero {
+  border-radius: 9999px;
+}
+
+.spotlight-hero-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: fit-content;
+  max-width: 90vw;
+  max-height: 80vh;
+  /* Overrides .spotlight-callout's overflow-y: auto — sizing below now
+     guarantees title + media + summary + buttons fit inside max-height, so
+     no scrollbar should ever be needed; hidden is the backstop instead of a
+     visible scrollbar for the rare edge case (2026-07-20 fix). */
+  overflow: hidden;
+}
+
+/* Scoped to the hero modal only — the base .spotlight-media rule above is
+   shared with the rectangle-callout steps (e.g. Browser Hardening, Privacy
+   Shield) and must stay untouched. Caps the video/image itself so a wide
+   2.5x hero modal (up to 1200px) can't push media past the modal's own
+   max-height. The calc() term reserves ~240px for the head row, title,
+   summary text, and the dots/buttons row that stack below the media inside
+   the same 80vh budget — a flat 60vh let media + text together exceed 80vh
+   on common laptop viewport heights, which is what forced the scrollbar
+   this replaces (2026-07-20 fix). */
+.spotlight-hero-modal .spotlight-media {
+  align-self: center;
+  width: auto;
+  max-width: calc(90vw - 32px);
+  max-height: min(50vh, calc(80vh - 240px));
+  object-fit: contain;
+}
+
+.spotlight-connector-svg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  /* Must paint after (visually above) .spotlight-ring, whose huge box-shadow
+     fakes a full-screen scrim outside its own cutout — otherwise the line
+     is covered everywhere except the tiny ring itself. Source order in
+     SpotlightTour.tsx now renders this after the ring; z-index makes that
+     robust against any future reordering (2026-07-10 fix). */
+  z-index: 1;
+}
+.spotlight-connector-line {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-dasharray: 5 5;
+  opacity: 0.9;
+}

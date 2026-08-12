@@ -1,0 +1,92 @@
+/* src/components/activity/awParity.css
+ *
+ * Styles for TimelineSwimlane. AGPL-3.0, part of the Free app's own viewer
+ * layer. The Pro fleet console has separate styles under the WinCommander
+ * EULA — do NOT sync or diff the two; `OPEN_CORE.md` places fleet services on
+ * the proprietary side of the boundary and this file on the public side.
+ *
+ * Scoped to TimelineSwimlane only: this panel loads a single local day, so the
+ * multi-day views (per-app drilldown, raw-bucket explorer, input-activity
+ * chart) don't exist here and neither do their styles.
+ *
+ * Reuses wc-fleet-section / wc-fleet-empty / wc-fleet-chart-empty from
+ * winCommanderActivityProductivity.css.
+ */
+
+/* ---- TimelineSwimlane ---- */
+.wc-fleet-swimlane-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.wc-fleet-swimlane-reset {
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+}
+.wc-fleet-swimlane-reset:hover { border-color: var(--accent); color: var(--text); }
+.wc-fleet-swimlane-track {
+  position: relative;
+  height: 64px;
+  margin-top: 24px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-3);
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+.wc-fleet-swimlane-gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--border) 70%, transparent);
+  pointer-events: none;
+}
+.wc-fleet-swimlane-hour {
+  position: absolute;
+  top: -18px;
+  color: var(--text-mute);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.wc-fleet-swimlane-idle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--text-mute) 16%, transparent) 0 6px,
+    transparent 6px 12px
+  );
+  pointer-events: none;
+}
+.wc-fleet-swimlane-block {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  min-width: 2px;
+  border: 0;
+  border-radius: 2px;
+  padding: 0;
+  opacity: .88;
+  cursor: pointer;
+  transition: opacity .12s ease, outline-color .12s ease;
+}
+.wc-fleet-swimlane-block:hover,
+.wc-fleet-swimlane-block:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
+.wc-fleet-swimlane-brush {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-left: 1px solid var(--accent);
+  border-right: 1px solid var(--accent);
+  pointer-events: none;
+}
+.wc-fleet-swimlane-detail { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 30px; color: var(--text-dim); font-size: 11px; }
+.wc-fleet-swimlane-detail b { color: var(--text); }

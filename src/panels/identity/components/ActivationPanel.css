@@ -1,0 +1,74 @@
+.activation-panel {
+          width: 100%;
+        }
+        
+        .activation-action-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--color-border);
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .action-details {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .activation-buttons-group {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }
+
+        .action-title {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--color-text-primary);
+            letter-spacing: 1px;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .action-desc {
+            font-size: 10px;
+            color: var(--color-text-muted);
+            line-height: 1.4;
+        }
+
+        .compact-action-btn {
+            background: color-mix(in srgb, var(--accent) 5%, transparent) !important;
+            border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent) !important;
+            color: var(--color-accent) !important;
+            font-family: var(--font-mono) !important;
+            text-transform: uppercase !important;
+            font-size: 10px !important;
+            letter-spacing: 1px !important;
+            padding: 4px 16px !important;
+            min-height: 32px !important;
+            border-radius: var(--radius-lg) !important;
+            flex-shrink: 0;
+        }
+        
+        .compact-action-btn:hover {
+            background: color-mix(in srgb, var(--accent) 15%, transparent) !important;
+            border-color: var(--color-accent) !important;
+        }
+
+        .compact-action-btn.secondary {
+            background: rgba(255, 255, 255, 0.03) !important;
+            border-color: rgba(255, 255, 255, 0.1) !important;
+            color: var(--color-text-muted) !important;
+        }
+        .compact-action-btn.secondary:hover {
+            background: rgba(255, 255, 255, 0.08) !important;
+            border-color: rgba(255, 255, 255, 0.3) !important;
+            color: var(--color-text-primary) !important;
+        }

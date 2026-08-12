@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  commander.admx — Group Policy Administrative Template for WinCommander
+  Version: 1.0  (F9 v1 — read + surface only; enforcement is phase-2)
+
+  Installation:
+    Copy this file to:
+      %SystemRoot%\PolicyDefinitions\commander.admx      (local machine)
+      \\<SYSVOL>\PolicyDefinitions\commander.admx        (domain-wide)
+    Copy en-US\commander.adml to the matching en-US\ subfolder.
+
+  Registry target (Policies hive — standard GPO location):
+    HKLM\SOFTWARE\Policies\ServaLabs\WinCommander
+
+  All values are read by WinCommander via gpo_policy::get_managed_policy().
+  When one or more values are present, the app shows a "managed by your
+  organisation" banner in the Settings panel.
+
+  Phase-2 note:
+    Hard enforcement (locking individual toggles so the user cannot override
+    managed values) is a planned follow-on.  This template is forward-compatible:
+    adding enforcement in a future build does NOT require changes here.
+-->
+<policyDefinitions
+    xmlns="http://www.microsoft.com/GroupPolicy/PolicyDefinitions"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    revision="1.0"
+    schemaVersion="1.0">
+
+  <policyNamespaces>
+    <target prefix="commander" namespace="ServaLabs.Policies.WinCommander" />
+    <using prefix="windows" namespace="Microsoft.Policies.Windows" />
+  </policyNamespaces>
+
+  <resources minRequiredRevision="1.0" />
+
+  <supportedOn>
+    <definitions>
+      <definition name="SUPPORTED_WIN10_AND_ABOVE"
+                  displayName="$(string.SUPPORTED_WIN10_AND_ABOVE)" />
+    </definitions>
+  </supportedOn>
+
+  <categories>
+    <category name="ServaLabs" displayName="$(string.ServaLabs)">
+      <!-- Root category — appears as "ServaLabs" in the GPME tree. -->
+    </category>
+    <category name="WinCommander" displayName="$(string.WinCommander)">
+      <parentCategory ref="ServaLabs" />
+    </category>
+  </categories>
+
+  <policies>
+
+    <!-- ────────────────────────────────────────────────────────────────────
+         LockTelemetryOff
+         DWORD: 1 = org requires all Windows telemetry settings to be OFF.
+         Phase-2: locks the telemetry toggles in the Privacy panel.
+    ──────────────────────────────────────────────────────────────────────── -->
+    <policy
+        name="LockTelemetryOff"
+        class="Machine"
+        displayName="$(string.LockTelemetryOff_Name)"
+        explainText="$(string.LockTelemetryOff_Explain)"
+        key="SOFTWARE\Policies\ServaLabs\WinCommander"
+        valueName="LockTelemetryOff"
+        supported="$(string.SUPPORTED_WIN10_AND_ABOVE)">
+      <parentCategory ref="WinCommander" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+    </policy>
+
+    <!-- ────────────────────────────────────────────────────────────────────
+         ForceSecureDNS
+         REG_SZ: DNS-over-HTTPS resolver URL (e.g. "https://1.1.1.1/dns-query").
+         Phase-2: replaces the user-configurable DoH resolver.
+    ──────────────────────────────────────────────────────────────────────── -->
+    <policy
+        name="ForceSecureDNS"
+        class="Machine"
+        displayName="$(string.ForceSecureDNS_Name)"
+        explainText="$(string.ForceSecureDNS_Explain)"
+        key="SOFTWARE\Policies\ServaLabs\WinCommander"
+        supported="$(string.SUPPORTED_WIN10_AND_ABOVE)">
+      <parentCategory ref="WinCommander" />
+      <elements>
+        <text id="ForceSecureDNS_Value"
+              valueName="ForceSecureDNS"
+              required="true"
+              maxLength="512" />
+      </elements>
+    </policy>
+
+    <!-- ────────────────────────────────────────────────────────────────────
+         DisableSelfDestruct
+         DWORD: 1 = prevent the panic / self-destruct flow from firing.
+         Phase-2: removes the panic button and greys out the self-destruct
+         configuration section.
+    ──────────────────────────────────────────────────────────────────────── -->
+    <policy
+        name="DisableSelfDestruct"
+        class="Machine"
+        displayName="$(string.DisableSelfDestruct_Name)"
+        explainText="$(string.DisableSelfDestruct_Explain)"
+        key="SOFTWARE\Policies\ServaLabs\WinCommander"
+        valueName="DisableSelfDestruct"
+        supported="$(string.SUPPORTED_WIN10_AND_ABOVE)">
+      <parentCategory ref="WinCommander" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+    </policy>
+
+    <!-- ────────────────────────────────────────────────────────────────────
+         RequireStartupPin
+         DWORD: 1 = the startup PIN gate must always be enabled.
+         Phase-2: greys out "Disable PIN" in Settings so the user cannot
+         remove the startup PIN without admin action.
+    ──────────────────────────────────────────────────────────────────────── -->
+    <policy
+        name="RequireStartupPin"
+        class="Machine"
+        displayName="$(string.RequireStartupPin_Name)"
+        explainText="$(string.RequireStartupPin_Explain)"
+        key="SOFTWARE\Policies\ServaLabs\WinCommander"
+        valueName="RequireStartupPin"
+        supported="$(string.SUPPORTED_WIN10_AND_ABOVE)">
+      <parentCategory ref="WinCommander" />
+      <enabledValue>
+        <decimal value="1" />
+      </enabledValue>
+      <disabledValue>
+        <decimal value="0" />
+      </disabledValue>
+    </policy>
+
+    <!-- ────────────────────────────────────────────────────────────────────
+         ManagedBannerText
+         REG_SZ: optional custom message shown in the managed-policy banner
+         (e.g. company name or IT helpdesk contact information).  If empty
+         or absent, WinCommander shows its default "managed by your organisation"
+         text.
+    ──────────────────────────────────────────────────────────────────────── -->
+    <policy
+        name="ManagedBannerText"
+        class="Machine"
+        displayName="$(string.ManagedBannerText_Name)"
+        explainText="$(string.ManagedBannerText_Explain)"
+        key="SOFTWARE\Policies\ServaLabs\WinCommander"
+        supported="$(string.SUPPORTED_WIN10_AND_ABOVE)">
+      <parentCategory ref="WinCommander" />
+      <elements>
+        <text id="ManagedBannerText_Value"
+              valueName="ManagedBannerText"
+              required="false"
+              maxLength="256" />
+      </elements>
+    </policy>
+
+  </policies>
+</policyDefinitions>

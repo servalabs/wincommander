@@ -1,0 +1,24 @@
+# ─────────────────────────────────────────────────────────────────
+# Cargo workspace build configuration
+# Applies to all crates: commander-free, commander-shared, commander-pro
+# ─────────────────────────────────────────────────────────────────
+
+[build]
+# ── sccache ────────────────────────────────────────────────────────
+# sccache caches compiled crate artefacts across full rebuilds.
+# Enormous win after `cargo clean`, a toolchain bump, or CI cold starts.
+#
+# Install once:  cargo install sccache
+#            or  winget install Mozilla.sccache
+# Then uncomment:
+# rustc-wrapper = "sccache"
+
+[target.x86_64-pc-windows-msvc]
+# ── LLD linker (optional, requires LLVM) ───────────────────────────
+# lld-link is 2-4x faster than MSVC link.exe on large Tauri binaries.
+# To enable:
+#   winget install LLVM.LLVM     (adds lld-link.exe to Program Files\LLVM\bin)
+#   Add LLVM\bin to PATH, then uncomment the two lines below:
+#
+# linker = "lld-link"
+# rustflags = ["-C", "linker-flavor=lld-link"]

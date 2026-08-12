@@ -1,0 +1,75 @@
+.status-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+        }
+        .status-title {
+          font-family: var(--font-mono);
+          font-size: 11px;
+          letter-spacing: 1px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .license-meta {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px 16px;
+          font-size: 11px;
+          color: var(--color-text-muted);
+          padding: 8px;
+          border: 1px solid var(--color-border);
+          background: rgba(255, 255, 255, 0.02);
+        }
+        .license-meta-wide {
+          grid-column: 1 / -1;
+        }
+        .license-access-summary {
+          margin-top: 8px;
+          padding: 8px;
+          border-left: 2px solid var(--color-accent);
+          background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+          color: var(--color-text-muted);
+          font-size: 11px;
+          line-height: 1.5;
+        }
+        .button-row {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 8px;
+          margin-top: 12px;
+        }
+        .license-row-layout {
+          display: flex;
+          gap: 16px;
+          align-items: flex-start;
+        }
+        .license-row-left {
+          flex: 1;
+          min-width: 0;
+        }
+        .license-row-actions {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          flex-shrink: 0;
+          padding-top: 4px;
+        }
+        .compact-action-btn {
+          font-family: var(--font-mono) !important;
+          font-size: 10px !important;
+          font-weight: 700 !important;
+          letter-spacing: 0.5px !important;
+          border-radius: var(--radius-lg) !important;
+          padding: 6px 14px !important;
+          min-height: 30px !important;
+        }
+        .compact-action-btn.secondary {
+          opacity: 0.8;
+        }
+        .compact-action-btn.danger {
+          border-color: rgba(255, 107, 107, 0.35) !important;
+          color: var(--color-danger) !important;
+        }

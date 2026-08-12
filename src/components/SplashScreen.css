@@ -1,0 +1,477 @@
+.splash-screen {
+    /* The matrix rain is cyan/teal. The Anduril accent is warm orange, which
+       clashed against the blue rain — so remap the accent to a matching cyan
+       WITHIN the splash only. Brand text, glow, grid and rings all read from
+       these vars, so they now suit the blue matrix. */
+    --accent: #2fe6d0;
+    --color-accent: #2fe6d0;
+    --color-accent-hover: #5cf0dd;
+    --color-accent-dim: rgba(47, 230, 208, 0.20);
+    --color-accent-subtle: rgba(47, 230, 208, 0.10);
+
+    position: fixed;
+    inset: 0;
+    background: var(--color-bg-primary, #0a0f12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    font-family: var(--font-mono, 'JetBrains Mono', monospace);
+    overflow: hidden;
+    color: var(--color-accent);
+}
+
+/* Light splash: the rain is deep navy/blue on white, so use a deeper
+   cyan-blue for the brand text/glow to keep contrast. */
+html.light .splash-screen {
+    --accent: #0a6b8c;
+    --color-accent: #0a6b8c;
+    --color-accent-hover: #0d83ab;
+    --color-accent-dim: rgba(10, 107, 140, 0.16);
+    --color-accent-subtle: rgba(10, 107, 140, 0.08);
+}
+
+/* ── Scanlines overlay — pure CSS, no repaints ── */
+.sp-scanlines {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(to bottom,
+            rgba(255, 255, 255, 0.018) 0px,
+            rgba(255, 255, 255, 0.018) 1px,
+            transparent 1px,
+            transparent 4px);
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* ── Radial ambient glow ── */
+.sp-glow {
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(circle at 50% 42%,
+            color-mix(in srgb, var(--accent) 12%, transparent) 0%,
+            color-mix(in srgb, var(--accent) 3%, transparent) 36%,
+            transparent 68%),
+        radial-gradient(circle at 50% 58%,
+            rgba(18, 99, 255, 0.08) 0%,
+            transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+}
+
+.sp-grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+        linear-gradient(var(--color-accent-subtle) 1px, transparent 1px),
+        linear-gradient(90deg, var(--color-accent-subtle) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(circle at center, black 25%, transparent 72%);
+    opacity: 0.55;
+    pointer-events: none;
+}
+
+/* ── Content stack ── */
+.sp-content {
+    position: relative;
+    /* z-index must beat .sp-sweep (1) and .sp-hex-rain (0) so the logo +
+       text never sit behind the ambient effects. The sweep uses
+       mix-blend-mode: screen which creates its own stacking context;
+       bumping content to 10 keeps the brand mark unambiguously on top. */
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    animation: sp-fade-in 0.5s ease-out both;
+}
+
+@keyframes sp-fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ── Logo ── */
+.sp-logo-wrap {
+    position: relative;
+    width: 192px;
+    height: 192px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 42px;
+}
+
+.sp-logo-core {
+    position: relative;
+    width: 192px;
+    height: 192px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sp-logo-plate {
+    width: 108px;
+    height: 108px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    /* Beat the rings (no z-index, default 0) inside sp-logo-core so the
+       logo image always sits on top of the rotating dashed circles. */
+    z-index: 5;
+    animation: sp-plate-float 2.8s ease-in-out infinite;
+}
+
+.sp-logo-img {
+    width: 96px;
+    height: 96px;
+    object-fit: contain;
+    position: relative;
+    z-index: 2;
+    /* Pulse oscillates opacity between 0.85 and 1 — keeps the logo
+       visible at all times. sp-fade-in is the 400ms entry only. */
+    animation: sp-pulse 2.8s ease-in-out infinite, sp-fade-in 0.4s ease-out both;
+    filter: drop-shadow(0 0 28px color-mix(in srgb, var(--color-accent) 55%, transparent));
+    will-change: opacity;
+    /* Defensive: the preloaded /Logo.png in index.html should hit the
+       cache instantly, but if a downstream theme accidentally sets
+       visibility:hidden on .sp-logo-* we want the splash to still show
+       *something* — the fallback below also stays styled even if the
+       img element ends up not rendering. */
+    display: block;
+}
+
+/* Brand-mark fallback shown when /Logo.png either errors or takes too
+   long to load (cold-disk first-run). Styled to look like a deliberate
+   monogram, not a broken-image placeholder: 96px square with the same
+   cyan glow + pulse animation as the real logo. */
+.sp-logo-fallback {
+    width: 96px;
+    height: 96px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid var(--color-accent);
+    background: radial-gradient(circle at 50% 35%, var(--color-accent-dim), var(--color-accent-subtle) 60%, transparent 100%);
+    box-shadow:
+        0 0 28px color-mix(in srgb, var(--color-accent) 45%, transparent),
+        inset 0 0 18px var(--color-accent-dim);
+    border-radius: 14px;
+    position: relative;
+    z-index: 2;
+    animation: sp-pulse 2.8s ease-in-out infinite, sp-fade-in 0.4s ease-out both;
+}
+
+.sp-logo-fallback span {
+    font-size: 32px;
+    font-weight: 900;
+    letter-spacing: 0.18em;
+    color: #e8fbff;
+    text-shadow: 0 0 22px color-mix(in srgb, var(--color-accent) 55%, transparent);
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+}
+
+html.light .sp-logo-fallback {
+    border-color: var(--color-accent);
+    background: radial-gradient(circle at 50% 35%, var(--color-accent-dim), var(--color-accent-subtle) 60%, transparent 100%);
+    box-shadow:
+        0 0 18px color-mix(in srgb, var(--color-accent) 35%, transparent),
+        inset 0 0 12px var(--color-accent-dim);
+}
+
+html.light .sp-logo-fallback span {
+    color: #0a1424;
+    text-shadow: 0 0 12px color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+
+@keyframes sp-plate-float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-4px); }
+}
+
+@keyframes sp-pulse {
+
+    0%,
+    100% {
+        opacity: 0.85;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
+html.light .sp-logo-img {
+    animation: sp-pulse-light 2.8s ease-in-out infinite, sp-fade-in 0.4s ease-out both;
+    filter: drop-shadow(0 0 20px color-mix(in srgb, var(--color-accent) 50%, transparent));
+}
+
+@keyframes sp-pulse-light {
+
+    0%,
+    100% {
+        opacity: 0.8;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
+.sp-ring {
+    position: absolute;
+    color: var(--color-accent);
+    pointer-events: none;
+}
+
+/* Dark mode — subtle rings */
+.sp-ring-circle-outer {
+    opacity: 0.25;
+}
+
+.sp-ring-circle-inner {
+    opacity: 0.18;
+}
+
+/* Light mode — much stronger rings for visibility */
+html.light .sp-ring-circle-outer {
+    opacity: 0.6;
+}
+
+html.light .sp-ring-circle-inner {
+    opacity: 0.45;
+}
+
+html.light .sp-ring {
+    color: var(--color-accent);
+}
+
+/* Light mode — darken glow so it reads on white bg */
+html.light .sp-glow {
+    background:
+        radial-gradient(circle at 50% 42%,
+            rgba(0, 153, 204, 0.18) 0%,
+            rgba(0, 153, 204, 0.06) 34%,
+            transparent 70%),
+        radial-gradient(circle at 50% 58%,
+            rgba(10, 85, 170, 0.08) 0%,
+            transparent 72%);
+}
+
+/* Light mode — scanlines need to be dark lines on light bg */
+html.light .sp-scanlines {
+    background: repeating-linear-gradient(to bottom,
+            rgba(0, 0, 0, 0.025) 0px,
+            rgba(0, 0, 0, 0.025) 1px,
+            transparent 1px,
+            transparent 4px);
+}
+
+.sp-ring-outer {
+    width: 172px;
+    height: 172px;
+    top: 10px;
+    left: 10px;
+    animation: sp-spin 12s linear infinite;
+}
+
+.sp-ring-inner {
+    width: 148px;
+    height: 148px;
+    top: 22px;
+    left: 22px;
+    animation: sp-spin 7s linear infinite reverse;
+}
+
+@keyframes sp-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ── Typography ── */
+.sp-brand {
+    font-size: clamp(38px, 6vw, 80px);
+    font-weight: 800;
+    color: var(--color-text-primary, #fff);
+    letter-spacing: 0.22em;
+    margin: 0 0 6px 0;
+    text-shadow: 0 0 30px color-mix(in srgb, var(--color-accent) 20%, transparent);
+    animation: sp-slide-up 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) 0.2s both;
+    text-align: center;
+    /* Cap to viewport width so the scrambled text never overflows on
+       narrow devices — the scramble can briefly include wide ASCII
+       glyphs that would otherwise push past the screen edge. */
+    max-width: min(94vw, 720px);
+    overflow: hidden;
+    text-overflow: clip;
+    white-space: nowrap;
+}
+
+/* Decrypt headline — adds cyan glow + monospace tracking while the
+   word is scrambling. Once resolved the styling stays identical so
+   there's no visible "snap" between scrambled and final states. */
+.sp-scramble {
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace);
+    color: var(--color-accent);
+    text-shadow:
+        0 0 18px color-mix(in srgb, var(--color-accent) 45%, transparent),
+        0 0 36px var(--color-accent-dim);
+}
+
+html.light .sp-scramble {
+    color: var(--color-accent);
+    text-shadow:
+        0 0 12px color-mix(in srgb, var(--color-accent) 35%, transparent),
+        0 0 24px var(--color-accent-dim);
+}
+
+.sp-sub {
+    font-size: clamp(24px, 2vw, 30px);
+    color: var(--color-accent);
+    letter-spacing: 0.28em;
+    font-weight: 700;
+    text-transform: uppercase;
+    opacity: 0.9;
+    margin: 0 0 24px 0;
+    text-shadow: 0 0 10px color-mix(in srgb, var(--color-accent) 40%, transparent);
+    animation: sp-slide-up 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) 0.35s both;
+    text-align: center;
+}
+
+@keyframes sp-slide-up {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ── Status text — terminal-style phase ticker ──
+   The bottom line shows the live startup phase, driven by the
+   `startup-progress` events emitted from AppContext. `>` prompt in cyan,
+   current phase in muted text, blinking `_` caret on the right. Each phase
+   change re-keys .sp-status-phase so the fade-in animation replays. */
+.sp-status {
+    font-size: 14px;
+    color: var(--color-text-muted, #64748b);
+    letter-spacing: 0.06em;
+    margin: 0;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+    animation: sp-slide-up 0.5s ease 0.5s both;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+}
+
+.sp-status-prompt {
+    color: var(--color-accent);
+    font-weight: 700;
+    text-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+
+.sp-status-phase {
+    color: var(--color-text-secondary, #94a3b8);
+    animation: sp-phase-in 280ms ease-out both;
+}
+
+@keyframes sp-phase-in {
+    from { opacity: 0; transform: translateX(-4px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+
+.sp-status-caret {
+    color: var(--color-accent);
+    font-weight: 800;
+    margin-left: 2px;
+    animation: sp-caret-blink 0.7s steps(2) infinite;
+}
+
+.sp-loader-orb {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 88px;
+    height: 88px;
+    margin: -8px 0 8px;
+    animation: sp-slide-up 0.5s ease 0.4s both;
+}
+
+.sp-loader-orb canvas {
+    position: relative;
+    filter: contrast(1.22);
+}
+
+html.light .sp-loader-orb canvas {
+    filter: contrast(1.45) brightness(0.72);
+}
+
+@keyframes sp-caret-blink {
+    50% { opacity: 0; }
+}
+
+/* ── Canvas matrix rain ──
+   Proper frame-by-frame falling character animation drawn via
+   requestAnimationFrame. Transparent canvas over the dark/light bg —
+   the SplashScreen component drives all drawing in JS. */
+.sp-matrix-canvas {
+    display: block;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 0;
+}
+
+html.light .sp-matrix-canvas {
+    opacity: 0.7;
+}
+
+/* ── Responsiveness — narrow / short viewports ──
+   Mobile keeps the same visual language but tightens spacing so the
+   logo + scrambled headline both fit above the fold. The scramble can
+   contain wide ASCII glyphs (#, %) — the brand max-width above plus
+   the responsive font clamp keeps it from overflowing. */
+@media (max-width: 480px) {
+    .sp-logo-wrap, .sp-logo-core { width: 152px; height: 152px; }
+    .sp-logo-plate { width: 88px; height: 88px; }
+    .sp-logo-img { width: 76px; height: 76px; }
+    .sp-ring-outer { width: 136px; height: 136px; top: 8px; left: 8px; }
+    .sp-ring-inner { width: 116px; height: 116px; top: 18px; left: 18px; }
+    .sp-brand { letter-spacing: 0.14em; margin-bottom: 8px; }
+    .sp-sub { font-size: 20px; letter-spacing: 0.22em; margin-bottom: 20px; }
+}
+
+@media (max-height: 540px) {
+    .sp-logo-wrap { margin-bottom: 22px; }
+    .sp-sub { margin-bottom: 16px; }
+}
+
+/* ── prefers-reduced-motion override ──
+   Canvas rain is immune to this (rAF runs regardless). CSS animations
+   on rings and logo still need the override so they play on systems
+   with "Animation effects" turned off in Windows accessibility settings. */
+@media (prefers-reduced-motion: reduce) {
+    .sp-ring-outer,
+    .sp-ring-inner,
+    .sp-logo-plate,
+    .sp-logo-img,
+    .sp-logo-fallback {
+        animation-play-state: running !important;
+    }
+}

@@ -1,0 +1,62 @@
+name: Feature request
+description: Suggest a new feature, toggle, or behaviour.
+title: "[feature] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Before filing, please check existing issues —
+        your idea may already be tracked.
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Where would this live?
+      options:
+        - Free (open / no licence required)
+        - Pro (paid)
+        - Not sure / let maintainers decide
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: |
+        What user-facing problem does this solve? Be specific —
+        "I want feature X" is less useful than "when I do Y, Z
+        happens, and I expected W."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        How would you implement this? UI sketch, settings shape,
+        backend command — whatever you've got.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing toggles, third-party tools, manual workarounds.
+
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risk classification (best guess)
+      description: |
+        For new toggles, take a guess at the tier-invariant fields:
+        `needsAdmin`, `irreversible`, `reducesSecurity`, `defenderFlagged`.
+        Maintainers will confirm.
+      placeholder: |
+        needsAdmin: yes
+        irreversible: no
+        reducesSecurity: no
+        defenderFlagged: no
