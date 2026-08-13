@@ -12,7 +12,7 @@ rust-version = "1.93.1"
 # Tauri-mobile expects the lib name "wincommander_lib" — keep it stable
 # even though the package was renamed. Decoupled deliberately.
 name = "wincommander_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["cdylib", "rlib"]
 
 # Cargo binary explicitly named to match commander-pro's `wincommander-pro.exe`
 # convention. Without this, `cargo build -p commander-free` would output
