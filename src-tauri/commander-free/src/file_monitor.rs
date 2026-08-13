@@ -968,6 +968,7 @@ pub struct LastAccessStatus {
 /// True when atime-based read detection can't work as configured,
 /// meaning the frontend should proactively prompt the user to run
 /// `enable_last_access_tracking`.
+#[cfg_attr(test, allow(dead_code))]
 fn atime_tracking_needs_warning(status: &LastAccessStatus) -> bool {
     !status.enabled
 }

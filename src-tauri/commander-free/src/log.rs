@@ -170,6 +170,7 @@ pub fn purge_old_log_records(log_file: &Path, keep_days: u64) {
 /// migration. Called once at startup before purge_old_log_records in release
 /// builds. Debug builds deliberately use the inverse migration below so a
 /// local Tauri dev session can be inspected without app-side decryption.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn migrate_plaintext_logs(log_file: &Path) {
     let content = match std::fs::read_to_string(log_file) {
         Ok(c) => c,

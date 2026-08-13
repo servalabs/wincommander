@@ -56,9 +56,17 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 let storage: MemoryStorage;
 
+function setTestStorage(value: Storage | undefined): void {
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value,
+    writable: true,
+  });
+}
+
 beforeEach(() => {
   storage = new MemoryStorage();
-  (globalThis as { localStorage?: Storage }).localStorage = storage;
+  setTestStorage(storage);
 });
 
 describe("frecencyScore", () => {
@@ -289,7 +297,7 @@ describe("corrupt / hostile storage contents", () => {
 
 describe("localStorage unavailable or throwing", () => {
   test("a throwing storage never propagates out of recordOpen/frecencyScore/topPaths/clearFrecency", () => {
-    (globalThis as { localStorage?: Storage }).localStorage = new ThrowingStorage();
+    setTestStorage(new ThrowingStorage());
 
     // No `toThrow` matcher in this repo's bun:test shim — calling directly is
     // enough: an uncaught throw here fails the test on its own.
@@ -300,7 +308,7 @@ describe("localStorage unavailable or throwing", () => {
   });
 
   test("a missing localStorage global degrades to no-history rather than throwing", () => {
-    delete (globalThis as { localStorage?: Storage }).localStorage;
+    setTestStorage(undefined);
 
     recordOpen("C:/whatever.txt");
     expect(frecencyScore("C:/whatever.txt")).toBe(0);
