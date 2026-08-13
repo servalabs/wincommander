@@ -74,8 +74,8 @@ describe("Maintenance multi-row control accessibility", () => {
     expect(fileStats).toContain('role="alert"');
     expect(fileStats).toContain('!fileStats && !statsScanning && !scanError');
 
-    expect(hygiene).toContain('aria-pressed={checked}');
-    expect(hygiene).toContain('aria-label={`${checked ? "Deselect" : "Select"} ${title}`}');
+    expect(hygiene).toContain("<CheckboxControl checked={checked} onChange={onClick}");
+    expect(hygiene).toContain('ariaLabel={`${checked ? "Deselect" : "Select"} ${title}`}');
     expect(hygiene).toContain('Reviewing {tools.tool === "shortcuts"');
     expect(hygiene).toContain('xl:grid-cols-2');
     expect(fileHygiene).toContain('ariaLabel={`${checked ? "Deselect" : "Select"} ${label}`}');

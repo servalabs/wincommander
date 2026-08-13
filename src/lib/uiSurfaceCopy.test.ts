@@ -247,8 +247,8 @@ describe("redesign surface copy guardrails", () => {
 
     // Confirmed-clean cards remain visible and use four readable rows so their
     // full titles and per-card controls do not get clipped.
-    expect(cleanupGrid).toContain("const orderUnscannedFirst");
-    expect(cleanupGrid).toContain("const activeSysCats = orderUnscannedFirst(");
+    expect(cleanupGrid).toContain("const orderActiveCards");
+    expect(cleanupGrid).toContain("const activeSysCats = orderActiveCards(");
     expect(cleanupGrid).toContain("const cleanCardPacks = packCleanCards(");
     expect(cleanupGrid).toContain("cleanCardPacks.map((pack, index) => (");
     expect(cleanupGrid).toContain('className="grid h-[168px] grid-cols-1 grid-rows-4 gap-1"');
@@ -290,14 +290,14 @@ describe("redesign surface copy guardrails", () => {
     expect(cleanupGrid).not.toContain('className="cleanup-scan-all-btn"');
     expect(cleanupPanel).toContain("function CleanupTabNavigation");
     expect(cleanupPanel).toContain(
-      "<CleanupTabNavigation activeTab={activeTab} scan={scan} isInvestigator={isInvestigator} />",
+      "<CleanupTabNavigation scan={scan} isInvestigator={isInvestigator} />",
     );
-    expect(cleanupPanel).toContain("loadCategoryBatch(categories, \"standard\")");
+    expect(cleanupPanel).toContain("loadCategoryBatch(allScanCategories, \"standard\")");
     expect(cleanupPanel).toContain("<CleanupSummaryStats scan={scan} />");
     expect(cleanupGrid).not.toContain("{(summaryStats.needsCleaning > 0 || summaryStats.clean > 0) && (");
     expect(cleanupGrid).not.toContain("{summaryStats.needsCleaning > 0 && (");
     expect(cleanupGrid).not.toContain("{summaryStats.clean > 0 && (");
-    expect(cleanupGrid).not.toContain("{loadingAll !== null && (");
+    expect(cleanupPanel).toContain('className="cleanup-scan-all-btn"');
   });
 
   test("System Cleanup scheduler uses a panel-owned non-modal surface", async () => {
@@ -455,19 +455,12 @@ describe("redesign surface copy guardrails", () => {
 
   test("dashboard resolves hidden Risk Matrix and More Products before rendering views", async () => {
     const dashboard = await read("src/panels/dashboard/index.tsx");
-    const toggle = await read("src/components/dashboard/ViewToggle.tsx");
-
     expect(dashboard).toContain("const effectiveViewMode");
-    expect(dashboard).toContain('viewMode={effectiveViewMode}');
     expect(dashboard).toContain('effectiveViewMode === "risk"');
     expect(dashboard).toContain('effectiveViewMode === "products"');
     expect(dashboard).toContain('viewMode === "products" && showMoreProducts');
     expect(dashboard).not.toContain("productsTabAvailable");
-    expect(toggle).not.toContain("showProductsTab");
-    expect(toggle).not.toContain("LIVE MAP");
-    expect(toggle).toContain('viewMode === "risk" ? "map" : "risk"');
-    expect(toggle).toContain('viewMode === "products" ? "map" : "products"');
-    expect(dashboard).toContain('<ViewToggle\n            viewMode={effectiveViewMode}');
+    expect(dashboard).toContain('dashboard-panel--${effectiveViewMode}');
     expect(dashboard).not.toContain('{!(effectiveViewMode === "map" && hideCenterChrome) && (');
   });
 

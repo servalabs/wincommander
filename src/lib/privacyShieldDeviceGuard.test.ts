@@ -64,12 +64,13 @@ describe("privacy shield device guardrails", () => {
     expect(card).toContain("!privacyShieldRunning && fleetPolicyManaged");
   });
 
-  test("Fleet attention alerts are limited to the enabled signed trigger", async () => {
+  test("Fleet attention alerts require the enabled signed Fleet policy", async () => {
     const backend = await read("src-tauri/commander-free/src/backend.rs");
 
     expect(backend).toContain("fn fleet_privacy_event_is_enabled(");
-    expect(backend).toContain('"multiple_faces" => shield.anti_peeping_enabled == Some(true)');
-    expect(backend).toContain('"look_away" | "no_face" => shield.gaze_detection_enabled == Some(true)');
-    expect(backend).toContain("if allow_fleet_privacy_alert(gaze_kind)");
+    expect(backend).toContain("shield.fleet_managed != Some(true)");
+    expect(backend).toContain("shield.fleet_monitoring_enabled != Some(true)");
+    expect(backend).toContain('"look_away" | "no_face" | "multiple_faces" | "secondary_device"');
+    expect(backend).toContain("if allow_fleet_privacy_alert(gaze_kind) {");
   });
 });
