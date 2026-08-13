@@ -379,12 +379,9 @@ pub(crate) fn force_window_foreground(_window: &tauri::WebviewWindow) {}
 /// already-running, elevated, BACKGROUND process: clicking the tray makes the
 /// shell — not us — the foreground process, so Windows' foreground-activation
 /// lock silently refuses SetForegroundWindow and the window stays hidden behind
-/// the shell. After a reboot the app cold-starts via the `--minimized` autostart
-/// task and its window has never been shown, so the very first tray click
-/// appears to "do nothing" until the user quits and relaunches (the relaunch
-/// runs in a fresh foreground process and force-foregrounds itself). Routing the
-/// tray paths through force_window_foreground — the same Alt-key workaround
-/// used for restored windows — makes that first click reliably bring the window up.
+/// the shell. Routing the tray paths through force_window_foreground — the same
+/// Alt-key workaround used for restored windows — makes a reveal reliably bring
+/// the window up.
 pub(crate) fn reveal_main_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         log_message_src("warn", "core", "[Reveal] main window not found");
@@ -1616,16 +1613,12 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        // Autostart at Windows login — silent by default. The `--minimized`
-        // arg is consumed in setup() below (search for `args.contains`); it
-        // suppresses the window.show()/maximize()/set_focus() block so the
-        // app comes up with only the tray icon. Monitors, pollers, updater,
-        // and license refresh all initialise normally. User can open the
-        // window via tray double-click or Ctrl+Shift+G.
+        // Autostart at Windows login enters full screen. Monitors, pollers,
+        // updater, and license refresh initialise normally.
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .app_name(paths::app_display_name())
-                .args(["--minimized"])
+                .args(["--autostart"])
                 .build(),
         )
         // Single-instance + arg-forwarding is handled by session_instance::acquire()
@@ -1899,10 +1892,15 @@ pub fn run() {
                     }
                 }
 
-                // Check command line args for --minimized or a secure-delete path
+                // Check command line args for a secure-delete path.
                 let args: Vec<String> = std::env::args().collect();
                 let hidden_mode = wincommander_is_hidden();
                 let not_minimized = !args.contains(&"--minimized".to_string());
+                // `--minimized` is included so existing scheduled tasks from
+                // older builds also use the new full-screen startup behavior.
+                let is_auto_start = args.iter().any(|arg| {
+                    arg == "--autostart" || arg == "--minimized"
+                });
                 // Safe Paste must never bring the window forward for any part of
                 // the operation — see session_instance.rs::handle_forwarded_args
                 // for the mirrored warm-forward guard. The only UI surfaces are
@@ -1951,9 +1949,13 @@ pub fn run() {
                     }
                     let _ = window.show();
                     let _ = window.set_focus();
-                } else if not_minimized && !hidden_mode {
+                } else if !hidden_mode {
                     let _ = window.set_skip_taskbar(false);
-                    let _ = window.maximize();
+                    if is_auto_start {
+                        let _ = window.set_fullscreen(true);
+                    } else {
+                        let _ = window.maximize();
+                    }
                     let _ = window.show();
                     set_wincommander_window_icon(&window);
                     let _ = window.set_focus();
@@ -2426,32 +2428,6 @@ pub fn run() {
 
             #[cfg(windows)]
             session_instance::set_app_ready(&app.handle().clone());
-
-            // One-shot post-startup reveal. The autostart logon task launches with
-            // --minimized, so neither show-branch above fires and the window stays hidden
-            // ("nothing opens after login"). Owner decision: Normal mode shows; Hide/Decoy/
-            // armed-calculator stays hidden-but-warm (frontend has already booted, so the
-            // next real hotkey reveal is instant). Fires exactly once.
-            #[cfg(windows)]
-            {
-                let launched_minimized = std::env::args().any(|a| a == "--minimized");
-                let hidden_mode = wincommander_is_hidden();
-                let calc_armed = startup_auth::startup_pin_is_configured_sync();
-                let decoy = settings::is_decoy_mode();
-                let is_normal_mode = !hidden_mode && !calc_armed && !decoy;
-                if launched_minimized && is_normal_mode {
-                    let app_reveal = app.handle().clone();
-                    tauri::async_runtime::spawn(async move {
-                        // Let WebView2 finish cold-init (~400ms) so the first paint isn't black,
-                        // then reveal via the same canonical path the tray/hotkey use.
-                        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-                        reveal_main_window(&app_reveal);
-                    });
-                    log_message_src("info", "core", "[System] post-startup reveal scheduled");
-                } else {
-                    log_message_src("info", "core", "[System] post-startup: staying hidden+warm");
-                }
-            }
 
             log_message("info", "[System] setup() finished. Application ready.");
             dev_startup_trace("setup complete");

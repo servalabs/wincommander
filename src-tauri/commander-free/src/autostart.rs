@@ -59,7 +59,7 @@ fn ensure_autostart_task_named(covered: bool) -> Result<(), String> {
 
     let script = format!(
         "$ErrorActionPreference='Stop'
-$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '--minimized'
+$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '--autostart'
 $t = New-ScheduledTaskTrigger -AtLogOn
 $p = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Highest
 $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew

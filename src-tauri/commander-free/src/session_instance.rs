@@ -156,21 +156,21 @@ pub fn acquire(cli_args: &[String]) -> bool {
         // Decide what — if anything — to forward to the primary:
         //
         //  • Startup duplicate (HKCU\Run or HKLM\Run fired alongside each
-        //    other at login): args are exactly ["--minimized"] or empty.
-        //    Forward nothing — the primary is already running tray-only and
-        //    must stay silent.
+        //    other at login): args carry only an autostart marker or are empty.
+        //    Forward nothing — the primary is already starting.
         //  • Bare double-click (no args at all): user explicitly wants to
         //    open the window. Send --focus so handle_forwarded_args shows it.
         //  • Context-menu launch (--shred / --scrub + paths): forward as-is
         //    so the primary can handle the file operation.
         //
-        // The key rule: --minimized is a startup flag, NOT a user-intent
-        // signal. Forwarding it caused handle_forwarded_args to call
-        // win.show() on every login, defeating tray-only silent startup.
-        let had_startup_flag = cli_args[1..].iter().any(|a| a == "--minimized");
+        // Startup markers are not user-intent signals and must not bring an
+        // already-running instance to the foreground.
+        let had_startup_flag = cli_args[1..]
+            .iter()
+            .any(|a| a == "--autostart" || a == "--minimized");
         let meaningful: Vec<String> = cli_args[1..]
             .iter()
-            .filter(|a| a.as_str() != "--minimized")
+            .filter(|a| a.as_str() != "--autostart" && a.as_str() != "--minimized")
             .cloned()
             .collect();
 
@@ -181,7 +181,7 @@ pub fn acquire(cli_args: &[String]) -> bool {
             // Bare double-click: no args at all → ask primary to show window.
             Some(vec!["--focus".to_string()])
         } else {
-            // --minimized only → startup duplicate → forward nothing.
+            // Startup marker only → startup duplicate → forward nothing.
             None
         };
 
