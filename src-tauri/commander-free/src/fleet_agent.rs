@@ -414,6 +414,15 @@ fn remote_command_settings_patch(update: &RemoteCommandStateUpdate) -> Option<Va
     }
 
     let (path, value) = match update.catalog_id.as_str() {
+        // The Pro sidecar executes these monitor commands before handing their
+        // result to Free. Mirror that effective state into settings so the
+        // Privacy card does not display a stale local toggle.
+        "monitoring.screen_capture.start" => {
+            ("privacy.screenCapture.detectionEnabled", Value::Bool(true))
+        }
+        "monitoring.screen_capture.stop" => {
+            ("privacy.screenCapture.detectionEnabled", Value::Bool(false))
+        }
         "defender.enable" => ("tweaks.security.defenderDisabled", Value::Bool(false)),
         "defender.disable" => ("tweaks.security.defenderDisabled", Value::Bool(true)),
         "usb.writeprotect.enable" => ("tweaks.security.usbWriteProtect", Value::Bool(true)),
@@ -1025,6 +1034,37 @@ mod tests {
         assert!(
             super::remote_command_settings_patch(&remote_update("status.read", json!({})))
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn fleet_screen_capture_commands_update_the_privacy_toggle() {
+        let started = super::remote_command_settings_patch(&remote_update(
+            "monitoring.screen_capture.start",
+            json!({}),
+        ))
+        .expect("screen-capture start must be mirrored locally");
+        assert_eq!(
+            started["ideal"]["privacy"]["screenCapture"]["detectionEnabled"],
+            true
+        );
+        assert_eq!(
+            started["current"]["privacy"]["screenCapture"]["detectionEnabled"],
+            true
+        );
+
+        let stopped = super::remote_command_settings_patch(&remote_update(
+            "monitoring.screen_capture.stop",
+            json!({}),
+        ))
+        .expect("screen-capture stop must be mirrored locally");
+        assert_eq!(
+            stopped["ideal"]["privacy"]["screenCapture"]["detectionEnabled"],
+            false
+        );
+        assert_eq!(
+            stopped["current"]["privacy"]["screenCapture"]["detectionEnabled"],
+            false
         );
     }
 
