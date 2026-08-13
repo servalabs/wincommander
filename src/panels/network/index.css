@@ -281,6 +281,25 @@ button.blocklist-brand-card:focus-visible {
     opacity: 1;
 }
 
+/* Purpose-fit thumbnail variants. Preserve the source aspect ratio rather
+   than treating a small illustration and a long wordmark as the same icon. */
+.bbc-logo.dns-bbc-logo-illustration {
+    height: 34px;
+    max-width: 48px;
+}
+
+.bbc-logo.dns-bbc-logo-wordmark {
+    height: 24px;
+    max-width: 60px;
+}
+
+/* Tinder and Bumble share one visual box despite their different source
+   canvases, so neither appears smaller in the Dating card. */
+.bbc-logo.dns-bbc-logo-dating {
+    height: 36px;
+    max-width: 60px;
+}
+
 .bbc-applied .bbc-logo.dns-bbc-logo {
     filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3)) brightness(1.05);
     opacity: 1;
@@ -293,6 +312,12 @@ button.blocklist-brand-card:focus-visible {
     width: 30px;
     max-width: 30px;
     object-fit: contain;
+}
+
+.bbc-logo.dns-bbc-logo-social.dns-bbc-logo-telegram {
+    height: 34px;
+    width: 42px;
+    max-width: 42px;
 }
 
 /* Stake logo is white/light — invert in dark mode so it's visible */

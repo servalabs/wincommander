@@ -122,6 +122,12 @@ export function applyProductAliases(productMap: Record<string, string>): Record<
 const softwaresMods = (CAN_LOAD_BROWSER_ASSET_MAPS
   ? import.meta.glob("../assets/softwares/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
+// Blocklist artwork is authored separately from compressed application icons.
+// Keep this narrower map so its transparent, card-ready assets win when both
+// folders contain the same basename (for example parimatch-logo.webp).
+const blocklistSoftwareMods = (CAN_LOAD_BROWSER_ASSET_MAPS
+  ? import.meta.glob("../assets/softwares/blocklist/**/*", { eager: true, query: "?url&wc-module", import: "default" })
+  : EMPTY_ASSET_MODS) as AssetMods;
 const entitiesMods = (CAN_LOAD_BROWSER_ASSET_MAPS
   ? import.meta.glob("../assets/entities/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
@@ -166,6 +172,7 @@ export const agencyLogos: Record<string, string> = mergeByBasename(
 export const blocklistLogos: Record<string, string> = mergeByBasename(
   entitiesMods,
   softwaresMods,
+  blocklistSoftwareMods,
 );
 
 // — flags (india/usa, emblems) —

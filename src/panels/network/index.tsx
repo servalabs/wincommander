@@ -100,25 +100,35 @@ function deriveAdapterMode(adapter: PhysicalNetworkAdapter): AdapterMode {
 // The inversion/height lookups below key on the SAME resolved URLs the <img>
 // renders, so the equality checks still match after Vite fingerprints them.
 const DNS_CATEGORY_LOGOS: Record<string, string[]> = {
-    'ads':      [blocklistLogos['ads-logo-1.webp'], blocklistLogos['tracker-logo.webp']],
+    'ads':      [blocklistLogos['ads-logo-1.png'], blocklistLogos['tracker-logo.webp']],
     'porn':     [blocklistLogos['onlyfans-logo.webp'], blocklistLogos['pornhub-logo.png']],
-    'dating':   [blocklistLogos['tinder-app-logo.png'], blocklistLogos['bumble-app-logo.webp']],
+    'dating':   [blocklistLogos['tinder-app-logo.png'], blocklistLogos['bumble-app-logo.png']],
     // drugs-logo.webp is a busy illustration that turns illegible at card
     // size — use the fallback category Icon instead (see dnsCategories.ts).
     'drugs':    [],
-    'gambling': [blocklistLogos['bet365-logo.webp'], blocklistLogos['parimatch-logo.webp'], blocklistLogos['stake-logo.png'], blocklistLogos['1xbet-logo.webp']],
+    'gambling': [blocklistLogos['bet365-logo.png'], blocklistLogos['parimatch-logo.png'], blocklistLogos['stake-logo.png'], blocklistLogos['1xbet-logo.png']],
     'gov':      [],
     'malware':  [],
     'phishing': [blocklistLogos['phishing-logo-1.webp']],
-    'social':   [blocklistLogos['telegram-logo.webp'], blocklistLogos['instagram-logo.webp'], blocklistLogos['snapchat-logo.webp']],
+    // Use the newly supplied compressed Instagram mark. The former
+    // instagram-logo.webp asset is retained in the bundle for compatibility,
+    // but this is the logo rendered on the Social blocklist card.
+    'social':   [blocklistLogos['telegram-logo.webp'], blocklistLogos['instagram.png'], blocklistLogos['snapchat-logo.webp']],
 };
 
 const DNS_LOGOS_NEEDING_INVERSION: string[] = [blocklistLogos['stake-logo.png']];
 
-// Per-logo height overrides (px) — applied as inline style on the img
-const DNS_LOGO_HEIGHTS: Record<string, number> = {
-    [blocklistLogos['tinder-app-logo.png']]: 36,
-    [blocklistLogos['parimatch-logo.webp']]:   22,
+// These source images have intentionally different aspect ratios. The generic
+// 30px / 60px thumbnail cap made the illustration marks too small and squeezed
+// the Parimatch wordmark into an unreadable sliver in Network Control.
+const DNS_LOGO_THUMBNAIL_CLASSES: Record<string, string> = {
+    [blocklistLogos['ads-logo-1.png']]: " dns-bbc-logo-illustration",
+    [blocklistLogos['tracker-logo.webp']]: " dns-bbc-logo-illustration",
+    [blocklistLogos['phishing-logo-1.webp']]: " dns-bbc-logo-illustration",
+    [blocklistLogos['parimatch-logo.png']]: " dns-bbc-logo-wordmark",
+    [blocklistLogos['telegram-logo.webp']]: " dns-bbc-logo-telegram",
+    [blocklistLogos['tinder-app-logo.png']]: " dns-bbc-logo-dating",
+    [blocklistLogos['bumble-app-logo.png']]: " dns-bbc-logo-dating",
 };
 
 const BRAND_LOGOS: Record<string, string[]> = {
@@ -233,8 +243,7 @@ function DnsCategoryCard({
                             key={i}
                             src={src}
                             alt=""
-                            className={`bbc-logo dns-bbc-logo${id === 'social' ? ' dns-bbc-logo-social' : ''}${DNS_LOGOS_NEEDING_INVERSION.includes(src) ? ' invert-in-dark' : ''}`}
-                            style={DNS_LOGO_HEIGHTS[src] ? { height: DNS_LOGO_HEIGHTS[src] } : undefined}
+                            className={`bbc-logo dns-bbc-logo${id === 'social' ? ' dns-bbc-logo-social' : ''}${DNS_LOGO_THUMBNAIL_CLASSES[src] ?? ''}${DNS_LOGOS_NEEDING_INVERSION.includes(src) ? ' invert-in-dark' : ''}`}
                         />
                     )) : (
                         <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, height: 36, borderRadius: 8, background: 'var(--color-bg-tertiary)' }}>
