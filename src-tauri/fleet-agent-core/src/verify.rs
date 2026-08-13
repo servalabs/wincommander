@@ -27,6 +27,9 @@ use serde_json::Value;
 /// Once recorded, the server rejects v1 identity-only MACs for that device.
 pub const HMAC_BODY_V2_CAPABILITY: &str = "hmac_body_v2";
 pub const HMAC_VERSION_V2: i64 = 2;
+/// Unified fleet enrollment protocol remains v1; request-auth versioning is
+/// additive and negotiated independently through `hmac_body_v2`.
+pub const ENROLL_PROTOCOL_VERSION: i64 = 1;
 
 // ── Wire types (agent check-in protocol) ─────────────────────────────────────
 
@@ -848,6 +851,23 @@ mod tests {
             compute_request_hmac_v2(b"test-secret", "POST", "/v1/agents/checkin", &body).unwrap(),
             "nvu2PQQzcwFNQLuX6MlOkdkil8OTwilR1OE7SKVuiC4="
         );
+    }
+
+    #[test]
+    fn enrollment_protocol_remains_v1_when_advertising_hmac_v2() {
+        let request = EnrollRequest {
+            device_id: "dev-1".into(),
+            device_hash: "dev-1".into(),
+            device_kind: "tuxcommander".into(),
+            hostname: "host".into(),
+            platform: "linux".into(),
+            agent_version: "1.0.0".into(),
+            protocol_version: ENROLL_PROTOCOL_VERSION,
+            capabilities: vec![HMAC_BODY_V2_CAPABILITY.into()],
+        };
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["protocol_version"], serde_json::json!(1));
+        assert_eq!(value["capabilities"], serde_json::json!(["hmac_body_v2"]));
     }
 
     // ── verify_command tests ──────────────────────────────────────────────────

@@ -15,7 +15,8 @@ use crate::state::SharedFleetState;
 use crate::util::now_rfc3339;
 use crate::verify::{
     compute_request_hmac_v2, decode_verifying_key, CheckinRequest, CheckinResponse, EnrollRequest,
-    EnrollResponse, SearchResultReport, HMAC_BODY_V2_CAPABILITY, HMAC_VERSION_V2,
+    EnrollResponse, SearchResultReport, ENROLL_PROTOCOL_VERSION, HMAC_BODY_V2_CAPABILITY,
+    HMAC_VERSION_V2,
 };
 
 // ── HTTP client helper ─────────────────────────────────────────────────────────
@@ -223,7 +224,7 @@ pub async fn enroll(
         hostname: hostname.clone(),
         platform: platform.to_string(),
         agent_version: agent_version.to_string(),
-        protocol_version: HMAC_VERSION_V2,
+        protocol_version: ENROLL_PROTOCOL_VERSION,
         capabilities: vec![HMAC_BODY_V2_CAPABILITY.to_string()],
     };
 
