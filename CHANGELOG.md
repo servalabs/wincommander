@@ -10,6 +10,22 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ## [Unreleased]
 
+### Added
+
+- **Shared fleet protocol contracts for governed security collection**
+  (2026-08-12). The catalog now includes the bounded, parameter-free
+  `endpoint.security_snapshot` action and the fixed
+  `velociraptor.collect.client_info` provider action. A strict typed snapshot
+  result contract caps every row domain and the aggregate payload, and the
+  generated TypeScript bindings expose the same wire shapes to the Pro fleet
+  console.
+
+### Fixed
+
+- **Restored the commander-free workspace manifest** (2026-08-12) by removing
+  a stray delimiter that prevented Cargo from parsing the workspace during
+  protocol type generation and validation.
+
 ### Changed
 
 - **Lockdown can now target VeraCrypt whole-partition volumes safely**

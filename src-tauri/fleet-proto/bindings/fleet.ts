@@ -712,6 +712,36 @@ path_exclude: Array<string>, };
 export type SearchRank = "ModifiedDesc" | "SizeDesc" | "TraversalOrder";
 
 /**
+ * One bounded listening-port row from `endpoint.security_snapshot`.
+ */
+export type SecuritySnapshotListeningPort = { pid: number | null, protocol: SecuritySnapshotProtocol, local_address: string, local_port: number, process_name: string | null, process_path: string | null, };
+
+/**
+ * One bounded process row from `endpoint.security_snapshot`.
+ */
+export type SecuritySnapshotProcess = { pid: number, parent_pid: number | null, name: string, path: string | null, };
+
+/**
+ * Transport protocol for a listening socket. Snapshot v1 intentionally
+ * excludes connection history and remote peers.
+ */
+export type SecuritySnapshotProtocol = "tcp" | "udp";
+
+/**
+ * Typed result for `endpoint.security_snapshot`. Version 1 contains exactly
+ * processes, listening ports, and services; it deliberately excludes files,
+ * scheduled tasks, startup items, hashes, and connection history. `truncated`
+ * is true whenever an endpoint reached a collection bound, so an incomplete
+ * result must never be rendered as a full inventory.
+ */
+export type SecuritySnapshotResult = { processes: Array<SecuritySnapshotProcess>, listening_ports: Array<SecuritySnapshotListeningPort>, services: Array<SecuritySnapshotService>, truncated: boolean, };
+
+/**
+ * One bounded Windows service row from `endpoint.security_snapshot`.
+ */
+export type SecuritySnapshotService = { name: string, start_type: string, status: string, path: string | null, };
+
+/**
  * What an agent receives when it polls — the signed, executable envelope. The
  * agent verifies `signature` against `signer_key` and checks `epoch_version`
  * (anti-rollback) before executing the `catalog_id` action.

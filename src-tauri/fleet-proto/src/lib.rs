@@ -176,6 +176,18 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         payload_schema: None,
     },
     CommandMeta {
+        catalog_id: "endpoint.security_snapshot",
+        action_class: ActionClass::Safe,
+        summary: "Collect bounded processes, listening ports, and services for device triage",
+        payload_schema: Some(r#"{"type":"object","properties":{},"additionalProperties":false}"#),
+    },
+    CommandMeta {
+        catalog_id: "velociraptor.collect.client_info",
+        action_class: ActionClass::Safe,
+        summary: "Collect a bounded Velociraptor client information summary",
+        payload_schema: Some(r#"{"type":"object","properties":{},"additionalProperties":false}"#),
+    },
+    CommandMeta {
         catalog_id: "dns.cache.clear",
         action_class: ActionClass::Safe,
         summary: "Clear the local DNS resolver cache",
@@ -1010,6 +1022,134 @@ pub struct RecentDownloadsResult {
 /// Catalog id for the per-device recent-downloads listing command
 /// (`ActionClass::Safe`). Same wiring contract as `FILES_SEARCH_CATALOG_ID`.
 pub const FILES_RECENT_DOWNLOADS_CATALOG_ID: &str = "files.recent_downloads";
+
+/// Catalog id for the bounded, on-demand endpoint triage snapshot.
+pub const ENDPOINT_SECURITY_SNAPSHOT_CATALOG_ID: &str = "endpoint.security_snapshot";
+
+/// Maximum rows returned for each security-snapshot domain. The endpoint must
+/// stop collecting at this cap; the server re-validates it before persistence.
+pub const SECURITY_SNAPSHOT_MAX_ROWS_PER_DOMAIN: usize = 200;
+/// Maximum UTF-8 bytes accepted for the complete security-snapshot result.
+pub const SECURITY_SNAPSHOT_MAX_RESULT_BYTES: usize = 256 * 1024;
+/// Maximum UTF-8 bytes accepted for an individual snapshot text field.
+pub const SECURITY_SNAPSHOT_MAX_TEXT_BYTES: usize = 1024;
+
+/// Transport protocol for a listening socket. Snapshot v1 intentionally
+/// excludes connection history and remote peers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(rename_all = "snake_case")]
+pub enum SecuritySnapshotProtocol {
+    Tcp,
+    Udp,
+}
+
+/// One bounded process row from `endpoint.security_snapshot`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct SecuritySnapshotProcess {
+    pub pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_pid: Option<u32>,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// One bounded listening-port row from `endpoint.security_snapshot`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct SecuritySnapshotListeningPort {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    pub protocol: SecuritySnapshotProtocol,
+    pub local_address: String,
+    pub local_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_path: Option<String>,
+}
+
+/// One bounded Windows service row from `endpoint.security_snapshot`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct SecuritySnapshotService {
+    pub name: String,
+    pub start_type: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// Typed result for `endpoint.security_snapshot`. Version 1 contains exactly
+/// processes, listening ports, and services; it deliberately excludes files,
+/// scheduled tasks, startup items, hashes, and connection history. `truncated`
+/// is true whenever an endpoint reached a collection bound, so an incomplete
+/// result must never be rendered as a full inventory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct SecuritySnapshotResult {
+    pub processes: Vec<SecuritySnapshotProcess>,
+    pub listening_ports: Vec<SecuritySnapshotListeningPort>,
+    pub services: Vec<SecuritySnapshotService>,
+    pub truncated: bool,
+}
+
+/// Validate the fixed, bounded v1 snapshot result before it crosses a process
+/// or persistence boundary. This is shared by the endpoint and server.
+pub fn validate_security_snapshot_result(
+    result: &SecuritySnapshotResult,
+) -> Result<(), &'static str> {
+    if result.processes.len() > SECURITY_SNAPSHOT_MAX_ROWS_PER_DOMAIN
+        || result.listening_ports.len() > SECURITY_SNAPSHOT_MAX_ROWS_PER_DOMAIN
+        || result.services.len() > SECURITY_SNAPSHOT_MAX_ROWS_PER_DOMAIN
+    {
+        return Err("security snapshot row limit exceeded");
+    }
+
+    let text_is_valid =
+        |text: &str| !text.is_empty() && text.len() <= SECURITY_SNAPSHOT_MAX_TEXT_BYTES;
+    let optional_text_is_valid = |text: &Option<String>| text.as_deref().is_none_or(text_is_valid);
+
+    if result
+        .processes
+        .iter()
+        .any(|row| !text_is_valid(&row.name) || !optional_text_is_valid(&row.path))
+    {
+        return Err("security snapshot process field is invalid");
+    }
+    if result.listening_ports.iter().any(|row| {
+        !text_is_valid(&row.local_address)
+            || !optional_text_is_valid(&row.process_name)
+            || !optional_text_is_valid(&row.process_path)
+    }) {
+        return Err("security snapshot listening-port field is invalid");
+    }
+    if result.services.iter().any(|row| {
+        !text_is_valid(&row.name)
+            || !text_is_valid(&row.start_type)
+            || !text_is_valid(&row.status)
+            || !optional_text_is_valid(&row.path)
+    }) {
+        return Err("security snapshot service field is invalid");
+    }
+
+    let bytes = serde_json::to_vec(result).map_err(|_| "security snapshot cannot serialize")?;
+    if bytes.len() > SECURITY_SNAPSHOT_MAX_RESULT_BYTES {
+        return Err("security snapshot byte limit exceeded");
+    }
+    Ok(())
+}
 
 /// `files.fetch_content` command payload. `path` must be echoed from a prior
 /// `files.search`/`files.recent_downloads` result for the SAME device — never
@@ -1869,6 +2009,70 @@ fn write_canonical(v: &Value, out: &mut String) {
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+
+    fn security_snapshot() -> SecuritySnapshotResult {
+        SecuritySnapshotResult {
+            processes: vec![SecuritySnapshotProcess {
+                pid: 42,
+                parent_pid: Some(1),
+                name: "agent.exe".into(),
+                path: Some(r"C:\\Program Files\\Agent\\agent.exe".into()),
+            }],
+            listening_ports: vec![SecuritySnapshotListeningPort {
+                pid: Some(42),
+                protocol: SecuritySnapshotProtocol::Tcp,
+                local_address: "0.0.0.0".into(),
+                local_port: 443,
+                process_name: Some("agent.exe".into()),
+                process_path: None,
+            }],
+            services: vec![SecuritySnapshotService {
+                name: "AgentSvc".into(),
+                start_type: "auto".into(),
+                status: "running".into(),
+                path: Some(r"C:\\Program Files\\Agent\\agent.exe".into()),
+            }],
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn security_snapshot_contract_round_trips_and_is_bounded() {
+        let snapshot = security_snapshot();
+        validate_security_snapshot_result(&snapshot).unwrap();
+        let round_trip: SecuritySnapshotResult =
+            serde_json::from_value(serde_json::to_value(&snapshot).unwrap()).unwrap();
+        assert_eq!(round_trip, snapshot);
+    }
+
+    #[test]
+    fn security_snapshot_rejects_rows_past_the_domain_cap() {
+        let mut snapshot = security_snapshot();
+        snapshot.processes = (0..=SECURITY_SNAPSHOT_MAX_ROWS_PER_DOMAIN)
+            .map(|pid| SecuritySnapshotProcess {
+                pid: pid as u32,
+                parent_pid: None,
+                name: "process.exe".into(),
+                path: None,
+            })
+            .collect();
+        assert_eq!(
+            validate_security_snapshot_result(&snapshot),
+            Err("security snapshot row limit exceeded")
+        );
+    }
+
+    #[test]
+    fn security_snapshot_rejects_unknown_wire_fields() {
+        let raw = serde_json::json!({
+            "processes": [],
+            "listening_ports": [],
+            "services": [],
+            "truncated": false,
+            "scheduled_tasks": []
+        });
+        assert!(serde_json::from_value::<SecuritySnapshotResult>(raw).is_err());
+    }
 
     #[test]
     fn config_epoch_round_trips_and_preserves_version() {
