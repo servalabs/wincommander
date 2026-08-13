@@ -14,8 +14,8 @@ use crate::dispatch::{execute_pending_search_jobs, process_checkin, FleetActions
 use crate::state::SharedFleetState;
 use crate::util::now_rfc3339;
 use crate::verify::{
-    compute_checkin_hmac, decode_verifying_key, CheckinRequest, CheckinResponse, EnrollRequest,
-    EnrollResponse, SearchResultReport,
+    compute_request_hmac_v2, decode_verifying_key, CheckinRequest, CheckinResponse, EnrollRequest,
+    EnrollResponse, SearchResultReport, HMAC_BODY_V2_CAPABILITY, HMAC_VERSION_V2,
 };
 
 // ── HTTP client helper ─────────────────────────────────────────────────────────
@@ -152,8 +152,8 @@ fn randomized_interval_secs(interval: u64, min_frac: f64, max_frac: f64) -> u64 
 /// data to hit a size target). `target_bytes == 0` disables padding entirely.
 ///
 /// This is a pure size-shaping helper — the returned value is carried in
-/// `CheckinRequest::padding`, which is OUTSIDE the HMAC preimage (see
-/// `verify::compute_checkin_hmac` and the module doc on `CheckinRequest`).
+/// `CheckinRequest::padding`, which is covered by the v2 request MAC (see the
+/// module doc on `CheckinRequest`).
 fn make_padding(target_bytes: usize, already_used_bytes: usize) -> String {
     if target_bytes == 0 || already_used_bytes >= target_bytes {
         return String::new();
@@ -223,6 +223,8 @@ pub async fn enroll(
         hostname: hostname.clone(),
         platform: platform.to_string(),
         agent_version: agent_version.to_string(),
+        protocol_version: HMAC_VERSION_V2,
+        capabilities: vec![HMAC_BODY_V2_CAPABILITY.to_string()],
     };
 
     let url = format!("{}/v1/agents/enroll", config.url);
@@ -310,15 +312,30 @@ pub async fn report_search_results(
     for report in reports {
         let now = crate::util::now_unix();
         let nonce = checkin_nonce();
-        let hmac = compute_checkin_hmac(checkin_secret, device_id, now, &nonce);
-        let body = SearchResultReport {
+        let mut body = SearchResultReport {
             device_id: device_id.to_string(),
             ts: now,
             nonce,
-            hmac,
+            hmac_version: HMAC_VERSION_V2,
+            hmac: String::new(),
             job_id: report.job_id.clone(),
             hits: report.hits,
             error: report.error,
+        };
+        body.hmac = match compute_request_hmac_v2(
+            checkin_secret,
+            "POST",
+            "/v1/agents/search-result",
+            &body,
+        ) {
+            Ok(hmac) => hmac,
+            Err(error) => {
+                warn!(
+                    "fleet: search-result report for job '{}' could not be authenticated: {error}",
+                    report.job_id
+                );
+                continue;
+            }
         };
         match client.post(&url).json(&body).send().await {
             Ok(resp) if resp.status().is_success() => {
@@ -390,16 +407,14 @@ pub async fn run_checkin_cycle_inner(
 
     // 3. Build HMAC-authenticated check-in request.
     //
-    //    The HMAC preimage is fixed at `"{device_id}:{ts}:{nonce}"` — computed
-    //    BEFORE `padding`/`decoy` are added to the request struct below, and
-    //    those two fields are never read by `compute_checkin_hmac`. Padding is
-    //    sized against a rough estimate of the non-padding JSON so the WHOLE
-    //    body (not just the padding value) lands near the configured bucket.
+    //    HMAC v2 binds the method, path, and complete canonical JSON body
+    //    (excluding only the `hmac` field). Padding is sized against a rough
+    //    estimate of the non-padding JSON so the WHOLE body (not just the
+    //    padding value) lands near the configured bucket.
     let nonce = checkin_nonce();
-    let hmac = compute_checkin_hmac(&checkin_secret, &device_id, now, &nonce);
     let hostname = hostname_str();
     let base_len_estimate =
-        device_id.len() + hostname.len() + nonce.len() + hmac.len() + 64 /* JSON scaffolding */;
+        device_id.len() + hostname.len() + nonce.len() + 44 + 64 /* JSON scaffolding */;
     let padding = make_padding(config.checkin_padding_bytes, base_len_estimate);
     let url = format!("{}/v1/agents/checkin", config.url);
     // Resources/health are skipped entirely on a decoy check-in — a decoy is
@@ -415,17 +430,25 @@ pub async fn run_checkin_cycle_inner(
     } else {
         dispatch.sample_health()
     };
-    let req = CheckinRequest {
+    let mut req = CheckinRequest {
         device_id: device_id.clone(),
         hostname,
         posture: "nominal".to_string(),
         ts: now,
         nonce,
-        hmac,
+        hmac_version: HMAC_VERSION_V2,
+        hmac: String::new(),
         padding,
         decoy,
         resources,
         health,
+    };
+    req.hmac = match compute_request_hmac_v2(&checkin_secret, "POST", "/v1/agents/checkin", &req) {
+        Ok(hmac) => hmac,
+        Err(error) => {
+            warn!("fleet: could not authenticate check-in body: {error}");
+            return false;
+        }
     };
     let resp: CheckinResponse = match fleet_post(client, &url, &config.fleet_token, &req).await {
         Ok(r) => r,
@@ -824,39 +847,35 @@ mod tests {
     // ── Traffic shaping: padding must never alter the HMAC preimage ──────────
 
     #[test]
-    fn padding_field_does_not_alter_checkin_hmac() {
-        // The HMAC is computed from device_id/ts/nonce alone, BEFORE padding
-        // is generated or attached to the request struct. Prove that two
-        // requests differing in `padding`/`decoy`/`health` (req_b also
-        // carries a populated `HealthSnapshot`, req_a carries none) produce
-        // an IDENTICAL hmac for the same device_id/ts/nonce/secret — i.e.
-        // padding and health are well and truly outside the signed preimage.
+    fn padding_decoy_and_health_alter_request_hmac_v2() {
         let secret = b"fleet-checkin-secret-32-bytes-ok";
         let device_id = "dev-pad-test";
         let ts: i64 = 1_700_000_000;
         let nonce = "ci-padtest";
 
-        let hmac_a = compute_checkin_hmac(secret, device_id, ts, nonce);
-
-        let req_a = CheckinRequest {
+        let mut req_a = CheckinRequest {
             device_id: device_id.to_string(),
             hostname: "host-a".to_string(),
             posture: "nominal".to_string(),
             ts,
             nonce: nonce.to_string(),
-            hmac: hmac_a.clone(),
+            hmac_version: HMAC_VERSION_V2,
+            hmac: String::new(),
             padding: make_padding(512, 0),
             decoy: false,
             resources: None,
             health: None,
         };
-        let req_b = CheckinRequest {
+        req_a.hmac = compute_request_hmac_v2(secret, "POST", "/v1/agents/checkin", &req_a).unwrap();
+
+        let mut req_b = CheckinRequest {
             device_id: device_id.to_string(),
             hostname: "host-b-different-length".to_string(),
             posture: "nominal".to_string(),
             ts,
             nonce: nonce.to_string(),
-            hmac: hmac_a.clone(),
+            hmac_version: HMAC_VERSION_V2,
+            hmac: String::new(),
             padding: make_padding(4096, 0),
             decoy: true,
             resources: None,
@@ -869,15 +888,8 @@ mod tests {
             }),
         };
 
-        // Both requests carry DIFFERENT padding/decoy/hostname, yet the HMAC
-        // (computed independently of the struct, over device_id/ts/nonce
-        // only) is identical for both — proving padding/decoy cannot affect
-        // the authenticated preimage.
-        assert_eq!(req_a.hmac, req_b.hmac);
-        assert_eq!(
-            req_a.hmac,
-            compute_checkin_hmac(secret, device_id, ts, nonce),
-            "hmac must match a computation that never saw padding/decoy at all"
-        );
+        req_b.hmac = compute_request_hmac_v2(secret, "POST", "/v1/agents/checkin", &req_b).unwrap();
+
+        assert_ne!(req_a.hmac, req_b.hmac);
     }
 }

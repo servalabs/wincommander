@@ -22,6 +22,14 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Fixed
 
+- **Fleet device requests now bind the complete payload to HMAC v2**
+  (2026-08-13). The shared agent core signs the HTTP method, exact route path,
+  and recursively canonicalized JSON body (excluding only `hmac`), preventing
+  authenticated envelopes from being reused with mutated decoy, telemetry,
+  search-result, or command-ack fields. Enrollment advertises
+  `hmac_body_v2`; cross-language golden vectors pin string escaping and exact
+  plain-decimal number normalization.
+
 - **Restored the commander-free workspace manifest** (2026-08-12) by removing
   a stray delimiter that prevented Cargo from parsing the workspace during
   protocol type generation and validation.

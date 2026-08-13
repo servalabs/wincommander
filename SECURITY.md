@@ -111,7 +111,7 @@ flowchart TB
 
 **Fleet**
 
-- Devices authenticate every check-in with a per-device HMAC secret (timestamp window + nonce replay defence); the server stores that secret KEK-encrypted. Each secret validates only its own device — there is no cross-device token to reuse.
+- Devices authenticate every device-plane request with a per-device HMAC secret. HMAC v2 binds the method, exact route path, and complete canonical JSON payload (excluding only `hmac`), in addition to timestamp-window and nonce-replay defences; the server stores the secret KEK-encrypted and persists a one-way v2 floor after first successful use. Each secret validates only its own device — there is no cross-device token to reuse.
 - Agents verify every config epoch and command against an Ed25519 key pinned at enrollment, with monotonic anti-rollback — a rogue or DNS-hijacked server can withhold commands but never forge them. Re-enrollment never silently re-pins to a new key.
 - Admin routes re-read role and org membership from the store on every request; last-super-admin and seat-cap invariants are enforced atomically under concurrency; admin login throttles with escalating lockout; passwords are Argon2id.
 - Optional TLS public-key pinning (with rotation overlap) and check-in traffic shaping (randomized timing, padded sizes, cover traffic) resist on-path fingerprinting. Missed check-ins fail toward "assume compromised" — never silently skipped.

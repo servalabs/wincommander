@@ -23,6 +23,11 @@ use hmac::{KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Enrollment capability that opts a device into request-body-bound HMACs.
+/// Once recorded, the server rejects v1 identity-only MACs for that device.
+pub const HMAC_BODY_V2_CAPABILITY: &str = "hmac_body_v2";
+pub const HMAC_VERSION_V2: i64 = 2;
+
 // ── Wire types (agent check-in protocol) ─────────────────────────────────────
 
 /// Enroll request body (POST `/v1/agents/enroll`). Unified check-in transport
@@ -40,6 +45,8 @@ pub struct EnrollRequest {
     pub hostname: String,
     pub platform: String,
     pub agent_version: String,
+    pub protocol_version: i64,
+    pub capabilities: Vec<String>,
 }
 
 /// Enroll response from the fleet server.
@@ -64,21 +71,9 @@ pub struct EnrollResponse {
 
 /// Check-in request body (POST `/v1/agents/checkin`).
 ///
-/// The server requires an HMAC-SHA256 body MAC on every check-in:
-///   preimage  = "{device_id}:{ts}:{nonce}" (UTF-8)
-///   secret    = raw bytes from `checkin_secret` (stored verbatim by the server)
-///   HMAC      = HMAC-SHA256(secret, preimage)
-///   `hmac`    = STANDARD base64 of the 32-byte MAC output
-///
-/// # Traffic-shaping fields (`padding`, `decoy`) — NOT part of the HMAC preimage
-///
-/// `padding` and `decoy` are transport-envelope-only additions (mirroring how
-/// `posture`/`productivity` were added to the server's own `CheckinRequest` in
-/// `fleet-server`): [`compute_checkin_hmac`] is computed over exactly
-/// `"{device_id}:{ts}:{nonce}"` and is NOT changed by this struct carrying
-/// extra fields. Neither field can ever influence a signature, a MAC, or
-/// `fleet_proto::canonical_command_bytes` — see the `golden_*` tests in this
-/// crate and in `fleet-proto`, which stay frozen across this change.
+/// Version 2 binds the method, route, and canonical JSON payload (excluding
+/// only `hmac`), so acknowledgements, telemetry, padding, and `decoy` all have
+/// integrity rather than merely authenticating a device identity.
 #[derive(Debug, Serialize)]
 pub struct CheckinRequest {
     pub device_id: String,
@@ -88,12 +83,12 @@ pub struct CheckinRequest {
     pub ts: i64,
     /// Single-use nonce for replay defence (and HMAC preimage).
     pub nonce: String,
-    /// HMAC-SHA256(checkin_secret, "{device_id}:{ts}:{nonce}") encoded as STANDARD base64.
+    pub hmac_version: i64,
+    /// HMAC-SHA256 over the v2 request preimage, STANDARD base64 encoded.
     pub hmac: String,
     /// Opaque, ignored-by-server filler bytes (base64) so every check-in
     /// request lands in the same size bucket regardless of what it actually
-    /// carries. Traffic-shaping only — never covered by `hmac`, never fed to
-    /// any canonical-bytes/signature construction. Empty string when padding
+    /// carries. It is covered by the v2 request MAC. Empty string when padding
     /// is disabled (`FleetConfig::checkin_padding_bytes == 0`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub padding: String,
@@ -115,8 +110,8 @@ pub struct CheckinRequest {
     pub resources: Option<fleet_proto::DeviceResourceSample>,
     /// Optional device-health snapshot (encryption/patch/AV/OS/sovereignty) —
     /// see [`HealthSnapshot`] and `FleetActions::sample_health`. Transport-
-    /// envelope only, exactly like `resources` immediately above: never part
-    /// of `hmac`, omitted entirely when the platform has no health collector
+    /// envelope only, exactly like `resources` immediately above; omitted
+    /// entirely when the platform has no health collector
     /// wired up (duress-only agents, or before a platform implements
     /// `sample_health`) so older/other check-ins are byte-identical to before
     /// this field existed.
@@ -223,8 +218,8 @@ pub struct SearchHit {
 
 /// Body of `POST /v1/agents/search-result` — reports one job's outcome for
 /// this device. Same HMAC envelope as [`CheckinRequest`] (`device_id`/`ts`/
-/// `nonce`/`hmac`, preimage `"{device_id}:{ts}:{nonce}"`, computed via
-/// [`compute_checkin_hmac`] over the SAME per-device `checkin_secret` used
+/// `nonce`/`hmac`, computed via [`compute_request_hmac_v2`] over the SAME
+/// per-device `checkin_secret` used
 /// for check-in — this is a dedicated event-driven route, not a literal
 /// `/checkin` call, per the server's `authenticate_device_hmac` reuse) plus
 /// the job payload. Field names pinned to match the fleet server's
@@ -234,6 +229,7 @@ pub struct SearchResultReport {
     pub device_id: String,
     pub ts: i64,
     pub nonce: String,
+    pub hmac_version: i64,
     pub hmac: String,
     pub job_id: String,
     pub hits: Vec<SearchHit>,
@@ -406,6 +402,139 @@ pub fn compute_checkin_hmac(secret: &[u8], device_id: &str, ts: i64, nonce: &str
     B64.encode(mac.finalize().into_bytes())
 }
 
+fn normalize_json_number(input: &str) -> Result<String, String> {
+    if input.len() > 1_024 {
+        return Err("JSON number token exceeds canonicalization limit".to_string());
+    }
+    let (negative, unsigned) = input
+        .strip_prefix('-')
+        .map_or((false, input), |rest| (true, rest));
+    let (mantissa, exponent) = match unsigned.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => {
+            let parsed = exponent
+                .parse::<i32>()
+                .map_err(|_| "invalid JSON number exponent".to_string())?;
+            if parsed.unsigned_abs() > 1_000 {
+                return Err("JSON number exponent exceeds canonicalization limit".to_string());
+            }
+            (mantissa, parsed)
+        }
+        None => (unsigned, 0),
+    };
+    let (integer, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{integer}{fraction}");
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("JSON number exceeds canonicalization limit".to_string());
+    }
+    let Some(first) = digits.bytes().position(|byte| byte != b'0') else {
+        return Ok("0".to_string());
+    };
+    let last = digits
+        .bytes()
+        .rposition(|byte| byte != b'0')
+        .expect("first non-zero digit exists");
+    let significant = &digits[first..=last];
+    let decimal_position = i64::try_from(integer.len())
+        .map_err(|_| "JSON number exceeds canonicalization limit".to_string())?
+        + i64::from(exponent)
+        - i64::try_from(first)
+            .map_err(|_| "JSON number exceeds canonicalization limit".to_string())?;
+    let mut normalized = if decimal_position <= 0 {
+        let zeros = usize::try_from(-decimal_position)
+            .map_err(|_| "JSON number exceeds canonicalization limit".to_string())?;
+        format!("0.{}{significant}", "0".repeat(zeros))
+    } else {
+        let position = usize::try_from(decimal_position)
+            .map_err(|_| "JSON number exceeds canonicalization limit".to_string())?;
+        if position >= significant.len() {
+            format!("{significant}{}", "0".repeat(position - significant.len()))
+        } else {
+            format!("{}.{}", &significant[..position], &significant[position..])
+        }
+    };
+    if negative {
+        normalized.insert(0, '-');
+    }
+    Ok(normalized)
+}
+
+fn canonical_json(value: &Value, output: &mut String) -> Result<(), String> {
+    match value {
+        Value::Null => output.push_str("null"),
+        Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
+        Value::Number(value) => output.push_str(&normalize_json_number(&value.to_string())?),
+        Value::String(value) => output.push_str(
+            &serde_json::to_string(value)
+                .map_err(|error| format!("request HMAC string serialization failed: {error}"))?,
+        ),
+        Value::Array(values) => {
+            output.push('[');
+            for (index, value) in values.iter().enumerate() {
+                if index != 0 {
+                    output.push(',');
+                }
+                canonical_json(value, output)?;
+            }
+            output.push(']');
+        }
+        Value::Object(object) => {
+            output.push('{');
+            let mut keys: Vec<&String> = object.keys().collect();
+            keys.sort_unstable();
+            for (index, key) in keys.into_iter().enumerate() {
+                if index != 0 {
+                    output.push(',');
+                }
+                output.push_str(&serde_json::to_string(key).map_err(|error| {
+                    format!("request HMAC object-key serialization failed: {error}")
+                })?);
+                output.push(':');
+                canonical_json(&object[key], output)?;
+            }
+            output.push('}');
+        }
+    }
+    Ok(())
+}
+
+/// Canonical v2 device-request preimage:
+/// `fleet-hmac-v2\n<METHOD>\n<path>\n<canonical JSON without hmac>`.
+/// Object keys are recursively sorted; arrays retain their order.
+pub fn request_hmac_preimage_v2<T: Serialize>(
+    method: &str,
+    path: &str,
+    payload: &T,
+) -> Result<Vec<u8>, String> {
+    let mut value = serde_json::to_value(payload)
+        .map_err(|error| format!("request HMAC payload serialization failed: {error}"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "request HMAC payload must be a JSON object".to_string())?;
+    object.remove("hmac");
+    let mut canonical = String::new();
+    canonical_json(&value, &mut canonical)?;
+    Ok(format!(
+        "fleet-hmac-v2\n{}\n{}\n{}",
+        method.to_ascii_uppercase(),
+        path,
+        canonical
+    )
+    .into_bytes())
+}
+
+pub fn compute_request_hmac_v2<T: Serialize>(
+    secret: &[u8],
+    method: &str,
+    path: &str,
+    payload: &T,
+) -> Result<String, String> {
+    let preimage = request_hmac_preimage_v2(method, path, payload)?;
+    let mut mac =
+        HmacSha256::new_from_slice(secret).map_err(|_| "request HMAC key error".to_string())?;
+    mac.update(&preimage);
+    Ok(B64.encode(mac.finalize().into_bytes()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,6 +672,7 @@ mod tests {
             posture: "nominal".to_string(),
             ts: 1_700_000_000,
             nonce: "n".to_string(),
+            hmac_version: HMAC_VERSION_V2,
             hmac: "h".to_string(),
             padding: String::new(),
             decoy: false,
@@ -576,6 +706,7 @@ mod tests {
             posture: "nominal".to_string(),
             ts: 1_700_000_000,
             nonce: "n".to_string(),
+            hmac_version: HMAC_VERSION_V2,
             hmac: "h".to_string(),
             padding: String::new(),
             decoy: false,
@@ -639,6 +770,83 @@ mod tests {
             base,
             compute_checkin_hmac(other_secret, "dev-1", 1000, "nonce-a"),
             "secret change"
+        );
+    }
+
+    #[test]
+    fn request_hmac_v2_binds_method_path_and_payload_except_hmac() {
+        let secret = b"request-body-secret";
+        let base = serde_json::json!({
+            "device_id": "dev-1", "ts": 1000, "nonce": "nonce-a",
+            "hmac_version": 2, "hmac": "ignored-a", "decoy": false,
+            "acks": [{"command_id":"cmd-1","success":false}]
+        });
+        let mac = compute_request_hmac_v2(secret, "POST", "/v1/agents/checkin", &base).unwrap();
+
+        let mut changed_hmac = base.clone();
+        changed_hmac["hmac"] = serde_json::json!("ignored-b");
+        assert_eq!(
+            mac,
+            compute_request_hmac_v2(secret, "POST", "/v1/agents/checkin", &changed_hmac).unwrap()
+        );
+
+        for changed in [
+            serde_json::json!({"device_id":"dev-1","ts":1000,"nonce":"nonce-a","hmac_version":2,"hmac":"ignored-a","decoy":true,"acks":[{"command_id":"cmd-1","success":false}]}),
+            serde_json::json!({"device_id":"dev-1","ts":1000,"nonce":"nonce-a","hmac_version":2,"hmac":"ignored-a","decoy":false,"acks":[{"command_id":"cmd-1","success":true}]}),
+        ] {
+            assert_ne!(
+                mac,
+                compute_request_hmac_v2(secret, "POST", "/v1/agents/checkin", &changed).unwrap()
+            );
+        }
+        assert_ne!(
+            mac,
+            compute_request_hmac_v2(secret, "GET", "/v1/agents/checkin", &base).unwrap()
+        );
+        assert_ne!(
+            mac,
+            compute_request_hmac_v2(secret, "POST", "/v1/agents/duress-event", &base).unwrap()
+        );
+    }
+
+    #[test]
+    fn request_hmac_v2_matches_cross_repo_golden_vector() {
+        let body = serde_json::json!({
+            "device_id": "dev-1",
+            "ts": 1_700_000_000_i64,
+            "nonce": "nonce-a",
+            "hmac_version": 2,
+            "hmac": "ignored",
+            "decoy": false,
+            "acks": [{"command_id": "cmd-1", "success": false}],
+        });
+        assert_eq!(
+            compute_request_hmac_v2(b"test-secret", "POST", "/v1/agents/checkin", &body).unwrap(),
+            "SUK6rX+K24Phz6abnI/V1m0oiQ8giDP4pILVEHxs3HY="
+        );
+    }
+
+    #[test]
+    fn request_hmac_v2_cross_language_strings_and_numbers_golden_vector() {
+        let body = serde_json::json!({
+            "device_id": "dev/1",
+            "ts": 1_700_000_000_i64,
+            "nonce": "nonce-a",
+            "hmac_version": 2,
+            "hmac": "ignored",
+            "path": "build/device/blazer",
+            "unicode": "café雪",
+            "control": "line\n\t",
+            "numbers": [1, 1.0, 1.25e2, -0.0, 1.2e-3],
+        });
+        let preimage = request_hmac_preimage_v2("POST", "/v1/agents/checkin", &body).unwrap();
+        assert_eq!(
+            String::from_utf8(preimage).unwrap(),
+            "fleet-hmac-v2\nPOST\n/v1/agents/checkin\n{\"control\":\"line\\n\\t\\u0001\",\"device_id\":\"dev/1\",\"hmac_version\":2,\"nonce\":\"nonce-a\",\"numbers\":[1,1,125,0,0.0012],\"path\":\"build/device/blazer\",\"ts\":1700000000,\"unicode\":\"café雪\"}"
+        );
+        assert_eq!(
+            compute_request_hmac_v2(b"test-secret", "POST", "/v1/agents/checkin", &body).unwrap(),
+            "nvu2PQQzcwFNQLuX6MlOkdkil8OTwilR1OE7SKVuiC4="
         );
     }
 
