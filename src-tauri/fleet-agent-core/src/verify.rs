@@ -11,7 +11,7 @@
 //!
 //! **The preimage's `command_id` slot is filled with `idempotency_key`, NOT
 //! `SignedCommand.command_id`.** The signer (operator's offline tool for
-//! duress commands, or the server for ordinary commands) signs over the
+//! operator-control commands, or the server for ordinary commands) signs over the
 //! stable `idempotency_key` because the server-assigned UUID does not exist
 //! yet at signing time. See [`verify_command`] and `fleet_proto::SignedCommand`.
 
@@ -46,10 +46,10 @@ pub struct EnrollRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct EnrollResponse {
     pub device_id: String,
-    /// Base64 ed25519 OPERATOR key — verifies DURESS commands. `None` when the
-    /// org has no operator key configured yet; a duress-only agent then can't
-    /// verify duress commands (fail-closed) and should present itself as
-    /// not-fully-enrolled. `#[serde(default)]` so an older response still parses.
+    /// Base64 ed25519 OPERATOR key — verifies operator-control commands. `None`
+    /// when the org has no operator key configured yet; such an agent then
+    /// can't verify those commands (fail-closed) and should present itself as
+    /// not-fully-enrolled. `#[serde(default)]` lets an older response still parse.
     #[serde(default)]
     pub command_pubkey_b64: Option<String>,
     /// Base64 ed25519 SERVER signing key — verifies ordinary (server-signed)
@@ -291,8 +291,8 @@ pub struct SignedCommand {
     /// to the right platform action after signature verification.
     ///
     /// `#[serde(default)]`: the server's `fleet_proto::SignedCommand` does NOT
-    /// carry `scope` (for duress commands `scope == catalog_id`), so it arrives
-    /// empty and the dispatcher falls back to `catalog_id` — see
+    /// carry `scope` (for operator commands `scope == catalog_id`), so it
+    /// arrives empty and the dispatcher falls back to `catalog_id` — see
     /// `dispatch::process_checkin`. Without this default, a non-empty `commands`
     /// array from the real server fails to deserialize (`missing field scope`),
     /// silently turning every command-carrying check-in into a network error.

@@ -31,8 +31,9 @@ pub trait SecretStore: Send + Sync {
 pub struct FleetClientState {
     /// Device ID assigned by the fleet server at enrollment.
     pub device_id: Option<String>,
-    /// Pinned OPERATOR command public key (base64) — verifies DURESS commands
-    /// (`fleet_proto::is_duress_catalog`). Set at enroll; refused if changed.
+    /// Pinned OPERATOR command public key (base64) — verifies operator-control
+    /// commands (`fleet_proto::is_duress_catalog`). Set at enroll; refused if
+    /// changed.
     pub pinned_pubkey_b64: Option<String>,
     /// Pinned SERVER signing key (base64) — verifies ordinary (server-signed)
     /// commands (WinCommander's lockdown/dismount/etc.). Set at enroll; refused

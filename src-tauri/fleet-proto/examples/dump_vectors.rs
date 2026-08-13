@@ -86,6 +86,24 @@ fn main() {
         3,
     );
 
+    // ── Android posture-policy command — independent golden vector ───────
+    let posture_payload = serde_json::json!({
+        "posture_epoch": 3,
+        "cut_camera": false,
+        "cut_mic": false,
+        "cut_gps": true,
+        "cut_sim": false,
+        "reboot_timeout_ms": 900000,
+    });
+    let posture_command_bytes = canonical_command_bytes(
+        "posture-policy-3",
+        "android-dev-1",
+        "set_posture_policy",
+        ActionClass::Safe.as_wire_str(),
+        &posture_payload,
+        12,
+    );
+
     // ── Policy preimage — SAME inputs as `golden_policy_preimage` ─────────
     // version=5, org_id="org-test", device_id="dev-abc", intents supplied
     // out-of-order (policy_preimage sorts by key: "fleet.enabled" <
@@ -145,6 +163,13 @@ fn main() {
     out.push_str(&format!(
         "    \"hex\": {}\n",
         json_escape(&hex(&command_bytes))
+    ));
+    out.push_str("  },\n");
+    out.push_str("  \"set_posture_policy_command\": {\n");
+    out.push_str("    \"inputs\": {\"idempotency_key\": \"posture-policy-3\", \"device_id\": \"android-dev-1\", \"catalog_id\": \"set_posture_policy\", \"action_class\": \"safe\", \"payload\": {\"posture_epoch\": 3, \"cut_camera\": false, \"cut_mic\": false, \"cut_gps\": true, \"cut_sim\": false, \"reboot_timeout_ms\": 900000}, \"epoch_version\": 12},\n");
+    out.push_str(&format!(
+        "    \"hex\": {}\n",
+        json_escape(&hex(&posture_command_bytes))
     ));
     out.push_str("  },\n");
     out.push_str("  \"policy_preimage\": {\n");

@@ -57,26 +57,33 @@ impl ActionClass {
     }
 }
 
-/// Catalog ids for OPERATOR-signed duress commands — verified against the org's
-/// operator command key, NEVER the server signing key. Every catalog id NOT in
-/// this list is a server-signed ordinary command. This is the SSOT for the
-/// dual-key command-verification routing in `fleet-agent-core` and the
-/// duress-issuance gate in `fleet-server` (whose own `DURESS_CATALOG_IDS`
-/// carries the `ActionClass` mapping and is pinned equal to this list by a
-/// test). Not feature-gated — the verifier needs it without `command-metadata`.
+/// Catalog ids for OPERATOR-signed control commands — verified against the
+/// org's operator command key, NEVER the server signing key. Every catalog id
+/// NOT in this list is a server-signed ordinary command. This is the SSOT for
+/// the dual-key command-verification routing in `fleet-agent-core` and the
+/// operator-command issuance gate in `fleet-server` (whose constant retains
+/// this historical name and carries the `ActionClass` mapping). A server test
+/// pins its ids equal to this list. Not feature-gated — the verifier needs it
+/// without `command-metadata`.
 pub const DURESS_CATALOG_IDS: &[&str] = &[
     "duress_seal",
     "raise_posture",
     "duress_wipe",
     "all_clear_revoke",
     "duress_unseal",
+    "all_clear",
+    "rotate_key",
+    "unenroll",
+    "suspend_deadman",
+    "set_deadman_policy",
+    "set_posture_policy",
 ];
 
-/// Whether `catalog_id` is an operator-signed duress command (see
-/// [`DURESS_CATALOG_IDS`]). The dual-key verifier routes a duress command to the
-/// pinned OPERATOR key and every other command to the pinned SERVER signing key,
-/// so the server can never forge a duress command (it lacks the operator key)
-/// and an operator-signed blob cannot masquerade as an ordinary command.
+/// Whether `catalog_id` is an operator-signed control command (see
+/// [`DURESS_CATALOG_IDS`]). The dual-key verifier routes these commands to the
+/// pinned OPERATOR key and every other command to the pinned SERVER signing
+/// key, so the server can't forge an operator command (it lacks the operator
+/// key) and an operator-signed blob can't masquerade as an ordinary command.
 pub fn is_duress_catalog(catalog_id: &str) -> bool {
     DURESS_CATALOG_IDS.contains(&catalog_id)
 }
@@ -1335,13 +1342,21 @@ pub struct AuditEntry {
     pub at: String,
 }
 
+/// Latest framework-authoritative Android status exposed to fleet operators.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct AndroidFleetStatus {
+    pub framework_key_fingerprint: String,
+    pub deadman_ladder_step: i32,
+    pub authoritative_last_contact_age_seconds: i64,
+    pub audit_ledger_count: i64,
+    pub audit_ledger_head_hash: String,
+    pub reported_at: String,
+}
+
 /// A device as shown in the admin panel's fleet view. `online` is computed by
 /// the server from `last_seen` against a freshness window.
-///
-/// NOTE: dropped the `Eq` derive when `resources` was added — `f32`/`f64`
-/// inside `DeviceResourceSample` aren't `Eq`. No caller relied on
-/// `DeviceSummary: Eq` (checked: every test compares individual fields after
-/// deserializing, never whole-struct equality or a `HashSet`/`BTreeSet`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
@@ -1362,6 +1377,9 @@ pub struct DeviceSummary {
     /// field, or one that simply hasn't checked in yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<DeviceResourceSample>,
+    /// Framework-authoritative Android fleet state from the latest check-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub android_fleet_status: Option<AndroidFleetStatus>,
 }
 
 /// A device group — a named bucket of devices within an org (F4). Membership is
@@ -2256,6 +2274,31 @@ mod tests {
         assert_eq!(
             hex,
             "7b22616374696f6e5f636c617373223a2273616665222c22636174616c6f675f6964223a227374617475732e72656164222c22636f6d6d616e645f6964223a22636d642d616263222c226465766963655f6964223a226465762d78797a222c2265706f63685f76657273696f6e223a332c227061796c6f6164223a7b7d7d"
+        );
+    }
+
+    #[test]
+    fn golden_set_posture_policy_command_bytes() {
+        let payload = serde_json::json!({
+            "posture_epoch": 3,
+            "cut_camera": false,
+            "cut_mic": false,
+            "cut_gps": true,
+            "cut_sim": false,
+            "reboot_timeout_ms": 900000,
+        });
+        let bytes = canonical_command_bytes(
+            "posture-policy-3",
+            "android-dev-1",
+            "set_posture_policy",
+            ActionClass::Safe.as_wire_str(),
+            &payload,
+            12,
+        );
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "7b22616374696f6e5f636c617373223a2273616665222c22636174616c6f675f6964223a227365745f706f73747572655f706f6c696379222c22636f6d6d616e645f6964223a22706f73747572652d706f6c6963792d33222c226465766963655f6964223a22616e64726f69642d6465762d31222c2265706f63685f76657273696f6e223a31322c227061796c6f6164223a7b226375745f63616d657261223a66616c73652c226375745f677073223a747275652c226375745f6d6963223a66616c73652c226375745f73696d223a66616c73652c22706f73747572655f65706f6368223a332c227265626f6f745f74696d656f75745f6d73223a3930303030307d7d"
         );
     }
 

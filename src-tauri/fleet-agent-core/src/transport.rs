@@ -228,12 +228,12 @@ pub async fn enroll(
     let url = format!("{}/v1/agents/enroll", config.url);
     let resp: EnrollResponse = fleet_post(client, &url, &config.enroll_token, &req).await?;
 
-    // Dual-key pinning: pin the OPERATOR key (duress commands) and the SERVER
-    // signing key (ordinary commands) independently. Each is pinned on first
+    // Dual-key pinning: pin the OPERATOR key (operator-control commands) and the
+    // SERVER signing key (ordinary commands) independently. Each is pinned on first
     // sight and a silent change on re-enroll is REFUSED (only a verified
     // `rotate_key` may change a key). The operator key may legitimately be
-    // absent (`None`) until the org configures it — a duress-only agent then
-    // simply can't verify duress commands yet (fail-closed at dispatch).
+    // absent (`None`) until the org configures it — an operator-control-only
+    // agent then can't verify those commands yet (fail-closed at dispatch).
     {
         let mut state = fleet_state.lock().unwrap();
         if let Some(ref op_key) = resp.command_pubkey_b64 {
@@ -457,11 +457,11 @@ pub async fn run_checkin_cycle_inner(
         return true;
     }
 
-    // 4. Process commands (dual-key): duress commands verify against the
-    //    OPERATOR key (the provisioned `config.cmd_pubkey`), ordinary
+    // 4. Process commands (dual-key): operator-control commands verify against
+    //    the OPERATOR key (the provisioned `config.cmd_pubkey`), ordinary
     //    server-signed commands against the SERVER key (pinned at enroll). The
     //    catalog→key routing (`fleet_proto::is_duress_catalog`) is fixed and
-    //    local, so the server can never forge a duress command and an
+    //    local, so the server can never forge an operator command and an
     //    operator-signed blob can't masquerade as an ordinary one.
     let operator_key = config.cmd_pubkey;
     let server_key = {

@@ -28,6 +28,11 @@ export type AdminRole = "viewer" | "operator" | "admin" | "super_admin";
 export type AdminView = { email: string, role: AdminRole, };
 
 /**
+ * Latest framework-authoritative Android status exposed to fleet operators.
+ */
+export type AndroidFleetStatus = { framework_key_fingerprint: string, deadman_ladder_step: number, authoritative_last_contact_age_seconds: bigint, audit_ledger_count: bigint, audit_ledger_head_hash: string, reported_at: string, };
+
+/**
  * Per-(kind) breakdown within a device's Argus rollup — a severity-aware,
  * unit-consistent bucket. Every signal in a bucket shares one `kind`, so their
  * `magnitude` is commensurable (bytes with bytes, pages with pages) — unlike
@@ -358,11 +363,6 @@ sampled_at: string, };
 /**
  * A device as shown in the admin panel's fleet view. `online` is computed by
  * the server from `last_seen` against a freshness window.
- *
- * NOTE: dropped the `Eq` derive when `resources` was added — `f32`/`f64`
- * inside `DeviceResourceSample` aren't `Eq`. No caller relied on
- * `DeviceSummary: Eq` (checked: every test compares individual fields after
- * deserializing, never whole-struct equality or a `HashSet`/`BTreeSet`).
  */
 export type DeviceSummary = { device_id: DeviceId, device_hash: string, hostname: string | null, os_version: string | null, agent_version: string, enrolled_at: string, last_seen_at: string | null, online: boolean,
 /**
@@ -374,7 +374,11 @@ group_id: string | null,
  * reported one. `None` for a device on an agent build predating this
  * field, or one that simply hasn't checked in yet.
  */
-resources: DeviceResourceSample | null, };
+resources: DeviceResourceSample | null,
+/**
+ * Framework-authoritative Android fleet state from the latest check-in.
+ */
+android_fleet_status: AndroidFleetStatus | null, };
 
 /**
  * One local drive/volume's capacity, sampled by the agent's existing

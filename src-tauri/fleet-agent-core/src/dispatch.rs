@@ -249,16 +249,24 @@ pub fn process_checkin(
     evict_stale_nonces(seen_nonces, now, max_skew_secs);
 
     for cmd in &response.commands {
-        // Dual-key routing (fixed, local — never client/server-supplied): a
-        // DURESS command must be signed by the operator key; every other
-        // command by the server signing key. A missing required key is a
+        // Dual-key routing (fixed, local — never client/server-supplied): an
+        // operator-control command must use the operator key; every other
+        // command uses the server signing key. A missing required key is a
         // fail-closed reject, never a fallback to the other key.
-        let is_duress = fleet_proto::is_duress_catalog(&cmd.catalog_id);
-        let selected = if is_duress { operator_key } else { server_key };
+        let is_operator_command = fleet_proto::is_duress_catalog(&cmd.catalog_id);
+        let selected = if is_operator_command {
+            operator_key
+        } else {
+            server_key
+        };
         let verify = match selected {
             None => Err(format!(
                 "no pinned {} key for command '{}'",
-                if is_duress { "operator" } else { "server" },
+                if is_operator_command {
+                    "operator"
+                } else {
+                    "server"
+                },
                 cmd.catalog_id
             )),
             Some(k) => verify_command(cmd, k, now, max_skew_secs, seen_nonces),
@@ -271,8 +279,8 @@ pub fn process_checkin(
             Ok(()) => {
                 dispatch.record_trigger_source(FLEET_TRIGGER_SOURCE, crate::util::now_rfc3339());
                 // The server's `fleet_proto::SignedCommand` carries no `scope`
-                // field; for duress commands `scope == catalog_id`, so fall back
-                // to it when `scope` is absent/empty (the real server case).
+                // field; for operator commands `scope == catalog_id`, so fall
+                // back to it when `scope` is absent/empty (the real server case).
                 let scope = if cmd.scope.is_empty() {
                     cmd.catalog_id.as_str()
                 } else {
@@ -310,9 +318,10 @@ pub fn process_checkin(
                     }
                     other => {
                         // A verified ordinary (server-signed) command routes by
-                        // catalog_id to the platform's open catalog. A duress-only
-                        // agent's default `dispatch_catalog` no-ops it.
-                        if !is_duress
+                        // catalog_id to the platform's open catalog. An
+                        // operator-control-only agent's default
+                        // `dispatch_catalog` no-ops it.
+                        if !is_operator_command
                             && dispatch.dispatch_catalog(
                                 &cmd.catalog_id,
                                 &cmd.action_class,
@@ -586,10 +595,11 @@ pub(crate) mod tests {
         );
     }
 
-    /// Security: dual-key routing is fixed and local. A DURESS command verifies
-    /// ONLY against the operator key (never the server key), and an ordinary
-    /// command ONLY against the server key — so the server can't forge a duress
-    /// command and an operator-signed blob can't masquerade as ordinary.
+    /// Security: dual-key routing is fixed and local. An operator-control
+    /// command verifies ONLY against the operator key (never the server key),
+    /// and an ordinary command ONLY against the server key — so the server
+    /// can't forge an operator command and an operator-signed blob can't
+    /// masquerade as ordinary.
     #[test]
     fn dual_key_routing_rejects_wrong_key_class() {
         let op = test_signing_key();
@@ -598,7 +608,7 @@ pub(crate) mod tests {
         let srv_vk = srv.verifying_key();
         let now = 1_700_000_000_i64;
 
-        // Duress command, operator-signed.
+        // Operator-control command, operator-signed.
         let duress = make_signed_command(
             &op,
             "duress_seal",
@@ -624,7 +634,7 @@ pub(crate) mod tests {
         let mut seen = HashMap::new();
         process_checkin(&resp, Some(&op_vk), Some(&srv_vk), now, 300, &mut seen, &d);
         assert_eq!(*d.seal_calls.lock().unwrap(), 1);
-        // ONLY the server key pinned → duress must be rejected (no fallback).
+        // ONLY the server key pinned → operator command rejected (no fallback).
         let d2 = MockDispatch::default();
         let mut seen2 = HashMap::new();
         let out = process_checkin(&resp, None, Some(&srv_vk), now, 300, &mut seen2, &d2);
