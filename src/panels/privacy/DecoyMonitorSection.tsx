@@ -206,8 +206,6 @@ export default function DecoyMonitorSection({
 
   // Status pill states: idle / watching / triggered (any recent events).
   const hasRecentTrip = recent.length > 0;
-  const hasUnattributedRead = recent.some((event) =>
-    event.kind === "read" && (!event.user_name || !event.process_name));
   let statusPill: React.ReactNode = null;
   if (enabled && hasRecentTrip) {
     statusPill = (
@@ -396,11 +394,6 @@ export default function DecoyMonitorSection({
                       </Button>
                     </div>
                     <PrivacyEventTable title="Decoy file access events" columns={["Time", "Kind", "User", "Process", "Decoy path"]} rows={recent.map((r, i) => ({ id: `${r.detected_at}-${i}`, search: `${r.kind} ${r.path} ${r.user_name ?? ""} ${r.process_name ?? ""}`, sort: [r.detected_at, r.kind, r.user_name ?? "", r.process_name ?? "", r.path], cells: [formatRelative(r.detected_at), r.kind, r.user_name ? <span title={`${r.domain ?? ""}\\${r.user_name}${r.sid ? ` · ${r.sid}` : ""}`}>{r.domain ? `${r.domain}\\${r.user_name}` : r.user_name}{r.is_administrator ? " · Admin" : ""}</span> : "—", r.process_name ? <span className="font-mono" title={r.process_name}>{shortPath(r.process_name)}</span> : "—", <span className="font-mono" title={r.path}>{shortPath(r.path)}</span>] }))} />
-                    {hasUnattributedRead && (
-                      <p className="text-[10px] text-[var(--color-warning)]">
-                        Read was detected, but Windows did not provide an actor or process. Restart WinCommander as administrator to enable Security-audit attribution for future reads.
-                      </p>
-                    )}
                   </div>
                 )}
               </div>

@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Instant;
 
 use notify::event::ModifyKind;
 use notify::{Event, EventKind};
@@ -79,14 +79,6 @@ static READ_AUDIT_TASK: Lazy<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>
 static SEEN_AUDIT_RECORDS: Lazy<Mutex<VecDeque<String>>> =
     Lazy::new(|| Mutex::new(VecDeque::with_capacity(128)));
 static AUDITED_DECOYS: Lazy<Mutex<HashSet<PathBuf>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-/// Last-access time baseline per enrolled decoy. This is a local fallback for
-/// read/open detection on NTFS volumes where last-access updates are enabled.
-/// Security event 4663 remains the authoritative source for actor/process
-/// details when the process has the privilege to read the Security log.
-static ATIME_BASELINES: Lazy<Mutex<HashMap<PathBuf, SystemTime>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-static ATIME_POLL_TASK: Lazy<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> =
-    Lazy::new(|| Mutex::new(None));
 /// The Security event-record cursor is monotonic within the active log. It
 /// prevents a busy host from losing a decoy read behind the old 64-event poll
 /// window and avoids replaying historical records on every poll.
@@ -94,9 +86,6 @@ static LAST_AUDIT_RECORD_ID: AtomicU64 = AtomicU64::new(0);
 
 const RECENT_CAP: usize = 10;
 const DEBOUNCE_MS: u128 = 2000;
-/// Statting the small enrolled set is inexpensive and gives a prompt fallback
-/// alert on hosts which deliberately enable NTFS access timestamps.
-const ATIME_POLL_INTERVAL_SECS: u64 = 2;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DecoyAccessEvent {
@@ -241,67 +230,6 @@ fn fire_decoy_event(app: &AppHandle, path: &Path, kind: &str) {
     );
 }
 
-// ── NTFS last-access fallback ──────────────────────────────────────
-//
-// The Windows Security log provides the best read evidence (including user and
-// process), but querying it requires elevation. A standard development launch
-// cannot install/read that audit path. When NTFS access-time updates are already
-// enabled, metadata polling restores immediate local open/read notifications
-// without broadening the watched scope or inspecting any file content.
-
-fn capture_atime_baseline(path: &Path) {
-    if let Ok(atime) = std::fs::metadata(path).and_then(|metadata| metadata.accessed()) {
-        ATIME_BASELINES
-            .lock()
-            .unwrap()
-            .insert(path.to_path_buf(), atime);
-    }
-}
-
-fn poll_atimes(app: &AppHandle) {
-    let watched: Vec<PathBuf> = WATCHED_DECOYS.lock().unwrap().iter().cloned().collect();
-    for path in watched {
-        let Ok(atime) = std::fs::metadata(&path).and_then(|metadata| metadata.accessed()) else {
-            continue;
-        };
-        let previous = ATIME_BASELINES.lock().unwrap().get(&path).copied();
-        match previous {
-            None => capture_atime_baseline(&path),
-            Some(previous) if atime > previous => {
-                ATIME_BASELINES.lock().unwrap().insert(path.clone(), atime);
-                let mut last_fires = LAST_FIRE.lock().unwrap();
-                let now = Instant::now();
-                if last_fires.get(&path).is_some_and(|previous_fire| {
-                    now.duration_since(*previous_fire).as_millis() < DEBOUNCE_MS
-                }) {
-                    continue;
-                }
-                last_fires.insert(path.clone(), now);
-                drop(last_fires);
-                // Fleet owns a closed event vocabulary; an inferred local open
-                // is reported as the same read class as Security event 4663.
-                fire_decoy_event(app, &path, "read");
-            }
-            Some(_) => {}
-        }
-    }
-}
-
-fn start_atime_fallback(app: AppHandle) {
-    let mut task = ATIME_POLL_TASK.lock().unwrap();
-    if task.is_some() {
-        return;
-    }
-    *task = Some(tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(ATIME_POLL_INTERVAL_SECS));
-        interval.tick().await;
-        while RUNNING.load(Ordering::SeqCst) {
-            interval.tick().await;
-            poll_atimes(&app);
-        }
-    }));
-}
-
 /// Send the administrator-enabled Fleet alert with the exact decoy event
 /// context. Optional actor/process fields are omitted when the non-elevated
 /// NTFS timestamp fallback was the detector, rather than inventing an owner.
@@ -416,17 +344,9 @@ pub async fn start_decoy_monitor(app: AppHandle) -> Result<(), String> {
 
     *APP_HANDLE.lock().unwrap() = Some(app.clone());
 
-    match get_last_access_tracking_status().await {
-        Ok(status) if status.enabled => start_atime_fallback(app.clone()),
-        Ok(_) => crate::log_message(
-            "warn",
-            "[HoneypotMonitor] NTFS last-access fallback unavailable; Security Log auditing is required for read/open alerts",
-        ),
-        Err(error) => crate::log_message(
-            "warn",
-            &format!("[HoneypotMonitor] couldn't query NTFS last-access tracking: {error}"),
-        ),
-    }
+    // A file access timestamp is only metadata, not proof of a content read.
+    // Do not turn it into a security notification. Read/open alerts are
+    // emitted solely from a matching Windows Security event 4663 below.
 
     // Spawn a consumer task for every pre-enrolled directory. Settings
     // restore + this command order means decoys may already be enrolled
@@ -454,9 +374,6 @@ pub async fn stop_decoy_monitor() -> Result<(), String> {
     RUNNING.store(false, Ordering::SeqCst);
     READ_AUDIT_ENABLED.store(false, Ordering::SeqCst);
     if let Some(task) = READ_AUDIT_TASK.lock().unwrap().take() {
-        task.abort();
-    }
-    if let Some(task) = ATIME_POLL_TASK.lock().unwrap().take() {
         task.abort();
     }
     remove_read_audit_rules();
@@ -491,7 +408,6 @@ pub async fn enroll_decoy(path: String) -> Result<(), String> {
         ));
     }
     WATCHED_DECOYS.lock().unwrap().insert(pb.clone());
-    capture_atime_baseline(&pb);
     ensure_dir_watched(&parent)?;
     if READ_AUDIT_ENABLED.load(Ordering::SeqCst) && pb.exists() {
         add_read_audit_rule(&pb)?;
@@ -513,7 +429,6 @@ pub async fn remove_decoy(path: String) -> Result<(), String> {
     };
     WATCHED_DECOYS.lock().unwrap().remove(&enrolled);
     LAST_FIRE.lock().unwrap().remove(&enrolled);
-    ATIME_BASELINES.lock().unwrap().remove(&enrolled);
     if AUDITED_DECOYS.lock().unwrap().remove(&enrolled) && enrolled.exists() {
         set_read_audit_rule(&enrolled, false)?;
     }
@@ -673,9 +588,9 @@ fn enable_file_system_auditing() -> Result<(), String> {
 fn set_read_audit_rule(path: &Path, add: bool) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     let script = if add {
-        "$a=Get-Acl -LiteralPath $env:WINCOMMANDER_DECOY_AUDIT_PATH;$rights=[System.Security.AccessControl.FileSystemRights]::Read;$r=[System.Security.AccessControl.FileSystemAuditRule]::new('S-1-1-0',$rights,[System.Security.AccessControl.AuditFlags]::Success);$a.AddAuditRule($r);Set-Acl -LiteralPath $env:WINCOMMANDER_DECOY_AUDIT_PATH -AclObject $a"
+        "$a=Get-Acl -LiteralPath $env:WINCOMMANDER_DECOY_AUDIT_PATH;$rights=[System.Security.AccessControl.FileSystemRights]::ReadData;$r=[System.Security.AccessControl.FileSystemAuditRule]::new('S-1-1-0',$rights,[System.Security.AccessControl.AuditFlags]::Success);$a.AddAuditRule($r);Set-Acl -LiteralPath $env:WINCOMMANDER_DECOY_AUDIT_PATH -AclObject $a"
     } else {
-        "$a=Get-Acl -LiteralPath $env:WINCOMMANDER_DECOY_AUDIT_PATH;$rights=[System.Security.AccessControl.FileSystemRights]::Read;$r=[System.Security.AccessControl.FileSystemAuditRule]::new('S-1-1-0',$rights,[System.Security.AccessControl.AuditFlags]::Success);$a.RemoveAuditRuleAll($r);Set-Acl -LiteralPath $env:WINCOMMANDER_DECOY_AUDIT_PATH -AclObject $a"
+        "$a=Get-Acl -LiteralPath $env:WINCOMMANDER_DECOY_AUDIT_PATH;$rights=[System.Security.AccessControl.FileSystemRights]::ReadData;$r=[System.Security.AccessControl.FileSystemAuditRule]::new('S-1-1-0',$rights,[System.Security.AccessControl.AuditFlags]::Success);$a.RemoveAuditRuleAll($r);Set-Acl -LiteralPath $env:WINCOMMANDER_DECOY_AUDIT_PATH -AclObject $a"
     };
     let output = Command::new("powershell.exe")
         .args([
@@ -755,6 +670,20 @@ struct SecurityReadEvent {
     detected_at: String,
 }
 
+/// Event 4663 is also emitted for attribute and permission checks. Those do
+/// not prove that the decoy's contents were read. `ReadData` is bit 0x1 for a
+/// file object, so accept a record only when that bit is present.
+fn security_event_has_read_data(event: &str) -> bool {
+    let raw = xml_field(event, "AccessMask");
+    let value = raw
+        .trim()
+        .strip_prefix("0x")
+        .or_else(|| raw.trim().strip_prefix("0X"))
+        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+        .or_else(|| raw.trim().parse::<u32>().ok());
+    value.is_some_and(|mask| mask & 0x1 != 0)
+}
+
 fn xml_field(xml: &str, field: &str) -> String {
     let pattern = format!(
         r#"<Data Name=['\"]{}['\"]>(.*?)</Data>"#,
@@ -783,7 +712,7 @@ fn parse_security_reads(xml: &str) -> Vec<SecurityReadEvent> {
         .filter_map(|m| {
             let event = m.as_str();
             let path = xml_field(event, "ObjectName");
-            if path.is_empty() {
+            if path.is_empty() || !security_event_has_read_data(event) {
                 return None;
             }
             Some(SecurityReadEvent {
@@ -804,6 +733,25 @@ fn parse_security_reads(xml: &str) -> Vec<SecurityReadEvent> {
             })
         })
         .collect()
+}
+
+/// Advance the Security-log cursor over every 4663 record we scanned, not
+/// only over confirmed `ReadData` rows. Attribute-only records are deliberately
+/// ignored as tripwires, but leaving the cursor behind them eventually makes a
+/// busy Security log push genuine decoy reads out of the bounded query window.
+fn highest_security_record_id(xml: &str) -> Option<u64> {
+    let event_re = regex::Regex::new(r"(?s)<Event[^>]*>.*?</Event>").expect("valid event regex");
+    let record_re =
+        regex::Regex::new(r"<EventRecordID>([^<]+)</EventRecordID>").expect("valid record regex");
+    event_re
+        .find_iter(xml)
+        .filter_map(|event| {
+            record_re
+                .captures(event.as_str())
+                .and_then(|captures| captures.get(1))
+                .and_then(|id| id.as_str().parse::<u64>().ok())
+        })
+        .max()
 }
 
 fn remember_audit_record(record_id: &str) -> bool {
@@ -851,11 +799,7 @@ fn poll_security_log(app: &AppHandle) {
     };
     let watched = WATCHED_DECOYS.lock().unwrap().clone();
     let events = parse_security_reads(&xml);
-    let highest_record_id = events
-        .iter()
-        .filter_map(|event| event.record_id.parse::<u64>().ok())
-        .max()
-        .unwrap_or(floor);
+    let highest_record_id = highest_security_record_id(&xml).unwrap_or(floor);
     for event in events {
         let matching_path = watched
             .iter()
@@ -928,11 +872,7 @@ fn prime_security_log_cursor() {
     ) else {
         return;
     };
-    if let Some(record_id) = parse_security_reads(&xml)
-        .into_iter()
-        .filter_map(|event| event.record_id.parse::<u64>().ok())
-        .max()
-    {
+    if let Some(record_id) = highest_security_record_id(&xml) {
         LAST_AUDIT_RECORD_ID.store(record_id, Ordering::SeqCst);
     }
 }
@@ -1211,7 +1151,7 @@ mod tests {
     fn parses_security_read_record_with_actor_and_process() {
         let xml = r#"
 <Events><Event><System><EventRecordID>42</EventRecordID><TimeCreated SystemTime="2026-08-12T12:00:00Z"/></System><EventData>
-<Data Name="ObjectName">C:\Users\Admin\Desktop\decoy.txt</Data><Data Name="SubjectUserName">Admin</Data><Data Name="SubjectDomainName">WORKGROUP</Data><Data Name="SubjectUserSid">S-1-5-21-1</Data><Data Name="ProcessName">C:\Windows\notepad.exe</Data>
+<Data Name="ObjectName">C:\Users\Admin\Desktop\decoy.txt</Data><Data Name="AccessMask">0x1</Data><Data Name="SubjectUserName">Admin</Data><Data Name="SubjectDomainName">WORKGROUP</Data><Data Name="SubjectUserSid">S-1-5-21-1</Data><Data Name="ProcessName">C:\Windows\notepad.exe</Data>
 </EventData></Event></Events>"#;
 
         let events = parse_security_reads(xml);
@@ -1264,11 +1204,29 @@ mod tests {
 
     #[test]
     fn parses_4663_read_identity_without_file_contents() {
-        let xml = r#"<Event><System><EventRecordID>41</EventRecordID><TimeCreated SystemTime='2026-08-11T08:00:00Z'/></System><EventData><Data Name='SubjectUserSid'>S-1-5-21-1</Data><Data Name='SubjectUserName'>alex</Data><Data Name='SubjectDomainName'>DESKTOP</Data><Data Name='ObjectName'>C:\Users\alex\Desktop\notes.txt</Data><Data Name='ProcessName'>C:\Windows\notepad.exe</Data></EventData></Event>"#;
+        let xml = r#"<Event><System><EventRecordID>41</EventRecordID><TimeCreated SystemTime='2026-08-11T08:00:00Z'/></System><EventData><Data Name='SubjectUserSid'>S-1-5-21-1</Data><Data Name='SubjectUserName'>alex</Data><Data Name='SubjectDomainName'>DESKTOP</Data><Data Name='ObjectName'>C:\Users\alex\Desktop\notes.txt</Data><Data Name='AccessMask'>0x1</Data><Data Name='ProcessName'>C:\Windows\notepad.exe</Data></EventData></Event>"#;
         let events = parse_security_reads(xml);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].record_id, "41");
         assert_eq!(events[0].user_name, "alex");
         assert_eq!(events[0].process_name, "C:\\Windows\\notepad.exe");
+    }
+
+    #[test]
+    fn ignores_4663_records_without_content_read_access() {
+        let xml = r#"<Event><System><EventRecordID>42</EventRecordID></System><EventData><Data Name='ObjectName'>C:\Users\alex\Desktop\notes.txt</Data><Data Name='AccessMask'>0x80</Data></EventData></Event>"#;
+        assert!(parse_security_reads(xml).is_empty());
+        assert!(security_event_has_read_data(
+            "<Data Name='AccessMask'>0x1</Data>"
+        ));
+    }
+
+    #[test]
+    fn advances_audit_cursor_past_non_read_records() {
+        let xml = r#"<Events>
+<Event><System><EventRecordID>42</EventRecordID></System><EventData><Data Name='AccessMask'>0x80</Data></EventData></Event>
+<Event><System><EventRecordID>43</EventRecordID></System><EventData><Data Name='AccessMask'>0x1</Data></EventData></Event>
+</Events>"#;
+        assert_eq!(highest_security_record_id(xml), Some(43));
     }
 }
