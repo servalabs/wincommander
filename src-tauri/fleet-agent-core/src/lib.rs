@@ -64,9 +64,10 @@ pub use state::{
     SecretStore, SharedFleetState,
 };
 pub use verify::{
-    compute_checkin_hmac, decode_verifying_key, evict_stale_nonces, verify_command, CheckinRequest,
-    CheckinResponse, EnrollRequest, EnrollResponse, PendingSearchJob, SearchHit,
-    SearchResultReport, SignedCommand,
+    compute_checkin_hmac, compute_request_hmac_v2, decode_verifying_key, evict_stale_nonces,
+    request_hmac_preimage_v2, verify_command, CheckinRequest, CheckinResponse, EnrollRequest,
+    EnrollResponse, PendingSearchJob, SearchHit, SearchResultReport, SignedCommand,
+    ENROLL_PROTOCOL_VERSION, HMAC_BODY_V2_CAPABILITY, HMAC_VERSION_V2,
 };
 
 #[cfg(feature = "transport")]

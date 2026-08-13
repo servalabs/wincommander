@@ -12,6 +12,11 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **Fleet device summaries now carry `device_kind`** (2026-08-13), allowing
+  the server and console to distinguish Windows, Linux, and Android agents
+  without inferring from host metadata. The additive field defaults safely
+  when an older cached response is decoded.
+
 - **Shared fleet protocol contracts for governed security collection**
   (2026-08-12). The catalog now includes the bounded, parameter-free
   `endpoint.security_snapshot` action and the fixed
@@ -22,11 +27,23 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Fixed
 
+- **Fleet device requests now bind the complete payload to HMAC v2**
+  (2026-08-13). The shared agent core signs the HTTP method, exact route path,
+  and recursively canonicalized JSON body (excluding only `hmac`), preventing
+  authenticated envelopes from being reused with mutated decoy, telemetry,
+  search-result, or command-ack fields. Enrollment advertises
+  `hmac_body_v2`; cross-language golden vectors pin string escaping and exact
+  plain-decimal number normalization.
+
 - **Restored the commander-free workspace manifest** (2026-08-12) by removing
   a stray delimiter that prevented Cargo from parsing the workspace during
   protocol type generation and validation.
 
 ### Changed
+
+- Corrected stale Fleet/monitoring documentation that described retired
+  consent handlers and a nonexistent 403 disclosure-version gate, and marked
+  the now-complete cross-device content-search path as shipped.
 
 - **Lockdown can now target VeraCrypt whole-partition volumes safely**
   (2026-08-11). Secret Settings lists eligible non-system partitions alongside

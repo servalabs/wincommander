@@ -1363,6 +1363,10 @@ pub struct AndroidFleetStatus {
 pub struct DeviceSummary {
     pub device_id: DeviceId,
     pub device_hash: String,
+    /// Enrolled agent class (`wincommander`, `tuxcommander`, or `android`).
+    /// Additive/defaulted so older cached API responses still deserialize.
+    #[serde(default)]
+    pub device_kind: String,
     pub hostname: Option<String>,
     pub os_version: Option<String>,
     pub agent_version: String,
@@ -2402,5 +2406,27 @@ mod tests {
             hex,
             "00000000000000057b226465766963655f6964223a226465762d616263222c22696e74656e7473223a5b7b226b6579223a22666c6565742e656e61626c6564222c226d6f6465223a226865616c222c2274746c5f73656373223a333630302c2276616c7565223a747275657d2c7b226b6579223a22707269766163792e74656c656d65747279222c226d6f6465223a22686172642d6c6f636b222c2276616c7565223a66616c73657d5d2c226f72675f6964223a226f72672d74657374222c2276657273696f6e223a357d"
         );
+    }
+
+    #[test]
+    fn device_summary_device_kind_is_additive_and_defaulted() {
+        let legacy = serde_json::json!({
+            "device_id": "dev-1",
+            "device_hash": "hash-1",
+            "hostname": null,
+            "os_version": null,
+            "agent_version": "1.0.0",
+            "enrolled_at": "2026-08-13T00:00:00Z",
+            "last_seen_at": null,
+            "online": false,
+            "group_id": null
+        });
+        let summary: DeviceSummary = serde_json::from_value(legacy).unwrap();
+        assert_eq!(summary.device_kind, "");
+
+        let mut current = serde_json::to_value(summary).unwrap();
+        current["device_kind"] = serde_json::json!("android");
+        let summary: DeviceSummary = serde_json::from_value(current).unwrap();
+        assert_eq!(summary.device_kind, "android");
     }
 }
