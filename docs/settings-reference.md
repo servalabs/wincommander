@@ -145,6 +145,7 @@ part of system state. Notable groups (see the struct for the complete list):
 - **Display/UX:** `theme`, `experienceLevel`, `density`, `sidebarCollapsed`, `lastPanel`, `dashboardViewMode`, `dashboardOpenCards`.
   - `dashboardViewMode` persists the requested Home center view (`map`, `risk`, or `products`), but the frontend resolves an `effectiveViewMode` before render. If Risk Matrix lacks its paid entitlement, or either view is disabled or hidden by Borrowed Mode, the visible view falls back to `map` and the setting is rewritten accordingly.
 - **Setup:** `firstRunComplete`, `firstRun.selectedBlocklists`.
+- **Cleanup:** `bulkClearExcludes` — categories the current Windows user keeps out of bulk clear. It survives app relaunches and normal reinstalls; resetting settings restores the protective defaults.
 - **Hotkeys:** `panicHotkey`, `searchHotkey`.
 - **Self-update:** `autoUpdate` (updates *WinCommander itself* — distinct from `ideal.apps.autoUpdate`, the winget installed-apps policy), `disableUpdates`. It defaults to `true`. When enabled, a verified Free release installs and WinCommander relaunches without an update dialog; an already-approved Pro sidecar is updated in the same background flow. The first Pro install still requires its explicit Defender-exclusion approval. When disabled, the Versions & Updates dialog remains the review-and-confirm path.
 - **Concealment:** `hideNotificationBell`, `hiddenSidebarActions`, `permanentlyHiddenPanels`, `borrowedHidden`, `hideLicensePanel`, `lockedPanelIds`, `unlockKeyword`/`lockKeyword`, `lockPanelOnClose`.

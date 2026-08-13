@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { showSuccess, showError } from "../../utils/toast";
 import useBackend from "../../hooks/useBackend";
+import { usePatchSettings, useSettingsQuery } from "../../hooks/queries/useSettingsQuery";
 import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
@@ -86,6 +87,12 @@ const HIDDEN_PROFILE_FRAGMENTS = [
     "wdagutilityaccount",
 ];
 
+const DEFAULT_BULK_CLEAR_EXCLUDES = [
+    'wlanProfiles', 'browserFootprints', 'notepadState', 'wslData',
+    'dockerDesktopData', 'virtualMachineArtifacts', 'developerCaches',
+    'credentialManager', 'sshState', 'passwordManagerCaches',
+];
+
 function isRealVisibleProfile(profile: { name?: string; displayName?: string; path?: string }): boolean {
     const name = (profile.name ?? "").trim();
     if (!name) return false;
@@ -125,6 +132,8 @@ interface CleanupScanOptions {
 export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationEnabled }: CleanupScanOptions) {
     const requestConfirm = useAppConfirm();
     const backend = useBackend();
+    const { data: settings } = useSettingsQuery();
+    const { mutate: persistSettings } = usePatchSettings();
     const {
         clearPowerShellHistory,
         clearJumpLists,
@@ -220,20 +229,35 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         error,
     } = backend;
 
-    // Exclusions apply to every bulk cleanup scope. They let an operator keep
-    // a category out of a universal sweep without making that card unavailable.
-    // wlanProfiles (Wi-Fi Profiles) and browserFootprints (Browser Audit) are
-    // pre-excluded every session so a new user can't lose saved Wi-Fi
-    // passwords or browsing footprints to a one-click sweep before they've
-    // seen the exclude picker — still removable from the set via that picker.
+    // Exclusions apply to every bulk cleanup scope. Their persisted settings
+    // are scoped to the current Windows user; defaults protect sensitive data
+    // until that user makes their first change.
     const [clearAllExcludes, setClearAllExcludesRaw] = useState<Set<string>>(
-        () => new Set([
-            'wlanProfiles', 'browserFootprints', 'notepadState', 'wslData',
-            'dockerDesktopData', 'virtualMachineArtifacts', 'developerCaches',
-            'credentialManager', 'sshState', 'passwordManagerCaches',
-        ])
+        () => new Set(DEFAULT_BULK_CLEAR_EXCLUDES)
     );
-    const setClearAllExcludes = setClearAllExcludesRaw;
+    const hasChangedExclusions = useRef(false);
+
+    useEffect(() => {
+        if (hasChangedExclusions.current || !settings) return;
+        setClearAllExcludesRaw(
+            new Set(settings.app.bulkClearExcludes ?? DEFAULT_BULK_CLEAR_EXCLUDES),
+        );
+    }, [settings]);
+
+    useEffect(() => {
+        if (!hasChangedExclusions.current) return;
+        persistSettings(
+            { app: { bulkClearExcludes: Array.from(clearAllExcludes) } },
+            { onError: () => showError("Couldn't save bulk-clear exclusions.") },
+        );
+    }, [clearAllExcludes, persistSettings]);
+
+    const setClearAllExcludes: React.Dispatch<React.SetStateAction<Set<string>>> = (update) => {
+        hasChangedExclusions.current = true;
+        setClearAllExcludesRaw((previous) => {
+            return new Set(typeof update === "function" ? update(previous) : update);
+        });
+    };
 
     // ── Multi-user viewer state ────────────────────────────────────────
     // The panel views exactly ONE user at a time. `availableUsers` lists every

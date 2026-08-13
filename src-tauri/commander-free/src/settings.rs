@@ -260,9 +260,11 @@ pub struct AppPreferences {
     pub safe_copy_context_menu_enabled: bool,
     #[serde(default)]
     pub sidebar_collapsed: bool,
-    /// True once the user has explicitly touched the Cleanup "Clear All
-    /// Traces" exclude list. Until then the frontend pre-excludes Wi-Fi
-    /// Profiles + Browser Audit by default every session.
+    /// Categories the current Windows user has excluded from Cleanup's
+    /// bulk-clear action. Persisted with the rest of per-user app settings.
+    #[serde(default = "default_bulk_clear_excludes")]
+    pub bulk_clear_excludes: Vec<String>,
+    /// Deprecated compatibility field. Superseded by `bulk_clear_excludes`.
     #[serde(default)]
     pub cleanup_excludes_customized: bool,
     #[serde(default = "default_last_panel")]
@@ -632,6 +634,24 @@ fn default_advisor_model() -> String {
     "qwen3.5:4b".to_string()
 }
 
+fn default_bulk_clear_excludes() -> Vec<String> {
+    [
+        "wlanProfiles",
+        "browserFootprints",
+        "notepadState",
+        "wslData",
+        "dockerDesktopData",
+        "virtualMachineArtifacts",
+        "developerCaches",
+        "credentialManager",
+        "sshState",
+        "passwordManagerCaches",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
 impl Default for AdvisorSettings {
     fn default() -> Self {
         Self {
@@ -652,6 +672,7 @@ impl Default for AppPreferences {
             scrub_context_menu_enabled: false,
             safe_copy_context_menu_enabled: false,
             sidebar_collapsed: false,
+            bulk_clear_excludes: default_bulk_clear_excludes(),
             cleanup_excludes_customized: false,
             last_panel: default_last_panel(),
             dashboard_view_mode: default_dashboard_view_mode(),

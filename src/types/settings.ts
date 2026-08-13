@@ -176,14 +176,12 @@ export interface AppPreferences {
   scrubContextMenuEnabled: boolean;
   safeCopyContextMenuEnabled: boolean;
   sidebarCollapsed: boolean;
-  /** @deprecated Unread by the frontend. Wi-Fi Profiles and Browser Audit
-   *  being pre-excluded from the Cleanup bulk-clear exclude list is now
-   *  seeded unconditionally into `clearAllExcludes`'s initial state in
-   *  useCleanupScan.ts (in-memory only, re-applied every session; users can
-   *  still remove either from the set via the exclude picker) — there is no
-   *  "not yet customized" state to persist. Kept in the schema only because
-   *  settings.rs still writes/reads this field; not consulted by any
-   *  frontend code. */
+  /** Categories this Windows user has excluded from Cleanup's bulk-clear
+   *  action. Stored in the per-user settings file, so it survives relaunches
+   *  and normal reinstalls; resetting settings restores the defaults. */
+  bulkClearExcludes?: string[];
+  /** @deprecated Superseded by `bulkClearExcludes`. Kept only so existing
+   *  settings files remain compatible. */
   cleanupExcludesCustomized?: boolean;
   lastPanel: string;
   dashboardViewMode: string;
