@@ -1206,7 +1206,7 @@ mod tests {
             .iter()
             .filter(|entry| entry.transport == Transport::Tauri)
             .collect();
-        assert_eq!(tauri_commands.len(), 420);
+        assert_eq!(tauri_commands.len(), 421);
         assert!(tauri_commands.iter().all(|entry| entry.registered));
         assert_eq!(
             tauri_commands
@@ -1224,7 +1224,7 @@ mod tests {
                 .iter()
                 .filter(|entry| available_in_this_build(entry))
                 .count(),
-            if cfg!(debug_assertions) { 420 } else { 416 }
+            if cfg!(debug_assertions) { 421 } else { 417 }
         );
     }
 
