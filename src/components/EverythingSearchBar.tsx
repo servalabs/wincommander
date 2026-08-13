@@ -590,7 +590,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
   const storageChip = query.chips.find((chip) => chip.kind === "in");
   const typeLabel = activeTypeChips.length ? activeTypeChips.map(chipLabel).join(" + ") : "All types";
   const storageLabel = storageChip?.pathLabel ?? "All drives";
-  const recentFolders = useMemo(() => recentSearchFolders(topPaths(24)), [query.text, visible]);
+  const recentFolders = useMemo(() => recentSearchFolders(topPaths(24)), []);
   const storageFolders = useMemo(() => {
     const paths = new Set<string>();
     return [...knownFolders, ...recentFolders].filter((folder) => {

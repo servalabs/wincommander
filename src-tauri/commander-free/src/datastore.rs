@@ -342,6 +342,7 @@ fn cached_log_key() -> Result<[u8; DERIVED_KEY_LEN], String> {
 /// Encrypt one log body into an on-disk `L:<date>:<b64>` line.
 /// `date` = `YYYY-MM-DD`; `body` = `[HH:MM:SS] [LEVEL] message`.
 /// Falls back to an unencrypted marker on key failure so the app never panics.
+#[cfg_attr(test, allow(dead_code))]
 pub fn log_encrypt_line(date: &str, body: &str) -> String {
     let key = match cached_log_key() {
         Ok(k) => k,

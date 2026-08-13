@@ -12,9 +12,9 @@ describe("applyProductAliases", () => {
     const source = await Bun.file("src/assets.ts").text();
     const moduleQueries = source.match(/query: "\?url&wc-module"/g) ?? [];
 
-    // softwares, entities, apps, editorial + 5 product roots
+    // softwares, software blocklist, entities, apps, editorial + 5 product roots
     // (contingency, private-phone, private-server, theron, wincommander)
-    expect(moduleQueries).toHaveLength(9);
+    expect(moduleQueries).toHaveLength(10);
     expect(source).not.toContain('query: "?url"');
     // Product media must load from the app's assets submodule, not a
     // missing workspace sibling at ../../assets (that left the title logo empty).

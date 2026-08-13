@@ -364,7 +364,12 @@ sampled_at: string, };
  * A device as shown in the admin panel's fleet view. `online` is computed by
  * the server from `last_seen` against a freshness window.
  */
-export type DeviceSummary = { device_id: DeviceId, device_hash: string, device_kind: string, hostname: string | null, os_version: string | null, agent_version: string, enrolled_at: string, last_seen_at: string | null, online: boolean,
+export type DeviceSummary = { device_id: DeviceId, device_hash: string,
+/**
+ * Enrolled agent class (`wincommander`, `tuxcommander`, or `android`).
+ * Additive/defaulted so older cached API responses still deserialize.
+ */
+device_kind: string, hostname: string | null, os_version: string | null, agent_version: string, enrolled_at: string, last_seen_at: string | null, online: boolean,
 /**
  * Group this device is assigned to, if any (F4 device groups).
  */
