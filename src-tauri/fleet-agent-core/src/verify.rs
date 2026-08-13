@@ -129,7 +129,7 @@ pub struct CheckinRequest {
 /// which is intentionally kept out of the shared `fleet_proto` crate because
 /// this is an admin-visibility roll-up, not a signed/verified command or
 /// policy type. Field names/shape are pinned to match that server struct
-/// exactly (`encryption_on`, `patch_state` ∈ {"current","pending","unknown"},
+/// exactly (`encryption_on`, `patch_state` ∈ {"current","behind"} or null,
 /// `av_on`, `os_version`, `sovereignty_score`).
 ///
 /// PII-free: every field is a scalar or a coarse label — never a filename,
