@@ -12,6 +12,11 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **Fleet device summaries now carry `device_kind`** (2026-08-13), allowing
+  the server and console to distinguish Windows, Linux, and Android agents
+  without inferring from host metadata. The additive field defaults safely
+  when an older cached response is decoded.
+
 - **Shared fleet protocol contracts for governed security collection**
   (2026-08-12). The catalog now includes the bounded, parameter-free
   `endpoint.security_snapshot` action and the fixed
@@ -35,6 +40,10 @@ commit timestamps). Shipped capabilities (not fixes) live in
   protocol type generation and validation.
 
 ### Changed
+
+- Corrected stale Fleet/monitoring documentation that described retired
+  consent handlers and a nonexistent 403 disclosure-version gate, and marked
+  the now-complete cross-device content-search path as shipped.
 
 - **Lockdown can now target VeraCrypt whole-partition volumes safely**
   (2026-08-11). Secret Settings lists eligible non-system partitions alongside
