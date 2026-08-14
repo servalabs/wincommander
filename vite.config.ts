@@ -104,6 +104,13 @@ export default defineConfig(({ command }): UserConfig => ({
   // Vite still generates them in dev for debugging.
   build: {
     sourcemap: false,
+    // Never inline media as base64 (Vite's default 4KB threshold would). The
+    // release pipeline's "Verify bundled shared media" step (release.yml)
+    // greps dist/assets for physical, hashed filenames per pinned asset — an
+    // asset small enough to fall under that threshold (e.g. a compressed
+    // logo) silently becomes a data: URI instead of a file, and that check
+    // fails even though the build itself is fine.
+    assetsInlineLimit: 0,
     // esbuild is 10-20x faster than terser and handles console/debugger
     // drops natively. Terser's property mangling was disabled anyway
     // (`properties: false`), so there is no obfuscation regression.
