@@ -1,6 +1,6 @@
 import { Icon } from "@/components/ui/bp";
 
-type ViewMode = "map" | "risk" | "products";
+type ViewMode = "dashboard" | "risk" | "products";
 
 interface ViewToggleProps {
   viewMode: ViewMode;
@@ -10,8 +10,8 @@ interface ViewToggleProps {
 }
 
 export default function ViewToggle({ viewMode, setViewMode, showRiskMatrix, showMoreProducts }: ViewToggleProps) {
-  // Live Map is the dashboard default, so it does not need its own selector.
-  // Selecting the active tag again returns to the default map view.
+  // Dashboard is the default, so it does not need its own selector. Selecting
+  // the active tag again returns to the live radar.
   if (!showRiskMatrix && !showMoreProducts) return null;
 
   return (
@@ -20,7 +20,7 @@ export default function ViewToggle({ viewMode, setViewMode, showRiskMatrix, show
         <button
           className={`view-toggle-btn ${viewMode === "risk" ? "active" : ""}`}
           aria-pressed={viewMode === "risk"}
-          onClick={() => setViewMode(viewMode === "risk" ? "map" : "risk")}
+          onClick={() => setViewMode(viewMode === "risk" ? "dashboard" : "risk")}
         >
           <Icon icon="shield" size={14} />
           <span>RISK MATRIX</span>
@@ -30,7 +30,7 @@ export default function ViewToggle({ viewMode, setViewMode, showRiskMatrix, show
         <button
           className={`view-toggle-btn ${viewMode === "products" ? "active" : ""}`}
           aria-pressed={viewMode === "products"}
-          onClick={() => setViewMode(viewMode === "products" ? "map" : "products")}
+          onClick={() => setViewMode(viewMode === "products" ? "dashboard" : "products")}
         >
           <Icon icon="clean" size={14} />
           <span>MORE PRODUCTS</span>

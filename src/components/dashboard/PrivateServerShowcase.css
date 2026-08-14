@@ -229,9 +229,8 @@
   margin-top: 9px;
 }
 
-/* Third-party logos above are shown for comparison. This note keeps the claim
-   nominative — it names other products to say what Servault replaces, without
-   implying any of those companies endorse or are connected to ServaLabs. */
+/* Third-party logos above are shown for comparison and do not imply an
+   endorsement or affiliation. */
 .server-trademark-note {
   margin-top: 8px;
   color: var(--color-text-muted);

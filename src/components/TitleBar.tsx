@@ -27,12 +27,6 @@ function openPalette() {
   window.dispatchEvent(new CustomEvent("open-command-palette"));
 }
 
-type DashboardView = "dashboard" | "risk" | "products";
-
-function openDashboardView(view: DashboardView) {
-  window.dispatchEvent(new CustomEvent("navigate-dashboard-view", { detail: view }));
-}
-
 interface TitleBarProps {
   activePanel: PanelId;
 }
@@ -41,21 +35,9 @@ function TitleBar({ activePanel }: TitleBarProps) {
   const { appSettings } = useAppState();
   const { theme, setTheme } = useTheme();
   const [version, setVersion] = useState("");
-  const [dashboardView, setDashboardView] = useState<DashboardView>(() => {
-    const stored = window.sessionStorage.getItem("wincommander.dashboard-view");
-    return stored === "risk" || stored === "products" ? stored : "dashboard";
-  });
   const score = useSovereigntyScore();
   const branding = getDisplayBranding(appSettings);
 
-  useEffect(() => {
-    const syncDashboardView = (event: Event) => {
-      const view = (event as CustomEvent<DashboardView>).detail;
-      if (view === "dashboard" || view === "risk" || view === "products") setDashboardView(view);
-    };
-    window.addEventListener("dashboard-view", syncDashboardView);
-    return () => window.removeEventListener("dashboard-view", syncDashboardView);
-  }, []);
   const { isInstalled: proInstalled } = useProInstall();
   const { hasPaid } = useEntitlements();
   const edition = hasPaid && proInstalled ? 'PRO' : 'FREE';
@@ -228,21 +210,6 @@ function TitleBar({ activePanel }: TitleBarProps) {
         <span className="text-[12.5px]">Search settings &amp; tools</span>
         <span className="ml-2 rounded-[var(--r-sm)] border border-[var(--border)] bg-[var(--surface-3)] px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-mute)]">⌘K</span>
       </button>
-
-      {activePanel === "dashboard" && authMode !== "decoy" && (
-        <div
-          className="absolute left-[calc(50%+10px)] top-1/2 z-10 flex -translate-y-1/2 items-center gap-1"
-          data-tauri-drag-region={false}
-          aria-label="Dashboard views"
-        >
-          <button type="button" onClick={() => { setDashboardView("risk"); openDashboardView("risk"); }} aria-pressed={dashboardView === "risk"} className={`flex items-center gap-1 rounded-[var(--r-sm)] px-2 py-1.5 text-[11px] font-semibold transition-colors ${dashboardView === "risk" ? "bg-[var(--accent)] text-[var(--accent-contrast)]" : "text-[var(--text-mute)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"}`} title="Risk Matrix">
-            <Icon icon="shield" size={13} /><span>Risk Matrix</span>
-          </button>
-          <button type="button" onClick={() => { setDashboardView("products"); openDashboardView("products"); }} aria-pressed={dashboardView === "products"} className={`flex items-center gap-1 rounded-[var(--r-sm)] px-2 py-1.5 text-[11px] font-semibold transition-colors ${dashboardView === "products" ? "bg-[var(--accent)] text-[var(--accent-contrast)]" : "text-[var(--text-mute)] hover:bg-[var(--surface-3)] hover:text-[var(--text)]"}`} title="More Products">
-            <Icon icon="clean" size={13} /><span>More Products</span>
-          </button>
-        </div>
-      )}
 
       {/* ── Posture pill ── */}
       <div

@@ -5,6 +5,7 @@ import useVisibility from "../../hooks/useVisibility";
 import { executeBackendCommand, useBackend } from "../../hooks/useBackend";
 import { runOperation } from "../../context/OperationContext";
 import SovereigntyRadar from "../../components/dashboard/SovereigntyRadar";
+import ViewToggle from "../../components/dashboard/ViewToggle";
 import NeedsAttention from "../../components/dashboard/NeedsAttention";
 import type { ScanFinding } from "../../components/startup/WizardAnimations";
 import { useDashboardRadar } from "../../hooks/useDashboardRadar";
@@ -809,18 +810,16 @@ export default function DashboardPanel() {
         {/* ── Left: Radar / Risk / Products ─────────────────────── */}
         <div className="dash-left">
           <div className="map-stage">
-            {effectiveViewMode !== "dashboard" && (
-              <button
-                type="button"
-                className="dashboard-section-back"
-                onClick={() => window.dispatchEvent(new CustomEvent("navigate-dashboard-view", { detail: "dashboard" }))}
-                title="Back to Dashboard"
-              >
-                <Icon icon="arrow-left" size={14} />
-                <span>Back to Dashboard</span>
-              </button>
-            )}
-            <AnimatePresence mode="wait">
+            <div className="dashboard-view-stage">
+              <div className={`dashboard-view-nav${effectiveViewMode === "dashboard" ? " dashboard-view-nav--dashboard" : ""}`}>
+                <ViewToggle
+                  viewMode={effectiveViewMode}
+                  setViewMode={setViewMode}
+                  showRiskMatrix={showRiskMatrix}
+                  showMoreProducts={showMoreProducts}
+                />
+              </div>
+              <AnimatePresence mode="wait">
               {effectiveViewMode === "risk" ? (
                 <motion.div
                   key="risk-matrix"
@@ -830,7 +829,7 @@ export default function DashboardPanel() {
                   // View-switch crossfade: shared cadence via SSOT tokens
                   // (was hardcoded 0.2s; now DURATION_S.normal + EASE.standard).
                   transition={{ duration: DURATION_S.normal, ease: EASE.standard }}
-                  className="w-full h-full flex items-center justify-center p-0 overflow-hidden"
+                  className="w-full min-h-0 flex-1 flex items-center justify-center p-0 overflow-hidden"
                 >
                   <SovereigntyRiskMatrix />
                 </motion.div>
@@ -842,7 +841,7 @@ export default function DashboardPanel() {
                   exit={{ opacity: 0 }}
                   // Same crossfade cadence as the other two views for consistency.
                   transition={{ duration: DURATION_S.normal, ease: EASE.standard }}
-                  className="w-full h-full"
+                  className="w-full min-h-0 flex-1"
                 >
                   <MoreProductsView />
                 </motion.div>
@@ -854,7 +853,7 @@ export default function DashboardPanel() {
                   exit={{ opacity: 0 }}
                   // Same crossfade cadence as the other two views for consistency.
                   transition={{ duration: DURATION_S.normal, ease: EASE.standard }}
-                  className="w-full h-full dashboard-radar-wrap"
+                  className="w-full min-h-0 flex-1 dashboard-radar-wrap"
                 >
                   {/* Radar stays vertically centered (flex:1); the fix-actions
                       sit below in their own flex-none row so the Clean /
@@ -920,7 +919,8 @@ export default function DashboardPanel() {
                   )}
                 </motion.div>
               )}
-            </AnimatePresence>
+              </AnimatePresence>
+            </div>
           </div>
         </div>
 

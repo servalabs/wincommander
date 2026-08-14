@@ -37,7 +37,7 @@ export default function MoreProductsView() {
         <motion.header className="mp-hero" variants={itemVariants}>
           <div className="mp-eyebrow">
             <span className="mp-eyebrow-dot" />
-            <span>SERVALABS · PRIVATE INFRASTRUCTURE</span>
+            <span>PRIVATE INFRASTRUCTURE</span>
           </div>
           <h1 className="mp-hero-title">
             Privacy You Own.<br />

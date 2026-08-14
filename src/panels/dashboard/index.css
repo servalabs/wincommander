@@ -1164,6 +1164,26 @@ html.light .tech-grid.armed {
     gap: 6px;
 }
 
+.metric-alert-report-fleet {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.metric-alert-report-fleet input[type="checkbox"] {
+    width: 12px;
+    height: 12px;
+    margin: 0;
+}
+
+.metric-alert-report-fleet input[type="checkbox"]:disabled {
+    cursor: not-allowed;
+}
+
 .nettraffic-drawer .metric-alert-row {
     display: grid;
     grid-template-columns: 24px minmax(52px, 1fr) auto;
@@ -1643,34 +1663,12 @@ html.light .inner-text.free {
     min-height: 0;
 }
 
-/* View-local navigation belongs to the content stage, not the application
-   title bar. It remains anchored to this panel as Risk Matrix and More
-   Products fill the dashboard. */
-.dashboard-section-back {
-    position: absolute;
-    top: 12px;
-    left: 12px;
-    z-index: 20;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 32px;
-    padding: 0 10px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--r-sm);
-    background: color-mix(in srgb, var(--color-bg-secondary) 92%, transparent);
-    color: var(--color-text-muted);
-    font-size: 11px;
-    font-weight: 700;
-    transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
-}
-
-.dashboard-section-back:hover,
-.dashboard-section-back:focus-visible {
-    border-color: var(--color-accent);
-    background: var(--color-bg-tertiary);
-    color: var(--color-text-primary);
-    outline: none;
+.dashboard-view-stage {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    flex-direction: column;
 }
 
 .dns-status-container {
@@ -2041,13 +2039,31 @@ html.light .storage-scan-btn {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 0;
     height: 100%;
     padding: 0 0 12px;
     box-sizing: border-box;
     overflow: visible;
     scrollbar-width: none;
+}
+
+/* The view switcher is deliberately in normal flow. It clears the persistent
+   wordmark above and reserves its own row before the radar starts, so neither
+   can overlap at narrow widths or short window heights. */
+.dashboard-view-nav {
+    position: relative;
+    z-index: 27;
+    display: flex;
+    flex: 0 0 auto;
+    justify-content: center;
+    width: 100%;
+    min-height: 44px;
+    margin-top: 6px;
+}
+
+.dashboard-view-nav--dashboard {
+    margin-top: clamp(64px, 8vw, 122px);
 }
 
 .dashboard-radar-wrap::-webkit-scrollbar {
@@ -2071,7 +2087,7 @@ html.light .storage-scan-btn {
     text-align: center;
     font-family: var(--font-display, var(--font-mono));
     font-weight: 900;
-    font-size: clamp(64px, 9vw, 142px);
+    font-size: clamp(42px, 7vw, 112px);
     line-height: 0.9;
     letter-spacing: clamp(0px, 0.12vw, 3px);
     color: var(--color-text-primary);
@@ -2087,7 +2103,7 @@ html.light .storage-scan-btn {
 }
 
 /* Risk Matrix and More Products own their full stage. The dashboard wordmark
-   is a map-only texture, so it must not sit above either view's controls. */
+   is a radar-only texture, so it must not sit above either view's controls. */
 .dashboard-panel--risk .dashboard-radar-watermark,
 .dashboard-panel--products .dashboard-radar-watermark {
     display: none;
@@ -2120,8 +2136,8 @@ html.light .dashboard-panel--watermark .dashboard-radar-watermark {
     /* Positioning context for the .dashboard-radar-watermark child — so
        the wordmark sits behind the disc no matter how the column reflows. */
     position: relative;
-    /* The optional dashboard-view tags live above this group in normal flow. */
-    padding-top: 14px;
+    /* The dashboard-view tags live above this group in normal flow. */
+    padding-top: 6px;
     padding-bottom: 0;
     gap: 10px;
     overflow: visible;
@@ -2155,7 +2171,40 @@ html.light .dashboard-panel--watermark .dashboard-radar-watermark {
 }
 
 .dashboard-radar-wrap .radar-center-group:not(.radar-center-group--expanded) .sov-radar__scope {
-    max-width: 420px;
+    max-width: min(420px, max(220px, calc(100dvh - 260px)));
+}
+
+@media (max-height: 680px) {
+    .dashboard-view-nav--dashboard {
+        min-height: 38px;
+        margin-top: clamp(44px, 7vw, 74px);
+    }
+
+    .view-toggle-container {
+        margin-top: 2px;
+        padding: 4px;
+    }
+
+    .view-toggle-btn {
+        padding: 5px 9px;
+        font-size: 10px;
+    }
+}
+
+@media (max-width: 520px) {
+    .dashboard-view-nav--dashboard {
+        margin-top: 58px;
+    }
+
+    .view-toggle-container {
+        max-width: calc(100% - 16px);
+    }
+
+    .view-toggle-btn {
+        padding-inline: 8px;
+        font-size: 9px;
+        letter-spacing: 0.45px;
+    }
 }
 
 /* Chosen treatment "scale + crossfade": smoothly animate the radar grow/shrink

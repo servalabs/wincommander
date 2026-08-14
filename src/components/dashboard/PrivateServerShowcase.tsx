@@ -6,27 +6,27 @@ import { DURATION_S } from "@/components/shared/motion";
 import { products, saas } from "@/assets";
 import "./PrivateServerShowcase.css";
 
-type ServerModel = "base" | "pro";
+type ServerModel = "pro" | "max";
 
 // Numeric values separated from their units so AnimatedNumber can tween them.
 // Strings (cpu) stay plain — no numeric tween for non-numeric specs.
 const specs = {
-  base: {
+  pro: {
     storageTb: 20,
     speedGbps: 5,
     cpu: "4-8 Core",
     image: products["private-server/base.png"],
   },
-  pro: {
+  max: {
     storageTb: 40,
     speedGbps: 20,
     cpu: "Ryzen 9 16C",
-    image: products["private-server/pro.png"],
+    image: products["private-server/max-nobg.png"],
   },
 } as const;
 
 export default function PrivateServerShowcase() {
-  const [model, setModel] = useState<ServerModel>("base");
+  const [model, setModel] = useState<ServerModel>("pro");
 
   return (
     <section className="private-server-card">
@@ -35,7 +35,7 @@ export default function PrivateServerShowcase() {
           <div className="private-server-kicker">
             <Server size={18} />
             <h3>
-              Servault
+              Private Server
             </h3>
           </div>
           <p>
@@ -45,16 +45,16 @@ export default function PrivateServerShowcase() {
 
         <div className="server-model-toggle" aria-label="Server model">
           <button
-            className={model === "base" ? "active" : ""}
-            onClick={() => setModel("base")}
-          >
-            Base
-          </button>
-          <button
-            className={model === "pro" ? "active pro" : ""}
+            className={model === "pro" ? "active" : ""}
             onClick={() => setModel("pro")}
           >
             Pro
+          </button>
+          <button
+            className={model === "max" ? "active pro" : ""}
+            onClick={() => setModel("max")}
+          >
+            Max
           </button>
         </div>
       </div>
@@ -132,7 +132,7 @@ export default function PrivateServerShowcase() {
               <span>& more</span>
             </div>
             <div className="server-trademark-note">
-              Logos shown to say what Servault replaces. Not affiliated with, or endorsed by, these companies.
+              Logos shown to illustrate the services a private server can replace. Not affiliated with, or endorsed by, these companies.
             </div>
           </div>
 
