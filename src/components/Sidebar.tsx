@@ -95,6 +95,9 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
   const licenseHidden =
     appSettings?.app?.hideLicensePanel === true ||
     (borrowedActive && (appSettings?.app?.borrowedHidden ?? []).includes("license-panel"));
+  const preferencesHidden =
+    appSettings?.app?.hideSidebarPreferences === true ||
+    (borrowedActive && (appSettings?.app?.borrowedHidden ?? []).includes("sidebar-preferences"));
 
   useEffect(() => {
     const revealSecretSettings = () => setSecretSettingsRevealed(true);
@@ -371,10 +374,12 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
 
       <div className="sidebar-footer">
         <RdpQuickAction isCollapsed={collapsed} />
-        <div className="preferences-row" data-tour="persona-density-switches">
-          <ExperienceLevelSwitch compact />
-          <PersonaSwitch compact />
-        </div>
+        {!preferencesHidden && (
+          <div className="preferences-row" data-tour="persona-density-switches">
+            <ExperienceLevelSwitch compact />
+            <PersonaSwitch compact />
+          </div>
+        )}
         {isDevBuild && (
           <button
             className={`sidebar-item sidebar-item--dev ${activePanel === "dev" ? "active" : ""}`}

@@ -14,5 +14,18 @@ describe("Sidebar mode controls", () => {
     const groupMarkup = sidebar.slice(groupStart, groupEnd);
     expect(groupMarkup).toContain("<ExperienceLevelSwitch compact />");
     expect(groupMarkup).toContain("<PersonaSwitch compact />");
+    expect(sidebar).toContain("hideSidebarPreferences === true");
+    expect(sidebar).toContain('includes("sidebar-preferences")');
+    expect(sidebar).toContain("{!preferencesHidden && (");
+  });
+
+  test("keeps the borrowed visibility controls as grouped three-state rows", () => {
+    const table = readFileSync("src/panels/secret/VisibilityTable.tsx", "utf8");
+
+    expect(table).toContain("Persona, interface &amp; licensing");
+    expect(table).toContain("hideSidebarPreferences: vis === \"always\"");
+    expect(table).toContain('"sidebar-preferences"');
+    expect(table).toContain("Tour &amp; guide");
+    expect(table).toContain("hideTour: vis === \"always\"");
   });
 });

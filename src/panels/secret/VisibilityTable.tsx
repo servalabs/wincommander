@@ -129,6 +129,7 @@ export default function VisibilityTable() {
     const desktopAlertsDisabled = appSettings?.app?.disableNativeNotifications === true;
     const enginesHidden = appSettings?.app?.hideEnginesSection === true;
     const licenseHidden = appSettings?.app?.hideLicensePanel === true;
+    const preferencesHidden = appSettings?.app?.hideSidebarPreferences === true;
     const tourHidden = appSettings?.app?.hideTour === true;
 
     // Pop-up alerts pref lives in localStorage; sync into React state.
@@ -228,11 +229,20 @@ export default function VisibilityTable() {
         } as any)).catch(() => {});
     }, [patchAppSettings]);
 
-    const toggleLicensePanel = useCallback((vis: VisState) => {
+    const toggleSidebarPreferencesAndLicense = useCallback((vis: VisState) => {
         patchAppSettings((latest) => ({
             app: {
                 hideLicensePanel: vis === "always",
-                borrowedHidden: withBorrowed((latest?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS) as string[], "license-panel", vis === "borrowed"),
+                hideSidebarPreferences: vis === "always",
+                borrowedHidden: withBorrowed(
+                    withBorrowed(
+                        (latest?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS) as string[],
+                        "license-panel",
+                        vis === "borrowed",
+                    ),
+                    "sidebar-preferences",
+                    vis === "borrowed",
+                ),
             },
         } as any)).catch(() => {});
     }, [patchAppSettings]);
@@ -349,20 +359,24 @@ export default function VisibilityTable() {
 
                 <div className="vis-table-row">
                     <span className="vis-row-label">
-                        <Icon icon="key" size={12} />
-                        License panel
+                        <Icon icon="cog" size={12} />
+                        Persona, interface &amp; licensing
                     </span>
                     <VisSegment
-                        value={licenseHidden ? "always" : borrowedHidden.includes("license-panel") ? "borrowed" : "visible"}
+                        value={preferencesHidden || licenseHidden
+                            ? "always"
+                            : borrowedHidden.includes("sidebar-preferences") || borrowedHidden.includes("license-panel")
+                                ? "borrowed"
+                                : "visible"}
                         allowBorrowed={true}
-                        onSelect={toggleLicensePanel}
+                        onSelect={toggleSidebarPreferencesAndLicense}
                     />
                 </div>
 
                 <div className="vis-table-row">
                     <span className="vis-row-label">
                         <Icon icon="help" size={12} />
-                        In-app tour
+                        Tour &amp; guide
                     </span>
                     <VisSegment
                         value={tourHidden ? "always" : borrowedHidden.includes("tour") ? "borrowed" : "visible"}

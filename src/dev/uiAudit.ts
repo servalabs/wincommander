@@ -441,6 +441,7 @@ export function createUiAuditSettings(): AppSettings {
       hideAdvisor: false,
       hideEnginesSection: false,
       hideLicensePanel: false,
+      hideSidebarPreferences: false,
       sidebarCollapsed: false,
       lastPanel: "dashboard",
       rdpNodes: [

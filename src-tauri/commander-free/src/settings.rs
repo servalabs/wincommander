@@ -432,7 +432,8 @@ pub struct AppPreferences {
     pub hide_tour: bool,
     /// Non-panel surface keys hidden only while Borrowed Mode is active.
     /// Recognised keys: "notif-bell", "risk-matrix", "more-products", "tour",
-    /// "action:dismount", "action:delete", "action:scrubMeta", "action:lockdown".
+    /// "license-panel", "sidebar-preferences", "action:dismount", "action:delete",
+    /// "action:scrubMeta", "action:lockdown".
     /// Option so the frontend can apply defaults when never configured.
     #[serde(default)]
     pub borrowed_hidden: Option<Vec<String>>,
@@ -459,6 +460,10 @@ pub struct AppPreferences {
     /// `borrowed_hidden`; this is the standalone always-hide flag. Default false.
     #[serde(default)]
     pub hide_license_panel: bool,
+    /// When true, the compact Interface and Persona controls in the sidebar
+    /// footer are hidden everywhere. Borrowed-only uses "sidebar-preferences".
+    #[serde(default)]
+    pub hide_sidebar_preferences: bool,
     /// When true, drift between ideal.* and current.* (detected post-probe) is
     /// silently re-applied without user action. Defaults to true — most users
     /// want Commander to keep their chosen settings even after Windows updates
@@ -737,6 +742,7 @@ impl Default for AppPreferences {
             file_search: FileSearchSettings::default(),
             fleet: FleetSettings::default(),
             hide_license_panel: false,
+            hide_sidebar_preferences: false,
             auto_heal: true,
             pro_install_prompt_dismissed: false,
             last_announced_update_version: None,

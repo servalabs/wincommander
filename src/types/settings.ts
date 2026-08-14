@@ -275,7 +275,7 @@ export interface AppPreferences {
    *  title-bar icons — key name kept from before the two-icon split so
    *  existing persisted settings keep working), "risk-matrix",
    *  "more-products", "popup-alerts", "desktop-alerts", "engines-section",
-   *  "license-panel", "action:ai-advisor", "action:search",
+   *  "license-panel", "sidebar-preferences", "action:ai-advisor", "action:search",
    *  "action:dismount", "action:delete", "action:scrubMeta", "action:lockdown". */
   borrowedHidden?: string[];
   /** When true, the License quick-panel in the sidebar footer is hidden
@@ -283,6 +283,9 @@ export interface AppPreferences {
    *  uses the "license-panel" key in borrowedHidden. Mirrors
    *  `app.hide_license_panel`. Default false. */
   hideLicensePanel?: boolean;
+  /** When true, Interface and Persona controls in the sidebar footer are hidden
+   *  everywhere. Borrowed-only hiding uses "sidebar-preferences" in borrowedHidden. */
+  hideSidebarPreferences?: boolean;
   /** When true, the full-screen countdown popup is suppressed when triggering
    *  lockdown from the sidebar button. The countdown still fires silently. */
   hideDestructionSequence?: boolean;
