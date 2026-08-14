@@ -179,10 +179,15 @@ export default function DashboardPanel() {
   const isExpert = visibility.density === "expert";
   const borrowedActive = useBorrowedActive();
   const borrowedHidden = appSettings?.app?.borrowedHidden ?? [];
-  // These top-level dashboard destinations remain available in normal mode;
-  // a retired Live Map must not leave the dashboard without a visible route.
-  const showRiskMatrix = !(borrowedActive && borrowedHidden.includes("risk-matrix"));
-  const showMoreProducts = !(borrowedActive && borrowedHidden.includes("more-products"));
+  // Secret Settings owns both the permanent and Borrowed Mode visibility of
+  // these dashboard destinations. `null` preserves the existing default of
+  // showing them; only an explicit false is a permanent concealment choice.
+  const showRiskMatrix =
+    appSettings?.ideal?.identity?.riskMatrixEnabled !== false
+    && !(borrowedActive && borrowedHidden.includes("risk-matrix"));
+  const showMoreProducts =
+    appSettings?.ideal?.identity?.moreProductsEnabled !== false
+    && !(borrowedActive && borrowedHidden.includes("more-products"));
   const effectiveViewMode: "dashboard" | "risk" | "products" =
     viewMode === "risk" && showRiskMatrix
       ? "risk"

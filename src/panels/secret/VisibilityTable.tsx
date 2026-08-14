@@ -124,11 +124,12 @@ export default function VisibilityTable() {
     );
 
     const notifHidden = appSettings?.app?.hideNotificationBell === true;
-    const riskMatrix = appSettings?.ideal?.identity?.riskMatrixEnabled === true;
-    const moreProds = appSettings?.ideal?.identity?.moreProductsEnabled === true;
+    const riskMatrixHidden = appSettings?.ideal?.identity?.riskMatrixEnabled === false;
+    const moreProdsHidden = appSettings?.ideal?.identity?.moreProductsEnabled === false;
     const desktopAlertsDisabled = appSettings?.app?.disableNativeNotifications === true;
     const enginesHidden = appSettings?.app?.hideEnginesSection === true;
     const licenseHidden = appSettings?.app?.hideLicensePanel === true;
+    const tourHidden = appSettings?.app?.hideTour === true;
 
     // Pop-up alerts pref lives in localStorage; sync into React state.
     const [popupAlertsOn, setPopupAlertsOn] = useState<boolean>(() => getPopupAlertsEnabled());
@@ -236,6 +237,15 @@ export default function VisibilityTable() {
         } as any)).catch(() => {});
     }, [patchAppSettings]);
 
+    const toggleTour = useCallback((vis: VisState) => {
+        patchAppSettings((latest) => ({
+            app: {
+                hideTour: vis === "always",
+                borrowedHidden: withBorrowed((latest?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS) as string[], "tour", vis === "borrowed"),
+            },
+        } as any)).catch(() => {});
+    }, [patchAppSettings]);
+
     return (
         <div className="vis-table">
             {/* Header */}
@@ -283,7 +293,7 @@ export default function VisibilityTable() {
                         {!hasPaid && <span className="vis-pro-badge">PRO</span>}
                     </span>
                     <VisSegment
-                        value={!riskMatrix ? "always" : borrowedHidden.includes("risk-matrix") ? "borrowed" : "visible"}
+                        value={riskMatrixHidden ? "always" : borrowedHidden.includes("risk-matrix") ? "borrowed" : "visible"}
                         allowBorrowed={true}
                         onSelect={toggleRiskMatrix}
                     />
@@ -295,7 +305,7 @@ export default function VisibilityTable() {
                         Dashboard More Products
                     </span>
                     <VisSegment
-                        value={!moreProds ? "always" : borrowedHidden.includes("more-products") ? "borrowed" : "visible"}
+                        value={moreProdsHidden ? "always" : borrowedHidden.includes("more-products") ? "borrowed" : "visible"}
                         allowBorrowed={true}
                         onSelect={toggleMoreProds}
                     />
@@ -346,6 +356,18 @@ export default function VisibilityTable() {
                         value={licenseHidden ? "always" : borrowedHidden.includes("license-panel") ? "borrowed" : "visible"}
                         allowBorrowed={true}
                         onSelect={toggleLicensePanel}
+                    />
+                </div>
+
+                <div className="vis-table-row">
+                    <span className="vis-row-label">
+                        <Icon icon="help" size={12} />
+                        In-app tour
+                    </span>
+                    <VisSegment
+                        value={tourHidden ? "always" : borrowedHidden.includes("tour") ? "borrowed" : "visible"}
+                        allowBorrowed={true}
+                        onSelect={toggleTour}
                     />
                 </div>
             </div>

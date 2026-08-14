@@ -191,6 +191,7 @@ export const GUIDE_TOPICS: GuideTopic[] = [
       navigateTo: "dashboard",
       variant: "hero",
       media: { type: "image", src: scrubGif, alt: "Scrub Meta stripping EXIF, PDF, and Office metadata from a file" },
+      showWhen: (ctx) => ctx.scrubMetadataVisible !== false,
       tours: [{ id: "tour-dashboard", order: 20 }],
     },
   },

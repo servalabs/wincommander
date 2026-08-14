@@ -18,6 +18,7 @@ import { getDensityForSettings } from "../../lib/personaMigration";
 import { setTourActive } from "../../lib/tourActive";
 import useBraveInstalled from "../../hooks/useBraveInstalled";
 import useBorrowedActive from "../../hooks/useBorrowedActive";
+import useVisibility from "../../hooks/useVisibility";
 import { DEFAULT_BORROWED_EXTRAS } from "../../lib/visibilityDefaults";
 
 // The full onboarding sequence — Dashboard's hero moments (Fix all, Scrub,
@@ -47,6 +48,14 @@ export default function GuideHost() {
   const braveInstalled = useBraveInstalled();
   const borrowedActive = useBorrowedActive();
   const borrowedHidden = appSettings?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS;
+  const visibility = useVisibility();
+  const tourHidden =
+    appSettings?.app?.hideTour === true
+    || (borrowedActive && borrowedHidden.includes("tour"));
+  const scrubMetadataVisible =
+    visibility.isVisible({ capability: ["privacy"] })
+    && !appSettings?.app?.hiddenSidebarActions?.includes("scrubMeta")
+    && !(borrowedActive && borrowedHidden.includes("action:scrubMeta"));
   const lockdownVisible =
     appSettings?.ideal?.privacy?.selfDestruct?.enabled === true
     && !appSettings?.app?.hiddenSidebarActions?.includes("lockdown")
@@ -56,8 +65,9 @@ export default function GuideHost() {
   // links) — always dismissable.
   useEffect(() => {
     const onStart = (e: Event) => {
+      if (tourHidden) return;
       const tourId = (e as CustomEvent<{ tourId?: string }>).detail?.tourId ?? "welcome";
-      const resolved = resolveTourSteps(GUIDE_TOPICS, tourId, density, { braveInstalled, lockdownVisible });
+      const resolved = resolveTourSteps(GUIDE_TOPICS, tourId, density, { braveInstalled, lockdownVisible, scrubMetadataVisible });
       if (resolved.length > 0) {
         setMandatory(false);
         setSteps(resolved);
@@ -65,7 +75,7 @@ export default function GuideHost() {
     };
     window.addEventListener("start-tour", onStart as EventListener);
     return () => window.removeEventListener("start-tour", onStart as EventListener);
-  }, [density, braveInstalled, lockdownVisible]);
+  }, [density, braveInstalled, lockdownVisible, scrubMetadataVisible, tourHidden]);
 
   // First launch auto-starts the full spotlight tour instead of the removed
   // Setup Wizard. Closing it does not re-open it during the same app session.
@@ -73,17 +83,23 @@ export default function GuideHost() {
     const isLoading = !startupComplete;
     const hasSettings = appSettings != null;
     const firstRunComplete = appSettings?.app?.firstRunComplete === true;
-    const shouldStart = !isLoading && hasSettings && !firstRunComplete && !tourAutoStartedRef.current;
+    const shouldStart = !tourHidden && !isLoading && hasSettings && !firstRunComplete && !tourAutoStartedRef.current;
     if (!shouldStart) return;
     tourAutoStartedRef.current = true;
     const timer = window.setTimeout(() => {
-      const resolved = resolveTourSteps(GUIDE_TOPICS, FIRST_RUN_TOUR_ID, density, { braveInstalled, lockdownVisible });
+      const resolved = resolveTourSteps(GUIDE_TOPICS, FIRST_RUN_TOUR_ID, density, { braveInstalled, lockdownVisible, scrubMetadataVisible });
       if (resolved.length === 0) return;
       setMandatory(appSettings?.app?.hasSeenMandatoryTour !== true);
       setSteps(resolved);
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [appSettings, startupComplete, density, braveInstalled, lockdownVisible]);
+  }, [appSettings, startupComplete, density, braveInstalled, lockdownVisible, scrubMetadataVisible, tourHidden]);
+
+  useEffect(() => {
+    if (!tourHidden) return;
+    setSteps(null);
+    setMandatory(false);
+  }, [tourHidden]);
 
   // Publish "a tour is running" for the surfaces that hide a step's anchor
   // outside Expert density or behind a disabled module — see lib/tourActive.ts.

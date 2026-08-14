@@ -68,6 +68,38 @@ describe("resolveTourSteps", () => {
   test("returns [] for an unknown tour", () => {
     expect(resolveTourSteps(TOPICS, "nope")).toEqual([]);
   });
+
+  test("omits controls unavailable in the current session", () => {
+    const conditionalTopics: GuideTopic[] = [
+      {
+        id: "scrub",
+        title: "Scrub",
+        summary: "",
+        body: "",
+        tour: {
+          anchor: "#scrub",
+          showWhen: (ctx) => ctx.scrubMetadataVisible !== false,
+          tours: [{ id: "tour-dashboard", order: 10 }],
+        },
+      },
+      {
+        id: "lockdown",
+        title: "Lockdown",
+        summary: "",
+        body: "",
+        tour: {
+          anchor: "#lockdown",
+          showWhen: (ctx) => ctx.lockdownVisible !== false,
+          tours: [{ id: "tour-dashboard", order: 20 }],
+        },
+      },
+    ];
+
+    expect(resolveTourSteps(conditionalTopics, "tour-dashboard", undefined, {
+      scrubMetadataVisible: false,
+      lockdownVisible: false,
+    })).toEqual([]);
+  });
 });
 
 describe("tourIdForPanel", () => {

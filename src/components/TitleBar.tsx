@@ -102,6 +102,9 @@ function TitleBar({ activePanel }: TitleBarProps) {
   const panelsLocked = !panelsUnlocked && (appSettings?.app?.lockedPanelIds?.length ?? 0) > 0;
   const borrowedActive = useBorrowedActive();
   const borrowedHidden = appSettings?.app?.borrowedHidden ?? [];
+  const hideTour =
+    appSettings?.app?.hideTour === true ||
+    (borrowedActive && borrowedHidden.includes("tour"));
   // Alerts + Processes share ONE visibility toggle (still the "notif-bell"
   // key/hideNotificationBell field — this was one bell before the
   // Alerts/Processes icon split, and splitting the icon didn't change the
@@ -256,15 +259,17 @@ function TitleBar({ activePanel }: TitleBarProps) {
       )}
       {/* ── Take the tour — single title-bar entry point for onboarding;
           also the tour's own anchor for its "find help later" stop ── */}
-      <button
-        onClick={() => window.dispatchEvent(new CustomEvent("start-tour", { detail: { tourId: contextualTourId } }))}
-        className={TITLEBAR_ICON_BTN}
-        title={contextualTourLabel}
-        data-tour="help"
-        data-tauri-drag-region={false}
-      >
-        <Icon icon="help" size={15} />
-      </button>
+      {!hideTour && (
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent("start-tour", { detail: { tourId: contextualTourId } }))}
+          className={TITLEBAR_ICON_BTN}
+          title={contextualTourLabel}
+          data-tour="help"
+          data-tauri-drag-region={false}
+        >
+          <Icon icon="help" size={15} />
+        </button>
+      )}
 
       {/* ── Window controls ── */}
       <div className="ml-1 flex items-center gap-0.5" data-tauri-drag-region={false}>

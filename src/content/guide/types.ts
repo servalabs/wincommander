@@ -37,6 +37,10 @@ export interface TourContext {
    *  New installs commonly keep it hidden until self-destruct is opted in, so
    *  the walkthrough must not stop on an absent control. */
   lockdownVisible?: boolean;
+  /** Whether Scrub Metadata is available in the right action rail. The
+   * dashboard walkthrough omits its stop instead of waiting for a hidden
+   * control. */
+  scrubMetadataVisible?: boolean;
 }
 
 export interface GuideTopic {
