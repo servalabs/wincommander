@@ -9,10 +9,10 @@ edition = "2021"
 rust-version = "1.93.1"
 
 [lib]
-# Tauri-mobile expects the lib name "wincommander_lib" — keep it stable
-# even though the package was renamed. Decoupled deliberately.
+# The desktop executable consumes this library as an rlib. Avoid generating
+# unused native libraries: Windows rustc currently crashes while linking them.
 name = "wincommander_lib"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 # Cargo binary explicitly named to match commander-pro's `wincommander-pro.exe`
 # convention. Without this, `cargo build -p commander-free` would output
