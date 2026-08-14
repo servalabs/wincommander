@@ -4317,12 +4317,31 @@ fn fleet_privacy_event_is_enabled(
     )
 }
 
-fn allow_fleet_privacy_alert(event_class: &str) -> bool {
+async fn allow_fleet_privacy_alert(event_class: &str) -> bool {
     let Ok(settings) = crate::settings::read_settings() else {
         // A settings read failure must not affect the local detector. Fleet
         // reporting fails closed because an admin has not confirmed that this
         // particular detector class is enabled for Fleet notification.
         return false;
+    };
+    // First-sync catch-up: a device can be enrolled (`fleet.enabled == true`)
+    // moments before its first `fleet_apply_pending_epoch` tick lands, so
+    // `fleet_managed`/`fleet_monitoring_enabled` still read `None` here even
+    // though the org's policy already mandates the Shield. Previously the
+    // very first look-away event after such a start silently dropped its
+    // Fleet report forever (no retry) — only a LATER restart, after the
+    // background apply loop had caught up, would report correctly. Give this
+    // first event one chance to force that sync itself before deciding.
+    let shield = &settings.ideal.privacy.privacy_shield;
+    let unsynced = settings.app.fleet.enabled && shield.fleet_managed.is_none();
+    let settings = if unsynced {
+        let _ = crate::fleet_agent::fleet_apply_pending_epoch_typed().await;
+        match crate::settings::read_settings() {
+            Ok(s) => s,
+            Err(_) => return false,
+        }
+    } else {
+        settings
     };
     let shield = &settings.ideal.privacy.privacy_shield;
     if !fleet_privacy_event_is_enabled(settings.app.fleet.enabled, shield, event_class) {
@@ -4481,7 +4500,7 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
                                 // Fleet receives only the detected class. The Pro sidecar
                                 // queues it for the next authenticated check-in; a Fleet
                                 // outage or absent sidecar must never disrupt local shielding.
-                                if allow_fleet_privacy_alert(gaze_kind) {
+                                if allow_fleet_privacy_alert(gaze_kind).await {
                                     if let Err(error) = crate::sidecar::dispatch_paid_command(
                                         "record_privacy_shield_event",
                                         serde_json::json!({ "class": gaze_kind }),

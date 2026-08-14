@@ -74,15 +74,36 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const { hasPaid } = useEntitlements();
     const { data: quota } = useShieldQuotaQuery();
     const invalidateShieldQuota = useInvalidateShieldQuota();
-    // Policy ownership and session ownership are intentionally distinct. A
-    // Fleet policy supplies the locked defaults, but only a session that Fleet
-    // actually started is forbidden to the local user to stop.
     const fleetPolicyManaged = appSettings?.app?.fleet?.enabled === true
         && appSettings?.ideal?.privacy?.privacyShield?.fleetManaged === true;
-    const fleetShieldSessionLocked = appSettings?.app?.fleet?.enabled === true
-        && appSettings?.app?.fleet?.privacyShieldSessionOwned === true;
     const fleetShieldMonitoring = fleetPolicyManaged
         && appSettings?.ideal?.privacy?.privacyShield?.fleetMonitoringEnabled === true;
+    // Resolved fleet desired-state (separate, non-policy_epoch channel — see
+    // CheckinResponse.shield_state). Falls back to fleetShieldMonitoring when
+    // the connected server predates this field.
+    const fleetShieldDesiredState = appSettings?.app?.fleet?.shieldDesiredState ?? null;
+    const fleetShieldMandatesOn = fleetPolicyManaged
+        && (fleetShieldDesiredState ? fleetShieldDesiredState.enabled : fleetShieldMonitoring);
+    // The Stop button is locked whenever fleet policy currently mandates the
+    // shield ON — derived directly from policy, never from who happened to
+    // start the running session. Previously this depended solely on
+    // `privacyShieldSessionOwned`, a flag the supervisor in BackgroundPollers
+    // only set on ITS OWN restart — so a shield already running locally (or
+    // started by the user a moment before the supervisor's next 60s tick)
+    // left the Stop button clickable even though policy required the shield
+    // on. `privacyShieldSessionOwned` is kept as a secondary OR so a
+    // just-stopped fleet session that hasn't re-synced policy yet still
+    // reads as locked for the brief window before the next checkin.
+    const fleetShieldSessionLocked = fleetShieldMandatesOn
+        || (appSettings?.app?.fleet?.enabled === true && appSettings?.app?.fleet?.privacyShieldSessionOwned === true);
+    // Resolved shield mode ("blur_notify" | "notify_only"). Fleet-managed
+    // devices always take the admin's mode; otherwise the local choice below.
+    const resolvedShieldMode: 'blur_notify' | 'notify_only' =
+        fleetPolicyManaged && fleetShieldDesiredState
+            ? fleetShieldDesiredState.mode
+            : (appSettings?.ideal?.privacy?.privacyShield as any)?.notifyMode === 'notify_only'
+                ? 'notify_only'
+                : 'blur_notify';
 
     const { density } = useVisibility();
     const isAdvanced = density === 'expert';
@@ -428,12 +449,19 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         }, 60_000);
         try {
             if (targetState) {
+                // "notify_only" mode still runs full detection (so the Windows
+                // toast + fleet report fire normally) but suppresses the
+                // visual blur/black-out entirely, per the segmented toggle.
+                const suppressBlur = resolvedShieldMode === 'notify_only';
                 const res = await startPrivacyShield(
                     0, privacyConfig.blurOnLookAway, privacyConfig.blurOnMultipleFaces, privacyConfig.blurOnCamera,
                     privacyConfig.captureOnDevice, privacyConfig.captureOnMultiFace, privacyConfig.modelLevel,
                     privacyConfig.confidence, privacyConfig.overlayOpacity, privacyConfig.wakeDelayMs,
                     privacyConfig.deviceWakeMultiplier, privacyConfig.multiFaceWakeMultiplier,
                     privacyConfig.bufferFrames, privacyConfig.captureSpeed,
+                    suppressBlur ? false : privacyConfig.blurOnLookAway,
+                    suppressBlur ? false : privacyConfig.blurOnMultipleFaces,
+                    suppressBlur ? false : privacyConfig.blurOnCamera,
                 );
                 if (res.success) {
                     await showSuccess("Privacy Shield activated.");
@@ -641,6 +669,34 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                         {/* Launch behaviour is deliberately not a model
                             parameter, so it gets its own direct row without
                             an invented group title. */}
+                        <div className="flex items-center justify-between gap-2 py-1">
+                            <span className="flex items-center gap-1.5 text-[13px] text-[var(--shield-text-primary)]">
+                                Alert mode
+                                <Tooltip content="Blur + Notify obscures the screen AND sends a notification. Notify Only sends the notification without blurring the screen." position="right">
+                                    <Icon icon="info-sign" size={11} className="physical-shield-info-icon" />
+                                </Tooltip>
+                            </span>
+                            <div className={privacyShieldRunning === true || fleetPolicyManaged ? 'opacity-50 pointer-events-none' : ''}>
+                                <Segmented
+                                    value={resolvedShieldMode}
+                                    onValueChange={(v) => {
+                                        if (privacyShieldRunning === true || fleetPolicyManaged) return;
+                                        patchAppSettings({ ideal: { privacy: { privacyShield: { notifyMode: v as 'blur_notify' | 'notify_only' } } } }).catch(() => {});
+                                    }}
+                                    options={[
+                                        { value: 'blur_notify', label: 'Blur + Notify' },
+                                        { value: 'notify_only', label: 'Notify Only' },
+                                    ]}
+                                    size="sm"
+                                />
+                            </div>
+                        </div>
+                        {fleetPolicyManaged && (
+                            <p className="text-[10px] text-[var(--color-text-muted)] -mt-1 mb-1">
+                                Alert mode is set by Fleet policy.
+                            </p>
+                        )}
+
                         <ShieldOption
                             label={isAdvanced ? "Auto start" : "Auto start on launch"}
                             tooltip={hasPaid
