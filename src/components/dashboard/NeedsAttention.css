@@ -1,7 +1,7 @@
 /* "Needs Attention" finding list — see NeedsAttention.tsx */
 
 .needs-attention {
-    width: min(560px, 92vw);
+    width: min(480px, 92vw);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
@@ -106,17 +106,34 @@
     list-style: none;
     margin: 0;
     padding: 0;
-    --na-row-height: 58px;
-    max-height: calc(var(--na-row-height) * 4);
+    --na-row-height: 52px;
+    max-height: calc(var(--na-row-height) * 3);
     overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--text-mute) 58%, transparent) transparent;
     border-top: 1px solid var(--border);
+}
+
+.na-list::-webkit-scrollbar { width: 7px; }
+.na-list::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text-mute) 58%, transparent);
+    border-radius: var(--r-pill);
+}
+
+@media (max-height: 700px) {
+    .na-list {
+        --na-row-height: 46px;
+        max-height: calc(var(--na-row-height) * 2);
+    }
+
+    .na-impact { -webkit-line-clamp: 1; }
 }
 
 .na-item {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    padding: 10px 12px;
+    padding: 8px 10px;
     min-height: var(--na-row-height);
     border-bottom: 1px solid var(--border);
 }

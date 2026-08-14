@@ -206,7 +206,7 @@ function TitleBar({ activePanel }: TitleBarProps) {
         onClick={openPalette}
         data-tauri-drag-region={false}
         data-tour="search"
-        className={`absolute top-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-[var(--text-mute)] transition-colors duration-150 hover:border-[var(--border-strong)] hover:text-[var(--text-dim)] ${activePanel === "dashboard" ? "left-[calc(50%-160px)]" : "left-1/2"}`}
+        className="absolute top-1/2 left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-1.5 text-[var(--text-mute)] transition-colors duration-150 hover:border-[var(--border-strong)] hover:text-[var(--text-dim)]"
         title="Search settings, files & actions"
       >
         <Icon icon="search" size={14} />

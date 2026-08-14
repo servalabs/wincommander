@@ -16,6 +16,14 @@ export default function ViewToggle({ viewMode, setViewMode, showRiskMatrix, show
 
   return (
     <div className="view-toggle-container" role="toolbar" aria-label="Dashboard views">
+      <button
+        className={`view-toggle-btn ${viewMode === "dashboard" ? "active" : ""}`}
+        aria-pressed={viewMode === "dashboard"}
+        onClick={() => setViewMode("dashboard")}
+      >
+        <Icon icon="globe" size={14} />
+        <span>DASHBOARD</span>
+      </button>
       {showRiskMatrix && (
         <button
           className={`view-toggle-btn ${viewMode === "risk" ? "active" : ""}`}

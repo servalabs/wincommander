@@ -816,7 +816,7 @@ export default function DashboardPanel() {
         <div className="dash-left">
           <div className="map-stage">
             <div className="dashboard-view-stage">
-              <div className={`dashboard-view-nav${effectiveViewMode === "dashboard" ? " dashboard-view-nav--dashboard" : ""}`}>
+              <div className={`dashboard-view-nav dashboard-view-nav--${effectiveViewMode}`}>
                 <ViewToggle
                   viewMode={effectiveViewMode}
                   setViewMode={setViewMode}
@@ -834,7 +834,7 @@ export default function DashboardPanel() {
                   // View-switch crossfade: shared cadence via SSOT tokens
                   // (was hardcoded 0.2s; now DURATION_S.normal + EASE.standard).
                   transition={{ duration: DURATION_S.normal, ease: EASE.standard }}
-                  className="w-full min-h-0 flex-1 flex items-center justify-center p-0 overflow-hidden"
+                  className="w-full min-h-0 flex-1 flex items-stretch justify-start p-0 overflow-hidden"
                 >
                   <SovereigntyRiskMatrix />
                 </motion.div>

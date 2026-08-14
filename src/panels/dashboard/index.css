@@ -1820,7 +1820,7 @@ html.light .inner-text.free {
     border: 1px solid color-mix(in srgb, var(--color-border-light) 52%, transparent);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
     white-space: nowrap;
-    margin: 8px auto 0;
+    margin: 4px auto 0;
     flex-shrink: 0;
 }
 
@@ -2041,11 +2041,10 @@ html.light .storage-scan-btn {
     align-items: center;
     justify-content: flex-start;
     gap: 0;
-    height: 100%;
+    min-height: 0;
     padding: 0 0 12px;
     box-sizing: border-box;
-    overflow: visible;
-    scrollbar-width: none;
+    overflow: hidden;
 }
 
 /* The view switcher is deliberately in normal flow. It clears the persistent
@@ -2058,17 +2057,72 @@ html.light .storage-scan-btn {
     flex: 0 0 auto;
     justify-content: center;
     width: 100%;
-    min-height: 44px;
-    margin-top: 6px;
+    min-height: 38px;
+    margin-top: 0;
 }
 
 .dashboard-view-nav--dashboard {
-    margin-top: clamp(64px, 8vw, 122px);
+    /* The dashboard alone has the WINCOMMANDER wordmark. Keep the switcher
+       below it, then leave the radar and findings in their own clear bands. */
+    margin-top: clamp(54px, 5vw, 84px);
 }
 
-.dashboard-radar-wrap::-webkit-scrollbar {
-    display: none;
+/* Risk and More Products have their own left-aligned headings. Their shared
+   switcher uses the free space at the right of that heading instead of adding
+   a blank full-width row above each panel. */
+.dashboard-view-nav--risk,
+.dashboard-view-nav--products {
+    position: absolute;
+    top: 0;
+    right: 16px;
+    width: auto;
+    justify-content: flex-end;
 }
+
+/* Risk and product views begin directly below the shared switcher instead of
+   centring a smaller surface in the stage and leaving a blank top band. */
+.sovereignty-risk-matrix {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0 16px 16px;
+}
+
+.sovereignty-risk-matrix .rm-root {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.sovereignty-risk-matrix .rm-header {
+    margin-bottom: 0.75rem;
+}
+
+.sovereignty-risk-matrix .wc-risk-title-line {
+    display: block;
+}
+
+/* The matrix's two desktop cards consume the remaining stage height. This
+   removes the outer Data Exposure scroll while retaining all matrix controls. */
+@media (min-width: 1024px) {
+    .sovereignty-risk-matrix .rm-grid {
+        flex: 1;
+        min-height: 0;
+        grid-auto-rows: minmax(0, 1fr);
+    }
+
+    .sovereignty-risk-matrix .rm-matrix {
+        min-height: 0;
+    }
+}
+
+.dashboard-radar-wrap {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.dashboard-radar-wrap::-webkit-scrollbar { display: none; }
 
 /* WINCOMMANDER wordmark — always mounted behind the radar so expanding or
    collapsing NeedsAttention never makes the brand anchor blink out. */
@@ -2126,7 +2180,7 @@ html.light .dashboard-panel--watermark .dashboard-radar-watermark {
    When NeedsAttention is expanded (title hidden), --expanded drops it back to
    28px so the radar sits near the top with the findings list below. */
 .radar-center-group {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
     min-height: 0;
     width: 100%;
     display: flex;
@@ -2167,7 +2221,7 @@ html.light .dashboard-panel--watermark .dashboard-radar-watermark {
 }
 
 .radar-center-group--expanded .sov-radar__scope {
-    max-width: 300px;
+    max-width: min(300px, max(180px, calc(100dvh - 450px)));
 }
 
 .dashboard-radar-wrap .radar-center-group:not(.radar-center-group--expanded) .sov-radar__scope {
@@ -2177,7 +2231,7 @@ html.light .dashboard-panel--watermark .dashboard-radar-watermark {
 @media (max-height: 680px) {
     .dashboard-view-nav--dashboard {
         min-height: 38px;
-        margin-top: clamp(44px, 7vw, 74px);
+        margin-top: 46px;
     }
 
     .view-toggle-container {
@@ -2193,7 +2247,7 @@ html.light .dashboard-panel--watermark .dashboard-radar-watermark {
 
 @media (max-width: 520px) {
     .dashboard-view-nav--dashboard {
-        margin-top: 58px;
+        margin-top: 46px;
     }
 
     .view-toggle-container {
@@ -2204,6 +2258,17 @@ html.light .dashboard-panel--watermark .dashboard-radar-watermark {
         padding-inline: 8px;
         font-size: 9px;
         letter-spacing: 0.45px;
+    }
+}
+
+@media (max-width: 1120px) {
+    .dashboard-view-nav--risk,
+    .dashboard-view-nav--products {
+        position: relative;
+        top: auto;
+        right: auto;
+        width: 100%;
+        justify-content: center;
     }
 }
 
@@ -2317,7 +2382,7 @@ html.light .dashboard-panel--watermark .dashboard-radar-watermark {
 }
 
 .dashboard-panel--watermark .dashboard-fix-actions {
-    margin-top: 8px;
+    margin-top: 16px;
 }
 
 .dashboard-fix-actions .fix-all-btn {

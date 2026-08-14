@@ -27,13 +27,14 @@ const theme = {
 
 export default function SovereigntyRiskMatrix() {
   return (
-    <div className="w-full py-6 px-4">
+    <div className="sovereignty-risk-matrix">
       <RiskMatrix
         style={theme}
         eyebrow="Privacy Risks"
         title={
           <>
-            Data Exposure &amp; <span className="rm-title-accent">Network Visibility</span>
+            <span className="wc-risk-title-line">Data Exposure &amp;</span>
+            <span className="rm-title-accent wc-risk-title-line">Network Visibility</span>
           </>
         }
         subtitle={
