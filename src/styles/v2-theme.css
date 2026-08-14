@@ -180,8 +180,8 @@ html.light {
 }
 
 /* ── Ambient backdrop: the signature V2 glassy radial gradient.
-   Skip the transparent search-overlay window (it must stay see-through). ── */
-html:not(.search-overlay-window) body {
+   Skip transparent auxiliary windows (they must stay see-through). ── */
+html:not(.search-overlay-window):not(.notification-toast-window) body {
   background-color: var(--bg);
   background-image: var(--bg-grad);
   background-attachment: fixed;

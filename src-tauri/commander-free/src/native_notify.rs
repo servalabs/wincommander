@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 static TOAST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -43,6 +43,8 @@ fn show_custom_notification(
         ),
     );
 
+    ensure_notification_window(app)?;
+
     let toast_id = TOAST_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
     let payload = CustomNotificationPayload {
         id: toast_id,
@@ -54,6 +56,31 @@ fn show_custom_notification(
 
     app.emit("wc-native-notification", payload)
         .map_err(|error| format!("could not emit external notification: {error}"))
+}
+
+fn ensure_notification_window(app: &AppHandle) -> Result<(), String> {
+    if app.get_webview_window("notification-alerts").is_some() {
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(
+        app,
+        "notification-alerts",
+        WebviewUrl::App("index.html".into()),
+    )
+    .title("WinCommander Alerts")
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .focused(false)
+    .visible(false)
+    .inner_size(440.0, 520.0)
+    .build()
+    .map(|_| ())
+    .map_err(|error| format!("could not create notification window: {error}"))
 }
 
 fn infer_presentation(title: &str, body: &str) -> (&'static str, &'static str) {
