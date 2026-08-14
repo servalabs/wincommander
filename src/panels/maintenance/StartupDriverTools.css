@@ -119,6 +119,10 @@
   flex-direction: column;
   gap: 4px;
   margin-top: 6px;
+  max-height: min(480px, calc(100vh - 360px));
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
 }
 
 .startup-impact-row {

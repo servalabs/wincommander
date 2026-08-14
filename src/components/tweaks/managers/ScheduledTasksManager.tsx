@@ -25,6 +25,10 @@ function hasTaskAuthor(author: string | null): author is string {
     return Boolean(normalized && normalized !== "\\");
 }
 
+function hasTaskPath(path: string): boolean {
+    return path.trim().length > 0 && path.trim() !== "\\";
+}
+
 export default function ScheduledTasksManager({ embedded = false, scanKey = 0 }: { embedded?: boolean; scanKey?: number }) {
     const requestConfirm = useAppConfirm();
     // Collapsed by default + lazy fetch — see StartupManager comment.
@@ -143,15 +147,15 @@ export default function ScheduledTasksManager({ embedded = false, scanKey = 0 }:
                                     transition: "opacity var(--dur-normal) var(--ease)",
                                 }}
                             >
-                                <div className="scheduled-tasks-manager__task">
-                                    <div className="scheduled-tasks-manager__name">
-                                        <span className="scheduled-tasks-manager__name-text">{t.Name}</span>
-                                        {t.IsMicrosoft && <Icon icon="symbol-square" size={10} title="Microsoft-shipped task" />}
-                                        {hasTaskAuthor(t.Author) && <span className="scheduled-tasks-manager__author" title={t.Author}>{t.Author}</span>}
-                                    </div>
-                                    <div className="scheduled-tasks-manager__path" title={t.Path}>
-                                        {t.Path}
-                                    </div>
+                                    <div className="scheduled-tasks-manager__task">
+                                        <div className="scheduled-tasks-manager__name">
+                                            <span className="scheduled-tasks-manager__name-text">{t.Name}</span>
+                                            {t.IsMicrosoft && <Icon icon="symbol-square" size={10} title="Microsoft-shipped task" />}
+                                            {(hasTaskPath(t.Path) || hasTaskAuthor(t.Author)) && <span className="scheduled-tasks-manager__meta">
+                                                {hasTaskPath(t.Path) && <span className="scheduled-tasks-manager__path" title={t.Path}>{t.Path}</span>}
+                                                {hasTaskAuthor(t.Author) && <span className="scheduled-tasks-manager__author" title={t.Author}>{t.Author}</span>}
+                                            </span>}
+                                        </div>
                                     {(t.Description || t.LastRunTime || t.NextRunTime) && (
                                         <div className="scheduled-tasks-manager__detail">
                                             {t.Description && <span>{t.Description}</span>}

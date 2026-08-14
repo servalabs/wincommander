@@ -1,6 +1,7 @@
 .runtime-signal-cell {
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     gap: 4px;
     min-width: 0;
     max-width: 220px;
@@ -14,7 +15,7 @@
     overflow: hidden;
 }
 
-.runtime-signal-tags .bp6-tag {
+.runtime-signal-tags [data-slot="badge"] {
     min-width: 0;
     max-width: 100%;
     overflow: hidden;

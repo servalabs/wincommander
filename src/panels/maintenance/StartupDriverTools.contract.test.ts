@@ -18,9 +18,19 @@ describe("System Managers compact detail views", () => {
     const source = await Bun.file("src/components/tweaks/managers/ScheduledTasksManager.tsx").text();
 
     expect(source).toContain('function hasTaskAuthor(author: string | null): author is string');
+    expect(source).toContain('function hasTaskPath(path: string): boolean');
     expect(source).toContain('normalized !== "\\\\"');
+    expect(source).toContain('className="scheduled-tasks-manager__meta"');
     expect(source).toContain('className="scheduled-tasks-manager__author"');
     expect(source).not.toContain('{t.Author && <span>Author: {t.Author}</span>}');
+  });
+
+  test("keeps an expanded startup impact review bounded to a scrollable list", async () => {
+    const css = await Bun.file("src/panels/maintenance/StartupDriverTools.css").text();
+
+    expect(css).toContain('.startup-impact-section__list');
+    expect(css).toContain('max-height: min(480px, calc(100vh - 360px))');
+    expect(css).toContain('overflow-y: auto');
   });
 
   test("folds long concealment signals into compact, titled tags", async () => {
@@ -32,6 +42,7 @@ describe("System Managers compact detail views", () => {
     expect(source).toContain('r.tags.slice(0, 2)');
     expect(source).toContain('r.tags.length > 2');
     expect(css).toContain('max-height: 48px');
+    expect(css).toContain('align-items: flex-start');
     expect(css).toContain('text-overflow: ellipsis');
   });
 });
