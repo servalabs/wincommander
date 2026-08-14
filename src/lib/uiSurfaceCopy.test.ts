@@ -436,19 +436,18 @@ describe("redesign surface copy guardrails", () => {
     // actions-row is applied via cn() so it can toggle an is-hidden class for the
     // engines view — assert the class reference rather than a static className=.
     expect(panel).toContain('"installer-actions-row"');
-    expect(panel).toContain('text="REFRESH"');
+    expect(panel).toContain('aria-label="Refresh software catalog"');
     expect(panel).toContain('text="SELECT ALL"');
     expect(panel).toContain('text="CLEAR"');
-    expect(panel).toContain('text="UPDATE ALL"');
+    expect(panel).toContain("UPDATE<br />ALL");
     expect(panel).toContain('<TabsTrigger value="not-installed">Not Installed (');
     expect(panel).toContain('<TabsTrigger value="updates">Updates (');
     expect(panel).toContain('<TabsTrigger value="installed">Installed (');
-    // The action row spans the full toolbar width so the controls no longer
-    // compete with the search and category chips. The filter area receives the
-    // flexible column; search remains a readable fixed-width control.
-    expect(css).toContain("grid-column: 1 / -1");
+    // The toolbar is one wrapping flex row: search stays full-width, while
+    // category chips and actions share the next line without a forced card wrap.
     expect(css).toContain(".installer-toolbar-layout");
-    expect(css).toContain("grid-template-columns: minmax(240px, 340px) 1fr");
+    expect(css).toContain("flex-wrap: wrap");
+    expect(css).toContain(".installer-filter-row");
     expect(css).toContain(".installer-action-buttons-utility");
     expect(css).toContain(".installer-action-buttons-bulk");
   });

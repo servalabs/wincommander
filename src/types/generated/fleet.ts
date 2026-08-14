@@ -480,6 +480,32 @@ export type HashResult = { ok: boolean, path: string, detail: string | null, alg
 export type ListDirResult = { ok: boolean, path: string, detail: string | null, entries: Array<FileEntry>, };
 
 /**
+ * Agent → server report of ONE local Windows notification the agent already
+ * showed the user (screen-capture-tool detected, CPU/RAM/network threshold
+ * exceeded, ...), forwarded to the fleet console only when the corresponding
+ * per-type `notifications.<type>.reportToFleet` setting is on (agent-side
+ * gate — the server stores whatever it is sent). Carries the SAME concrete
+ * detail the local toast already showed, so the console can render a
+ * specific message instead of a generic "alert" line. PII-free: `detail`
+ * must contain only scalars/process-executable-names/metric values, never
+ * window titles, file contents, or free-text.
+ */
+export type LocalAlertReport = {
+/**
+ * `"screen_capture" | "cpu_usage" | "ram_usage" | "network_usage"`.
+ */
+alert_type: string,
+/**
+ * e.g. `{"detected":"OBS Studio","process":"obs64.exe"}` or
+ * `{"metric":"cpu","value_pct":94,"threshold_pct":85,"duration_s":300}`.
+ */
+detail: JsonValue,
+/**
+ * RFC3339, set by the agent at the moment the local notification fired.
+ */
+occurred_at: string | null, };
+
+/**
  * Admin login credentials. Transport security (Tailscale/TLS) protects these.
  */
 export type LoginRequest = { email: string, password: string, };
@@ -564,7 +590,16 @@ export type PostureReport = { applied_epoch: bigint, settings_hash: string,
  * against the resolved epoch's desired config to surface PER-TOGGLE drift
  * (P3). Absent (`null`) → drift is computed at epoch granularity only.
  */
-toggle_states: JsonValue | null, };
+toggle_states: JsonValue | null,
+/**
+ * Whether the Privacy Shield is ACTUALLY running on the device right
+ * now, self-reported at posture time. Compared against the resolved
+ * `ShieldDesiredState` (a SEPARATE, non-epoch-versioned channel — see
+ * that type's doc) to raise real shield drift, independent of
+ * `applied_epoch`/`toggle_states`. `None` on any pre-shield-drift agent
+ * build, or when the agent has no shield status to report this cycle.
+ */
+shield_running: boolean | null, };
 
 /**
  * Aggregate productivity sample sent by an agent. Carries NO raw titles, URLs,
@@ -750,6 +785,31 @@ export type SecuritySnapshotResult = { processes: Array<SecuritySnapshotProcess>
  * One bounded Windows service row from `endpoint.security_snapshot`.
  */
 export type SecuritySnapshotService = { name: string, start_type: string, status: string, path: string | null, };
+
+/**
+ * Privacy Shield's admin-desired on/off + mode, resolved device > group > org
+ * (same precedence as `ConfigEpoch`) but stored and versioned SEPARATELY from
+ * the policy `config_epochs` chain. Toggling the shield from the console
+ * must NEVER advance `ConfigEpoch.version` — that chain is for actual policy
+ * edits, and every version bump makes every OTHER device look momentarily
+ * "behind" in `routes::posture::drift` (which compares against the org's
+ * single highest version regardless of target). Delivered to the agent on
+ * the same fast `/v1/agents/checkin` round-trip as `config_epoch`, via
+ * `CheckinResponse.shield_state`.
+ */
+export type ShieldDesiredState = { enabled: boolean,
+/**
+ * `"blur_notify"` (blur/black-out the screen AND notify) | `"notify_only"`
+ * (notification only, no visual blur). Mutually exclusive — see the
+ * Privacy Shield card's segmented toggle.
+ */
+mode: string,
+/**
+ * RFC3339, set by the server when this desired state was last written.
+ * Informational only (no anti-rollback gate — latest write always wins,
+ * unlike `ConfigEpoch`).
+ */
+updated_at: string, };
 
 /**
  * What an agent receives when it polls — the signed, executable envelope. The

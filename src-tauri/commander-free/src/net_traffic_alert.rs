@@ -164,6 +164,19 @@ struct MetricAlertPayload {
     threshold: f64,
 }
 
+/// One threshold breach that has transitioned into an alert. Grouping these
+/// related fields prevents the notification/reporting boundary from gaining a
+/// brittle positional parameter list as alert metadata evolves.
+struct AlertFire<'a> {
+    metric: &'a str,
+    label: &'a str,
+    value: f64,
+    unit: &'a str,
+    threshold: f64,
+    report_to_fleet: bool,
+    sustained_secs: u32,
+}
+
 /// Evaluate one metric alert against `value`. Returns true exactly on the
 /// transition into the alerted state (the moment to fire). Shared by every
 /// metric — this is the reusable core.
@@ -206,19 +219,10 @@ fn evaluate(cfg: &MetricAlert, state: &mut AlertState, value: f64, now: Instant)
     }
 }
 
-fn fire_alert(
-    app: &AppHandle,
-    metric: &str,
-    label: &str,
-    value: f64,
-    unit: &str,
-    threshold: f64,
-    report_to_fleet: bool,
-    sustained_secs: u32,
-) {
+fn fire_alert(app: &AppHandle, alert: AlertFire<'_>) {
     let body = format!(
         "{} hit {:.1}{} (limit {:.0}{}).",
-        label, value, unit, threshold, unit
+        alert.label, alert.value, alert.unit, alert.threshold, alert.unit
     );
     if let Err(e) =
         crate::native_notify::show_native_notification(app, "WinCommander - Alert", &body)
@@ -228,30 +232,30 @@ fn fire_alert(
     let _ = app.emit(
         "metrics://metric-alert",
         MetricAlertPayload {
-            metric: metric.to_string(),
-            label: label.to_string(),
-            value,
-            unit: unit.to_string(),
-            threshold,
+            metric: alert.metric.to_string(),
+            label: alert.label.to_string(),
+            value: alert.value,
+            unit: alert.unit.to_string(),
+            threshold: alert.threshold,
         },
     );
     crate::log_message("warn", &format!("[MetricAlert] {}", body));
 
-    if report_to_fleet {
+    if alert.report_to_fleet {
         // "cpu"|"ram" map 1:1; "upload"/"download" both collapse to the
         // server's single "network_usage" alert type (see the contract's
         // LocalAlertReport doc) — the fleet console models network as one
         // reportable metric, not per-direction.
-        let alert_type = match metric {
+        let alert_type = match alert.metric {
             "cpu" => "cpu_usage",
             "ram" => "ram_usage",
             _ => "network_usage",
         };
         let detail = serde_json::json!({
-            "metric": metric,
-            "value_pct": value,
-            "threshold_pct": threshold,
-            "duration_s": sustained_secs,
+            "metric": alert.metric,
+            "value_pct": alert.value,
+            "threshold_pct": alert.threshold,
+            "duration_s": alert.sustained_secs,
         });
         let alert_type = alert_type.to_string();
         tauri::async_runtime::spawn(async move {
@@ -290,13 +294,15 @@ fn tick_metric(
         if evaluate(cfg, state, value, now) {
             fire_alert(
                 app,
-                metric,
-                label,
-                value,
-                unit,
-                cfg.threshold,
-                cfg.report_to_fleet,
-                cfg.sustained_secs,
+                AlertFire {
+                    metric,
+                    label,
+                    value,
+                    unit,
+                    threshold: cfg.threshold,
+                    report_to_fleet: cfg.report_to_fleet,
+                    sustained_secs: cfg.sustained_secs,
+                },
             );
         }
     } else {
