@@ -54,6 +54,15 @@ lto = "thin"
 opt-level = "s"
 strip = true
 
+[profile.release.package.commander-free]
+# Workaround for a rustc 1.97.1 ICE (ar_archive_writer panics with an unwrap()
+# on None inside CrateInfo::new / ArArchiveBuilder::build) that only fires on
+# x86_64-pc-windows-msvc when a crate is built with codegen-units=1 under
+# linker-plugin-lto. Bumping this crate's codegen-units off 1 routes around
+# the broken archive-writer code path while keeping workspace-wide thin LTO
+# and strip. Revert once upstream ships a fix.
+codegen-units = 16
+
 [profile.release.build-override]
 # Build scripts + proc-macros only — never shipped. opt-level=0 + more codegen
 # units compiles them fast; the LTO'd release binary is byte-unaffected.
