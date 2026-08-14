@@ -1,5 +1,36 @@
 /* src/panels/apps/index.css */
 
+.apps-panel-tabs {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  padding: 8px !important;
+}
+
+.apps-panel-tabs__status {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.apps-panel-tabs + [data-slot="tabs-content"] {
+  margin-top: 0;
+}
+
+.apps-panel-tabs + [data-slot="tabs-content"] .installer-card {
+  border-top: 0 !important;
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl) !important;
+}
+
+@media (max-width: 900px) {
+  .apps-panel-tabs__status {
+    width: 100%;
+    margin-left: 0;
+    padding-top: 4px;
+  }
+}
+
 /* ── Engines Section (revamped) ───────────────────────────────────── */
 .apps-engines-section { padding: 0 12px 12px; }
 .eng-root { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
