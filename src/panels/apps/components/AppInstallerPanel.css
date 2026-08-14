@@ -317,6 +317,7 @@
         .installer-filter-row {
           display: flex;
           align-items: center;
+          flex-wrap: nowrap;
           flex: 1 1 420px;
           justify-content: flex-start;
           gap: 12px;
@@ -424,13 +425,16 @@
            pill-button group (title-case, "on" active state). */
         .category-chips {
           display: flex;
-          flex-wrap: wrap;
+          flex-wrap: nowrap;
           gap: 6px;
           flex: 1;
+          min-width: 0;
+          overflow-x: auto;
           padding: 0;
         }
 
         .category-chip {
+          flex: 0 0 auto;
           font-family: var(--font-mono);
           font-size: 10px;
           letter-spacing: 0.6px;
@@ -460,6 +464,7 @@
         }
 
         .category-clear-btn {
+          flex: 0 0 auto;
           font-family: var(--font-mono) !important;
           font-size: 10px !important;
           letter-spacing: 0.8px;

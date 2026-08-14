@@ -222,6 +222,8 @@ const ID_TO_SLUG: Record<string, string> = {
 
   // Catalog gap
   "ImDisk.Toolkit": "imdisk-toolkit",
+  "AnyDesk.AnyDesk": "anydesk",
+  "DucFabulous.UltraViewer": "ultraviewer",
 };
 
 // Category → Blueprint icon used when no brand asset is present. Keeps cards

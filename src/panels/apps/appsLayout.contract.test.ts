@@ -12,7 +12,7 @@ describe("Packages and Apps layout", () => {
     const installer = await read("src/panels/apps/components/AppInstallerPanel.tsx");
 
     expect(panel).not.toContain('value="updates-tools"');
-    expect(panel).toContain("updatesTools={<div");
+    expect(panel).toContain("updatesTools={<PackageUpdateTools />}");
     expect(installer).toContain('<TabsContent value="updates">');
     expect(installer).toContain("{updatesTools &&");
   });
@@ -37,13 +37,16 @@ describe("Packages and Apps layout", () => {
     expect(engines).not.toContain("eng-installed");
   });
 
-  test("offers the engine catalog filter in both install-state sub-tabs", async () => {
+  test("shows the full engine readiness view from the Engines category", async () => {
     const installer = await read("src/panels/apps/components/AppInstallerPanel.tsx");
+    const engines = await read("src/panels/apps/components/EnginesSection.tsx");
 
     expect(installer).toContain('{ id: "engines", label: "Engines" }');
-    expect(installer).toContain("ENGINE_PACKAGE_IDS.has(app.id)");
-    expect(installer).toContain('<TabsContent value="not-installed">');
-    expect(installer).toContain('<TabsContent value="installed">');
+    expect(installer).toContain('selectedCategory === "engines"');
+    expect(installer).toContain("<EnginesSection />");
+    expect(engines).not.toContain("HIDDEN_FROM_ENGINES_GRID");
+    expect(engines).toContain("Not installed ({missing.length})");
+    expect(engines).toContain("Installed ({installed.length})");
   });
 
   test("includes the requested remote-support applications in the catalog", async () => {

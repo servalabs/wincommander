@@ -1,7 +1,6 @@
 // src/panels/apps/index.tsx
 import { useEffect, useState } from "react";
 import AppInstallerPanel, { type AppInstallerStatus } from "./components/AppInstallerPanel";
-import EnginesSection from "./components/EnginesSection";
 import DebloatPanel from "./DebloatPanel";
 import { PackageUpdateTools } from "./PackageUpdateTools";
 import PanelHeader from "../../components/shared/PanelHeader";
@@ -84,7 +83,7 @@ export default function AppsPanel() {
               </span>
             </div>
           </TabsList>
-          <TabsContent value="install"><AppInstallerPanel onStatusChange={setInstallerStatus} updatesTools={<div className="flex flex-col gap-6"><PackageUpdateTools /><div className="apps-engines-section flex flex-col gap-3"><div className="text-xs font-semibold uppercase tracking-widest opacity-60">Engines</div><EnginesSection /></div></div>} /></TabsContent>
+          <TabsContent value="install"><AppInstallerPanel onStatusChange={setInstallerStatus} updatesTools={<PackageUpdateTools />} /></TabsContent>
           <TabsContent value="debloat"><DebloatPanel /></TabsContent>
         </Tabs>
       </div>

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback } from "react";
 import { Button, Icon, Spinner } from "@/components/ui/bp";
 import { cn } from "../../../lib/utils";
 import { executeBackendCommand } from "../../../hooks/useBackend";
@@ -124,24 +124,9 @@ function EngineCard({ dep, importance, isBusy, onInstall }: CardProps) {
   );
 }
 
-// Packages & Apps is itself built on winget — listing "Package Manager" as
-// just another optional engine card here reads as redundant/circular, so it's
-// excluded from this grid. It's still a real dependency elsewhere (DependencyGate,
-// Install-Dependency, etc.) — only this display is filtered.
-const HIDDEN_FROM_ENGINES_GRID = new Set([
-  "winget",
-  // Chocolatey and Scoop remain available as deliberate, manual choices in
-  // Package updates. They are never part of the engine readiness surface.
-  "chocolatey",
-  "scoop",
-]);
-
 export default function EnginesSection() {
   const { dependencyStatus: allDependencyStatus, forceRefreshDeps, runAppInventoryScan } = useAppState();
-  const dependencyStatus = useMemo(
-    () => allDependencyStatus?.filter((d) => !HIDDEN_FROM_ENGINES_GRID.has(d.id)) ?? null,
-    [allDependencyStatus]
-  );
+  const dependencyStatus = allDependencyStatus ?? null;
   const [installingIds, setInstallingIds] = useState<Set<string>>(new Set());
   const [installingAll, setInstallingAll] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -214,8 +199,6 @@ export default function EnginesSection() {
 
   const missing = dependencyStatus.filter((d) => !d.installed);
   const installed = dependencyStatus.filter((d) => d.installed);
-  const critical = missing.filter((d) => engineImportance(d.id) === "critical");
-  const optional = missing.filter((d) => engineImportance(d.id) !== "critical");
   const pct = dependencyStatus.length > 0
     ? Math.round((installed.length / dependencyStatus.length) * 100)
     : 100;
@@ -250,17 +233,16 @@ export default function EnginesSection() {
         </div>
       </div>
 
-      {/* Critical missing */}
-      {critical.length > 0 && (
+      {missing.length > 0 && (
         <div className="eng-group">
           <div className="eng-group-label eng-group-label--critical">
-            <Icon icon="error" size={10} /> Critical
+            <Icon icon="download" size={10} /> Not installed ({missing.length})
           </div>
           <div className="eng-app-grid">
-            {critical.map((dep) => (
+            {missing.map((dep) => (
               <EngineCard
                 key={dep.id} dep={dep}
-                importance="critical"
+                importance={engineImportance(dep.id)}
                 isBusy={installingIds.has(dep.id) || installingAll}
                 onInstall={handleInstall}
               />
@@ -269,14 +251,13 @@ export default function EnginesSection() {
         </div>
       )}
 
-      {/* Optional / system missing */}
-      {optional.length > 0 && (
+      {installed.length > 0 && (
         <div className="eng-group">
-          <div className="eng-group-label eng-group-label--optional">
-            <Icon icon="warning-sign" size={10} /> Optional
+          <div className="eng-group-label">
+            <Icon icon="tick" size={10} /> Installed ({installed.length})
           </div>
           <div className="eng-app-grid">
-            {optional.map((dep) => (
+            {installed.map((dep) => (
               <EngineCard
                 key={dep.id} dep={dep}
                 importance={engineImportance(dep.id)}

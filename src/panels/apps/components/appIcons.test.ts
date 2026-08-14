@@ -16,5 +16,7 @@ describe("resolveBundledBrandSlug", () => {
     expect(resolveBundledBrandSlug("Discord.Discord")).toBe("discord");
     expect(resolveBundledBrandSlug("JetBrains.IntelliJIDEA.Community")).toBe("intellij");
     expect(resolveBundledBrandSlug("Google.GoogleDrive")).toBe("google-drive");
+    expect(resolveBundledBrandSlug("AnyDesk.AnyDesk")).toBe("anydesk");
+    expect(resolveBundledBrandSlug("DucFabulous.UltraViewer")).toBe("ultraviewer");
   });
 });

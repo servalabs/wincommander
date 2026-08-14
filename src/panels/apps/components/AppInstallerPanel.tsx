@@ -9,6 +9,7 @@ import { releasePackageOperation, tryAcquirePackageOperation, waitForPackageOper
 import { recordPackageActivity, setPackageActivityStatus, usePackageActivities } from "../../../lib/packageActivityStore";
 import { showWarning, showError, showSuccess } from "../../../utils/toast";
 import AppIcon from "./AppIcon";
+import EnginesSection from "./EnginesSection";
 import { cn } from "../../../lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 // staggerDelay caps per-item delay so large lists never animate for seconds.
@@ -77,17 +78,6 @@ const CATEGORY_TABS = [
   { id: "developer", label: "Developer" },
   { id: "system-info", label: "System" },
 ] as const;
-
-// These catalogue packages back a WinCommander engine. Keep this separate
-// from their ordinary catalogue categories so one filter works for both the
-// install and installed sub-tabs.
-const ENGINE_PACKAGE_IDS = new Set([
-  "Voidtools.Everything",
-  "ImDisk.Toolkit",
-  "smartmontools.smartmontools",
-  "Microsoft.PowerShell",
-  "BleachBit.BleachBit",
-]);
 
 function mapCategoryToTab(category: string): string {
   const normalized = category.trim().toLowerCase();
@@ -570,7 +560,6 @@ function AppInstallerPanel({
         const mappedCategory = mapCategoryToTab(app.category);
         const categoryMatches = isSearching
           || selectedCategory === "all"
-          || (selectedCategory === "engines" && ENGINE_PACKAGE_IDS.has(app.id))
           || mappedCategory === selectedCategory;
         const matchesSearch = !isSearching ||
           app.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -1120,7 +1109,7 @@ function AppInstallerPanel({
             )}
           </div>
 
-          <div className="installer-actions-row">
+          <div className={selectedCategory === "engines" ? "hidden" : "installer-actions-row"}>
               <div className="installer-selection-count">
                 <span className={`mono text-xl leading-none transition-all duration-300 font-bold ${selectedApps.size > 0 ? "text-[var(--color-accent)]" : "text-[var(--color-text-muted)] opacity-30"}`}>
                   {selectedApps.size}
@@ -1253,6 +1242,11 @@ function AppInstallerPanel({
             per-item Tabs pattern (Privacy). "Updates" combines what were
             previously two stacked groups — the collapsible "Updates
             Available" and the always-shown "Other Updates" — into one tab. */}
+        {selectedCategory === "engines" ? (
+          <div ref={appsGridRef} className="apps-engines-section">
+            <EnginesSection />
+          </div>
+        ) : (
         <div ref={appsGridRef}>
           <Tabs value={installerView} onValueChange={(value) => setInstallerView(value as typeof installerView)}>
             <TabsList className="w-full flex-wrap justify-start">
@@ -1382,6 +1376,7 @@ function AppInstallerPanel({
             </TabsContent>
           </Tabs>
         </div>
+        )}
 
       </Card >
     </div >
