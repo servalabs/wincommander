@@ -28,6 +28,12 @@ import { Button, Spinner, Switch, Tag } from '@/components/ui/bp';
 import type { Intent } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
 import { useAppState } from '../../context/AppContext';
+import {
+  driverHealthIgnoreId,
+  ignoredDriverFindingCount,
+  isIgnoredDriverFinding,
+  vulnerableDriverIgnoreId,
+} from './driverFindingIgnore';
 import './DriverHealthSection.css';
 
 type Severity = 'critical' | 'warning' | 'info';
@@ -113,6 +119,7 @@ function remediation(d: DriverProblem): string {
 export default function DriverHealthSection({ isAdvanced = false, embedded = false, scanKey = 0, hideActions = false }: DriverHealthSectionProps) {
   const { appSettings, patchAppSettings } = useAppState();
   const watchEnabled = appSettings?.ideal?.security?.drivers?.watchEnabled ?? false;
+  const ignoredFindingIds = appSettings?.app?.ignoredFindingIds ?? [];
 
   const [report, setReport] = useState<DriverHealthReport | null>(null);
   const [loading, setLoading] = useState(false);
@@ -192,7 +199,32 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
   );
 
   const summary = report?.summary;
-  const problemCount = summary ? summary.critical + summary.warning : 0;
+  const sortedDevices = report
+    ? [...report.devices]
+      .filter((driver) => !isIgnoredDriverFinding(ignoredFindingIds, driverHealthIgnoreId(driver)))
+      .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
+    : [];
+  const problemCount = sortedDevices.filter((driver) => driver.severity === 'critical' || driver.severity === 'warning').length;
+  const visibleVulnerableDrivers = vulnReport?.vulnerable.filter(
+    (driver) => !isIgnoredDriverFinding(ignoredFindingIds, vulnerableDriverIgnoreId(driver)),
+  ) ?? [];
+  const ignoredDriverCount = ignoredDriverFindingCount(ignoredFindingIds);
+
+  const ignoreDriverFinding = useCallback((id: string) => {
+    void patchAppSettings((latest) => ({
+      app: { ignoredFindingIds: [...new Set([...(latest?.app?.ignoredFindingIds ?? []), id])] },
+    })).catch(() => {});
+  }, [patchAppSettings]);
+
+  const restoreDriverFindings = useCallback(() => {
+    void patchAppSettings((latest) => ({
+      app: {
+        ignoredFindingIds: (latest?.app?.ignoredFindingIds ?? []).filter(
+          (id) => !id.startsWith('driver-health:') && !id.startsWith('driver-byovd:'),
+        ),
+      },
+    })).catch(() => {});
+  }, [patchAppSettings]);
 
   const headerTag = summary ? (
     summary.ok || problemCount === 0 ? (
@@ -205,10 +237,6 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
       </Tag>
     )
   ) : null;
-
-  const sortedDevices = report
-    ? [...report.devices].sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
-    : [];
 
   const body = <div className="driver-health-body">
         <div className="driver-health-intro">
@@ -231,6 +259,7 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
               className="driver-health-watch-switch"
             />
           )}
+          {ignoredDriverCount > 0 && <Button icon="reset" minimal small onClick={restoreDriverFindings}>Restore ignored ({ignoredDriverCount})</Button>}
         </div>
 
         {error && <div role="alert" className="driver-health-error">{error}</div>}
@@ -257,6 +286,7 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
                     {d.severity.toUpperCase()}
                     {d.problemCode != null ? ` · CODE ${d.problemCode}` : ''}
                   </Tag>
+                  {d.severity === 'critical' && <Button icon="eye-off" minimal small onClick={() => ignoreDriverFinding(driverHealthIgnoreId(d))}>Ignore</Button>}
                 </div>
                 <div className="driver-health-row-problem">{d.problemText}</div>
                 <div className="driver-health-row-meta">
@@ -281,10 +311,10 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
               {vulnReport && (
                 <Tag
                   minimal={vulnReport.ok}
-                  intent={vulnReport.ok ? 'success' : 'danger'}
+                  intent={vulnReport.ok || visibleVulnerableDrivers.length === 0 ? 'success' : 'danger'}
                   className="font-mono"
                 >
-                  {vulnReport.ok ? 'NO EXPOSURE FOUND' : `${vulnReport.vulnerable.length} FOUND`}
+                  {vulnReport.ok ? 'NO EXPOSURE FOUND' : visibleVulnerableDrivers.length === 0 ? 'ALL IGNORED' : `${visibleVulnerableDrivers.length} FOUND`}
                 </Tag>
               )}
               {!hideActions && <Button icon="refresh" minimal small onClick={refreshVuln} disabled={vulnLoading}>Refresh scan</Button>}
@@ -304,13 +334,13 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
             <div role="alert" className="driver-health-error">{vulnError}</div>
           )}
 
-          {!vulnLoading && vulnReport && vulnReport.ok && (
-            <div className="driver-health-byovd-empty">No known-vulnerable drivers are loaded.</div>
+              {!vulnLoading && vulnReport && (vulnReport.ok || visibleVulnerableDrivers.length === 0) && (
+            <div className="driver-health-byovd-empty">No active known-vulnerable drivers are shown.</div>
           )}
 
-          {vulnReport && vulnReport.vulnerable.length > 0 && (
+          {vulnReport && visibleVulnerableDrivers.length > 0 && (
             <div className="driver-health-list">
-              {vulnReport.vulnerable.map((v) => (
+              {visibleVulnerableDrivers.map((v) => (
                 <div key={v.filename} className="driver-health-row is-critical driver-health-byovd-row">
                   <div className="driver-health-row-head">
                     <span className="driver-health-row-name font-mono">{v.filename}</span>
@@ -320,6 +350,7 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
                     <Tag minimal className="font-mono">
                       {v.state}
                     </Tag>
+                    <Button icon="eye-off" minimal small onClick={() => ignoreDriverFinding(vulnerableDriverIgnoreId(v))}>Ignore</Button>
                   </div>
                   <div className="driver-health-row-problem">{v.reason}</div>
                   {v.path && (
