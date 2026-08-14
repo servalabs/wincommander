@@ -731,6 +731,62 @@ pub async fn fleet_report_privacy_shield_status(
     .await
 }
 
+/// Pull the Privacy Shield's admin-desired on/off + mode from the Fleet
+/// server via the Pro sidecar's cached check-in state (`CheckinResponse
+/// .shield_state`), and mirror it into local settings as
+/// `app.fleet.shieldDesiredState` so the UI (PrivacyShieldCard's Stop-button
+/// lock + alert-mode segmented toggle) can read it without its own poll
+/// cycle. This is a SEPARATE, non-`policy_epoch`-versioned channel — see
+/// `ShieldDesiredState`'s doc in `fleet-proto` — so calling this never
+/// touches `policy.masterConfigVersion` or triggers a config-drift check.
+/// Returns the resolved state (or `null` when the org has none / the device
+/// isn't fleet-managed) so callers can react immediately without a settings
+/// re-read.
+#[tauri::command]
+pub async fn fleet_sync_shield_state() -> Result<serde_json::Value, String> {
+    crate::license::require_service_feature("fleet")?;
+    let settings = crate::settings::read_settings()?;
+    if !settings.app.fleet.enabled {
+        return Ok(serde_json::Value::Null);
+    }
+    let resp =
+        crate::sidecar::dispatch_paid_command("fleet_agent_shield_state", serde_json::Value::Null)
+            .await?;
+    let state = resp.get("shieldState").cloned().unwrap_or(serde_json::Value::Null);
+    crate::settings::patch_settings(serde_json::json!({
+        "app": { "fleet": { "shieldDesiredState": state } }
+    }))?;
+    Ok(state)
+}
+
+/// Forward one local Windows-notification alert (screen-capture detected,
+/// CPU/RAM/network threshold exceeded) to the Fleet console, carrying the
+/// SAME concrete detail the local toast already showed. Callers MUST check
+/// the corresponding `notifications.<type>.reportToFleet` setting before
+/// calling this — this command does not re-check it, matching
+/// `fleet_report_privacy_shield_status`'s division of responsibility (the
+/// caller decides IF to report; this only decides HOW).
+#[tauri::command]
+pub async fn fleet_report_local_alert(
+    alert_type: String,
+    detail: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    crate::license::require_service_feature("fleet")?;
+    let settings = crate::settings::read_settings()?;
+    if !settings.app.fleet.enabled {
+        return Err("Fleet is not enabled on this device.".to_string());
+    }
+    crate::sidecar::dispatch_paid_command(
+        "fleet_agent_local_alert",
+        serde_json::json!({
+            "alertType": alert_type,
+            "detail": detail,
+            "occurredAt": chrono::Utc::now().to_rfc3339(),
+        }),
+    )
+    .await
+}
+
 /// Request to leave the fleet. Posts to the fleet server's unenroll-request
 /// endpoint so an admin (two Operator+ admins under MPA) can approve the
 /// departure. Idempotent — calling again while a pending request exists

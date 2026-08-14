@@ -50,6 +50,11 @@ pub struct MetricAlert {
     pub hysteresis_pct: u8,
     pub sustained_enabled: bool,
     pub sustained_secs: u32,
+    /// Forward this alert to the Fleet console when it fires. Admin-lockable
+    /// via `ConfigEpoch.locked_paths` on `notifications.{cpuUsage,ramUsage,
+    /// networkUsage}.reportToFleet` — same mechanism `privacy.privacyShield`
+    /// already uses.
+    pub report_to_fleet: bool,
 }
 
 impl From<crate::settings::MetricAlertSettings> for MetricAlert {
@@ -61,6 +66,7 @@ impl From<crate::settings::MetricAlertSettings> for MetricAlert {
             hysteresis_pct: s.hysteresis_pct.clamp(1, 90),
             sustained_enabled: s.sustained_enabled,
             sustained_secs: s.sustained_secs.clamp(1, 600),
+            report_to_fleet: s.report_to_fleet,
         }
     }
 }
@@ -75,6 +81,7 @@ impl MetricAlert {
             hysteresis_pct: self.hysteresis_pct.clamp(1, 90),
             sustained_enabled: self.sustained_enabled,
             sustained_secs: self.sustained_secs.clamp(1, 600),
+            report_to_fleet: self.report_to_fleet,
         }
     }
 
@@ -86,6 +93,7 @@ impl MetricAlert {
             "hysteresisPct": self.hysteresis_pct,
             "sustainedEnabled": self.sustained_enabled,
             "sustainedSecs": self.sustained_secs,
+            "reportToFleet": self.report_to_fleet,
         })
     }
 }
@@ -198,7 +206,16 @@ fn evaluate(cfg: &MetricAlert, state: &mut AlertState, value: f64, now: Instant)
     }
 }
 
-fn fire_alert(app: &AppHandle, metric: &str, label: &str, value: f64, unit: &str, threshold: f64) {
+fn fire_alert(
+    app: &AppHandle,
+    metric: &str,
+    label: &str,
+    value: f64,
+    unit: &str,
+    threshold: f64,
+    report_to_fleet: bool,
+    sustained_secs: u32,
+) {
     let body = format!(
         "{} hit {:.1}{} (limit {:.0}{}).",
         label, value, unit, threshold, unit
@@ -219,6 +236,35 @@ fn fire_alert(app: &AppHandle, metric: &str, label: &str, value: f64, unit: &str
         },
     );
     crate::log_message("warn", &format!("[MetricAlert] {}", body));
+
+    if report_to_fleet {
+        // "cpu"|"ram" map 1:1; "upload"/"download" both collapse to the
+        // server's single "network_usage" alert type (see the contract's
+        // LocalAlertReport doc) — the fleet console models network as one
+        // reportable metric, not per-direction.
+        let alert_type = match metric {
+            "cpu" => "cpu_usage",
+            "ram" => "ram_usage",
+            _ => "network_usage",
+        };
+        let detail = serde_json::json!({
+            "metric": metric,
+            "value_pct": value,
+            "threshold_pct": threshold,
+            "duration_s": sustained_secs,
+        });
+        let alert_type = alert_type.to_string();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) =
+                crate::fleet_agent::fleet_report_local_alert(alert_type.clone(), detail).await
+            {
+                crate::flow_bridge::flow_trace(format!(
+                    "[MetricAlert] Fleet report not queued ({}): {}",
+                    alert_type, error
+                ));
+            }
+        });
+    }
 }
 
 /// One enabled metric: evaluate + fire, or reset state while disabled.
@@ -242,7 +288,16 @@ fn tick_metric(
 ) {
     if cfg.enabled && entitled {
         if evaluate(cfg, state, value, now) {
-            fire_alert(app, metric, label, value, unit, cfg.threshold);
+            fire_alert(
+                app,
+                metric,
+                label,
+                value,
+                unit,
+                cfg.threshold,
+                cfg.report_to_fleet,
+                cfg.sustained_secs,
+            );
         }
     } else {
         // Keep state clean while disabled (or unentitled) so re-enabling

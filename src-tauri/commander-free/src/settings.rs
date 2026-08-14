@@ -426,8 +426,12 @@ pub struct AppPreferences {
     /// lockdown. The cascade fires silently via invoke without step progress shown.
     #[serde(default)]
     pub hide_destruction_sequence: bool,
+    /// Hides the in-app guide trigger and suppresses automatic/manual tours.
+    /// Borrowed-only hiding is represented by the "tour" borrowed-hidden key.
+    #[serde(default)]
+    pub hide_tour: bool,
     /// Non-panel surface keys hidden only while Borrowed Mode is active.
-    /// Recognised keys: "notif-bell", "risk-matrix", "more-products",
+    /// Recognised keys: "notif-bell", "risk-matrix", "more-products", "tour",
     /// "action:dismount", "action:delete", "action:scrubMeta", "action:lockdown".
     /// Option so the frontend can apply defaults when never configured.
     #[serde(default)]
@@ -569,6 +573,14 @@ pub struct MetricAlertSettings {
     pub sustained_enabled: bool,
     /// Seconds of continuous breach required to fire. Clamped 1..=600.
     pub sustained_secs: u32,
+    /// Forward this alert to the Fleet console when it fires. Settings path
+    /// `notifications.{cpuUsage,ramUsage,networkUsage}.reportToFleet` — an
+    /// admin-lockable path via the generic `ConfigEpoch.locked_paths`
+    /// mechanism, same as `privacy.privacyShield`. `upload`/`download` share
+    /// the single `networkUsage` fleet alert type. `#[serde(default)]` so
+    /// settings.json written before this field existed still parse.
+    #[serde(default)]
+    pub report_to_fleet: bool,
 }
 
 impl MetricAlertSettings {
@@ -581,6 +593,7 @@ impl MetricAlertSettings {
             hysteresis_pct: 20,
             sustained_enabled: true,
             sustained_secs: 30,
+            report_to_fleet: false,
         }
     }
 }
@@ -718,6 +731,7 @@ impl Default for AppPreferences {
                     .collect(),
             ),
             hide_destruction_sequence: false,
+            hide_tour: false,
             borrowed_hidden: None,
             lock_panel_on_close: None,
             file_search: FileSearchSettings::default(),
@@ -942,6 +956,11 @@ pub struct ScreenCaptureSettings {
     pub detection_enabled: Option<bool>,
     #[serde(default)]
     pub protect_window: Option<bool>,
+    /// Forward each screen-capture-tool detection to the Fleet console.
+    /// Admin-lockable via `ConfigEpoch.locked_paths` on
+    /// `notifications.screenCapture.reportToFleet`.
+    #[serde(default)]
+    pub report_to_fleet: Option<bool>,
 }
 
 /// F-5: coercion phrase. Persistence layer; runtime authority lives

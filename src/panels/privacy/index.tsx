@@ -106,8 +106,15 @@ export default function PrivacyPanel() {
 
     const screenCaptureDetectionEnabled = appSettings?.ideal?.privacy?.screenCapture?.detectionEnabled ?? false;
     const screenCaptureProtectWindow = appSettings?.ideal?.privacy?.screenCapture?.protectWindow ?? false;
-    const patchScreenCapture = (patch: { detectionEnabled?: boolean; protectWindow?: boolean }) =>
+    const screenCaptureReportToFleet = appSettings?.ideal?.privacy?.screenCapture?.reportToFleet ?? false;
+    const patchScreenCapture = (patch: { detectionEnabled?: boolean; protectWindow?: boolean; reportToFleet?: boolean }) =>
         patchAppSettings({ ideal: { privacy: { screenCapture: patch } } } as any).catch(() => {});
+    const fleetEnabled = appSettings?.app?.fleet?.enabled === true;
+    const fleetLockedPaths = appSettings?.policy?.lockedPaths ?? [];
+    const screenCaptureReportLocked = fleetLockedPaths.some((p) =>
+        p.trim().length > 0 &&
+        ("notifications.screenCapture.reportToFleet".startsWith(p) || "ideal.notifications.screenCapture.reportToFleet".startsWith(p))
+    );
 
     // These six Pro monitors are not represented in appSettings. Poll their
     // status endpoints so the top strip includes their collector state.
@@ -333,6 +340,9 @@ export default function PrivacyPanel() {
                                                 <ScreenCaptureSection
                                                     detectionEnabled={screenCaptureDetectionEnabled}
                                                     protectWindow={screenCaptureProtectWindow}
+                                                    reportToFleet={screenCaptureReportToFleet}
+                                                    reportToFleetLocked={screenCaptureReportLocked}
+                                                    fleetEnabled={fleetEnabled}
                                                     onPatch={patchScreenCapture}
                                                 />
                                             </div>

@@ -286,6 +286,9 @@ export interface AppPreferences {
   /** When true, the full-screen countdown popup is suppressed when triggering
    *  lockdown from the sidebar button. The countdown still fires silently. */
   hideDestructionSequence?: boolean;
+  /** When true, the title-bar guide button and all automatic/manual tours are
+   * hidden. Borrowed-only hiding uses the "tour" borrowedHidden key. */
+  hideTour?: boolean;
   /** "Lock panel on close" (Secret Setting). When ON and a calculator PIN is armed,
    *  closing shows the calculator only; when OFF (or no PIN), closing hides to the tray
    *  (next reveal is Borrowed-locked when lockedPanelIds is configured). Undefined
@@ -390,8 +393,17 @@ export interface FleetSettings {
   dispatch: boolean;
   /** base64 Ed25519 fleet public key */
   signingKeyPub: string;
-  /** True only for a Privacy Shield session that Fleet started. */
+  /** True only for a Privacy Shield session that Fleet started. Kept for
+   *  back-compat display text; no longer the sole gate on the Stop button —
+   *  see `shieldDesiredState.enabled`, which is derived from "is the shield
+   *  fleet-mandated on right now" and does not depend on restart history. */
   privacyShieldSessionOwned?: boolean;
+  /** Resolved Privacy Shield desired state from the fleet server's
+   *  `/v1/agents/checkin` response (`CheckinResponse.shield_state`) — a
+   *  SEPARATE, non-`policy_epoch`-versioned channel (toggling the shield
+   *  never bumps the policy version). `null`/absent = not fleet-managed,
+   *  or the connected server predates this field. */
+  shieldDesiredState?: { enabled: boolean; mode: 'blur_notify' | 'notify_only'; updatedAt: string } | null;
 }
 
 /** Paid: one reusable metric alert. Hysteresis and sustained-breach
@@ -404,6 +416,13 @@ export interface MetricAlertSettings {
   hysteresisPct: number;
   sustainedEnabled: boolean;
   sustainedSecs: number;
+  /** Forward this alert to the Fleet console when it fires. Settings path
+   *  `notifications.{cpuUsage,ramUsage,networkUsage}.reportToFleet` —
+   *  locked (visible-but-disabled locally) whenever that path appears in
+   *  the resolved ConfigEpoch.locked_paths. `upload`/`download` share the
+   *  single `networkUsage` fleet path since the server models network as
+   *  one alert type. */
+  reportToFleet?: boolean | null;
 }
 
 /** Paid: the full set of metric alerts. Mirrors MetricAlertsSettings in
@@ -834,6 +853,11 @@ export interface ScreenCaptureSettings {
   /** Apply WDA_EXCLUDEFROMCAPTURE to WinCommander's own window so it
    *  renders black in screenshots/recordings/share. Off by default. */
   protectWindow: boolean | null;
+  /** Forward each screen-capture-tool detection to the Fleet console.
+   *  Settings path `notifications.screenCapture.reportToFleet` — locked
+   *  (visible-but-disabled locally) whenever that path appears in the
+   *  resolved ConfigEpoch.locked_paths. */
+  reportToFleet?: boolean | null;
 }
 
 export interface TrackingSettings {
@@ -937,6 +961,11 @@ export interface PrivacyShieldSettings {
   /** When true, Privacy Shield starts automatically on app launch.
    *  Mirrors `ideal.privacy.privacy_shield.autostart` in settings.rs. Default false. */
   autostart?: boolean;
+  /** Local (non-fleet-managed) mode choice: "blur_notify" (default — blur the
+   *  screen AND notify) or "notify_only" (Windows notification only, no
+   *  visual blur). Mutually exclusive — see the card's segmented toggle.
+   *  Ignored when `app.fleet.shieldDesiredState` is present (fleet mode wins). */
+  notifyMode?: 'blur_notify' | 'notify_only' | null;
 }
 
 // ── Tweaks ───────────────────────────────────────────────────────────

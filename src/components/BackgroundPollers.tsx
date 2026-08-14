@@ -180,6 +180,10 @@ export default function BackgroundPollers({
       const ps = settings?.ideal?.privacy?.privacyShield;
       if (!settings?.app?.fleet?.enabled) return;
       const fleetOwnsSession = settings.app.fleet.privacyShieldSessionOwned === true;
+      // Pull the latest admin desired-state (separate, non-policy_epoch
+      // channel) so PrivacyShieldCard's Stop-button lock reflects the org's
+      // CURRENT mandate even between full settings syncs.
+      try { await invoke("fleet_sync_shield_state"); } catch { /* best-effort */ }
       try {
         const status = await executeBackendCommand<{ running?: boolean; cameraAvailable?: boolean; cameraMessage?: string }>("Get-PrivacyShieldStatus");
         const running = status.success && status.data?.running === true;
@@ -207,11 +211,22 @@ export default function BackgroundPollers({
           return;
         }
         if (running) {
-          // A pre-existing employee-started session remains employee-owned.
-          // Fleet can observe its attention events but neither locks nor
-          // charges/stops it through this supervisor.
+          // A session already running when the supervisor first sees a
+          // fleet mandate (started locally, or before this device's policy
+          // sync completed) must be claimed as fleet-owned immediately, not
+          // left "employee-owned" until the NEXT restart. Previously this
+          // branch only reported the session and never set
+          // privacyShieldSessionOwned, so PrivacyShieldCard's Stop button
+          // (which used to gate solely on that flag) stayed unlocked
+          // indefinitely for any session the supervisor didn't itself start.
+          // The card's lock now derives directly from policy
+          // (fleetShieldMandatesOn) so this claim is for reporting/quota
+          // consistency, not the sole lock mechanism — but it must still
+          // happen so quota charging and "who owns this session" state stay
+          // correct going forward.
           if (!fleetOwnsSession) {
-            await report("running_local_session");
+            await invoke("patch_settings_cmd", { patch: { app: { fleet: { privacyShieldSessionOwned: true } } } }).catch(() => {});
+            await report("running_fleet_session");
             return;
           }
           // Fleet service is paid, but the local Free Privacy Shield quota is
@@ -491,6 +506,12 @@ export default function BackgroundPollers({
           `${tool} is running — your screen may be recorded. Sensitive windows can be hidden in Privacy → Screen Capture.`,
           10_000,
         );
+        if (appSettingsRef.current?.ideal?.privacy?.screenCapture?.reportToFleet === true) {
+          invoke("fleet_report_local_alert", {
+            alertType: "screen_capture",
+            detail: { detected: tool, process: event.payload?.processName ?? "" },
+          }).catch(() => { /* best-effort — a Fleet outage must never affect local detection */ });
+        }
       },
     );
 

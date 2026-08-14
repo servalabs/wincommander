@@ -1,6 +1,17 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Bell, BellOff } from "lucide-react";
+import { Bell, BellOff, Lock } from "lucide-react";
 import { useMetricAlerts, type MetricKey } from "../../hooks/useMetricAlerts";
+import { useAppState } from "../../context/AppContext";
+
+/** Fleet settings dot-path per metric, matching the fleet-server contract
+ *  ("upload"/"download" both collapse to the server's single networkUsage
+ *  alert type, so they share one lock/report path). */
+const FLEET_REPORT_PATH: Record<MetricKey, string> = {
+  cpu: "notifications.cpuUsage.reportToFleet",
+  ram: "notifications.ramUsage.reportToFleet",
+  upload: "notifications.networkUsage.reportToFleet",
+  download: "notifications.networkUsage.reportToFleet",
+};
 
 interface MetricAlertRowProps {
   metric: MetricKey;
@@ -34,11 +45,23 @@ export default function MetricAlertRow({
   buzzWhenInputDisabled = false,
 }: MetricAlertRowProps) {
   const { config, update } = useMetricAlerts();
+  const { appSettings } = useAppState();
   const m = config?.[metric];
   const [draft, setDraft] = useState<string>("");
   const [secDraft, setSecDraft] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [isShaking, setIsShaking] = useState(false);
+
+  const fleetEnabled = appSettings?.app?.fleet?.enabled === true;
+  const fleetPath = FLEET_REPORT_PATH[metric];
+  const lockedPaths = appSettings?.policy?.lockedPaths ?? [];
+  // Tolerate both the bare dot-path convention the fleet server contract uses
+  // ("notifications.cpuUsage.reportToFleet") and this app's registry
+  // convention of prefixing generic toggle paths with "ideal." — whichever
+  // the connected server actually publishes, this still locks correctly.
+  const reportToFleetLocked = lockedPaths.some(
+    (p) => p.trim().length > 0 && (fleetPath.startsWith(p) || `ideal.${fleetPath}`.startsWith(p))
+  );
 
   useEffect(() => {
     if (m) setDraft(String(m.threshold));
@@ -134,6 +157,24 @@ export default function MetricAlertRow({
         />
         <span className="metric-alert-unit">s</span>
       </div>
+      {fleetEnabled && (
+        <label
+          className="metric-alert-report-fleet"
+          title={reportToFleetLocked
+            ? "Set by your Fleet administrator — cannot be changed on this device."
+            : "Forward this alert to your organization's Fleet console when it fires."}
+        >
+          <input
+            type="checkbox"
+            checked={m.reportToFleet === true}
+            disabled={busy || reportToFleetLocked}
+            onChange={(e) => void commit({ reportToFleet: e.target.checked })}
+            aria-label={`Report ${label} alerts to Fleet`}
+          />
+          <span>Report to Fleet</span>
+          {reportToFleetLocked && <Lock size={10} />}
+        </label>
+      )}
       </div>
     </div>
   );

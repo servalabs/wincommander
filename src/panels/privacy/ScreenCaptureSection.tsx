@@ -27,7 +27,15 @@ import "./ScreenCaptureSection.css";
 interface Props {
   detectionEnabled: boolean;
   protectWindow: boolean;
-  onPatch: (patch: { detectionEnabled?: boolean; protectWindow?: boolean }) => void;
+  /** Forward each screen-capture-tool detection to the Fleet console.
+   *  Settings path `notifications.screenCapture.reportToFleet`. */
+  reportToFleet?: boolean;
+  /** True when the org's fleet policy locks this path — render
+   *  visible-but-disabled rather than hiding it. */
+  reportToFleetLocked?: boolean;
+  /** Only show the Fleet-reporting row when this device is fleet-enrolled. */
+  fleetEnabled?: boolean;
+  onPatch: (patch: { detectionEnabled?: boolean; protectWindow?: boolean; reportToFleet?: boolean }) => void;
   /** Controlled expand (accordion). Falls back to internal state if omitted. */
   expanded?: boolean;
   onExpandedChange?: (next: boolean) => void;
@@ -50,6 +58,9 @@ function formatTime(iso: string): string {
 export default function ScreenCaptureSection({
   detectionEnabled,
   protectWindow,
+  reportToFleet = false,
+  reportToFleetLocked = false,
+  fleetEnabled = false,
   onPatch,
   expanded: expandedProp,
   onExpandedChange,
@@ -128,6 +139,28 @@ export default function ScreenCaptureSection({
           </span>
         </div>
       </div>
+
+      {fleetEnabled && (
+        <div className="screencap-row">
+          <Switch
+            checked={reportToFleet}
+            disabled={busy || reportToFleetLocked}
+            onChange={(e) => onPatch({ reportToFleet: e.currentTarget.checked })}
+            aria-label="Report screen-capture detections to Fleet"
+          />
+          <div className="screencap-row-text">
+            <span className="screencap-row-label">
+              Report to Fleet
+              {reportToFleetLocked && <Icon icon="lock" size={10} style={{ marginLeft: 6, verticalAlign: 'middle' }} />}
+            </span>
+            <span className="screencap-row-help">
+              {reportToFleetLocked
+                ? "Set by your Fleet administrator — cannot be changed on this device."
+                : "Forward each screen-capture-tool detection to your organization's Fleet console."}
+            </span>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div role="alert" className="screencap-error">

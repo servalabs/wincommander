@@ -19,6 +19,10 @@ export interface MetricAlert {
   hysteresisPct: number;
   sustainedEnabled: boolean;
   sustainedSecs: number;
+  /** Forward this alert to the Fleet console when it fires. Settings path
+   *  `notifications.{cpuUsage,ramUsage,networkUsage}.reportToFleet` — see
+   *  PrivacyShieldSettings.fleetManaged for the equivalent admin-lock pattern. */
+  reportToFleet: boolean;
 }
 
 export interface MetricAlertsConfig {

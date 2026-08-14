@@ -2922,6 +2922,8 @@ pub fn run() {
             fleet_agent::fleet_apply_pending_epoch,
             fleet_agent::fleet_update_posture_snapshot,
             fleet_agent::fleet_report_privacy_shield_status,
+            fleet_agent::fleet_sync_shield_state,
+            fleet_agent::fleet_report_local_alert,
             fleet_agent::fleet_request_unenroll,
             fleet_agent::fleet_unenroll_status,
             // ── F6 Phase-1 Piece 2 — BootNext UEFI setter (non-destructive) ──
