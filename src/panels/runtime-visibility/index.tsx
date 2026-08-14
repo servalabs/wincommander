@@ -533,11 +533,12 @@ function RuntimesPanel({
                               {KIND_LABEL[r.kind]}
                             </Tag>
                             <div className="runtime-signal-tags">
-                              {r.tags.slice(0, 3).map((t) => (
-                                <Tag key={t} minimal>
+                              {r.tags.slice(0, 2).map((t) => (
+                                <Tag key={t} minimal title={t}>
                                   {t}
                                 </Tag>
                               ))}
+                              {r.tags.length > 2 && <Tag minimal title={r.tags.slice(2).join(", ")}>+{r.tags.length - 2}</Tag>}
                               {r.hasVisibleWindow && (
                                 <Tag minimal intent={Intent.PRIMARY}>
                                   window

@@ -20,6 +20,11 @@ interface ScheduledTask {
     LastResult: number | null;
 }
 
+function hasTaskAuthor(author: string | null): author is string {
+    const normalized = author?.trim();
+    return Boolean(normalized && normalized !== "\\");
+}
+
 export default function ScheduledTasksManager({ embedded = false, scanKey = 0 }: { embedded?: boolean; scanKey?: number }) {
     const requestConfirm = useAppConfirm();
     // Collapsed by default + lazy fetch — see StartupManager comment.
@@ -142,14 +147,14 @@ export default function ScheduledTasksManager({ embedded = false, scanKey = 0 }:
                                     <div className="scheduled-tasks-manager__name">
                                         <span className="scheduled-tasks-manager__name-text">{t.Name}</span>
                                         {t.IsMicrosoft && <Icon icon="symbol-square" size={10} title="Microsoft-shipped task" />}
+                                        {hasTaskAuthor(t.Author) && <span className="scheduled-tasks-manager__author" title={t.Author}>{t.Author}</span>}
                                     </div>
                                     <div className="scheduled-tasks-manager__path" title={t.Path}>
                                         {t.Path}
                                     </div>
-                                    {(t.Description || t.Author || t.LastRunTime || t.NextRunTime) && (
+                                    {(t.Description || t.LastRunTime || t.NextRunTime) && (
                                         <div className="scheduled-tasks-manager__detail">
                                             {t.Description && <span>{t.Description}</span>}
-                                            {t.Author && <span>Author: {t.Author}</span>}
                                             {t.LastRunTime && <span>Last: {t.LastRunTime}</span>}
                                             {t.NextRunTime && <span>Next: {t.NextRunTime}</span>}
                                         </div>

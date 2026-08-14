@@ -2,13 +2,24 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    min-width: 130px;
+    min-width: 0;
+    max-width: 220px;
 }
 
 .runtime-signal-tags {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
+    max-height: 48px;
+    overflow: hidden;
+}
+
+.runtime-signal-tags .bp6-tag {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .runtime-visibility-state {

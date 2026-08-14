@@ -20,6 +20,7 @@ export function StartupDriverTools() {
   const tools = useStartupDrivers();
   const [managerTab, setManagerTab] = useState<ManagerTab>("startup");
   const [showAllDrivers, setShowAllDrivers] = useState(false);
+  const [isStartupImpactOpen, setIsStartupImpactOpen] = useState(false);
   const [driverScanKey, setDriverScanKey] = useState(0);
   const [managerScanKey, setManagerScanKey] = useState(0);
 
@@ -69,11 +70,17 @@ export function StartupDriverTools() {
       <CardContent className="flex flex-col gap-3">
         <div id="maintenance-manager-panel-startup" role="tabpanel" aria-labelledby="maintenance-manager-tab-startup" hidden={managerTab !== "startup"}>
           <StartupManager embedded scanKey={managerScanKey} />
-          {tools.startup && <div className="startup-impact-section">
-            <div className="startup-impact-section__heading"><p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Signature &amp; launch-impact review</p><p className="text-xs text-[var(--text-mute)]">Review unsigned or unverifiable launchers. The manager above remains the live enable/disable list.</p></div>
-            {tools.startup.entries.map((entry) => <div key={entry.id} className="flex flex-wrap items-start gap-3 rounded-[var(--r)] border border-[var(--border)] p-3"><div className="min-w-0 flex-1"><p className="text-sm text-[var(--text)]">{entry.name}</p><p className="break-all font-mono text-[11px] text-[var(--text-mute)]">{entry.command}</p><p className="text-xs text-[var(--text-dim)]">{entry.signer ?? entry.signatureStatus} · {entry.source}</p></div><Badge tone={entry.recommendation === "keep" ? "success" : "warning"}>{entry.recommendation}</Badge></div>)}
-            {!tools.startup.entries.length && <Empty text="No startup entries found." />}
-          </div>}
+          {tools.startup && <section className="startup-impact-section" aria-label="Signature and launch-impact review">
+            <button type="button" className="startup-impact-section__toggle" aria-expanded={isStartupImpactOpen} onClick={() => setIsStartupImpactOpen((open) => !open)}>
+              <span className="startup-impact-section__heading"><span className="text-xs font-semibold uppercase tracking-wide text-[var(--text-dim)]">Signature &amp; launch-impact review</span><span className="text-xs text-[var(--text-mute)]">Unsigned or unverifiable launchers</span></span>
+              <Badge tone="accent">{tools.startup.entries.length} entries</Badge>
+              <Icon icon={isStartupImpactOpen ? "chevron-up" : "chevron-down"} size={16} aria-hidden="true" />
+            </button>
+            {isStartupImpactOpen && <div className="startup-impact-section__list">
+              {tools.startup.entries.map((entry) => <div key={entry.id} className="startup-impact-row"><div className="min-w-0"><p className="startup-impact-row__name">{entry.name}</p><p className="startup-impact-row__command" title={entry.command}>{entry.command}</p><p className="text-xs text-[var(--text-dim)]">{entry.signer ?? entry.signatureStatus} · {entry.source}</p></div><Badge tone={entry.recommendation === "keep" ? "success" : "warning"}>{entry.recommendation}</Badge></div>)}
+              {!tools.startup.entries.length && <Empty text="No startup entries found." />}
+            </div>}
+          </section>}
         </div>
         <div id="maintenance-manager-panel-users" role="tabpanel" aria-labelledby="maintenance-manager-tab-users" hidden={managerTab !== "users"}><LocalUsersManager embedded scanKey={managerScanKey} /></div>
         <div id="maintenance-manager-panel-tasks" role="tabpanel" aria-labelledby="maintenance-manager-tab-tasks" hidden={managerTab !== "tasks"}><ScheduledTasksManager embedded scanKey={managerScanKey} /></div>

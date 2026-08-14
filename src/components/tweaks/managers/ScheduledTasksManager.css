@@ -85,6 +85,9 @@
 
 .scheduled-tasks-manager__name-text {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -92,6 +95,21 @@
 .scheduled-tasks-manager__name .bp6-icon {
   flex: 0 0 auto;
   margin-top: 2px;
+}
+
+.scheduled-tasks-manager__author {
+  min-width: 0;
+  max-width: 42%;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.25;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .scheduled-tasks-manager__path {
@@ -173,5 +191,16 @@
 
   .scheduled-tasks-manager__actions {
     justify-content: flex-start;
+  }
+
+  .scheduled-tasks-manager__name {
+    flex-wrap: wrap;
+  }
+
+  .scheduled-tasks-manager__author {
+    flex-basis: 100%;
+    max-width: 100%;
+    margin-left: 0;
+    text-align: left;
   }
 }
