@@ -15,7 +15,8 @@ downloads. The Free release bucket is `windows`.
 ## Publish an exact version
 
 1. Run **prepare release** in GitHub Actions with the new version. It opens a
-   `release/vX.Y.Z` pull request containing the aligned Free version files.
+   `release/vX.Y.Z` pull request containing the aligned Free version files and
+   Free `Cargo.lock` package version.
 2. Merge that PR. The tag workflow creates the protected `vX.Y.Z` tag and
    invokes the release workflow.
 3. Approve the protected `release` environment. The workflow builds from the
