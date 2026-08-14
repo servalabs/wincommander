@@ -1546,6 +1546,61 @@ pub struct PostureReport {
     /// (P3). Absent (`null`) → drift is computed at epoch granularity only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toggle_states: Option<Value>,
+    /// Whether the Privacy Shield is ACTUALLY running on the device right
+    /// now, self-reported at posture time. Compared against the resolved
+    /// `ShieldDesiredState` (a SEPARATE, non-epoch-versioned channel — see
+    /// that type's doc) to raise real shield drift, independent of
+    /// `applied_epoch`/`toggle_states`. `None` on any pre-shield-drift agent
+    /// build, or when the agent has no shield status to report this cycle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shield_running: Option<bool>,
+}
+
+/// Privacy Shield's admin-desired on/off + mode, resolved device > group > org
+/// (same precedence as `ConfigEpoch`) but stored and versioned SEPARATELY from
+/// the policy `config_epochs` chain. Toggling the shield from the console
+/// must NEVER advance `ConfigEpoch.version` — that chain is for actual policy
+/// edits, and every version bump makes every OTHER device look momentarily
+/// "behind" in `routes::posture::drift` (which compares against the org's
+/// single highest version regardless of target). Delivered to the agent on
+/// the same fast `/v1/agents/checkin` round-trip as `config_epoch`, via
+/// `CheckinResponse.shield_state`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct ShieldDesiredState {
+    pub enabled: bool,
+    /// `"blur_notify"` (blur/black-out the screen AND notify) | `"notify_only"`
+    /// (notification only, no visual blur). Mutually exclusive — see the
+    /// Privacy Shield card's segmented toggle.
+    pub mode: String,
+    /// RFC3339, set by the server when this desired state was last written.
+    /// Informational only (no anti-rollback gate — latest write always wins,
+    /// unlike `ConfigEpoch`).
+    pub updated_at: String,
+}
+
+/// Agent → server report of ONE local Windows notification the agent already
+/// showed the user (screen-capture-tool detected, CPU/RAM/network threshold
+/// exceeded, ...), forwarded to the fleet console only when the corresponding
+/// per-type `notifications.<type>.reportToFleet` setting is on (agent-side
+/// gate — the server stores whatever it is sent). Carries the SAME concrete
+/// detail the local toast already showed, so the console can render a
+/// specific message instead of a generic "alert" line. PII-free: `detail`
+/// must contain only scalars/process-executable-names/metric values, never
+/// window titles, file contents, or free-text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct LocalAlertReport {
+    /// `"screen_capture" | "cpu_usage" | "ram_usage" | "network_usage"`.
+    pub alert_type: String,
+    /// e.g. `{"detected":"OBS Studio","process":"obs64.exe"}` or
+    /// `{"metric":"cpu","value_pct":94,"threshold_pct":85,"duration_s":300}`.
+    pub detail: Value,
+    /// RFC3339, set by the agent at the moment the local notification fired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<String>,
 }
 
 /// One local drive/volume's capacity, sampled by the agent's existing
