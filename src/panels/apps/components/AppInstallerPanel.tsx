@@ -64,12 +64,25 @@ let activeInstallOperation: ReturnType<typeof beginOperation> | null = null;
 
 const CATEGORY_TABS = [
   { id: "all", label: "All" },
+  { id: "engines", label: "Engines" },
   { id: "basic", label: "Basic" },
   { id: "power-user", label: "Advanced" },
   { id: "privacy", label: "Privacy" },
   { id: "developer", label: "Developer" },
   { id: "system-info", label: "System" },
 ] as const;
+
+// These catalogue packages back a WinCommander engine. Keep this separate
+// from their ordinary catalogue categories so one filter works for both the
+// install and installed sub-tabs.
+const ENGINE_PACKAGE_IDS = new Set([
+  "Voidtools.Everything",
+  "ImDisk.Toolkit",
+  "smartmontools.smartmontools",
+  "Microsoft.PowerShell",
+  "IDRIX.VeraCrypt",
+  "BleachBit.BleachBit",
+]);
 
 function mapCategoryToTab(category: string): string {
   const normalized = category.trim().toLowerCase();
@@ -536,7 +549,10 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       .filter(app => {
         const isSearching = searchQuery.trim() !== "";
         const mappedCategory = mapCategoryToTab(app.category);
-        const categoryMatches = isSearching || selectedCategory === "all" || mappedCategory === selectedCategory;
+        const categoryMatches = isSearching
+          || selectedCategory === "all"
+          || (selectedCategory === "engines" && ENGINE_PACKAGE_IDS.has(app.id))
+          || mappedCategory === selectedCategory;
         const matchesSearch = !isSearching ||
           app.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
           app.description.toLowerCase().includes(searchQuery.toLowerCase()) ||

@@ -65,6 +65,9 @@ function Read-AppsManifest {
         @{ category = "misc"; id = "Balena.Etcher"; name = "balenaEtcher"; description = "Flash OS images to SD cards and USB drives." },
         @{ category = "misc"; id = "BlastApps.FluentSearch"; name = "Fluent Search"; description = "Powerful search app for Windows." },
         @{ category = "misc"; id = "Ablaze.Floorp"; name = "Floorp"; description = "Firefox-based browser with customizations." },
+        @{ category = "misc"; id = "AnyDesk.AnyDesk"; name = "AnyDesk"; description = "Remote desktop and support application." },
+        @{ category = "misc"; id = "DucFabulous.UltraViewer"; name = "UltraViewer"; description = "Remote support and desktop-sharing application." },
+        @{ category = "misc"; id = "TeamViewer.TeamViewer"; name = "TeamViewer"; description = "Remote access, support, and desktop-sharing application." },
 
         @{ category = "power"; id = "Microsoft.PowerToys"; name = "PowerToys"; description = "Utilities to power up Windows productivity." },
         @{ category = "power"; id = "ActivityWatch.ActivityWatch"; name = "ActivityWatch"; description = "Sovereign time tracker for local productivity analytics." },

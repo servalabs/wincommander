@@ -592,6 +592,7 @@ function Test-InstantSearchInstalled {
     $candidates = @(
         "$env:ProgramFiles\Everything\es.exe",
         "${env:ProgramFiles(x86)}\Everything\es.exe",
+        "$env:ProgramData\WinCommander\bin\es.exe",
         "C:\Tools\es.exe",
         "$env:LOCALAPPDATA\Microsoft\WinGet\Links\es.exe",
         "$env:ProgramFiles\WinGet\Links\es.exe",

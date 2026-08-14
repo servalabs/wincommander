@@ -212,8 +212,12 @@ export const editorial: Record<string, string> = mergeByBasename(
 );
 
 // — UI media (searching.gif + contingency demo videos) —
+// The Contingency clips are stored under private-server/contingency in the
+// assets submodule. Reuse the already-bundled private-server glob so the
+// video sources resolve to fingerprinted URLs instead of undefined.
 export const ui: Record<string, string> = mergeByBasename(
   contingencyProductMods,
+  privateServerProductMods,
   winCommanderProductMods,
 );
 

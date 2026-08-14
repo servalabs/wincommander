@@ -22,6 +22,12 @@ describe("applyProductAliases", () => {
     expect(source).not.toContain('../../assets/products/');
   });
 
+  test("exposes the bundled Contingency clips through the UI media map", async () => {
+    const source = await Bun.file("src/assets.ts").text();
+
+    expect(source).toMatch(/export const ui[\s\S]*privateServerProductMods/);
+  });
+
   test("keeps legacy product keys wired to the renamed asset files", () => {
     const aliased = applyProductAliases({
       "private-phone/phone-top-view.png": "/private-phone/phone-top-view.png",

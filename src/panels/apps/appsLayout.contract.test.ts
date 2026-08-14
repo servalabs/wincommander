@@ -36,4 +36,21 @@ describe("Packages and Apps layout", () => {
     expect(installer).toContain('setInstallerView("installed")');
     expect(engines).not.toContain("eng-installed");
   });
+
+  test("offers the engine catalog filter in both install-state sub-tabs", async () => {
+    const installer = await read("src/panels/apps/components/AppInstallerPanel.tsx");
+
+    expect(installer).toContain('{ id: "engines", label: "Engines" }');
+    expect(installer).toContain("ENGINE_PACKAGE_IDS.has(app.id)");
+    expect(installer).toContain('<TabsContent value="not-installed">');
+    expect(installer).toContain('<TabsContent value="installed">');
+  });
+
+  test("includes the requested remote-support applications in the catalog", async () => {
+    const manifest = await read("src-tauri/commander-free/scripts/modules/apps/winget.ps1");
+
+    expect(manifest).toContain('id = "AnyDesk.AnyDesk"');
+    expect(manifest).toContain('id = "DucFabulous.UltraViewer"');
+    expect(manifest).toContain('id = "TeamViewer.TeamViewer"');
+  });
 });
