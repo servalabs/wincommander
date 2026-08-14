@@ -905,8 +905,8 @@ mod tests {
         let obsolete_gate = ["require", "_paid(\"fleet agent\")"].concat();
         assert_eq!(
             source.matches(&service_gate).count(),
-            8,
-            "connect, status, policy apply, posture, privacy-shield status, unenroll request/status, and disconnect must all require Fleet"
+            10,
+            "connect, status, policy apply, posture, privacy-shield status, local-alert reporting, unenroll request/status, and disconnect must all require Fleet"
         );
         assert!(!source.contains(&obsolete_gate));
     }

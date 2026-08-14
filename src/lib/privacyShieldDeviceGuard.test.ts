@@ -71,6 +71,6 @@ describe("privacy shield device guardrails", () => {
     expect(backend).toContain("shield.fleet_managed != Some(true)");
     expect(backend).toContain("shield.fleet_monitoring_enabled != Some(true)");
     expect(backend).toContain('"look_away" | "no_face" | "multiple_faces" | "secondary_device"');
-    expect(backend).toContain("if allow_fleet_privacy_alert(gaze_kind) {");
+    expect(backend).toContain("if allow_fleet_privacy_alert(gaze_kind).await {");
   });
 });
