@@ -48,6 +48,12 @@ interface UpgradeItem {
   iconData?: string | null;
 }
 
+export type AppInstallerStatus = {
+  wingetStatus: "checking" | "installed" | "not-installed" | "installing" | "failed";
+  vulnerabilityTone: string;
+  vulnerabilityText: string;
+};
+
 // Navigation unmounts this panel; package work must not disappear with it.
 const coveredInstallIds = new Set<string>();
 type PendingInstall = {
@@ -100,7 +106,13 @@ function mapCategoryToTab(category: string): string {
   return "basic";
 }
 
-function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
+function AppInstallerPanel({
+  updatesTools,
+  onStatusChange,
+}: {
+  updatesTools?: ReactNode;
+  onStatusChange?: (status: AppInstallerStatus) => void;
+}) {
   const { appInventory, runAppInventoryScan, loading: contextLoading, patchAppSettings, forceRefreshDeps } = useAppState();
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -416,6 +428,14 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
       detail: `${vulnerabilityScore}% vulnerability score`,
     };
   }, [installedManifestCount, outdatedInstalledCount]);
+
+  useEffect(() => {
+    onStatusChange?.({
+      wingetStatus,
+      vulnerabilityTone: vulnerabilityBadge.tone,
+      vulnerabilityText: vulnerabilityBadge.text,
+    });
+  }, [onStatusChange, vulnerabilityBadge.text, vulnerabilityBadge.tone, wingetStatus]);
 
   // Derive local state from appInventory (context) whenever it changes
   // LEARNING: appInventory is the single source of truth from Get-AppInventory.
@@ -1023,22 +1043,8 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
   return (
     <div className="app-installer-panel">
       <Card className="installer-card">
-        <div className="installer-toolbar-context">
-          <span className={`winget-status ${wingetStatus === "installed" ? "installed" : wingetStatus === "not-installed" ? "not-installed" : ""}`}>
-            {wingetStatus === "checking" && <Spinner size={14} />}
-            {wingetStatus === "installed" && <><Icon icon="tick-circle" size={14} /> PACKAGE MANAGER INSTALLED</>}
-            {wingetStatus === "not-installed" && <><Icon icon="cross-circle" size={14} /> PACKAGE MANAGER MISSING</>}
-            {wingetStatus === "installing" && <><Spinner size={14} /> INSTALLING...</>}
-            {wingetStatus === "failed" && <><Icon icon="error" size={14} /> PACKAGE MANAGER FAILED</>}
-          </span>
-          <span className={`vulnerability-badge ${vulnerabilityBadge.tone}`}>
-            <Icon icon={vulnerabilityBadge.tone === "is-safe" ? "shield" : vulnerabilityBadge.tone === "is-risk" ? "warning-sign" : vulnerabilityBadge.tone === "is-warning" ? "issue" : "info-sign"} size={12} />
-            <span>{vulnerabilityBadge.text}</span>
-          </span>
-        </div>
         <div className="installer-toolbar-layout">
           <div className="installer-toolbar-search">
-            <span className="installer-control-label">Search</span>
             <div className="installer-search-box">
               <Icon icon="search" className="installer-search-icon" />
               <InputGroup
@@ -1049,10 +1055,30 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
                 disabled={appsLoading}
               />
             </div>
+            <div className="installer-search-actions">
+              <Button
+                icon={contextLoading?.apps ? undefined : "refresh"}
+                minimal
+                className="installer-icon-btn"
+                onClick={handleRefreshAll}
+                disabled={contextLoading?.apps || appsLoading || inventoryScanPending}
+                loading={contextLoading?.apps || inventoryScanPending}
+                aria-label="Refresh software catalog"
+                title="Refresh software catalog"
+              />
+              <Button
+                icon="cross"
+                minimal
+                className="installer-icon-btn"
+                onClick={() => setSearchQuery("")}
+                disabled={appsLoading || searchQuery.length === 0}
+                aria-label="Clear software search"
+                title="Clear software search"
+              />
+            </div>
           </div>
 
           <div className="installer-filter-row">
-            <span className="installer-control-label">Category</span>
             <div className="category-chips" role="group" aria-label="App categories">
               {CATEGORY_TABS.map((tab) => (
                 <button
@@ -1092,16 +1118,6 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
               <div className="installer-action-buttons">
               <div className="installer-action-buttons-utility">
               <Button
-                icon={contextLoading?.apps ? undefined : "refresh"}
-                text="REFRESH"
-                minimal
-                className="installer-toolbar-btn installer-toolbar-btn--accent font-mono text-[11px]!"
-                onClick={handleRefreshAll}
-                disabled={contextLoading?.apps || appsLoading || inventoryScanPending}
-                loading={contextLoading?.apps || inventoryScanPending}
-              />
-              <div className="h-4 w-px bg-[var(--color-border)] mx-2" />
-              <Button
                 icon="plus"
                 text="SELECT ALL"
                 minimal
@@ -1134,7 +1150,7 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
               {outdatedInstalledCount > 0 ? (
                 <Button
                   icon="automatic-updates"
-                  text="UPDATE ALL"
+                  text={<span className="installer-batch-action-label">UPDATE<br />ALL</span>}
                   minimal
                   className="app-update-all-btn font-mono text-[11px]!"
                   onClick={handleUpdateAll}
@@ -1144,7 +1160,7 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
               ) : (
                 <Button
                   icon="tick-circle"
-                  text="UP TO DATE"
+                  text={<span className="installer-batch-action-label">UP TO<br />DATE</span>}
                   minimal
                   disabled
                   className="app-update-all-btn font-mono text-[11px]!"
@@ -1153,7 +1169,7 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
               {selectedUpdateIds.length > 0 && (
                 <Button
                   icon={localLoadingMap["updateSelected"] ? undefined : "automatic-updates"}
-                  text={`UPDATE SELECTED (${selectedUpdateIds.length})`}
+                  text={<span className="installer-batch-action-label">UPDATE<br />SELECTED <small>({selectedUpdateIds.length})</small></span>}
                   minimal
                   small
                   className="app-update-selected-btn font-mono text-[10px]! tracking-wide"
@@ -1205,7 +1221,7 @@ function AppInstallerPanel({ updatesTools }: { updatesTools?: ReactNode }) {
               {selectedInstallIds.length > 0 && (
                 <Button
                   icon="download"
-                  text={`${installing ? "ADD TO INSTALL" : "INSTALL APPS"} (${selectedInstallIds.length})`}
+                  text={<span className="installer-batch-action-label">{installing ? <>ADD TO<br />INSTALL</> : <>INSTALL<br />APPS</>} <small>({selectedInstallIds.length})</small></span>}
                   intent="success"
                   minimal
                   small
