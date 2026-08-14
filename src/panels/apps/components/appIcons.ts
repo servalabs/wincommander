@@ -117,7 +117,6 @@ const ID_TO_SLUG: Record<string, string> = {
   "Winaero.Tweaker": "winaero-tweaker",
   "Anthropic.Claude": "claude",
   "Proton.ProtonDrive": "proton-drive",
-  "IDRIX.VeraCrypt": "veracrypt",
   "Proton.ProtonPass": "proton-pass",
   "Proton.ProtonMail": "proton-mail",
   "Proton.ProtonVPN": "proton-vpn",

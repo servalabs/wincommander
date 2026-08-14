@@ -81,7 +81,6 @@ function Read-AppsManifest {
         @{ category = "power"; id = "Anthropic.Claude"; name = "Claude"; description = "Anthropic's AI assistant desktop app." },
 
         @{ category = "privacy"; id = "Proton.ProtonDrive"; name = "Proton Drive"; description = "Secure encrypted cloud storage." },
-        @{ category = "privacy"; id = "IDRIX.VeraCrypt"; name = "Disk Encryption Engine"; description = "Disk encryption utility." },
         @{ category = "privacy"; id = "Proton.ProtonPass"; name = "Proton Pass"; description = "Secure password manager." },
         @{ category = "privacy"; id = "Proton.ProtonMail"; name = "Proton Mail"; description = "End-to-end encrypted email." },
         @{ category = "privacy"; id = "Proton.ProtonVPN"; name = "Proton VPN"; description = "Secure VPN service." },
@@ -738,18 +737,11 @@ function Get-AppInventory {
     }
 
     # -- 3b. Filesystem fallback detection for apps that hide from winget --
-    # LEARNING: Some apps (e.g. VeraCrypt) are intentionally installed outside winget's
+    # LEARNING: Some apps are intentionally installed outside winget's
     # view (portable, stealth, or manual installs). We detect them via filesystem/registry
     # so step 4 can mark them installed even if winget doesn't list them.
     # Maps manifest ID -> { installed: bool, version: string|null }
     $filesystemOverrides = @{}
-
-    # VeraCrypt - often hidden by design
-    $veraPath = "$env:ProgramFiles\VeraCrypt\VeraCrypt.exe"
-    if (Test-Path $veraPath) {
-        $veraVer = try { (Get-Item $veraPath).VersionInfo.ProductVersion } catch { $null }
-        $filesystemOverrides['IDRIX.VeraCrypt'] = @{ installed = $true; version = $veraVer }
-    }
 
     # Tailscale (Mesh) - check exe and PATH
     $meshInstalled = $false

@@ -53,4 +53,12 @@ describe("Packages and Apps layout", () => {
     expect(manifest).toContain('id = "DucFabulous.UltraViewer"');
     expect(manifest).toContain('id = "TeamViewer.TeamViewer"');
   });
+
+  test("omits the retired encryption engine from catalog and engine filters", async () => {
+    const manifest = await read("src-tauri/commander-free/scripts/modules/apps/winget.ps1");
+    const installer = await read("src/panels/apps/components/AppInstallerPanel.tsx");
+
+    expect(manifest).not.toContain('id = "IDRIX.VeraCrypt"');
+    expect(installer).not.toContain('"IDRIX.VeraCrypt"');
+  });
 });

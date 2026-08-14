@@ -214,10 +214,6 @@ $catalog = @(
     @{ slug = 'proton-drive'; urls = @(
             'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/proton-drive.svg'
         ) },
-    @{ slug = 'veracrypt'; urls = @(
-            'https://veracrypt.io/favicon.ico',
-            'https://www.veracrypt.fr/favicon.ico'
-        ) },
     @{ slug = 'proton-pass'; urls = @(
             'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/proton-pass.svg'
         ) },

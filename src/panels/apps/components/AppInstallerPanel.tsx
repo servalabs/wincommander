@@ -86,7 +86,6 @@ const ENGINE_PACKAGE_IDS = new Set([
   "ImDisk.Toolkit",
   "smartmontools.smartmontools",
   "Microsoft.PowerShell",
-  "IDRIX.VeraCrypt",
   "BleachBit.BleachBit",
 ]);
 
