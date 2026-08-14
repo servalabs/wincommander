@@ -151,7 +151,12 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     primary, contentRows, reset: resetSearch, setError,
   } = search;
   const reduceMotion = useReducedMotionPref();
-  const contentPreview = useContentPreview(query.text);
+  const {
+    row: previewRow,
+    text: previewText,
+    isLoading: previewLoading,
+    select: selectPreview,
+  } = useContentPreview(query.text);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -231,7 +236,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       // inline Rename input). End any foreground-promotion retry that began
       // on the result row's preceding right-click instead of stealing the
       // caret back into the search field.
-      if (document.querySelector(".esb-context-menu")) return true;
+      if (document.querySelector(".esb-shortcut-context-menu")) return true;
       const el = inputRef.current;
       if (!el) return false;
       try { window.focus(); } catch { /* */ }
@@ -558,6 +563,15 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
   const visibleRows = resultTab === "files" ? primary : dedupedContentRows;
   const visibleRowCount = visibleRows.length;
   const activeIndex = Math.min(selectedIndex, Math.max(0, visibleRowCount - 1));
+
+  // The preview follows the same selection model as the result list. Without
+  // this, arrowing through content hits left the preview pinned to a prior row.
+  useEffect(() => {
+    if (resultTab !== "contents") return;
+    const activeRow = dedupedContentRows[activeIndex];
+    if (activeRow && activeRow.docId !== previewRow?.docId) selectPreview(activeRow);
+  }, [activeIndex, dedupedContentRows, previewRow?.docId, resultTab, selectPreview]);
+
   // The count request is intentionally best-effort. A full quick-search page
   // still means there may be more results even when that slower request timed
   // out, so never hide the complete-results escape hatch in that case.
@@ -934,7 +948,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
             <button type="button" role="tab" aria-selected={resultTab === "files"} className={resultTab === "files" ? "is-active" : ""} onClick={() => { setResultTab("files"); setSelectedIndex(0); }}>
               Files <span>{primary.length}</span>
             </button>
-            <button type="button" role="tab" aria-selected={resultTab === "contents"} className={resultTab === "contents" ? "is-active" : ""} onClick={() => { setResultTab("contents"); setSelectedIndex(0); if (!contentPreview.row && dedupedContentRows[0]) contentPreview.select(dedupedContentRows[0]); }}>
+            <button type="button" role="tab" aria-selected={resultTab === "contents"} className={resultTab === "contents" ? "is-active" : ""} onClick={() => { setResultTab("contents"); setSelectedIndex(0); }}>
               Inside files <span>{dedupedContentRows.length}</span>
             </button>
           </div>
@@ -954,7 +968,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
               {resultTab === "contents" && dedupedContentRows.length > 0 && (
                 <motion.div id="esb-result-list" className="esb-results esb-content-results" role="listbox" aria-label="Text inside file search results" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} exit={reduceMotion ? { opacity: 0 } : { opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.12 }}>
                   {dedupedContentRows.map((row, index) => (
-                    <div key={row.docId} id={`esb-opt-${index}`} role="option" aria-selected={index === activeIndex} className={`esb-content-item${index === activeIndex ? " esb-selected" : ""}`} onMouseEnter={() => setSelectedIndex(index)} onClick={() => contentPreview.select(row)} onDoubleClick={() => void openPath(row.path)} onContextMenu={(event) => openMenu(event, row.path, row.name)}>
+                    <div key={row.docId} id={`esb-opt-${index}`} role="option" aria-selected={index === activeIndex} className={`esb-content-item${index === activeIndex ? " esb-selected" : ""}`} onMouseEnter={() => setSelectedIndex(index)} onClick={() => { setSelectedIndex(index); selectPreview(row); }} onDoubleClick={() => void openPath(row.path)} onContextMenu={(event) => openMenu(event, row.path, row.name)}>
                       <NativeSearchIcon result={{ name: row.name, directory: "", full_path: row.path, size: "1", modified: "" }} />
                       <div className="esb-content-text"><span className="esb-content-name">{row.name}</span>{isNameOnlyMatch(row) && <span className="esb-name-match-badge" title="Matches the file name">name</span>}<span className="esb-content-snippet">{row.snippetSegs.map((seg) => seg.highlighted ? <mark key={`${row.docId}-${seg.highlighted}-${seg.text}`}>{seg.text}</mark> : <span key={`${row.docId}-${seg.highlighted}-${seg.text}`}>{seg.text}</span>)}</span></div>
                     </div>
@@ -964,14 +978,14 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
             </AnimatePresence>
             {resultTab === "contents" && (
               <aside className="esb-preview" aria-live="polite">
-                {contentPreview.row ? <>
-                  <div className="esb-preview-heading"><Icon icon="document" size={14} /><strong>{contentPreview.row.name}</strong></div>
-                  <div className="esb-preview-path">{contentPreview.row.path}</div>
-                  <div className="esb-preview-copy">{contentPreview.isLoading ? <Spinner size={16} /> : (contentPreview.text || "No readable text is available for this file.")}</div>
+                {previewRow ? <>
+                  <div className="esb-preview-heading"><Icon icon="document" size={14} /><strong>{previewRow.name}</strong></div>
+                  <div className="esb-preview-path">{previewRow.path}</div>
+                  <div className="esb-preview-copy">{previewLoading ? <Spinner size={16} /> : (previewText || "No readable text is available for this file.")}</div>
                   <div className="esb-preview-actions">
-                    <button type="button" onClick={() => void openPath(contentPreview.row!.path)}>Open</button>
-                    <button type="button" onClick={() => void invoke("search_open_containing_folder", { path: contentPreview.row!.path }).catch((error) => setError(String(error)))}>Folder</button>
-                    <button type="button" className="esb-icon-action" aria-label="Copy file path" title="Copy file path" onClick={() => void invoke("search_copy_path", { path: contentPreview.row!.path }).catch((error) => setError(String(error)))}><Icon icon="clipboard" size={14} /></button>
+                    <button type="button" onClick={() => void openPath(previewRow.path)}>Open</button>
+                    <button type="button" onClick={() => void invoke("search_open_containing_folder", { path: previewRow.path }).catch((error) => setError(String(error)))}>Folder</button>
+                    <button type="button" className="esb-icon-action" aria-label="Copy file path" title="Copy file path" onClick={() => void invoke("search_copy_path", { path: previewRow.path }).catch((error) => setError(String(error)))}><Icon icon="clipboard" size={14} /></button>
                   </div>
                 </> : <div className="esb-preview-empty">Select a result to preview its matched text.</div>}
               </aside>
@@ -992,10 +1006,18 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
             className="esb-open-full-search"
             onClick={() => {
               // The panel mounts after navigation, so retain the handoff until
-              // its first effect can consume it instead of racing an event.
-              window.localStorage.setItem(SEARCH_FILES_HANDOFF_KEY, query.text);
-              close();
-              window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "search-files" }));
+              // its first effect can consume it instead of racing an event. A
+              // DOM event alone stays inside the dedicated shortcut WebView;
+              // the Tauri event reaches the main window that owns the panel.
+              const handoff = query.text.trim();
+              if (handoff) window.localStorage.setItem(SEARCH_FILES_HANDOFF_KEY, handoff);
+              void emit("open-search-files-panel", handoff)
+                .catch(() => {
+                  // The normal in-window bar has no separate main WebView, so
+                  // preserve its direct route as a resilient fallback.
+                  window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "search-files" }));
+                })
+                .finally(close);
             }}
           >
             View all results

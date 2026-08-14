@@ -690,22 +690,32 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Search-result actions replace WebView2's developer context menu. */
-.esb-context-menu {
+/* The shortcut uses a compact command deck instead of the larger action
+   treatment used in the full Search panel. Grouped paired actions make a
+   right-click menu fast to scan without making destructive actions blend in. */
+.esb-shortcut-context-menu {
   position: fixed;
   z-index: var(--z-popover);
-  width: 236px;
-  max-height: min(70vh, 480px);
+  width: min(294px, calc(100vw - 16px));
+  max-height: min(70vh, 340px);
   overflow-y: auto;
-  padding: 5px;
-  border: 1px solid var(--border-strong);
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border-strong));
   border-radius: var(--radius-lg);
-  background: var(--surface-2);
-  box-shadow: var(--shadow);
+  background: linear-gradient(145deg, var(--surface-2), var(--surface));
+  box-shadow: var(--shadow), inset 0 1px 0 color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-.esb-context-label {
-  padding: 6px 9px 7px;
+.esb-shortcut-context-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 2px 7px 7px;
+}
+
+.esb-shortcut-context-label {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   color: var(--text-mute);
   font-family: var(--font-mono);
@@ -714,33 +724,110 @@
   white-space: nowrap;
 }
 
-.esb-context-action {
+.esb-shortcut-context-properties,
+.esb-shortcut-context-action {
   display: flex;
-  width: 100%;
   align-items: center;
-  gap: 10px;
-  padding: 8px 9px;
-  border: 0;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  color: var(--text-dim);
   cursor: pointer;
   font-family: var(--font-ui);
-  font-size: 12px;
-  text-align: left;
+  font-size: 10.5px;
+  transition: border-color 100ms ease, background 100ms ease, color 100ms ease;
 }
 
-.esb-context-action:hover:not(:disabled),
-.esb-context-action:focus-visible {
+.esb-shortcut-context-properties {
+  width: 30px;
+  flex: 0 0 30px;
+  padding: 0;
+}
+
+.esb-shortcut-context-groups {
+  display: grid;
+  gap: 4px;
+}
+
+.esb-shortcut-context-primary,
+.esb-shortcut-context-row {
+  display: grid;
+  gap: 4px;
+}
+
+.esb-shortcut-context-primary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.esb-shortcut-context-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.esb-shortcut-context-row:last-child {
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.esb-shortcut-context-properties:hover:not(:disabled),
+.esb-shortcut-context-properties:focus-visible,
+.esb-shortcut-context-action:hover:not(:disabled),
+.esb-shortcut-context-action:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
   background: var(--accent-soft);
   color: var(--accent);
   outline: none;
 }
 
-.esb-context-action:disabled {
+.esb-shortcut-context-properties:disabled,
+.esb-shortcut-context-action:disabled {
   cursor: not-allowed;
   opacity: 0.4;
 }
+
+.esb-shortcut-context-action[data-danger="true"] { color: var(--danger); }
+.esb-shortcut-context-action[data-danger="true"]:hover:not(:disabled),
+.esb-shortcut-context-action[data-danger="true"]:focus-visible {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border-strong));
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.esb-shortcut-rename {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 2px;
+}
+
+.esb-shortcut-rename-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 6px 8px;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  outline: none;
+}
+
+.esb-shortcut-rename-input:focus { border-color: var(--accent); }
+.esb-shortcut-rename-actions { display: flex; justify-content: flex-end; gap: 5px; }
+.esb-shortcut-rename-cancel,
+.esb-shortcut-rename-confirm {
+  min-height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+}
+.esb-shortcut-rename-cancel { background: transparent; color: var(--text-mute); }
+.esb-shortcut-rename-confirm { background: var(--accent-soft); color: var(--accent); }
+.esb-shortcut-rename-cancel:hover,
+.esb-shortcut-rename-cancel:focus-visible { background: var(--surface-2); color: var(--text); outline: none; }
+.esb-shortcut-rename-confirm:hover,
+.esb-shortcut-rename-confirm:focus-visible { background: var(--accent); color: var(--surface); outline: none; }
 
 /* ── No results ─────────────────────────────────────────────────────── */
 

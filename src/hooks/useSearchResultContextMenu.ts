@@ -37,11 +37,10 @@ export function useSearchResultContextMenu({ openPath, closeSearch, reportError 
       path,
       label,
       canUseFileActions: /^[a-zA-Z]:\\|^\\\\/.test(path),
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 244)),
-      // ~10 action rows + separator + label now render taller than the old menu;
-      // the estimate just needs to keep the menu mostly on-screen — esb-context-menu's
-      // max-height + overflow-y:auto (EverythingSearchBar.css) is the real safety net.
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 420)),
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 302)),
+      // The compact two-column menu is deliberately short, but this keeps its
+      // destructive row visible on short displays before CSS overflow applies.
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 292)),
     });
   }, []);
 

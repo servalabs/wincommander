@@ -1,6 +1,5 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/ui/icon";
-import { Separator } from "@/components/ui/separator";
 import type { SearchContextAction, SearchContextTarget } from "@/hooks/useSearchResultContextMenu";
 
 interface Props {
@@ -9,18 +8,16 @@ interface Props {
   onClose: () => void;
 }
 
-const ACTIONS: Array<{ id: SearchContextAction; label: string; icon: string; fileOnly?: boolean; separatorBefore?: boolean }> = [
+const PRIMARY_ACTIONS: Array<{ id: SearchContextAction; label: string; icon: string }> = [
   { id: "open", label: "Open", icon: "document" },
-  { id: "open-folder", label: "Open containing folder", icon: "folder-open", fileOnly: true },
-  { id: "copy", label: "Copy", icon: "duplicate", fileOnly: true },
-  { id: "cut", label: "Cut", icon: "cut", fileOnly: true },
-  { id: "copy-path", label: "Copy path", icon: "clipboard", fileOnly: true },
-  { id: "vscode", label: "Open in Visual Studio Code", icon: "code", fileOnly: true },
-  { id: "rename", label: "Rename", icon: "edit", fileOnly: true },
-  { id: "properties", label: "Properties", icon: "info-sign", fileOnly: true },
-  // Destructive actions last, separated from the actions above.
-  { id: "delete", label: "Delete", icon: "trash", fileOnly: true, separatorBefore: true },
-  { id: "shred", label: "Shred (permanent)", icon: "flame", fileOnly: true },
+  { id: "open-folder", label: "Folder", icon: "folder-open" },
+  { id: "vscode", label: "Code", icon: "code" },
+];
+
+const COMPACT_ROWS: Array<Array<{ id: SearchContextAction; label: string; icon: string; danger?: boolean }>> = [
+  [{ id: "copy", label: "Copy", icon: "duplicate" }, { id: "copy-path", label: "Copy path", icon: "clipboard" }],
+  [{ id: "cut", label: "Cut", icon: "cut" }, { id: "rename", label: "Rename", icon: "edit" }],
+  [{ id: "delete", label: "Delete", icon: "trash", danger: true }, { id: "shred", label: "Shred", icon: "flame", danger: true }],
 ];
 
 export default function SearchResultContextMenu({ target, onAction, onClose }: Props) {
@@ -80,58 +77,90 @@ export default function SearchResultContextMenu({ target, onAction, onClose }: P
 
   return (
     <div
-      className="esb-context-menu custom-scrollbar"
+      className="esb-shortcut-context-menu custom-scrollbar"
       style={{ left: target.x, top: target.y }}
       role="menu"
       aria-label={`Actions for ${target.label}`}
       onPointerDown={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
     >
-      <div className="esb-context-label" title={target.path}>{target.label}</div>
+      <div className="esb-shortcut-context-toolbar">
+        <div className="esb-shortcut-context-label" title={target.path}>{target.label}</div>
+        <button
+          type="button"
+          className="esb-shortcut-context-properties"
+          disabled={!target.canUseFileActions}
+          aria-label="Properties"
+          title="Properties"
+          onClick={() => onAction("properties")}
+        >
+          <Icon icon="info-sign" size={14} />
+        </button>
+      </div>
       {renaming ? (
         <form
-          className="flex flex-col gap-2 px-2 pb-2 pt-1"
+          className="esb-shortcut-rename"
           onSubmit={(event) => { event.preventDefault(); confirmRename(); }}
         >
           <input
             ref={renameInputRef}
             autoFocus
-            className="w-full rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-[12px] text-[var(--text)] outline-none focus:border-[var(--accent)]"
+            className="esb-shortcut-rename-input"
             value={renameValue}
             onChange={(event) => setRenameValue(event.target.value)}
           />
-          <div className="flex justify-end gap-1.5">
+          <div className="esb-shortcut-rename-actions">
             <button
               type="button"
-              className="rounded-[var(--radius-md)] px-2.5 py-1 text-[12px] text-[var(--text-mute)] hover:bg-[var(--accent-soft)] hover:text-[var(--accent)]"
+              className="esb-shortcut-rename-cancel"
               onClick={() => setRenaming(false)}
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="rounded-[var(--radius-md)] bg-[var(--accent-soft)] px-2.5 py-1 text-[12px] font-medium text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--surface)]"
+              className="esb-shortcut-rename-confirm"
             >
               Confirm
             </button>
           </div>
         </form>
       ) : (
-        ACTIONS.map((action) => (
-          <Fragment key={action.id}>
-            {action.separatorBefore && <Separator className="my-1" />}
-            <button
-              type="button"
-              role="menuitem"
-              className="esb-context-action"
-              disabled={action.fileOnly && !target.canUseFileActions}
-              onClick={() => (action.id === "rename" ? startRename() : onAction(action.id))}
-            >
-              <Icon icon={action.icon} size={15} />
-              <span>{action.label}</span>
-            </button>
-          </Fragment>
-        ))
+        <div className="esb-shortcut-context-groups">
+          <div className="esb-shortcut-context-primary">
+            {PRIMARY_ACTIONS.map((action) => (
+              <button
+                key={action.id}
+                type="button"
+                role="menuitem"
+                className="esb-shortcut-context-action"
+                disabled={action.id !== "open" && !target.canUseFileActions}
+                onClick={() => onAction(action.id)}
+              >
+                <Icon icon={action.icon} size={14} />
+                <span>{action.label}</span>
+              </button>
+            ))}
+          </div>
+          {COMPACT_ROWS.map((row) => (
+            <div key={row[0].id} className="esb-shortcut-context-row">
+              {row.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  role="menuitem"
+                  className="esb-shortcut-context-action"
+                  data-danger={action.danger || undefined}
+                  disabled={!target.canUseFileActions}
+                  onClick={() => (action.id === "rename" ? startRename() : onAction(action.id))}
+                >
+                  <Icon icon={action.icon} size={14} />
+                  <span>{action.label}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
