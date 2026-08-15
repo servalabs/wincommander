@@ -775,6 +775,13 @@ fn default_notification_timeout() -> u32 {
 pub struct QuickMountSlot {
     pub file_path: String,
     pub drive_letter: String,
+    /// "letter" (default) or "folder". Absent on slots saved before folder mounts
+    /// existed, which are letter slots — hence Option rather than a defaulted enum.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount_target: Option<String>,
+    /// Directory to mount at when mount_target is "folder".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount_point: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -794,6 +801,15 @@ pub struct VaultSettings {
     /// Must exist here or patch_settings_cmd's round-trip drops it.
     #[serde(default)]
     pub quick_mount_slots: Vec<QuickMountSlot>,
+    /// Who can see a mounted vault's drive letter: "auto" (default), "machine" or
+    /// "per-user". "auto" resolves to per-user on multi-session/Server SKUs and
+    /// machine on single-user desktops.
+    ///
+    /// Same rule as the fields above, and it bit this feature already: the frontend
+    /// shipped the toggle before this field existed, so every save round-tripped the
+    /// user's choice straight back to nothing while the UI showed it as applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount_scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
