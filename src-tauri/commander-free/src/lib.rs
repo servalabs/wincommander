@@ -1613,8 +1613,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        // Autostart at Windows login enters full screen. Monitors, pollers,
-        // updater, and license refresh initialise normally.
+        // Autostart at Windows login uses the same maximized window as a manual
+        // launch so the Windows taskbar remains available.
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .app_name(paths::app_display_name())
@@ -1896,11 +1896,6 @@ pub fn run() {
                 let args: Vec<String> = std::env::args().collect();
                 let hidden_mode = wincommander_is_hidden();
                 let not_minimized = !args.contains(&"--minimized".to_string());
-                // `--minimized` is included so existing scheduled tasks from
-                // older builds also use the new full-screen startup behavior.
-                let is_auto_start = args.iter().any(|arg| {
-                    arg == "--autostart" || arg == "--minimized"
-                });
                 // Safe Paste must never bring the window forward for any part of
                 // the operation — see session_instance.rs::handle_forwarded_args
                 // for the mirrored warm-forward guard. The only UI surfaces are
@@ -1951,11 +1946,7 @@ pub fn run() {
                     let _ = window.set_focus();
                 } else if !hidden_mode {
                     let _ = window.set_skip_taskbar(false);
-                    if is_auto_start {
-                        let _ = window.set_fullscreen(true);
-                    } else {
-                        let _ = window.maximize();
-                    }
+                    let _ = window.maximize();
                     let _ = window.show();
                     set_wincommander_window_icon(&window);
                     let _ = window.set_focus();
