@@ -493,7 +493,7 @@ fn classify_risk(entry: &GeneratedCommand) -> Risk {
 }
 
 fn classify_headless_support(entry: &GeneratedCommand) -> HeadlessSupport {
-    if available_in_this_build(entry) {
+    if available_in_this_build(entry) && classify_risk(entry) == Risk::ReadOnly {
         return HeadlessSupport::Executable;
     }
     let name = entry.name.as_str();
@@ -504,6 +504,10 @@ fn classify_headless_support(entry: &GeneratedCommand) -> HeadlessSupport {
         || name.contains("display_label")
         || name.contains("tray_")
     {
+        HeadlessSupport::UiOnly
+    } else if available_in_this_build(entry) {
+        // Mutating and destructive handlers remain desktop-only until every
+        // command has the native capability gate and shared cross-process locks.
         HeadlessSupport::UiOnly
     } else {
         HeadlessSupport::Cataloged
@@ -1218,7 +1222,12 @@ mod tests {
         assert!(tauri_commands
             .iter()
             .filter(|entry| available_in_this_build(entry))
-            .all(|entry| classify_headless_support(entry) == HeadlessSupport::Executable));
+            .all(|entry| match classify_risk(entry) {
+                Risk::ReadOnly => classify_headless_support(entry) == HeadlessSupport::Executable,
+                Risk::Mutating | Risk::Destructive => {
+                    classify_headless_support(entry) == HeadlessSupport::UiOnly
+                }
+            }));
         assert_eq!(
             tauri_commands
                 .iter()

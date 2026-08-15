@@ -2,6 +2,10 @@
 
 WinCommander Free uses one executable for both the desktop app and headless automation. Launching `wincommander-free.exe` normally opens the GUI. The explicit verbs `commands`, `audit`, `run`, and `help` switch the same executable into CLI mode.
 
+The production CLI is read-only. Mutating and destructive commands remain
+desktop-only until they share the desktop's native confirmation and
+cross-process locking controls.
+
 Run it from an elevated terminal because the shipped executable retains WinCommander's administrator manifest. Every CLI request writes one structured JSON document to stdout; the process exit code carries the outcome.
 
 ```powershell
