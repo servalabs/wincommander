@@ -72,6 +72,8 @@ mod port_monitor;
 mod print_log;
 mod pro_install;
 mod ransomware_monitor;
+#[cfg(windows)]
+mod rdp_session_watch;
 mod reboot_usb;
 mod registry_hygiene;
 mod remote_sessions;
@@ -1673,6 +1675,14 @@ pub fn run() {
             // hotkey relaunch during cold-start finds a live pipe immediately.
             #[cfg(windows)]
             session_instance::start_pipe_listener(app.handle().clone());
+
+            // Native session-end vault dismount — a reliable backstop for the
+            // existing 10s-poll incoming-RDP dismount (useRdpIncomingDismount.ts):
+            // that poll can miss its own session ending, since Windows may tear
+            // this very process down before the next tick runs. See
+            // rdp_session_watch.rs for the full rationale.
+            #[cfg(windows)]
+            rdp_session_watch::start(app.handle().clone());
 
             // ── Startup registry flags (contract: read by R5/NSIS) ──────────
             // Write HiddenMode and CalculatorMode DWORDs before any window shows
