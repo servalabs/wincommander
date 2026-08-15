@@ -3,11 +3,20 @@
 // Lets the user choose who can see a mounted vault: everyone signed into
 // this PC (machine scope) or only the signed-in user (per-user scope) — see
 // EncVolMountScope in EncVolFormatSdk.h for why these are two genuinely
-// different engine resources, not a cosmetic label. Admin-lockable: a Fleet
-// policy can pin the value via policy.lockedPaths ("vault.mountScope"), in
-// which case this renders disabled with a note instead of hiding the control
-// (same pattern as the RDP Idle card's "MANAGED BY ORG" lock).
+// different engine resources, not a cosmetic label. Admin-lockable two ways,
+// checked here directly (rather than trusting a caller-passed `locked` prop)
+// so any future caller gets the lock for free, matching how ToggleSection/
+// RdpIdleCard derive their own lock state instead of taking it as a prop:
+//   - a Fleet policy pin via policy.lockedPaths ("vault.mountScope") — needs
+//     a connected admin server to populate;
+//   - policy.pinnedMountScope — set locally by the single administrator on a
+//     standalone (no Fleet server) box, where lockedPaths never gets written.
+// Either way this renders disabled with a note instead of hiding the control
+// (same pattern as the RDP Idle card's "MANAGED BY ORG" lock), and shows the
+// pinned value rather than the caller's `value` so a stale local preference
+// never displays as selected while a pin overrides it.
 import { Icon } from "@/components/ui/bp";
+import { useAppState } from "../../context/AppContext";
 import type { MountScopePreference } from "./mountScope";
 import "./MountScopeSelector.css";
 
@@ -15,8 +24,10 @@ interface MountScopeSelectorProps {
   id?: string;
   value: MountScopePreference;
   onChange: (value: MountScopePreference) => void;
-  /** True when a Fleet policy has pinned this setting. The control still
-   *  shows the pinned value — it just can't be changed locally. */
+  /** Forces the locked state on top of whatever policy already derives —
+   *  kept for callers that already know they're locked (e.g. a disabled
+   *  wizard step); not required for the Fleet/admin-pin cases below, which
+   *  this component now checks itself. */
   locked?: boolean;
   disabled?: boolean;
 }
@@ -28,7 +39,24 @@ const OPTIONS: { value: MountScopePreference; label: string; description: string
 ];
 
 export default function MountScopeSelector({ id, value, onChange, locked, disabled }: MountScopeSelectorProps) {
-  const isDisabled = Boolean(locked || disabled);
+  const { appSettings } = useAppState();
+
+  const lockedPaths = appSettings?.policy?.lockedPaths ?? [];
+  // Tolerates both the bare fleet dot-path convention ("vault.mountScope")
+  // and this app's "app."-prefixed convention (see CreateVolumeWizard.tsx /
+  // MetricAlertRow.tsx), whichever the connected server actually publishes.
+  const fleetLocked = lockedPaths.some(
+    (p) => p.trim().length > 0 && ("vault.mountScope".startsWith(p) || "app.vault.mountScope".startsWith(p))
+  );
+  const pinnedMountScope = appSettings?.policy?.pinnedMountScope ?? null;
+  const policyLocked = fleetLocked || pinnedMountScope !== null;
+  const isDisabled = Boolean(locked || disabled || policyLocked);
+  // Distinct from isDisabled: a plain `disabled` prop (e.g. a wizard step
+  // that isn't reachable yet) isn't an admin action and shouldn't claim one.
+  const showLockedNote = Boolean(locked || policyLocked);
+  // While pinned, the pin is authoritative over whatever the caller's own
+  // (possibly stale, possibly pre-pin) preference says.
+  const effectiveValue = pinnedMountScope ?? value;
 
   return (
     <div id={id} className="mount-scope-selector">
@@ -38,9 +66,9 @@ export default function MountScopeSelector({ id, value, onChange, locked, disabl
             key={opt.value}
             type="button"
             role="radio"
-            aria-checked={value === opt.value}
+            aria-checked={effectiveValue === opt.value}
             disabled={isDisabled}
-            className={`mount-scope-option${value === opt.value ? " is-selected" : ""}`}
+            className={`mount-scope-option${effectiveValue === opt.value ? " is-selected" : ""}`}
             onClick={() => !isDisabled && onChange(opt.value)}
           >
             <span className="mount-scope-option-label">{opt.label}</span>
@@ -48,7 +76,7 @@ export default function MountScopeSelector({ id, value, onChange, locked, disabl
           </button>
         ))}
       </div>
-      {locked && (
+      {showLockedNote && (
         <div className="mount-scope-locked-note">
           <Icon icon="lock" size={10} />
           <span>Set by your administrator.</span>

@@ -1524,6 +1524,17 @@ export interface PolicySettings {
   fleetSigningKey?: string | null;
   /** Enrollment-locked by org policy (P5) — in-app Disconnect is refused. */
   managed?: boolean;
+  /** Admin pin for `VaultSettings.mountScope`, set locally by the single
+   *  administrator on an unmanaged (`syncMode: "standalone"`) install —
+   *  read directly by `MountScopeSelector.tsx`. Distinct from the generic
+   *  Fleet `lockedPaths` mechanism, which only ever gets populated by a
+   *  connected admin server (`apply_admin_config_cmd`): a standalone box has
+   *  no server to push that, yet still has exactly one administrator who
+   *  needs to stop other signed-in users from switching a shared vault to
+   *  per-user scope. Settings are machine-wide (see AGENTS.md), so one write
+   *  here pins the effective scope for every user's session. `null`/absent
+   *  = not pinned, users choose freely. */
+  pinnedMountScope?: "auto" | "machine" | "per-user" | null;
 }
 
 // ── Server Apps ──────────────────────────────────────────────────────

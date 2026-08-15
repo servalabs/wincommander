@@ -1981,6 +1981,17 @@ pub struct PolicySettings {
     /// deterrent; a determined local admin can still uninstall — see the plan §8).
     #[serde(default)]
     pub managed: bool,
+    /// Admin pin for `VaultSettings::mount_scope`, read by
+    /// `MountScopeSelector.tsx`. Separate from `locked_paths` because that
+    /// generic mechanism is only ever populated by `apply_admin_config` (a
+    /// connected admin/Fleet server) — a standalone (`sync_mode:
+    /// "standalone"`) box has no server to push that, but still has one
+    /// administrator who needs to stop other signed-in users from flipping
+    /// a shared vault to per-user scope. `None` = not pinned. Must exist
+    /// here or patch_settings_cmd's round-trip drops it, same failure mode
+    /// `mount_scope` itself already hit once (see its comment above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_mount_scope: Option<String>,
 }
 
 impl Default for PolicySettings {
@@ -1995,6 +2006,7 @@ impl Default for PolicySettings {
             organization: None,
             fleet_signing_key: None,
             managed: false,
+            pinned_mount_scope: None,
         }
     }
 }
