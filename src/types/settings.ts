@@ -460,7 +460,18 @@ export interface QuickMountSlot {
    * device path returned by the encrypted-volume picker. */
   targetType?: "file" | "partition";
   filePath: string;
+  /** How this slot is presented once mounted: a drive letter (default) or a
+   *  folder mount point. A slot saved before this field existed has no
+   *  `mountTarget` at all — it is interpreted as `"letter"`, using
+   *  `driveLetter` exactly as before, so old Quick Mount slots keep working
+   *  unchanged. */
+  mountTarget?: "letter" | "folder";
   driveLetter: string;
+  /** Folder mount point path. Only meaningful when `mountTarget === "folder"`;
+   *  absent for letter-target and legacy slots. Folder mounts require
+   *  machine scope (see `VaultSettings.mountScope`) — a per-user mount has
+   *  no folder-mount equivalent. */
+  mountPoint?: string;
 }
 
 export interface VaultSettings {
@@ -476,6 +487,14 @@ export interface VaultSettings {
    *  All sub-fields are optional so the user can save a partial config;
    *  the autostart hook fills in safe defaults for anything missing. */
   ramdiskAutostart?: RamDiskAutostartSettings;
+  /** Preferred mount scope for new mounts: who can see the drive once it's
+   *  mounted. `"auto"` (default, and the meaning of an absent value) resolves
+   *  to per-user on Windows Server / multi-session SKUs and per-machine on a
+   *  single-user desktop; `"machine"`/`"per-user"` override auto-detection
+   *  explicitly. Admin-lockable — a Fleet policy can pin this via
+   *  `policy.lockedPaths` (path `"vault.mountScope"`), in which case the
+   *  Settings UI shows the pinned value disabled rather than hiding it. */
+  mountScope?: "auto" | "machine" | "per-user";
 }
 
 export interface RamDiskAutostartSettings {
