@@ -27,6 +27,12 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Fixed
 
+- **Headless automation now fails closed for every mutating and destructive
+  command** (2026-08-15). The CLI exposes only read-only handlers until its
+  native confirmation and cross-process locking controls cover the mutation
+  surface, preventing CLI-triggered destructive actions, settings write races,
+  and index-rebuild/read races.
+
 - **Fleet device requests now bind the complete payload to HMAC v2**
   (2026-08-13). The shared agent core signs the HTTP method, exact route path,
   and recursively canonicalized JSON body (excluding only `hmac`), preventing
