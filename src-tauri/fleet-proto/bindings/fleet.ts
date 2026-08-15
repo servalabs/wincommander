@@ -363,12 +363,12 @@ sampled_at: string, };
  * A device as shown in the admin panel's fleet view. `online` is computed by
  * the server from `last_seen` against a freshness window.
  */
-export type DeviceSummary = { device_id: DeviceId, device_hash: string,
+export type DeviceSummary = { device_id: DeviceId, device_hash: string, 
 /**
  * Enrolled agent class (`wincommander`, `tuxcommander`, or `android`).
  * Additive/defaulted so older cached API responses still deserialize.
  */
-device_kind: string, hostname: string | null, os_version: string | null, agent_version: string, enrolled_at: string, last_seen_at: string | null, online: boolean,
+device_kind: string, hostname: string | null, os_version: string | null, agent_version: string, enrolled_at: string, last_seen_at: string | null, online: boolean, 
 /**
  * Group this device is assigned to, if any (F4 device groups).
  */
@@ -378,7 +378,7 @@ group_id: string | null,
  * reported one. `None` for a device on an agent build predating this
  * field, or one that simply hasn't checked in yet.
  */
-resources: DeviceResourceSample | null,
+resources: DeviceResourceSample | null, 
 /**
  * Framework-authoritative Android fleet state from the latest check-in.
  */
@@ -489,16 +489,16 @@ export type ListDirResult = { ok: boolean, path: string, detail: string | null, 
  * must contain only scalars/process-executable-names/metric values, never
  * window titles, file contents, or free-text.
  */
-export type LocalAlertReport = {
+export type LocalAlertReport = { 
 /**
  * `"screen_capture" | "cpu_usage" | "ram_usage" | "network_usage"`.
  */
-alert_type: string,
+alert_type: string, 
 /**
  * e.g. `{"detected":"OBS Studio","process":"obs64.exe"}` or
  * `{"metric":"cpu","value_pct":94,"threshold_pct":85,"duration_s":300}`.
  */
-detail: JsonValue,
+detail: JsonValue, 
 /**
  * RFC3339, set by the agent at the moment the local notification fired.
  */
@@ -589,7 +589,7 @@ export type PostureReport = { applied_epoch: bigint, settings_hash: string,
  * against the resolved epoch's desired config to surface PER-TOGGLE drift
  * (P3). Absent (`null`) → drift is computed at epoch granularity only.
  */
-toggle_states: JsonValue | null,
+toggle_states: JsonValue | null, 
 /**
  * Whether the Privacy Shield is ACTUALLY running on the device right
  * now, self-reported at posture time. Compared against the resolved
@@ -796,13 +796,13 @@ export type SecuritySnapshotService = { name: string, start_type: string, status
  * the same fast `/v1/agents/checkin` round-trip as `config_epoch`, via
  * `CheckinResponse.shield_state`.
  */
-export type ShieldDesiredState = { enabled: boolean,
+export type ShieldDesiredState = { enabled: boolean, 
 /**
  * `"blur_notify"` (blur/black-out the screen AND notify) | `"notify_only"`
  * (notification only, no visual blur). Mutually exclusive — see the
  * Privacy Shield card's segmented toggle.
  */
-mode: string,
+mode: string, 
 /**
  * RFC3339, set by the server when this desired state was last written.
  * Informational only (no anti-rollback gate — latest write always wins,
