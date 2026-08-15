@@ -946,6 +946,15 @@ pub struct RemoteSearchRequest {
     pub predicates: SearchPredicates,
     #[serde(default)]
     pub rank: SearchRank,
+    /// Maximum result rows the device may return. Fleet derives this from the
+    /// organization setting before signing the command; callers cannot select
+    /// a larger limit through the search request itself.
+    #[serde(default = "default_remote_search_result_limit")]
+    pub result_limit: usize,
+}
+
+fn default_remote_search_result_limit() -> usize {
+    200
 }
 
 /// Cross-device file search — one result row. Wired to `FILES_SEARCH_CATALOG_ID`
