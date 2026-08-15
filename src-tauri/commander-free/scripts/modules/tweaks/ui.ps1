@@ -602,3 +602,118 @@ function Enable-AutocorrectSpellcheck {
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
+
+# ============================================================================
+# Make PowerShell 7 the Windows Terminal default profile
+#
+# Scope: only Windows Terminal's own "defaultProfile" setting (which profile
+# opens with no explicit profile argument -- Win+X "Terminal", the modern
+# Explorer "Open in Terminal" verb). Deliberately does NOT touch the separate
+# Windows 11 "Default Terminal Application" registry axis
+# (HKCU:\Console\%%Startup DelegationConsole/DelegationTerminal), which
+# repoints the host for every console app system-wide and is documented as
+# unreliable under elevated processes -- this app always runs elevated.
+# ============================================================================
+
+function Get-WindowsTerminalSettingsPath {
+    $packaged = Get-ChildItem -Path "$env:LOCALAPPDATA\Packages" -Filter 'Microsoft.WindowsTerminal_*' -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notmatch 'Preview|Canary' } |
+        Select-Object -First 1
+    if ($packaged) {
+        $path = Join-Path $packaged.FullName 'LocalState\settings.json'
+        if (Test-Path -LiteralPath $path -PathType Leaf) { return $path }
+    }
+    $unpackaged = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\settings.json'
+    if (Test-Path -LiteralPath $unpackaged -PathType Leaf) { return $unpackaged }
+    return $null
+}
+
+function ConvertFrom-WindowsTerminalSettings {
+    # Windows Terminal ships a leading "// ..." comment header and users
+    # sometimes hand-edit trailing commas; both break strict ConvertFrom-Json.
+    # This parsed copy is discovery-only (finding a profile's GUID) and is
+    # never written back, so stripping comments/trailing-commas here can
+    # never damage the user's actual on-disk formatting.
+    param([string]$RawJson)
+    $stripped = ($RawJson -split "`r?`n" | Where-Object { $_.TrimStart() -notmatch '^//' }) -join "`n"
+    $stripped = [regex]::Replace($stripped, ',(\s*[}\]])', '$1')
+    try { $stripped | ConvertFrom-Json -ErrorAction Stop } catch { $null }
+}
+
+function Find-PowerShell7ProfileGuid {
+    param($ParsedSettings)
+    if ($ParsedSettings.disabledProfileSources -contains 'Windows.Terminal.PowershellCore') { return $null }
+    $profiles = @($ParsedSettings.profiles.list)
+    $match = $profiles | Where-Object { $_.source -eq 'Windows.Terminal.PowershellCore' } | Select-Object -First 1
+    if (-not $match) { $match = $profiles | Where-Object { $_.commandline -match 'pwsh\.exe' } | Select-Object -First 1 }
+    if (-not $match) { $match = $profiles | Where-Object { $_.name -eq 'PowerShell' } | Select-Object -First 1 }
+    if ($match) { return $match.guid }
+    return $null
+}
+
+function Find-WindowsPowerShellProfileGuid {
+    param($ParsedSettings)
+    $profiles = @($ParsedSettings.profiles.list)
+    $match = $profiles | Where-Object { $_.name -eq 'Windows PowerShell' } | Select-Object -First 1
+    if ($match) { return $match.guid }
+    # Windows Terminal's fixed, non-dynamic GUID for the built-in Windows PowerShell profile.
+    return '{61c54bbd-c2c6-5271-96e7-009a87ff44bf}'
+}
+
+function Get-PowerShell7DefaultStatus {
+    $settingsPath = Get-WindowsTerminalSettingsPath
+    if (-not $settingsPath) { return @{ default = $false; available = $false; reason = 'Windows Terminal is not installed' } }
+    $parsed = ConvertFrom-WindowsTerminalSettings -RawJson ([System.IO.File]::ReadAllText($settingsPath))
+    if (-not $parsed) { return @{ default = $false; available = $false; reason = 'Could not read Windows Terminal settings' } }
+    $ps7Guid = Find-PowerShell7ProfileGuid -ParsedSettings $parsed
+    if (-not $ps7Guid) {
+        return @{ default = $false; available = $false; reason = 'PowerShell 7 profile not found -- open Windows Terminal once after installing PowerShell 7' }
+    }
+    return @{ default = ($parsed.defaultProfile -eq $ps7Guid); available = $true }
+}
+
+function Enable-PowerShell7DefaultShell {
+    if (-not (Test-PowerShell7Installed).installed) {
+        return @{ error = $true; message = 'PowerShell 7 is not installed' }
+    }
+    $settingsPath = Get-WindowsTerminalSettingsPath
+    if (-not $settingsPath) { return @{ error = $true; message = 'Windows Terminal is not installed' } }
+    $raw = [System.IO.File]::ReadAllText($settingsPath)
+    $parsed = ConvertFrom-WindowsTerminalSettings -RawJson $raw
+    if (-not $parsed) { return @{ error = $true; message = 'Could not read Windows Terminal settings' } }
+    $ps7Guid = Find-PowerShell7ProfileGuid -ParsedSettings $parsed
+    if (-not $ps7Guid) {
+        return @{ error = $true; message = 'PowerShell 7 profile not found in Windows Terminal -- open Windows Terminal once after installing PowerShell 7, then try again' }
+    }
+    # Surgical text replace of only the defaultProfile value -- preserves the
+    # user's comments, key order, and every other hand-edited setting. Uses
+    # plain substring surgery (not a regex Replace-all) so a hand-trimmed
+    # file with no defaultProfile key can't have every "{" in the JSON
+    # corrupted by a naive first-brace regex substitution.
+    $keyPattern = [regex]'"defaultProfile"\s*:\s*"[^"]*"'
+    $existingMatch = $keyPattern.Match($raw)
+    $updated = if ($existingMatch.Success) {
+        $raw.Substring(0, $existingMatch.Index) + "`"defaultProfile`": `"$ps7Guid`"" + $raw.Substring($existingMatch.Index + $existingMatch.Length)
+    } else {
+        $braceIndex = $raw.IndexOf('{')
+        $raw.Substring(0, $braceIndex + 1) + "`n    `"defaultProfile`": `"$ps7Guid`"," + $raw.Substring($braceIndex + 1)
+    }
+    [System.IO.File]::WriteAllText($settingsPath, $updated)
+    @{ status = 'enabled' }
+}
+
+function Disable-PowerShell7DefaultShell {
+    $settingsPath = Get-WindowsTerminalSettingsPath
+    if (-not $settingsPath) { return @{ status = 'disabled' } }
+    $raw = [System.IO.File]::ReadAllText($settingsPath)
+    $parsed = ConvertFrom-WindowsTerminalSettings -RawJson $raw
+    if (-not $parsed) { return @{ status = 'disabled' } }
+    $winPsGuid = Find-WindowsPowerShellProfileGuid -ParsedSettings $parsed
+    $keyPattern = [regex]'"defaultProfile"\s*:\s*"[^"]*"'
+    $existingMatch = $keyPattern.Match($raw)
+    if ($existingMatch.Success) {
+        $updated = $raw.Substring(0, $existingMatch.Index) + "`"defaultProfile`": `"$winPsGuid`"" + $raw.Substring($existingMatch.Index + $existingMatch.Length)
+        [System.IO.File]::WriteAllText($settingsPath, $updated)
+    }
+    @{ status = 'disabled' }
+}

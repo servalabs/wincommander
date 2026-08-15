@@ -648,7 +648,7 @@ scope: Array<string>, mode: SearchMode,
  * the JSON-Schema `required` at `[terms, mode]`, so an older console that
  * omits this is unaffected.
  */
-predicates: SearchPredicates, rank: SearchRank,
+predicates: SearchPredicates, rank: SearchRank, 
 /**
  * Maximum result rows the device may return. Fleet derives this from the
  * organization setting before signing the command; callers cannot select
