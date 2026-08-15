@@ -562,6 +562,7 @@ const SYSTEM_MAINTENANCE: &[u8] = include_bytes!("../scripts/modules/tweaks/main
 const SYSTEM_INFO: &[u8] = include_bytes!("../scripts/modules/dashboard/info.enc");
 const SYSTEM_SECURITY: &[u8] = include_bytes!("../scripts/modules/tweaks/security.enc");
 const TWEAKS_SYSTEM: &[u8] = include_bytes!("../scripts/modules/tweaks/system.enc");
+const TWEAKS_SERVER: &[u8] = include_bytes!("../scripts/modules/tweaks/server.enc");
 const TWEAKS_UI: &[u8] = include_bytes!("../scripts/modules/tweaks/ui.enc");
 const NETWORK_FIREWALL: &[u8] = include_bytes!("../scripts/modules/network/firewall.enc");
 const NETWORK_DNS: &[u8] = include_bytes!("../scripts/modules/network/dns.enc");
@@ -2167,6 +2168,33 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Invoke-Defrag" => Some("tweaks/maintenance"),
         "Invoke-DeepCleanup" => Some("tweaks/maintenance"),
 
+        // Tweaks - Windows Server
+        "Disable-CtrlAltDelLogon" => Some("tweaks/server"),
+        "Enable-CtrlAltDelLogon" => Some("tweaks/server"),
+        "Enable-HideLastSignedInUser" => Some("tweaks/server"),
+        "Disable-HideLastSignedInUser" => Some("tweaks/server"),
+        "Enable-ConsoleInactivityLock" => Some("tweaks/server"),
+        "Disable-ConsoleInactivityLock" => Some("tweaks/server"),
+        "Disable-ShutdownEventTracker" => Some("tweaks/server"),
+        "Enable-ShutdownEventTracker" => Some("tweaks/server"),
+        "Disable-ServerManagerAtLogon" => Some("tweaks/server"),
+        "Enable-ServerManagerAtLogon" => Some("tweaks/server"),
+        "Disable-IEEnhancedSecurity" => Some("tweaks/server"),
+        "Enable-IEEnhancedSecurity" => Some("tweaks/server"),
+        "Block-WDigestCredentials" => Some("tweaks/server"),
+        "Allow-WDigestCredentials" => Some("tweaks/server"),
+        "Enable-LsaProtection" => Some("tweaks/server"),
+        "Disable-LsaProtection" => Some("tweaks/server"),
+        "Block-LegacyNtlm" => Some("tweaks/server"),
+        "Allow-LegacyNtlm" => Some("tweaks/server"),
+        "Enable-SmbSigningRequired" => Some("tweaks/server"),
+        "Disable-SmbSigningRequired" => Some("tweaks/server"),
+        "Disable-Smb1Protocol" => Some("tweaks/server"),
+        "Enable-Smb1Protocol" => Some("tweaks/server"),
+        "Disable-RemoteRegistryService" => Some("tweaks/server"),
+        "Enable-RemoteRegistryService" => Some("tweaks/server"),
+        "Get-ServerTweakStatus" => Some("tweaks/server"),
+
         // Tweaks - UI
         "Disable-BackgroundApps" => Some("tweaks/ui"),
         "Enable-BackgroundApps" => Some("tweaks/ui"),
@@ -2216,6 +2244,9 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Enable-MouseAcceleration" => Some("tweaks/ui"),
         "Disable-AutocorrectSpellcheck" => Some("tweaks/ui"),
         "Enable-AutocorrectSpellcheck" => Some("tweaks/ui"),
+        "Enable-PowerShell7DefaultShell" => Some("tweaks/ui"),
+        "Disable-PowerShell7DefaultShell" => Some("tweaks/ui"),
+        "Get-PowerShell7DefaultStatus" => Some("tweaks/ui"),
 
         // Tweaks - Startup Manager
         "Get-StartupItems" => Some("tweaks/startup-manager"),
@@ -2483,6 +2514,31 @@ pub fn list_all_commands() -> Vec<String> {
         "Enable-Notifications",
         "Enable-ClassicContextMenu",
         "Disable-ClassicContextMenu",
+        "Disable-CtrlAltDelLogon",
+        "Enable-CtrlAltDelLogon",
+        "Enable-HideLastSignedInUser",
+        "Disable-HideLastSignedInUser",
+        "Enable-ConsoleInactivityLock",
+        "Disable-ConsoleInactivityLock",
+        "Disable-ShutdownEventTracker",
+        "Enable-ShutdownEventTracker",
+        "Disable-ServerManagerAtLogon",
+        "Enable-ServerManagerAtLogon",
+        "Disable-IEEnhancedSecurity",
+        "Enable-IEEnhancedSecurity",
+        "Block-WDigestCredentials",
+        "Allow-WDigestCredentials",
+        "Enable-LsaProtection",
+        "Disable-LsaProtection",
+        "Block-LegacyNtlm",
+        "Allow-LegacyNtlm",
+        "Enable-SmbSigningRequired",
+        "Disable-SmbSigningRequired",
+        "Disable-Smb1Protocol",
+        "Enable-Smb1Protocol",
+        "Disable-RemoteRegistryService",
+        "Enable-RemoteRegistryService",
+        "Get-ServerTweakStatus",
         "Enable-NTFSOptimizations",
         "Disable-NTFSOptimizations",
         "Enable-USBWriteProtect",
@@ -2584,6 +2640,7 @@ fn load_module(module_name: &str) -> Result<String, String> {
         "apps/uninstaller" => APPS_UNINSTALLER,
         "apps/bcu-uninstaller" => APPS_BCU_UNINSTALLER,
         "tweaks/system" => TWEAKS_SYSTEM,
+        "tweaks/server" => TWEAKS_SERVER,
         "tweaks/ui" => TWEAKS_UI,
         "tweaks/startup-manager" => TWEAKS_STARTUP_MANAGER,
         "tweaks/performance" => TWEAKS_PERFORMANCE,
@@ -2824,6 +2881,72 @@ fn get_settings_sync_patch(
             Some(json!({"tweaks":{"security":{"bitlockerTpmPinEnforce": enabled}}}))
         }
 
+        // ── Tweaks: Windows Server ───────────────────────────────────
+        "Disable-CtrlAltDelLogon" => {
+            Some(json!({"tweaks":{"server":{"ctrlAltDelDisabled": true}}}))
+        }
+        "Enable-CtrlAltDelLogon" => {
+            Some(json!({"tweaks":{"server":{"ctrlAltDelDisabled": false}}}))
+        }
+        "Enable-HideLastSignedInUser" => {
+            Some(json!({"tweaks":{"server":{"lastSignedInUserHidden": true}}}))
+        }
+        "Disable-HideLastSignedInUser" => {
+            Some(json!({"tweaks":{"server":{"lastSignedInUserHidden": false}}}))
+        }
+        "Enable-ConsoleInactivityLock" => {
+            Some(json!({"tweaks":{"server":{"consoleInactivityLock": true}}}))
+        }
+        "Disable-ConsoleInactivityLock" => {
+            Some(json!({"tweaks":{"server":{"consoleInactivityLock": false}}}))
+        }
+        "Disable-ShutdownEventTracker" => {
+            Some(json!({"tweaks":{"server":{"shutdownTrackerDisabled": true}}}))
+        }
+        "Enable-ShutdownEventTracker" => {
+            Some(json!({"tweaks":{"server":{"shutdownTrackerDisabled": false}}}))
+        }
+        "Disable-ServerManagerAtLogon" => {
+            Some(json!({"tweaks":{"server":{"serverManagerAtLogonDisabled": true}}}))
+        }
+        "Enable-ServerManagerAtLogon" => {
+            Some(json!({"tweaks":{"server":{"serverManagerAtLogonDisabled": false}}}))
+        }
+        "Disable-IEEnhancedSecurity" => {
+            Some(json!({"tweaks":{"server":{"ieEnhancedSecurityDisabled": true}}}))
+        }
+        "Enable-IEEnhancedSecurity" => {
+            Some(json!({"tweaks":{"server":{"ieEnhancedSecurityDisabled": false}}}))
+        }
+        "Block-WDigestCredentials" => {
+            Some(json!({"tweaks":{"server":{"wdigestBlocked": true}}}))
+        }
+        "Allow-WDigestCredentials" => {
+            Some(json!({"tweaks":{"server":{"wdigestBlocked": false}}}))
+        }
+        "Enable-LsaProtection" => {
+            Some(json!({"tweaks":{"server":{"lsaProtectionEnabled": true}}}))
+        }
+        "Disable-LsaProtection" => {
+            Some(json!({"tweaks":{"server":{"lsaProtectionEnabled": false}}}))
+        }
+        "Block-LegacyNtlm" => Some(json!({"tweaks":{"server":{"legacyNtlmBlocked": true}}})),
+        "Allow-LegacyNtlm" => Some(json!({"tweaks":{"server":{"legacyNtlmBlocked": false}}})),
+        "Enable-SmbSigningRequired" => {
+            Some(json!({"tweaks":{"server":{"smbSigningRequired": true}}}))
+        }
+        "Disable-SmbSigningRequired" => {
+            Some(json!({"tweaks":{"server":{"smbSigningRequired": false}}}))
+        }
+        "Disable-Smb1Protocol" => Some(json!({"tweaks":{"server":{"smb1Disabled": true}}})),
+        "Enable-Smb1Protocol" => Some(json!({"tweaks":{"server":{"smb1Disabled": false}}})),
+        "Disable-RemoteRegistryService" => {
+            Some(json!({"tweaks":{"server":{"remoteRegistryDisabled": true}}}))
+        }
+        "Enable-RemoteRegistryService" => {
+            Some(json!({"tweaks":{"server":{"remoteRegistryDisabled": false}}}))
+        }
+
         // ── Tweaks: UI ───────────────────────────────────────────────
         "Enable-ClassicContextMenu" => Some(json!({"tweaks":{"ui":{"classicContextMenu": true}}})),
         "Disable-ClassicContextMenu" => {
@@ -2874,6 +2997,12 @@ fn get_settings_sync_patch(
         "Enable-FullPathInTitleBar" => Some(json!({"tweaks":{"ui":{"fullPathInTitleBar": true}}})),
         "Disable-FullPathInTitleBar" => {
             Some(json!({"tweaks":{"ui":{"fullPathInTitleBar": false}}}))
+        }
+        "Enable-PowerShell7DefaultShell" => {
+            Some(json!({"tweaks":{"ui":{"powerShell7Default": true}}}))
+        }
+        "Disable-PowerShell7DefaultShell" => {
+            Some(json!({"tweaks":{"ui":{"powerShell7Default": false}}}))
         }
         "Set-TaskbarDebloated" => Some(json!({"tweaks":{"ui":{"taskbarDebloated": true}}})),
         "Reset-TaskbarDebloated" => Some(json!({"tweaks":{"ui":{"taskbarDebloated": false}}})),
@@ -3311,6 +3440,10 @@ fn get_module_dependencies(module_name: &str) -> &'static [&'static str] {
         // privacy/telemetry stays in the command-specific composition below
         // because the Copilot handlers add their own companion modules there.
         "tweaks/security" => &["core/settings-bridge"],
+        // PowerShell 7 default-shell detection reuses Test-PowerShell7Installed
+        // from the dependencies module rather than duplicating its pwsh.exe
+        // detection logic.
+        "tweaks/ui" => &["dependencies/dependencies"],
         _ => &[],
     }
 }

@@ -451,6 +451,21 @@ function Get-WCSystemProbe {
                 notificationsDisabled  = $false
                 endTaskOnTaskbar       = $false
             }
+            server   = @{
+                isServerSku                  = $false
+                ctrlAltDelDisabled           = $false
+                lastSignedInUserHidden       = $false
+                consoleInactivityLock        = $false
+                shutdownTrackerDisabled      = $false
+                serverManagerAtLogonDisabled = $false
+                ieEnhancedSecurityDisabled   = $false
+                wdigestBlocked               = $false
+                lsaProtectionEnabled         = $false
+                legacyNtlmBlocked            = $false
+                smbSigningRequired           = $false
+                smb1Disabled                 = $false
+                remoteRegistryDisabled       = $false
+            }
             # ── Empty buckets so granular probe writes don't
             # need Add-Member trickery. Frontend reads the whole sub-
             # hashtable via data.tweaks.{performance,gpu,power}.* and
@@ -820,6 +835,50 @@ function Get-WCSystemProbe {
     try {
         $wkt = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control" -Name "WaitToKillServiceTimeout" -EA SilentlyContinue
         if ($wkt -and $wkt.WaitToKillServiceTimeout -eq "1500") { $state.tweaks.os.serviceTimeoutsOptimized = $true }
+    } catch {}
+
+    # ── Windows Server tweaks ────────────────────────────────────────────
+    # Mirrors Get-ServerTweakStatus in tweaks/server.ps1. Kept in the same
+    # boolean shape so the panel probe and this bridge cannot disagree.
+    try {
+        $pt = (Get-CimInstance -ClassName Win32_OperatingSystem -EA SilentlyContinue).ProductType
+        $state.tweaks.server.isServerSku = ($pt -eq 2 -or $pt -eq 3)
+    } catch {}
+    try {
+        $sp = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -EA SilentlyContinue
+        if ($sp -and $sp.DisableCAD -eq 1) { $state.tweaks.server.ctrlAltDelDisabled = $true }
+        if ($sp -and $sp.DontDisplayLastUserName -eq 1) { $state.tweaks.server.lastSignedInUserHidden = $true }
+        if ($sp -and $sp.InactivityTimeoutSecs -gt 0) { $state.tweaks.server.consoleInactivityLock = $true }
+    } catch {}
+    try {
+        $rel = Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability" -EA SilentlyContinue
+        if ($rel -and $rel.ShutdownReasonOn -eq 0) { $state.tweaks.server.shutdownTrackerDisabled = $true }
+    } catch {}
+    try {
+        $sm = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\ServerManager" -Name "DoNotOpenServerManagerAtLogon" -EA SilentlyContinue
+        if ($sm -and $sm.DoNotOpenServerManagerAtLogon -eq 1) { $state.tweaks.server.serverManagerAtLogonDisabled = $true }
+    } catch {}
+    try {
+        $esc = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A7-37EF-4b3f-8CFC-4F3A74704073}" -Name "IsInstalled" -EA SilentlyContinue
+        if ($esc -and $esc.IsInstalled -eq 0) { $state.tweaks.server.ieEnhancedSecurityDisabled = $true }
+    } catch {}
+    try {
+        $wd = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" -Name "UseLogonCredential" -EA SilentlyContinue
+        if ($wd -and $wd.UseLogonCredential -eq 0) { $state.tweaks.server.wdigestBlocked = $true }
+    } catch {}
+    try {
+        $lsa = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -EA SilentlyContinue
+        if ($lsa -and $lsa.RunAsPPL -eq 1) { $state.tweaks.server.lsaProtectionEnabled = $true }
+        if ($lsa -and $lsa.LmCompatibilityLevel -ge 5) { $state.tweaks.server.legacyNtlmBlocked = $true }
+    } catch {}
+    try {
+        $smb = Get-SmbServerConfiguration -EA SilentlyContinue
+        if ($smb -and $smb.RequireSecuritySignature) { $state.tweaks.server.smbSigningRequired = $true }
+        if ($smb -and -not $smb.EnableSMB1Protocol) { $state.tweaks.server.smb1Disabled = $true }
+    } catch {}
+    try {
+        $rr = Get-Service -Name "RemoteRegistry" -EA SilentlyContinue
+        if ($rr -and $rr.StartType -eq 'Disabled') { $state.tweaks.server.remoteRegistryDisabled = $true }
     } catch {}
 
     # Power Plan detection — writes to TweakSettings.powerPlan (the field

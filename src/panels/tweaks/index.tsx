@@ -52,7 +52,7 @@ function sectionHasMatch(sectionId: string, q: string): boolean {
 export default function TweaksPanel() {
     const { searchQuery } = useSearchQuery();
     const visibility = useVisibility();
-    const { systemInfo } = useAppState();
+    const { systemInfo, appSettings } = useAppState();
     const [activeTab, setActiveTab] = useTweaksSessionState<TweaksTab>("tweaks.active-tab", "appearance");
 
     const { restartExplorer, error } = useBackend();
@@ -68,12 +68,26 @@ export default function TweaksPanel() {
 
     useEffect(() => { if (error) showError(error); }, [error]);
 
+    // Windows Server detection for the server-only tweak section. The probed
+    // ProductType is authoritative; osName is the fallback for the first render
+    // after launch, before settings-bridge has written current.tweaks.server.
+    const isServerSku = useMemo(() => {
+        const probed = appSettings?.current?.tweaks?.server?.isServerSku;
+        if (typeof probed === "boolean") return probed;
+        return /windows server/i.test(systemInfo?.osName ?? "");
+    }, [appSettings, systemInfo]);
+
     const hasResults = useMemo(() => {
         if (!searchQuery.trim()) return true;
         const q = searchQuery.toLowerCase().trim();
         const matchesContextMenu = "context menu secure delete".includes(q) || "secure right-click".includes(q);
-        return TWEAKS_TOGGLES.some((t) => toggleMatchesQuery(t, q)) || matchesContextMenu;
-    }, [searchQuery]);
+        // The server section is hidden on client SKUs, so its toggles must not
+        // count as results — otherwise the panel suppresses "no results" and
+        // shows an empty screen instead.
+        return TWEAKS_TOGGLES.some(
+            (t) => (isServerSku || t.section !== "server") && toggleMatchesQuery(t, q),
+        ) || matchesContextMenu;
+    }, [searchQuery, isServerSku]);
 
     const isAdvanced = visibility.density === "expert";
     const showExpertSpeed = visibility.isVisible({ minDensity: "expert" });
@@ -111,7 +125,8 @@ export default function TweaksPanel() {
                     return sectionHasMatch("power", q) || sectionHasMatch("performance", q) ||
                         (isAdvanced && sectionHasMatch("gpu", q));
                 case "os-boot":
-                    return showExpertSpeed && (sectionHasMatch("os", q) || sectionHasMatch("boot", q));
+                    return showExpertSpeed && (sectionHasMatch("os", q) || sectionHasMatch("boot", q) ||
+                        (isServerSku && sectionHasMatch("server", q)));
                 case "security":
                     return showExpertSpeed && sectionHasMatch("security", q);
                 case "exploit-protection":
@@ -165,6 +180,7 @@ export default function TweaksPanel() {
                     <OsBootTab
                         showExpertSpeed={showExpertSpeed}
                         isAdvanced={isAdvanced}
+                        isServerSku={isServerSku}
                         searchQuery={searchQuery}
                         handlePostToggle={handlePostToggle}
                     />
@@ -285,9 +301,10 @@ function PerformancePowerTab({ isAdvanced, noSearch, searchQuery, handlePostTogg
 }
 
 // ── Tab 3: OS & boot ──────────────────────────────────────────────────────
-function OsBootTab({ showExpertSpeed, isAdvanced, searchQuery, handlePostToggle }: {
+function OsBootTab({ showExpertSpeed, isAdvanced, isServerSku, searchQuery, handlePostToggle }: {
     showExpertSpeed: boolean;
     isAdvanced: boolean;
+    isServerSku: boolean;
     searchQuery: string;
     handlePostToggle: (t: ToggleDef) => Promise<void>;
 }) {
@@ -313,6 +330,22 @@ function OsBootTab({ showExpertSpeed, isAdvanced, searchQuery, handlePostToggle 
                 bare
                 searchQuery={searchQuery}
             />
+            {/* Server-only. These settings are either ignored outright on a
+                client SKU (Server Manager, IE ESC, shutdown tracker) or only
+                matter on a machine serving other machines, so the whole
+                section stays hidden unless we detect a Server SKU. */}
+            {isServerSku && (
+                <>
+                    <div className="tweaks-sublabel tweaks-sublabel-gap">Windows Server</div>
+                    <ToggleSection
+                        section={TWEAKS_SECTIONS[8]}
+                        toggles={TWEAKS_TOGGLES}
+                        onToggled={handlePostToggle}
+                        bare
+                        searchQuery={searchQuery}
+                    />
+                </>
+            )}
         </SectionCard>
     );
 }

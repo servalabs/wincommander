@@ -120,6 +120,30 @@ describe("radar scan filtering", () => {
     expect(ids).toContain("disableSearchHistory");
   });
 
+  test("Windows Server findings only surface when isServerSku is true", () => {
+    const clientSettings = makeSettings(
+      { privacy: false, network: false, tweaks: true, cleanup: false },
+      { tweaks: { server: { isServerSku: false, wdigestBlocked: false, smb1Disabled: false } } },
+    );
+    const clientReport = buildRadarReport({ appSettings: clientSettings, networkBlocklistStatus: { applied: [] } });
+    expect(clientReport.findings.some((f) => f.id === "serverWdigest")).toBe(false);
+    expect(clientReport.findings.some((f) => f.id === "serverSmb1")).toBe(false);
+    expect(clientReport.findings.some((f) => f.id === "serverHideLastUser")).toBe(false);
+
+    const serverSettings = makeSettings(
+      { privacy: false, network: false, tweaks: true, cleanup: false },
+      { tweaks: { server: { isServerSku: true, wdigestBlocked: false, smb1Disabled: false } } },
+    );
+    const serverReport = buildRadarReport({ appSettings: serverSettings, networkBlocklistStatus: { applied: [] } });
+    expect(serverReport.findings.some((f) => f.id === "serverWdigest")).toBe(true);
+    expect(serverReport.findings.some((f) => f.id === "serverSmb1")).toBe(true);
+    expect(serverReport.findings.some((f) => f.id === "serverHideLastUser")).toBe(true);
+
+    // reducesSecurity toggles are never radar-eligible, on Server or client.
+    expect(serverReport.findings.some((f) => f.id === "serverCtrlAltDel")).toBe(false);
+    expect(serverReport.findings.some((f) => f.id === "serverIeEsc")).toBe(false);
+  });
+
   test("surfaces stale Windows storage cleanup when the cleanup module is enabled", () => {
     const settings = makeSettings(
       { privacy: false, network: false, tweaks: false, cleanup: true },

@@ -12,6 +12,7 @@
 //   3. irreversible: true   ⇒ tier === "paid"
 //   4. defenderFlagged: true ⇒ tier === "paid"
 //   5. reducesSecurity: true ⇒ tier === "paid"
+//      (except REDUCES_SECURITY_FREE_EXEMPT — registry-only, see below)
 //   6. tier === "free"      ⇒ !defenderFlagged   (corollary of 4)
 //
 // Exit 0 = all pass. Exit 1 = at least one violation, with a printed
@@ -36,6 +37,24 @@ interface RegistryEntry {
 }
 
 const VALID_TIERS: ReadonlySet<Tier> = new Set<Tier>(["free", "paid"]);
+
+// ── Invariant 5 exemptions ─────────────────────────────────────────────
+//
+// reducesSecurity ⇒ paid exists because weakening a security feature is
+// normally done by sidecar code that AV flags (Defender disablement, VBS
+// teardown, OOBE bypass). It is a proxy for "this needs the Pro sidecar",
+// not a rule that every security-reducing setting must be sold.
+//
+// These entries are plain HKLM registry DWORD writes: nothing to AV-flag,
+// nothing irreversible, and the reducesSecurity flag still drives the
+// warning dialog in the UI. They are Windows Server administration basics
+// and shipping them behind the paywall would be arbitrary. Keep this list
+// SHORT and registry-only — anything touching Defender, VBS, SmartScreen,
+// or the OOBE flow belongs in the sidecar and must not be added here.
+const REDUCES_SECURITY_FREE_EXEMPT: ReadonlySet<string> = new Set([
+  "toggles/serverCtrlAltDel", // DisableCAD — drops the logon SAS requirement
+  "toggles/serverIeEsc",      // IE ESC Active Setup IsInstalled=0
+]);
 
 function toEntry(registry: string, t: ToggleDef | { id: string; tier: Tier; needsAdmin: boolean; irreversible: boolean; reducesSecurity: boolean; defenderFlagged: boolean }): RegistryEntry {
   return {
@@ -71,7 +90,7 @@ function checkAll(entries: RegistryEntry[]): string[] {
       violations.push(`${where}: defenderFlagged=true requires tier="paid", got "${e.tier}"`);
     }
 
-    if (e.reducesSecurity && e.tier !== "paid") {
+    if (e.reducesSecurity && e.tier !== "paid" && !REDUCES_SECURITY_FREE_EXEMPT.has(where)) {
       violations.push(`${where}: reducesSecurity=true requires tier="paid", got "${e.tier}"`);
     }
 

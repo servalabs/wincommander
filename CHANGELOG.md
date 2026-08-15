@@ -12,6 +12,25 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **Windows Server tweak section** (2026-08-15) — twelve Server-SKU settings in
+  a new `tweaks/server` module: no Ctrl+Alt+Del at logon, hide last signed-in
+  user, console inactivity lock, no Shutdown Event Tracker, no Server Manager
+  at logon, disable IE ESC, block WDigest cleartext credentials, LSA
+  Protection (RunAsPPL), refuse LM/NTLMv1, require SMB signing, disable SMBv1,
+  and disable Remote Registry. The section only renders when a Server SKU is
+  detected (`Win32_OperatingSystem.ProductType` 2 or 3, with `osName` as the
+  pre-probe fallback), and the three settings Windows ignores on client SKUs
+  guard with `Assert-IsServerSku` rather than writing a dead key. Verified
+  against a live Windows Server 2025 Standard (build 26100) RDS/Hyper-V host.
+
+- **Registry-only exemption to tier invariant 5** (2026-08-15) — `No
+  Ctrl+Alt+Del At Logon` and `Disable IE Enhanced Security` genuinely set
+  `reducesSecurity`, but are plain HKLM DWORD writes with nothing for AV to
+  flag, so they stay `tier: "free"` via an explicit allowlist in
+  `tools/check-tier-invariants.ts`. The stale note in `src/types/toggles.ts`
+  claiming `reducesSecurity` was unbound from tier has been corrected — the
+  rule is real and enforced; this is a narrow, documented carve-out.
+
 - **Fleet device summaries now carry `device_kind`** (2026-08-13), allowing
   the server and console to distinguish Windows, Linux, and Android agents
   without inferring from host metadata. The additive field defaults safely

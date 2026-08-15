@@ -75,9 +75,12 @@ export interface ToggleDef {
   //   - irreversible: true    ⇒ tier === "paid" (lives in sidecar)
   //   - defenderFlagged: true ⇒ tier === "paid" (must live in sidecar)
   //
-  // Note: reducesSecurity is NOT bound to tier — single-registry security
-  // tweaks (uac, vbs, smartscreen) are free even when reducesSecurity is
-  // true. Risk is handled by the warning-dialog UX, not by paywall.
+  // Note: reducesSecurity IS bound to tier — CI invariant 5 requires
+  // tier="paid" because security-weakening code normally lives in the
+  // sidecar and AV-flags (uac, vbs, smartscreen are all tier="paid").
+  // The one exception is a small registry-only allowlist in
+  // tools/check-tier-invariants.ts (REDUCES_SECURITY_FREE_EXEMPT); for
+  // those, risk is handled by the warning-dialog UX rather than by paywall.
   //
   // No defaults — all five are required so authors decide explicitly.
 
@@ -244,6 +247,13 @@ export interface ToggleDef {
 
   /** If true, this radar finding only appears when Privacy Clean mode is enabled. */
   radarRequiresAntiCleanup?: boolean;
+
+  /** If true, this radar finding only appears when the machine is a Windows
+   *  Server SKU (current.tweaks.server.isServerSku). Mirrors the same gate
+   *  the Tweaks panel uses to hide the Windows Server section on client
+   *  Windows — without this, Fix All would silently flip a Server-only
+   *  setting on a client machine that has no visible row to review it. */
+  radarRequiresServerSku?: boolean;
 
   /** If true, this toggle is excluded from the dashboard Needs Attention list
    *  (even when defaultOn/safeDefault would otherwise include it). */

@@ -1005,6 +1005,8 @@ export interface TweakSettings {
   power: PowerTweaks;
   /** RDP host stability + incoming idle sign-out */
   rdp?: RdpTweaks;
+  /** Windows Server SKU logon, credential, and file-server hardening */
+  server?: ServerTweaks;
   /** Active power plan. 'ultimate' lazily duplicates Microsoft's
    *  Ultimate Performance scheme (e9a42b02-…) when first selected.
    *  Single source of truth — OsTweaks.powerPlan was removed as dead code. */
@@ -1079,6 +1081,38 @@ export interface PowerTweaks {
 export interface MaintenanceRunInfo {
   lastRunAt: string | null;
   runCount: number;
+}
+
+/** Windows Server SKU tweaks. Probed by Get-ServerTweakStatus and by the
+ *  matching block in settings-bridge.ps1 — the two share this exact shape. */
+export interface ServerTweaks {
+  /** True when the OS is a Server SKU (ProductType 2 or 3). Read-only probe
+   *  output — the three server-only tweaks below no-op on a client SKU. */
+  isServerSku: boolean | null;
+  /** Ctrl+Alt+Del no longer required at the logon screen (DisableCAD=1) */
+  ctrlAltDelDisabled: boolean | null;
+  /** Logon screen does not prefill the previous username */
+  lastSignedInUserHidden: boolean | null;
+  /** Machine-level lock after InactivityTimeoutSecs of console idle */
+  consoleInactivityLock: boolean | null;
+  /** Server-only: suppresses the shutdown "reason" dialog */
+  shutdownTrackerDisabled: boolean | null;
+  /** Server-only: Server Manager no longer launches at sign-in */
+  serverManagerAtLogonDisabled: boolean | null;
+  /** Server-only: IE Enhanced Security Configuration turned off */
+  ieEnhancedSecurityDisabled: boolean | null;
+  /** WDigest pinned to 0 so LSASS holds no cleartext credentials */
+  wdigestBlocked: boolean | null;
+  /** LSASS runs as a protected process (RunAsPPL) — needs a reboot */
+  lsaProtectionEnabled: boolean | null;
+  /** LmCompatibilityLevel=5 — NTLMv2 only, LM/NTLMv1 refused */
+  legacyNtlmBlocked: boolean | null;
+  /** SMB signing required on both the server and client roles */
+  smbSigningRequired: boolean | null;
+  /** SMBv1 protocol and optional feature removed */
+  smb1Disabled: boolean | null;
+  /** RemoteRegistry service set to Disabled */
+  remoteRegistryDisabled: boolean | null;
 }
 
 export interface RdpTweaks {

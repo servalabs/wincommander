@@ -1337,6 +1337,9 @@ pub struct TweakSettings {
     pub boot_kernel: BootKernelTweaks,
     #[serde(default)]
     pub rdp: RdpTweaks,
+    /// Windows Server SKU logon, credential, and file-server hardening
+    #[serde(default)]
+    pub server: ServerTweaks,
     /// Performance / gaming-responsiveness tweaks (MMCSS, kb latency, etc.)
     #[serde(default)]
     pub performance: PerformanceTweaks,
@@ -1439,6 +1442,35 @@ pub struct RdpTweaks {
     pub incoming_dismount_on_empty: Option<bool>,
     /// Sign off incoming RDP sessions when they become disconnected.
     pub incoming_sign_off_on_disconnect: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerTweaks {
+    /// Ctrl+Alt+Del no longer required at the logon screen (DisableCAD=1)
+    pub ctrl_alt_del_disabled: Option<bool>,
+    /// Logon screen does not prefill the previous username
+    pub last_signed_in_user_hidden: Option<bool>,
+    /// Machine-level lock after InactivityTimeoutSecs of console idle
+    pub console_inactivity_lock: Option<bool>,
+    /// Server-only: suppresses the shutdown "reason" dialog
+    pub shutdown_tracker_disabled: Option<bool>,
+    /// Server-only: Server Manager no longer launches at sign-in
+    pub server_manager_at_logon_disabled: Option<bool>,
+    /// Server-only: IE Enhanced Security Configuration turned off
+    pub ie_enhanced_security_disabled: Option<bool>,
+    /// WDigest pinned to 0 so LSASS holds no cleartext credentials
+    pub wdigest_blocked: Option<bool>,
+    /// LSASS runs as a protected process (RunAsPPL) — needs a reboot
+    pub lsa_protection_enabled: Option<bool>,
+    /// LmCompatibilityLevel=5 — NTLMv2 only, LM/NTLMv1 refused
+    pub legacy_ntlm_blocked: Option<bool>,
+    /// SMB signing required on both the server and client roles
+    pub smb_signing_required: Option<bool>,
+    /// SMBv1 protocol and optional feature removed
+    pub smb1_disabled: Option<bool>,
+    /// RemoteRegistry service set to Disabled
+    pub remote_registry_disabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1619,6 +1651,8 @@ pub struct UiTweaks {
     pub window_shake_disabled: Option<bool>,
     /// Show seconds in taskbar clock (ShowSecondsInSystemClock=1)
     pub clock_seconds_visible: Option<bool>,
+    /// Windows Terminal's "defaultProfile" set to PowerShell 7 instead of Windows PowerShell 5.1
+    pub power_shell7_default: Option<bool>,
 }
 
 // ── Network Settings (Desired State) ─────────────────────────────────
@@ -2896,6 +2930,36 @@ pub fn get_convergence_command(path: &str, desired: bool) -> Option<&'static str
             Some("Enable-SmbBandwidthThrottling")
         }
 
+        // ── Tweaks: Windows Server ───────────────────────────────────
+        ("tweaks.server.ctrlAltDelDisabled", true) => Some("Disable-CtrlAltDelLogon"),
+        ("tweaks.server.ctrlAltDelDisabled", false) => Some("Enable-CtrlAltDelLogon"),
+        ("tweaks.server.lastSignedInUserHidden", true) => Some("Enable-HideLastSignedInUser"),
+        ("tweaks.server.lastSignedInUserHidden", false) => Some("Disable-HideLastSignedInUser"),
+        ("tweaks.server.consoleInactivityLock", true) => Some("Enable-ConsoleInactivityLock"),
+        ("tweaks.server.consoleInactivityLock", false) => Some("Disable-ConsoleInactivityLock"),
+        ("tweaks.server.shutdownTrackerDisabled", true) => Some("Disable-ShutdownEventTracker"),
+        ("tweaks.server.shutdownTrackerDisabled", false) => Some("Enable-ShutdownEventTracker"),
+        ("tweaks.server.serverManagerAtLogonDisabled", true) => {
+            Some("Disable-ServerManagerAtLogon")
+        }
+        ("tweaks.server.serverManagerAtLogonDisabled", false) => {
+            Some("Enable-ServerManagerAtLogon")
+        }
+        ("tweaks.server.ieEnhancedSecurityDisabled", true) => Some("Disable-IEEnhancedSecurity"),
+        ("tweaks.server.ieEnhancedSecurityDisabled", false) => Some("Enable-IEEnhancedSecurity"),
+        ("tweaks.server.wdigestBlocked", true) => Some("Block-WDigestCredentials"),
+        ("tweaks.server.wdigestBlocked", false) => Some("Allow-WDigestCredentials"),
+        ("tweaks.server.lsaProtectionEnabled", true) => Some("Enable-LsaProtection"),
+        ("tweaks.server.lsaProtectionEnabled", false) => Some("Disable-LsaProtection"),
+        ("tweaks.server.legacyNtlmBlocked", true) => Some("Block-LegacyNtlm"),
+        ("tweaks.server.legacyNtlmBlocked", false) => Some("Allow-LegacyNtlm"),
+        ("tweaks.server.smbSigningRequired", true) => Some("Enable-SmbSigningRequired"),
+        ("tweaks.server.smbSigningRequired", false) => Some("Disable-SmbSigningRequired"),
+        ("tweaks.server.smb1Disabled", true) => Some("Disable-Smb1Protocol"),
+        ("tweaks.server.smb1Disabled", false) => Some("Enable-Smb1Protocol"),
+        ("tweaks.server.remoteRegistryDisabled", true) => Some("Disable-RemoteRegistryService"),
+        ("tweaks.server.remoteRegistryDisabled", false) => Some("Enable-RemoteRegistryService"),
+
         // ── Tweaks: UI ───────────────────────────────────────────────
         ("tweaks.ui.classicContextMenu", true) => Some("Enable-ClassicContextMenu"),
         ("tweaks.ui.classicContextMenu", false) => Some("Disable-ClassicContextMenu"),
@@ -2933,6 +2997,8 @@ pub fn get_convergence_command(path: &str, desired: bool) -> Option<&'static str
         ("tweaks.ui.transparencyDisabled", false) => Some("Enable-TransparencyEffects"),
         ("tweaks.ui.fullPathInTitleBar", true) => Some("Enable-FullPathInTitleBar"),
         ("tweaks.ui.fullPathInTitleBar", false) => Some("Disable-FullPathInTitleBar"),
+        ("tweaks.ui.powerShell7Default", true) => Some("Enable-PowerShell7DefaultShell"),
+        ("tweaks.ui.powerShell7Default", false) => Some("Disable-PowerShell7DefaultShell"),
 
         // ── Tweaks: Security (new) ───────────────────────────────────
         ("tweaks.security.vbsDisabled", true) => Some("Disable-VBS"),

@@ -50,6 +50,9 @@ function shouldIncludeRadarToggle(
 ): boolean {
   const moduleId = getRadarModuleForToggle(toggle);
   if (moduleId && !isModuleEnabled(appSettings.app.modules, moduleId)) return false;
+  if (toggle.radarRequiresServerSku && !appSettings.current?.tweaks?.server?.isServerSku) {
+    return false;
+  }
   if (toggle.radarRequiresAntiCleanup) {
     return getPersona(appSettings) === "secure";
   }

@@ -30,6 +30,26 @@
       ]
     },
     {
+      "id": "backend:Allow\u002dLegacyNtlm",
+      "name": "Allow\u002dLegacyNtlm",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
+      "id": "backend:Allow\u002dWDigestCredentials",
+      "name": "Allow\u002dWDigestCredentials",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Block\u002dAnonymousSamEnumeration",
       "name": "Block\u002dAnonymousSamEnumeration",
       "transport": "backend\u002dscript",
@@ -48,12 +68,32 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Block\u002dLegacyNtlm",
+      "name": "Block\u002dLegacyNtlm",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Block\u002dProtocol",
       "name": "Block\u002dProtocol",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Block\u002dWDigestCredentials",
+      "name": "Block\u002dWDigestCredentials",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
     },
     {
       "id": "backend:Clear\u002dActivitiesTimeline",
@@ -1082,6 +1122,16 @@
       ]
     },
     {
+      "id": "backend:Disable\u002dConsoleInactivityLock",
+      "name": "Disable\u002dConsoleInactivityLock",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Disable\u002dConsumerFeatures",
       "name": "Disable\u002dConsumerFeatures",
       "transport": "backend\u002dscript",
@@ -1144,6 +1194,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Disable\u002dCtrlAltDelLogon",
+      "name": "Disable\u002dCtrlAltDelLogon",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
     },
     {
       "id": "backend:Disable\u002dDeliveryOptimization",
@@ -1376,12 +1436,32 @@
       ]
     },
     {
+      "id": "backend:Disable\u002dHideLastSignedInUser",
+      "name": "Disable\u002dHideLastSignedInUser",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Disable\u002dHttpAcceptLanguageOptOut",
       "name": "Disable\u002dHttpAcceptLanguageOptOut",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Disable\u002dIEEnhancedSecurity",
+      "name": "Disable\u002dIEEnhancedSecurity",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
     },
     {
       "id": "backend:Disable\u002dIFEOPriorityTuning",
@@ -1542,6 +1622,16 @@
       ]
     },
     {
+      "id": "backend:Disable\u002dLsaProtection",
+      "name": "Disable\u002dLsaProtection",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Disable\u002dMandatoryASLR",
       "name": "Disable\u002dMandatoryASLR",
       "transport": "backend\u002dscript",
@@ -1678,6 +1768,16 @@
     {
       "id": "backend:Disable\u002dPagefile",
       "name": "Disable\u002dPagefile",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
+      "id": "backend:Disable\u002dPowerShell7DefaultShell",
+      "name": "Disable\u002dPowerShell7DefaultShell",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
@@ -1838,6 +1938,16 @@
       ]
     },
     {
+      "id": "backend:Disable\u002dRemoteRegistryService",
+      "name": "Disable\u002dRemoteRegistryService",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Disable\u002dRemoveGalleryHome",
       "name": "Disable\u002dRemoveGalleryHome",
       "transport": "backend\u002dscript",
@@ -1912,6 +2022,16 @@
       ]
     },
     {
+      "id": "backend:Disable\u002dServerManagerAtLogon",
+      "name": "Disable\u002dServerManagerAtLogon",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Disable\u002dSetupCompletionNags",
       "name": "Disable\u002dSetupCompletionNags",
       "transport": "backend\u002dscript",
@@ -1919,6 +2039,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/panels/dashboard/index.tsx"
+      ]
+    },
+    {
+      "id": "backend:Disable\u002dShutdownEventTracker",
+      "name": "Disable\u002dShutdownEventTracker",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
       ]
     },
     {
@@ -1942,8 +2072,28 @@
       ]
     },
     {
+      "id": "backend:Disable\u002dSmb1Protocol",
+      "name": "Disable\u002dSmb1Protocol",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Disable\u002dSmbBandwidthThrottling",
       "name": "Disable\u002dSmbBandwidthThrottling",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
+      "id": "backend:Disable\u002dSmbSigningRequired",
+      "name": "Disable\u002dSmbSigningRequired",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
@@ -2700,6 +2850,16 @@
       ]
     },
     {
+      "id": "backend:Enable\u002dConsoleInactivityLock",
+      "name": "Enable\u002dConsoleInactivityLock",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Enable\u002dConsumerFeatures",
       "name": "Enable\u002dConsumerFeatures",
       "transport": "backend\u002dscript",
@@ -2762,6 +2922,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Enable\u002dCtrlAltDelLogon",
+      "name": "Enable\u002dCtrlAltDelLogon",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
     },
     {
       "id": "backend:Enable\u002dDeliveryOptimization",
@@ -3012,12 +3182,32 @@
       ]
     },
     {
+      "id": "backend:Enable\u002dHideLastSignedInUser",
+      "name": "Enable\u002dHideLastSignedInUser",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Enable\u002dHttpAcceptLanguageOptOut",
       "name": "Enable\u002dHttpAcceptLanguageOptOut",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Enable\u002dIEEnhancedSecurity",
+      "name": "Enable\u002dIEEnhancedSecurity",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
     },
     {
       "id": "backend:Enable\u002dIFEOPriorityTuning",
@@ -3178,6 +3368,16 @@
       ]
     },
     {
+      "id": "backend:Enable\u002dLsaProtection",
+      "name": "Enable\u002dLsaProtection",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Enable\u002dMandatoryASLR",
       "name": "Enable\u002dMandatoryASLR",
       "transport": "backend\u002dscript",
@@ -3314,6 +3514,16 @@
     {
       "id": "backend:Enable\u002dPagefile",
       "name": "Enable\u002dPagefile",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
+      "id": "backend:Enable\u002dPowerShell7DefaultShell",
+      "name": "Enable\u002dPowerShell7DefaultShell",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
@@ -3473,6 +3683,16 @@
       ]
     },
     {
+      "id": "backend:Enable\u002dRemoteRegistryService",
+      "name": "Enable\u002dRemoteRegistryService",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Enable\u002dRemoveGalleryHome",
       "name": "Enable\u002dRemoveGalleryHome",
       "transport": "backend\u002dscript",
@@ -3547,12 +3767,32 @@
       ]
     },
     {
+      "id": "backend:Enable\u002dServerManagerAtLogon",
+      "name": "Enable\u002dServerManagerAtLogon",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Enable\u002dSetupCompletionNags",
       "name": "Enable\u002dSetupCompletionNags",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Enable\u002dShutdownEventTracker",
+      "name": "Enable\u002dShutdownEventTracker",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
     },
     {
       "id": "backend:Enable\u002dSleepPassword",
@@ -3575,8 +3815,28 @@
       ]
     },
     {
+      "id": "backend:Enable\u002dSmb1Protocol",
+      "name": "Enable\u002dSmb1Protocol",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Enable\u002dSmbBandwidthThrottling",
       "name": "Enable\u002dSmbBandwidthThrottling",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
+      "id": "backend:Enable\u002dSmbSigningRequired",
+      "name": "Enable\u002dSmbSigningRequired",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
@@ -4811,6 +5071,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Get\u002dPowerShell7DefaultStatus",
+      "name": "Get\u002dPowerShell7DefaultStatus",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Get\u002dPrefetchFiles",
       "name": "Get\u002dPrefetchFiles",
       "transport": "backend\u002dscript",
@@ -5060,6 +5330,16 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": []
+    },
+    {
+      "id": "backend:Get\u002dServerTweakStatus",
+      "name": "Get\u002dServerTweakStatus",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
     },
     {
       "id": "backend:Get\u002dServicingLogsInfo",
@@ -6636,6 +6916,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/components/BackgroundPollers.tsx",
         "src/panels/privacy/PrivacyShieldCard.tsx"
       ]
     },
@@ -6953,9 +7234,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useArgus.ts"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:argus_print_usb_recent",
@@ -7324,7 +7603,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/useContentIndex.ts"
+        "src/hooks/useContentIndex.ts",
+        "src/hooks/useContentPreview.ts"
       ]
     },
     {
@@ -7408,6 +7688,14 @@
     {
       "id": "tauri:decoy_monitor_status",
       "name": "decoy_monitor_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
+      "id": "tauri:decoy_read_audit_status",
+      "name": "decoy_read_audit_status",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
@@ -7617,9 +7905,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/privacy/DecoyMonitorSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:enroll_decoy",
@@ -7990,6 +8276,26 @@
       ]
     },
     {
+      "id": "tauri:fleet_report_local_alert",
+      "name": "fleet_report_local_alert",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/BackgroundPollers.tsx"
+      ]
+    },
+    {
+      "id": "tauri:fleet_report_privacy_shield_status",
+      "name": "fleet_report_privacy_shield_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/BackgroundPollers.tsx"
+      ]
+    },
+    {
       "id": "tauri:fleet_request_unenroll",
       "name": "fleet_request_unenroll",
       "transport": "tauri",
@@ -8009,6 +8315,16 @@
         "src/hooks/fleetStatus.ts",
         "src/panels/dev/index.tsx",
         "src/panels/fleet/FleetConnectView.tsx"
+      ]
+    },
+    {
+      "id": "tauri:fleet_sync_shield_state",
+      "name": "fleet_sync_shield_state",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/BackgroundPollers.tsx"
       ]
     },
     {
@@ -8306,9 +8622,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/privacy/DecoyMonitorSection.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:get_license_status",
@@ -8959,6 +9273,26 @@
       "frontendReferences": []
     },
     {
+      "id": "tauri:list_search_known_folders",
+      "name": "list_search_known_folders",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/EverythingSearchBar.tsx"
+      ]
+    },
+    {
+      "id": "tauri:list_search_storage_roots",
+      "name": "list_search_storage_roots",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/EverythingSearchBar.tsx"
+      ]
+    },
+    {
       "id": "tauri:list_usb_devices",
       "name": "list_usb_devices",
       "transport": "tauri",
@@ -9117,6 +9451,14 @@
       "frontendReferences": []
     },
     {
+      "id": "tauri:open_event_log",
+      "name": "open_event_log",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "tauri:open_log_file",
       "name": "open_log_file",
       "transport": "tauri",
@@ -9206,6 +9548,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/components/BackgroundPollers.tsx",
         "src/context/AppContext.tsx",
         "src/context/ThemeContext.tsx",
         "src/hooks/queries/useSettingsQuery.ts",
@@ -9382,7 +9725,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/useDecoyMonitor.ts"
+        "src/hooks/useDecoyMonitor.ts",
+        "src/panels/privacy/DecoyMonitorSection.tsx"
       ]
     },
     {
@@ -9646,6 +9990,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/components/EverythingSearchBar.tsx",
         "src/hooks/useSearchResultContextMenu.ts"
       ]
     },
@@ -9687,6 +10032,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/components/EverythingSearchBar.tsx",
         "src/hooks/useSearchResultContextMenu.ts"
       ]
     },
@@ -9810,6 +10156,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/context/AuthModeContext.tsx"
+      ]
+    },
+    {
+      "id": "tauri:set_decoy_read_audit_enabled",
+      "name": "set_decoy_read_audit_enabled",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useDecoyMonitor.ts"
       ]
     },
     {
