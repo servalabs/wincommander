@@ -310,6 +310,17 @@ export interface AppPreferences {
    *  and suppresses every updater event — no banner, no background download,
    *  no restart prompt. Mirrors `app.disable_updates` in settings.rs. */
   disableUpdates?: boolean;
+  /** Low Performance Mode — disables UI animations AND the periodic active-panel
+   *  polling, which is the expensive half: each refresh spawns a cold
+   *  powershell.exe (no runspace reuse), and on a multi-user server every
+   *  logged-in session pays it separately.
+   *
+   *  "auto" (the default) turns it on for constrained hardware using the same
+   *  thresholds as the motion system — 4 or fewer cores, or under 8 GB RAM.
+   *  "on"/"off" are explicit and always win over the hardware check.
+   *  Mirrors `app.low_performance_mode` in settings.rs — a field with no Rust
+   *  counterpart is silently dropped by patch_settings' merge/deserialize. */
+  lowPerformanceMode?: "auto" | "on" | "off" | null;
   /** When true, detected drift (ideal ≠ current state) is automatically
    *  re-applied after each system probe — no manual "Fix" clicks needed.
    *  Off by default. Irreversible and action-type toggles are never auto-healed. */

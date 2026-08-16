@@ -17,6 +17,7 @@ import { listen } from "@tauri-apps/api/event";
 import { motion, MotionConfig } from "framer-motion";
 import { showError, showInfo, showWarning } from "./utils/toast";
 import useMotionPreference from "./hooks/useMotionPreference";
+import useLowPerformanceMode from "./hooks/useLowPerformanceMode";
 import { panelVariants, panelTransition } from "./components/shared/motion";
 import DependencyGate from "./components/DependencyGate";
 import SplashScreen from "./components/SplashScreen";
@@ -230,6 +231,11 @@ function AppContent() {
   // Resolved motion preference: OS reduce-motion ∪ wc-no-motion toggle ∪ low-profile
   // posture. Drives <MotionConfig> so EVERY framer-motion surface honors it at once.
   const motionPref = useMotionPreference();
+
+  // Low Performance Mode. Resolved once here and threaded into both consumers so
+  // animations and polling can never disagree about whether this machine is
+  // constrained.
+  const lowPerformance = useLowPerformanceMode();
 
   // KT: We grab the full appState object so manifest-driven hover prefetch
   // can look up refreshKey dynamically, plus we destructure specific fields
@@ -697,7 +703,20 @@ function AppContent() {
   // KT: Active-panel polling — replaces the old "poll everything always" approach.
   // Only the currently viewed panel gets periodic refreshes (10s interval).
   // See useActivePanelPoller.ts for full behavior.
-  useActivePanelPoller({ activePanel });
+  //
+  // `paused` is load-bearing, not decorative: the 10s panel refresh spawns a COLD
+  // powershell.exe per tick (backend.rs build_powershell_command — no runspace reuse,
+  // no cache), and the hook has honoured a `paused` flag since it was written. It was
+  // simply never passed, so idle sessions kept spawning PowerShell every 10s while the
+  // UI displayed the "Resource pause mode active due to inactivity" overlay. That is
+  // wasteful on a desktop and multiplies per session on a multi-user server, where
+  // several idle-but-logged-in RDP sessions each pay it forever.
+  //
+  // Low Performance Mode pauses the same polling permanently rather than only when
+  // idle — that PowerShell spawn is the dominant cost on a constrained or heavily
+  // shared box, so switching off animations alone would not deliver what the user
+  // asked for when they enabled it.
+  useActivePanelPoller({ activePanel, paused: isIdlePaused || lowPerformance.active });
   useNetworkTrafficListener();
 
   // Pause must NOT engage while a task is running (app install, applying

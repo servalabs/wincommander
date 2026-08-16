@@ -386,6 +386,19 @@ pub struct AppPreferences {
     /// banner, no background download, no restart prompt. Default false.
     #[serde(default)]
     pub disable_updates: bool,
+    /// Low Performance Mode: "auto" (default), "on" or "off". Disables UI
+    /// animations AND the periodic active-panel polling — the latter being the
+    /// expensive half, since every refresh spawns a cold powershell.exe
+    /// (`build_powershell_command`, no runspace reuse) and a multi-user server
+    /// pays that once per logged-in session.
+    ///
+    /// Resolved in the frontend (src/lib/lowPerformance.ts); Rust does not read
+    /// it, but the field MUST exist here regardless — `patch_settings` merges the
+    /// incoming JSON then deserializes into AppSettings, and serde silently drops
+    /// any key without a matching field, so a frontend-only setting appears to
+    /// save and then vanishes on the next round-trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub low_performance_mode: Option<String>,
     /// Reusable per-metric alert configuration (paid). One entry per monitored
     /// metric (CPU %, upload MB/s, download MB/s); each shares the same
     /// hysteresis/sustained suppressors. Persistence layer; the runtime
@@ -723,6 +736,10 @@ impl Default for AppPreferences {
             advisor: AdvisorSettings::default(),
             internet_kill_switch: false,
             disable_updates: false,
+            // None means "auto" — the frontend decides from this machine's cores
+            // and RAM. Storing None rather than Some("auto") keeps the key out of
+            // settings.json until a user makes an explicit choice.
+            low_performance_mode: None,
             metric_alerts: MetricAlertsSettings::default(),
             decoy_mode: DecoyModeSettings::default(),
             hide_notification_bell: false,
