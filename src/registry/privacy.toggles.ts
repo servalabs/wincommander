@@ -253,6 +253,7 @@ const PRIVACY_TOGGLES_RAW: ToggleDef[] = [
     minExperience: "standard",
     impact: "Windows caches image previews in thumbs.db — reveals which files were viewed",
     radar: true,
+    radarRequiresAntiCleanup: true,
     safeDefault: true,
     radarCategory: "privacy",
     radarSeverity: "info",
