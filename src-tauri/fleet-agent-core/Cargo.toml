@@ -35,7 +35,7 @@ rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", 
 rustls-webpki = { version = "0.103", default-features = false, features = ["aws-lc-rs", "std"], optional = true }
 
 [dev-dependencies]
-serial_test = "3"
+serial_test = "4"
 rcgen = "0.14"
 
 [features]
