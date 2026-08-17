@@ -6,11 +6,7 @@ import { showSuccess } from "../utils/toast";
 import { fireLicenseCelebration } from "./shared/LicenseCelebrationListener";
 import useProInstall from "../hooks/useProInstall";
 import LicenseQuickStats from "./LicenseQuickStats";
-import {
-  activeLicenseServices,
-  licenseAccessSummary,
-  licenseStateLabel,
-} from "../utils/licensePresentation";
+import { licenseStateLabel } from "../utils/licensePresentation";
 
 export default function LicenseQuickPanel() {
   const { getLicenseStatus, activateAppLicense, refreshAppLicense, clearAppLicenseCache, deactivateAppLicense } = useBackend();
@@ -35,8 +31,6 @@ export default function LicenseQuickPanel() {
     if (diff <= 0) return 0;
     return Math.max(1, Math.floor(diff / 86400));
   }, [status]);
-  const accessSummary = licenseAccessSummary(status);
-  const activeServices = activeLicenseServices(status);
   const hasInvestigator = status?.valid === true && (status.features ?? []).includes("advanced");
   const investigator = useInvestigatorInstall(hasInvestigator);
 
@@ -229,11 +223,6 @@ export default function LicenseQuickPanel() {
               seatLimit={status?.seat_limit}
             />
           )}
-          {isActive && !isTrialActive && accessSummary && <div className="license-msg">{accessSummary}</div>}
-          {isActive && !isTrialActive && activeServices.length > 0 && (
-            <div className="license-msg">Active services: {activeServices.join(", ")}</div>
-          )}
-
           {isTrialExpired && (
             <div className="license-btn-row" style={{ marginTop: 0 }}>
               <button
