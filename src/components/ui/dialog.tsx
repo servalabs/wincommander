@@ -52,7 +52,7 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed left-1/2 top-1/2 z-[var(--z-modal)] w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-[var(--r-lg)] border border-[var(--border-strong)] bg-[var(--surface)] p-5 shadow-[var(--shadow)] text-[var(--text)] duration-[240ms] [transition-timing-function:var(--ease)] [animation-timing-function:var(--ease)] data-[state=open]:animate-in data-[state=open]:zoom-in-95 data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-3 data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-3",
+          "fixed left-1/2 top-1/2 z-[var(--z-modal)] w-full max-h-[calc(100vh-2rem)] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--r-lg)] border border-[var(--border-strong)] bg-[var(--surface)] p-5 shadow-[var(--shadow)] text-[var(--text)] duration-[240ms] [transition-timing-function:var(--ease)] [animation-timing-function:var(--ease)] data-[state=open]:animate-in data-[state=open]:zoom-in-95 data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-3 data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-3",
           className
         )}
         {...props}

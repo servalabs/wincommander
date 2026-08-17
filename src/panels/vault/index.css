@@ -577,6 +577,9 @@
 
 .mount-dialog .wc-dialog-body {
   padding: 24px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .mount-dialog {
@@ -584,7 +587,11 @@
   border: 1px solid var(--color-border) !important;
   border-radius: var(--radius-xl) !important;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5) !important;
-  width: 450px !important;
+  width: min(450px, calc(100vw - 32px)) !important;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden !important;
 }
 
 .mount-dialog .bp6-input {
@@ -682,6 +689,7 @@
 
 .mount-dialog-footer {
   display: flex;
+  flex: 0 0 auto;
   justify-content: flex-end;
   align-items: center;
   gap: 16px;
