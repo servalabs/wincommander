@@ -23,7 +23,7 @@ const ENGINE_DESCRIPTIONS: Record<string, string> = {
   winget:              "Windows Package Manager for app installs",
   powershell7:         "Modern PowerShell runtime for all scripts",
   chocolatey:          "Community package manager for app installs & updates",
-  scoop:               "Command-line installer for portable apps & tools",
+  scoop:               "Machine-wide portable app installer and updater",
   meshVpn:             "Peer-to-peer encrypted mesh networking",
   productivityEngine:  "Virtual desktop & focus-mode features",
   privacyShieldAI:     "AI-powered behaviour analysis shield",

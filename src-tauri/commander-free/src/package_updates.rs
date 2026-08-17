@@ -55,34 +55,32 @@ impl Manager {
     fn fallback_paths(self) -> Vec<String> {
         let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_default();
         let program_data = std::env::var("ProgramData").unwrap_or_default();
-        let user_profile = std::env::var("USERPROFILE").unwrap_or_default();
+        let program_files = std::env::var("ProgramFiles").unwrap_or_default();
         match self {
             Self::Winget => vec![
                 format!("{local_app_data}\\Microsoft\\WindowsApps\\winget.exe"),
                 format!("{local_app_data}\\Microsoft\\WinGet\\Links\\winget.exe"),
             ],
             Self::Chocolatey => {
-                let root = std::env::var("ChocolateyInstall")
-                    .unwrap_or_else(|_| format!("{program_data}\\chocolatey"));
-                vec![format!("{root}\\bin\\choco.exe")]
+                vec![format!("{program_data}\\chocolatey\\bin\\choco.exe")]
             }
-            Self::Scoop => {
-                let mut paths = Vec::new();
-                if let Ok(scoop_root) = std::env::var("SCOOP") {
-                    paths.push(format!("{scoop_root}\\shims\\scoop.cmd"));
-                }
-                paths.push(format!("{user_profile}\\scoop\\shims\\scoop.cmd"));
-                paths.push(format!("{program_data}\\scoop\\shims\\scoop.cmd"));
-                paths
-            }
-            Self::Npm => Vec::new(),
+            Self::Scoop => vec![format!(
+                "{program_data}\\WinCommander\\scoop\\shims\\scoop.cmd"
+            )],
+            Self::Npm => vec![format!("{program_files}\\nodejs\\npm.cmd")],
         }
     }
-    /// Resolve to a runnable path: a PATH lookup first, then the fallback
-    /// candidates above. Returns the bare executable name as a last resort so
-    /// callers still get the manager's own "not found" error message.
+    /// Resolve to a runnable path. Chocolatey, Scoop, and npm prefer their machine
+    /// locations; the other managers use PATH before their fallback candidates.
     fn resolve(self) -> String {
         let name = self.executable();
+        if matches!(self, Self::Chocolatey | Self::Scoop | Self::Npm) {
+            for candidate in self.fallback_paths() {
+                if std::path::Path::new(&candidate).is_file() {
+                    return candidate;
+                }
+            }
+        }
         if let Ok(path_var) = std::env::var("PATH") {
             for dir in std::env::split_paths(&path_var) {
                 let candidate = dir.join(name);
@@ -287,7 +285,7 @@ fn inventory_for(manager: Manager) -> Result<Vec<(String, String, String)>, Stri
         Manager::Chocolatey => {
             process::run(&resolved, &["outdated", "--limit-output", "--no-color"])?
         }
-        Manager::Scoop => process::run(&resolved, &["status"])?,
+        Manager::Scoop => process::run(&resolved, &["status", "--global"])?,
         Manager::Npm => process::run_npm_outdated()?,
     };
     let rows = if manager == Manager::Npm {
@@ -336,6 +334,13 @@ mod tests {
     fn parses_chocolatey_machine_rows() {
         assert_eq!(
             parsing::parse_text("chocolatey", "git|2.45|2.46|false"),
+            vec![("git".into(), "2.45".into(), "2.46".into())]
+        );
+    }
+    #[test]
+    fn parses_scoop_global_rows() {
+        assert_eq!(
+            parsing::parse_text("scoop", "git 2.45 2.46"),
             vec![("git".into(), "2.45".into(), "2.46".into())]
         );
     }

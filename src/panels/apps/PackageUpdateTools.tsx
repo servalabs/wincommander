@@ -121,7 +121,7 @@ export function PackageUpdateTools() {
 
   return <section id="package-updates" className="flex scroll-mt-4 flex-col gap-4">
     <Card>
-      <CardHeader><CardTitle>Updates across package managers</CardTitle><CardDescription>Check and apply explicit updates from Winget, Chocolatey, Scoop, and global npm. Each manager reports availability independently.</CardDescription></CardHeader>
+      <CardHeader><CardTitle>Updates across package managers</CardTitle><CardDescription>Check and apply explicit machine-scope updates from Winget, Chocolatey, Scoop, and global npm. Each manager reports availability independently.</CardDescription></CardHeader>
       <CardContent className="flex flex-wrap items-center gap-2"><Button variant="primary" disabled={busy} onClick={() => void inspectPackages()}><Icon icon="search" />{busy ? "Checking…" : "Check updates"}</Button>{busy && <Button variant="outline" onClick={() => void cancel()}><Icon icon="stop" /> Cancel</Button>}{packages && <Badge tone="accent">{displayedUpdateCount} additional</Badge>}</CardContent>
     </Card>
     {visibleActiveManager && <Tabs value={visibleActiveManager} onValueChange={setActiveManager}>
@@ -135,7 +135,7 @@ export function PackageUpdateTools() {
 
 function PackageManager({ manager, hiddenUpdateCount, selected, toggle: onToggle, onInstallManager, installingManagers }: { manager: ManagerInventory; hiddenUpdateCount: number; selected: Set<string>; toggle: (id: string) => void; onInstallManager: (manager: string) => void; installingManagers: Set<string> }) {
   if (!manager.available) {
-    // Chocolatey/Scoop are optional package-manager choices. Winget/npm keep
+    // Chocolatey and Scoop are optional package-manager choices. Winget/npm keep
     // the passive notice because this panel cannot install them safely here.
     if (manager.manager in INSTALLABLE_MANAGERS) {
       const installing = installingManagers.has(manager.manager);

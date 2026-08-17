@@ -75,7 +75,7 @@ function Install-BcuUninstaller {
         if (-not $wingetCmd) {
             return @{ error = $true; message = "Winget is not available. Install it first." }
         }
-        & $wingetCmd.Source install --id Klocman.BulkCrapUninstaller --exact --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity 2>&1 | Out-Null
+        & $wingetCmd.Source install --id Klocman.BulkCrapUninstaller --exact --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity 2>&1 | Out-Null
         Start-Sleep -Seconds 2
         $check = Test-BcuInstalled
         if ($check.installed) {

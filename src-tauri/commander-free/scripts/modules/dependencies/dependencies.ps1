@@ -324,11 +324,7 @@ function Test-WingetDependencyInstalled {
 }
 
 function Get-LocalChocolateyPath {
-    $cmd = Get-Command choco.exe -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-
-    $root = if ($env:ChocolateyInstall) { $env:ChocolateyInstall } else { "$env:ProgramData\chocolatey" }
-    $candidate = Join-Path $root "bin\choco.exe"
+    $candidate = Join-Path "$env:ProgramData\chocolatey" "bin\choco.exe"
     if (Test-Path $candidate) { return $candidate }
     return $null
 }
@@ -344,13 +340,10 @@ function Test-ChocolateyInstalled {
 }
 
 function Get-LocalScoopPath {
-    $cmd = Get-Command scoop.cmd -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-
-    $roots = @()
-    if ($env:SCOOP) { $roots += $env:SCOOP }
-    $roots += "$env:USERPROFILE\scoop"
-    $roots += "$env:ProgramData\scoop"
+    $roots = @(
+        "$env:ProgramData\WinCommander\scoop",
+        "$env:ProgramData\scoop"
+    )
     foreach ($root in $roots) {
         $candidate = Join-Path $root "shims\scoop.cmd"
         if (Test-Path $candidate) { return $candidate }
@@ -913,7 +906,7 @@ function Install-MeshVpn {
     $wingetCmd = Resolve-WingetPath
     if (-not $wingetCmd) { throw "Winget is required to install Mesh VPN." }
 
-    & $wingetCmd install --id Tailscale.Tailscale --exact --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
+    & $wingetCmd install --id Tailscale.Tailscale --exact --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335212) {
         throw "Failed to install Mesh VPN (exit code $LASTEXITCODE)"
     }
@@ -929,7 +922,7 @@ function Install-ProductivityEngine {
     $wingetCmd = Resolve-WingetPath
     if (-not $wingetCmd) { throw "Winget is required to install Productivity Engine." }
 
-    & $wingetCmd install --id ActivityWatch.ActivityWatch --exact --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
+    & $wingetCmd install --id ActivityWatch.ActivityWatch --exact --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335212) {
         throw "Failed to install ActivityWatch (exit code $LASTEXITCODE)"
     }
@@ -950,8 +943,8 @@ function Install-WingetDependency {
 
     # Fallback: manual install
     Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-    Install-PackageProvider -Name NuGet -Force -ErrorAction SilentlyContinue
-    Install-Module Microsoft.WinGet.Client -Force -ErrorAction SilentlyContinue
+    Install-PackageProvider -Name NuGet -Scope AllUsers -Force -ErrorAction SilentlyContinue
+    Install-Module Microsoft.WinGet.Client -Scope AllUsers -Force -ErrorAction SilentlyContinue
     Import-Module Microsoft.WinGet.Client -ErrorAction SilentlyContinue
     Repair-WinGetPackageManager -ErrorAction SilentlyContinue
 
@@ -964,6 +957,9 @@ function Install-Chocolatey {
     if ($status.installed) { return @{ success = $true; message = "Chocolatey already installed." } }
 
     try {
+        # The bootstrap script honours ChocolateyInstall. Pin it to ProgramData
+        # so a user-level environment override cannot redirect the engine.
+        $env:ChocolateyInstall = "$env:ProgramData\chocolatey"
         Set-ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
         Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
@@ -979,6 +975,7 @@ function Install-Chocolatey {
 }
 
 function Install-Scoop {
+    Assert-IsAdmin
     $status = Test-ScoopInstalled
     if ($status.installed) { return @{ success = $true; message = "Scoop already installed." } }
 
@@ -986,20 +983,10 @@ function Install-Scoop {
     $tmpScript = Join-Path $env:TEMP "scoop_install_$([Guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
 
     try {
-        # Download to disk and Unblock-File it instead of Invoke-RestMethod +
-        # Invoke-Expression on an in-memory string: this app runs elevated, and a
-        # remote script piped straight into Invoke-Expression with no
-        # Mark-of-the-Web handling is exactly the shape AppLocker/SmartScreen/AV
-        # products flag and block.
         Invoke-WebRequest -Uri 'https://get.scoop.sh' -OutFile $tmpScript -UseBasicParsing -ErrorAction Stop
         Unblock-File -LiteralPath $tmpScript -ErrorAction SilentlyContinue
-
-        # Process-scoped so it doesn't persist/affect anything outside this call.
         Set-ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
-
-        # Scoop's own installer refuses to run as admin unless told to via
-        # -RunAsAdmin (this app runs elevated / requireAdministrator).
-        & $tmpScript -RunAsAdmin
+        & $tmpScript -RunAsAdmin -ScoopDir "$env:ProgramData\WinCommander\scoop" -ScoopGlobalDir "$env:ProgramData\scoop"
     } catch {
         throw "Failed to install Scoop: $($_.Exception.Message)"
     } finally {
@@ -1010,7 +997,7 @@ function Install-Scoop {
     if (-not $status.installed) {
         throw "Scoop installer finished but scoop.cmd was not detected."
     }
-    return @{ success = $true; message = "Scoop installed." }
+    return @{ success = $true; message = "Scoop installed for machine-wide apps." }
 }
 
 function Install-PowerShell7 {
@@ -1021,7 +1008,7 @@ function Install-PowerShell7 {
     $wingetCmd = Resolve-WingetPath
     if (-not $wingetCmd) { throw "Winget is required to install PowerShell 7." }
 
-    & $wingetCmd install --id Microsoft.PowerShell --exact --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
+    & $wingetCmd install --id Microsoft.PowerShell --exact --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335212) {
         throw "Failed to install PowerShell 7 (exit code $LASTEXITCODE)"
     }
@@ -1044,7 +1031,7 @@ function Install-VCRedist {
     )
 
     foreach ($pkg in $packages) {
-        & $wingetCmd install --id $pkg --exact --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
+        & $wingetCmd install --id $pkg --exact --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
         # Ignore individual failures (some may already be installed or unavailable)
     }
 
@@ -1063,13 +1050,13 @@ function Install-InstantSearch {
     Invoke-WingetSourceUpdate -WingetCmd $wingetCmd
 
     $pkgId = 'voidtools.Everything'
-    & $wingetCmd install --id $pkgId --exact --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity
+    & $wingetCmd install --id $pkgId --exact --scope machine --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity
     $code = $LASTEXITCODE
 
     if ($code -ne 0 -and $code -ne -1978335212) {
         if ($code -eq -1978335231) {
             # Hash mismatch — retry with --ignore-security-hash (safe after source update)
-            & $wingetCmd install --id $pkgId --exact --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity --ignore-security-hash
+            & $wingetCmd install --id $pkgId --exact --scope machine --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity --ignore-security-hash
             $retryCode = $LASTEXITCODE
             if ($retryCode -ne 0 -and $retryCode -ne -1978335212) {
                 throw "Installer hash mismatch for $pkgId and retry also failed (exit code $retryCode)"
@@ -1093,10 +1080,10 @@ function Install-SystemCleaner {
     if (-not $wingetCmd) { throw "Winget is required to install System Cleaner." }
 
     Invoke-WingetSourceUpdate -WingetCmd $wingetCmd
-    & $wingetCmd install --id BleachBit.BleachBit --exact --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity
+    & $wingetCmd install --id BleachBit.BleachBit --exact --scope machine --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity
     $code = $LASTEXITCODE
     if ($code -eq -1978335231) {
-        & $wingetCmd install --id BleachBit.BleachBit --exact --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity --ignore-security-hash
+        & $wingetCmd install --id BleachBit.BleachBit --exact --scope machine --silent --source winget --accept-source-agreements --accept-package-agreements --force --disable-interactivity --ignore-security-hash
         $code = $LASTEXITCODE
     }
     if ($code -ne 0 -and $code -ne -1978335212) {
@@ -1138,7 +1125,7 @@ function Install-DiskHealthEngine {
     $wingetCmd = Resolve-WingetPath
     if (-not $wingetCmd) { throw "Winget is required to install Disk Health Engine." }
 
-    & $wingetCmd install --id smartmontools.smartmontools --exact --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
+    & $wingetCmd install --id smartmontools.smartmontools --exact --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335212) {
         throw "Failed to install Disk Health Engine (exit code $LASTEXITCODE)"
     }
@@ -1147,10 +1134,8 @@ function Install-DiskHealthEngine {
 }
 
 function Install-MetadataScrubber {
-    # Doesn't strictly need admin — winget can install to per-user — but
-    # forwarding the admin check keeps the install path symmetric with
-    # the other winget-backed deps + avoids partial installs on locked
-    # boxes.
+    # Machine scope needs elevation; keeping the check here gives a clear
+    # failure rather than allowing winget to fall back to a user install.
     Assert-IsAdmin
     $status = Test-MetadataScrubberInstalled
     if ($status.installed) { return @{ success = $true; message = "Hidden Data Remover already installed." } }
@@ -1158,7 +1143,7 @@ function Install-MetadataScrubber {
     $wingetCmd = Resolve-WingetPath
     if (-not $wingetCmd) { throw "Winget is required to install the Hidden Data Remover." }
 
-    & $wingetCmd install --id OliverBetz.ExifTool --exact --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
+    & $wingetCmd install --id OliverBetz.ExifTool --exact --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335212) {
         throw "Failed to install Hidden Data Remover (winget exit code $LASTEXITCODE)"
     }
@@ -1172,7 +1157,7 @@ function Install-LocalLlm {
     if (-not $status.installed) {
         $wingetCmd = Resolve-WingetPath
         if (-not $wingetCmd) { throw "Winget is required to install the Local AI Advisor." }
-        & $wingetCmd install --id Ollama.Ollama --exact --silent `
+        & $wingetCmd install --id Ollama.Ollama --exact --scope machine --silent `
             --accept-source-agreements --accept-package-agreements --force --disable-interactivity
         if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335212) {
             throw "Failed to install Local AI Advisor (winget exit code $LASTEXITCODE)"
@@ -1258,7 +1243,7 @@ function Install-PrivacyShieldAI {
         $wingetCmd = Get-LocalWingetPath
         if (-not $wingetCmd) { throw "Winget is required to install Python." }
 
-        & $wingetCmd install --id Python.Python.3.12 --exact --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
+        & $wingetCmd install --id Python.Python.3.12 --exact --scope machine --silent --accept-source-agreements --accept-package-agreements --force --disable-interactivity
         if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335212) {
             throw "Python 3.12 installation failed (exit code $LASTEXITCODE)."
         }

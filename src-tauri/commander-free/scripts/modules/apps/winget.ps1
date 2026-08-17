@@ -28,6 +28,7 @@ function Read-AppsManifest {
         @{ category = "dev"; id = "Python.Python.3.12"; name = "Python 3.12"; description = "Python programming language runtime 3.12." },
         @{ category = "dev"; id = "Python.Launcher"; name = "Python Launcher"; description = "Launch multiple Python versions conveniently." },
         @{ category = "dev"; id = "Mobatek.MobaXterm"; name = "MobaXterm"; description = "Enhanced terminal for Windows with X11 and SSH." },
+        @{ category = "dev"; id = "OliverBetz.ExifTool"; name = "ExifTool"; description = "Metadata reader and editor for image, audio, video, and document files." },
         @{ category = "dev"; id = "Gyan.FFmpeg"; name = "FFmpeg"; description = "Cross-platform solution to record, convert and stream audio and video." },
 
         @{ category = "mid"; id = "PDFgear.PDFgear"; name = "PDFgear"; description = "PDF reader and editor." },
@@ -472,7 +473,9 @@ function Install-WingetApps {
         # stubs (Microsoft\WindowsApps\winget.exe) cannot be launched via
         # Start-Process -FilePath and throw "The file cannot be accessed by the
         # system" (InvalidOperationException). The & operator resolves the alias.
-        $cmdArgs = @("install", "--id", "$appId", "--exact", "--silent", "--source", "winget", "--accept-source-agreements", "--accept-package-agreements", "--force", "--disable-interactivity")
+        # Machine scope prevents manifests with a per-user default from placing
+        # executables and uninstall registration under the invoking profile.
+        $cmdArgs = @("install", "--id", "$appId", "--exact", "--scope", "machine", "--silent", "--source", "winget", "--accept-source-agreements", "--accept-package-agreements", "--force", "--disable-interactivity")
 
         & $wingetCmd @cmdArgs *>&1 | Out-Null
         $code = $LASTEXITCODE
@@ -489,7 +492,7 @@ function Install-WingetApps {
             # hasn't caught up with a newer installer binary. Retry once with
             # --ignore-security-hash before surfacing the error; this is safe
             # because we already ran a source update above.
-            $retryArgs = @("install", "--id", "$appId", "--exact", "--silent", "--source", "winget", "--accept-source-agreements", "--accept-package-agreements", "--force", "--disable-interactivity", "--ignore-security-hash")
+            $retryArgs = @("install", "--id", "$appId", "--exact", "--scope", "machine", "--silent", "--source", "winget", "--accept-source-agreements", "--accept-package-agreements", "--force", "--disable-interactivity", "--ignore-security-hash")
             & $wingetCmd @retryArgs *>&1 | Out-Null
             $retryCode = $LASTEXITCODE
             if ($retryCode -eq 0) {
@@ -1026,8 +1029,8 @@ function Install-Winget {
     }
 
     Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
-    Install-PackageProvider -Name NuGet -Force -ErrorAction SilentlyContinue
-    Install-Module Microsoft.WinGet.Client -Force -ErrorAction SilentlyContinue
+    Install-PackageProvider -Name NuGet -Scope AllUsers -Force -ErrorAction SilentlyContinue
+    Install-Module Microsoft.WinGet.Client -Scope AllUsers -Force -ErrorAction SilentlyContinue
     Import-Module Microsoft.WinGet.Client -ErrorAction SilentlyContinue
     Repair-WinGetPackageManager -ErrorAction SilentlyContinue
 
