@@ -4563,10 +4563,11 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
             crate::flow_bridge::flow_trace("shield-reader: no sidecar path — not starting");
             return;
         };
-        // Seed from the current end of the sidecar so a stale look-away line left
-        // by a prior session isn't replayed (spurious webcam-deny) before the
-        // overlay truncates the file. A later truncation is caught by len < offset.
-        let mut offset: u64 = std::fs::metadata(&sidecar).map(|m| m.len()).unwrap_or(0);
+        // Start from byte zero. Start-PrivacyShield waits until the new Python
+        // session has truncated this sidecar, and the detector may already have
+        // emitted its first look-away during that wait. Seeding at EOF dropped
+        // that initial native notification while the visual blur still worked.
+        let mut offset: u64 = 0;
         crate::flow_bridge::flow_trace(format!(
             "shield-reader: SPAWNED gen={} pid={} seed_offset={} sidecar={}",
             my_gen,

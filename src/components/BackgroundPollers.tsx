@@ -27,6 +27,7 @@ import { recordEvidence } from "../lib/evidence";
 import { normalizeRamDiskSizeMB } from "../lib/ramDisk";
 import useAutoHeal from "../hooks/useAutoHeal";
 import useAdoptCurrentState from "../hooks/useAdoptCurrentState";
+import { privacyShieldBlurTriggers, resolvePrivacyShieldMode } from "../lib/privacyShieldMode";
 import type { PanelId } from "../types/panels";
 
 interface PasteMonitorDetected {
@@ -246,6 +247,21 @@ export default function BackgroundPollers({
           return;
         }
         starting = true;
+        const mode = resolvePrivacyShieldMode({
+          fleetManaged: ps?.fleetManaged === true,
+          fleetMode: settings.app.fleet.shieldDesiredState?.mode
+            ?? (ps?.gazeDetectionEnabled === false
+              && ps?.antiPeepingEnabled === false
+              && ps?.cameraHunterEnabled === false
+              ? "notify_only"
+              : undefined),
+          localMode: ps?.notifyMode,
+        });
+        const blurTriggers = privacyShieldBlurTriggers(mode, {
+          gaze: ps?.gazeDetectionEnabled === true,
+          faces: ps?.antiPeepingEnabled === true,
+          device: ps?.cameraHunterEnabled === true,
+        });
         const result = await startPrivacyShield(
           0,
           // Always collect all attention classes for Fleet. The last three
@@ -260,9 +276,9 @@ export default function BackgroundPollers({
           ps?.multiFaceWakeMultiplier ?? 5,
           ps?.detectionBufferFrames ?? 2,
           ps?.captureSpeed ?? 1,
-          ps?.gazeDetectionEnabled === true,
-          ps?.antiPeepingEnabled === true,
-          ps?.cameraHunterEnabled === true,
+          blurTriggers.gaze,
+          blurTriggers.faces,
+          blurTriggers.device,
         );
         if (result.success) {
           await invoke("patch_settings_cmd", { patch: { app: { fleet: { privacyShieldSessionOwned: true } } } }).catch(() => {});
@@ -338,7 +354,15 @@ export default function BackgroundPollers({
       }
       if (!isModuleEnabled(modulesRef.current, 'privacyShield')) return;
       try {
-        const res = await startPrivacyShield(0, true, false, false, false, false, "medium", 0.5, 200, 150, 5, 5, 2, 1);
+        const shield = appSettingsRef.current?.ideal?.privacy?.privacyShield;
+        const mode = resolvePrivacyShieldMode({ fleetManaged: false, localMode: shield?.notifyMode });
+        const detectorTriggers = {
+          gaze: shield?.gazeDetectionEnabled ?? true,
+          faces: shield?.antiPeepingEnabled ?? true,
+          device: shield?.cameraHunterEnabled ?? true,
+        };
+        const blurTriggers = privacyShieldBlurTriggers(mode, detectorTriggers);
+        const res = await startPrivacyShield(0, detectorTriggers.gaze, detectorTriggers.faces, detectorTriggers.device, false, false, shield?.modelSize ?? "medium", shield?.confidenceThreshold ?? 0.5, shield?.blurOpacity ?? 200, shield?.wakeDelaySeconds ?? 150, shield?.deviceWakeMultiplier ?? 5, shield?.multiFaceWakeMultiplier ?? 5, shield?.detectionBufferFrames ?? 2, shield?.captureSpeed ?? 1, blurTriggers.gaze, blurTriggers.faces, blurTriggers.device);
         if (res.success) {
           await invoke("update_tray_shield_label", { running: true });
           showSuccess("Privacy Shield enabled.");
@@ -682,7 +706,15 @@ export default function BackgroundPollers({
         const ai = await getAIDependenciesStatus();
         if (!ai.success || !ai.data?.installed) return;
 
-        const r = await startPrivacyShield(0, true, false, false, false, false, "medium", 0.5, 200, 150, 5, 5, 2, 1);
+        const shield = appSettingsRef.current?.ideal?.privacy?.privacyShield;
+        const mode = resolvePrivacyShieldMode({ fleetManaged: false, localMode: shield?.notifyMode });
+        const detectorTriggers = {
+          gaze: shield?.gazeDetectionEnabled ?? true,
+          faces: shield?.antiPeepingEnabled ?? true,
+          device: shield?.cameraHunterEnabled ?? true,
+        };
+        const blurTriggers = privacyShieldBlurTriggers(mode, detectorTriggers);
+        const r = await startPrivacyShield(0, detectorTriggers.gaze, detectorTriggers.faces, detectorTriggers.device, false, false, shield?.modelSize ?? "medium", shield?.confidenceThreshold ?? 0.5, shield?.blurOpacity ?? 200, shield?.wakeDelaySeconds ?? 150, shield?.deviceWakeMultiplier ?? 5, shield?.multiFaceWakeMultiplier ?? 5, shield?.detectionBufferFrames ?? 2, shield?.captureSpeed ?? 1, blurTriggers.gaze, blurTriggers.faces, blurTriggers.device);
         if (r.success) {
           await invoke("update_tray_shield_label", { running: true }).catch(() => {});
           showSuccess("Privacy Shield auto-started.");

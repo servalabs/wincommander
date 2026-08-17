@@ -1303,6 +1303,10 @@ pub struct AppCapabilitySettings {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PrivacyShieldSettings {
+    /// Local alert behavior. Fleet's signed desired state overrides this while
+    /// the endpoint is fleet-managed.
+    #[serde(default)]
+    pub notify_mode: Option<PrivacyShieldNotifyMode>,
     /// Fleet policy master switch. When true on an enrolled device, the
     /// background supervisor starts the local detector and reports attention
     /// events; it never uploads frames.
@@ -1337,6 +1341,13 @@ pub struct PrivacyShieldSettings {
     /// Serializes as "autostart" (camelCase passthrough). Default false.
     #[serde(default)]
     pub autostart: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivacyShieldNotifyMode {
+    BlurNotify,
+    NotifyOnly,
 }
 
 // ── Tweak Settings (Desired State) ───────────────────────────────────
@@ -3288,6 +3299,23 @@ pub fn update_current_state(probe: serde_json::Value) -> Result<serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn privacy_shield_notify_mode_round_trips_through_settings_json() {
+        let shield: PrivacyShieldSettings = serde_json::from_value(serde_json::json!({
+            "notifyMode": "notify_only"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            shield.notify_mode,
+            Some(PrivacyShieldNotifyMode::NotifyOnly)
+        );
+        assert_eq!(
+            serde_json::to_value(shield).unwrap()["notifyMode"],
+            serde_json::json!("notify_only")
+        );
+    }
 
     #[test]
     fn runtime_defaults_remove_the_retired_sidecar_panel_id() {

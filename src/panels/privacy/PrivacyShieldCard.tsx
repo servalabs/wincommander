@@ -14,6 +14,7 @@ import useVisibility from "../../hooks/useVisibility";
 import { useShieldQuotaQuery, useShieldQuotaTicker, useInvalidateShieldQuota } from "../../hooks/useShieldQuota";
 import PrivacyShieldIntro from "./PrivacyShieldIntro";
 import SectionCard from "../../components/shared/SectionCard";
+import { privacyShieldBlurTriggers, resolvePrivacyShieldMode } from "../../lib/privacyShieldMode";
 
 // Module-level cache — survives panel unmount/remount
 let _shieldRunningCache: boolean | null = null;
@@ -82,6 +83,14 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // CheckinResponse.shield_state). Falls back to fleetShieldMonitoring when
     // the connected server predates this field.
     const fleetShieldDesiredState = appSettings?.app?.fleet?.shieldDesiredState ?? null;
+    const shieldSettings = appSettings?.ideal?.privacy?.privacyShield;
+    // Older Fleet servers expressed Notify Only by disabling all visual
+    // triggers and did not send shieldDesiredState.mode. Preserve that
+    // behavior until the endpoint receives the newer desired-state field.
+    const legacyFleetNotifyOnly = fleetPolicyManaged
+        && shieldSettings?.gazeDetectionEnabled === false
+        && shieldSettings?.antiPeepingEnabled === false
+        && shieldSettings?.cameraHunterEnabled === false;
     const fleetShieldMandatesOn = fleetPolicyManaged
         && (fleetShieldDesiredState ? fleetShieldDesiredState.enabled : fleetShieldMonitoring);
     // The Stop button is locked whenever fleet policy currently mandates the
@@ -98,12 +107,11 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         || (appSettings?.app?.fleet?.enabled === true && appSettings?.app?.fleet?.privacyShieldSessionOwned === true);
     // Resolved shield mode ("blur_notify" | "notify_only"). Fleet-managed
     // devices always take the admin's mode; otherwise the local choice below.
-    const resolvedShieldMode: 'blur_notify' | 'notify_only' =
-        fleetPolicyManaged && fleetShieldDesiredState
-            ? fleetShieldDesiredState.mode
-            : (appSettings?.ideal?.privacy?.privacyShield as any)?.notifyMode === 'notify_only'
-                ? 'notify_only'
-                : 'blur_notify';
+    const resolvedShieldMode = resolvePrivacyShieldMode({
+        fleetManaged: fleetPolicyManaged,
+        fleetMode: fleetShieldDesiredState?.mode ?? (legacyFleetNotifyOnly ? 'notify_only' : undefined),
+        localMode: shieldSettings?.notifyMode,
+    });
 
     const { density } = useVisibility();
     const isAdvanced = density === 'expert';
@@ -430,7 +438,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         }
         const targetState = !privacyShieldRunning;
         if (targetState && !privacyConfig.blurOnLookAway && !privacyConfig.blurOnMultipleFaces && !privacyConfig.blurOnCamera) {
-            showError("Enable at least one blur trigger before starting the Privacy Shield.");
+            showError("Enable at least one detection trigger before starting the Privacy Shield.");
             return;
         }
         if (targetState && cameraAvailable === false) {
@@ -452,16 +460,20 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 // "notify_only" mode still runs full detection (so the Windows
                 // toast + fleet report fire normally) but suppresses the
                 // visual blur/black-out entirely, per the segmented toggle.
-                const suppressBlur = resolvedShieldMode === 'notify_only';
+                const blurTriggers = privacyShieldBlurTriggers(resolvedShieldMode, {
+                    gaze: privacyConfig.blurOnLookAway,
+                    faces: privacyConfig.blurOnMultipleFaces,
+                    device: privacyConfig.blurOnCamera,
+                });
                 const res = await startPrivacyShield(
                     0, privacyConfig.blurOnLookAway, privacyConfig.blurOnMultipleFaces, privacyConfig.blurOnCamera,
                     privacyConfig.captureOnDevice, privacyConfig.captureOnMultiFace, privacyConfig.modelLevel,
                     privacyConfig.confidence, privacyConfig.overlayOpacity, privacyConfig.wakeDelayMs,
                     privacyConfig.deviceWakeMultiplier, privacyConfig.multiFaceWakeMultiplier,
                     privacyConfig.bufferFrames, privacyConfig.captureSpeed,
-                    suppressBlur ? false : privacyConfig.blurOnLookAway,
-                    suppressBlur ? false : privacyConfig.blurOnMultipleFaces,
-                    suppressBlur ? false : privacyConfig.blurOnCamera,
+                    blurTriggers.gaze,
+                    blurTriggers.faces,
+                    blurTriggers.device,
                 );
                 if (res.success) {
                     await showSuccess("Privacy Shield activated.");
@@ -659,9 +671,9 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     <div className="flex flex-col gap-3">
                         <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Blur triggers" : "Activation Triggers"}</span>
                         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,160px),1fr))] gap-3">
-                            <div><ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Blurs when eyes are not detected on screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true || fleetPolicyManaged} /></div>
-                            <div><ShieldOption label="Multiple faces" tooltip="Blurs when more than one person is detected." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true || fleetPolicyManaged} /></div>
-                            <div><ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: blurs when a phone or camera is pointed at the screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true || fleetPolicyManaged} /></div>
+                            <div><ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Detects when eyes are not directed at the screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true || fleetPolicyManaged} /></div>
+                            <div><ShieldOption label="Multiple faces" tooltip="Detects when more than one person is in view." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true || fleetPolicyManaged} /></div>
+                            <div><ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: detects a phone or camera pointed at the screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true || fleetPolicyManaged} /></div>
                         </div>
                     </div>
 

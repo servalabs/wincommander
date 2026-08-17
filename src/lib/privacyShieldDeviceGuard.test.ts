@@ -73,4 +73,11 @@ describe("privacy shield device guardrails", () => {
     expect(backend).toContain('"look_away" | "no_face" | "multiple_faces" | "secondary_device"');
     expect(backend).toContain("if allow_fleet_privacy_alert(gaze_kind).await {");
   });
+
+  test("the event reader retains an initial look-away emitted during startup", async () => {
+    const backend = await read("src-tauri/commander-free/src/backend.rs");
+
+    expect(backend).toContain("let mut offset: u64 = 0;");
+    expect(backend).toContain("initial native notification while the visual blur still worked");
+  });
 });

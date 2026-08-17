@@ -241,7 +241,7 @@ idle-disconnect group (`rdpIdleDisconnectEnabled`, `rdpIdleDisconnectTimeout`,
 `rdpClearCacheOnDisconnect`, `rdpRemoveCredsOnDisconnect`,
 `rdpDismountVaultsOnDisconnect`, `rdpSaveLog`).
 
-### Privacy Shield (AI-powered, 13 parameters)
+### Privacy Shield (AI-powered, 14 parameters)
 
 Anti-shoulder-surfing / camera-detection module. Tier: **free**, with a
 15-minute-per-day cumulative quota for users without a paid entitlement
@@ -268,6 +268,7 @@ Pillow).
 | `multiFaceWakeMultiplier`      | int     | `4`     | 1–20                          |
 | `detectionBufferFrames`        | int     | `3`     | 1–8                           |
 | `captureSpeed`                 | int     | `2`     | 1–4                           |
+| `notifyMode`                   | enum    | `blur_notify` | `blur_notify` obscures the display and notifies; `notify_only` sends the alert without obscuring the display. Fleet policy overrides the local choice. |
 
 `autostart` (boolean) starts Privacy Shield on app launch when set.
 
