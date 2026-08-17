@@ -1210,8 +1210,26 @@ mod tests {
             .iter()
             .filter(|entry| entry.transport == Transport::Tauri)
             .collect();
-        assert_eq!(tauri_commands.len(), 421);
+        // Keep this snapshot count intentional: the generated catalog is the
+        // authority, but a count change must be reviewed with the handler
+        // registrations rather than silently widening the CLI surface.
+        assert_eq!(tauri_commands.len(), 429);
         assert!(tauri_commands.iter().all(|entry| entry.registered));
+        for name in [
+            "decoy_read_audit_status",
+            "fleet_report_local_alert",
+            "fleet_report_privacy_shield_status",
+            "fleet_sync_shield_state",
+            "list_search_known_folders",
+            "list_search_storage_roots",
+            "open_event_log",
+            "set_decoy_read_audit_enabled",
+        ] {
+            assert!(
+                tauri_commands.iter().any(|entry| entry.name == name),
+                "generated CLI catalog is missing registered handler {name}"
+            );
+        }
         assert_eq!(
             tauri_commands
                 .iter()
@@ -1233,7 +1251,7 @@ mod tests {
                 .iter()
                 .filter(|entry| available_in_this_build(entry))
                 .count(),
-            if cfg!(debug_assertions) { 421 } else { 417 }
+            if cfg!(debug_assertions) { 429 } else { 425 }
         );
     }
 
