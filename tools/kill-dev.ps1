@@ -1,8 +1,18 @@
 # Kill app processes from a previous dev session, then free port 1420.
 # Run via: powershell -File tools/kill-dev.ps1  (called by the kill:dev npm script)
 
-Get-Process wincommander-free, wincommander-pro, WinCommander -ErrorAction SilentlyContinue |
-    Stop-Process -Force -ErrorAction SilentlyContinue
+[CmdletBinding()]
+param(
+    # Multi-session development records each user's installed app before its
+    # per-session agent swaps it for the debug binary.  Do not erase that
+    # evidence during the shared Vite-server bootstrap.
+    [switch]$PreserveWinCommander
+)
+
+if (-not $PreserveWinCommander) {
+    Get-Process wincommander-free, wincommander-pro, WinCommander -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+}
 
 # Free port 1420 (Vite dev server) if held by a stale bun/node process.
 # vite.config.ts uses strictPort: true, so an occupied port aborts startup.

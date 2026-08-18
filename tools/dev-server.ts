@@ -38,6 +38,7 @@ import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
 const FREE_ONLY = process.argv.includes("--free");
+const MULTI_USER = process.argv.includes("--multi-user");
 
 function run(tag: string, cmd: string, args: string[]): Promise<number> {
   return new Promise((resolvePromise, reject) => {
@@ -77,7 +78,13 @@ async function main(): Promise<void> {
   console.log("[dev-server] kill:dev, bun install, encrypt-backend running in parallel...");
 
   const steps: Array<{ name: string; promise: Promise<number> }> = [
-    { name: "kill:dev", promise: run("[kill]", "powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools/kill-dev.ps1"]) },
+    {
+      name: "kill:dev",
+      promise: run("[kill]", "powershell", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools/kill-dev.ps1",
+        ...(MULTI_USER ? ["-PreserveWinCommander"] : []),
+      ]),
+    },
     { name: "bun install", promise: run("[install]", "bun", ["install", "--frozen-lockfile"]) },
     { name: "encrypt-backend", promise: run("[encrypt]", "bun", ["run", "tools/encrypt.ts"]) },
   ];
