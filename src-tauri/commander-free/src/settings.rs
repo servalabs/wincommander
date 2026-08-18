@@ -2735,6 +2735,25 @@ pub fn apply_admin_config_cmd(
         if !wincmd_shared::fleet::verify_signature_b64(&pinned, &msg, &sig) {
             return Err("config push signature verification failed".to_string());
         }
+
+        // Clipboard Guard / Ink Receipt (plan §4.4, §2.4 finding 1; task C6):
+        // the `clipboardGuard`/`inkReceipt` subtrees ride this SAME signed
+        // epoch, exactly as Privacy Shield rides `privacy.privacyShield`, so
+        // they inherit everything the check above just proved. Only reachable
+        // here because the signature verified above — see
+        // `spawn_clipboard_guard_epoch_relay`'s doc comment for why that must
+        // stay true. Fire-and-forget: must never block this command or the
+        // config apply below.
+        spawn_clipboard_guard_epoch_relay(
+            &config,
+            config_version as i64,
+            &locked_paths,
+            managed.unwrap_or(false),
+            target_kind.as_deref(),
+            target_id.as_deref(),
+            &sig,
+            &pinned,
+        );
     }
     let updated = apply_admin_config(
         config,
@@ -2744,6 +2763,449 @@ pub fn apply_admin_config_cmd(
         managed.unwrap_or(false),
     )?;
     serde_json::to_value(&updated).map_err(|e| format!("Serialization error: {}", e))
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// CLIPBOARD GUARD / INK RECEIPT — verified-epoch subtree relay into svc
+// (plan §4.4, §2.4 finding 1; task C6)
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Extends the epoch-verification pattern directly above
+// (`apply_admin_config_cmd`) rather than duplicating it: the
+// `clipboardGuard`/`inkReceipt` subtrees ride the SAME signed
+// `config_json` Privacy Shield uses for `privacy.privacyShield`, so
+// signing, org/group/device scoping, `locked_paths`, and monotonic
+// versioning are already proven by the time any code below ever runs.
+//
+// `commander-svc` — not Free — is the durable owner of the installed
+// policy (plan §3): Free's job here is (1) a local sanity/health gate so
+// a malformed subtree is visible without a live round trip, and (2)
+// relaying the full verified epoch to svc over `\\.\pipe\wincmd-svc` so
+// svc can independently re-verify it (plan §2.4 finding 1 / D-7's
+// reasoning applied one hop further — svc must never trust "Free already
+// checked it"). Free never trusts an unverified epoch's subtree, and an
+// absent subtree is always "no change", never "disabled" — conflating
+// those would let a truncated epoch silently turn a security feature off.
+
+/// The `clipboardGuard` subtree of a verified epoch's `config_json` (plan
+/// §4.4). Field shape mirrors `wincmd_clip_rules::Rule`/`RuleSetLimits`
+/// exactly (same crate, same camelCase convention) so a rule that
+/// validates in the fleet console can never re-parse differently here.
+///
+/// No `deny_unknown_fields`, matching `PrivacyShieldSettings` above: a
+/// forward-compatible Fleet schema addition must not brick an older Free
+/// client into reporting unhealthy.
+///
+/// Deliberately carries NO enable/disable field — plan §4.4 puts
+/// `clipboard_guard_enabled` in `org_settings` (mirroring
+/// `fleet_privacy_shield_enabled`) precisely so flipping it doesn't burn
+/// an org-wide monotonic epoch version.
+// `rules`/`limits` are never read after a successful parse — this type
+// exists purely so `serde`'s (hand-written, for `RuleId`) `Deserialize`
+// impls enforce the real shape (valid rule ids, closed enum values, ...)
+// as a gate BEFORE relaying to svc. Only the Ok/Err outcome is used; the
+// parsed value itself is intentionally discarded (see
+// `parse_epoch_policy_subtrees`).
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardGuardSubtree {
+    rules: Vec<wincmd_clip_rules::Rule>,
+    /// Overrides `wincmd_clip_rules::RuleSetLimits::default()` when
+    /// present. Not enforced here — `compile()` against these limits is
+    /// commander-svc's atomic-install step (plan §4.4) — only
+    /// deserialized so a malformed override is caught as such rather than
+    /// silently ignored.
+    #[serde(default)]
+    limits: Option<wincmd_clip_rules::RuleSetLimits>,
+}
+
+/// Structural-only gate for the `inkReceipt` epoch subtree. Ink Receipt's
+/// concrete policy schema (managed destinations, printer classes, ticket
+/// requirement, offline behaviour, failure stance, watermark template —
+/// plan §5.3) belongs to commander-pro's policy resolver: a separately-
+/// scoped, later workflow in the private repo that must verify the epoch
+/// signature itself (D-7) rather than trust this relay. Inventing
+/// field-level validation here would let this file drift out of sync with
+/// whatever schema that workflow ships, so the only thing checked at this
+/// layer is that a PRESENT `inkReceipt` value is at least JSON-object
+/// shaped, not e.g. a bare string/number/array/null that could never be a
+/// policy object.
+fn ink_receipt_subtree_is_well_formed(value: &serde_json::Value) -> bool {
+    value.is_object()
+}
+
+/// Whether one epoch subtree was present, and if so, whether it parsed.
+/// `Absent` and `Malformed` are kept distinct everywhere in this module —
+/// conflating "not mentioned" with "present but broken" is exactly the
+/// hazard that would let a truncated epoch silently disable a security
+/// feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubtreeOutcome {
+    /// The key was not present in `config_json` at all.
+    Absent,
+    /// Present and deserialized (clipboardGuard) or shape-checked
+    /// (inkReceipt) successfully.
+    Valid,
+    /// Present but failed. Caller must keep whatever policy it already
+    /// had and report unhealthy — never install nothing/blank in its
+    /// place.
+    Malformed,
+}
+
+/// Result of inspecting one verified epoch's `config_json` for the
+/// `clipboardGuard` / `inkReceipt` subtrees.
+#[derive(Debug, Clone, Copy)]
+struct ParsedEpochSubtrees {
+    clipboard_guard: SubtreeOutcome,
+    ink_receipt: SubtreeOutcome,
+}
+
+impl ParsedEpochSubtrees {
+    /// Nothing new for svc to install — both subtrees absent. Distinct
+    /// from "attempt a relay" so an epoch that never mentions either
+    /// subtree behaves exactly as it always has.
+    fn is_no_op(&self) -> bool {
+        matches!(self.clipboard_guard, SubtreeOutcome::Absent)
+            && matches!(self.ink_receipt, SubtreeOutcome::Absent)
+    }
+
+    /// At least one PRESENT subtree failed its shape check.
+    fn any_malformed(&self) -> bool {
+        matches!(self.clipboard_guard, SubtreeOutcome::Malformed)
+            || matches!(self.ink_receipt, SubtreeOutcome::Malformed)
+    }
+}
+
+/// Inspect a verified epoch's `config_json` for the `clipboardGuard` and
+/// `inkReceipt` subtrees. Pure — no I/O, no global state, no signature
+/// re-check — so it is directly unit-testable. Callers MUST only invoke
+/// this on a `config` whose epoch signature has already verified: this
+/// function trusts that precondition and does not re-check it.
+fn parse_epoch_policy_subtrees(config: &serde_json::Value) -> ParsedEpochSubtrees {
+    let clipboard_guard = match config.get("clipboardGuard") {
+        None => SubtreeOutcome::Absent,
+        Some(v) => match serde_json::from_value::<ClipboardGuardSubtree>(v.clone()) {
+            Ok(_) => SubtreeOutcome::Valid,
+            Err(_) => SubtreeOutcome::Malformed,
+        },
+    };
+    let ink_receipt = match config.get("inkReceipt") {
+        None => SubtreeOutcome::Absent,
+        Some(v) => {
+            if ink_receipt_subtree_is_well_formed(v) {
+                SubtreeOutcome::Valid
+            } else {
+                SubtreeOutcome::Malformed
+            }
+        }
+    };
+    ParsedEpochSubtrees {
+        clipboard_guard,
+        ink_receipt,
+    }
+}
+
+/// Local, best-effort mirror of "did the most recently verified epoch's
+/// Clipboard Guard / Ink Receipt subtrees parse, and did the relay to
+/// commander-svc succeed" — plan §4.4's last-valid-retention rule,
+/// applied at this layer. `commander-svc` is the durable owner of the
+/// installed policy (plan §3); this only backs Free's own health surface.
+/// A malformed subtree or an unreachable svc must never blank this back
+/// to "never verified" — it simply stops advancing, exactly like svc
+/// keeps its last-valid ruleset on a failed atomic install.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClipboardGuardEpochHealth {
+    /// `false` after the most recent verified epoch's clipboardGuard or
+    /// inkReceipt subtree failed to deserialize, or after a subsequent
+    /// relay attempt to commander-svc failed or was rejected. An epoch
+    /// whose subtrees were simply absent never flips this — "no change",
+    /// never "unhealthy".
+    pub healthy: bool,
+    /// Highest epoch `policy_version` whose present subtree(s) all parsed
+    /// AND relayed successfully. Held at its previous value across a
+    /// malformed epoch or a failed relay — the "last known good" marker.
+    pub last_valid_policy_version: Option<i64>,
+}
+
+impl Default for ClipboardGuardEpochHealth {
+    fn default() -> Self {
+        Self {
+            healthy: true,
+            last_valid_policy_version: None,
+        }
+    }
+}
+
+static CLIPBOARD_GUARD_EPOCH_HEALTH: Mutex<ClipboardGuardEpochHealth> =
+    Mutex::new(ClipboardGuardEpochHealth {
+        healthy: true,
+        last_valid_policy_version: None,
+    });
+
+/// Snapshot of the current Clipboard Guard / Ink Receipt epoch-relay
+/// health (see [`ClipboardGuardEpochHealth`]). Mirrors
+/// `is_native_notifications_disabled`'s lock-and-default pattern above.
+/// Not yet wired into any GUI/health surface — `#[allow(dead_code)]`
+/// mirrors `export_settings`'s precedent above for a public accessor with
+/// no in-tree caller yet (exercised directly by this module's tests).
+#[allow(dead_code)]
+pub fn clipboard_guard_epoch_health() -> ClipboardGuardEpochHealth {
+    CLIPBOARD_GUARD_EPOCH_HEALTH
+        .lock()
+        .map(|g| *g)
+        .unwrap_or_default()
+}
+
+/// The `svc.*` verb this module relays a verified epoch to (plan §4.3
+/// caller 3, D-2). Classified `SessionHelper` in
+/// `wincmd_shared::svc::classify_verb` — svc must independently
+/// re-verify the signature before trusting anything in the payload.
+const INSTALL_EPOCH_VERB: &str = "svc.policy.install_epoch";
+
+/// How long Free will wait for the whole `svc.policy.install_epoch` round
+/// trip (connect + Hello + Request + Response) before giving up. Unlike
+/// `sidecar.rs`'s Pro-sidecar handshake, `commander-svc` is a local SYSTEM
+/// service with no AV-scanned spawn tail to absorb — a few seconds is
+/// generous for a same-machine named pipe.
+const SVC_RELAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Wire payload for [`INSTALL_EPOCH_VERB`]. Every field is exactly what
+/// `wincmd_shared::fleet::EpochSigningInput` binds into the epoch
+/// preimage, plus the signature and the pinned signer key Free just
+/// verified against — so commander-svc can rebuild the IDENTICAL preimage
+/// via `epoch_preimage` and call `verify_signature_b64` itself. This is
+/// deliberate: svc must never trust "Free already checked it" — sending
+/// anything less than the full signed material would make that
+/// impossible.
+///
+/// Field names are snake_case, matching `wincmd_shared`/`fleet_proto`'s
+/// backend-to-backend wire convention (e.g. `ClipboardEventReport`,
+/// `Envelope::Request`) — NOT the camelCase this file uses for
+/// `AppSettings`'s own on-disk/frontend JSON.
+#[derive(Debug, Clone, Serialize)]
+struct InstallEpochArgs {
+    /// The epoch's monotonic version. svc must reject any value that is
+    /// not strictly greater than what it already holds (plan §4.3).
+    policy_version: i64,
+    /// The FULL verified `config_json` — not just the clipboardGuard/
+    /// inkReceipt subtrees. `epoch_preimage` signs over the whole config,
+    /// so re-verifying a subtree in isolation is not possible; svc reads
+    /// only the two subtrees it cares about back out of this.
+    config: serde_json::Value,
+    locked_paths: Vec<String>,
+    managed: bool,
+    target_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_id: Option<String>,
+    /// Base64 Ed25519 signature over `epoch_preimage(EpochSigningInput {
+    /// version: policy_version, config: &config, locked_paths:
+    /// &locked_paths, managed, target_kind: &target_kind, target_id:
+    /// target_id.as_deref() })`.
+    signature: String,
+    /// Base64 Ed25519 public key Free verified `signature` against
+    /// (`settings.policy.fleet_signing_key`) — svc pins/compares this the
+    /// same way Free does, never trusting Free's verdict alone.
+    signer_key: String,
+}
+
+/// Kick off the Clipboard Guard / Ink Receipt epoch-subtree handling for a
+/// JUST-VERIFIED epoch. Call this ONLY from inside
+/// `apply_admin_config_cmd`'s `if let Some(pinned) = ...` branch, after
+/// `verify_signature_b64` has already returned `true` — this function
+/// does not itself re-check the signature, and reaching it on an
+/// unverified epoch would defeat the entire "verify before use, always"
+/// rule.
+///
+/// Fire-and-forget: spawns the actual parse+relay work on Tauri's
+/// background runtime (matching every other detached task in this crate —
+/// see e.g. `file_monitor.rs`, `flow_engine.rs`) so a slow or absent
+/// commander-svc can never block this Tauri command or the rest of the
+/// config apply that follows it. Outcomes are only ever observable via
+/// [`clipboard_guard_epoch_health`] afterward.
+#[allow(clippy::too_many_arguments)]
+fn spawn_clipboard_guard_epoch_relay(
+    config: &serde_json::Value,
+    policy_version: i64,
+    locked_paths: &[String],
+    managed: bool,
+    target_kind: Option<&str>,
+    target_id: Option<&str>,
+    signature: &str,
+    signer_key: &str,
+) {
+    let args = InstallEpochArgs {
+        policy_version,
+        config: config.clone(),
+        locked_paths: locked_paths.to_vec(),
+        managed,
+        target_kind: target_kind.unwrap_or("org").to_string(),
+        target_id: target_id.map(str::to_string),
+        signature: signature.to_string(),
+        signer_key: signer_key.to_string(),
+    };
+    tauri::async_runtime::spawn(async move {
+        handle_clipboard_guard_epoch_subtrees(args).await;
+    });
+}
+
+/// Extend a JUST-VERIFIED epoch's handling with the Clipboard Guard / Ink
+/// Receipt subtrees and relay to commander-svc over the real `wincmd-svc`
+/// pipe. Only ever reachable from [`spawn_clipboard_guard_epoch_relay`] in
+/// production — see that function's doc comment for the "verified before
+/// use" precondition.
+async fn handle_clipboard_guard_epoch_subtrees(args: InstallEpochArgs) {
+    handle_clipboard_guard_epoch_subtrees_via(wincmd_shared::svc::SVC_PIPE_NAME, args).await
+}
+
+/// Same as [`handle_clipboard_guard_epoch_subtrees`], but with the target
+/// pipe name injectable so tests can point this at a private test pipe
+/// instead of the real system service (mirrors
+/// `commander-svc/src/pipe.rs`'s own integration-test pattern of a
+/// `wincmd-svc-test-<suffix>` pipe name).
+async fn handle_clipboard_guard_epoch_subtrees_via(pipe_name: &str, args: InstallEpochArgs) {
+    let parsed = parse_epoch_policy_subtrees(&args.config);
+
+    if parsed.is_no_op() {
+        // Neither subtree was mentioned — behave exactly as this epoch
+        // always has: no health change, no relay attempt.
+        return;
+    }
+
+    if parsed.any_malformed() {
+        // Keep last_valid_policy_version exactly where it was — do not
+        // advance it, do not clear it — and report unhealthy. Skip the
+        // relay entirely: commander-svc's own atomic install would reach
+        // the identical parse failure on the identical bytes, so a round
+        // trip could not accomplish anything but spend one.
+        if let Ok(mut health) = CLIPBOARD_GUARD_EPOCH_HEALTH.lock() {
+            health.healthy = false;
+        }
+        crate::log_message(
+            "warn",
+            "[ClipboardGuard] verified epoch's clipboardGuard/inkReceipt subtree failed to deserialize — keeping last-valid policy",
+        );
+        return;
+    }
+
+    // At least one subtree is present and parsed. Relay the FULL verified
+    // epoch so commander-svc can independently re-verify (never trusting
+    // that Free already did) and atomically install it.
+    let policy_version = args.policy_version;
+    match relay_epoch_to_svc(pipe_name, &args).await {
+        Ok(()) => {
+            if let Ok(mut health) = CLIPBOARD_GUARD_EPOCH_HEALTH.lock() {
+                health.healthy = true;
+                health.last_valid_policy_version = Some(policy_version);
+            }
+        }
+        Err(reason) => {
+            // svc absent, unreachable, or it rejected the epoch. Surface
+            // as a health signal only — never touch
+            // last_valid_policy_version, since the previous value is
+            // still the best information available about what svc
+            // actually has installed. Never panic here: an absent svc is
+            // an expected runtime condition, not a bug.
+            if let Ok(mut health) = CLIPBOARD_GUARD_EPOCH_HEALTH.lock() {
+                health.healthy = false;
+            }
+            crate::log_message(
+                "warn",
+                &format!("[ClipboardGuard] epoch relay to commander-svc failed: {reason}"),
+            );
+        }
+    }
+}
+
+/// Dial `pipe_name`, perform the `wincmd-svc` Hello handshake, send
+/// [`INSTALL_EPOCH_VERB`], and report whether svc accepted the epoch.
+///
+/// Pipe name is a parameter (rather than hardcoding
+/// `wincmd_shared::svc::SVC_PIPE_NAME` directly) purely so tests can point
+/// this at a private test pipe instead of the real system service.
+///
+/// Never panics on a failure that is expected in production (svc absent,
+/// svc rejects, pipe busy, timeout) — every step maps to `Err(String)`.
+/// The error text is protocol-level only (connect/timeout/frame-shape
+/// failures, or svc's own `error_kind`) — never rule names, patterns, or
+/// clipboard text, so it is safe to log verbatim.
+async fn relay_epoch_to_svc(pipe_name: &str, args: &InstallEpochArgs) -> Result<(), String> {
+    use tokio::net::windows::named_pipe::{ClientOptions, PipeMode};
+    use tokio::time::timeout;
+
+    let mut client = ClientOptions::new()
+        .pipe_mode(PipeMode::Byte)
+        .open(pipe_name)
+        .map_err(|e| format!("connect failed: {e}"))?;
+
+    // Fresh per-connection token. svc's authorization for this verb rests
+    // on peer session-membership + binary/publisher pinning (plan §4.3),
+    // not on this token being pre-shared or secret — it only proves that
+    // frames within THIS connection came from whoever established it,
+    // the same Phase-9 HMAC contract every other `Envelope::Signed` use in
+    // this repo relies on.
+    let session_token = Uuid::new_v4().to_string();
+
+    let hello = wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(&session_token));
+    timeout(
+        SVC_RELAY_TIMEOUT,
+        wincmd_shared::write_envelope(&mut client, &hello),
+    )
+    .await
+    .map_err(|_| "Hello write timed out".to_string())?
+    .map_err(|e| format!("Hello write failed: {e}"))?;
+
+    let ack = timeout(SVC_RELAY_TIMEOUT, wincmd_shared::read_envelope(&mut client))
+        .await
+        .map_err(|_| "Hello ack timed out".to_string())?
+        .map_err(|e| format!("Hello ack read failed: {e}"))?;
+    if !matches!(ack, wincmd_shared::Envelope::Hello(_)) {
+        return Err("expected a Hello ack, got a different frame".to_string());
+    }
+
+    let args_json =
+        serde_json::to_value(args).map_err(|e| format!("args serialize failed: {e}"))?;
+    let request = wincmd_shared::Envelope::Request(wincmd_shared::Request {
+        request_id: 1,
+        feature_id: INSTALL_EPOCH_VERB.to_string(),
+        args: args_json,
+    })
+    .sign(&session_token);
+
+    timeout(
+        SVC_RELAY_TIMEOUT,
+        wincmd_shared::write_envelope(&mut client, &request),
+    )
+    .await
+    .map_err(|_| "request write timed out".to_string())?
+    .map_err(|e| format!("request write failed: {e}"))?;
+
+    let reply = timeout(SVC_RELAY_TIMEOUT, wincmd_shared::read_envelope(&mut client))
+        .await
+        .map_err(|_| "reply timed out".to_string())?
+        .map_err(|e| format!("reply read failed: {e}"))?;
+
+    // Lenient on signing: today's svc replies unsigned (see
+    // `commander-svc/src/pipe.rs::handle_connection`), but
+    // `wincmd_shared::svc`'s module doc specifies every post-handshake
+    // frame is `Signed` — accept either shape so this client keeps
+    // working once svc's reply path is updated to match its own
+    // documented contract.
+    let reply = if matches!(reply, wincmd_shared::Envelope::Signed(_)) {
+        reply
+            .verify_and_unwrap(&session_token)
+            .map_err(|e| format!("reply signature check failed: {e}"))?
+    } else {
+        reply
+    };
+
+    let _ = wincmd_shared::write_envelope(&mut client, &wincmd_shared::Envelope::Bye).await;
+
+    match reply {
+        wincmd_shared::Envelope::Response(_) => Ok(()),
+        wincmd_shared::Envelope::Error(e) => Err(format!("svc rejected the epoch: {}", e.kind)),
+        _ => Err("unexpected reply frame".to_string()),
+    }
 }
 
 /// Check if a setting is locked by admin.
@@ -3639,6 +4101,400 @@ mod tests {
         assert!(
             !would_attempt_persist_write,
             "read_settings must skip its cold-read persistence write while decoy mode is active"
+        );
+    }
+
+    // ── Clipboard Guard / Ink Receipt epoch subtree relay (task C6) ──────
+
+    /// A minimally valid `wincmd_clip_rules::Rule` as JSON — camelCase
+    /// top-level fields, snake_case `matcher.params` fields (see
+    /// `wincmd-clip-rules/tests/serde_shape.rs`, the authoritative wire
+    /// shape check for this crate).
+    fn valid_clipboard_guard_rule_json() -> serde_json::Value {
+        serde_json::json!({
+            "id": "0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a4b",
+            "revision": 1,
+            "name": "test-rule",
+            "enabled": true,
+            "priority": 100,
+            "matcher": {"kind": "phrase", "params": {"value": "secret", "case_sensitive": false}},
+            "severity": "warn",
+            "actions": ["notify_user"],
+            "cooldownSeconds": 30,
+            "snoozable": true,
+            "locked": false
+        })
+    }
+
+    fn sample_install_epoch_args(policy_version: i64) -> InstallEpochArgs {
+        InstallEpochArgs {
+            policy_version,
+            config: serde_json::json!({
+                "clipboardGuard": {"rules": [valid_clipboard_guard_rule_json()]}
+            }),
+            locked_paths: vec![],
+            managed: true,
+            target_kind: "org".to_string(),
+            target_id: None,
+            signature: "test-signature".to_string(),
+            signer_key: "test-signer-key".to_string(),
+        }
+    }
+
+    fn set_clipboard_guard_health_for_test(health: ClipboardGuardEpochHealth) {
+        let mut guard = CLIPBOARD_GUARD_EPOCH_HEALTH
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard = health;
+    }
+
+    fn warm_cache_with_pinned_fleet_key(pubkey_b64: &str) {
+        let mut settings = create_default_settings();
+        settings.policy.fleet_signing_key = Some(pubkey_b64.to_string());
+        let mut guard = SETTINGS_CACHE.lock().unwrap();
+        *guard = Some(settings);
+    }
+
+    // ── parse_epoch_policy_subtrees: pure, no I/O, no globals ────────────
+
+    #[test]
+    fn absent_subtrees_are_absent_not_malformed() {
+        let config = serde_json::json!({"privacy": {"telemetry": {}}});
+        let parsed = parse_epoch_policy_subtrees(&config);
+        assert_eq!(parsed.clipboard_guard, SubtreeOutcome::Absent);
+        assert_eq!(parsed.ink_receipt, SubtreeOutcome::Absent);
+        assert!(parsed.is_no_op());
+        assert!(!parsed.any_malformed());
+    }
+
+    #[test]
+    fn valid_clipboard_guard_subtree_parses() {
+        let config = serde_json::json!({
+            "clipboardGuard": {"rules": [valid_clipboard_guard_rule_json()]}
+        });
+        let parsed = parse_epoch_policy_subtrees(&config);
+        assert_eq!(parsed.clipboard_guard, SubtreeOutcome::Valid);
+        assert!(!parsed.is_no_op());
+        assert!(!parsed.any_malformed());
+    }
+
+    #[test]
+    fn clipboard_guard_subtree_with_invalid_rule_id_is_malformed() {
+        let mut bad_rule = valid_clipboard_guard_rule_json();
+        // "not-a-uuid" is the exact known-bad fixture from
+        // wincmd-clip-rules/src/ids.rs's own RuleId tests.
+        bad_rule["id"] = serde_json::json!("not-a-uuid");
+        let config = serde_json::json!({"clipboardGuard": {"rules": [bad_rule]}});
+        let parsed = parse_epoch_policy_subtrees(&config);
+        assert_eq!(parsed.clipboard_guard, SubtreeOutcome::Malformed);
+        assert!(parsed.any_malformed());
+    }
+
+    #[test]
+    fn ink_receipt_subtree_as_json_object_is_valid() {
+        // Free deliberately does not model Ink Receipt's field-level
+        // schema (that's commander-pro's job) — any JSON object passes.
+        let config = serde_json::json!({"inkReceipt": {"anything": "goes-for-now"}});
+        let parsed = parse_epoch_policy_subtrees(&config);
+        assert_eq!(parsed.ink_receipt, SubtreeOutcome::Valid);
+        assert!(!parsed.any_malformed());
+    }
+
+    #[test]
+    fn ink_receipt_subtree_as_non_object_is_malformed() {
+        let config = serde_json::json!({"inkReceipt": "not-an-object"});
+        let parsed = parse_epoch_policy_subtrees(&config);
+        assert_eq!(parsed.ink_receipt, SubtreeOutcome::Malformed);
+        assert!(parsed.any_malformed());
+    }
+
+    // ── relay_epoch_to_svc: real IPC against a private test pipe ─────────
+
+    /// Minimal stand-in for `commander-svc/src/pipe.rs`'s Hello+Request
+    /// loop — accepts exactly one connection, does the Hello handshake,
+    /// reads one frame, then writes back `reply`. Mirrors that file's own
+    /// integration-test pattern (a `wincmd-svc-test-<suffix>` pipe name)
+    /// so it never touches the real system pipe.
+    async fn run_fake_svc_once(pipe_name: &'static str, reply: wincmd_shared::Envelope) {
+        use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
+        let mut server = ServerOptions::new()
+            .pipe_mode(PipeMode::Byte)
+            .first_pipe_instance(true)
+            .create(pipe_name)
+            .expect("create test svc pipe");
+        server.connect().await.expect("test svc pipe accept");
+
+        let _hello = wincmd_shared::read_envelope(&mut server)
+            .await
+            .expect("read Hello");
+        let ack = wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui("svc-ack"));
+        wincmd_shared::write_envelope(&mut server, &ack)
+            .await
+            .expect("write Hello ack");
+
+        let _request = wincmd_shared::read_envelope(&mut server)
+            .await
+            .expect("read Request");
+        wincmd_shared::write_envelope(&mut server, &reply)
+            .await
+            .expect("write reply");
+    }
+
+    #[tokio::test]
+    async fn relay_succeeds_when_svc_responds_with_response() {
+        let pipe_name = r"\\.\pipe\wincmd-svc-test-c6-relay-ok";
+        let reply = wincmd_shared::Envelope::Response(wincmd_shared::Response {
+            request_id: 1,
+            result: serde_json::json!({"ok": true}),
+        });
+        let server = tokio::spawn(run_fake_svc_once(pipe_name, reply));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let args = sample_install_epoch_args(1);
+        let result = relay_epoch_to_svc(pipe_name, &args).await;
+
+        server.await.expect("fake svc server task panicked");
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn relay_fails_when_svc_responds_with_error() {
+        let pipe_name = r"\\.\pipe\wincmd-svc-test-c6-relay-reject";
+        let reply = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
+            request_id: 1,
+            kind: "forbidden".to_string(),
+            message: "denied".to_string(),
+        });
+        let server = tokio::spawn(run_fake_svc_once(pipe_name, reply));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let args = sample_install_epoch_args(2);
+        let result = relay_epoch_to_svc(pipe_name, &args).await;
+
+        server.await.expect("fake svc server task panicked");
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn relay_fails_gracefully_when_svc_is_unreachable() {
+        // Nobody is listening at this pipe on purpose — the "svc absent"
+        // scenario. Must return a graceful Err, never panic.
+        let pipe_name = r"\\.\pipe\wincmd-svc-test-c6-relay-absent";
+        let args = sample_install_epoch_args(3);
+        let result = relay_epoch_to_svc(pipe_name, &args).await;
+        assert!(
+            result.is_err(),
+            "expected a graceful Err with no svc listening"
+        );
+    }
+
+    // ── handle_clipboard_guard_epoch_subtrees_via: parse + health + relay ──
+
+    #[tokio::test]
+    // This process-wide test mutex intentionally spans the await so synchronous
+    // decoy-mode tests cannot mutate the same globals while this probe runs.
+    #[allow(clippy::await_holding_lock)]
+    async fn absent_subtrees_are_a_no_op() {
+        let _lock = super::GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        set_clipboard_guard_health_for_test(ClipboardGuardEpochHealth {
+            healthy: true,
+            last_valid_policy_version: Some(3),
+        });
+
+        let mut args = sample_install_epoch_args(9);
+        args.config = serde_json::json!({"privacy": {"telemetry": {}}});
+
+        // Nobody listens at this pipe on purpose — a no-op epoch must
+        // never even attempt the relay.
+        handle_clipboard_guard_epoch_subtrees_via(
+            r"\\.\pipe\wincmd-svc-test-c6-should-not-be-dialed-noop",
+            args,
+        )
+        .await;
+
+        let health = clipboard_guard_epoch_health();
+        assert!(health.healthy);
+        assert_eq!(
+            health.last_valid_policy_version,
+            Some(3),
+            "absent subtrees must not change last_valid_policy_version"
+        );
+    }
+
+    #[tokio::test]
+    // This process-wide test mutex intentionally spans the await so synchronous
+    // decoy-mode tests cannot mutate the same globals while this probe runs.
+    #[allow(clippy::await_holding_lock)]
+    async fn valid_subtree_parses_and_relays_and_marks_healthy() {
+        let _lock = super::GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        set_clipboard_guard_health_for_test(ClipboardGuardEpochHealth::default());
+
+        let pipe_name = r"\\.\pipe\wincmd-svc-test-c6-handle-ok";
+        let reply = wincmd_shared::Envelope::Response(wincmd_shared::Response {
+            request_id: 1,
+            result: serde_json::json!({"ok": true}),
+        });
+        let server = tokio::spawn(run_fake_svc_once(pipe_name, reply));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        handle_clipboard_guard_epoch_subtrees_via(pipe_name, sample_install_epoch_args(7)).await;
+
+        server.await.expect("fake svc server task panicked");
+
+        let health = clipboard_guard_epoch_health();
+        assert!(health.healthy);
+        assert_eq!(health.last_valid_policy_version, Some(7));
+    }
+
+    #[tokio::test]
+    // This process-wide test mutex intentionally spans the await so synchronous
+    // decoy-mode tests cannot mutate the same globals while this probe runs.
+    #[allow(clippy::await_holding_lock)]
+    async fn malformed_subtree_keeps_previous_policy_version_and_marks_unhealthy() {
+        let _lock = super::GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        set_clipboard_guard_health_for_test(ClipboardGuardEpochHealth {
+            healthy: true,
+            last_valid_policy_version: Some(3),
+        });
+
+        let mut bad_rule = valid_clipboard_guard_rule_json();
+        bad_rule["id"] = serde_json::json!("not-a-uuid");
+        let mut args = sample_install_epoch_args(8);
+        args.config = serde_json::json!({"clipboardGuard": {"rules": [bad_rule]}});
+
+        // No server listening at this pipe on purpose — a malformed
+        // subtree must never even attempt the relay.
+        handle_clipboard_guard_epoch_subtrees_via(
+            r"\\.\pipe\wincmd-svc-test-c6-should-not-be-dialed-malformed",
+            args,
+        )
+        .await;
+
+        let health = clipboard_guard_epoch_health();
+        assert!(!health.healthy);
+        assert_eq!(
+            health.last_valid_policy_version,
+            Some(3),
+            "a malformed subtree must keep the previous valid policy version"
+        );
+    }
+
+    #[tokio::test]
+    // This process-wide test mutex intentionally spans the await so synchronous
+    // decoy-mode tests cannot mutate the same globals while this probe runs.
+    #[allow(clippy::await_holding_lock)]
+    async fn relay_failure_marks_unhealthy_without_losing_last_valid_version() {
+        let _lock = super::GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        set_clipboard_guard_health_for_test(ClipboardGuardEpochHealth {
+            healthy: true,
+            last_valid_policy_version: Some(5),
+        });
+
+        // Nobody listens at this pipe — svc absent/unreachable.
+        handle_clipboard_guard_epoch_subtrees_via(
+            r"\\.\pipe\wincmd-svc-test-c6-relay-failure-no-listener",
+            sample_install_epoch_args(6),
+        )
+        .await;
+
+        let health = clipboard_guard_epoch_health();
+        assert!(!health.healthy);
+        assert_eq!(
+            health.last_valid_policy_version,
+            Some(5),
+            "a failed relay must not clear or advance the last known-good version"
+        );
+    }
+
+    // ── apply_admin_config_cmd: forged/mismatched signature ⇒ never relayed ──
+
+    #[test]
+    fn forged_signature_epoch_with_clipboard_guard_subtree_is_rejected_and_never_relayed() {
+        let _lock = super::GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let signing_key = SigningKey::generate(&mut rand_core::OsRng);
+        let pubkey_b64 = STANDARD.encode(signing_key.verifying_key().to_bytes());
+
+        warm_cache_with_pinned_fleet_key(&pubkey_b64);
+        set_clipboard_guard_health_for_test(ClipboardGuardEpochHealth::default());
+
+        let config = serde_json::json!({
+            "clipboardGuard": {"rules": [valid_clipboard_guard_rule_json()]}
+        });
+        // A syntactically valid Ed25519 signature — over the WRONG
+        // message — so verify_signature_b64 fails without needing a
+        // hand-corrupted signature blob.
+        let forged = signing_key.sign(b"not the real epoch preimage");
+        let forged_b64 = STANDARD.encode(forged.to_bytes());
+
+        let result = apply_admin_config_cmd(
+            config,
+            vec![],
+            "merge".to_string(),
+            1,
+            Some(forged_b64),
+            Some(pubkey_b64),
+            Some("org".to_string()),
+            None,
+            Some(true),
+        );
+
+        assert_eq!(
+            result,
+            Err("config push signature verification failed".to_string())
+        );
+        assert_eq!(
+            clipboard_guard_epoch_health().last_valid_policy_version,
+            None,
+            "a forged-signature epoch must never reach the subtree relay"
+        );
+    }
+
+    #[test]
+    fn signer_key_mismatch_epoch_is_rejected_and_never_relayed() {
+        let _lock = super::GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let pinned_key = "pinned-fleet-key-b64-placeholder".to_string();
+        warm_cache_with_pinned_fleet_key(&pinned_key);
+        set_clipboard_guard_health_for_test(ClipboardGuardEpochHealth::default());
+
+        let config = serde_json::json!({
+            "clipboardGuard": {"rules": [valid_clipboard_guard_rule_json()]}
+        });
+
+        let result = apply_admin_config_cmd(
+            config,
+            vec![],
+            "merge".to_string(),
+            1,
+            Some("any-signature".to_string()),
+            Some("a-different-key".to_string()),
+            Some("org".to_string()),
+            None,
+            Some(true),
+        );
+
+        assert_eq!(
+            result,
+            Err("config push signer key does not match the pinned fleet key".to_string())
+        );
+        assert_eq!(
+            clipboard_guard_epoch_health().last_valid_policy_version,
+            None,
+            "a signer-key-mismatched epoch must never reach the subtree relay"
         );
     }
 }

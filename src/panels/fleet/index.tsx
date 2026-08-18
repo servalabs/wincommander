@@ -12,7 +12,10 @@
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import FleetConnectView from "./FleetConnectView";
+import FleetAdminSession, { FleetAdminGate } from "./FleetAdminSession";
 import VaultAccessTab from "./VaultAccessTab";
+import ClipboardGuardTab from "./ClipboardGuardTab";
+import InkReceiptTab from "./InkReceiptTab";
 import "./index.css";
 
 export default function FleetPanel() {
@@ -21,13 +24,16 @@ export default function FleetPanel() {
       <div className="fleet-panel-heading">
         <div>
           <h2>Fleet & multi-user security</h2>
-          <p>Enroll this endpoint or prepare a local, non-secret Vault deployment manifest.</p>
+          <p>Enroll this endpoint, prepare a local Vault deployment manifest, or publish organization safeguards.</p>
         </div>
       </div>
+      <FleetAdminSession>
       <Tabs defaultValue="enrollment" className="fleet-tabs">
         <TabsList className="fleet-tabs-list" aria-label="Fleet configuration sections">
           <TabsTrigger value="enrollment">Enrollment</TabsTrigger>
           <TabsTrigger value="vault">Vault access</TabsTrigger>
+          <TabsTrigger value="clipboard">Clipboard Guard</TabsTrigger>
+          <TabsTrigger value="ink">Ink Receipt</TabsTrigger>
         </TabsList>
         <TabsContent value="enrollment" className="fleet-tab-content">
           <FleetConnectView />
@@ -38,7 +44,14 @@ export default function FleetPanel() {
         <TabsContent value="vault" className="fleet-tab-content">
           <VaultAccessTab />
         </TabsContent>
+        <TabsContent value="clipboard" className="fleet-tab-content">
+          <FleetAdminGate><ClipboardGuardTab /></FleetAdminGate>
+        </TabsContent>
+        <TabsContent value="ink" className="fleet-tab-content">
+          <FleetAdminGate><InkReceiptTab /></FleetAdminGate>
+        </TabsContent>
       </Tabs>
+      </FleetAdminSession>
     </div>
   );
 }

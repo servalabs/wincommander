@@ -1,0 +1,38 @@
+[package]
+name = "wincmd-clip-rules"
+version = "0.1.0"
+description = "Pure clipboard-guard rule engine — rule types, compilation, matching, cooldown. No clipboard access, no filesystem, no network, no logging, no platform deps. Compiled into both fleet-server (validation/test panel) and the endpoint (matching) so a rule that validates in the console behaves identically on-device."
+authors = ["ServaLabs"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.93.1"
+
+# Pure data + matcher crate — deliberately dependency-light. `regex` is the
+# only non-serde dependency: this crate does NOT depend on `uuid` (see
+# `src/ids.rs` for why — the same reason `fleet-proto`'s `DeviceId`/`OrgId`
+# are validated `String` newtypes rather than `uuid::Uuid`), does not depend
+# on `chrono` (cooldown timing uses `std::time::Instant`, never wall-clock),
+# and does not depend on `once_cell`/`lazy_static` (every builtin regex is
+# compiled inside `compile()`, not at process-load time via a `Lazy` global,
+# because size-limit enforcement has to run for builtins too — see
+# `src/compile.rs`).
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+
+# WI-2 SSOT codegen idiom (mirrors `fleet-proto`/`wincmd-shared`): derive
+# TypeScript types for the fleet-server console's rule editor + test panel.
+# Optional + build-only — gated behind `ts-codegen` so it is NEVER in the
+# AV-scanned Free binary's dependency closure. `fleet-proto` depends on this
+# crate and enables the feature (wired by a separate agent, not here).
+ts-rs = { version = "10", optional = true, features = ["serde-json-impl"] }
+
+[features]
+# Activate ONLY for the Rust->TS codegen step (build.rs / emit binaries).
+ts-codegen = ["dep:ts-rs"]
+
+# Test-only — golden-vector / round-trip tests serialize through JSON
+# directly rather than re-deriving expected bytes by hand. Never linked into
+# a production binary.
+[dev-dependencies]
+serde_json = "1"

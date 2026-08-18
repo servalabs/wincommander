@@ -112,6 +112,19 @@ hmac = "0.13"
 tokio = { version = "1", features = ["time", "rt", "process", "io-util", "sync", "net", "macros"] }
 wincmd-shared = { path = "../wincmd-shared" }
 wincmd-search = { path = "../wincmd-search" }
+# Clipboard Guard's rule engine (plan §4.1): the same pure matcher/compiler
+# Fleet uses to validate rules, so paste_monitor.rs's on-device matching
+# (Phase 1c re-point) can never drift from what an admin saw pass validation
+# in the console. Pure/no-I/O by design — safe for the AV-scanned Free binary.
+wincmd-clip-rules = { path = "../wincmd-clip-rules" }
+# Clipboard Guard's per-user listener/read/engine/action/report library
+# (plan §4.2 Phase 1c re-point): paste_monitor.rs drives this crate's
+# event-driven listener + bounded read + wincmd-clip-rules matching/
+# cooldown/report-building directly, instead of hand-rolling a second Win32
+# clipboard watcher that could silently diverge from the standalone
+# per-user helper process (see clipboard-guard-helper's own crate doc for
+# why it exists as a reusable lib+thin-bin).
+clipboard-guard-helper = { path = "../clipboard-guard-helper" }
 hex = "0.4"
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 # KT: sysinfo for Rust-native CPU/RAM/Disk metrics — replaces 3s PowerShell spawn poll.

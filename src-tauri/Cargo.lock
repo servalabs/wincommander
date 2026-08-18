@@ -805,12 +805,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "clipboard-guard-helper"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clipboard-win",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "wincmd-clip-rules",
+ "wincmd-shared",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
 dependencies = [
  "error-code",
+ "windows-win",
 ]
 
 [[package]]
@@ -855,6 +871,7 @@ dependencies = [
  "argon2",
  "base64 0.22.1",
  "chrono",
+ "clipboard-guard-helper",
  "clipboard-win",
  "cron",
  "dotenvy",
@@ -897,6 +914,7 @@ dependencies = [
  "url",
  "uuid",
  "webview2-com",
+ "wincmd-clip-rules",
  "wincmd-search",
  "wincmd-shared",
  "windows 0.61.3",
@@ -913,6 +931,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "wincmd-clip-rules",
  "wincmd-shared",
  "windows-service",
  "windows-sys 0.61.2",
@@ -1807,6 +1826,7 @@ dependencies = [
  "serde",
  "serde_json",
  "ts-rs",
+ "wincmd-clip-rules",
 ]
 
 [[package]]
@@ -7182,6 +7202,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
+name = "wincmd-clip-rules"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "ts-rs",
+]
+
+[[package]]
 name = "wincmd-search"
 version = "0.1.0"
 dependencies = [
@@ -7595,6 +7625,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4060a1da109b9d0326b7262c8e12c84df67cc0dbc9e33cf49e01ccc2eb63631"
 dependencies = [
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "windows-win"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58e23e33622b3b52f948049acbec9bcc34bf6e26d74176b88941f213c75cf2dc"
+dependencies = [
+ "error-code",
 ]
 
 [[package]]

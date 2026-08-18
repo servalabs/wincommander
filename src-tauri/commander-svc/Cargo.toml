@@ -24,6 +24,12 @@ path = "src/main.rs"
 
 [dependencies]
 wincmd-shared = { path = "../wincmd-shared" }
+# Clipboard Guard's rule engine (plan §4.1): pure matcher/compiler shared with
+# Fleet and commander-pro, so the per-user helper's on-device matching
+# (Phase 2) behaves identically to what validated in the fleet-server
+# console. Lives in this public repo on purpose — no proprietary enforcement
+# logic — per NON-GOALS.md's ban on re-vendoring shared types privately.
+wincmd-clip-rules = { path = "../wincmd-clip-rules" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -43,4 +49,5 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Threading",
   "Win32_System_Memory",
   "Win32_System_SystemServices",
+  "Win32_System_RemoteDesktop",
 ] }

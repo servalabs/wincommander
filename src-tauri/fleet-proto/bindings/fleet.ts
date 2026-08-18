@@ -2,6 +2,14 @@
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
+ * What a rule asks the endpoint to do on a match. Closed enum, ordered by
+ * the engine (author intent, `Rule.actions` order) not enforced execution
+ * order here — sequencing is the endpoint's job, this crate only carries
+ * the request.
+ */
+export type Action = "notify_user" | "clear_clipboard" | "quarantine_clipboard" | "record_local_receipt" | "report_fleet" | "alert_admin";
+
+/**
  * Risk tier of a remote action — drives the safety-gate ladder in the fleet
  * server (Milestone 3) and tells the admin panel which confirmation UI to
  * render. Contains no command strings.
@@ -108,6 +116,45 @@ export type AssignGroupRequest = { group_id: string | null, };
  * the panel agree on the shape (SSOT) — RFC 3339 `at`.
  */
 export type AuditEntry = { actor: string, action: string, target: string | null, outcome: string, detail: JsonValue, at: string, };
+
+/**
+ * One clipboard-guard rule match, reported by the agent as part of a
+ * `CheckinRequest` batch (`clipboard_events: Vec<ClipboardEventReport>`,
+ * plan §4.4).
+ *
+ * `event_id`/`occurred_at` are `String` (RFC3339 for the latter), matching
+ * this crate's universal id/timestamp idiom — see `ProductivitySample::
+ * window_start` and `LocalAlertReport::occurred_at` above. `fleet-proto`
+ * has ZERO `uuid`/`chrono` dependency, deliberately, to keep the
+ * AV-scanned Free binary's dependency closure small (see the crate doc
+ * comment); parsing/validating `event_id` as a UUID and `occurred_at` as
+ * RFC3339 is the fleet-server ROUTE layer's job, not this type's.
+ *
+ * `rule_id` is likewise a `String` — the wire form of a
+ * `wincmd_clip_rules::RuleId` (see that type's own doc comment: "hand to a
+ * `fleet-proto` `String`-typed wire field"). The route layer re-validates
+ * it via `RuleId::new` before use; a malformed value is a `BadRequest`,
+ * not a panic.
+ *
+ * `severity`/`actions_attempted`/`actions_succeeded` are the closed enums
+ * re-exported from `wincmd_clip_rules` above — never a `String` a caller
+ * could set to an unrecognised value. `suppressed_count` is the
+ * content-free cooldown metric from `wincmd_clip_rules::CooldownLedger::
+ * should_emit`'s `Emit::Suppressed { count }`.
+ */
+export type ClipboardEventReport = {
+/**
+ * Device-minted UUIDv7 — the idempotency key.
+ */
+event_id: string,
+/**
+ * RFC3339, agent clock.
+ */
+occurred_at: string, policy_version: bigint,
+/**
+ * String form of a `wincmd_clip_rules::RuleId` — see the struct doc.
+ */
+rule_id: string, rule_revision: number, severity: Severity, actions_attempted: Array<Action>, actions_succeeded: Array<Action>, suppressed_count: number, };
 
 /**
  * Discoverable, AV-safe catalog metadata for one remote command. Mirrors an
@@ -475,6 +522,48 @@ detail: JsonValue, device_id: DeviceId | null, hostname: string | null, read: bo
 export type HashResult = { ok: boolean, path: string, detail: string | null, algo: string, hex: string, size_bytes: bigint, };
 
 /**
+ * One Ink Receipt lifecycle report, batched onto `CheckinRequest` as
+ * `ink_receipts: Vec<InkReceiptReport>` (plan §5.6). Same rules as
+ * [`ClipboardEventReport`] above: `deny_unknown_fields` scoped to this
+ * type only, no `Value`, no free-text field, `device_id` from the
+ * authenticated identity rather than the body.
+ *
+ * Fields are deliberately ONLY: `receipt_id`, `ticket_id`,
+ * `printer_class`, `pages`, `status`, `policy_version`, `occurred_at`.
+ * Specifically **NOT** present, and never to be added: document name,
+ * file path, printer queue name, or OS user name — the whole point of the
+ * controlled-PDF lane (plan §5) is that Fleet learns a page COUNT and an
+ * OUTCOME, never what was printed or by whom on the machine.
+ */
+export type InkReceiptReport = {
+/**
+ * Device-minted UUID — the idempotency key.
+ */
+receipt_id: string,
+/**
+ * The `IR-<uuid-simple>` ticket id (D-5) this receipt completes.
+ * Treated as pseudonymous and encrypted at rest (D-8) — the route
+ * layer, not this type, owns that encryption and any format check.
+ */
+ticket_id: string, printer_class: PrinterClass, pages: number, status: InkReceiptStatus, policy_version: bigint,
+/**
+ * RFC3339, agent clock.
+ */
+occurred_at: string, };
+
+/**
+ * Closed outcome of one Ink Receipt render/print attempt (plan §5.5/§5.6).
+ * Mirrors the exact status set the renderer maps onto: `scrub_warning` /
+ * `failed` / `cancelled` come from the metadata-scrubber outcome mapping
+ * (§5.5), `failed_after_render` is the "writer failed after the watermark
+ * was already applied" case that must never be reported as `completed`,
+ * `blocked` is the online-path zero-rows-consumed replay/expiry outcome
+ * (§5.4), and `duplicate_or_replay` is the offline-path ex-post duplicate
+ * detection outcome (§5.4, D-9) — never silently merged or dropped.
+ */
+export type InkReceiptStatus = "completed" | "scrub_warning" | "failed" | "failed_after_render" | "cancelled" | "blocked" | "duplicate_or_replay";
+
+/**
  * `files.list_dir` result — a bounded directory listing (see the handler's
  * entry cap). `entries` is empty when `ok` is false.
  */
@@ -601,6 +690,15 @@ toggle_states: JsonValue | null,
  * build, or when the agent has no shield status to report this cycle.
  */
 shield_running: boolean | null, };
+
+/**
+ * Closed set of printer classes an Ink Receipt ticket or receipt can name
+ * (plan §5.4/§5.6). Plan §5.4 uses exactly `Pdf`/`SecurePhysical` as its
+ * cross-class replay example — a `pdf` ticket must never be presentable
+ * for `secure_physical` — which is why `printer_class` binds into
+ * [`ticket_preimage`] below as well as appearing here on the receipt.
+ */
+export type PrinterClass = "pdf" | "secure_physical";
 
 /**
  * Aggregate productivity sample sent by an agent. Carries NO raw titles, URLs,
@@ -792,6 +890,15 @@ export type SecuritySnapshotResult = { processes: Array<SecuritySnapshotProcess>
  * One bounded Windows service row from `endpoint.security_snapshot`.
  */
 export type SecuritySnapshotService = { name: string, start_type: string, status: string, path: string | null, };
+
+/**
+ * How urgently a match should be surfaced. Four tiers rather than the
+ * legacy free-tier's two ("warning"/"danger") so custom fleet-authored
+ * rules have headroom above and below the migrated builtins — see
+ * `BuiltinPattern::default_severity` for exactly where the old two-tier
+ * scheme lands in this enum.
+ */
+export type Severity = "info" | "warn" | "high" | "critical";
 
 /**
  * Privacy Shield's admin-desired on/off + mode, resolved device > group > org

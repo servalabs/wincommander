@@ -12,10 +12,11 @@ describe("native Fleet Vault panel contracts", () => {
     expect(panel).toContain("<VaultAccessTab />");
   });
 
-  test("does not bring Ink Receipt or Clipboard Guard into main", () => {
-    expect(panel).not.toContain("Clipboard Guard");
-    expect(panel).not.toContain("Ink Receipt");
-    expect(panel).not.toContain("FleetAdminGate");
+  test("keeps organization security tabs behind the Fleet-admin gate", () => {
+    expect(panel).toContain("Clipboard Guard");
+    expect(panel).toContain("Ink Receipt");
+    expect(panel).toContain("<FleetAdminGate><ClipboardGuardTab /></FleetAdminGate>");
+    expect(panel).toContain("<FleetAdminGate><InkReceiptTab /></FleetAdminGate>");
   });
 
   test("copies a non-secret local manifest", () => {

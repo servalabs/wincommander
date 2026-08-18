@@ -12,6 +12,25 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Re-exported from `wincmd-clip-rules`, the clipboard-guard rule engine's
+/// SSOT for policy types (plan §4.1). This crate deliberately does NOT
+/// redefine `Severity`/`Action`/`Rule`/`MatchKind`/etc. — `NON-GOALS.md`
+/// forbids duplicating a shared wire type, and `wincmd-clip-rules` is
+/// already the one place both the fleet console (rule editor + test panel,
+/// plan §4.5) and the endpoint (the actual clipboard matcher) compile it
+/// from, so a rule that validates in the console behaves identically
+/// on-device. Re-exporting here gives every consumer of THIS crate —
+/// fleet-server, the admin panel's `ts-codegen` output, and (through
+/// `wincmd_shared::fleet`'s existing blanket re-export) Free/Pro — ONE
+/// import path (`fleet_proto::{Rule, Action, Severity, ...}`) instead of a
+/// second, independent dependency edge on `wincmd-clip-rules` that could
+/// drift out of lockstep with this crate's own re-export.
+pub use wincmd_clip_rules::{
+    compile, truncate_for_match, Action, BuiltinPattern, CompileError, CompiledRuleSet,
+    CooldownLedger, Emit, MatchKind, Rule, RuleId, RuleIdError, RuleSetLimits, Severity,
+    StructuredKind, Verdict,
+};
+
 /// Tenant identifier. `"local"` for single-tenant self-host installs; real
 /// org slugs once multi-tenancy is enabled.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -491,6 +510,35 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         summary: "Stop driver-change monitoring",
         payload_schema: None,
     },
+    // ── Ink Receipt — controlled-PDF print-workflow bridge (plan §5.3, D-1) ──
+    // Mirrors commander-pro::fleet_dispatch::COMMAND_CATALOG's own comment:
+    // status/recent reads and starting enforcement are Safe; stopping
+    // enforcement is Destructive because it is security-reducing (same
+    // reasoning as every monitoring.*.stop entry above).
+    CommandMeta {
+        catalog_id: "ink_receipt.status",
+        action_class: ActionClass::Safe,
+        summary: "Read whether Ink Receipt enforcement is running",
+        payload_schema: None,
+    },
+    CommandMeta {
+        catalog_id: "ink_receipt.enforce",
+        action_class: ActionClass::Safe,
+        summary: "Start Ink Receipt enforcement",
+        payload_schema: None,
+    },
+    CommandMeta {
+        catalog_id: "ink_receipt.disable",
+        action_class: ActionClass::Destructive,
+        summary: "Stop Ink Receipt enforcement",
+        payload_schema: None,
+    },
+    CommandMeta {
+        catalog_id: "ink_receipt.receipts.recent",
+        action_class: ActionClass::Safe,
+        summary: "Read recent Ink Receipt bridge activity (content-free)",
+        payload_schema: None,
+    },
     // ── Fleet P4: special actions + tripwire arming ─────────────────────────
     CommandMeta {
         catalog_id: "tripwire.honeypot.arm",
@@ -666,6 +714,8 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
     CommandMeta { catalog_id: "privacy.hideRunMRU.disable", action_class: ActionClass::Destructive, summary: "Remove privacy protection: Don't Save Run Dialog History", payload_schema: None },
     CommandMeta { catalog_id: "privacy.disableSearchHistory.enable", action_class: ActionClass::Safe, summary: "Apply privacy protection: Disable Search Box History", payload_schema: None },
     CommandMeta { catalog_id: "privacy.disableSearchHistory.disable", action_class: ActionClass::Destructive, summary: "Remove privacy protection: Disable Search Box History", payload_schema: None },
+    // Ink Receipt and Clipboard Guard are delivered through signed org settings.
+    // Do not advertise endpoint commands until matching, audited handlers exist.
 ];
 
 /// A signed, versioned configuration snapshot. Append-only and monotonic per
@@ -1616,6 +1666,151 @@ pub struct LocalAlertReport {
     pub occurred_at: Option<String>,
 }
 
+// ── Clipboard Guard + Ink Receipt device reports (plan §4.4, §5.6) ───────
+// Both types below ride `CheckinRequest` as a new batched `Vec<_>` field —
+// `local_alerts: Vec<LocalAlertReport>` above is the batching precedent
+// (`duress.rs:676`). `CheckinRequest`/`CheckinResponse` themselves are
+// local to fleet-server's `routes/duress.rs`, not this crate: additive
+// fields on that envelope are cheap, so the item types are the only piece
+// that needs to live in the shared SSOT.
+//
+// Unlike `CheckinRequest`, EVERY type in this section carries
+// `#[serde(deny_unknown_fields)]` — the strictness is deliberately scoped
+// to these new report types, not inherited by the envelope. Neither type
+// contains a `serde_json::Value` or any other free-text field; the in-tree
+// anti-pattern both deliberately avoid is `LocalAlertReport::detail: Value`
+// immediately above, which would let content leak through a field nobody
+// reviews. `device_id` is deliberately ABSENT from both: it comes from the
+// authenticated HMAC check-in identity (`duress.rs::authenticate_device_hmac`),
+// never the request body — a body-supplied `device_id` would let a
+// compromised agent attribute events to a different device.
+
+/// One clipboard-guard rule match, reported by the agent as part of a
+/// `CheckinRequest` batch (`clipboard_events: Vec<ClipboardEventReport>`,
+/// plan §4.4).
+///
+/// `event_id`/`occurred_at` are `String` (RFC3339 for the latter), matching
+/// this crate's universal id/timestamp idiom — see `ProductivitySample::
+/// window_start` and `LocalAlertReport::occurred_at` above. `fleet-proto`
+/// has ZERO `uuid`/`chrono` dependency, deliberately, to keep the
+/// AV-scanned Free binary's dependency closure small (see the crate doc
+/// comment); parsing/validating `event_id` as a UUID and `occurred_at` as
+/// RFC3339 is the fleet-server ROUTE layer's job, not this type's.
+///
+/// `rule_id` is likewise a `String` — the wire form of a
+/// `wincmd_clip_rules::RuleId` (see that type's own doc comment: "hand to a
+/// `fleet-proto` `String`-typed wire field"). The route layer re-validates
+/// it via `RuleId::new` before use; a malformed value is a `BadRequest`,
+/// not a panic.
+///
+/// `severity`/`actions_attempted`/`actions_succeeded` are the closed enums
+/// re-exported from `wincmd_clip_rules` above — never a `String` a caller
+/// could set to an unrecognised value. `suppressed_count` is the
+/// content-free cooldown metric from `wincmd_clip_rules::CooldownLedger::
+/// should_emit`'s `Emit::Suppressed { count }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct ClipboardEventReport {
+    /// Device-minted UUIDv7 — the idempotency key.
+    pub event_id: String,
+    /// RFC3339, agent clock.
+    pub occurred_at: String,
+    pub policy_version: i64,
+    /// String form of a `wincmd_clip_rules::RuleId` — see the struct doc.
+    pub rule_id: String,
+    pub rule_revision: u32,
+    pub severity: Severity,
+    pub actions_attempted: Vec<Action>,
+    pub actions_succeeded: Vec<Action>,
+    pub suppressed_count: u32,
+}
+
+/// Closed set of printer classes an Ink Receipt ticket or receipt can name
+/// (plan §5.4/§5.6). Plan §5.4 uses exactly `Pdf`/`SecurePhysical` as its
+/// cross-class replay example — a `pdf` ticket must never be presentable
+/// for `secure_physical` — which is why `printer_class` binds into
+/// [`ticket_preimage`] below as well as appearing here on the receipt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(rename_all = "snake_case")]
+pub enum PrinterClass {
+    Pdf,
+    SecurePhysical,
+}
+
+impl PrinterClass {
+    /// The wire string this class binds into [`ticket_preimage`] under —
+    /// `TicketSigningInput::printer_class` is a plain `&str` (see that
+    /// type's doc for why), so a caller minting or verifying a ticket needs
+    /// a single, non-hand-copied source for the string form of this enum.
+    /// Mirrors `ActionClass::as_wire_str`'s KT rationale above: drive the
+    /// mapping from serde's own `snake_case` representation so a future
+    /// hand-written copy at a call site can't drift from what actually gets
+    /// serialised.
+    pub fn as_wire_str(self) -> &'static str {
+        match self {
+            PrinterClass::Pdf => "pdf",
+            PrinterClass::SecurePhysical => "secure_physical",
+        }
+    }
+}
+
+/// Closed outcome of one Ink Receipt render/print attempt (plan §5.5/§5.6).
+/// Mirrors the exact status set the renderer maps onto: `scrub_warning` /
+/// `failed` / `cancelled` come from the metadata-scrubber outcome mapping
+/// (§5.5), `failed_after_render` is the "writer failed after the watermark
+/// was already applied" case that must never be reported as `completed`,
+/// `blocked` is the online-path zero-rows-consumed replay/expiry outcome
+/// (§5.4), and `duplicate_or_replay` is the offline-path ex-post duplicate
+/// detection outcome (§5.4, D-9) — never silently merged or dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(rename_all = "snake_case")]
+pub enum InkReceiptStatus {
+    Completed,
+    ScrubWarning,
+    Failed,
+    FailedAfterRender,
+    Cancelled,
+    Blocked,
+    DuplicateOrReplay,
+}
+
+/// One Ink Receipt lifecycle report, batched onto `CheckinRequest` as
+/// `ink_receipts: Vec<InkReceiptReport>` (plan §5.6). Same rules as
+/// [`ClipboardEventReport`] above: `deny_unknown_fields` scoped to this
+/// type only, no `Value`, no free-text field, `device_id` from the
+/// authenticated identity rather than the body.
+///
+/// Fields are deliberately ONLY: `receipt_id`, `ticket_id`,
+/// `printer_class`, `pages`, `status`, `policy_version`, `occurred_at`.
+/// Specifically **NOT** present, and never to be added: document name,
+/// file path, printer queue name, or OS user name — the whole point of the
+/// controlled-PDF lane (plan §5) is that Fleet learns a page COUNT and an
+/// OUTCOME, never what was printed or by whom on the machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct InkReceiptReport {
+    /// Device-minted UUID — the idempotency key.
+    pub receipt_id: String,
+    /// The `IR-<uuid-simple>` ticket id (D-5) this receipt completes.
+    /// Treated as pseudonymous and encrypted at rest (D-8) — the route
+    /// layer, not this type, owns that encryption and any format check.
+    pub ticket_id: String,
+    pub printer_class: PrinterClass,
+    pub pages: u32,
+    pub status: InkReceiptStatus,
+    pub policy_version: i64,
+    /// RFC3339, agent clock.
+    pub occurred_at: String,
+}
+
 /// One local drive/volume's capacity, sampled by the agent's existing
 /// `sysinfo`-backed local dashboard collector. Reused verbatim for the fleet
 /// resource sample below — same shape, no PII (mount point / drive letter
@@ -2012,6 +2207,75 @@ pub fn policy_preimage(
     canonical_epoch_bytes(version, &envelope)
 }
 
+/// All inputs that bind into an Ink Receipt ticket's signature (plan §5.4).
+/// A typed struct, exactly like [`EpochSigningInput`] above — every call
+/// site must construct this explicitly, so adding a new signed field later
+/// is a compile error at every site rather than a silent omission from the
+/// preimage. This is the same discipline `crypto.rs:118-121`
+/// (fleet-server) records a real bug for under the old positional-argument
+/// style; this typed-struct convention is the deliberate fix, applied here
+/// too.
+#[derive(Debug, Clone, Copy)]
+pub struct TicketSigningInput<'a> {
+    pub ticket_id: &'a str,
+    pub org_id: &'a str,
+    pub device_id: &'a str,
+    pub printer_class: &'a str,
+    pub policy_version: i64,
+    pub issued_at_unix: i64,
+    pub expires_at_unix: i64,
+    pub nonce: &'a str,
+}
+
+/// The single function that owns the Ink Receipt ticket signing preimage.
+/// The fleet server signs this at mint time (`POST
+/// /v1/agents/ink-receipt/ticket`, plan §5.4); the endpoint's
+/// `ink_receipt/tickets.rs` verifies before rendering — so this byte layout
+/// is the SSOT both sides share, exactly like [`epoch_preimage`] and
+/// [`policy_preimage`] above. All signers and verifiers must call this —
+/// never assemble the bytes by hand.
+///
+/// Byte layout (stable): 8-byte big-endian `policy_version`, then
+/// canonical JSON (via [`canonical_epoch_bytes`] / `write_canonical` —
+/// never hand-rolled) of every field on [`TicketSigningInput`], object
+/// keys recursively sorted.
+///
+/// **Security-critical bindings** (mirrors the rationale on
+/// [`policy_preimage`] and `epoch_signing_envelope`):
+///   - `policy_version` → a ticket cannot outlive the policy that
+///     authorised it: a policy rollback/edit invalidates every ticket
+///     minted under the superseded version (also the 8-byte prefix, same
+///     anti-rollback shape as every other preimage in this crate).
+///   - `org_id` → no cross-org replay: a ticket minted for org A cannot be
+///     presented to org B's fleet server as valid.
+///   - `device_id` → no cross-device replay: a ticket minted for device D1
+///     cannot be redeemed by device D2 — the preimage would not match.
+///   - `printer_class` → a `pdf` ticket cannot be presented for
+///     `secure_physical`, or vice versa: the two lanes carry different
+///     failure-stance policy (D-1), and this binding is what makes
+///     cross-class substitution fail signature verification rather than
+///     silently succeeding.
+///   - `expires_at_unix` → bounded validity: the endpoint checks this
+///     field's value against its own clock before accepting a ticket at
+///     all (residual risk noted in plan §5.4: for the offline path this is
+///     the DEVICE clock, not the server's ±300s check-in window).
+///   - `nonce` → distinguishes otherwise-identical tickets (same org,
+///     device, class, version, and validity window) so two such tickets
+///     never collide on the same preimage/signature.
+pub fn ticket_preimage(input: &TicketSigningInput<'_>) -> Vec<u8> {
+    let envelope = serde_json::json!({
+        "ticket_id": input.ticket_id,
+        "org_id": input.org_id,
+        "device_id": input.device_id,
+        "printer_class": input.printer_class,
+        "policy_version": input.policy_version,
+        "issued_at_unix": input.issued_at_unix,
+        "expires_at_unix": input.expires_at_unix,
+        "nonce": input.nonce,
+    });
+    canonical_epoch_bytes(input.policy_version, &envelope)
+}
+
 /// Verify a base64 Ed25519 `signature` over `msg` against a base64 32-byte key.
 /// Fail-closed: any decode/parse error returns false.
 pub fn verify_signature_b64(public_key_b64: &str, msg: &[u8], signature_b64: &str) -> bool {
@@ -2326,6 +2590,102 @@ mod tests {
         );
     }
 
+    // ── golden_ticket_preimage: the Ink Receipt ticket-signing preimage ────
+    // Same discipline as golden_epoch_preimage above — pins the EXACT bytes
+    // `ticket_preimage` produces. Any change here requires a coordinated
+    // deploy of fleet-server's mint route AND every ticket-verifying
+    // endpoint (`ink_receipt/tickets.rs`), plus re-signing/re-minting any
+    // outstanding tickets, so it must never drift silently.
+
+    /// Fixed inputs shared by the golden vector and the three
+    /// cross-field-binding tests below.
+    fn ticket_input() -> TicketSigningInput<'static> {
+        TicketSigningInput {
+            ticket_id: "IR-0123456789abcdef0123456789abcdef",
+            org_id: "org-test",
+            device_id: "dev-abc",
+            printer_class: "pdf",
+            policy_version: 5,
+            issued_at_unix: 1_755_000_000,
+            expires_at_unix: 1_755_003_600,
+            nonce: "nonce-abc123",
+        }
+    }
+
+    #[test]
+    fn golden_ticket_preimage() {
+        // Inputs (documented for regeneration): see `ticket_input()` above —
+        //   ticket_id="IR-0123456789abcdef0123456789abcdef", org_id="org-test",
+        //   device_id="dev-abc", printer_class="pdf", policy_version=5,
+        //   issued_at_unix=1755000000, expires_at_unix=1755003600,
+        //   nonce="nonce-abc123"
+        //
+        // Byte layout: [0,0,0,0,0,0,0,5] ++ canonical JSON of the envelope
+        // (keys sorted alphabetically):
+        //   {"device_id":"dev-abc","expires_at_unix":1755003600,
+        //    "issued_at_unix":1755000000,"nonce":"nonce-abc123",
+        //    "org_id":"org-test","policy_version":5,"printer_class":"pdf",
+        //    "ticket_id":"IR-0123456789abcdef0123456789abcdef"}
+        //
+        // FROZEN golden vector — computed on 2026-08-17.
+        // To regenerate: comment out the assert_eq!, run
+        //   cargo test -p fleet-proto golden_ticket_preimage -- --nocapture
+        // read the printed hex from the failure, paste it back, and commit
+        // with a message explaining WHY the bytes changed (requires a
+        // coordinated deploy of both repos plus re-minting outstanding
+        // tickets).
+        let bytes = ticket_preimage(&ticket_input());
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "00000000000000057b226465766963655f6964223a226465762d616263222c22657870697265735f61745f756e6978223a313735353030333630302c226973737565645f61745f756e6978223a313735353030303030302c226e6f6e6365223a226e6f6e63652d616263313233222c226f72675f6964223a226f72672d74657374222c22706f6c6963795f76657273696f6e223a352c227072696e7465725f636c617373223a22706466222c227469636b65745f6964223a2249522d3031323334353637383961626364656630313233343536373839616263646566227d"
+        );
+    }
+
+    #[test]
+    fn ticket_preimage_changes_with_printer_class() {
+        // Proves the cross-class binding is real (plan §5.4's example): a
+        // `pdf` ticket's preimage must differ from an otherwise-identical
+        // `secure_physical` ticket's, so one can never be substituted for
+        // the other at verification time.
+        let base = ticket_input();
+        let mut other = base;
+        other.printer_class = "secure_physical";
+        assert_ne!(
+            ticket_preimage(&base),
+            ticket_preimage(&other),
+            "printer_class must bind into the preimage"
+        );
+    }
+
+    #[test]
+    fn ticket_preimage_changes_with_device_id() {
+        // No cross-device replay: a ticket minted for one device_id must not
+        // produce the same preimage/signature for another.
+        let base = ticket_input();
+        let mut other = base;
+        other.device_id = "dev-xyz";
+        assert_ne!(
+            ticket_preimage(&base),
+            ticket_preimage(&other),
+            "device_id must bind into the preimage"
+        );
+    }
+
+    #[test]
+    fn ticket_preimage_changes_with_org_id() {
+        // No cross-org replay: a ticket minted for one org_id must not
+        // produce the same preimage/signature for another org.
+        let base = ticket_input();
+        let mut other = base;
+        other.org_id = "org-other";
+        assert_ne!(
+            ticket_preimage(&base),
+            ticket_preimage(&other),
+            "org_id must bind into the preimage"
+        );
+    }
+
     #[test]
     fn golden_canonical_command_bytes() {
         let payload = serde_json::json!({});
@@ -2496,5 +2856,136 @@ mod tests {
         current["device_kind"] = serde_json::json!("android");
         let summary: DeviceSummary = serde_json::from_value(current).unwrap();
         assert_eq!(summary.device_kind, "android");
+    }
+
+    // ── Content-free type-layer tests (plan §8 layer 1) ──────────────────
+    // `ClipboardEventReport`/`InkReceiptReport` must (a) actually reject an
+    // unknown field at deserialize time — `#[serde(deny_unknown_fields)]`
+    // written on the struct is a promise, not a guarantee, until a test
+    // exercises it — and (b) have a CLOSED, exhaustively-enumerated field
+    // set, so a future PR that quietly adds a free-text field (a `note:
+    // String`, say) has to edit the enumeration below, making that addition
+    // a deliberate, reviewable diff rather than a silent one. This is the
+    // practical, runtime-checkable proxy for "no field capable of carrying
+    // free text": the type system already rules out `serde_json::Value`
+    // (neither type imports it), and this test rules out an undocumented
+    // field appearing at all.
+
+    fn clipboard_event_report_sample() -> ClipboardEventReport {
+        ClipboardEventReport {
+            event_id: "018f2f3a-0000-7000-8000-000000000000".to_string(),
+            occurred_at: "2026-08-17T00:00:00Z".to_string(),
+            policy_version: 1,
+            rule_id: "0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a4b".to_string(),
+            rule_revision: 1,
+            severity: Severity::Warn,
+            actions_attempted: vec![Action::ClearClipboard],
+            actions_succeeded: vec![Action::ClearClipboard],
+            suppressed_count: 0,
+        }
+    }
+
+    fn ink_receipt_report_sample() -> InkReceiptReport {
+        InkReceiptReport {
+            receipt_id: "018f2f3a-0000-7000-8000-000000000001".to_string(),
+            ticket_id: "IR-0123456789abcdef0123456789abcdef".to_string(),
+            printer_class: PrinterClass::Pdf,
+            pages: 3,
+            status: InkReceiptStatus::Completed,
+            policy_version: 1,
+            occurred_at: "2026-08-17T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn clipboard_event_report_rejects_unknown_fields() {
+        let mut raw = serde_json::to_value(clipboard_event_report_sample()).unwrap();
+        raw.as_object_mut().unwrap().insert(
+            "matched_text".to_string(),
+            serde_json::json!("whatever was on the clipboard"),
+        );
+        assert!(
+            serde_json::from_value::<ClipboardEventReport>(raw).is_err(),
+            "deny_unknown_fields must reject an unrecognised key"
+        );
+    }
+
+    #[test]
+    fn ink_receipt_report_rejects_unknown_fields() {
+        let mut raw = serde_json::to_value(ink_receipt_report_sample()).unwrap();
+        raw.as_object_mut().unwrap().insert(
+            "document_name".to_string(),
+            serde_json::json!("Q3-layoffs-draft.docx"),
+        );
+        assert!(
+            serde_json::from_value::<InkReceiptReport>(raw).is_err(),
+            "deny_unknown_fields must reject an unrecognised key"
+        );
+    }
+
+    #[test]
+    fn clipboard_event_report_field_set_is_closed() {
+        let value = serde_json::to_value(clipboard_event_report_sample()).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "actions_attempted",
+                "actions_succeeded",
+                "event_id",
+                "occurred_at",
+                "policy_version",
+                "rule_id",
+                "rule_revision",
+                "severity",
+                "suppressed_count",
+            ],
+            "adding a field here (e.g. free-form text) must be a deliberate edit to this test"
+        );
+    }
+
+    #[test]
+    fn ink_receipt_report_field_set_is_closed() {
+        let value = serde_json::to_value(ink_receipt_report_sample()).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "occurred_at",
+                "pages",
+                "policy_version",
+                "printer_class",
+                "receipt_id",
+                "status",
+                "ticket_id",
+            ],
+            "adding a field here (e.g. document name / file path) must be a deliberate edit to this test"
+        );
+    }
+
+    #[cfg(feature = "command-metadata")]
+    #[test]
+    fn command_metadata_has_no_duplicate_catalog_ids() {
+        let mut ids: Vec<&str> = COMMAND_METADATA.iter().map(|m| m.catalog_id).collect();
+        ids.sort_unstable();
+        let mut deduped = ids.clone();
+        deduped.dedup();
+        assert_eq!(
+            ids.len(),
+            deduped.len(),
+            "COMMAND_METADATA has a duplicate catalog_id"
+        );
     }
 }

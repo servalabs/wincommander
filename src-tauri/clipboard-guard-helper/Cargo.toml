@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# clipboard-guard-helper — per-user Clipboard Guard listener (plan Phase 2)
+#
+# Lib + thin bin, deliberately (see src/lib.rs's crate doc for the full
+# rationale): the event-driven listener, bounded read, matching/cooldown
+# engine, action execution, and svc IPC client all live in the LIBRARY as
+# reusable `pub mod`s, because `commander-free`'s `paste_monitor.rs` also
+# needs to move off its 2000ms poll (agent C5) and hand-rolling a second
+# Win32 clipboard watcher there would let the two implementations silently
+# diverge. `src/bin/wincommander-clipboard-guard.rs` is a thin process that
+# just wires the library together and runs it standalone (for when the GUI
+# is closed) — see plan §4.2/§2.2.
+#
+# Build: cargo build -p clipboard-guard-helper
+# Test:  cargo test  -p clipboard-guard-helper
+
+[package]
+name = "clipboard-guard-helper"
+version = "0.1.0"
+description = "Per-user Clipboard Guard listener — event-driven WM_CLIPBOARDUPDATE watcher, bounded read, wincmd-clip-rules matching, verified clear/quarantine, content-free reporting to commander-svc"
+authors = ["ServaLabs"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.77"
+
+[[bin]]
+name = "wincommander-clipboard-guard"
+path = "src/bin/main.rs"
+
+[dependencies]
+# The rule-matching SSOT (plan §4.1) — compile()/evaluate()/CooldownLedger.
+# Pure/no-I/O; this crate supplies the I/O (clipboard read/write, svc IPC)
+# around it. Depended on directly (not only via wincmd-shared/fleet-proto's
+# re-export) because this crate IS the matcher, not just a report producer.
+wincmd-clip-rules = { path = "../wincmd-clip-rules" }
+# svc.* IPC framing (Envelope/Hello/Request/Signed, SVC_PIPE_NAME,
+# classify_verb) AND, via `wincmd_shared::fleet` (`pub use fleet_proto as
+# fleet`), the `ClipboardEventReport` wire type — the established repo path
+# for reaching fleet-proto types from the endpoint side (see
+# commander-free/commander-svc: neither adds a direct fleet-proto edge).
+# Reusing this is the whole point of Phase 2 (plan §1.4): do NOT invent a
+# third IPC mechanism.
+wincmd-shared = { path = "../wincmd-shared" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Device-minted UUIDv7 event_id (plan §4.4's ClipboardEventReport.event_id
+# doc: "device-minted UUIDv7 — the idempotency key"). `v4` is NOT needed —
+# only `v7`. commander-free already links `uuid` (v4) into the AV-scanned
+# Free binary's closure (paste_monitor's future embed point per C5), so
+# this feature addition doesn't introduce a new crate to that binary.
+uuid = { version = "1", features = ["v7"] }
+# RFC3339 occurred_at, matching every other occurred_at producer in this
+# codebase (paste_monitor.rs's chrono::Utc::now().to_rfc3339(),
+# InkReceiptReport's doc). commander-free already depends on chrono.
+chrono = "0.4"
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+# Windows clipboard read/write AND the `monitor` feature's message-only-
+# window + AddClipboardFormatListener/WM_CLIPBOARDUPDATE wrapper
+# (`clipboard_win::Monitor`) — this is what makes the event-driven listener
+# (plan §4.2) possible without hand-rolling a second raw Win32 window/
+# message-pump implementation. `clipboard-win`'s crate root is itself
+# `#![cfg(windows)]`, so it compiles to an empty crate on non-Windows;
+# every call site in this crate is additionally behind `#[cfg(windows)]`
+# per this repo's "Windows-only enforcement, non-Windows no-op stub"
+# convention (AGENTS.md).
+clipboard-win = { version = "5", features = ["monitor"] }

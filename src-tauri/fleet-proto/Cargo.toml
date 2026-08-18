@@ -16,6 +16,13 @@ serde_json = "1"
 base64 = "0.22"
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "signature", "rand_core"] }
 
+# Clipboard-guard policy types (plan §4.1) — Severity/Action/Rule/MatchKind/
+# etc. are NOT redefined here (NON-GOALS.md forbids duplicating a shared wire
+# type); this crate re-exports them so fleet-server and the console have ONE
+# import path. Not optional: it's a normal, always-present dependency edge,
+# same as ed25519-dalek above.
+wincmd-clip-rules = { path = "../wincmd-clip-rules" }
+
 # WI-2 SSOT codegen: derive TypeScript types from these Rust types. Optional +
 # build-only — gated behind the `ts-codegen` feature so it is NEVER in a
 # production binary's dependency closure.
@@ -23,7 +30,10 @@ ts-rs = { version = "10", optional = true, features = ["serde-json-impl"] }
 
 [features]
 # Activate ONLY for the Rust->TS codegen step (build.rs / emit binaries).
-ts-codegen = ["dep:ts-rs"]
+# Also turns on wincmd-clip-rules' own ts-codegen so the re-exported policy
+# types (Rule, MatchKind, Severity, ...) emit TS bindings alongside this
+# crate's own types, into the same fleet.ts file.
+ts-codegen = ["dep:ts-rs", "wincmd-clip-rules/ts-codegen"]
 # Pure cfg gate (no deps) for COMMAND_METADATA — keeps the catalog metadata
 # table out of the AV-scanned Free binary's dependency closure. Enable only in
 # consumers that need catalog discovery (fleet-server, commander-pro).

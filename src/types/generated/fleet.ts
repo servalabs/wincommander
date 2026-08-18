@@ -3,6 +3,14 @@
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
+ * What a rule asks the endpoint to do on a match. Closed enum, ordered by
+ * the engine (author intent, `Rule.actions` order) not enforced execution
+ * order here — sequencing is the endpoint's job, this crate only carries
+ * the request.
+ */
+export type Action = "notify_user" | "clear_clipboard" | "quarantine_clipboard" | "record_local_receipt" | "report_fleet" | "alert_admin";
+
+/**
  * Risk tier of a remote action — drives the safety-gate ladder in the fleet
  * server (Milestone 3) and tells the admin panel which confirmation UI to
  * render. Contains no command strings.
@@ -89,7 +97,21 @@ magnitude: bigint,
 /**
  * "info" | "warn" | "critical"
  */
-severity: string, consent_version: number, disclosure_version: number, };
+severity: string, consent_version: number, disclosure_version: number,
+/**
+ * Device-minted idempotency key (D-6, plan §2.5): a fresh id generated
+ * the FIRST time a signal is constructed, resent UNCHANGED on every
+ * requeue-after-transport-failure retry of that same signal, so a
+ * lost-200 (agent never saw the response, server already ingested it)
+ * doesn't get double-counted on the next check-in. `None` for an agent
+ * built before this field existed — the server treats that exactly as
+ * it always has (an unconditional insert, nothing to dedup against).
+ * Optional/`#[serde(default)]` in both directions on purpose: this
+ * struct has no `#[serde(deny_unknown_fields)]`, so an OLD server
+ * tolerates a NEW agent sending this field, and `#[serde(default)]`
+ * means a NEW server tolerates an OLD agent that omits it.
+ */
+event_id: string | null, };
 
 /**
  * One raw Argus signal record in a device's drill-down window (Feature C). The
@@ -107,6 +129,53 @@ export type AssignGroupRequest = { group_id: string | null, };
  * the panel agree on the shape (SSOT) — RFC 3339 `at`.
  */
 export type AuditEntry = { actor: string, action: string, target: string | null, outcome: string, detail: JsonValue, at: string, };
+
+/**
+ * One of the individually-named patterns migrated from the free-tier
+ * `paste_monitor.rs` engine. Each variant is either backed by a fixed
+ * regex (`regex_source` returns `Some`) or by a procedural check
+ * (`regex_source` returns `None` — the three `Unicode*` variants).
+ */
+export type BuiltinPattern = "aws_access_key" | "google_api_key" | "sendgrid_api_key" | "mailgun_api_key" | "twilio_account_sid" | "database_url_with_credentials" | "open_ai_project_key" | "open_ai_api_key" | "anthropic_api_key" | "git_hub_classic_token" | "git_hub_fine_grained_token" | "npm_token" | "stripe_live_secret" | "stripe_live_publishable" | "slack_token" | "discord_bot_token" | "private_key_pem" | "ssh_private_key_header" | "jwt" | "bitcoin_wif_private_key" | "powershell_encoded_payload" | "hidden_powershell_window" | "powershell_execution_policy_bypass" | "powershell_remote_download_execute" | "mshta_web_payload" | "certutil_web_download" | "regsvr32_web_payload" | "bitsadmin_web_transfer" | "curl_wget_pipe_to_shell" | "unicode_bidi_override" | "unicode_zero_width_in_code" | "unicode_confusable_url_host";
+
+/**
+ * One clipboard-guard rule match, reported by the agent as part of a
+ * `CheckinRequest` batch (`clipboard_events: Vec<ClipboardEventReport>`,
+ * plan §4.4).
+ *
+ * `event_id`/`occurred_at` are `String` (RFC3339 for the latter), matching
+ * this crate's universal id/timestamp idiom — see `ProductivitySample::
+ * window_start` and `LocalAlertReport::occurred_at` above. `fleet-proto`
+ * has ZERO `uuid`/`chrono` dependency, deliberately, to keep the
+ * AV-scanned Free binary's dependency closure small (see the crate doc
+ * comment); parsing/validating `event_id` as a UUID and `occurred_at` as
+ * RFC3339 is the fleet-server ROUTE layer's job, not this type's.
+ *
+ * `rule_id` is likewise a `String` — the wire form of a
+ * `wincmd_clip_rules::RuleId` (see that type's own doc comment: "hand to a
+ * `fleet-proto` `String`-typed wire field"). The route layer re-validates
+ * it via `RuleId::new` before use; a malformed value is a `BadRequest`,
+ * not a panic.
+ *
+ * `severity`/`actions_attempted`/`actions_succeeded` are the closed enums
+ * re-exported from `wincmd_clip_rules` above — never a `String` a caller
+ * could set to an unrecognised value. `suppressed_count` is the
+ * content-free cooldown metric from `wincmd_clip_rules::CooldownLedger::
+ * should_emit`'s `Emit::Suppressed { count }`.
+ */
+export type ClipboardEventReport = {
+/**
+ * Device-minted UUIDv7 — the idempotency key.
+ */
+event_id: string,
+/**
+ * RFC3339, agent clock.
+ */
+occurred_at: string, policy_version: bigint,
+/**
+ * String form of a `wincmd_clip_rules::RuleId` — see the struct doc.
+ */
+rule_id: string, rule_revision: number, severity: Severity, actions_attempted: Array<Action>, actions_succeeded: Array<Action>, suppressed_count: number, };
 
 /**
  * Discoverable, AV-safe catalog metadata for one remote command. Mirrors an
@@ -474,6 +543,48 @@ detail: JsonValue, device_id: DeviceId | null, hostname: string | null, read: bo
 export type HashResult = { ok: boolean, path: string, detail: string | null, algo: string, hex: string, size_bytes: bigint, };
 
 /**
+ * One Ink Receipt lifecycle report, batched onto `CheckinRequest` as
+ * `ink_receipts: Vec<InkReceiptReport>` (plan §5.6). Same rules as
+ * [`ClipboardEventReport`] above: `deny_unknown_fields` scoped to this
+ * type only, no `Value`, no free-text field, `device_id` from the
+ * authenticated identity rather than the body.
+ *
+ * Fields are deliberately ONLY: `receipt_id`, `ticket_id`,
+ * `printer_class`, `pages`, `status`, `policy_version`, `occurred_at`.
+ * Specifically **NOT** present, and never to be added: document name,
+ * file path, printer queue name, or OS user name — the whole point of the
+ * controlled-PDF lane (plan §5) is that Fleet learns a page COUNT and an
+ * OUTCOME, never what was printed or by whom on the machine.
+ */
+export type InkReceiptReport = {
+/**
+ * Device-minted UUID — the idempotency key.
+ */
+receipt_id: string,
+/**
+ * The `IR-<uuid-simple>` ticket id (D-5) this receipt completes.
+ * Treated as pseudonymous and encrypted at rest (D-8) — the route
+ * layer, not this type, owns that encryption and any format check.
+ */
+ticket_id: string, printer_class: PrinterClass, pages: number, status: InkReceiptStatus, policy_version: bigint,
+/**
+ * RFC3339, agent clock.
+ */
+occurred_at: string, };
+
+/**
+ * Closed outcome of one Ink Receipt render/print attempt (plan §5.5/§5.6).
+ * Mirrors the exact status set the renderer maps onto: `scrub_warning` /
+ * `failed` / `cancelled` come from the metadata-scrubber outcome mapping
+ * (§5.5), `failed_after_render` is the "writer failed after the watermark
+ * was already applied" case that must never be reported as `completed`,
+ * `blocked` is the online-path zero-rows-consumed replay/expiry outcome
+ * (§5.4), and `duplicate_or_replay` is the offline-path ex-post duplicate
+ * detection outcome (§5.4, D-9) — never silently merged or dropped.
+ */
+export type InkReceiptStatus = "completed" | "scrub_warning" | "failed" | "failed_after_render" | "cancelled" | "blocked" | "duplicate_or_replay";
+
+/**
  * `files.list_dir` result — a bounded directory listing (see the handler's
  * entry cap). `entries` is empty when `ok` is false.
  */
@@ -516,6 +627,11 @@ export type LoginRequest = { email: string, password: string, };
  * (re-read from the DB) on every request.
  */
 export type LoginResponse = { token: string, role: AdminRole, expires_at: string, };
+
+/**
+ * What a rule matches against clipboard text.
+ */
+export type MatchKind = { "kind": "phrase", "params": { value: string, case_sensitive: boolean, } } | { "kind": "regex", "params": { pattern: string, case_sensitive: boolean, } } | { "kind": "structured", "params": StructuredKind } | { "kind": "builtin", "params": BuiltinPattern };
 
 /**
  * Tenant identifier. `"local"` for single-tenant self-host installs; real
@@ -600,6 +716,15 @@ toggle_states: JsonValue | null,
  * build, or when the agent has no shield status to report this cycle.
  */
 shield_running: boolean | null, };
+
+/**
+ * Closed set of printer classes an Ink Receipt ticket or receipt can name
+ * (plan §5.4/§5.6). Plan §5.4 uses exactly `Pdf`/`SecurePhysical` as its
+ * cross-class replay example — a `pdf` ticket must never be presentable
+ * for `secure_physical` — which is why `printer_class` binds into
+ * [`ticket_preimage`] below as well as appearing here on the receipt.
+ */
+export type PrinterClass = "pdf" | "secure_physical";
 
 /**
  * Aggregate productivity sample sent by an agent. Carries NO raw titles, URLs,
@@ -713,6 +838,88 @@ version: bigint, org_id: OrgId, device_id: DeviceId,
 intents: Array<PolicyIntent>, };
 
 /**
+ * A single clipboard-guard rule, either custom (fleet-authored) or a
+ * wrapper around one `BuiltinPattern`.
+ */
+export type Rule = { id: RuleId,
+/**
+ * Bumped by the author on every edit — carried into `Verdict` so a
+ * consumer can tell whether a match was produced under the rule
+ * version it expects (e.g. before/after an admin edit lands).
+ */
+revision: number, name: string, enabled: boolean,
+/**
+ * 0..=1000, higher wins. Not enforced as a hard range by `compile()`
+ * (no `CompileError` variant exists for it) — `u16` accepts any
+ * value, and `evaluate()`'s max/tie-break logic is correct regardless
+ * of whether authors respect the documented range. The range is a
+ * UI/console convention, not a wire-level invariant.
+ */
+priority: number, matcher: MatchKind, severity: Severity, actions: Array<Action>, cooldownSeconds: number,
+/**
+ * Whether a user-facing snooze can suppress this rule. Not read by
+ * this crate (`compile()`/`evaluate()` don't gate on it) — it's a
+ * hint for the endpoint's snooze UI to filter by.
+ */
+snoozable: boolean,
+/**
+ * Whether the console should allow editing this rule. Not read by
+ * this crate — same as `snoozable`, a hint for the authoring UI.
+ */
+locked: boolean, };
+
+/**
+ * A rule identifier: a canonical UUID rendered as either the hyphenated
+ * form (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, 36 chars) or the hyphenless
+ * form (32 lowercase hex chars) — matching D-5's `IR-<uuid-simple>` ticket
+ * id convention's own alphabet, minus the `IR-` prefix (rules aren't
+ * tickets). Lowercase only: accepting both cases would let the same UUID
+ * round-trip through two textually-different `RuleId`s, which would let a
+ * rule dodge `CooldownLedger`'s per-id cooldown by re-casing its id.
+ */
+export type RuleId = string;
+
+/**
+ * Bounds `compile()` enforces on an input ruleset. Every field is a hard
+ * cap, not a soft target — exceeding one is a `CompileError`, never a
+ * silent clamp.
+ */
+export type RuleSetLimits = {
+/**
+ * Max number of rules with `enabled: true`. Disabled rules (kept
+ * around as drafts / toggled-off presets) don't count and aren't
+ * compiled at all — see `compile()`.
+ */
+maxEnabledRules: number,
+/**
+ * Max byte length of a `Phrase.value` or `Regex.pattern` string.
+ */
+maxPatternBytes: number,
+/**
+ * The clipboard-text read cap. NOT enforced by this crate — it's a
+ * contract on the caller, who must truncate (via
+ * `truncate_for_match`) before calling `CompiledRuleSet::evaluate`.
+ */
+maxTextBytes: number,
+/**
+ * Per-rule compiled-regex-program byte bound, passed to both
+ * `RegexBuilder::size_limit` (NFA build size) and
+ * `RegexBuilder::dfa_size_limit` (lazy-DFA search-time cache) — see
+ * `compile.rs` for why one number governs both.
+ */
+regexSizeLimit: number,
+/**
+ * Summed bound across every regex-backed rule in the set (custom
+ * `Regex` rules AND regex-backed `Builtin` rules alike). The `regex`
+ * crate doesn't expose a compiled program's actual byte size after a
+ * successful build, so this is enforced by charging each successful
+ * compile its full `regex_size_limit` allowance against a running
+ * total — conservative (never under-counts worst-case memory), not
+ * exact.
+ */
+regexTotalSizeLimit: number, };
+
+/**
  * Search backend a remote file-search request should use. Open/extensible —
  * new variants may be added as backends are built (Keyword ships first).
  */
@@ -793,6 +1000,15 @@ export type SecuritySnapshotResult = { processes: Array<SecuritySnapshotProcess>
 export type SecuritySnapshotService = { name: string, start_type: string, status: string, path: string | null, };
 
 /**
+ * How urgently a match should be surfaced. Four tiers rather than the
+ * legacy free-tier's two ("warning"/"danger") so custom fleet-authored
+ * rules have headroom above and below the migrated builtins — see
+ * `BuiltinPattern::default_severity` for exactly where the old two-tier
+ * scheme lands in this enum.
+ */
+export type Severity = "info" | "warn" | "high" | "critical";
+
+/**
  * Privacy Shield's admin-desired on/off + mode, resolved device > group > org
  * (same precedence as `ConfigEpoch`) but stored and versioned SEPARATELY from
  * the policy `config_epochs` chain. Toggling the shield from the console
@@ -842,6 +1058,12 @@ export type SignedCommand = { command_id: string,
  * `command_id`, when rebuilding `canonical_command_bytes`.
  */
 idempotency_key: string, device_id: DeviceId, catalog_id: string, action_class: ActionClass, payload: JsonValue, epoch_version: bigint, signature: string, signer_key: string, };
+
+/**
+ * A structurally-validated pattern family — matched by a checksum over
+ * candidate digit/alnum runs found in the text, not by a plain regex.
+ */
+export type StructuredKind = "payment_card" | "iban";
 
 /**
  * Change an admin's role (super_admin only).

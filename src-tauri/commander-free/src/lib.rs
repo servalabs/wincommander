@@ -2536,6 +2536,13 @@ pub fn run() {
             paste_monitor::get_paste_monitor_auto_clear,
             paste_monitor::set_paste_monitor_auto_clear_on_lock,
             paste_monitor::get_paste_monitor_auto_clear_on_lock,
+            // Clipboard Guard health/report surface (Ink Receipt & Clipboard
+            // Guard plan §4.2) — content-free health snapshot plus the
+            // bounded pending-report queue a future check-in integrator
+            // drains into CheckinBody.clipboard_events.
+            paste_monitor::get_paste_monitor_health,
+            paste_monitor::get_paste_monitor_pending_reports,
+            paste_monitor::drain_paste_monitor_pending_reports,
             // ── F-2 File monitor (filesystem sentinel) ──
             file_monitor::start_decoy_monitor,
             file_monitor::stop_decoy_monitor,

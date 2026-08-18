@@ -29,11 +29,26 @@ fn main() {
 
 mod settings_host;
 
+// Cross-platform by design (C2): the generic verify/version-guard/compile
+// engine and every test in this module compile and run on Linux CI too;
+// only its internal `WindowsPolicyFs`/`windows_acl` submodule is
+// `#[cfg(windows)]`-gated. See `policy_store.rs`'s module doc.
+mod policy_store;
+
 #[cfg(windows)]
 mod pipe;
 
 #[cfg(windows)]
 mod pro_broker;
+
+// `SessionHelper` peer authentication (D-2). Windows-only: every syscall
+// and the `Get-AuthenticodeSignature` shell-out it performs are Win32/
+// PowerShell-specific, matching `pipe.rs`'s own windows-only stance.
+#[cfg(windows)]
+mod peer_auth;
+
+#[cfg(windows)]
+use std::sync::Arc;
 
 #[cfg(windows)]
 use windows_service::{
@@ -128,26 +143,153 @@ fn run_runtime() {
 /// Async service body — starts the four background loops and the pipe server.
 #[cfg(windows)]
 async fn run() {
-    // ── Phase 2/3 background loops (stubbed for Phase 0) ────────────────
+    // ── Durable policy store (plan §3: "the SYSTEM service owns durable
+    // state") ────────────────────────────────────────────────────────────
     //
-    // Each loop is an independent tokio task.  Phase 2 fills in
-    // `enforcement_loop`; Phase 3 fills in the remaining three.
+    // Opening the store enforces the policy directory's DACL
+    // (SYSTEM/Administrators-only) — see `policy_store::WindowsPolicyFs::
+    // ensure_dir_secure`. A service that cannot prove that directory is
+    // locked down must not pretend its policy state is trustworthy, so a
+    // failure here is a genuine "the service should not start" condition,
+    // not something to swallow and continue past.
+    let policy_store = Arc::new(
+        match policy_store::PolicyStore::open(
+            Box::new(policy_store::WindowsPolicyFs),
+            Box::new(policy_store::SystemClock),
+            policy_store::default_policy_dir(),
+            pinned_fleet_signing_key(),
+        ) {
+            Ok(store) => store,
+            Err(e) => {
+                // `PolicyStoreError`'s `Display` is content-free by
+                // construction (see that type's doc) — safe to log as-is.
+                eprintln!(
+                    "[wincommander-svc] policy store failed to open securely ({e}) — refusing to start"
+                );
+                std::process::exit(1);
+            }
+        },
+    );
 
-    tokio::spawn(enforcement_loop());
+    // Re-verify and load whatever was last durably installed (if
+    // anything) before accepting any pipe connections. `StartupOutcome`'s
+    // `Debug` output is content-free (see `PolicyStoreError`'s doc) — safe
+    // to log directly.
+    let startup_report = policy_store.load_at_startup();
+    eprintln!(
+        "[wincommander-svc] policy store startup: clipboard={:?} ink_receipt={:?}",
+        startup_report.clipboard, startup_report.ink_receipt
+    );
+
+    // ── SessionHelper peer gate (D-2) ────────────────────────────────────
+    //
+    // ONE gate for the service's lifetime — its rate limiter's state must
+    // outlive individual pipe connections to mean anything.
+    let session_helper_gate = Arc::new(peer_auth::SessionHelperGate::new(Arc::new(
+        peer_auth::WinPeerAuthProbe,
+    )));
+
+    // ── Clipboard Guard shared state (event queue + health + local toggle) ─
+    let clipboard_state = Arc::new(pipe::ClipboardGuardState::new());
+
+    // ── Phase 2/3 background loops ───────────────────────────────────────
+    //
+    // Each loop is an independent tokio task. `enforcement_loop` is now the
+    // first real one (Phase 2); the remaining three stay Phase-0 stubs —
+    // Phase 3 fills them in.
+
+    tokio::spawn(enforcement_loop(
+        Arc::clone(&policy_store),
+        Arc::clone(&clipboard_state),
+    ));
     tokio::spawn(reconciler_loop());
     tokio::spawn(command_worker_loop());
     tokio::spawn(fleet_conn_loop());
 
     // ── Named-pipe server ────────────────────────────────────────────────
-    if let Err(e) = pipe::serve().await {
+    if let Err(e) = pipe::serve(policy_store, session_helper_gate, clipboard_state).await {
         eprintln!("[wincommander-svc] pipe server exited with error: {:#}", e);
     }
 }
 
-/// Phase 2 fills this in — endpoint enforcement (policy push, rule evaluation).
+/// Read the fleet signing key svc pins `svc.policy.install_epoch` against,
+/// from the same `%ProgramData%\WinCommander\svc-settings.json` blob
+/// `settings_host.rs` already reads/writes as an untyped
+/// `serde_json::Value` (see that module's doc: "no coupling to
+/// commander-free's encrypted datastore ... deferred to a later Phase-1
+/// step"). Nothing populates a `fleet_signing_key` field there yet as of
+/// this task — see the handoff note. Absence degrades safely: every
+/// `install_epoch` call is rejected with `SignerKeyMismatch` (fail closed)
+/// until that field exists, never silently trusted.
 #[cfg(windows)]
-async fn enforcement_loop() {
+fn pinned_fleet_signing_key() -> String {
+    extract_pinned_fleet_signing_key(&settings_host::get_settings())
+}
+
+/// Pure half of [`pinned_fleet_signing_key`] — split out so the field
+/// lookup itself is unit-testable without touching the real settings file.
+#[cfg(windows)]
+fn extract_pinned_fleet_signing_key(settings: &serde_json::Value) -> String {
+    settings
+        .get("fleet_signing_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Run `f`, catching any panic instead of letting it unwind past the
+/// caller — the "must not panic the service on any single iteration
+/// failure" contract every background loop needs. Returns `true` if `f`
+/// completed without panicking. Logs a stable, content-free code (just
+/// `loop_name`, never the panic payload, which could in principle carry
+/// arbitrary data) so an operator can see a loop is degrading without a
+/// panic message potentially leaking anything into service logs.
+///
+/// Uses `AssertUnwindSafe` rather than requiring `F: UnwindSafe` from
+/// callers: `enforcement_loop`'s real closure captures `Arc<PolicyStore>`,
+/// and `PolicyStore` holds `Box<dyn PolicyFs>`/`Box<dyn Clock>` fields the
+/// compiler cannot automatically prove `RefUnwindSafe` for (trait objects
+/// don't propagate auto traits they didn't explicitly declare). The assert
+/// is sound here regardless: every piece of state a panic mid-iteration
+/// could leave "torn" is behind a `Mutex` or an atomic, both of which are
+/// `RefUnwindSafe` unconditionally and are already read through
+/// poison-recovering locks (`unwrap_or_else(|p| p.into_inner())`)
+/// throughout `pipe.rs`/`policy_store.rs`.
+#[cfg(windows)]
+fn run_iteration_catching_panics<F>(loop_name: &str, f: F) -> bool
+where
+    F: FnOnce(),
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(()) => true,
+        Err(_) => {
+            eprintln!("[wincommander-svc] {loop_name}: iteration panicked, continuing");
+            false
+        }
+    }
+}
+
+/// Clipboard Guard's enforcement loop (Phase 2 — plan §9's "the first real
+/// `commander-svc` loop"): each tick refreshes the policy-health flags,
+/// prunes aged-out queued clipboard events, and derives the
+/// clipboard-specific health flags (see [`pipe::enforcement_tick`] for
+/// exactly how). Cancellation-aware via `tokio::time::sleep` (a normal
+/// async yield point — the task is dropped cleanly if the runtime shuts
+/// down while sleeping) and never panics the service on a single bad
+/// iteration: [`run_iteration_catching_panics`] is defensive-in-depth on
+/// top of `enforcement_tick`'s own no-panic design (poison-recovering
+/// locks, no `unwrap`/`expect`, no unchecked indexing).
+#[cfg(windows)]
+async fn enforcement_loop(
+    policy_store: Arc<policy_store::PolicyStore>,
+    clipboard_state: Arc<pipe::ClipboardGuardState>,
+) {
     loop {
+        let ps = Arc::clone(&policy_store);
+        let state = Arc::clone(&clipboard_state);
+        run_iteration_catching_panics("enforcement_loop", move || {
+            pipe::enforcement_tick(&ps, &state, std::time::Instant::now());
+        });
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
     }
 }
@@ -173,5 +315,63 @@ async fn command_worker_loop() {
 async fn fleet_conn_loop() {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_pinned_fleet_signing_key_reads_expected_field() {
+        let v = serde_json::json!({ "fleet_signing_key": "abc123==" });
+        assert_eq!(extract_pinned_fleet_signing_key(&v), "abc123==");
+    }
+
+    #[test]
+    fn extract_pinned_fleet_signing_key_defaults_to_empty_when_absent() {
+        let v = serde_json::json!({});
+        assert_eq!(extract_pinned_fleet_signing_key(&v), "");
+    }
+
+    #[test]
+    fn extract_pinned_fleet_signing_key_defaults_to_empty_on_wrong_type() {
+        // A non-string value must degrade to "" (fail closed via
+        // SignerKeyMismatch downstream), never panic on an `as_str()` that
+        // returns `None`.
+        let v = serde_json::json!({ "fleet_signing_key": 12345 });
+        assert_eq!(extract_pinned_fleet_signing_key(&v), "");
+    }
+
+    // ── run_iteration_catching_panics: the loop-resilience contract ──────
+
+    #[test]
+    fn run_iteration_catching_panics_survives_a_panicking_iteration_and_reports_false() {
+        let survived = run_iteration_catching_panics("test_loop", || {
+            panic!("boom");
+        });
+        assert!(
+            !survived,
+            "a panicking iteration must report false, not propagate"
+        );
+
+        // A subsequent, non-panicking call succeeds — proves the earlier
+        // panic didn't poison anything that would break later iterations,
+        // i.e. the loop genuinely "survives" rather than merely delaying
+        // the crash by one tick.
+        let ok = run_iteration_catching_panics("test_loop", || {});
+        assert!(ok);
+    }
+
+    #[test]
+    fn run_iteration_catching_panics_does_not_swallow_a_clean_run() {
+        let mut ran = false;
+        let ok = run_iteration_catching_panics("test_loop", || {
+            ran = true;
+        });
+        assert!(ok);
+        assert!(ran);
     }
 }
