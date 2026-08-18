@@ -26,3 +26,12 @@ downloads. The Free release bucket is `windows`.
 The updater manifest points to the versioned R2 MSI, so the manifest and
 installer cannot drift. The release environment must provide `CF_UPDATE_DOMAIN`,
 `CF_R2_API`, `R2_KEY`, and `R2_SECRET`.
+
+## Free bundle media boundary
+
+The shared `assets` submodule also supports website and other-product media.
+The Free desktop build imports only its explicit runtime asset allowlist from
+`src/assets.ts`; adding a file to the submodule does not put it in the MSI.
+The release workflow rejects bundled installers, archives, Theron media, and
+media payloads larger than 64 MiB. Add a genuinely required desktop asset to
+the allowlist and release verification patterns in the same change.

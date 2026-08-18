@@ -12,14 +12,20 @@ describe("applyProductAliases", () => {
     const source = await Bun.file("src/assets.ts").text();
     const moduleQueries = source.match(/query: "\?url&wc-module"/g) ?? [];
 
-    // softwares, software blocklist, entities, apps, editorial + 5 product roots
-    // (contingency, private-phone, private-server, theron, wincommander)
-    expect(moduleQueries).toHaveLength(10);
+    // softwares, software blocklist, entities, apps, editorial + three
+    // explicitly allowlisted product groups (contingency, private-server,
+    // wincommander).
+    expect(moduleQueries).toHaveLength(8);
     expect(source).not.toContain('query: "?url"');
     // Product media must load from the app's assets submodule, not a
     // missing workspace sibling at ../../assets (that left the title logo empty).
-    expect(source).toContain('../assets/products/wincommander/**/*');
+    expect(source).toContain('../assets/products/wincommander/Scrub.gif');
     expect(source).not.toContain('../../assets/products/');
+    expect(source).not.toContain('../assets/products/wincommander/**/*');
+    expect(source).not.toContain('../assets/products/private-server/**/*');
+    expect(source).not.toContain('../assets/products/private-phone/**/*');
+    expect(source).not.toContain('../assets/products/theron/**/*');
+    expect(source).not.toContain('../assets/softwares/**/*",');
   });
 
   test("exposes the bundled Contingency clips through the UI media map", async () => {

@@ -4,7 +4,8 @@ import { LOGO_DATA_URL } from "./assets/logoData";
 //
 // Runtime media lives in this repo's `assets/` git submodule (`servalabs/assets`).
 // Components reference it through the maps below — keyed by file basename or
-// product-relative path — instead of hard-coded URLs. After clone:
+// product-relative path — instead of hard-coded URLs. Product media is an
+// explicit desktop allowlist so website-only demos never enter the MSI. After clone:
 //   git submodule update --init assets
 //
 // We use Vite `import.meta.glob` (not static `import` statements like the
@@ -120,7 +121,7 @@ export function applyProductAliases(productMap: Record<string, string>): Record<
 }
 
 const softwaresMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../assets/softwares/**/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob("../assets/softwares/**/*.{svg,png,webp,ico,gif,jpg,jpeg,avif}", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 // Blocklist artwork is authored separately from compressed application icons.
 // Keep this narrower map so its transparent, card-ready assets win when both
@@ -137,21 +138,32 @@ const appsMods = (CAN_LOAD_BROWSER_ASSET_MAPS
 const editorialMods = (CAN_LOAD_BROWSER_ASSET_MAPS
   ? import.meta.glob("../assets/editorial/**/*", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
-// Product media — same submodule root as softwares/entities (NOT workspace ../../assets).
+// Product media is explicitly allowlisted for the Free desktop runtime. The assets
+// submodule also serves other products and the website, so its demo media must not
+// be imported through recursive globs here.
 const contingencyProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../assets/products/contingency/**/*", { eager: true, query: "?url&wc-module", import: "default" })
-  : EMPTY_ASSET_MODS) as AssetMods;
-const privatePhoneProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../assets/products/private-phone/**/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob("../assets/products/contingency/usb-decoy-hub.png", { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const privateServerProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../assets/products/private-server/**/*", { eager: true, query: "?url&wc-module", import: "default" })
-  : EMPTY_ASSET_MODS) as AssetMods;
-const theronProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../assets/products/theron/**/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob([
+    "../assets/products/private-server/pro-nobg.png",
+    "../assets/products/private-server/max-nobg.png",
+    "../assets/products/private-server/contingency/panic-button.webm",
+    "../assets/products/private-server/contingency/panic-button.mp4",
+    "../assets/products/private-server/contingency/watering-plant.webm",
+    "../assets/products/private-server/contingency/watering-plant.mp4",
+    "../assets/products/private-server/contingency/phone-click.webm",
+    "../assets/products/private-server/contingency/phone-click.mp4",
+  ], { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 const winCommanderProductMods = (CAN_LOAD_BROWSER_ASSET_MAPS
-  ? import.meta.glob("../assets/products/wincommander/**/*", { eager: true, query: "?url&wc-module", import: "default" })
+  ? import.meta.glob([
+    "../assets/products/wincommander/Scrub.gif",
+    "../assets/products/wincommander/Extention.png",
+    "../assets/products/wincommander/videos/wc-lockdown.mp4",
+    "../assets/products/wincommander/searching.gif",
+    "../assets/products/wincommander/logo.png",
+  ], { eager: true, query: "?url&wc-module", import: "default" })
   : EMPTY_ASSET_MODS) as AssetMods;
 
 // — app icons (svg/png/ico/gif), keyed by full filename incl. extension —
@@ -199,9 +211,7 @@ export const serviceIcons: Record<string, string> = mergeByBasename(
 const productMap = mergeByRelativePath(
   "/products/",
   contingencyProductMods,
-  privatePhoneProductMods,
   privateServerProductMods,
-  theronProductMods,
   winCommanderProductMods,
 );
 export const products: Record<string, string> = applyProductAliases(productMap);

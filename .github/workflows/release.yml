@@ -56,6 +56,13 @@ jobs:
             "editorial/nsa-prism-slide.png",
             "products/contingency/usb-decoy-hub.png",
             "products/private-server/pro-nobg.png",
+            "products/private-server/max-nobg.png",
+            "products/private-server/contingency/panic-button.webm",
+            "products/private-server/contingency/panic-button.mp4",
+            "products/private-server/contingency/watering-plant.webm",
+            "products/private-server/contingency/watering-plant.mp4",
+            "products/private-server/contingency/phone-click.webm",
+            "products/private-server/contingency/phone-click.mp4",
             "products/wincommander/logo.png",
             "products/wincommander/Scrub.gif",
             "products/wincommander/Extention.png",
@@ -132,6 +139,13 @@ jobs:
             "nsa-prism-slide-*.png",
             "usb-decoy-hub-*.png",
             "pro-nobg-*.png",
+            "max-nobg-*.png",
+            "panic-button-*.webm",
+            "panic-button-*.mp4",
+            "watering-plant-*.webm",
+            "watering-plant-*.mp4",
+            "phone-click-*.webm",
+            "phone-click-*.mp4",
             "logo-*.png",
             "Scrub-*.gif",
             "Extention-*.png",
@@ -147,6 +161,25 @@ jobs:
             if (-not (Get-ChildItem -Path $bundleAssets -Filter $pattern -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
               throw "The production bundle is missing expected shared media: $pattern"
             }
+          }
+
+      - name: Reject unexpected Free bundle media
+        shell: pwsh
+        run: |
+          $bundleAssets = "dist/assets"
+          $forbidden = @(Get-ChildItem -Path $bundleAssets -Recurse -File |
+            Where-Object { $_.Extension -in @(".exe", ".zip") -or $_.Name -match "theron" })
+          if ($forbidden.Count -gt 0) {
+            $paths = $forbidden.FullName -join ", "
+            throw "The Free bundle contains forbidden media: $paths"
+          }
+
+          $mediaExtensions = @(".avif", ".gif", ".ico", ".jpeg", ".jpg", ".mp4", ".png", ".svg", ".webm", ".webp")
+          $mediaBytes = (Get-ChildItem -Path $bundleAssets -Recurse -File |
+            Where-Object { $_.Extension -in $mediaExtensions } |
+            Measure-Object -Property Length -Sum).Sum
+          if ($mediaBytes -gt 64MB) {
+            throw "Free bundle media is $([math]::Round($mediaBytes / 1MB, 2)) MiB; limit is 64 MiB."
           }
 
       - name: Generate CycloneDX SBOM
