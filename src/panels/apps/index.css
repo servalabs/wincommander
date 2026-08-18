@@ -115,9 +115,9 @@
   width: fit-content;
 }
 .eng-installed-toggle:hover { color: var(--color-text-secondary); }
-.panel-container {
+.apps-panel {
   width: 100%;
-  max-width: 1400px;
+  min-width: 0;
   padding: 0;
 }
 

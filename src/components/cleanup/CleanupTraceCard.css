@@ -20,6 +20,14 @@
   overflow-anchor: none;
 }
 
+/* Let cleanup cards use the full panel stage: they gain columns as space
+   becomes available and collapse before a card gets narrower than 15rem. */
+.cleanup-category-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 1rem;
+}
+
 /* Cleanup cards change state and height while scans finish. Keep this panel
    fully laid out so Chromium does not revise off-screen intrinsic estimates
    mid-scroll, which can otherwise feel like the page is pulling upward. */

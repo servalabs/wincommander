@@ -119,7 +119,7 @@ export default function AppShell({
             /* Viewport-bound panels own their scroll lifecycle; let them fill
                the stage instead of nesting inside AppShell page scroll. */
             <div
-              className={`flex-1 min-h-0 overflow-x-hidden custom-scrollbar relative ${isViewportBoundPanel ? "overflow-hidden" : "overflow-y-auto"}`}
+              className={`app-panel-stage flex-1 min-h-0 overflow-x-hidden custom-scrollbar relative ${isViewportBoundPanel ? "overflow-hidden" : "overflow-y-auto"}`}
               ref={contentScrollRef}
               style={{ paddingBottom: isViewportBoundPanel ? 0 : 56 }}
             >

@@ -1,9 +1,9 @@
 .vault-panel {
   width: 100%;
-  max-width: 1180px;
+  min-width: 0;
   padding-top: 0;
   padding-bottom: 2rem;
-  margin: 0 auto;
+  margin: 0;
 }
 
 .vault-panel > .panel-header {

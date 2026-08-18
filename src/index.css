@@ -472,6 +472,7 @@ a,
 .app-body {
   display: flex;
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   /* Isolate panel stacking contexts so high z-index panel elements
      cannot punch through Blueprint Dialog/Overlay portals which
@@ -481,9 +482,24 @@ a,
 
 .app-content {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
-  padding: var(--spacing-lg);
+  padding: clamp(12px, 1.25vw, 24px);
   background-color: var(--color-bg-primary);
+}
+
+/* The shell's middle column is constrained by two fixed sidebars.  Panels
+   must size from that remaining space, never a cap left behind by another
+   lazily loaded panel stylesheet. */
+.app-panel-stage {
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.app-panel-stage .panel-container {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
 }
 
 .app-universal-search {

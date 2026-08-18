@@ -58,7 +58,7 @@ export default function AppsPanel() {
   }, [setActiveTab]);
 
   return (
-    <div className="panel-container">
+    <div className="panel-container apps-panel">
       <div className="flex flex-col gap-0">
         <PanelHeader
           panelId="apps"

@@ -594,7 +594,7 @@ export default function CleanupCategoryGrid({
               {tierMeta.description}
             </span>
           </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="cleanup-category-grid">
             {activeSysCats.map((cat) => renderCard(cat))}
             {activeUserCats.map((cat) => renderUserCard(cat))}
             {cleanCardPacks.map((pack, index) => (
