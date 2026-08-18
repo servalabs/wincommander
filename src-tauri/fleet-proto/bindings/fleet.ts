@@ -88,7 +88,9 @@ magnitude: bigint,
 /**
  * "info" | "warn" | "critical"
  */
-severity: string, consent_version: number, disclosure_version: number, };
+severity: string, consent_version: number, disclosure_version: number,
+/** Stable device-minted idempotency key; absent on older agents. */
+event_id: string | null, };
 
 /**
  * One raw Argus signal record in a device's drill-down window (Feature C). The

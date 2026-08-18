@@ -1446,6 +1446,10 @@ pub struct ArgusSignal {
     pub severity: String,
     pub consent_version: i32,
     pub disclosure_version: i32,
+    /// Stable, device-minted idempotency key for a retried signal. Older
+    /// agents omit it, in which case the server preserves legacy insertion.
+    #[serde(default)]
+    pub event_id: Option<String>,
 }
 
 /// Per-(kind) breakdown within a device's Argus rollup — a severity-aware,
