@@ -21,6 +21,7 @@ import SectionCard from "../../components/shared/SectionCard";
 import useEntitlements from "../../hooks/useEntitlements";
 import './index.css';
 import DriveLetterPicker from "./DriveLetterPicker";
+import { resolveEffectiveMountScope } from "./mountScope";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
 
@@ -66,6 +67,11 @@ interface EncryptedVolumesTabProps {
 // owns them.
 function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: EncryptedVolumesTabProps) {
   const { theme } = useTheme();
+  const { appSettings, systemInfo } = useAppState();
+  const effectiveMountScope = resolveEffectiveMountScope(
+    appSettings?.app?.vault?.mountScope,
+    systemInfo?.osName,
+  );
 
   const [mountDialogOpen, setMountDialogOpen] = useState(false);
   const [mountPath, setMountPath] = useState("");
@@ -75,6 +81,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [mountPim, setMountPim] = useState("");
   const [mountReadOnly, setMountReadOnly] = useState(false);
   const [mountRemovable, setMountRemovable] = useState(false);
+  const [mountHardenAcl, setMountHardenAcl] = useState(true);
   const [protectHidden, setProtectHidden] = useState(false);
   const [hiddenPassword, setHiddenPassword] = useState("");
   const [hiddenKeyfile, setHiddenKeyfile] = useState("");
@@ -111,6 +118,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     setMountPim("");
     setMountReadOnly(false);
     setMountRemovable(false);
+    setMountHardenAcl(true);
     setProtectHidden(false);
     setHiddenPassword("");
     setHiddenKeyfile("");
@@ -214,6 +222,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         hiddenPassword: protectHidden ? hiddenPassword : undefined,
         hiddenKeyfiles: protectHidden && hiddenKeyfile ? [hiddenKeyfile] : [],
         hiddenPim: protectHidden ? hiddenPim || undefined : undefined,
+        scope: effectiveMountScope,
+        hardenAcl: mountHardenAcl,
       });
       if (!result.success) throw new Error(result.error || "Failed to mount volume");
       setMountDialogOpen(false);
@@ -227,7 +237,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     } finally {
       setMounting(false);
     }
-  }, [hiddenKeyfile, hiddenPassword, hiddenPim, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, protectHidden, refreshVault, resetMountForm]);
+  }, [effectiveMountScope, hiddenKeyfile, hiddenPassword, hiddenPim, mountHardenAcl, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, protectHidden, refreshVault, resetMountForm]);
 
   const handleMountDialogKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter" || event.shiftKey || event.defaultPrevented) return;
@@ -360,6 +370,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
                           letter={vol.letter}
                           path={vol.path}
                           type={vol.type}
+                          internalDrive={vol.internalDrive}
                           onDismounted={() => refreshVault(true)}
                         />
                       </td>
@@ -593,6 +604,15 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               />
               <span>Protect hidden volume</span>
               <span className="quick-desc">Required for safe writes to an outer decoy volume.</span>
+            </label>
+            <label className="quick-toggle">
+              <CheckboxControl
+                checked={mountHardenAcl}
+                ariaLabel="Restrict mounted content to this Windows account"
+                onChange={event => setMountHardenAcl(event.currentTarget.checked)}
+              />
+              <span>Private NTFS permissions</span>
+              <span className="quick-desc">Recommended. Disable only to preserve deliberate Sales/Accounting group ACLs.</span>
             </label>
           </div>
 

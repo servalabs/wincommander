@@ -33,7 +33,13 @@ pnpm-lock.yaml
 
 # ts-rs codegen scratch — raw output of `cargo test --features ts-codegen`.
 # The tracked SSOT copy lives in src/types/generated/ (written by tools/gen-types.ts).
+# One entry per crate that derives ts_rs::TS — keep this list in sync with
+# gen-types.ts's FILES table (A6 2026-08: added wincmd-clip-rules/fleet-proto,
+# which were missing here even though gen-types.ts's own header comment and
+# AGENTS.md both already described bindings/ as gitignored for every crate).
 src-tauri/wincmd-shared/bindings/
+src-tauri/fleet-proto/bindings/
+src-tauri/wincmd-clip-rules/bindings/
 
 # Build outputs
 dist/

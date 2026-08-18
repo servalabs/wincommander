@@ -92,11 +92,12 @@ function Ensure-Rustup {
 
     $rustup = Find-Application "rustup"
     if (-not $rustup) {
-        $rustupInit = Join-Path ([IO.Path]::GetTempPath()) "wincommander-rustup-init.exe"
+        # rustup dispatches by argv[0]; any name other than rustup-init is treated as a proxy.
+        $rustupInit = Join-Path ([IO.Path]::GetTempPath()) "rustup-init.exe"
         Write-Host "rustup is not installed. Installing the Rust toolchain manager..."
         try {
             Invoke-WebRequest -Uri $rustupInitUrl -OutFile $rustupInit
-            & $rustupInit -y --profile minimal --default-toolchain none
+            & $rustupInit -y --profile minimal --default-toolchain none | Out-Host
             if ($LASTEXITCODE -ne 0) {
                 throw "rustup-init.exe exited with code $LASTEXITCODE."
             }

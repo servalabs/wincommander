@@ -160,7 +160,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         getBlocklistStatus,
         getDNSStatus,
         getAppBranding,
-        getEncryptionStatus,
+        getEncryptedVolumeStatus,
         getProductivityStatus,
         getAppInventory,
     } = useBackend();
@@ -893,12 +893,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const refreshVault = useCallback(async (silent: boolean = false) => {
         if (!silent) setLoading(prev => ({ ...prev, vault: true }));
         try {
-            const res = await getEncryptionStatus();
+            // This Pro-native endpoint returns only drive links in the current
+            // logon session. The legacy VeraCrypt/PowerShell probe is machine-
+            // scoped and must not be used as a fallback on multi-user hosts.
+            const res = await getEncryptedVolumeStatus();
             if (res.success && res.data) setEncryptionStatus(res.data);
         } finally {
             if (!silent) setLoading(prev => ({ ...prev, vault: false }));
         }
-    }, [getEncryptionStatus]);
+    }, [getEncryptedVolumeStatus]);
 
     const refreshProductivity = useCallback(async (silent: boolean = false) => {
         if (!silent) setLoading(prev => ({ ...prev, dashboard: true }));

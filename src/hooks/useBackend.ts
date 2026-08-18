@@ -482,6 +482,9 @@ export interface EncryptionStatus {
     letter: string;
     path: string | null;
     type: string;
+    /** Driver slot returned by the Pro engine. Passing it back makes a
+     * per-user dismount reliable even when no machine-wide letter exists. */
+    internalDrive?: number;
   }>;
 }
 
@@ -575,6 +578,10 @@ export interface MountVolumeParams {
   hiddenPassword?: string;
   hiddenKeyfiles?: string[];
   hiddenPim?: string;
+  scope?: "machine" | "per-user";
+  /** Replace the mounted NTFS root ACL with the mounting account plus SYSTEM
+   * and Administrators. Disable only for a volume with deliberate group ACLs. */
+  hardenAcl?: boolean;
 }
 
 export interface CreateStegoMp4Params {
@@ -1751,6 +1758,7 @@ export function useBackend() {
 
     // Encrypted volumes
     getEncryptionStatus: () => execute<EncryptionStatus>("Get-EncryptionStatus"),
+    getEncryptedVolumeStatus: () => execute<EncryptionStatus>("Get-EncryptedVolumeStatus"),
     mountVolume: (params: MountVolumeParams) =>
       execute("Mount-EncryptionVolume", {
         VolumePath: params.volumePath,
@@ -1764,9 +1772,15 @@ export function useBackend() {
         ...(params.hiddenPassword ? { HiddenPassword: params.hiddenPassword } : {}),
         HiddenKeyfiles: JSON.stringify(params.hiddenKeyfiles ?? []),
         ...(params.hiddenPim ? { HiddenPim: params.hiddenPim } : {}),
+        ...(params.scope ? { Scope: params.scope } : {}),
+        HardenAcl: params.hardenAcl ?? true,
       }),
-    dismountVolume: (letter: string, force = false) =>
-      execute("Dismount-EncryptionVolume", { DriveLetter: letter, Force: force }),
+    dismountVolume: (letter: string, force = false, internalDrive?: number) =>
+      execute("Dismount-EncryptionVolume", {
+        DriveLetter: letter,
+        Force: force,
+        ...(internalDrive !== undefined ? { InternalDrive: internalDrive } : {}),
+      }),
     openEncryptionVolume: (letter: string) =>
       execute("Open-EncryptionVolume", { DriveLetter: letter }),
     dismountAllVolumes: (force = false) => execute(commandId("Dismount-", "All", "Encryption", "Volumes"), { Force: force }),

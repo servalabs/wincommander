@@ -46,6 +46,12 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Fixed
 
+- **Fresh Windows developer bootstrap now installs rustup reliably**
+  (2026-08-18). The installer keeps rustup's required `rustup-init.exe`
+  executable name and sends its informational output to the host instead of
+  accidentally capturing it as the rustup command path. A clean sandbox now
+  installs and selects the repository-pinned Rust 1.97.1 toolchain headlessly.
+
 - **Headless automation now fails closed for every mutating and destructive
   command** (2026-08-15). The CLI exposes only read-only handlers until its
   native confirmation and cross-process locking controls cover the mutation
