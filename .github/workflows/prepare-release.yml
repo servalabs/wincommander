@@ -1,12 +1,12 @@
 name: prepare release
 
-# A maintainer chooses the exact version. This workflow creates a normal,
-# reviewable PR; it never creates a tag or publishes an installer.
+# A maintainer chooses the next exact version. This workflow creates a normal,
+# reviewable PR; merging that PR creates the tag and starts the installer release.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Exact SemVer version, for example 3.2.5 or 3.2.5-rc.1"
+        description: "Next SemVer version, for example 3.2.16 or 3.2.16-rc.1. Merging its PR starts the release."
         required: true
         type: string
 
@@ -37,6 +37,12 @@ jobs:
 
           const packagePath = 'package.json';
           const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          if (packageJson.version === version) {
+            throw new Error(
+              `Version ${version} is already prepared on main. Choose a new version for Prepare release; ` +
+              `to rebuild an existing tag, run the release workflow directly with v${version}.`,
+            );
+          }
           packageJson.version = version;
           fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
 
@@ -47,8 +53,10 @@ jobs:
 
           const cargoPath = 'src-tauri/commander-free/Cargo.toml';
           const cargo = fs.readFileSync(cargoPath, 'utf8');
+          if (!/^version = ".*"$/m.test(cargo)) {
+            throw new Error('Free Cargo package version was not found.');
+          }
           const updatedCargo = cargo.replace(/^version = ".*"$/m, `version = "${version}"`);
-          if (updatedCargo === cargo) throw new Error('Free Cargo package version was not found.');
           fs.writeFileSync(cargoPath, updatedCargo);
 
           const lockPath = 'src-tauri/Cargo.lock';
