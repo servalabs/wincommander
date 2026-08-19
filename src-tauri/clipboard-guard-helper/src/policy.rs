@@ -8,7 +8,7 @@
 //! ready-to-match [`ActivePolicy`] via `wincmd_clip_rules::compile()`, and
 //! never half-applying a bad one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -65,6 +65,8 @@ pub struct ActivePolicy {
     pub policy_version: i64,
     pub compiled: CompiledRuleSet,
     cooldowns: HashMap<RuleId, Duration>,
+    // Disabled rules still reserve their ID across policy sources.
+    rule_ids: HashSet<RuleId>,
 }
 
 impl ActivePolicy {
@@ -78,6 +80,7 @@ impl ActivePolicy {
             policy_version: 0,
             compiled,
             cooldowns: HashMap::new(),
+            rule_ids: HashSet::new(),
         }
     }
 
@@ -203,6 +206,7 @@ impl PolicyStore {
                     policy_version: response.policy_version,
                     compiled,
                     cooldowns,
+                    rule_ids: response.rules.iter().map(|rule| rule.id.clone()).collect(),
                 };
                 match source {
                     PolicySource::Local => self.local = active,
@@ -230,12 +234,9 @@ impl PolicyStore {
     }
 
     fn first_rule_id_collision(&self, rules: &[Rule], other: &ActivePolicy) -> Option<RuleId> {
-        rules.iter().filter(|rule| rule.enabled).find_map(|rule| {
-            other
-                .cooldowns
-                .contains_key(&rule.id)
-                .then(|| rule.id.clone())
-        })
+        rules
+            .iter()
+            .find_map(|rule| other.rule_ids.contains(&rule.id).then(|| rule.id.clone()))
     }
 
     /// Legacy alias for the Fleet policy, kept for existing helper callers.
@@ -415,6 +416,43 @@ mod tests {
         ));
         assert_eq!(store.local().policy_version, 1);
         assert_eq!(store.fleet().policy_version, 0);
+    }
+
+    #[test]
+    fn rejects_cross_source_collisions_when_either_rule_is_disabled() {
+        let mut disabled_local = good_rule();
+        disabled_local.enabled = false;
+        let mut store = PolicyStore::new();
+        store
+            .install_local(&ClipboardPolicyResponse {
+                policy_version: 1,
+                rules: vec![disabled_local],
+            })
+            .unwrap();
+        assert!(matches!(
+            store.install_fleet(&ClipboardPolicyResponse {
+                policy_version: 2,
+                rules: vec![good_rule()],
+            }),
+            Err(PolicyInstallError::RuleIdCollision { .. })
+        ));
+
+        let mut disabled_fleet = good_rule();
+        disabled_fleet.enabled = false;
+        let mut store = PolicyStore::new();
+        store
+            .install_local(&ClipboardPolicyResponse {
+                policy_version: 1,
+                rules: vec![good_rule()],
+            })
+            .unwrap();
+        assert!(matches!(
+            store.install_fleet(&ClipboardPolicyResponse {
+                policy_version: 2,
+                rules: vec![disabled_fleet],
+            }),
+            Err(PolicyInstallError::RuleIdCollision { .. })
+        ));
     }
 
     #[test]
