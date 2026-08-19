@@ -891,7 +891,14 @@ pub async fn fleet_disconnect() -> Result<serde_json::Value, String> {
     });
     crate::settings::patch_settings(patch)?;
 
-    crate::sidecar::dispatch_paid_command("fleet_agent_disconnect", serde_json::Value::Null).await
+    let disconnected =
+        crate::sidecar::dispatch_paid_command("fleet_agent_disconnect", serde_json::Value::Null)
+            .await?;
+
+    // Clear only the managed source after Pro confirms disconnect. Personal
+    // rules stay active; transient status/disconnect failures retain both.
+    crate::paste_monitor::clear_paste_monitor_fleet_policy_on_unenroll();
+    Ok(disconnected)
 }
 
 #[cfg(test)]
@@ -1131,6 +1138,21 @@ mod tests {
         assert!(!patch["app"]["fleet"]["enabled"].as_bool().unwrap());
         // Must not contain other keys that would accidentally clear the URL.
         assert!(patch["app"]["fleet"].get("serverUrl").is_none());
+    }
+
+    #[test]
+    fn approved_disconnect_clears_fleet_policy_only_after_sidecar_disconnect_succeeds() {
+        let source = include_str!("fleet_agent.rs");
+        let disconnect = source
+            .find("dispatch_paid_command(\"fleet_agent_disconnect\"")
+            .expect("disconnect dispatch must remain present");
+        let clear = source
+            .find("clear_paste_monitor_fleet_policy_on_unenroll();")
+            .expect("approved unenroll must clear the Fleet policy source");
+        assert!(
+            disconnect < clear,
+            "Fleet policy must remain installed when the disconnect dispatch fails"
+        );
     }
 
     /// FleetStatus default is disconnected with empty strings.
