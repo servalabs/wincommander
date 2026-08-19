@@ -36,6 +36,7 @@ import {
     DEFAULT_RANSOMWARE_ACTION,
 } from "../../hooks/useRansomwareMonitor";
 import type { RansomwareAction } from "../../types/settings";
+import useClipboardGuardRules from "../../hooks/useClipboardGuardRules";
 import './index.css';
 
 export default function PrivacyPanel() {
@@ -76,6 +77,7 @@ export default function PrivacyPanel() {
     const pasteAutoClearEnabled = appSettings?.ideal?.privacy?.clipboard?.pasteMonitorAutoClearEnabled ?? null;
     const pasteAutoClearSeconds = appSettings?.ideal?.privacy?.clipboard?.pasteMonitorAutoClearSeconds ?? null;
     const pasteAutoClearOnLock = appSettings?.ideal?.privacy?.clipboard?.pasteMonitorAutoClearOnLock ?? null;
+    const { localRules, fleetRules, saveLocalRules } = useClipboardGuardRules();
     const patchClipboard = (patch: Record<string, unknown>) =>
         patchAppSettings({ ideal: { privacy: { clipboard: patch } } } as any).catch(() => {});
 
@@ -395,6 +397,9 @@ export default function PrivacyPanel() {
                                                     autoClearEnabled={pasteAutoClearEnabled}
                                                     autoClearSeconds={pasteAutoClearSeconds}
                                                     autoClearOnLock={pasteAutoClearOnLock}
+                                                    customRules={localRules}
+                                                    fleetRules={fleetRules}
+                                                    onChangeLocalRules={saveLocalRules}
                                                     onPatchClipboard={patchClipboard}
                                                 />
                                             </div>
