@@ -1,8 +1,13 @@
 name: release
 
-# A protected version tag is the only release trigger. The job pauses at the
-# protected `release` environment before GitHub exposes the Tauri signing key.
+# A vX.Y.Z tag starts the release. Pushing the tag (locally or after a
+# prepare-release PR merges) aligns Cargo/package versions, then the job
+# pauses at the protected `release` environment before GitHub exposes the
+# Tauri signing key and builds the MSI.
 on:
+  push:
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       release_tag:
@@ -24,13 +29,143 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write # publish the GitHub Release archive
+  contents: write # version-file commit + GitHub Release archive
   id-token: write # keyless Sigstore provenance
   attestations: write # persist build provenance
 
 jobs:
+  align-version:
+    name: Align Cargo and version files
+    runs-on: ubuntu-latest
+    outputs:
+      release_sha: ${{ steps.align.outputs.release_sha }}
+    steps:
+      - name: Require repository admin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          perm="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" --jq .permission)"
+          echo "Release requested by ${ACTOR} (${perm})"
+          if [[ "${perm}" != "admin" ]]; then
+            echo "Only repository admins or owners can start a release." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+
+      - name: Align version files with the tag
+        id: align
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tags must look like vX.Y.Z or vX.Y.Z-prerelease: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+
+          version="${RELEASE_TAG#v}"
+          git fetch origin main --quiet
+          tag_sha="$(git rev-parse HEAD)"
+          main_sha="$(git rev-parse origin/main)"
+
+          node <<'NODE'
+          const fs = require('fs');
+          const version = process.env.RELEASE_TAG.slice(1);
+          const packagePath = 'package.json';
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          const current = packageJson.version;
+          const parse = (value) => {
+            const match = /^(\d+)\.(\d+)\.(\d+)(?:-.*)?$/.exec(value);
+            if (!match) throw new Error(`Invalid version: ${value}`);
+            return match.slice(1, 4).map(Number);
+          };
+          const [requestedMajor, requestedMinor, requestedPatch] = parse(version);
+          const [currentMajor, currentMinor, currentPatch] = parse(current);
+          const requestedBase = requestedMajor * 1_000_000 + requestedMinor * 1_000 + requestedPatch;
+          const currentBase = currentMajor * 1_000_000 + currentMinor * 1_000 + currentPatch;
+          if (requestedBase < currentBase) {
+            throw new Error(`Tag v${version} is older than the current version ${current}.`);
+          }
+
+          const tauriPath = 'src-tauri/commander-free/tauri.conf.json';
+          const cargoPath = 'src-tauri/commander-free/Cargo.toml';
+          const lockPath = 'src-tauri/Cargo.lock';
+          const tauriConfig = JSON.parse(fs.readFileSync(tauriPath, 'utf8'));
+          const cargo = fs.readFileSync(cargoPath, 'utf8');
+          const lock = fs.readFileSync(lockPath, 'utf8');
+          const cargoVersion = (cargo.match(/^version = "([^"]+)"/m) || [])[1];
+          const lockVersion = (lock.match(/\[\[package\]\]\nname = "commander-free"\nversion = "([^"]+)"/) || [])[1];
+          const aligned =
+            current === version &&
+            tauriConfig.version === version &&
+            cargoVersion === version &&
+            lockVersion === version;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `already_aligned=${aligned}\n`);
+          if (aligned) {
+            console.log(`Version files already match ${version}.`);
+            process.exit(0);
+          }
+
+          packageJson.version = version;
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+          tauriConfig.version = version;
+          fs.writeFileSync(tauriPath, `${JSON.stringify(tauriConfig, null, 2)}\n`);
+          if (!/^version = ".*"$/m.test(cargo)) {
+            throw new Error('Free Cargo package version was not found.');
+          }
+          fs.writeFileSync(cargoPath, cargo.replace(/^version = ".*"$/m, `version = "${version}"`));
+          const updatedLock = lock.replace(
+            /(\[\[package\]\]\nname = "commander-free"\nversion = ")[^"]+(")/,
+            `$1${version}$2`,
+          );
+          if (updatedLock === lock) throw new Error('Free Cargo.lock package version was not found.');
+          fs.writeFileSync(lockPath, updatedLock);
+          console.log(`Updated version files ${current} -> ${version}.`);
+          NODE
+
+          if [[ "$(git rev-parse HEAD)" != "$tag_sha" ]]; then
+            echo "Checkout moved while aligning versions." >&2
+            exit 1
+          fi
+
+          git config user.name "WinCommander release automation"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- package.json \
+              src-tauri/commander-free/tauri.conf.json \
+              src-tauri/commander-free/Cargo.toml \
+              src-tauri/Cargo.lock; then
+            echo "release_sha=${tag_sha}" >> "$GITHUB_OUTPUT"
+            echo "Version files already match ${version} at ${tag_sha}."
+            exit 0
+          fi
+
+          if [[ "${tag_sha}" != "${main_sha}" ]]; then
+            echo "Tag ${RELEASE_TAG} is not origin/main HEAD, so the workflow cannot commit version files on top of it." >&2
+            echo "Merge the intended commits to main, then retag, or run prepare release first." >&2
+            exit 1
+          fi
+
+          git add package.json \
+            src-tauri/commander-free/tauri.conf.json \
+            src-tauri/commander-free/Cargo.toml \
+            src-tauri/Cargo.lock
+          git commit -m "release: v${version}"
+          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:main
+          echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   build-free-release:
     name: Build, sign, publish to R2 and GitHub, and attest Free MSI
+    needs: align-version
     runs-on: windows-latest
     environment:
       name: release
@@ -38,8 +173,9 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ env.RELEASE_TAG }}
-          # Build from the exact assets commit recorded by the version tag.
+          ref: ${{ needs.align-version.outputs.release_sha }}
+          # Build from the aligned release commit (the tag itself when
+          # versions already match, or the follow-up Cargo bump on main).
           # A hard-coded assets ref can drift from local development and ship
           # a release with missing runtime logos despite a passing dev build.
           submodules: recursive
@@ -286,6 +422,7 @@ jobs:
           RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.CF_R2_API }}
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_KEY }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET }}
+          RCLONE_CONFIG_R2_REGION: auto
         run: |
           $ErrorActionPreference = "Stop"
           $rcloneZip = Join-Path $env:RUNNER_TEMP "rclone.zip"

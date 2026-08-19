@@ -19,6 +19,19 @@ jobs:
     name: Prepare exact version release PR
     runs-on: ubuntu-latest
     steps:
+      - name: Require repository admin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          perm="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" --jq .permission)"
+          echo "Prepare-release requested by ${ACTOR} (${perm})"
+          if [[ "${perm}" != "admin" ]]; then
+            echo "Only repository admins or owners can prepare a release." >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: main
