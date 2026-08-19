@@ -118,21 +118,21 @@ export default function VaultVolumesEditor({ volumes, groups, onChange }: {
               <div><span>Selected Vault</span><strong>{selected.label} · {selected.driveLetter}:</strong></div>
               <Button size="sm" variant="danger" onClick={removeVolume}><Icon icon="trash" />Remove</Button>
             </div>
-            <div className="fleet-vault-fields">
-              <FleetField label="Volume name"><Input value={selected.label} onChange={event => patch({ label: event.target.value })} /></FleetField>
-              <FleetField label="Type">
+            <div className={`fleet-vault-fields${selected.kind === "dual" ? " is-dual" : ""}`}>
+              <FleetField compact label="Volume name"><Input value={selected.label} onChange={event => patch({ label: event.target.value })} /></FleetField>
+              <FleetField compact label="Type">
                 <Select value={selected.kind} onValueChange={kind => patch({ kind: kind as VaultKind })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="container">Container</SelectItem><SelectItem value="partition">Raw partition</SelectItem><SelectItem value="dual">Decoy + hidden</SelectItem></SelectContent>
                 </Select>
               </FleetField>
-              <FleetField label="Backing path / device"><Input value={selected.backing} onChange={event => patch({ backing: event.target.value })} /></FleetField>
-              <FleetField label="Size (MiB)"><Input type="number" min={64} value={selected.sizeMb} onChange={event => patch({ sizeMb: Number(event.target.value) })} /></FleetField>
-              <FleetField label="Drive letter"><Input maxLength={1} value={selected.driveLetter} onChange={event => patch({ driveLetter: event.target.value.toUpperCase() })} /></FleetField>
-              <FleetField label="Credential reference"><Input value={selected.credentialRef} onChange={event => patch({ credentialRef: event.target.value })} /></FleetField>
+              <FleetField compact label="Backing path / device"><Input value={selected.backing} onChange={event => patch({ backing: event.target.value })} /></FleetField>
+              <FleetField compact label="Size (MiB)"><Input type="number" min={64} value={selected.sizeMb} onChange={event => patch({ sizeMb: Number(event.target.value) })} /></FleetField>
+              <FleetField compact label="Drive letter"><Input maxLength={1} value={selected.driveLetter} onChange={event => patch({ driveLetter: event.target.value.toUpperCase() })} /></FleetField>
+              <FleetField compact label="Credential reference"><Input value={selected.credentialRef} onChange={event => patch({ credentialRef: event.target.value })} /></FleetField>
               {selected.kind === "dual" && <>
-                <FleetField label="Hidden size (MiB)"><Input type="number" min={32} value={selected.hiddenSizeMb ?? 128} onChange={event => patch({ hiddenSizeMb: Number(event.target.value) })} /></FleetField>
-                <FleetField label="Hidden credential"><Input value={selected.hiddenCredentialRef ?? ""} onChange={event => patch({ hiddenCredentialRef: event.target.value })} /></FleetField>
+                <FleetField compact label="Hidden size (MiB)"><Input type="number" min={32} value={selected.hiddenSizeMb ?? 128} onChange={event => patch({ hiddenSizeMb: Number(event.target.value) })} /></FleetField>
+                <FleetField compact label="Hidden credential"><Input value={selected.hiddenCredentialRef ?? ""} onChange={event => patch({ hiddenCredentialRef: event.target.value })} /></FleetField>
               </>}
             </div>
             <div className="fleet-vault-permission-head">

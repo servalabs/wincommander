@@ -175,10 +175,15 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
                 {visibleUsers.map(user => {
                   const checked = selectedGroup.userIds.includes(user.id);
                   const totalMemberships = membershipCount(directory.groups, user.id);
+                  const primary = user.displayName || user.username;
+                  const secondary = user.displayName
+                    && user.displayName.localeCompare(user.username, undefined, { sensitivity: "accent" }) !== 0
+                    ? user.username
+                    : user.isCurrent ? "Signed-in user" : "";
                   return (
                     <label className={`fleet-access-user-row${checked ? " is-checked" : ""}`} key={user.id}>
                       <input type="checkbox" checked={checked} onChange={event => toggleUser(user.id, event.target.checked)} />
-                      <span className="fleet-access-user-copy"><strong>{user.displayName || user.username}</strong><small>{user.displayName ? user.username : user.sid || "Windows user"}</small></span>
+                      <span className="fleet-access-user-copy"><strong>{primary}</strong><small>{secondary || "\u00a0"}</small></span>
                       <span className="fleet-count-badge" title={`${totalMemberships} group memberships`}>{totalMemberships}</span>
                     </label>
                   );
