@@ -23,21 +23,23 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Icon, Spinner } from "@/components/ui/bp";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { AnimatePresence, motion } from "framer-motion";
 import type { AppSettings } from "../types/settings";
 import { dedupeContentRows, isNameOnlyMatch } from "@/lib/contentSearch";
 import { formatResultSize, isDirectoryResult, isEngineMissingError, sfExtOf } from "@/lib/fileNameSearch";
 import type { SearchResult } from "@/lib/fileNameSearch";
 import { recordOpen, topPaths } from "@/lib/frecency";
-import { describeQuery } from "@/lib/searchQueryPlan";
+import { describeQuery, isDriveRootPath, splitScopePaths } from "@/lib/searchQueryPlan";
 import { parseKnownFolderScope, parseSearchStorageLocation, recentSearchFolders } from "@/lib/searchStorageLocation";
 import { addChip, CHIP_DEFS, chipDef, cycleChipStrict, demoteLastChip, promoteChip, removeChipAt, suggestChip } from "@/lib/searchTokens";
 import type { Chip, ChipKind, QueryState } from "@/lib/searchTokens";
+import { nextAppendType, TAB_TYPE_CYCLE, TYPE_DROPDOWN_ORDER, visibleSelectedTypes } from "@/lib/searchTypeCycle";
 import { useChipSearch, useReducedMotionPref } from "@/hooks/useChipSearch";
 import { useContentPreview } from "@/hooks/useContentPreview";
 import type { BrowseResult } from "@/hooks/useChipSearch";
 import SearchResultContextMenu from "./SearchResultContextMenu";
+import FileTypeIcon from "./FileTypeIcon";
 import { useSearchResultContextMenu } from "@/hooks/useSearchResultContextMenu";
 import "./EverythingSearchBar.css";
 
@@ -45,15 +47,47 @@ const esbIconCache = new Map<string, string | null>();
 const SEARCH_FILES_HANDOFF_KEY = "wincommander.search-files-query";
 const QUICK_RESULT_LIMIT = 300;
 
-const TYPE_FILTERS: readonly { kind: ChipKind; label: string; icon: string }[] = [
-  { kind: "pdf", label: "PDF", icon: "document" }, { kind: "excel", label: "Excel", icon: "document" },
-  { kind: "word", label: "Word", icon: "document" }, { kind: "text", label: "Text", icon: "document" },
-  { kind: "slides", label: "Slides", icon: "document" }, { kind: "images", label: "Images", icon: "media" },
-  { kind: "videos", label: "Video", icon: "video" }, { kind: "audio", label: "Audio", icon: "music" },
-  { kind: "archives", label: "Archives", icon: "compressed" }, { kind: "code", label: "Code", icon: "code" },
-  { kind: "apps", label: "Apps", icon: "application" }, { kind: "folders", label: "Folders", icon: "folder-close" },
+const TYPE_FILTER_META: Record<string, { label: string; icon: string }> = {
+  videos: { label: "Video", icon: "video" },
+  images: { label: "Images", icon: "media" },
+  slides: { label: "Slides", icon: "document" },
+  text: { label: "Text", icon: "document" },
+  audio: { label: "Audio", icon: "music" },
+  archives: { label: "Archives", icon: "compressed" },
+  apps: { label: "Apps", icon: "application" },
+  code: { label: "Code", icon: "code" },
+};
+const TYPE_FILTERS: readonly { kind: ChipKind; label: string; icon: string }[] =
+  TYPE_DROPDOWN_ORDER.filter((kind) => !(TAB_TYPE_CYCLE as readonly ChipKind[]).includes(kind))
+    .map((kind) => ({ kind, ...(TYPE_FILTER_META[kind] ?? { label: kind, icon: "document" }) }));
+const CYCLE_TYPE_FILTERS: readonly { kind: ChipKind; label: string }[] = [
+  { kind: "folders", label: "Folders" },
+  { kind: "pdf", label: "PDF" },
+  { kind: "excel", label: "Excel" },
+  { kind: "word", label: "Word" },
+];
+const ALL_TYPE_FILTERS: readonly { kind: ChipKind; label: string }[] = [
+  ...CYCLE_TYPE_FILTERS,
+  ...TYPE_FILTERS.map((type) => ({ kind: type.kind, label: type.label })),
 ];
 const STORAGE_ROOTS = ["C:\\", "D:\\", "E:\\"];
+
+function isTypeFilterKind(kind: ChipKind): boolean {
+  return (TAB_TYPE_CYCLE as readonly ChipKind[]).includes(kind) || TYPE_FILTERS.some((type) => type.kind === kind);
+}
+
+function driveRootLabel(path: string): string {
+  return path.replace(/[\\/]+$/, "");
+}
+
+function driveIconName(label: string): "hard-drive" | "disc" {
+  return /cd|dvd/i.test(label) ? "disc" : "hard-drive";
+}
+
+function sameStoragePath(a: string, b: string): boolean {
+  return driveRootLabel(a).toLocaleLowerCase() === driveRootLabel(b).toLocaleLowerCase();
+}
+
 type KnownSearchFolder = { label: string; path: string };
 type ResultTab = "files" | "contents";
 
@@ -127,6 +161,55 @@ function chipIconName(chip: Chip): string {
   return def.supportsStrict && chip.strict === true ? "filter" : def.icon;
 }
 
+function ChipGlyph({ chip }: { chip: Chip }) {
+  if (isTypeFilterKind(chip.kind)) return <FileTypeIcon kind={chip.kind} size={14} />;
+  return <Icon icon={chipIconName(chip)} size={12} className="esb-chip-icon" />;
+}
+
+function TypeFilterIcon({
+  kind,
+  selected,
+  next,
+  onToggle,
+}: {
+  kind: ChipKind;
+  selected: boolean;
+  next: boolean;
+  onToggle: (kind: ChipKind) => void;
+}) {
+  return (
+    <span className={`esb-type-icon${selected ? " is-selected" : ""}${next && !selected ? " is-next" : ""}`}>
+      {selected && (
+        <button
+          type="button"
+          className="esb-type-icon-x"
+          aria-label="Remove this type filter"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onToggle(kind);
+          }}
+        >
+          <Icon icon="cross" size={8} />
+        </button>
+      )}
+      <button
+        type="button"
+        className="esb-type-icon-hit"
+        aria-pressed={selected}
+        aria-label={selected ? "Remove this type filter" : "Filter by this type"}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onToggle(kind);
+        }}
+      >
+        <FileTypeIcon kind={kind} size={18} />
+      </button>
+    </span>
+  );
+}
+
 function chipAriaLabel(chip: Chip): string {
   const def = chipDef(chip.kind);
   if (!def.supportsStrict) return `${chipLabel(chip)} filter. Activate to remove.`;
@@ -144,6 +227,8 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
   const [resultTab, setResultTab] = useState<ResultTab>("files");
   const [storageRoots, setStorageRoots] = useState<string[]>(STORAGE_ROOTS);
   const [knownFolders, setKnownFolders] = useState<KnownSearchFolder[]>([]);
+  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+  const [typeMenuArmed, setTypeMenuArmed] = useState(false);
 
   const search = useChipSearch(visible);
   const {
@@ -216,6 +301,8 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     resetSearch();
     setSelectedIndex(0);
     setInputKey(k => k + 1);
+    setTypeMenuOpen(false);
+    setTypeMenuArmed(false);
     autoStorageUndoRef.current = null;
   }, [resetSearch]);
 
@@ -588,6 +675,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     if (suggestion) {
       const def = chipDef(suggestion.chip.kind);
       return {
+        kind: suggestion.chip.kind,
         icon: def.icon,
         label: def.supportsStrict ? `${def.label} first` : def.label,
       };
@@ -600,10 +688,48 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     if (suggestion) { setQuery(promoteChip(query, suggestion)); return; }
   }, [suggestion, query, setQuery]);
 
-  const activeTypeChips = query.chips.filter((chip) => TYPE_FILTERS.some((type) => type.kind === chip.kind));
+  const applyTabTypeCycle = useCallback(() => {
+    const selected = query.chips.filter((chip) => isTypeFilterKind(chip.kind)).map((chip) => chip.kind);
+    const next = nextAppendType(selected);
+    setSelectedIndex(0);
+    if (next === "menu") {
+      setTypeMenuArmed(true);
+      return;
+    }
+    setTypeMenuArmed(false);
+    setQuery((previous) => addChip(previous, next));
+  }, [query.chips, setQuery]);
+
+  const cycleHint = useMemo(() => {
+    if (ghost || !query.text.trim()) return null;
+    if (typeMenuArmed) {
+      return { kind: undefined, icon: "filter", label: "Type", kbd: "↵", action: "menu" as const };
+    }
+    const selected = query.chips.filter((chip) => isTypeFilterKind(chip.kind)).map((chip) => chip.kind);
+    const next = nextAppendType(selected);
+    if (next === "menu") {
+      return { kind: undefined, icon: "filter", label: "More types", kbd: "Tab", action: "cycle" as const };
+    }
+    const def = chipDef(next);
+    return { kind: next, icon: def.icon, label: def.label, kbd: "Tab", action: "cycle" as const };
+  }, [ghost, query.chips, query.text, typeMenuArmed]);
+
+  const activeTypeChips = query.chips.filter((chip) => isTypeFilterKind(chip.kind));
+  const activeTypeKinds = activeTypeChips.map((chip) => chip.kind);
+  const nextTypeKind = nextAppendType(activeTypeKinds);
+  const { visible: visibleSelectedKinds, overflow: overflowSelectedKinds } = visibleSelectedTypes(activeTypeKinds);
+  const barTypeKinds = activeTypeKinds.length === 0 ? [...TAB_TYPE_CYCLE] : visibleSelectedKinds;
+  const dropdownTypeFilters = activeTypeKinds.length === 0
+    ? TYPE_FILTERS
+    : ALL_TYPE_FILTERS.filter((type) => !visibleSelectedKinds.includes(type.kind));
   const storageChip = query.chips.find((chip) => chip.kind === "in");
-  const typeLabel = activeTypeChips.length ? activeTypeChips.map(chipLabel).join(" + ") : "All types";
-  const storageLabel = storageChip?.pathLabel ?? "All drives";
+  const selectedDrivePaths = useMemo(() => {
+    const paths = splitScopePaths(storageChip?.path);
+    return paths.length > 0 && paths.every(isDriveRootPath) ? paths : [];
+  }, [storageChip?.path]);
+  const storageLabel = selectedDrivePaths.length > 0
+    ? selectedDrivePaths.map(driveRootLabel).join(" + ")
+    : (storageChip?.pathLabel ?? "All drives");
   const recentFolders = useMemo(() => recentSearchFolders(topPaths(24)), []);
   const storageFolders = useMemo(() => {
     const paths = new Set<string>();
@@ -616,6 +742,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
   }, [knownFolders, recentFolders]);
 
   const toggleType = useCallback((kind: ChipKind) => {
+    setTypeMenuArmed(false);
     setSelectedIndex(0);
     setQuery((previous) => {
       const existing = previous.chips.findIndex((chip) => chip.kind === kind);
@@ -637,11 +764,38 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     });
   }, [setQuery]);
 
+  const toggleDrive = useCallback((folder: KnownSearchFolder) => {
+    autoStorageUndoRef.current = null;
+    setSelectedIndex(0);
+    setQuery((previous) => {
+      const current = previous.chips.find((chip) => chip.kind === "in");
+      const withoutStorage = { chips: previous.chips.filter((chip) => chip.kind !== "in"), text: previous.text };
+      const roots = splitScopePaths(current?.path);
+      const driveMode = roots.length > 0 && roots.every(isDriveRootPath);
+      if (!current || !driveMode) {
+        return addChip(withoutStorage, "in", { path: folder.path, pathLabel: driveRootLabel(folder.path), source: "" });
+      }
+      const exists = roots.some((root) => sameStoragePath(root, folder.path));
+      const nextRoots = exists
+        ? roots.filter((root) => !sameStoragePath(root, folder.path))
+        : [...roots, folder.path];
+      if (nextRoots.length === 0) return withoutStorage;
+      const labels = nextRoots.map(driveRootLabel);
+      return addChip(withoutStorage, "in", {
+        path: nextRoots.join("|"),
+        pathLabel: labels.join(" + "),
+        source: "",
+      });
+    });
+  }, [setQuery]);
+
   const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const text = e.target.value;
     // Once another input event has happened, the automatic promotion is no
     // longer the immediately preceding action, so Backspace edits normally.
     autoStorageUndoRef.current = null;
+    setTypeMenuArmed(false);
+    setTypeMenuOpen(false);
     setSelectedIndex(0);
     setQuery((previous) => {
       let next: QueryState = { chips: previous.chips, text };
@@ -672,6 +826,12 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey && ghost) {
       e.preventDefault();
       promoteGhost();
+      return;
+    }
+    // No trailing-word ghost: append the next unused cycle type, then arm the Type dropdown.
+    if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey && query.text.trim()) {
+      e.preventDefault();
+      applyTabTypeCycle();
       return;
     }
     if (e.key === "Backspace" && query.chips.length > 0) {
@@ -725,12 +885,24 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         close();
         return;
       }
+      if (typeMenuArmed) {
+        e.preventDefault();
+        setTypeMenuOpen(true);
+        return;
+      }
+      // First Enter on a name applies Folders, then PDF / Excel / Word via Tab.
+      // Opening a mixed all-types hit is the old path and hid the type cycle.
+      if (query.text.trim() && !query.chips.some((chip) => isTypeFilterKind(chip.kind))) {
+        e.preventDefault();
+        applyTabTypeCycle();
+        return;
+      }
       const fileResult = resultTab === "files" ? primary[activeIndex] : undefined;
       const row = fileResult?.full_path ?? (resultTab === "contents" ? dedupedContentRows[activeIndex]?.path : undefined);
       if (row) void openPath(row, fileResult ? isDirectoryResult(fileResult) : false);
       return;
     }
-  }, [close, handleEscape, ghost, promoteGhost, query, applyQuery, visibleRowCount, activeIndex, primary, dedupedContentRows, openPath, resultTab]);
+  }, [close, handleEscape, ghost, promoteGhost, applyTabTypeCycle, typeMenuArmed, query, applyQuery, visibleRowCount, activeIndex, primary, dedupedContentRows, openPath, resultTab]);
 
   const renderChip = (chip: Chip, index: number) => {
     const label = chipLabel(chip);
@@ -741,7 +913,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     if (!chipDef(chip.kind).supportsStrict) {
       return (
         <button type="button" className={`${cls} esb-chip-solo`} onClick={() => applyQuery(removeChipAt(query, index))} aria-label={aria} title={aria}>
-          <Icon icon={chipIconName(chip)} size={12} className="esb-chip-icon" />
+          <ChipGlyph chip={chip} />
           <span className="esb-chip-label">{label}</span>
           <span className="esb-chip-x" aria-hidden="true"><Icon icon="cross" size={9} /></span>
         </button>
@@ -750,7 +922,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     return (
       <span className={cls}>
         <button type="button" className="esb-chip-main" onClick={() => applyQuery(cycleChipStrict(query, index))} aria-label={aria} title={aria}>
-          <Icon icon={chipIconName(chip)} size={12} className="esb-chip-icon" />
+          <ChipGlyph chip={chip} />
           <span className="esb-chip-label">{label}</span>
         </button>
         <button type="button" className="esb-chip-x esb-chip-x-btn" onClick={() => applyQuery(removeChipAt(query, index))} aria-label={`Remove the ${label} filter`} title="Remove">
@@ -800,7 +972,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         <div className="esb-field">
           <AnimatePresence initial={false}>
             {query.chips.map((chip, index) => (
-              !TYPE_FILTERS.some((type) => type.kind === chip.kind) && chip.kind !== "in" && (
+              chip.kind !== "in" && !isTypeFilterKind(chip.kind) && (
               <motion.span
                 key={chip.kind}
                 className="esb-chip-wrap"
@@ -823,9 +995,23 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
               aria-label={`Add the ${ghost.label} filter. Press Tab.`}
               title={`Tab to filter by ${ghost.label}`}
             >
-              <Icon icon={ghost.icon} size={12} className="esb-chip-icon" />
-              <span className="esb-chip-label">{ghost.label}</span>
+              {isTypeFilterKind(ghost.kind)
+                ? <FileTypeIcon kind={ghost.kind} size={14} />
+                : <Icon icon={ghost.icon} size={12} className="esb-chip-icon" />}
+              {!isTypeFilterKind(ghost.kind) && <span className="esb-chip-label">{ghost.label}</span>}
               <kbd className="esb-ghost-kbd" aria-hidden="true">Tab</kbd>
+            </button>
+          )}
+          {!ghost && cycleHint && cycleHint.action === "menu" && (
+            <button
+              type="button"
+              className="esb-ghost"
+              onClick={() => setTypeMenuOpen(true)}
+              aria-label="Open the type filter menu. Press Enter."
+              title="Enter to open types"
+            >
+              <Icon icon={cycleHint.icon} size={12} className="esb-chip-icon" />
+              <kbd className="esb-ghost-kbd" aria-hidden="true">{cycleHint.kbd}</kbd>
             </button>
           )}
 
@@ -854,7 +1040,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         {!search.isSearching && (query.text || query.chips.length > 0) && (
           <button
             className="esb-clear"
-            onClick={() => { applyQuery({ chips: [], text: "" }); inputRef.current?.focus(); }}
+            onClick={() => { setTypeMenuArmed(false); setTypeMenuOpen(false); applyQuery({ chips: [], text: "" }); inputRef.current?.focus(); }}
             aria-label="Clear the search"
             title="Clear"
             tabIndex={-1}
@@ -864,50 +1050,110 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         )}
         </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button type="button" className="esb-filter-control" aria-label={`File type: ${typeLabel}`}>
-              <Icon icon="filter" size={13} />
-              <span className="esb-filter-control-label">Type</span>
-              <strong>{typeLabel}</strong>
-              <Icon icon="chevron-down" size={12} />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="esb-filter-menu">
-            <DropdownMenuLabel>File type — choose any</DropdownMenuLabel>
-            <DropdownMenuItem onSelect={() => setQuery((previous) => ({ chips: previous.chips.filter((chip) => !TYPE_FILTERS.some((type) => type.kind === chip.kind)), text: previous.text }))}>
-              <Icon icon="th" /> All types
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            {TYPE_FILTERS.map((type) => (
-              <DropdownMenuCheckboxItem key={type.kind} checked={activeTypeChips.some((chip) => chip.kind === type.kind)} onCheckedChange={() => toggleType(type.kind)} onSelect={(event) => event.preventDefault()}>
-                <span className={`esb-extension-icon esb-extension-icon--${type.kind}`} aria-hidden="true">{type.label.slice(0, 3).toUpperCase()}</span>{type.label}
-              </DropdownMenuCheckboxItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <div className="esb-filter-control esb-type-filter" aria-label="File type">
+          {barTypeKinds.map((kind) => (
+            <TypeFilterIcon
+              key={kind}
+              kind={kind}
+              selected={activeTypeKinds.includes(kind)}
+              next={activeTypeKinds.length === 0 && nextTypeKind === kind}
+              onToggle={toggleType}
+            />
+          ))}
+          <DropdownMenu open={typeMenuOpen} onOpenChange={setTypeMenuOpen}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className={`esb-type-more${overflowSelectedKinds.length > 0 ? " is-overflow" : ""}`}
+                aria-label={overflowSelectedKinds.length > 0 ? `${overflowSelectedKinds.length} more selected types` : "More file types"}
+              >
+                {overflowSelectedKinds.length > 0
+                  ? `+${overflowSelectedKinds.length}`
+                  : <Icon icon="plus" size={12} />}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="esb-filter-menu">
+              <DropdownMenuLabel>{overflowSelectedKinds.length > 0 ? "Selected and more types" : "More types"}</DropdownMenuLabel>
+              {dropdownTypeFilters.map((type) => (
+                <DropdownMenuCheckboxItem
+                  key={type.kind}
+                  checked={overflowSelectedKinds.includes(type.kind)}
+                  onCheckedChange={() => toggleType(type.kind)}
+                  onSelect={(event) => event.preventDefault()}
+                >
+                  <span className="esb-filter-type-item"><FileTypeIcon kind={type.kind} />{type.label}</span>
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" className="esb-filter-control" aria-label={`Storage: ${storageLabel}`} title={storageChip?.path ? `Storage path: ${storageChip.path}` : undefined}>
               <Icon icon="hard-drive" size={13} />
-              <span className="esb-filter-control-label">Storage</span>
               <strong>{storageLabel}</strong>
               <Icon icon="chevron-down" size={12} />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="esb-filter-menu">
+          <DropdownMenuContent align="end" className="esb-filter-menu esb-storage-menu">
             <DropdownMenuLabel>Storage</DropdownMenuLabel>
-            <DropdownMenuItem onSelect={() => selectStorage()}><Icon icon="hard-drive" /> All drives</DropdownMenuItem>
+            <DropdownMenuItem
+              className={`esb-drive-all${selectedDrivePaths.length === 0 && !storageChip ? " is-selected" : ""}`}
+              onSelect={(event) => {
+                selectStorage();
+                event.preventDefault();
+              }}
+            >
+              <span className="esb-drive-tick" aria-hidden="true">{selectedDrivePaths.length === 0 && !storageChip ? <Icon icon="tick" size={11} /> : null}</span>
+              <Icon icon="hard-drive" /> All drives
+            </DropdownMenuItem>
+            <DropdownMenuGroup className="esb-drive-grid" aria-label="Drives">
+              {storageRoots.map((path) => {
+                const label = driveRootLabel(path);
+                const selected = selectedDrivePaths.some((root) => sameStoragePath(root, path));
+                return (
+                  <DropdownMenuItem
+                    key={path}
+                    className={`esb-drive-cell${selected ? " is-selected" : ""}`}
+                    title={path}
+                    onSelect={(event) => {
+                      toggleDrive({ path, label });
+                      event.preventDefault();
+                    }}
+                  >
+                    <span className="esb-drive-tick" aria-hidden="true">{selected ? <Icon icon="tick" size={11} /> : null}</span>
+                    <Icon icon={driveIconName(label)} size={12} />
+                    <span className="esb-drive-label">{label}</span>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuGroup>
             {knownFolders.length > 0 && <DropdownMenuSeparator />}
-            {knownFolders.map((folder) => <DropdownMenuItem key={folder.path} onSelect={() => selectStorage(folder)} title={folder.path}><Icon icon={knownFolderIcon(folder.label)} /> {folder.label}</DropdownMenuItem>)}
+            {knownFolders.length > 0 && (
+              <DropdownMenuGroup className="esb-folder-grid" aria-label="Folders">
+                {knownFolders.map((folder) => {
+                  const selected = !!storageChip?.path && sameStoragePath(storageChip.path, folder.path);
+                  return (
+                    <DropdownMenuItem
+                      key={folder.path}
+                      className={`esb-drive-cell${selected ? " is-selected" : ""}`}
+                      title={folder.path}
+                      onSelect={() => selectStorage(folder)}
+                    >
+                      <span className="esb-drive-tick" aria-hidden="true">{selected ? <Icon icon="tick" size={11} /> : null}</span>
+                      <Icon icon={knownFolderIcon(folder.label)} size={12} />
+                      <span className="esb-drive-label">{folder.label}</span>
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuGroup>
+            )}
             {recentFolders.length > 0 && <>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Recent folders</DropdownMenuLabel>
               {recentFolders.map((folder) => <DropdownMenuItem key={folder.path} onSelect={() => selectStorage(folder)} title={folder.path}><Icon icon="folder-open" /> {folder.label}</DropdownMenuItem>)}
             </>}
-            <DropdownMenuSeparator />
-            {storageRoots.map((path) => <DropdownMenuItem key={path} onSelect={() => selectStorage({ path, label: path.replace(/[\\/]+$/, "") })} title={path}><Icon icon="hard-drive" /> {path}</DropdownMenuItem>)}
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -921,7 +1167,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
           <span className="esb-hint-mode"><Icon icon="folder-open" size={11} /> jump into folder</span>
         )}
         <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
-        <span><kbd>↵</kbd> open</span>
+        <span><kbd>↵</kbd> {query.text.trim() && activeTypeChips.length === 0 ? "folders" : "open"}</span>
         <span><kbd>Tab</kbd> filter</span>
         <span><kbd>⌫</kbd> undo chip</span>
         <span><kbd>Esc</kbd> close</span>
