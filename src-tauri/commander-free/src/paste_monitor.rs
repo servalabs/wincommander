@@ -1523,13 +1523,13 @@ fn rules_have_cross_source_collision(
     })
 }
 
-/// Replace the user-owned custom portion of the local source. The caller
-/// persists this value through settings; this command only validates and
-/// atomically activates it alongside the immutable builtins.
-#[tauri::command]
-pub async fn set_local_clipboard_guard_rules(
+/// Validates and swaps the user-owned custom source, returning the prior
+/// response so its persistent owner can restore it if its subsequent disk
+/// write fails. This is crate-private to keep service/Fleet code out of the
+/// personal rule source.
+pub(crate) fn replace_local_clipboard_guard_rules(
     policy: ClipboardPolicyResponse,
-) -> Result<(), String> {
+) -> Result<ClipboardPolicyResponse, String> {
     if !local_actions_are_safe(&policy) {
         return Err("local clipboard rules may only notify, clear, or quarantine".to_string());
     }
@@ -1540,13 +1540,23 @@ pub async fn set_local_clipboard_guard_rules(
         return Err("local clipboard rules reuse a managed rule identifier".to_string());
     }
     install_local_policy(&enabled, &policy)?;
+    let previous = LOCAL_CUSTOM_RULES.lock().unwrap().clone();
     *LOCAL_CUSTOM_NAMES.lock().unwrap() = policy
         .rules
         .iter()
         .map(|rule| (rule.id.clone(), rule.name.clone()))
         .collect();
     *LOCAL_CUSTOM_RULES.lock().unwrap() = policy;
-    Ok(())
+    Ok(previous)
+}
+
+/// Replace the user-owned custom portion of the local source without
+/// persistence. Kept for in-process callers that only need a runtime change.
+#[tauri::command]
+pub async fn set_local_clipboard_guard_rules(
+    policy: ClipboardPolicyResponse,
+) -> Result<(), String> {
+    replace_local_clipboard_guard_rules(policy).map(|_| ())
 }
 
 #[tauri::command]

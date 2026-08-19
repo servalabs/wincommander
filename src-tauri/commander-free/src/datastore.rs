@@ -47,6 +47,7 @@ use std::fs;
 use std::path::PathBuf;
 
 const MATERIAL_FILENAME: &str = ".install.material";
+const USER_MATERIAL_FILENAME: &str = ".user-store.material";
 const STORE_SUBDIR: &str = "store";
 const FORMAT_PREFIX: &str = "enc:v1:";
 
@@ -76,6 +77,18 @@ fn section_path(section: &str) -> Result<PathBuf, String> {
         ));
     }
     Ok(store_dir()?.join(format!("{section}.dat")))
+}
+
+fn user_file_path(filename: &str) -> Result<PathBuf, String> {
+    if filename.is_empty()
+        || filename.len() > 64
+        || !filename
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    {
+        return Err("invalid per-user store filename".to_string());
+    }
+    Ok(crate::paths::user_data_dir()?.join(filename))
 }
 
 // ── DPAPI (machine-scope) protection for the install material ─────────────────
@@ -150,12 +163,89 @@ fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
+// Deliberately separate from the machine store: without
+// CRYPTPROTECT_LOCAL_MACHINE this material is only usable by this Windows
+// account. Clipboard rule authoring is personal state, never service state.
+#[cfg(windows)]
+fn user_dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
+    unsafe {
+        let in_blob = CRYPT_INTEGER_BLOB {
+            cbData: plain.len() as u32,
+            pbData: plain.as_ptr() as *mut u8,
+        };
+        let mut out_blob = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+        // `0` is current-user DPAPI scope. Do not add CRYPTPROTECT_LOCAL_MACHINE.
+        if CryptProtectData(
+            &in_blob,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            &mut out_blob,
+        ) == 0
+        {
+            return Err("current-user material protection failed".to_string());
+        }
+        let out = std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize).to_vec();
+        LocalFree(out_blob.pbData as _);
+        Ok(out)
+    }
+}
+
+#[cfg(windows)]
+fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+    unsafe {
+        let in_blob = CRYPT_INTEGER_BLOB {
+            cbData: blob.len() as u32,
+            pbData: blob.as_ptr() as *mut u8,
+        };
+        let mut out_blob = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+        // `0` is current-user DPAPI scope. It must match user_dpapi_protect.
+        if CryptUnprotectData(
+            &in_blob,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            &mut out_blob,
+        ) == 0
+        {
+            return Err("current-user material unprotection failed".to_string());
+        }
+        let out = std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize).to_vec();
+        LocalFree(out_blob.pbData as _);
+        Ok(out)
+    }
+}
+
 #[cfg(not(windows))]
 fn dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
     Ok(plain.to_vec())
 }
 #[cfg(not(windows))]
 fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
+    Ok(blob.to_vec())
+}
+
+#[cfg(not(windows))]
+fn user_dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
+    Ok(plain.to_vec())
+}
+
+#[cfg(not(windows))]
+fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     Ok(blob.to_vec())
 }
 
@@ -205,6 +295,29 @@ fn install_material() -> Result<[u8; 32], String> {
     atomic_write_bytes(&path, &protected)
         .map_err(|e| format!("Failed to write install material: {e}"))?;
     Ok(buf)
+}
+
+fn user_material() -> Result<[u8; 32], String> {
+    let path = crate::paths::user_data_dir()?.join(USER_MATERIAL_FILENAME);
+    if path.exists() {
+        let raw =
+            fs::read(&path).map_err(|_| "could not read per-user store material".to_string())?;
+        let plain = user_dpapi_unprotect(&raw)
+            .map_err(|_| "could not unlock per-user store material".to_string())?;
+        if plain.len() != 32 {
+            return Err("per-user store material is invalid".to_string());
+        }
+        let mut material = [0u8; 32];
+        material.copy_from_slice(&plain);
+        return Ok(material);
+    }
+    let mut material = [0u8; 32];
+    OsRng.fill_bytes(&mut material);
+    let protected = user_dpapi_protect(&material)
+        .map_err(|_| "could not protect per-user store material".to_string())?;
+    atomic_write_bytes(&path, &protected)
+        .map_err(|_| "could not write per-user store material".to_string())?;
+    Ok(material)
 }
 
 fn derive_section_key(
@@ -309,6 +422,54 @@ pub fn save(section: &str, data: &Value) -> Result<(), String> {
     let encoded = encode_section(&key, &bytes)?;
     atomic_write_bytes(&path, encoded.as_bytes())
         .map_err(|e| format!("Failed to write section '{section}': {e}"))
+}
+
+/// Reads one bounded, encrypted blob owned by the interactive Windows user.
+/// This is intentionally crate-private: services must not gain a generic path
+/// to user-owned clipboard rules.
+pub(crate) fn load_user_blob(
+    filename: &str,
+    max_plaintext_bytes: usize,
+) -> Result<Option<Vec<u8>>, String> {
+    let path = user_file_path(filename)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let max_encoded_bytes = max_plaintext_bytes
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(128))
+        .ok_or_else(|| "per-user store size limit is invalid".to_string())?;
+    let size = fs::metadata(&path)
+        .map_err(|_| "could not inspect per-user rules".to_string())?
+        .len();
+    if size as usize > max_encoded_bytes {
+        return Err("per-user rules exceed the size limit".to_string());
+    }
+    let encoded =
+        fs::read_to_string(&path).map_err(|_| "could not read per-user rules".to_string())?;
+    let key = derive_section_key(&user_material()?, None)?;
+    let plaintext = decode_section(&key, encoded.trim())
+        .map_err(|_| "per-user rules could not be decoded".to_string())?;
+    if plaintext.len() > max_plaintext_bytes {
+        return Err("per-user rules exceed the size limit".to_string());
+    }
+    Ok(Some(plaintext))
+}
+
+/// Atomically replaces one bounded user-owned encrypted blob.
+pub(crate) fn save_user_blob(
+    filename: &str,
+    plaintext: &[u8],
+    max_plaintext_bytes: usize,
+) -> Result<(), String> {
+    if plaintext.len() > max_plaintext_bytes {
+        return Err("per-user rules exceed the size limit".to_string());
+    }
+    let path = user_file_path(filename)?;
+    let key = derive_section_key(&user_material()?, None)?;
+    let encoded = encode_section(&key, plaintext)?;
+    atomic_write_bytes(&path, encoded.as_bytes())
+        .map_err(|_| "could not persist per-user rules".to_string())
 }
 
 // ── Log-record encryption ─────────────────────────────────────────────────────
@@ -478,6 +639,22 @@ mod tests {
         assert!(section_path("../etc/passwd").is_err());
         assert!(section_path("foo/bar").is_err());
         assert!(section_path("valid-name_123").is_ok());
+    }
+
+    #[test]
+    fn per_user_store_filename_cannot_escape_the_user_directory() {
+        assert!(user_file_path("../clipboard-guard-rules.dat").is_err());
+        assert!(user_file_path("clipboard/guard.dat").is_err());
+        assert!(user_file_path("clipboard-guard-rules.dat").is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn current_user_dpapi_material_roundtrip_is_separate_from_machine_store() {
+        let material = [9u8; 32];
+        let protected = user_dpapi_protect(&material).expect("current-user protect");
+        assert!(protected.len() > material.len());
+        assert_eq!(user_dpapi_unprotect(&protected).expect("current-user unprotect"), material);
     }
 
     #[test]

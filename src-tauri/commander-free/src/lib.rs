@@ -55,6 +55,7 @@ mod gpo_policy;
 mod inactivity_timer;
 mod investigator_install;
 mod license;
+mod local_clipboard_rules;
 mod log;
 mod malware_scan;
 mod monitor_util;
@@ -2527,6 +2528,8 @@ pub fn run() {
             paste_monitor::get_paste_monitor_categories,
             paste_monitor::set_local_clipboard_guard_rules,
             paste_monitor::get_local_clipboard_guard_rules,
+            local_clipboard_rules::load_local_clipboard_guard_rules,
+            local_clipboard_rules::save_local_clipboard_guard_rules,
             paste_monitor::get_managed_clipboard_guard_rules,
             paste_monitor::snooze_paste_monitor,
             paste_monitor::paste_monitor_snooze_remaining,
