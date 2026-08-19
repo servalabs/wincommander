@@ -1,9 +1,10 @@
 name: release
 
 # A vX.Y.Z tag starts the release. Pushing the tag (locally or after a
-# prepare-release PR merges) aligns Cargo/package versions, then the job
-# pauses at the protected `release` environment before GitHub exposes the
-# Tauri signing key and builds the MSI.
+# prepare-release PR merges) aligns Cargo/package versions, then the MSI
+# job uses the protected `release` environment (signing key + R2).
+# Owners/admins and usernames in RELEASE_AUTO_APPROVERS skip the manual
+# Review deployments click; anyone else cannot start the workflow.
 on:
   push:
     tags:
@@ -40,16 +41,26 @@ jobs:
     outputs:
       release_sha: ${{ steps.align.outputs.release_sha }}
     steps:
-      - name: Require repository admin
+      - name: Require owner, admin, or allowlisted releaser
         env:
           GH_TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
+          RELEASE_AUTO_APPROVERS: ${{ vars.RELEASE_AUTO_APPROVERS }}
         run: |
           set -euo pipefail
           perm="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" --jq .permission)"
-          echo "Release requested by ${ACTOR} (${perm})"
-          if [[ "${perm}" != "admin" ]]; then
-            echo "Only repository admins or owners can start a release." >&2
+          actor_lc="$(printf '%s' "${ACTOR}" | tr '[:upper:]' '[:lower:]')"
+          listed=false
+          allow="$(printf '%s' "${RELEASE_AUTO_APPROVERS:-}" | tr ',;' ' ')"
+          for name in ${allow}; do
+            name_lc="$(printf '%s' "${name}" | tr '[:upper:]' '[:lower:]')"
+            if [[ "${actor_lc}" == "${name_lc}" ]]; then
+              listed=true
+            fi
+          done
+          echo "Release requested by ${ACTOR} (${perm}, allowlisted=${listed})"
+          if [[ "${perm}" != "admin" && "${listed}" != "true" ]]; then
+            echo "Only repository owners/admins or people in RELEASE_AUTO_APPROVERS can start a release." >&2
             exit 1
           fi
 
@@ -162,6 +173,42 @@ jobs:
           git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin HEAD:main
           echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  auto-approve-release:
+    name: Auto-approve release environment
+    needs: align-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Approve pending release deployment
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          # GITHUB_TOKEN cannot approve its own deployment. The automation
+          # PAT must belong to a required reviewer on the `release`
+          # environment, and "Prevent self-review" must be off if that
+          # person also pushed the tag.
+          for _ in $(seq 1 40); do
+            pending="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/pending_deployments")"
+            count="$(printf '%s' "${pending}" | jq 'length')"
+            if [[ "${count}" != "0" ]]; then
+              ids="$(printf '%s' "${pending}" | jq -c '[.[].environment.id]')"
+              printf '%s' "${pending}" | jq -r '.[] | "Pending environment: \(.environment.name) (\(.environment.id))"'
+              if jq -n \
+                --argjson ids "${ids}" \
+                --arg comment "Auto-approved: ${ACTOR} is a repository owner/admin or RELEASE_AUTO_APPROVERS entry." \
+                '{environment_ids: $ids, state: "approved", comment: $comment}' \
+                | gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/pending_deployments" --input -; then
+                echo "Approved the release environment for ${ACTOR}."
+                exit 0
+              fi
+              echo "Auto-approve was rejected (often Prevent self-review, or the PAT is not a required reviewer). Approve Review deployments in the Actions UI."
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "No pending deployment appeared. If the MSI job is waiting, approve the release environment in the Actions UI. If Prevent self-review is enabled, turn it off for owner-triggered releases."
 
   build-free-release:
     name: Build, sign, publish to R2 and GitHub, and attest Free MSI

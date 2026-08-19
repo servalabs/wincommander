@@ -32,9 +32,10 @@ git push origin v3.2.17
    `release: vX.Y.Z` on `main` (`package.json`, Free `tauri.conf.json`,
    Free `Cargo.toml`, and the Free `Cargo.lock` package version) and builds
    that commit.
-3. Approve the protected `release` environment. The existing MSI job signs
-   the installer, copies the artifacts to R2 and its updater manifest, then
-   publishes the same files to the GitHub Release archive.
+3. If you (owner/admin) or a username in `RELEASE_AUTO_APPROVERS` pushed
+   the tag, the workflow approves the `release` environment itself. Anyone
+   else still uses **Review deployments**. The MSI job then signs the
+   installer, copies the artifacts to R2, and publishes the GitHub Release.
 
 The reviewable alternative is unchanged: run **prepare release** with the
 exact version, merge the `release/vX.Y.Z` pull request, and let the tag
@@ -47,25 +48,34 @@ installer cannot drift. The release environment must provide `CF_UPDATE_DOMAIN`,
 ## Who can release
 
 A tag push is **not** owner-only by GitHub default. Anyone with Write on the
-repo can push `v3.2.17` and start the workflow. The workflow itself now
-refuses to run unless `github.actor` is a repository **admin** (org owners
-and people with the Admin role). Contributors with Write or Maintain are
-rejected before any Cargo commit.
+repo can push `v3.2.17` and start the workflow. The workflow itself now refuses to run unless `github.actor` is a
+repository **admin** (org owners and people with the Admin role) **or** a
+username listed in the repository variable `RELEASE_AUTO_APPROVERS`
+(Settings → Secrets and variables → Actions → Variables). A Write
+collaborator who is not on that list is rejected before any Cargo commit.
 
-That check is the in-repo gate. Two GitHub settings should stay in place so
-a workflow edit cannot weaken it alone:
+That check is the in-repo gate. Keep these GitHub settings so a workflow
+edit cannot weaken it alone:
 
 1. **Tag ruleset** — Settings → Rules → Rulesets → new tag ruleset.
    Target `refs/tags/v*`. Restrict create, update, and delete to
-   **Repository admins**. Block force pushes. Then only owners/admins can
-   create the tag that starts a release.
+   **Repository admins** (and any named releaser if you add them to the
+   ruleset bypass). Block force pushes.
 2. **`release` environment** — Settings → Environments → `release`.
    Required reviewers = the owners. Deployment branches/tags = `v*`.
-   Signing keys and R2 secrets live here, so even an admin tag still waits
-   for that approval before the MSI is signed or uploaded.
+   Signing keys and R2 secrets live here.
+3. **Turn off Prevent self-review** on that environment. If it is on,
+   GitHub blocks the owner from approving their own tag (including the
+   automation PAT). The PAT in `RELEASE_AUTOMATION_TOKEN` must belong to
+   a required reviewer.
+4. **`RELEASE_AUTO_APPROVERS`** — optional comma-separated GitHub
+   logins, for example `alice,bob`. Those people can start a release and
+   skip the Review deployments click without being admins.
 
-The prepare-release path uses the same admin check. Merging the version PR
-still needs permission to merge to `main`.
+When the actor is an owner/admin or is allowlisted, **prepare release**
+also merges its version PR with `--admin` so CODEOWNERS on
+`tauri.conf.json` does not wait for a second human. The tag push then
+starts the same MSI job.
 
 ## Free bundle media boundary
 
