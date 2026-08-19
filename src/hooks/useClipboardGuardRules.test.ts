@@ -22,9 +22,9 @@ function localRule(): Rule {
 }
 
 describe("local clipboard rule persistence", () => {
-  test("uses the Tauri camel-case policy argument", () => {
+  test("uses the Rust policy_version field required by the Tauri command", () => {
     expect(localClipboardGuardPolicy([localRule()])).toEqual({
-      policyVersion: 0,
+      policy_version: 0,
       rules: [localRule()],
     });
   });
@@ -34,7 +34,7 @@ describe("local clipboard rule persistence", () => {
     await saveLocalClipboardRules(
       [localRule()],
       async (policy) => {
-        calls.push(`save:${policy.policyVersion}:${policy.rules.length}`);
+        calls.push(`save:${policy.policy_version}:${policy.rules.length}`);
       },
     );
     expect(calls).toEqual(["save:0:1"]);

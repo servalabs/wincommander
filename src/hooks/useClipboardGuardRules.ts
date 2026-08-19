@@ -3,12 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Rule } from "../types/generated/fleet";
 
 export interface ClipboardGuardPolicy {
-  policyVersion: number;
+  policy_version: number;
   rules: Rule[];
 }
 
 export function localClipboardGuardPolicy(rules: Rule[]): ClipboardGuardPolicy {
-  return { policyVersion: 0, rules };
+  return { policy_version: 0, rules };
 }
 
 /** The backend validates, atomically activates, then persists this policy. */
