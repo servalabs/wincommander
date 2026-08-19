@@ -372,6 +372,11 @@ Persisted under `ideal.privacy.*`. Several are paid (Pro sidecar). See
 | `f6_list_removable_volumes` / `f6_provision_wipe_usb(usbRoot)` (commands) | Create-Wipe-USB wizard: list removable drives; write `pubkey.bin` (32-byte device Ed25519 verifying key) + `device_id.txt` to `<usbRoot>\wipe\`, binding the USB to this device. Refuses fixed disks (DRIVE_REMOVABLE only). | Pro + Admin |
 | `prevention`                      | Advanced Activity Reduction — expert toggles that stop the OS from recording execution/device/network activity (some sub-flags paid). | —  |
 
+User-authored Clipboard Guard rules are intentionally outside `AppSettings`,
+because that store is machine-wide. They live in the signed-in Windows user's
+DPAPI-encrypted `%LOCALAPPDATA%\WinCommander\clipboard-rules.dat`; managed
+organization rules remain a separate Fleet-delivered source.
+
 Calculator-PIN gate (`startupPin`) and distress phrases (`distressPhrases`) are
 also persisted here as hashed values; plaintext is never stored.
 

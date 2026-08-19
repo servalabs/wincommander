@@ -93,6 +93,7 @@ flowchart TB
 - Machine-wide state lives under `%ProgramData%\WinCommander\`, per-user logs and quota under `%LOCALAPPDATA%`; all writes are atomic temp-then-rename.
 - The full-text search index is ACL-restricted to the owning user; indexed files are treated as untrusted input (parser advisories tracked, decompression caps against zip bombs).
 - Monitor events cross the IPC boundary as matched-pattern labels only — never the clipboard or file contents that triggered them.
+- Clipboard Guard keeps user-local and Fleet-managed rules as separate policy sources. Local rules are rejected if they request organization reporting, never create Fleet events, and remain active when the device unenrolls. Managed rules are locked in the desktop UI, retain their last valid signed version through an outage, and can only be removed by explicit unenrollment.
 
 **Code execution surface**
 

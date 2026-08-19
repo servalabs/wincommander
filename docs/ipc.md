@@ -210,7 +210,8 @@ automations (that's v2, above).
 
 | Command group | Tier | Purpose |
 |---------------|------|---------|
-| `start_paste_monitor` … `cancel_paste_monitor_snooze` (F-1) | Paid | Clipboard credential watcher — start/stop/status, category + snooze + recent config, crypto-swap and auto-clear/auto-clear-on-lock toggles. |
+| `start_paste_monitor` … `cancel_paste_monitor_snooze` (F-1) | Free core; paid crypto-swap/timed auto-clear | Clipboard credential watcher — start/stop/status, category + snooze + recent config, crypto-swap and auto-clear/auto-clear-on-lock toggles. |
+| `load_local_clipboard_guard_rules` / `save_local_clipboard_guard_rules` / `get_managed_clipboard_guard_rules` | Free local IPC | Load or atomically validate, encrypt, persist, and activate the current Windows user's local rules; read the managed source separately. Local rules can't request Fleet/admin reporting, and managed rows are read-only in the desktop UI. |
 | `start_decoy_monitor` … `enable_last_access_tracking` (F-2) | Paid | Decoy-file sentinel — start/stop/status, enroll/remove/list/delete decoys, drop standard decoys, recent log, last-access tracking. |
 | `start_ransomware_monitor` … `set_ransomware_watch_dirs` (F-3) | Paid | Mass-modify (ransomware) detector — start/stop/status, config, recent, watched/extra dirs. |
 | `start_lockdown_words` … `test_fire_lockdown_words` (F-5) | Paid | Lockdown-word keyboard trigger — start/stop/status, register/set/list words, test-fire. |

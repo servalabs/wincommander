@@ -35,9 +35,11 @@ import {
 } from "../../hooks/usePasteMonitor";
 import useEntitlements from "../../hooks/useEntitlements";
 import type { PasteMonitorCategories } from "../../types/settings";
+import type { Rule } from "../../types/generated/fleet";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import PrivacyEventTable from './PrivacyEventTable';
+import LocalClipboardRulesEditor from "./LocalClipboardRulesEditor";
 
 interface DetectionRow {
   pattern: string;
@@ -82,6 +84,9 @@ interface Props {
   autoClearSeconds?: number | null | undefined;
   /** Free: erase the clipboard when the workstation locks. */
   autoClearOnLock?: boolean | null | undefined;
+  customRules?: Rule[] | null | undefined;
+  fleetRules?: Rule[] | null | undefined;
+  onChangeLocalRules?: (rules: Rule[]) => void | Promise<void>;
   onPatchClipboard: (patch: Record<string, unknown>) => void;
   /** Controlled expand for accordion behaviour in monitoring/safeguards grids. */
   expanded?: boolean;
@@ -97,6 +102,9 @@ export default function PasteMonitorSection({
   autoClearEnabled,
   autoClearSeconds,
   autoClearOnLock,
+  customRules,
+  fleetRules,
+  onChangeLocalRules,
   onPatchClipboard,
   expanded: expandedProp,
   onExpandedChange,
@@ -321,6 +329,14 @@ export default function PasteMonitorSection({
                     ))}
                   </div>
                 </div>
+
+                {onChangeLocalRules && (
+                  <LocalClipboardRulesEditor
+                    localRules={customRules ?? []}
+                    fleetRules={fleetRules ?? []}
+                    onChangeLocalRules={onChangeLocalRules}
+                  />
+                )}
 
                 {/* Pro protections — crypto-swap detection + auto-clear */}
                 <div className="flex flex-col gap-2">
