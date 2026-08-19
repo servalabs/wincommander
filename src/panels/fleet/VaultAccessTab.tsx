@@ -6,36 +6,42 @@ import { Switch } from "@/components/ui/switch";
 import useBackend, { type EncryptionPartition } from "@/hooks/useBackend";
 import { showError, showSuccess } from "@/utils/toast";
 import FleetField from "./FleetField";
-import VaultGroupsEditor from "./VaultGroupsEditor";
 import VaultMatrixPreview from "./VaultMatrixPreview";
 import VaultVolumesEditor from "./VaultVolumesEditor";
+import type { FleetAccessDirectory } from "./accessControlTypes";
 import type { VaultFleetPolicy } from "./vaultFleetTypes";
 import {
-  buildVaultMatrix, loadVaultPolicy, saveVaultPolicy, validateVaultPolicy,
+  buildVaultMatrix, validateVaultPolicy,
 } from "./vaultFleetPolicy";
 
 function partitionLabel(partition: EncryptionPartition) {
   return `${partition.model || "Disk"} · Disk ${partition.diskNumber}, partition ${partition.partitionNumber} · ${partition.size}`;
 }
 
-export default function VaultAccessTab() {
-  const [policy, setPolicy] = useState<VaultFleetPolicy>(loadVaultPolicy);
+interface VaultAccessTabProps {
+  directory: FleetAccessDirectory;
+  policy: VaultFleetPolicy;
+  onChange: (policy: VaultFleetPolicy) => void;
+  onSave: () => void;
+}
+
+export default function VaultAccessTab({ directory, policy, onChange, onSave }: VaultAccessTabProps) {
   const [partitions, setPartitions] = useState<EncryptionPartition[]>([]);
   const [discovering, setDiscovering] = useState(false);
   const [showMatrix, setShowMatrix] = useState(false);
   const { getEncryptionPartitions, getUserProfiles } = useBackend();
-  const errors = useMemo(() => validateVaultPolicy(policy), [policy]);
+  const errors = useMemo(() => validateVaultPolicy(policy, directory.groups), [directory.groups, policy]);
 
   useEffect(() => {
     if (policy.ownerPrincipal) return;
     void getUserProfiles().then(result => {
       if (result.success && result.data?.currentUser) {
-        setPolicy(current => current.ownerPrincipal ? current : { ...current, ownerPrincipal: result.data!.currentUser });
+        if (!policy.ownerPrincipal) onChange({ ...policy, ownerPrincipal: result.data!.currentUser });
       }
     });
-  }, [getUserProfiles, policy.ownerPrincipal]);
+  }, [getUserProfiles, onChange, policy]);
 
-  const update = (patch: Partial<VaultFleetPolicy>) => setPolicy(current => ({ ...current, ...patch }));
+  const update = (patch: Partial<VaultFleetPolicy>) => onChange({ ...policy, ...patch });
   const discover = async () => {
     setDiscovering(true);
     const result = await getEncryptionPartitions();
@@ -53,7 +59,7 @@ export default function VaultAccessTab() {
 
   const save = () => {
     if (errors.length) return void showError(errors[0]);
-    saveVaultPolicy(policy);
+    onSave();
     void showSuccess("Vault deployment policy saved on this administrator workstation.");
   };
 
@@ -96,15 +102,7 @@ export default function VaultAccessTab() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader><CardTitle>Groups and standard users</CardTitle><CardDescription>Accounting, Sales, and Partner membership is explicit and mutually exclusive.</CardDescription></CardHeader>
-        <CardContent><VaultGroupsEditor groups={policy.groups} onChange={groups => update({ groups })} /></CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle>Volumes and access policy</CardTitle><CardDescription>Configure file containers, raw partitions, dual volumes, credentials, drive letters, and group visibility.</CardDescription></CardHeader>
-        <CardContent><VaultVolumesEditor volumes={policy.volumes} onChange={volumes => update({ volumes })} /></CardContent>
-      </Card>
+      <VaultVolumesEditor volumes={policy.volumes} groups={directory.groups} onChange={volumes => update({ volumes })} />
 
       <Card>
         <CardHeader><CardTitle>Validation matrix</CardTitle><CardDescription>Preview the expected distinction between backing visibility, mount/decrypt authorization, content ACLs, and another session’s mounted drive.</CardDescription></CardHeader>
@@ -115,7 +113,7 @@ export default function VaultAccessTab() {
             <Button onClick={copyManifest}>Copy deployment manifest</Button>
             <Button variant="primary" onClick={save}>Save policy</Button>
           </div>
-          {showMatrix && <VaultMatrixPreview rows={buildVaultMatrix(policy)} />}
+          {showMatrix && <VaultMatrixPreview rows={buildVaultMatrix(policy, directory)} />}
           <p className="fleet-field-hint">This preview validates policy intent. Live per-user probes and reboot validation remain a separate deployment step and must not be inferred from this table.</p>
         </CardContent>
       </Card>
