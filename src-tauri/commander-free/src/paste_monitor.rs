@@ -1057,6 +1057,16 @@ fn fleet_action_outcome(outcome: &ActionOutcome, verdict: &Verdict) -> ActionOut
     }
 }
 
+fn should_submit_organisation_match(source: PolicySource, actions: &[Action]) -> bool {
+    source == PolicySource::Fleet
+        && actions.iter().any(|action| {
+            matches!(
+                action,
+                Action::RecordLocalReceipt | Action::ReportFleet | Action::AlertAdmin
+            )
+        })
+}
+
 /// Handle one `MatchOutcome::Emit` — the toast/`DetectionEvent`/log
 /// exactly matches the legacy engine's copy and behaviour (see
 /// `detection_copy`); the report-building/queuing and best-effort svc
@@ -1158,8 +1168,9 @@ fn handle_combined_emit(
     for matched in combined
         .matches
         .iter()
-        .filter(|matched| matched.source == PolicySource::Fleet)
-        .filter(|matched| matched.verdict.actions.contains(&Action::ReportFleet))
+        .filter(|matched| {
+            should_submit_organisation_match(matched.source, &matched.verdict.actions)
+        })
     {
         let fleet_outcome = fleet_action_outcome(&outcome, &matched.verdict);
         let report = build_pending_report_with_outcome(
@@ -2739,5 +2750,41 @@ mod tests {
         let serialized = serde_json::to_string(&report).unwrap();
         assert!(!serialized.contains("clear_clipboard"));
         assert!(!serialized.contains("notify_user"));
+    }
+
+    #[test]
+    fn fleet_record_local_receipt_action_requires_organisation_submission() {
+        assert!(should_submit_organisation_match(
+            PolicySource::Fleet,
+            &[Action::RecordLocalReceipt]
+        ));
+    }
+
+    #[test]
+    fn fleet_report_action_requires_organisation_submission() {
+        assert!(should_submit_organisation_match(
+            PolicySource::Fleet,
+            &[Action::ReportFleet]
+        ));
+    }
+
+    #[test]
+    fn fleet_alert_admin_action_requires_organisation_submission() {
+        assert!(should_submit_organisation_match(
+            PolicySource::Fleet,
+            &[Action::AlertAdmin]
+        ));
+    }
+
+    #[test]
+    fn local_organisation_actions_never_trigger_submission() {
+        assert!(!should_submit_organisation_match(
+            PolicySource::Local,
+            &[
+                Action::RecordLocalReceipt,
+                Action::ReportFleet,
+                Action::AlertAdmin,
+            ]
+        ));
     }
 }
