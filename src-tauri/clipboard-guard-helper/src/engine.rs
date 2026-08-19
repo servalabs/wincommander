@@ -8,9 +8,9 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use wincmd_clip_rules::{CooldownLedger, Emit, RuleId, Verdict};
+use wincmd_clip_rules::{Action, CooldownLedger, Emit, RuleId, Severity, Verdict};
 
-use crate::policy::ActivePolicy;
+use crate::policy::{ActivePolicy, PolicySource, PolicyStore};
 use crate::read::MAX_CLIPBOARD_READ_BYTES;
 
 /// What one `observe()` call decided.
@@ -35,12 +35,57 @@ pub enum MatchOutcome {
     Suppressed { rule_id: RuleId, count: u32 },
 }
 
+/// An emitted verdict together with its policy source. The source is
+/// required downstream so locally-authored matches stay local while Fleet
+/// matches can use the existing content-free reporting path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourcedVerdict {
+    pub source: PolicySource,
+    pub verdict: Verdict,
+    pub suppressed_since_last: u32,
+}
+
+/// The protection decision across independently-evaluated local and Fleet
+/// policies. `actions` is the de-duplicated union; `severity` is the maximum
+/// severity. This makes a local rule additive only — it cannot reduce a
+/// Fleet rule's protection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CombinedVerdict {
+    pub matches: Vec<SourcedVerdict>,
+    pub severity: Severity,
+    pub actions: Vec<Action>,
+}
+
+/// Outcome of source-aware evaluation. Suppression is retained per source so
+/// two rules with the same id can never share a cooldown ledger (installs
+/// reject collisions as a second defence).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CombinedMatchOutcome {
+    NoMatch,
+    Suppressed {
+        source: PolicySource,
+        rule_id: RuleId,
+        count: u32,
+    },
+    Emit {
+        verdict: CombinedVerdict,
+    },
+}
+
 /// Owns the cooldown ledger and the "suppressed since last real emission"
 /// bookkeeping. Stateful and per-process; a fresh `MatchEngine` treats
 /// every rule as never having fired, matching `CooldownLedger`'s own
 /// semantics.
 #[derive(Default)]
 pub struct MatchEngine {
+    cooldown: CooldownLedger,
+    pending_suppressed: HashMap<RuleId, u32>,
+    local_cooldown: CooldownState,
+    fleet_cooldown: CooldownState,
+}
+
+#[derive(Default)]
+struct CooldownState {
     cooldown: CooldownLedger,
     pending_suppressed: HashMap<RuleId, u32>,
 }
@@ -57,33 +102,132 @@ impl MatchEngine {
     /// testable — mirrors `CooldownLedger::should_emit`'s own contract.
     pub fn observe(&mut self, policy: &ActivePolicy, text: &str, now: Instant) -> MatchOutcome {
         let truncated = wincmd_clip_rules::truncate_for_match(text, MAX_CLIPBOARD_READ_BYTES);
-        let Some(verdict) = policy.compiled.evaluate(truncated) else {
+        Self::observe_one(
+            &mut self.cooldown,
+            &mut self.pending_suppressed,
+            policy,
+            truncated,
+            now,
+        )
+    }
+
+    /// Evaluates the local and Fleet rule sets independently, then combines
+    /// only the matches that are ready to emit. Callers can route each
+    /// `SourcedVerdict` independently: local entries must never produce a
+    /// Fleet report.
+    pub fn observe_sources(
+        &mut self,
+        policies: &PolicyStore,
+        text: &str,
+        now: Instant,
+    ) -> CombinedMatchOutcome {
+        let truncated = wincmd_clip_rules::truncate_for_match(text, MAX_CLIPBOARD_READ_BYTES);
+        let local = Self::observe_one(
+            &mut self.local_cooldown.cooldown,
+            &mut self.local_cooldown.pending_suppressed,
+            policies.local(),
+            truncated,
+            now,
+        );
+        let fleet = Self::observe_one(
+            &mut self.fleet_cooldown.cooldown,
+            &mut self.fleet_cooldown.pending_suppressed,
+            policies.fleet(),
+            truncated,
+            now,
+        );
+
+        let mut matches = Vec::new();
+        let mut suppressed = None;
+        for (source, outcome) in [(PolicySource::Local, local), (PolicySource::Fleet, fleet)] {
+            match outcome {
+                MatchOutcome::Emit {
+                    verdict,
+                    suppressed_since_last,
+                } => matches.push(SourcedVerdict {
+                    source,
+                    verdict,
+                    suppressed_since_last,
+                }),
+                MatchOutcome::Suppressed { rule_id, count } => {
+                    suppressed.get_or_insert((source, rule_id, count));
+                }
+                MatchOutcome::NoMatch => {}
+            }
+        }
+        if !matches.is_empty() {
+            return CombinedMatchOutcome::Emit {
+                verdict: combine(matches),
+            };
+        }
+        match suppressed {
+            Some((source, rule_id, count)) => CombinedMatchOutcome::Suppressed {
+                source,
+                rule_id,
+                count,
+            },
+            None => CombinedMatchOutcome::NoMatch,
+        }
+    }
+
+    fn observe_one(
+        cooldown_ledger: &mut CooldownLedger,
+        pending_suppressed: &mut HashMap<RuleId, u32>,
+        policy: &ActivePolicy,
+        text: &str,
+        now: Instant,
+    ) -> MatchOutcome {
+        let Some(verdict) = policy.compiled.evaluate(text) else {
             return MatchOutcome::NoMatch;
         };
         let cooldown = policy.cooldown_for(&verdict.rule_id);
-        match self
-            .cooldown
-            .should_emit(verdict.rule_id.clone(), now, cooldown)
-        {
+        match cooldown_ledger.should_emit(verdict.rule_id.clone(), now, cooldown) {
             Emit::Now => {
-                let suppressed_since_last = self
-                    .pending_suppressed
-                    .remove(&verdict.rule_id)
-                    .unwrap_or(0);
+                let suppressed_since_last =
+                    pending_suppressed.remove(&verdict.rule_id).unwrap_or(0);
                 MatchOutcome::Emit {
                     verdict,
                     suppressed_since_last,
                 }
             }
             Emit::Suppressed { count } => {
-                self.pending_suppressed
-                    .insert(verdict.rule_id.clone(), count);
+                pending_suppressed.insert(verdict.rule_id.clone(), count);
                 MatchOutcome::Suppressed {
                     rule_id: verdict.rule_id,
                     count,
                 }
             }
         }
+    }
+}
+
+fn combine(matches: Vec<SourcedVerdict>) -> CombinedVerdict {
+    let severity = matches
+        .iter()
+        .map(|matched| matched.verdict.severity)
+        .max_by_key(|severity| severity_rank(*severity))
+        .expect("combine is only called with at least one match");
+    let mut actions = Vec::new();
+    for matched in &matches {
+        for action in &matched.verdict.actions {
+            if !actions.contains(action) {
+                actions.push(*action);
+            }
+        }
+    }
+    CombinedVerdict {
+        matches,
+        severity,
+        actions,
+    }
+}
+
+fn severity_rank(severity: Severity) -> u8 {
+    match severity {
+        Severity::Info => 0,
+        Severity::Warn => 1,
+        Severity::High => 2,
+        Severity::Critical => 3,
     }
 }
 
@@ -286,5 +430,131 @@ mod tests {
             MatchOutcome::NoMatch,
             "NEEDLE lands past the read cap and must not be seen"
         );
+    }
+
+    #[test]
+    fn local_and_fleet_matches_union_actions_and_keep_fleet_severity() {
+        let mut store = PolicyStore::new();
+        let local = Rule {
+            id: RuleId::new("11111111111111111111111111111111").unwrap(),
+            revision: 1,
+            name: "local secret".to_string(),
+            enabled: true,
+            priority: 1,
+            matcher: MatchKind::Phrase {
+                value: "SECRET".to_string(),
+                case_sensitive: true,
+            },
+            severity: Severity::Warn,
+            actions: vec![Action::NotifyUser, Action::ClearClipboard],
+            cooldown_seconds: 60,
+            snoozable: true,
+            locked: false,
+        };
+        let fleet = Rule {
+            id: RuleId::new("22222222222222222222222222222222").unwrap(),
+            revision: 4,
+            name: "fleet secret".to_string(),
+            enabled: true,
+            priority: 1,
+            matcher: MatchKind::Phrase {
+                value: "SECRET".to_string(),
+                case_sensitive: true,
+            },
+            severity: Severity::Critical,
+            actions: vec![Action::QuarantineClipboard, Action::ReportFleet],
+            cooldown_seconds: 60,
+            snoozable: false,
+            locked: true,
+        };
+        store
+            .install_local(&ClipboardPolicyResponse {
+                policy_version: 1,
+                rules: vec![local],
+            })
+            .unwrap();
+        store
+            .install_fleet(&ClipboardPolicyResponse {
+                policy_version: 9,
+                rules: vec![fleet],
+            })
+            .unwrap();
+
+        let outcome = MatchEngine::new().observe_sources(&store, "SECRET", Instant::now());
+        let CombinedMatchOutcome::Emit { verdict } = outcome else {
+            panic!("both sources must protect a shared match");
+        };
+        assert_eq!(verdict.severity, Severity::Critical);
+        assert_eq!(verdict.matches.len(), 2);
+        assert_eq!(
+            verdict.actions,
+            vec![
+                Action::NotifyUser,
+                Action::ClearClipboard,
+                Action::QuarantineClipboard,
+                Action::ReportFleet,
+            ]
+        );
+        assert_eq!(verdict.matches[0].source, PolicySource::Local);
+        assert_eq!(verdict.matches[1].source, PolicySource::Fleet);
+    }
+
+    #[test]
+    fn source_cooldowns_are_independent() {
+        let mut store = PolicyStore::new();
+        let local = Rule {
+            id: RuleId::new("11111111111111111111111111111111").unwrap(),
+            revision: 1,
+            name: "local".to_string(),
+            enabled: true,
+            priority: 1,
+            matcher: MatchKind::Phrase {
+                value: "LOCAL".to_string(),
+                case_sensitive: true,
+            },
+            severity: Severity::Warn,
+            actions: vec![Action::NotifyUser],
+            cooldown_seconds: 60,
+            snoozable: true,
+            locked: false,
+        };
+        let mut fleet = local.clone();
+        fleet.id = RuleId::new("22222222222222222222222222222222").unwrap();
+        fleet.matcher = MatchKind::Phrase {
+            value: "FLEET".to_string(),
+            case_sensitive: true,
+        };
+        fleet.actions = vec![Action::ReportFleet];
+        fleet.severity = Severity::High;
+        store
+            .install_local(&ClipboardPolicyResponse {
+                policy_version: 1,
+                rules: vec![local],
+            })
+            .unwrap();
+        store
+            .install_fleet(&ClipboardPolicyResponse {
+                policy_version: 1,
+                rules: vec![fleet],
+            })
+            .unwrap();
+
+        let mut engine = MatchEngine::new();
+        let now = Instant::now();
+        assert!(matches!(
+            engine.observe_sources(&store, "LOCAL", now),
+            CombinedMatchOutcome::Emit { .. }
+        ));
+        assert!(matches!(
+            engine.observe_sources(&store, "FLEET", now + Duration::from_secs(1)),
+            CombinedMatchOutcome::Emit { .. }
+        ));
+        assert!(matches!(
+            engine.observe_sources(&store, "LOCAL", now + Duration::from_secs(2)),
+            CombinedMatchOutcome::Suppressed {
+                source: PolicySource::Local,
+                ..
+            }
+        ));
     }
 }

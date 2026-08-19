@@ -12,7 +12,27 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use wincmd_clip_rules::{compile, CompileError, CompiledRuleSet, Rule, RuleId, RuleSetLimits};
+use wincmd_clip_rules::{
+    compile, Action, CompileError, CompiledRuleSet, Rule, RuleId, RuleSetLimits,
+};
+
+/// Where a policy rule came from. Source stays attached to the rule's
+/// execution path: a local rule never becomes an organisation report merely
+/// because Fleet is also configured on the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PolicySource {
+    Local,
+    Fleet,
+}
+
+/// An install was refused without changing the last valid policy for either
+/// source. The variants carry no matcher text or clipboard content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyInstallError {
+    Compile(Vec<CompileError>),
+    RuleIdCollision { rule_id: RuleId },
+    LocalActionNotAllowed { rule_id: RuleId, action: Action },
+}
 
 /// Wire shape of a successful `svc.clipboard.get_policy` response.
 ///
@@ -80,15 +100,19 @@ impl ActivePolicy {
 /// bad ruleset from svc leaves the previous good one live and flips
 /// `rules_compiled` false — it never half-applies (plan §4.4).
 pub struct PolicyStore {
-    active: ActivePolicy,
-    rules_compiled: bool,
+    local: ActivePolicy,
+    fleet: ActivePolicy,
+    local_rules_compiled: bool,
+    fleet_rules_compiled: bool,
 }
 
 impl Default for PolicyStore {
     fn default() -> Self {
         Self {
-            active: ActivePolicy::empty(),
-            rules_compiled: true,
+            local: ActivePolicy::empty(),
+            fleet: ActivePolicy::empty(),
+            local_rules_compiled: true,
+            fleet_rules_compiled: true,
         }
     }
 }
@@ -98,14 +122,74 @@ impl PolicyStore {
         Self::default()
     }
 
-    /// Attempt to install `response` as the active policy. On success,
-    /// swaps `active` and sets `rules_compiled` true. On failure, `active`
-    /// is left completely untouched (the old ruleset — possibly still the
-    /// empty starting one — keeps matching) and `rules_compiled` is set
-    /// false so the health surface can report it honestly. Always enforces
-    /// this crate's own `RuleSetLimits::default()`, independent of
-    /// whatever `commander-svc`/Fleet validated against.
+    /// Legacy Fleet-only install API. It preserves the existing external
+    /// result shape; source-aware callers must use [`Self::install_fleet`].
+    /// A legacy caller must not install while local rules exist because it
+    /// cannot represent a collision failure.
     pub fn install(&mut self, response: &ClipboardPolicyResponse) -> Result<(), Vec<CompileError>> {
+        if self.has_rule_id_collision(&response.rules, &self.local) {
+            self.fleet_rules_compiled = false;
+            return Err(Vec::new());
+        }
+        self.install_compiled(response, PolicySource::Fleet)
+            .map_err(|error| match error {
+                PolicyInstallError::Compile(errors) => errors,
+                PolicyInstallError::RuleIdCollision { .. }
+                | PolicyInstallError::LocalActionNotAllowed { .. } => Vec::new(),
+            })
+    }
+
+    /// Atomically installs a Fleet policy. A bad update leaves the last good
+    /// Fleet policy active; local rules are independent and remain active.
+    pub fn install_fleet(
+        &mut self,
+        response: &ClipboardPolicyResponse,
+    ) -> Result<(), PolicyInstallError> {
+        self.install_compiled(response, PolicySource::Fleet)
+    }
+
+    /// Atomically installs locally-owned rules. Local rules cannot request
+    /// Fleet reporting or administrator paging, preventing local clipboard
+    /// text/tests from creating an organisation-facing side channel.
+    pub fn install_local(
+        &mut self,
+        response: &ClipboardPolicyResponse,
+    ) -> Result<(), PolicyInstallError> {
+        for rule in &response.rules {
+            for action in &rule.actions {
+                if matches!(action, Action::ReportFleet | Action::AlertAdmin) {
+                    self.local_rules_compiled = false;
+                    return Err(PolicyInstallError::LocalActionNotAllowed {
+                        rule_id: rule.id.clone(),
+                        action: *action,
+                    });
+                }
+            }
+        }
+        self.install_compiled(response, PolicySource::Local)
+    }
+
+    /// Explicit unenrolment removes only the cached Fleet source. Personal
+    /// rules stay in place, so disconnecting an organisation never weakens a
+    /// user's local protection.
+    pub fn clear_fleet_on_unenroll(&mut self) {
+        self.fleet = ActivePolicy::empty();
+        self.fleet_rules_compiled = true;
+    }
+
+    fn install_compiled(
+        &mut self,
+        response: &ClipboardPolicyResponse,
+        source: PolicySource,
+    ) -> Result<(), PolicyInstallError> {
+        let other = match source {
+            PolicySource::Local => &self.fleet,
+            PolicySource::Fleet => &self.local,
+        };
+        if let Some(rule_id) = self.first_rule_id_collision(&response.rules, other) {
+            self.set_compiled_health(source, false);
+            return Err(PolicyInstallError::RuleIdCollision { rule_id });
+        }
         let limits = RuleSetLimits::default();
         match compile(&response.rules, &limits) {
             Ok(compiled) => {
@@ -115,27 +199,68 @@ impl PolicyStore {
                     .filter(|r| r.enabled)
                     .map(|r| (r.id.clone(), Duration::from_secs(r.cooldown_seconds as u64)))
                     .collect();
-                self.active = ActivePolicy {
+                let active = ActivePolicy {
                     policy_version: response.policy_version,
                     compiled,
                     cooldowns,
                 };
-                self.rules_compiled = true;
+                match source {
+                    PolicySource::Local => self.local = active,
+                    PolicySource::Fleet => self.fleet = active,
+                }
+                self.set_compiled_health(source, true);
                 Ok(())
             }
             Err(errors) => {
-                self.rules_compiled = false;
-                Err(errors)
+                self.set_compiled_health(source, false);
+                Err(PolicyInstallError::Compile(errors))
             }
         }
     }
 
-    pub fn active(&self) -> &ActivePolicy {
-        &self.active
+    fn set_compiled_health(&mut self, source: PolicySource, compiled: bool) {
+        match source {
+            PolicySource::Local => self.local_rules_compiled = compiled,
+            PolicySource::Fleet => self.fleet_rules_compiled = compiled,
+        }
     }
 
+    fn has_rule_id_collision(&self, rules: &[Rule], other: &ActivePolicy) -> bool {
+        self.first_rule_id_collision(rules, other).is_some()
+    }
+
+    fn first_rule_id_collision(&self, rules: &[Rule], other: &ActivePolicy) -> Option<RuleId> {
+        rules.iter().filter(|rule| rule.enabled).find_map(|rule| {
+            other
+                .cooldowns
+                .contains_key(&rule.id)
+                .then(|| rule.id.clone())
+        })
+    }
+
+    /// Legacy alias for the Fleet policy, kept for existing helper callers.
+    pub fn active(&self) -> &ActivePolicy {
+        self.fleet()
+    }
+
+    pub fn local(&self) -> &ActivePolicy {
+        &self.local
+    }
+
+    pub fn fleet(&self) -> &ActivePolicy {
+        &self.fleet
+    }
+
+    /// Legacy Fleet health alias, kept for existing helper callers.
     pub fn rules_compiled(&self) -> bool {
-        self.rules_compiled
+        self.fleet_rules_compiled
+    }
+
+    pub fn rules_compiled_for(&self, source: PolicySource) -> bool {
+        match source {
+            PolicySource::Local => self.local_rules_compiled,
+            PolicySource::Fleet => self.fleet_rules_compiled,
+        }
     }
 }
 
@@ -238,6 +363,102 @@ mod tests {
             .compiled
             .evaluate("my SECRET value")
             .is_some());
+    }
+
+    #[test]
+    fn fleet_install_failure_keeps_last_good_fleet_and_local_policies() {
+        let mut store = PolicyStore::new();
+        let local = ClipboardPolicyResponse {
+            policy_version: 2,
+            rules: vec![good_rule()],
+        };
+        store.install_local(&local).unwrap();
+
+        let mut fleet_rule = good_rule();
+        fleet_rule.id = rule_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let fleet = ClipboardPolicyResponse {
+            policy_version: 3,
+            rules: vec![fleet_rule],
+        };
+        store.install_fleet(&fleet).unwrap();
+
+        let failure = ClipboardPolicyResponse {
+            policy_version: 4,
+            rules: vec![bad_rule()],
+        };
+        assert!(matches!(
+            store.install_fleet(&failure),
+            Err(PolicyInstallError::Compile(_))
+        ));
+        assert_eq!(store.local().policy_version, 2);
+        assert_eq!(store.fleet().policy_version, 3);
+        assert!(!store.rules_compiled_for(PolicySource::Fleet));
+        assert!(store.rules_compiled_for(PolicySource::Local));
+    }
+
+    #[test]
+    fn rejects_rule_id_collisions_between_sources_without_replacing_either() {
+        let mut store = PolicyStore::new();
+        let local = ClipboardPolicyResponse {
+            policy_version: 1,
+            rules: vec![good_rule()],
+        };
+        store.install_local(&local).unwrap();
+
+        let collision = ClipboardPolicyResponse {
+            policy_version: 9,
+            rules: vec![good_rule()],
+        };
+        assert!(matches!(
+            store.install_fleet(&collision),
+            Err(PolicyInstallError::RuleIdCollision { .. })
+        ));
+        assert_eq!(store.local().policy_version, 1);
+        assert_eq!(store.fleet().policy_version, 0);
+    }
+
+    #[test]
+    fn local_rules_cannot_request_organisation_actions() {
+        let mut store = PolicyStore::new();
+        let mut rule = good_rule();
+        rule.actions = vec![Action::NotifyUser, Action::ReportFleet];
+        let response = ClipboardPolicyResponse {
+            policy_version: 1,
+            rules: vec![rule],
+        };
+        assert!(matches!(
+            store.install_local(&response),
+            Err(PolicyInstallError::LocalActionNotAllowed {
+                action: Action::ReportFleet,
+                ..
+            })
+        ));
+        assert_eq!(store.local().policy_version, 0);
+        assert!(!store.rules_compiled_for(PolicySource::Local));
+    }
+
+    #[test]
+    fn explicit_unenrol_removes_fleet_only() {
+        let mut store = PolicyStore::new();
+        let local = ClipboardPolicyResponse {
+            policy_version: 2,
+            rules: vec![good_rule()],
+        };
+        store.install_local(&local).unwrap();
+        let mut fleet_rule = good_rule();
+        fleet_rule.id = rule_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        store
+            .install_fleet(&ClipboardPolicyResponse {
+                policy_version: 3,
+                rules: vec![fleet_rule],
+            })
+            .unwrap();
+
+        store.clear_fleet_on_unenroll();
+        assert_eq!(store.local().policy_version, 2);
+        assert_eq!(store.fleet().policy_version, 0);
+        assert!(store.local().compiled.evaluate("SECRET").is_some());
+        assert!(store.fleet().compiled.evaluate("SECRET").is_none());
     }
 
     #[test]
