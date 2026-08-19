@@ -1,7 +1,7 @@
 {
   "name": "wincommander-free",
   "private": true,
-  "version": "3.2.16",
+  "version": "3.2.17",
   "license": "AGPL-3.0",
   "description": "WinCommander Free — open-source primary",
   "type": "module",
