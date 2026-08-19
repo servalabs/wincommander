@@ -1368,8 +1368,37 @@
 .fleet-field {
   display: grid;
   align-content: start;
+  align-items: stretch;
   gap: 6px;
   min-width: 0;
+}
+
+.fleet-field.is-compact {
+  grid-template-rows: 16px 34px;
+  gap: 5px;
+}
+
+.fleet-field.is-compact > span,
+.fleet-field.is-compact [data-slot="label"] {
+  overflow: hidden;
+  min-height: 16px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-field.is-compact input,
+.fleet-field.is-compact [data-slot="input"],
+.fleet-field.is-compact [data-slot="select-trigger"] {
+  box-sizing: border-box;
+  width: 100%;
+  height: 34px;
+  min-height: 34px;
+  max-height: 34px;
+}
+
+.fleet-field.is-compact [data-slot="select-trigger"] {
+  display: flex;
 }
 
 .fleet-field-hint,
@@ -1606,11 +1635,18 @@
   padding-left: 18px;
 }
 
-.fleet-access-group-list,
-.fleet-access-user-list {
+.fleet-access-group-list {
   display: grid;
   align-content: start;
   gap: 7px;
+}
+
+.fleet-access-user-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  align-content: start;
+  align-items: stretch;
+  gap: 8px;
 }
 
 .fleet-access-group-row {
@@ -1641,8 +1677,9 @@
 .fleet-access-group-row > span:first-child,
 .fleet-access-user-copy {
   display: grid;
+  grid-template-rows: 16px 14px;
   min-width: 0;
-  gap: 3px;
+  gap: 2px;
 }
 
 .fleet-access-group-row strong,
@@ -1711,8 +1748,10 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  min-height: 50px;
+  gap: 8px;
+  height: 56px;
+  min-height: 56px;
+  max-height: 56px;
   padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: var(--r-sm);
@@ -1861,6 +1900,7 @@
   margin-top: 18px;
   padding-top: 18px;
   border-top: 1px solid var(--border);
+  overflow-x: auto;
 }
 
 .fleet-vault-editor-header {
@@ -1874,10 +1914,46 @@
 .fleet-vault-editor-header span { color: var(--text-mute); font-family: var(--font-mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
 .fleet-vault-editor-header strong { font-size: 14px; }
 
+.fleet-owner-stack {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fleet-owner-inputs,
 .fleet-vault-fields {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-rows: auto;
+  grid-auto-flow: column;
+  align-items: start;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.fleet-owner-inputs {
+  grid-template-columns: minmax(140px, 1.1fr) minmax(160px, 1.1fr) minmax(220px, 1.6fr) minmax(120px, 0.8fr);
+}
+
+.fleet-owner-tools {
+  display: grid;
+  gap: 10px;
+}
+
+.fleet-policy-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.fleet-vault-fields {
+  grid-template-columns: minmax(120px, 1.2fr) minmax(110px, 1fr) minmax(160px, 1.4fr) minmax(88px, 0.7fr) minmax(72px, 0.55fr) minmax(140px, 1.1fr);
+  grid-auto-columns: minmax(110px, 1fr);
+}
+
+.fleet-vault-fields.is-dual {
+  grid-template-columns: minmax(110px, 1.1fr) minmax(100px, 0.95fr) minmax(140px, 1.3fr) minmax(80px, 0.65fr) minmax(68px, 0.5fr) minmax(120px, 1fr) minmax(90px, 0.7fr) minmax(120px, 1fr);
 }
 
 .fleet-vault-permission-head {
@@ -1916,7 +1992,6 @@
 @media (max-width: 1100px) {
   .fleet-form-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .fleet-group-grid { grid-template-columns: 1fr; }
-  .fleet-vault-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 900px) {
@@ -1929,8 +2004,9 @@
   .fleet-form-grid,
   .fleet-form-grid-4 { grid-template-columns: 1fr; }
   .fleet-console-card { align-items: stretch; flex-direction: column; }
-  .fleet-access-fields,
-  .fleet-vault-fields { grid-template-columns: 1fr; }
+  .fleet-access-fields { grid-template-columns: 1fr; }
+  .fleet-owner-tools { grid-template-columns: 1fr; }
+  .fleet-policy-toggle-grid { grid-template-columns: 1fr; }
   .fleet-vault-workspace-header { align-items: stretch; flex-direction: column; }
   .fleet-vault-workspace-header > button { align-self: flex-start; }
   .fleet-vault-permission-head { align-items: flex-start; flex-direction: column; }

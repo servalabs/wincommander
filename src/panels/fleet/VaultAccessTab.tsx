@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import ToggleTile from "@/components/shared/ToggleTile";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import useBackend, { type EncryptionPartition } from "@/hooks/useBackend";
 import { showError, showSuccess } from "@/utils/toast";
 import FleetField from "./FleetField";
@@ -71,28 +71,44 @@ export default function VaultAccessTab({ directory, policy, onChange, onSave }: 
 
   return (
     <div className="fleet-admin-stack">
-      <div className="fleet-callout fleet-callout-warning">
-        <strong>Destructive boundary:</strong> only the selected test disk/partitions are eligible. C: and D: are never inferred from a drive letter and must remain outside the pinned disk identity.
-      </div>
-
       <Card>
         <CardHeader><CardTitle>Owner and disk boundary</CardTitle><CardDescription>Pin the existing administrator and the exact test disk before generating a deployment manifest.</CardDescription></CardHeader>
-        <CardContent className="fleet-form-grid">
-          <FleetField label="Owner principal" hint="This account remains an administrator and receives every volume credential.">
-            <Input value={policy.ownerPrincipal} onChange={event => update({ ownerPrincipal: event.target.value })} />
-          </FleetField>
-          <FleetField label="Mount scope"><Input value="Per-user session isolation" disabled /></FleetField>
-          <FleetField label="Protected engine directory">
-            <Input value={policy.installDirectory} onChange={event => update({ installDirectory: event.target.value })} />
-          </FleetField>
-          <label className="fleet-switch-field"><Switch checked={policy.preloadDriverAtStartup} onCheckedChange={checked => update({ preloadDriverAtStartup: checked })} /> <span><strong>Protected SYSTEM driver preload</strong><small>Standard users never receive service-control or driver-load privilege.</small></span></label>
-          <label className="fleet-switch-field"><Switch checked={policy.allowUnallocatedSpace} onCheckedChange={checked => update({ allowUnallocatedSpace: checked })} /> <span><strong>Allow selected-disk unallocated space</strong><small>Raw-volume entries may allocate only on the pinned disk, never C: or D:.</small></span></label>
-          <FleetField label="Unallocated reserve (MiB)" hint="Leave this amount unused after planned raw-volume allocations.">
-            <Input type="number" min={0} value={policy.unallocatedReserveMb} onChange={event => update({ unallocatedReserveMb: Number(event.target.value) })} disabled={!policy.allowUnallocatedSpace} />
-          </FleetField>
-          <div className="fleet-discovery-row">
-            <Button onClick={discover} disabled={discovering}>{discovering ? "Discovering…" : "Discover test partitions"}</Button>
-            {policy.diskNumber != null && <span>Selected Disk {policy.diskNumber} · <code>{policy.diskUniqueId}</code></span>}
+        <CardContent className="fleet-owner-stack">
+          <div className="fleet-owner-inputs">
+            <FleetField compact label="Owner principal" hint="This account remains an administrator and receives every volume credential.">
+              <Input value={policy.ownerPrincipal} onChange={event => update({ ownerPrincipal: event.target.value })} />
+            </FleetField>
+            <FleetField compact label="Mount scope"><Input value="Per-user session isolation" disabled /></FleetField>
+            <FleetField compact label="Protected engine directory">
+              <Input value={policy.installDirectory} onChange={event => update({ installDirectory: event.target.value })} />
+            </FleetField>
+            <FleetField compact label="Unallocated reserve (MiB)" hint="Leave this amount unused after planned raw-volume allocations.">
+              <Input type="number" min={0} value={policy.unallocatedReserveMb} onChange={event => update({ unallocatedReserveMb: Number(event.target.value) })} disabled={!policy.allowUnallocatedSpace} />
+            </FleetField>
+          </div>
+          <div className="fleet-owner-tools">
+            <div className="fleet-policy-toggle-grid">
+              <ToggleTile
+                label="Protected SYSTEM driver preload"
+                description="Standard users never receive service-control or driver-load privilege."
+                checked={policy.preloadDriverAtStartup}
+                onChange={checked => update({ preloadDriverAtStartup: checked })}
+                domain="security"
+                icon="shield"
+              />
+              <ToggleTile
+                label="Allow selected-disk unallocated space"
+                description="Raw-volume entries may allocate only on the pinned disk, never C: or D:."
+                checked={policy.allowUnallocatedSpace}
+                onChange={checked => update({ allowUnallocatedSpace: checked })}
+                domain="tweaks"
+                icon="hard-drive"
+              />
+            </div>
+            <div className="fleet-discovery-row">
+              <Button onClick={discover} disabled={discovering}>{discovering ? "Discovering…" : "Discover test partitions"}</Button>
+              {policy.diskNumber != null && <span>Selected Disk {policy.diskNumber} · <code>{policy.diskUniqueId}</code></span>}
+            </div>
           </div>
           {partitions.length > 0 && <div className="fleet-partition-list">
             {partitions.map(partition => <button key={partition.devicePath} disabled={!partition.safeForCreation} onClick={() => selectPartition(partition)} className={policy.diskUniqueId === partition.diskUniqueId ? "is-selected" : ""}>
