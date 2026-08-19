@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Button, Icon } from "@/components/ui/bp";
 import { open } from "@tauri-apps/plugin-shell";
 import useBackend from "../../../hooks/useBackend";
+import { useLicenseQuery } from "../../../hooks/queries/useLicenseQuery";
 import './ActivationPanel.css';
 
 // Office Home Premium Retail (O365HomePremRetail x64 en-us). The
@@ -16,15 +17,27 @@ const OFFICE_OFFLINE_URL =
 
 function ActivationPanel() {
   const { getActivationStatus, openActivationSettings, error } = useBackend();
+  const { data: license, isLoading: isLicenseLoading } = useLicenseQuery();
   const [officeInstalled, setOfficeInstalled] = useState<boolean>();
+  const hasProAccess =
+    (license?.licensed === true && license.valid === true) ||
+    license?.trial_active === true;
 
   useEffect(() => {
+    // This status read is handled by the Pro sidecar. Do not run it while the
+    // licence state is unknown or unavailable: otherwise the initial failed
+    // request leaves an entitlement error visible after a trial is activated.
+    if (isLicenseLoading || !hasProAccess) {
+      setOfficeInstalled(undefined);
+      return;
+    }
+
     let active = true;
     void getActivationStatus().then((result) => {
       if (active && result.success && result.data) setOfficeInstalled(result.data.office.installed);
     });
     return () => { active = false; };
-  }, [getActivationStatus]);
+  }, [getActivationStatus, hasProAccess, isLicenseLoading]);
 
   const openWindowsSettings = async () => {
     await openActivationSettings();
@@ -37,7 +50,7 @@ function ActivationPanel() {
 
   return (
     <div className="activation-panel">
-      {error && (
+      {hasProAccess && error && (
         <p className="mb-4 p-2 bg-red-500/10 text-red-400 text-xs rounded border border-red-500/20">
           {error}
         </p>
