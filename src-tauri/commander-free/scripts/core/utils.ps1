@@ -288,10 +288,25 @@ function Resolve-DataPath {
 
 
 function Restart-Explorer {
-    taskkill.exe /F /IM "explorer.exe" 2>$null
-    Start-Sleep -Milliseconds 500
-    Start-Process "explorer.exe"
-    return @{ status = 'restarted' }
+    # KT: Explorer is a per-user desktop shell. Killing it by image name also
+    # kills every RDS user's taskbar, while a process started by an updater or
+    # service cannot restore those other sessions. Refresh shell associations
+    # instead; changes that require a new shell apply on the user's next logon.
+    try {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class WinCommanderShellRefresh {
+    [DllImport("shell32.dll")]
+    public static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr item1, IntPtr item2);
+}
+'@ -ErrorAction SilentlyContinue
+        [WinCommanderShellRefresh]::SHChangeNotify(0x08000000, 0x1000, [IntPtr]::Zero, [IntPtr]::Zero)
+        return @{ status = 'refresh_requested'; requiresSignOut = $true }
+    }
+    catch {
+        return @{ status = 'refresh_deferred'; requiresSignOut = $true; warning = $_.Exception.Message }
+    }
 }
 
 function Schedule-SSDOptimization {

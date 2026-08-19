@@ -48,7 +48,6 @@ function Invoke-RemoveOneDrive {
         # 2. Kill associated processes
         Write-Host "Stopping residual processes..."
         Stop-Process -Name "FileCoAuth", "OneDrive" -ErrorAction SilentlyContinue
-        Stop-Process -Name "Explorer" -Force -ErrorAction SilentlyContinue
         
         # 3. Cleanup residual folders
         $folders = @(
@@ -69,11 +68,11 @@ function Invoke-RemoveOneDrive {
             icacls $Env:OneDrive /grant "Administrators:(D,DC)" | Out-Null
         }
 
-        Start-Process "explorer.exe"
+        Restart-Explorer | Out-Null
         @{ status = 'removed' }
     }
     catch {
-        Start-Process "explorer.exe"
+        Restart-Explorer | Out-Null
         @{ error = $true; message = "Failed to remove OneDrive: $($_.Exception.Message)" }
     }
 }

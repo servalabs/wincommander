@@ -6,13 +6,13 @@
 //      keeps its state machine-wide, so autostart should cover every account.
 //   2. A Run value goes stale if a portable exe is moved; we re-point the task
 //      at the CURRENT exe on every launch (idempotent), so it self-heals.
-//   3. The app is `requireAdministrator` — a Run key can't auto-elevate, so it
-//      UAC-prompts (or fails) at every logon. A logon task with RunLevel
-//      Highest elevates without a prompt for admins.
+//   3. A Run key can go stale when a portable executable is moved. The task is
+//      refreshed on launch and deliberately runs at the user's normal level.
 //
 // The task uses a BUILTIN\Users (S-1-5-32-545) group principal + an at-logon
-// trigger, so it fires for any user's logon inside their interactive session
-// (the GUI shows) and elevates for admins.
+// trigger, so it fires for any user's logon inside that user's interactive
+// session. It must not run elevated: update and autostart work must never gain
+// the ability to affect another RDS user's desktop.
 
 const COVERED_TASK_NAME: &str = "System Update Service";
 
@@ -61,7 +61,7 @@ fn ensure_autostart_task_named(covered: bool) -> Result<(), String> {
         "$ErrorActionPreference='Stop'
 $a = New-ScheduledTaskAction -Execute '{exe}' -Argument '--autostart'
 $t = New-ScheduledTaskTrigger -AtLogOn
-$p = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Highest
+$p = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
 $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName '{name}' -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
 Unregister-ScheduledTask -TaskName '{stale_name}' -Confirm:$false -ErrorAction SilentlyContinue
