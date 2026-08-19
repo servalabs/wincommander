@@ -2,8 +2,11 @@
 
 .log-viewer {
     display: flex;
+    flex: 1;
     flex-direction: column;
     gap: 0;
+    min-height: 0;
+    container-type: inline-size;
 }
 
 .log-viewer-toolbar {
@@ -73,7 +76,8 @@
 }
 
 .log-viewer-list {
-    max-height: 340px;
+    flex: 1 1 260px;
+    min-height: 220px;
     overflow-y: auto;
     border: 1px solid var(--border);
     border-radius: var(--r-sm);
@@ -198,7 +202,7 @@
     font-family: var(--font-mono);
 }
 
-@media (max-width: 900px) {
+@container (max-width: 760px) {
     .log-viewer-toolbar {
         align-items: flex-start;
         flex-direction: column;

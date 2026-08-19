@@ -6,6 +6,8 @@
 // patches deep-merge objects but REPLACE arrays wholesale, so every
 // selection change must send the FULL desired array, never a delta.
 
+import type { VeraCryptDeviceEraseTarget } from "../../types/settings";
+
 const normDrive = (s: string): string => s.trim().replace(/\\+$/, "").toUpperCase();
 
 /** Returns the full next array with `drive` (normalized to "X:") toggled
@@ -34,4 +36,28 @@ export function addVeracryptPath(current: string[], path: string): string[] {
 
 export function removeVeracryptPath(current: string[], path: string): string[] {
   return current.filter((p) => p !== path);
+}
+
+const normalizeIdentityPart = (value: string): string =>
+  value.trim().replace(/^\{(.+)\}$/, "$1").toLowerCase();
+
+/** Stable identity used for an explicitly enrolled raw partition. Device paths
+ * can be reassigned after storage topology changes, so they are only a fallback
+ * for old/incomplete settings. The backend re-probes every identity field again
+ * immediately before destruction. */
+export function veracryptDeviceIdentity(target: VeraCryptDeviceEraseTarget): string {
+  const diskId = normalizeIdentityPart(target.diskUniqueId);
+  const partitionGuid = normalizeIdentityPart(target.partitionGuid);
+  if (diskId && partitionGuid && target.offsetBytes > 0 && target.sizeBytes > 0) {
+    return `${diskId}|${partitionGuid}|${target.offsetBytes}|${target.sizeBytes}`;
+  }
+  return normalizeIdentityPart(target.devicePath);
+}
+
+export function removeVeracryptDevice(
+  current: VeraCryptDeviceEraseTarget[],
+  target: VeraCryptDeviceEraseTarget,
+): VeraCryptDeviceEraseTarget[] {
+  const identity = veracryptDeviceIdentity(target);
+  return current.filter((candidate) => veracryptDeviceIdentity(candidate) !== identity);
 }

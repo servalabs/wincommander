@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Callout, Checkbox, Icon, Popover, Spinner, Tooltip } from "@/components/ui/bp";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import useBackend, { type BitLockerVolume, type EncryptionPartition } from "../../hooks/useBackend";
+import useBackend, { type BitLockerVolume } from "../../hooks/useBackend";
 import type { VeraCryptDeviceEraseTarget } from "../../types/settings";
 import EmptyState from "../../components/shared/EmptyState";
 import { escrowRiskOf } from "../../lib/cryptoEraseTargets";
@@ -34,7 +34,9 @@ import {
   toggleBitlockerDrive,
   isBitlockerDriveSelected,
   addVeracryptPath,
+  removeVeracryptDevice,
   removeVeracryptPath,
+  veracryptDeviceIdentity,
 } from "./cryptoEraseCascadeUtils";
 import "./LockdownConfigSection.css";
 import "./CryptoEraseTargetsSection.css";
@@ -92,31 +94,20 @@ export default function CryptoEraseTargetsSection({
   veracryptDevices,
   onPatch,
 }: Props) {
-  const { getBitLockerVolumes, getEncryptionPartitions } = useBackend();
+  const { getBitLockerVolumes } = useBackend();
   const [volumes, setVolumes] = useState<BitLockerVolume[]>([]);
-  const [partitions, setPartitions] = useState<EncryptionPartition[]>([]);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    const [res, partitionRes] = await Promise.all([
-      getBitLockerVolumes(),
-      getEncryptionPartitions(),
-    ]);
+    const res = await getBitLockerVolumes();
     setLoading(false);
     if (res.success && Array.isArray(res.data)) {
       setVolumes(res.data);
     } else if (!res.success) {
       showError(res.error || "Failed to load BitLocker volumes");
     }
-    if (partitionRes.success && Array.isArray(partitionRes.data?.partitions)) {
-      setPartitions(
-        partitionRes.data.partitions.filter((partition) => partition.safeForCreation),
-      );
-    } else if (!partitionRes.success) {
-      showError(partitionRes.error || "Failed to load candidate VeraCrypt partitions");
-    }
-  }, [getBitLockerVolumes, getEncryptionPartitions]);
+  }, [getBitLockerVolumes]);
 
   useEffect(() => {
     void refresh();
@@ -155,29 +146,9 @@ export default function CryptoEraseTargetsSection({
     [veracryptPaths, onPatch],
   );
 
-  const togglePartition = useCallback(
-    (partition: EncryptionPartition) => {
-      const selected = veracryptDevices.some(
-        (target) => target.devicePath.toLowerCase() === partition.devicePath.toLowerCase(),
-      );
-      const next = selected
-        ? veracryptDevices.filter(
-            (target) => target.devicePath.toLowerCase() !== partition.devicePath.toLowerCase(),
-          )
-        : [
-            ...veracryptDevices,
-            {
-              devicePath: partition.devicePath,
-              diskNumber: partition.diskNumber,
-              partitionNumber: partition.partitionNumber,
-              partitionGuid: partition.partitionGuid,
-              offsetBytes: partition.offsetBytes,
-              sizeBytes: partition.sizeBytes,
-              diskUniqueId: partition.diskUniqueId,
-              label: partition.label,
-            },
-          ];
-      onPatch({ cryptoEraseVeracryptDevices: next });
+  const removePartition = useCallback(
+    (target: VeraCryptDeviceEraseTarget) => {
+      onPatch({ cryptoEraseVeracryptDevices: removeVeracryptDevice(veracryptDevices, target) });
     },
     [onPatch, veracryptDevices],
   );
@@ -316,33 +287,33 @@ export default function CryptoEraseTargetsSection({
       <div className="sd-shred-folders-header" style={{ marginTop: "0.75rem" }}>
         <Icon icon="database" size={14} className="sd-shred-folders-icon" />
         <div className="sd-shred-folders-text">
-          <div className="sd-shred-folders-label">VeraCrypt Partitions</div>
+          <div className="sd-shred-folders-label">Enrolled VeraCrypt Partitions</div>
         </div>
       </div>
       <p className="sd-remove-users-warning">
-        Raw partitions are stored with their disk ID, GPT partition GUID, offset, and exact size.
-        Lockdown rechecks that identity before overwriting any header bytes.
+        Only raw partitions you explicitly enrolled are shown. Automatic suggestions are disabled
+        because Windows cannot prove that an ordinary writable partition contains VeraCrypt. Saved
+        targets remain visible while disconnected, and Lockdown rechecks their disk ID, partition
+        GUID, offset, size, and safety immediately before overwriting any header bytes.
       </p>
-      {partitions.length > 0 ? (
+      {veracryptDevices.length > 0 ? (
         <div className="sd-remove-users-list">
-          {partitions.map((partition) => {
-            const checked = veracryptDevices.some(
-              (target) => target.devicePath.toLowerCase() === partition.devicePath.toLowerCase(),
-            );
-            const name = partition.driveLetter
-              ? `${partition.driveLetter}:`
-              : `Disk ${partition.diskNumber}, partition ${partition.partitionNumber}`;
+          {veracryptDevices.map((target) => {
+            const name = `Disk ${target.diskNumber}, partition ${target.partitionNumber}`;
             return (
-              <label key={partition.devicePath} className="sd-row">
+              <label
+                key={veracryptDeviceIdentity(target)}
+                className="sd-row"
+              >
                 <Checkbox
                   className="sd-row-checkbox"
-                  checked={checked}
-                  onChange={() => togglePartition(partition)}
+                  checked
+                  onChange={() => removePartition(target)}
                 />
                 <div className="sd-row-content">
-                  <div className="sd-row-label">{name} · {partition.size}</div>
+                  <div className="sd-row-label">{name} · explicitly enrolled</div>
                   <div className="sd-row-description">
-                    {partition.label || "Unlabelled"} · {partition.devicePath}
+                    {target.label || "Unlabelled"} · {target.devicePath}
                   </div>
                 </div>
               </label>
@@ -350,7 +321,10 @@ export default function CryptoEraseTargetsSection({
           })}
         </div>
       ) : (
-        <EmptyState compact title="No non-system writable partitions detected." />
+        <EmptyState
+          compact
+          title="No VeraCrypt partitions enrolled — ordinary disks are intentionally not suggested."
+        />
       )}
 
       {(bitlockerDrives.length > 0 || veracryptPaths.length > 0 || veracryptDevices.length > 0) && (
