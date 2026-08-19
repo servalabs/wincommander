@@ -136,3 +136,6 @@ archive/
 .claude/
 
 UI_problem/
+
+# Local Superdesign working files and drafts must never be committed.
+/.superdesign/
