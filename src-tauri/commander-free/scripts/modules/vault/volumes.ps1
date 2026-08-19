@@ -11,6 +11,127 @@ function Get-VeraCryptExe {
     return $null
 }
 
+function Get-SystemEncryptionPlatform {
+    try {
+        $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+        $productType = [int]$os.ProductType
+        $caption = [string]$os.Caption
+        $version = [string]$os.Version
+        $build = 0
+        [void][int]::TryParse([string]$os.BuildNumber, [ref]$build)
+
+        if ($productType -eq 1) {
+            return @{ platform = 'windows-client'; productType = $productType; caption = $caption; version = $version; build = $build }
+        }
+        if ($productType -in @(2, 3)) {
+            return @{ platform = 'windows-server'; productType = $productType; caption = $caption; version = $version; build = $build }
+        }
+        return @{ platform = 'unknown'; productType = $productType; caption = $caption; version = $version; build = $build }
+    }
+    catch {
+        return @{ platform = 'unknown'; productType = $null; caption = $null; version = $null; build = $null }
+    }
+}
+
+function Test-SystemEncryptionSupportedClient {
+    param($PlatformInfo)
+    return $PlatformInfo.platform -eq 'windows-client' -and
+        $PlatformInfo.version -eq '10.0' -and $PlatformInfo.build -ge 17763 -and
+        $PlatformInfo.caption -match '(?i)Windows (10|11)' -and
+        $PlatformInfo.caption -notmatch '(?i)embedded|iot'
+}
+
+function Get-SystemEncryptionEligibility {
+    $platformInfo = Get-SystemEncryptionPlatform
+    $reasons = [System.Collections.Generic.List[string]]::new()
+    $isAdmin = $false
+    $isX64 = $null
+    try {
+        $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+        $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+    catch { $reasons.Add('Could not verify that WinCommander is running as an administrator.') }
+
+    try {
+        $processor = Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1
+        $isX64 = [int]$processor.Architecture -eq 9
+    }
+    catch { $reasons.Add('Could not verify that Windows is running on an x64 processor.') }
+
+    $isSupportedClient = Test-SystemEncryptionSupportedClient $platformInfo
+    if ($platformInfo.platform -eq 'windows-server') {
+        $reasons.Add('VeraCrypt supports system encryption only on Windows 10 and Windows 11; Windows Server is not supported.')
+    }
+    elseif (-not $isSupportedClient) {
+        $reasons.Add('VeraCrypt system encryption requires a supported Windows 10 or Windows 11 client installation.')
+    }
+    if (-not $isAdmin) { $reasons.Add('Launching VeraCrypt system encryption requires an elevated administrator session.') }
+
+    if ($isX64 -eq $false) { $reasons.Add('VeraCrypt system encryption requires an x64 Windows installation.') }
+
+    try {
+        $systemLetter = $env:SystemDrive.TrimEnd(':')
+        $systemPartition = Get-Partition -DriveLetter $systemLetter -ErrorAction Stop
+        $systemDisk = Get-Disk -Number $systemPartition.DiskNumber -ErrorAction Stop
+        $busType = [string]$systemDisk.BusType
+        $logicalSectorSize = [int]$systemDisk.LogicalSectorSize
+        $partitionTypes = @(Get-CimInstance -ClassName Win32_DiskPartition -Filter "DiskIndex = $($systemPartition.DiskNumber)" -ErrorAction Stop | ForEach-Object { [string]$_.Type })
+        $isDynamic = $partitionTypes -match '(?i)dynamic|logical disk manager'
+        if ($isDynamic) { $reasons.Add('VeraCrypt system encryption does not support dynamic system disks.') }
+        if ($busType -notin @('ATA', 'SATA', 'SCSI')) { $reasons.Add("VeraCrypt system encryption supports only locally attached ATA or SCSI disks; detected bus: $busType.") }
+        if ($logicalSectorSize -ne 512) { $reasons.Add("VeraCrypt system encryption requires 512-byte logical sectors; detected $logicalSectorSize bytes.") }
+    }
+    catch { $reasons.Add('Could not verify that the system disk is a supported basic, locally attached disk with 512-byte logical sectors.') }
+
+    try {
+        $bitLocker = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction Stop
+        if ($null -eq $bitLocker) { throw 'BitLocker status returned no system volume.' }
+        if ([string]$bitLocker.ProtectionStatus -eq 'On' -or [string]$bitLocker.VolumeStatus -match '(?i)encrypt') {
+            $reasons.Add('BitLocker protection is active on the system drive. Resolve that conflict before using VeraCrypt system encryption.')
+        }
+    }
+    catch { $reasons.Add('Could not verify whether BitLocker protects the system drive.') }
+
+    $exe = Get-VeraCryptExe
+    $version = $null
+    if (-not $exe) {
+        $reasons.Add('The installed VeraCrypt application was not found.')
+    }
+    else {
+        try {
+            $signature = Get-AuthenticodeSignature -LiteralPath $exe -ErrorAction Stop
+            $subject = [string]$signature.SignerCertificate.Subject
+            if ($signature.Status -ne 'Valid' -or $subject -notmatch '(?i)(^|,\s*)CN=IDRIX SARL(,|$)') {
+                $reasons.Add('The installed VeraCrypt application does not have a valid IDRIX signature.')
+            }
+            $version = (Get-Item -LiteralPath $exe -ErrorAction Stop).VersionInfo.ProductVersion
+            $formatExe = Join-Path (Split-Path -Parent $exe) 'VeraCrypt Format.exe'
+            $formatSignature = Get-AuthenticodeSignature -LiteralPath $formatExe -ErrorAction Stop
+            if ($formatSignature.Status -ne 'Valid' -or [string]$formatSignature.SignerCertificate.Subject -notmatch '(?i)(^|,\s*)CN=IDRIX SARL(,|$)') {
+                $reasons.Add('The installed VeraCrypt Format companion does not have a valid IDRIX signature.')
+            }
+        }
+        catch {
+            $reasons.Add('The installed VeraCrypt application and companion could not be signature-verified.')
+        }
+    }
+
+    @{
+        eligible = ($reasons.Count -eq 0)
+        reasons = @($reasons)
+        platform = $platformInfo.platform
+        productType = $platformInfo.productType
+        osCaption = $platformInfo.caption
+        osVersion = $platformInfo.version
+        isExperimental = $false
+        isAdmin = $isAdmin
+        isX64 = [bool]$isX64
+        veraCryptPath = $exe
+        veraCryptVersion = $version
+        status = Get-SystemEncryptionStatusDescriptor
+    }
+}
+
 function Mount-EncryptionVolume {
     # Volume mounting is a PAID feature, tagged "paid" in backend.rs and
     # dispatched to the Pro sidecar (commander-pro::encvol_engine::mount_volume).
@@ -398,54 +519,32 @@ function Get-VolumeInfo {
     }
 }
 
-function Get-SystemEncryptionStatus {
-    $svcName = 'veracrypt'
-    $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-
-    if (-not $svc) {
-        return @{
-            encrypted = $false
-            progress  = $null
-            algorithm = $null
-            mode      = $null
-        }
+function Get-SystemEncryptionStatusDescriptor {
+    $platformInfo = Get-SystemEncryptionPlatform
+    $isSupportedClient = Test-SystemEncryptionSupportedClient $platformInfo
+    $reason = if ($isSupportedClient) {
+        'WinCommander cannot verify VeraCrypt system-encryption state without a trusted driver status response.'
     }
-
-    # Check registry key written by VeraCrypt during system encryption
-    $regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\veracrypt'
-    $regExists = Test-Path $regPath
-
-    # Check for the VeraCrypt boot loader presence on the system drive
-    # VeraCrypt writes a key under its service when system encryption is active
-    $systemEncRegPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\veracrypt\SystemEncryption'
-    $systemEncActive = Test-Path $systemEncRegPath
-
-    # Try to read encryption progress if available
-    $progress = $null
-    $algorithm = $null
-    $mode = 'XTS'
-
-    if ($systemEncActive) {
-        try {
-            $regData = Get-ItemProperty -Path $systemEncRegPath -ErrorAction SilentlyContinue
-            if ($regData.EncryptionProgress) { $progress = [double]$regData.EncryptionProgress }
-            if ($regData.Algorithm) { $algorithm = $regData.Algorithm }
-        }
-        catch {}
+    else {
+        'System encryption status is supported only on Windows 10 and Windows 11 clients.'
     }
-
-    # Also check the VeraCrypt volume header backup path as a secondary signal
-    $vcBootPath = "$env:SystemRoot\System32\VeraCrypt-DCS"
-    $hasBoot = Test-Path $vcBootPath
-
-    $isEncrypted = $systemEncActive -or $hasBoot
 
     @{
-        encrypted = $isEncrypted
-        progress  = if ($isEncrypted -and $null -eq $progress) { 100 } else { $progress }
-        algorithm = if ($algorithm) { $algorithm } else { if ($isEncrypted) { 'AES-256' } else { $null } }
-        mode      = if ($isEncrypted) { $mode } else { $null }
+        encrypted = $null
+        progress = $null
+        algorithm = $null
+        mode = $null
+        state = if ($isSupportedClient) { 'unknown' } else { 'unsupported' }
+        reason = $reason
     }
+}
+
+function Get-SystemEncryptionStatus {
+    $status = Get-SystemEncryptionStatusDescriptor
+    # Service, registry, and VeraCrypt-DCS files are installation artefacts, not
+    # proof of active pre-boot protection. Do not convert their presence into a
+    # false "encrypted" claim.
+    throw $status.reason
 }
 
 function Get-AvailableDriveLetters {

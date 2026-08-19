@@ -1425,7 +1425,7 @@ pub(crate) fn get_command_tier(command: &str) -> &'static str {
         | "security_threat_snapshot"
         | "security_cve_snapshot" => "paid",
         // ── Stego backup (paid; VeraCrypt-in-MP4, Pro-Rust handler) ──
-        "Create-StegoMp4" | "Extract-StegoMp4" => "paid",
+        "Create-StegoMp4" | "Extract-StegoMp4" | "Launch-VeraCryptForSystemEncryption" => "paid",
         // ── Two-password volume creation (paid; headless engine, Pro-Rust handler) ──
         "Create-DualVolume" => "paid",
         // ── Vault/volumes create+mount+dismount (paid; stdin-based engine, Pro-Rust handler) ──
@@ -1642,6 +1642,19 @@ mod command_tier_tests {
         // privacy/cleanup module — must NOT be force-classified paid (Pro
         // ships no handler for it). Falls through to the free default.
         assert_eq!(get_command_tier("Get-VirtualMemoryStatus"), "free");
+    }
+
+    #[test]
+    fn system_encryption_eligibility_is_a_free_read_only_query() {
+        assert_eq!(get_command_tier("Get-SystemEncryptionEligibility"), "free");
+    }
+
+    #[test]
+    fn system_encryption_launch_stays_paid() {
+        assert_eq!(
+            get_command_tier("Launch-VeraCryptForSystemEncryption"),
+            "paid"
+        );
     }
 }
 
@@ -2385,6 +2398,7 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Extract-StegoMp4" => Some("vault/volumes"),
         "Get-VolumeInfo" => Some("vault/volumes"),
         "Get-SystemEncryptionStatus" => Some("vault/volumes"),
+        "Get-SystemEncryptionEligibility" => Some("vault/volumes"),
         "Get-EncryptionPartitions" => Some("vault/volumes"),
         "Get-AvailableDriveLetters" => Some("vault/volumes"),
 
@@ -3479,6 +3493,80 @@ mod module_dependency_tests {
                 "{command} must load core/settings-bridge"
             );
         }
+    }
+
+    #[test]
+    fn system_encryption_commands_keep_their_local_and_pro_boundaries() {
+        assert_eq!(
+            get_module_for_command("Get-SystemEncryptionEligibility"),
+            Some("vault/volumes")
+        );
+        assert_eq!(
+            get_module_for_command("Launch-VeraCryptForSystemEncryption"),
+            None,
+            "the paid action must route through the Pro dispatcher, not Free PowerShell"
+        );
+    }
+}
+
+#[cfg(test)]
+mod system_encryption_status_contract_tests {
+    const VAULT_VOLUMES_SCRIPT: &str = include_str!("../scripts/modules/vault/volumes.ps1");
+
+    fn function_body(name: &str) -> &str {
+        let start = VAULT_VOLUMES_SCRIPT
+            .find(&format!("function {name} {{"))
+            .unwrap_or_else(|| panic!("{name} must remain in vault/volumes.ps1"));
+        let after_start = &VAULT_VOLUMES_SCRIPT[start..];
+        let end = after_start.find("\nfunction ").unwrap_or(after_start.len());
+        &after_start[..end]
+    }
+
+    #[test]
+    fn system_encryption_status_never_guesses_from_installation_artefacts() {
+        let status = function_body("Get-SystemEncryptionStatusDescriptor");
+        let executable_lines = status
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(status.contains("encrypted = $null"));
+        assert!(
+            status.contains("state = if ($isSupportedClient) { 'unknown' } else { 'unsupported' }")
+        );
+        for forbidden in [
+            "Get-Service",
+            "Test-Path",
+            "VeraCrypt-DCS",
+            "HKLM:",
+            "$systemEncActive",
+            "$hasBoot",
+            "EncryptionProgress",
+            "AES-256",
+            "100",
+        ] {
+            assert!(
+                !executable_lines.contains(forbidden),
+                "status must not infer system encryption from {forbidden}"
+            );
+        }
+        let public_status = function_body("Get-SystemEncryptionStatus");
+        assert!(public_status.contains("Get-SystemEncryptionStatusDescriptor"));
+        assert!(public_status.contains("throw $status.reason"));
+    }
+
+    #[test]
+    fn eligibility_explicitly_blocks_server_and_unknown_hosts() {
+        let eligibility = function_body("Get-SystemEncryptionEligibility");
+
+        assert!(eligibility.contains("$platformInfo.platform -eq 'windows-server'"));
+        assert!(eligibility.contains("Windows Server is not supported."));
+        assert!(eligibility.contains("Test-SystemEncryptionSupportedClient $platformInfo"));
+        assert!(eligibility
+            .contains("VeraCrypt system encryption requires an x64 Windows installation."));
+        assert!(eligibility.contains("isExperimental = $false"));
+        assert!(eligibility.contains("if ($null -eq $bitLocker)"));
     }
 }
 

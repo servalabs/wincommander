@@ -659,6 +659,17 @@ Volume management: `Create-EncryptionVolume`, `Create-HiddenVolume`,
 `Get-VolumeInfo`, `Get-SystemEncryptionStatus`, `Get-EncryptionPartitions`,
 `Get-AvailableDriveLetters`.
 
+System-encryption handoff: `Get-SystemEncryptionEligibility` is a read-only
+preflight. It fails closed for Windows Server, unsupported Windows clients,
+untrusted or incomplete VeraCrypt installs, BitLocker conflicts, unsupported
+system-disk transport/layout, and non-512-byte sectors. `Get-SystemEncryptionStatus`
+does not infer protection from VeraCrypt installation files or registry keys; it
+returns an error until a trusted VeraCrypt driver status source is available.
+`Launch-VeraCryptForSystemEncryption` is paid and revalidates eligibility in the
+Pro sidecar before opening only the installed, IDRIX-signed `VeraCrypt.exe` with
+no arguments. It never receives credentials and instructs the user to choose
+`System > Encrypt System Partition/Drive` in VeraCrypt.
+
 #### Feature 5 — Real Crypto-Erase (Irreversible, paid, needsAdmin, default OFF)
 
 These commands destroy the encryption master key. They are NOT called by any
