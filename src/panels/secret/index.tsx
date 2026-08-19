@@ -35,6 +35,7 @@ import AppLicensingSection from "./AppLicensingSection";
 import BrandingLicensingSection from "./BrandingLicensingSection";
 import ManagedPolicyBanner from "../../components/shared/ManagedPolicyBanner";
 import { useSecretSessionState } from "./secretSessionState";
+import RuntimeStatusSection from "./RuntimeStatusSection";
 import { DEFAULT_BORROWED_PANELS } from "../../lib/visibilityDefaults";
 import "./index.css";
 import "../privacy/index.css";
@@ -693,7 +694,7 @@ export default function SecretPanel() {
             />
             {/* F9: show when AD admin has pushed policy via commander.admx */}
             <ManagedPolicyBanner />
-            <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="secret-tabs">
                 <TabsList className="w-full flex-wrap justify-start">
                     <TabsTrigger value="disguise">Disguise &amp; branding</TabsTrigger>
                     <TabsTrigger value="borrowed">Borrowed mode &amp; visibility</TabsTrigger>
@@ -716,9 +717,10 @@ export default function SecretPanel() {
                         <EmergencyToolsSection />
                     </div>
                 </TabsContent>
-                <TabsContent value="diagnostics">
-                    <div className="secret-grid">
-                        <SectionCard title="Error Center" icon="document" className="secret-grid__wide">
+                <TabsContent value="diagnostics" className="secret-diagnostics-tab">
+                    <div className="secret-grid secret-diagnostics-grid">
+                        <RuntimeStatusSection />
+                        <SectionCard title="Error Center" icon="document" className="secret-grid__wide secret-diagnostics-log-card">
                             <LogViewer />
                         </SectionCard>
                     </div>

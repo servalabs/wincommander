@@ -88,7 +88,7 @@ export default function SectionCard({
                 )}
             </div>
             
-            <Collapse isOpen={isInternalOpen}>
+            <Collapse isOpen={isInternalOpen} className="section-collapse">
                 <div className="section-content">
                     {typeof children === 'function'
                         ? (children as (pulse: () => void) => ReactNode)(handlePulse)
