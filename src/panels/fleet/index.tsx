@@ -5,7 +5,6 @@
 import { useCallback, useState, type SetStateAction } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AccessControlTab from "./AccessControlTab";
-import FleetConsoleLink from "./FleetConsoleLink";
 import FleetConnectView from "./FleetConnectView";
 import VaultAccessTab from "./VaultAccessTab";
 import { loadAccessDirectory, saveAccessDirectory } from "./accessControlPolicy";
@@ -48,7 +47,7 @@ export default function FleetPanel() {
       <div className="fleet-panel-heading">
         <div>
           <h2>Fleet & multi-user security</h2>
-          <p>Enroll this endpoint, organize Windows users, assign Vault permissions, or open the organization console.</p>
+          <p>Enroll this endpoint, organize Windows users, and assign Vault permissions.</p>
         </div>
       </div>
       <Tabs defaultValue="enrollment" className="fleet-tabs">
@@ -59,7 +58,6 @@ export default function FleetPanel() {
         </TabsList>
         <TabsContent value="enrollment" className="fleet-tab-content">
           <FleetConnectView />
-          <FleetConsoleLink />
         </TabsContent>
         <TabsContent value="access-control" className="fleet-tab-content">
           <AccessControlTab directory={directory} onChange={updateDirectory} onSave={saveDirectory} />

@@ -1547,33 +1547,6 @@
   font-size: 12px;
 }
 
-.fleet-console-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-top: 20px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--r);
-  background: var(--surface-2);
-}
-
-.fleet-console-card > div {
-  flex: 1;
-}
-
-.fleet-console-card h3,
-.fleet-console-card p {
-  margin: 0;
-}
-
-.fleet-console-card p,
-.fleet-console-card small {
-  color: var(--text-dim);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .fleet-access-layout {
   display: grid;
   grid-template-columns: minmax(250px, 3fr) minmax(0, 7fr);
@@ -2003,7 +1976,6 @@
 @media (max-width: 720px) {
   .fleet-form-grid,
   .fleet-form-grid-4 { grid-template-columns: 1fr; }
-  .fleet-console-card { align-items: stretch; flex-direction: column; }
   .fleet-access-fields { grid-template-columns: 1fr; }
   .fleet-owner-tools { grid-template-columns: 1fr; }
   .fleet-policy-toggle-grid { grid-template-columns: 1fr; }

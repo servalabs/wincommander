@@ -13,7 +13,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(panel).toContain("Enrollment");
     expect(panel).toContain("Access control");
     expect(panel).toContain("Vault permissions");
-    expect(panel).toContain("<FleetConsoleLink />");
+    expect(panel).not.toContain("FleetConsoleLink");
     expect(panel).not.toContain("ClipboardGuardTab");
     expect(panel).not.toContain("InkReceiptTab");
   });
