@@ -85,6 +85,8 @@ use tauri::{AppHandle, Emitter};
 
 use clipboard_guard_helper::actions::{ActionOutcome, ClipboardWriter, Win32Writer};
 use clipboard_guard_helper::engine::{CombinedMatchOutcome, CombinedVerdict, MatchEngine};
+#[cfg(test)]
+use clipboard_guard_helper::engine::MatchOutcome;
 use clipboard_guard_helper::health::HelperHealth;
 use clipboard_guard_helper::ipc::SvcClient;
 use clipboard_guard_helper::listener::{self, ClipboardChangeSource};
