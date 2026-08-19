@@ -151,6 +151,22 @@ export function toEverythingToken(word: string): string | null {
   return `*${core}*`;
 }
 
+/** True for a Windows drive root: "C:", "C:\", "D:\\" — letter + colon, optional slashes. */
+export function isDriveRootPath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]*$/.test(path.trim());
+}
+
+/** Split an `in` chip path on "|". A single folder is `[that path]`; empties drop. */
+export function splitScopePaths(path: string | undefined): string[] {
+  if (!path) return [];
+  return path.split("|").map((part) => part.trim()).filter(Boolean);
+}
+
+/** Drive letter + colon, no trailing slash — the form Everything grouping accepts. */
+function driveRootToken(path: string): string {
+  return path.replace(/[\\/]+$/, "");
+}
+
 /**
  * Build the Everything (es.exe) plan. `now` is accepted for symmetry with
  * buildContentTerms but is deliberately unused: es.exe resolves `dm:` tokens
@@ -204,8 +220,15 @@ export function buildEverythingPlan(state: QueryState, _now?: Date): EverythingP
   // hunting for are the ones you touched recently. Same principle as the soft
   // time chip: prefer recent rather than filter on it.
   plan.sort = "dm-descending";
-  const scope = chipOf(state, "in");
-  if (scope?.path) plan.scopePath = scope.path;
+  const paths = splitScopePaths(chipOf(state, "in")?.path);
+  if (paths.length === 1) {
+    plan.scopePath = paths[0];
+  } else if (paths.length >= 2 && paths.every(isDriveRootPath)) {
+    // -path is single-folder only. OR the drive roots as one grouping token.
+    tokens.push(`<${paths.map(driveRootToken).join("|")}>`);
+  } else if (paths.length >= 2) {
+    plan.scopePath = paths[0];
+  }
   return plan;
 }
 
@@ -292,7 +315,14 @@ export function describeQuery(state: QueryState): string {
   let out = head;
   if (term) out += ` named ${term}`;
   const scope = chipOf(state, "in");
-  if (scope) out += ` in ${scope.pathLabel ?? scope.path ?? "this folder"}`;
+  if (scope) {
+    const paths = splitScopePaths(scope.path);
+    if (paths.length >= 2 && paths.every(isDriveRootPath)) {
+      out += ` in ${joinList(paths.map(driveRootToken))}`;
+    } else {
+      out += ` in ${scope.pathLabel ?? scope.path ?? "this folder"}`;
+    }
+  }
 
   const clauses: string[] = [];
   const time = activeTime(state);

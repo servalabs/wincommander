@@ -11,6 +11,8 @@ import {
   buildEverythingPlan,
   contentSearchApplies,
   describeQuery,
+  isDriveRootPath,
+  splitScopePaths,
   toEverythingToken,
 } from "./searchQueryPlan";
 import { EMPTY_QUERY, addChip, cycleChipStrict } from "./searchTokens";
@@ -133,6 +135,45 @@ describe("buildEverythingPlan — scopePath", () => {
 
   it("leaves scopePath undefined without an in chip", () => {
     expect(buildEverythingPlan(q("x")).scopePath).toBeUndefined();
+  });
+
+  it("ORs two drive roots as one grouping token and does not set scopePath", () => {
+    const state = withText(addChip(EMPTY_QUERY, "in", { path: "C:\\|D:\\", pathLabel: "C: + D:" }), "readme");
+    const plan = buildEverythingPlan(state);
+    expect(plan.scopePath).toBeUndefined();
+    expect(plan.tokens).toContain("<C:|D:>");
+    expect(plan.tokens.some((t) => t.startsWith("path:"))).toBe(false);
+  });
+
+  it("ORs three drive roots as one grouping token and does not set scopePath", () => {
+    const state = addChip(EMPTY_QUERY, "in", { path: "C:\\|D:\\|E:\\", pathLabel: "C: + D: + E:" });
+    const plan = buildEverythingPlan(state);
+    expect(plan.scopePath).toBeUndefined();
+    expect(plan.tokens).toContain("<C:|D:|E:>");
+    expect(plan.tokens.some((t) => t.startsWith("path:"))).toBe(false);
+  });
+
+  it("still uses scopePath for a single folder and emits no grouping token", () => {
+    const state = addChip(EMPTY_QUERY, "in", { path: "D:\\GitHub\\wincommander", pathLabel: "wincommander" });
+    const plan = buildEverythingPlan(state);
+    expect(plan.scopePath).toBe("D:\\GitHub\\wincommander");
+    expect(plan.tokens.some((t) => t.includes("|") || t.startsWith("<"))).toBe(false);
+    expect(plan.tokens.some((t) => t.startsWith("path:"))).toBe(false);
+  });
+});
+
+describe("scope path helpers", () => {
+  it("recognises a drive letter with optional trailing slashes as a root", () => {
+    expect(isDriveRootPath("C:")).toBe(true);
+    expect(isDriveRootPath("C:\\")).toBe(true);
+    expect(isDriveRootPath("D:\\\\")).toBe(true);
+    expect(isDriveRootPath("D:\\GitHub\\wincommander")).toBe(false);
+  });
+
+  it("splits a pipe-joined path and leaves a single folder as one entry", () => {
+    expect(splitScopePaths("C:\\|D:\\")).toEqual(["C:\\", "D:\\"]);
+    expect(splitScopePaths("D:\\GitHub\\wincommander")).toEqual(["D:\\GitHub\\wincommander"]);
+    expect(splitScopePaths(undefined)).toEqual([]);
   });
 });
 
@@ -320,6 +361,8 @@ describe("describeQuery", () => {
       .toBe("Folders named assets, changed today");
     expect(describeQuery(addChip(chips("images"), "in", { path: "C:\\Users\\Admin\\Downloads", pathLabel: "Downloads" })))
       .toBe("Images in Downloads");
+    expect(describeQuery(addChip(EMPTY_QUERY, "in", { path: "C:\\|D:\\", pathLabel: "C: + D:" })))
+      .toBe("Files and folders in C: and D:");
     expect(describeQuery(withText(chips("files", "big"), "iso")))
       .toBe("Files named iso, larger than 100 MB");
     expect(describeQuery(withText(chips("documents", "code"), "budget")))

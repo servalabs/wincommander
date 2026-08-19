@@ -26,7 +26,7 @@ import { isDirectoryResult, isSearchTimeoutError, sfExtOf } from "@/lib/fileName
 import type { SearchResponse, SearchResult } from "@/lib/fileNameSearch";
 import { resolveMotionDisabled } from "@/lib/motionPolicy";
 import { normalizeKey, topPaths } from "@/lib/frecency";
-import { buildContentTerms, buildEverythingPlan, contentSearchApplies } from "@/lib/searchQueryPlan";
+import { buildContentTerms, buildEverythingPlan, contentSearchApplies, splitScopePaths } from "@/lib/searchQueryPlan";
 import type { EverythingPlan } from "@/lib/searchQueryPlan";
 import { EMPTY_QUERY, addChip, chipOf, parseFolderJump, suggestChip } from "@/lib/searchTokens";
 import type { ChipSuggestion, QueryState } from "@/lib/searchTokens";
@@ -526,7 +526,8 @@ export function useChipSearch(active: boolean): ChipSearchApi {
     // narrowed the filename list while "Inside files" below it kept showing hits
     // from the whole disk. Two lists visibly disagreeing about the same filter
     // is worse than having no filter.
-    const contentScope = chipOf(searchState, "in")?.path;
+    const scopePaths = splitScopePaths(chipOf(searchState, "in")?.path);
+    const contentScope = scopePaths.length === 1 ? scopePaths[0] : undefined;
     contentTimerRef.current = setTimeout(() => {
       invoke<ContentHit[]>(
         "search_content",
