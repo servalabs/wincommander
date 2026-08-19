@@ -120,8 +120,8 @@ html.light .splash-screen {
 }
 
 .sp-logo-plate {
-    width: 108px;
-    height: 108px;
+    width: 128px;
+    height: 128px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -133,8 +133,8 @@ html.light .splash-screen {
 }
 
 .sp-logo-img {
-    width: 96px;
-    height: 96px;
+    width: 120px;
+    height: 120px;
     object-fit: contain;
     position: relative;
     z-index: 2;
@@ -151,13 +151,12 @@ html.light .splash-screen {
     display: block;
 }
 
-/* Brand-mark fallback shown when /Logo.png either errors or takes too
-   long to load (cold-disk first-run). Styled to look like a deliberate
-   monogram, not a broken-image placeholder: 96px square with the same
-   cyan glow + pulse animation as the real logo. */
+/* Brand-mark fallback shown when the inlined logo errors or takes too
+   long to load (cold-disk first-run). Styled as a deliberate monogram
+   with the same cyan glow + pulse as the real logo. */
 .sp-logo-fallback {
-    width: 96px;
-    height: 96px;
+    width: 120px;
+    height: 120px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -401,25 +400,6 @@ html.light .sp-scramble {
     animation: sp-caret-blink 0.7s steps(2) infinite;
 }
 
-.sp-loader-orb {
-    position: relative;
-    display: grid;
-    place-items: center;
-    width: 88px;
-    height: 88px;
-    margin: -8px 0 8px;
-    animation: sp-slide-up 0.5s ease 0.4s both;
-}
-
-.sp-loader-orb canvas {
-    position: relative;
-    filter: contrast(1.22);
-}
-
-html.light .sp-loader-orb canvas {
-    filter: contrast(1.45) brightness(0.72);
-}
-
 @keyframes sp-caret-blink {
     50% { opacity: 0; }
 }
@@ -449,8 +429,8 @@ html.light .sp-matrix-canvas {
    the responsive font clamp keeps it from overflowing. */
 @media (max-width: 480px) {
     .sp-logo-wrap, .sp-logo-core { width: 152px; height: 152px; }
-    .sp-logo-plate { width: 88px; height: 88px; }
-    .sp-logo-img { width: 76px; height: 76px; }
+    .sp-logo-plate { width: 104px; height: 104px; }
+    .sp-logo-img { width: 96px; height: 96px; }
     .sp-ring-outer { width: 136px; height: 136px; top: 8px; left: 8px; }
     .sp-ring-inner { width: 116px; height: 116px; top: 18px; left: 18px; }
     .sp-brand { letter-spacing: 0.14em; margin-bottom: 8px; }
@@ -474,4 +454,17 @@ html.light .sp-matrix-canvas {
     .sp-logo-fallback {
         animation-play-state: running !important;
     }
+}
+
+/* wc-no-motion sets animation:none globally. `animation: … both` leaves
+   some WebView2 builds stuck on the first keyframe (opacity: 0), so force
+   splash chrome visible when motion is off. */
+html.wc-no-motion .splash-screen .sp-content,
+html.wc-no-motion .splash-screen .sp-brand,
+html.wc-no-motion .splash-screen .sp-sub,
+html.wc-no-motion .splash-screen .sp-logo-img,
+html.wc-no-motion .splash-screen .sp-logo-fallback {
+    opacity: 1 !important;
+    transform: none !important;
+    animation: none !important;
 }

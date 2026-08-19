@@ -1155,7 +1155,7 @@ function AppContent() {
 }
 
 function StartupAuthGate({ children }: { children: React.ReactNode }) {
-  const [authDone, setAuthDone]       = useState(false);
+  const [, setAuthDone]               = useState(false);
   const [showCalc, setShowCalc]       = useState(false);
   const { setMode } = useAuthMode();
 
@@ -1202,8 +1202,8 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
 
     // Fail open if the configured-check never settles. A rejection is already
     // handled below, but a HANG (stalled IPC / blocked settings read) resolves
-    // neither path and leaves `authDone` false — the window is shown and paints
-    // nothing, which reads to the user as "the tray click did nothing".
+    // neither path. Children still render (splash covers the dashboard), but
+    // mode must flip to "real" so the rest of startup isn't stuck waiting.
     const failOpenTimer = setTimeout(() => {
       setMode("real");
       setAuthDone(true);
@@ -1248,10 +1248,19 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
     } catch { /* process is exiting */ }
   }, []);
 
+  // Calculator replaces the whole app; drop the HTML first-paint overlay so
+  // it never sits on top of the lock UI.
+  useEffect(() => {
+    if (!showCalc) return;
+    document.getElementById("boot-splash")?.setAttribute("hidden", "");
+  }, [showCalc]);
+
   if (showCalc) {
     return <CalculatorGate onAuth={handleAuth} onDestroy={handleDestroy} />;
   }
-  if (!authDone) return null; // brief flash before configured-check resolves
+  // Always render children while the PIN check runs — AppContent already
+  // hides the dashboard behind SplashScreen, so a blank native window is
+  // worse than mounting early. Calculator still replaces the tree above.
   return <>{children}</>;
 }
 

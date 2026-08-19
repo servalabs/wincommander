@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { ThinkingOrb } from 'thinking-orbs';
 import { useAppState } from '../context/AppContext';
 import { useTheme } from '../context/ThemeContext';
 import useMotionPreference from '../hooks/useMotionPreference';
@@ -71,6 +70,12 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
     const [logoReady, setLogoReady] = useState(false);
     const [scrambleText, setScrambleText] = useState(() => scrambleWord(branding.companyLabel, 0));
     const [animDone, setAnimDone] = useState(false);
+
+    // React splash owns the frame now — drop the HTML first-paint overlay
+    // so the two never stack.
+    useEffect(() => {
+        document.getElementById("boot-splash")?.setAttribute("hidden", "");
+    }, []);
 
     // Canvas matrix rain — brightness-grid approach.
     // Every cell has a float brightness [0..1] that decays each frame; drops
@@ -344,15 +349,6 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
 
                 <h1 className="sp-brand sp-scramble">{scrambleText}</h1>
                 <p className="sp-sub">{branding.productLabel}</p>
-
-                <div className="sp-loader-orb">
-                    <ThinkingOrb
-                        state="composing"
-                        size={64}
-                        theme={isLight ? 'light' : 'dark'}
-                        aria-label="Loading WinCommander"
-                    />
-                </div>
 
             </div>
         </div>
