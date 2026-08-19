@@ -48,8 +48,8 @@ describe("local clipboard rule persistence", () => {
       );
       throw new Error("expected the backend validation failure");
     } catch (error) {
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toBe("invalid regular expression");
+      if (!(error instanceof Error)) throw error;
+      expect(error.message).toBe("invalid regular expression");
     }
   });
 });
