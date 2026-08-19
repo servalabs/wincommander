@@ -1,20 +1,20 @@
-# Fleet desktop organization-security tabs
+# Fleet desktop and organization-console boundary
 
-The WinCommander desktop Fleet panel keeps device enrollment and the local Vault
-deployment manifest separate from organization policy. Clipboard Guard and Ink
-Receipt require an in-memory Fleet administrator session; no password or token
-is written to browser storage.
+The WinCommander desktop Fleet panel is an endpoint surface. It enrolls this
+device, reports its connection state, and prepares the local non-secret Vault
+deployment manifest. It does not authenticate Fleet administrators or edit
+organization policy.
 
-The desktop client uses these existing Fleet routes:
+Clipboard Guard and Ink Receipt policy administration remains in the web
+console served by `fleet-server`. The desktop links to the enrolled server's
+origin in the system browser. Administrator credentials and session tokens
+therefore never enter the desktop app.
 
-- `POST /api/v1/auth/login`
-- `GET`/`PUT /api/v1/orgs/{org}/settings`
-- `GET`/`PUT /api/v1/orgs/{org}/clipboard-guard/rules`
-- `POST /api/v1/orgs/{org}/clipboard-guard/rules/test`
-- `POST /api/v1/orgs/{org}/clipboard-guard/publish`
-- `GET`/`PUT /api/v1/orgs/{org}/ink-receipt/policy`
+The separation is deliberate:
 
-Clipboard Guard supports content-free rule drafts, canonical compile/test, and
-explicit publication. Ink Receipt supports ticket limits, managed destination
-classes, watermark policy, failure stance, and policy publication. Server-side
-role checks remain authoritative: the interface does not grant authorization.
+- The Fleet server console owns organization Clipboard Guard and Ink Receipt
+  rule authoring, testing, publication, roles, and audit history.
+- An enrolled device receives signed policy and cannot weaken managed rules.
+- Personal Clipboard Guard rules are configured under Privacy > Monitor and
+  remain local to that Windows user.
+- Ink Receipt has no local policy editor; it remains Fleet-managed only.

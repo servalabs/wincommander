@@ -5,17 +5,16 @@
 // Groups / Admins / Audit / …) now lives in ONE web app served by the
 // fleet-server itself (`wincommander-pro/fleet-server/console`, reachable at
 // the server's own origin, e.g. http://fleet.corp.ts.net:8787). WinCommander's
-// only remote-facing action here is enrolling THIS device (see FleetConnectView
-// → `fleet_connect`). The Vault tab is deliberately local: it creates a
-// non-secret deployment manifest and does not log in to, or manage, the server.
+// only server actions here are enrolling THIS device (see FleetConnectView →
+// `fleet_connect`) and opening that server's console in the system browser.
+// The Vault tab is deliberately local: it creates a non-secret deployment
+// manifest and does not log in to, or manage, the server.
 // ══════════════════════════════════════════════════════════════════════════
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import FleetConsoleLink from "./FleetConsoleLink";
 import FleetConnectView from "./FleetConnectView";
-import FleetAdminSession, { FleetAdminGate } from "./FleetAdminSession";
 import VaultAccessTab from "./VaultAccessTab";
-import ClipboardGuardTab from "./ClipboardGuardTab";
-import InkReceiptTab from "./InkReceiptTab";
 import "./index.css";
 
 export default function FleetPanel() {
@@ -24,34 +23,22 @@ export default function FleetPanel() {
       <div className="fleet-panel-heading">
         <div>
           <h2>Fleet & multi-user security</h2>
-          <p>Enroll this endpoint, prepare a local Vault deployment manifest, or publish organization safeguards.</p>
+          <p>Enroll this endpoint, prepare a local Vault deployment manifest, or open the organization console.</p>
         </div>
       </div>
-      <FleetAdminSession>
       <Tabs defaultValue="enrollment" className="fleet-tabs">
         <TabsList className="fleet-tabs-list" aria-label="Fleet configuration sections">
           <TabsTrigger value="enrollment">Enrollment</TabsTrigger>
           <TabsTrigger value="vault">Vault access</TabsTrigger>
-          <TabsTrigger value="clipboard">Clipboard Guard</TabsTrigger>
-          <TabsTrigger value="ink">Ink Receipt</TabsTrigger>
         </TabsList>
         <TabsContent value="enrollment" className="fleet-tab-content">
           <FleetConnectView />
-          <p className="fleet-section-sub" style={{ marginTop: 20 }}>
-            Manage remote fleet controls from the web console served by your fleet-server.
-          </p>
+          <FleetConsoleLink />
         </TabsContent>
         <TabsContent value="vault" className="fleet-tab-content">
           <VaultAccessTab />
         </TabsContent>
-        <TabsContent value="clipboard" className="fleet-tab-content">
-          <FleetAdminGate><ClipboardGuardTab /></FleetAdminGate>
-        </TabsContent>
-        <TabsContent value="ink" className="fleet-tab-content">
-          <FleetAdminGate><InkReceiptTab /></FleetAdminGate>
-        </TabsContent>
       </Tabs>
-      </FleetAdminSession>
     </div>
   );
 }

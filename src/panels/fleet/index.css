@@ -1328,8 +1328,7 @@
   font: 650 22px/1.2 var(--font-display);
 }
 
-.fleet-panel-heading p,
-.fleet-admin-login p {
+.fleet-panel-heading p {
   margin: 6px 0 0;
   color: var(--text-dim);
   font-size: 13px;
@@ -1351,33 +1350,9 @@
   gap: 14px;
 }
 
-.fleet-admin-login {
-  display: grid;
-  gap: 16px;
-  max-width: 820px;
-  padding: 20px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background: var(--surface);
-}
-
-.fleet-admin-login h3,
 .fleet-subcard h4 {
   margin: 0;
   color: var(--text);
-}
-
-.fleet-session-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r);
-  background: var(--surface-2);
-  color: var(--text-dim);
-  font-size: 12px;
 }
 
 .fleet-form-grid {
@@ -1390,8 +1365,7 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.fleet-field,
-.fleet-admin-login label {
+.fleet-field {
   display: grid;
   align-content: start;
   gap: 6px;
@@ -1463,8 +1437,7 @@
   font-size: 12px;
 }
 
-.fleet-policy-row label,
-.fleet-rule-enabled {
+.fleet-policy-row label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1540,30 +1513,36 @@
   white-space: nowrap;
 }
 
-.fleet-validation-errors,
-.fleet-inline-error {
+.fleet-validation-errors {
   color: var(--danger);
   font-size: 12px;
 }
 
-.fleet-test-result {
-  padding: 10px;
-  border-radius: var(--r);
-  background: var(--surface-2);
-  color: var(--text-dim);
-  font: 11px/1.5 var(--font-mono);
-  overflow-wrap: anywhere;
-}
-
-.fleet-textarea {
-  min-height: 92px;
-  resize: vertical;
-  padding: 10px 12px;
+.fleet-console-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 20px;
+  padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--r);
   background: var(--surface-2);
-  color: var(--text);
-  font: 12px/1.4 var(--font-mono);
+}
+
+.fleet-console-card > div {
+  flex: 1;
+}
+
+.fleet-console-card h3,
+.fleet-console-card p {
+  margin: 0;
+}
+
+.fleet-console-card p,
+.fleet-console-card small {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 @media (max-width: 1100px) {
@@ -1574,4 +1553,5 @@
 @media (max-width: 720px) {
   .fleet-form-grid,
   .fleet-form-grid-4 { grid-template-columns: 1fr; }
+  .fleet-console-card { align-items: stretch; flex-direction: column; }
 }
