@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { CheckboxControl } from "@/components/ui/bp";
 import type { Rule, Severity } from "../../types/generated/fleet";
 import {
   LOCAL_RULE_SEVERITIES,
@@ -179,15 +180,15 @@ function RuleForm({ rule, error, onChange, onSave, onCancel }: {
       </div>
       <div className="flex flex-wrap gap-4 text-[10px] text-[var(--shield-text-subtle)]">
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={rule.actions.includes("notify_user")} onChange={(event) => onChange(setLocalAction(rule, "notify_user", event.currentTarget.checked))} aria-label="Notify me" />
+          <CheckboxControl checked={rule.actions.includes("notify_user")} onChange={(event) => onChange(setLocalAction(rule, "notify_user", event.currentTarget.checked))} ariaLabel="Notify me" />
           Notify me
         </label>
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={rule.actions.includes("clear_clipboard")} onChange={(event) => onChange(setLocalAction(rule, "clear_clipboard", event.currentTarget.checked))} aria-label="Clear clipboard" />
+          <CheckboxControl checked={rule.actions.includes("clear_clipboard")} onChange={(event) => onChange(setLocalAction(rule, "clear_clipboard", event.currentTarget.checked))} ariaLabel="Clear clipboard" />
           Clear clipboard
         </label>
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={rule.actions.includes("quarantine_clipboard")} onChange={(event) => onChange(setLocalAction(rule, "quarantine_clipboard", event.currentTarget.checked))} aria-label="Replace clipboard content" />
+          <CheckboxControl checked={rule.actions.includes("quarantine_clipboard")} onChange={(event) => onChange(setLocalAction(rule, "quarantine_clipboard", event.currentTarget.checked))} ariaLabel="Replace clipboard content" />
           Replace with a warning
         </label>
       </div>

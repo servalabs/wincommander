@@ -492,6 +492,13 @@ fn install_free_tier_policy(enabled: &EnabledCategories) -> Result<(), String> {
     install_local_policy(enabled, &custom)
 }
 
+/// Built-in heuristic rules keep their legacy length floor to avoid noisy
+/// matches. A user-authored local rule is explicit, so it may intentionally
+/// match a short phrase (for example, a person's name).
+fn should_evaluate_clipboard_text(text: &str, has_local_custom_rules: bool) -> bool {
+    text.len() >= 13 || has_local_custom_rules
+}
+
 // ── Toast copy (byte-identical to the legacy engine) ─────────────────
 
 /// Build the notification title/body for one detection. Extracted
@@ -1195,6 +1202,16 @@ pub async fn start_paste_monitor(app: AppHandle) -> Result<(), String> {
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     crate::log_message("debug", "[PasteMonitor] watcher started");
 
+    // The monitor is global, while the editor only mounts when the Privacy
+    // panel is opened. Activate the encrypted per-user rules here so a saved
+    // local phrase works immediately after every application launch.
+    if let Err(error) = crate::local_clipboard_rules::load_local_clipboard_guard_rules() {
+        crate::log_message(
+            "warn",
+            &format!("[PasteMonitor] saved local rules were not activated: {error}"),
+        );
+    }
+
     {
         let enabled = *ENABLED_CATEGORIES.lock().unwrap();
         let _ = install_free_tier_policy(&enabled);
@@ -1414,11 +1431,12 @@ pub async fn start_paste_monitor(app: AppHandle) -> Result<(), String> {
                 }
 
                 // ── Builtin/structured category matching via
-                //    wincmd_clip_rules, gated by the same `< 13 bytes`
-                //    floor the legacy engine used (kept for byte-for-byte
-                //    parity, including its one quirk: a match under 13
-                //    bytes never fires, even a unicode-anomaly one).
-                if text.len() >= 13 {
+                //    wincmd_clip_rules. The legacy rules retain their
+                //    `< 13 bytes` noise floor, but a person-created local
+                //    phrase is an explicit request and must be allowed to
+                //    match short text such as "Parth".
+                let has_local_custom_rules = !LOCAL_CUSTOM_RULES.lock().unwrap().rules.is_empty();
+                if should_evaluate_clipboard_text(&text, has_local_custom_rules) {
                     let (outcome, fleet_policy_version) = {
                         let policy = POLICY.lock().unwrap();
                         let fleet_policy_version = policy.fleet().policy_version;
@@ -2074,6 +2092,12 @@ mod tests {
     }
 
     #[test]
+    fn explicit_local_rule_can_match_a_short_phrase() {
+        assert!(!should_evaluate_clipboard_text("Parth", false));
+        assert!(should_evaluate_clipboard_text("Parth", true));
+    }
+
+    #[test]
     fn disabling_malicious_command_suppresses_those_patterns() {
         let mut cats = EnabledCategories::default();
         let text = "powershell -enc SGVsbG8=";
@@ -2708,6 +2732,35 @@ mod tests {
             snoozable: true,
             locked: false,
         }
+    }
+
+    #[test]
+    fn local_short_phrase_emits_its_configured_notification_action() {
+        let mut store = PolicyStore::new();
+        let mut parth_rule = custom_rule(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            vec![Action::NotifyUser],
+            true,
+        );
+        parth_rule.matcher = MatchKind::Phrase {
+            value: "Parth".to_string(),
+            case_sensitive: false,
+        };
+        store
+            .install_local(&ClipboardPolicyResponse {
+                policy_version: 0,
+                rules: vec![parth_rule],
+            })
+            .expect("a valid personal phrase rule must compile");
+        let mut engine = MatchEngine::new();
+
+        let outcome = engine.observe_sources(&store, "Parth", Instant::now());
+        let CombinedMatchOutcome::Emit { verdict } = outcome else {
+            panic!("an enabled local phrase must emit for its exact short text");
+        };
+        assert_eq!(verdict.actions, vec![Action::NotifyUser]);
+        assert_eq!(verdict.matches.len(), 1);
+        assert_eq!(verdict.matches[0].source, PolicySource::Local);
     }
 
     #[test]
