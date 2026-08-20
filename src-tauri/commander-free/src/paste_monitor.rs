@@ -1009,6 +1009,7 @@ fn push_pending_report(report: ClipboardEventReport) {
 /// marked as attempted in the report that IS the attempt (a message can't
 /// truthfully assert its own successful delivery before delivery
 /// happens).
+#[cfg(test)]
 fn build_pending_report(
     policy_version: i64,
     verdict: &Verdict,

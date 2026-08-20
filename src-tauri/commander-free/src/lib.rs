@@ -99,6 +99,10 @@ mod sidecar;
 mod startup_auth;
 mod startup_maintenance;
 mod storage_probe;
+// This is an executable-free admission contract, covered by its unit tests.
+// It is intentionally excluded from the shipped binary until the signed
+// recovery-environment handoff that consumes it is wired in.
+#[cfg(test)]
 mod sanitize_plan;
 mod system_metrics;
 mod uninstall_leftovers;
