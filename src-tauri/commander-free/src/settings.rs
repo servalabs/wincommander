@@ -148,6 +148,13 @@ pub struct SystemState {
 #[serde(rename_all = "camelCase", default)]
 pub struct SecuritySettings {
     pub drivers: DriverHealthSettings,
+    /// When a signed Fleet policy enables this, every device-side alert is
+    /// forwarded through the existing authenticated Fleet queues. The value
+    /// lives in `ideal.security` so it survives the config-epoch
+    /// serialize/merge/deserialize cycle; it is deliberately not a virtual UI
+    /// setting.
+    #[serde(default)]
+    pub require_all_device_alerts_in_fleet: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -2148,7 +2155,7 @@ fn get_app_version() -> String {
 }
 
 /// Create default settings with a generated device ID.
-fn create_default_settings() -> AppSettings {
+pub(crate) fn create_default_settings() -> AppSettings {
     AppSettings {
         settings_version: SETTINGS_VERSION,
         app_version: get_app_version(),
@@ -2480,6 +2487,7 @@ pub fn apply_admin_config(
         settings.policy.managed = managed;
 
         write_settings(&settings)?;
+        crate::net_traffic_alert::reload_from_settings(&settings);
         Ok(settings)
     } else {
         // Merge: hold the cache lock for the entire read-modify-write cycle so no
@@ -2517,6 +2525,7 @@ pub fn apply_admin_config(
         crate::set_logging_enabled_flag(settings.app.logging_enabled.unwrap_or(true));
         write_settings_internal(&settings)?;
         *cache = Some(settings.clone());
+        crate::net_traffic_alert::reload_from_settings(&settings);
 
         Ok(settings)
     }
@@ -3972,6 +3981,27 @@ mod tests {
         assert_eq!(settings.device_id, existing.device_id);
     }
 
+    #[test]
+    fn fleet_master_alert_payload_survives_the_exact_epoch_merge_and_reread() {
+        let payload = serde_json::json!({
+            "security": { "requireAllDeviceAlertsInFleet": true }
+        });
+        let locked_paths = vec!["security.requireAllDeviceAlertsInFleet".to_string()];
+        let mut raw = serde_json::to_value(create_default_settings()).unwrap();
+        merge_json(&mut raw, &serde_json::json!({ "ideal": payload }));
+        let mut applied: AppSettings = serde_json::from_value(raw).unwrap();
+        applied.policy.locked_paths = locked_paths.clone();
+        applied.policy.sync_mode = "managed".to_string();
+
+        // Re-serialize and re-read exactly as the settings store does after a
+        // signed ConfigEpoch merge. This prevents a new Fleet key from being
+        // accepted by JSON merge but silently discarded by the Rust schema.
+        let reread: AppSettings =
+            serde_json::from_value(serde_json::to_value(&applied).unwrap()).unwrap();
+        assert!(reread.ideal.security.require_all_device_alerts_in_fleet);
+        assert_eq!(reread.policy.locked_paths, locked_paths);
+    }
+
     // ── Decoy-mode write refusal (write_settings_internal choke point) ──
     //
     // DECOY_MODE and SETTINGS_CACHE are process-global statics shared by every
@@ -4468,7 +4498,7 @@ mod tests {
         let _lock = super::GLOBAL_STATE_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        use base64::{engine::general_purpose::STANDARD, Engine};
+        use base64::{Engine, engine::general_purpose::STANDARD};
         use ed25519_dalek::{Signer, SigningKey};
 
         let signing_key = SigningKey::generate(&mut rand_core::OsRng);

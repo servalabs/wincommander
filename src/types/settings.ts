@@ -36,6 +36,9 @@ export interface SystemState {
 export interface SecuritySettings {
   /** #6: driver-health / Device-Manager check. */
   drivers: DriverHealthSettings;
+  /** Signed Fleet policy master gate. When enabled, every supported
+   * device-side alert is reported through its existing Fleet queue. */
+  requireAllDeviceAlertsInFleet?: boolean;
 }
 
 export interface DriverHealthSettings {

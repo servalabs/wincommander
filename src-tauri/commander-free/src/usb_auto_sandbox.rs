@@ -307,6 +307,11 @@ fn spawn_listener(app: AppHandle, epoch: u64) -> tauri::async_runtime::JoinHandl
                 AutoAction::Ignore => continue,
 
                 AutoAction::Alert => {
+                    crate::fleet_agent::report_required_device_alert(
+                        "usb_security",
+                        "untrusted_device",
+                        "warning",
+                    );
                     let title = "WinCommander - USB auto-isolate";
                     let body = format!(
                         "Untrusted USB device attached: {} — observing (Enforce mode off)",
@@ -378,6 +383,15 @@ fn spawn_listener(app: AppHandle, epoch: u64) -> tauri::async_runtime::JoinHandl
                         }
                         Err(e) => (false, format!("dispatch error: {e}")),
                     };
+                    crate::fleet_agent::report_required_device_alert(
+                        "usb_security",
+                        if enforced {
+                            "quarantined"
+                        } else {
+                            "quarantine_failed"
+                        },
+                        if enforced { "warning" } else { "danger" },
+                    );
 
                     let title = "WinCommander - USB auto-isolate";
                     let body = if enforced {

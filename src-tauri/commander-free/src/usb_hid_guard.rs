@@ -368,6 +368,7 @@ fn fire(app: &AppHandle, arm: ArmState, gaps_ms: &[u64]) {
 
     // Emit Tauri event (payload: device identity + timing counts only — no keys).
     let _ = app.emit("usb-hid-injection", &alert);
+    crate::fleet_agent::report_required_device_alert("usb_security", "hid_injection", "danger");
 
     // Native toast. Compose the attack-tool terms from fragments at runtime so
     // the literals AV/EDR heuristics key on are not single static strings in the

@@ -227,6 +227,11 @@ fn spawn_watcher(app: AppHandle, my_epoch: u64) {
                     if crate::network_toggle::internet_kill_switch_set(true).is_ok() {
                         FIRED.store(true, Ordering::SeqCst);
                         LAST_FIRED_AT.store(now_secs(), Ordering::SeqCst);
+                        crate::fleet_agent::report_required_device_alert(
+                            "vpn_kill_switch",
+                            "tunnel_dropped",
+                            "danger",
+                        );
                         let _ = crate::native_notify::show_native_notification(
                             &app,
                             "VPN drop — internet cut",

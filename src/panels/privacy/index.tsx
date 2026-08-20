@@ -108,12 +108,18 @@ export default function PrivacyPanel() {
 
     const screenCaptureDetectionEnabled = appSettings?.ideal?.privacy?.screenCapture?.detectionEnabled ?? false;
     const screenCaptureProtectWindow = appSettings?.ideal?.privacy?.screenCapture?.protectWindow ?? false;
-    const screenCaptureReportToFleet = appSettings?.ideal?.privacy?.screenCapture?.reportToFleet ?? false;
+    const allDeviceAlertsRequired = appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true;
+    const screenCaptureReportToFleet = allDeviceAlertsRequired
+        || appSettings?.ideal?.privacy?.screenCapture?.reportToFleet === true;
     const patchScreenCapture = (patch: { detectionEnabled?: boolean; protectWindow?: boolean; reportToFleet?: boolean }) =>
         patchAppSettings({ ideal: { privacy: { screenCapture: patch } } } as any).catch(() => {});
     const fleetEnabled = appSettings?.app?.fleet?.enabled === true;
     const fleetLockedPaths = appSettings?.policy?.lockedPaths ?? [];
-    const screenCaptureReportLocked = fleetLockedPaths.some((p) =>
+    const masterFleetAlertsLocked = fleetLockedPaths.some((p) =>
+        p.trim().length > 0 &&
+        ("security.requireAllDeviceAlertsInFleet".startsWith(p) || "ideal.security.requireAllDeviceAlertsInFleet".startsWith(p))
+    );
+    const screenCaptureReportLocked = (allDeviceAlertsRequired && masterFleetAlertsLocked) || fleetLockedPaths.some((p) =>
         p.trim().length > 0 &&
         ("notifications.screenCapture.reportToFleet".startsWith(p) || "ideal.notifications.screenCapture.reportToFleet".startsWith(p))
     );

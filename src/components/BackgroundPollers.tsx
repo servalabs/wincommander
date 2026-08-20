@@ -379,6 +379,15 @@ export default function BackgroundPollers({
     const unlistenFleetShieldDenied = listen("fleet-privacy-shield-control-denied", () => {
       showWarning("Privacy Shield was started by Fleet and can only be stopped by a Fleet administrator.");
     });
+    // The Fleet master policy sends only an alarm class and small counters —
+    // never a clipboard pattern, process/tool name, path, peer, SSID, or
+    // device name. Pro validates this closed shape again before queueing.
+    const reportRequiredFleetAlert = (alertType: string, detail: Record<string, string | number>) => {
+      if (appSettingsRef.current?.ideal?.security?.requireAllDeviceAlertsInFleet !== true) return;
+      invoke("fleet_report_local_alert", { alertType, detail }).catch(() => {
+        // A Fleet outage must never interfere with the local protection or toast.
+      });
+    };
 
     // ── Tauri event: F-1 paste monitor detected ─────────────────────────
     // Fires when the clipboard watcher matches a credential or malicious
@@ -402,6 +411,7 @@ export default function BackgroundPollers({
             `Looks like you copied a ${pattern} — be careful where you paste it.`,
           );
         }
+        reportRequiredFleetAlert("clipboard_guard", { class: "local_match", severity: severity === "danger" ? "danger" : "warning" });
       },
     );
 
@@ -457,6 +467,7 @@ export default function BackgroundPollers({
           `DISCONNECT NETWORK NOW (Ethernet/WiFi off). ${actionMsg}`,
           30_000,
         );
+        reportRequiredFleetAlert("ransomware", { class: "mass_modification", severity: "danger", count });
       },
     );
 
@@ -514,6 +525,10 @@ export default function BackgroundPollers({
         } else {
           showWarning(`${tool} is running — no active session detected yet.`, 5_000);
         }
+        reportRequiredFleetAlert("remote_access", {
+          class: conf === "high" ? "incoming_session" : "tool_detected",
+          severity: conf === "high" ? "danger" : "warning",
+        });
       },
     );
 
@@ -530,10 +545,14 @@ export default function BackgroundPollers({
           `${tool} is running — your screen may be recorded. Sensitive windows can be hidden in Privacy → Screen Capture.`,
           10_000,
         );
-        if (appSettingsRef.current?.ideal?.privacy?.screenCapture?.reportToFleet === true) {
+        const settings = appSettingsRef.current;
+        const reportToFleet = settings?.ideal?.security?.requireAllDeviceAlertsInFleet === true
+          || settings?.ideal?.privacy?.screenCapture?.reportToFleet === true;
+        if (reportToFleet) {
           invoke("fleet_report_local_alert", {
             alertType: "screen_capture",
-            detail: { detected: tool, process: event.payload?.processName ?? "" },
+            // Fleet needs the alert class, not a process name or executable.
+            detail: { detected: "screen_capture" },
           }).catch(() => { /* best-effort — a Fleet outage must never affect local detection */ });
         }
       },
@@ -548,8 +567,16 @@ export default function BackgroundPollers({
         const text = event.payload?.problemText ?? "driver problem";
         recordEvidence("system", "warn", `Driver problem: ${name}`, text);
         showError(`Driver problem: ${name} — ${text}`, 12_000);
+        reportRequiredFleetAlert("driver_health", { class: "critical_problem", severity: "warning" });
       },
     );
+
+    const unlistenWifiGuard = listen("wifi-guard-detected", () => {
+      reportRequiredFleetAlert("wifi_guard", { class: "rogue_access_point", severity: "warning" });
+    });
+    const unlistenNetworkHoneypot = listen("network-honeypot-detected", () => {
+      reportRequiredFleetAlert("network_honeypot", { class: "connection", severity: "warning" });
+    });
 
     // ── Tauri event: panic-trigger-test ──────────────────────────────────
     // Diagnostic surface — fired by the "Test trigger" buttons in the
@@ -739,7 +766,8 @@ export default function BackgroundPollers({
       window.removeEventListener("apps-open-package-updates", handleOpenPackageUpdates);
       for (const p of [unlistenShred, unlistenTrayShield, unlistenFleetShieldDenied, unlistenPasteMonitor, unlistenDecoy,
         unlistenRansomware, unlistenCoercion,
-        unlistenTriggerTest, unlistenRemoteAccess, unlistenScreenCapture, unlistenDriverProblem]) {
+        unlistenTriggerTest, unlistenRemoteAccess, unlistenScreenCapture, unlistenDriverProblem,
+        unlistenWifiGuard, unlistenNetworkHoneypot]) {
         p.then(f => { try { f(); } catch { /* already torn down */ } });
       }
       autoStartTimers.forEach(clearTimeout);

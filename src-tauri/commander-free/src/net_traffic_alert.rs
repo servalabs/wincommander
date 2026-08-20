@@ -128,6 +128,99 @@ impl Default for MetricAlertsConfig {
 static CONFIG: Lazy<Mutex<MetricAlertsConfig>> =
     Lazy::new(|| Mutex::new(MetricAlertsConfig::default()));
 
+const MASTER_FLEET_ALERT_PATH: &str = "security.requireAllDeviceAlertsInFleet";
+
+/// Resolve the user-facing configuration from persisted settings. A signed
+/// Fleet master policy is an effective value, not a second notification
+/// pipeline: it simply turns on the existing per-metric reports.
+fn config_from_settings(settings: &crate::settings::AppSettings) -> MetricAlertsConfig {
+    let mut config: MetricAlertsConfig = settings.app.metric_alerts.clone().into();
+    if settings.ideal.security.require_all_device_alerts_in_fleet {
+        config.cpu.report_to_fleet = true;
+        config.ram.report_to_fleet = true;
+        config.upload.report_to_fleet = true;
+        config.download.report_to_fleet = true;
+    }
+    config
+}
+
+/// Refresh the sampler after a signed configuration epoch has changed the
+/// Fleet master gate. This is called only after the complete settings object
+/// has been assembled, so the sampler cannot observe a half-applied policy.
+pub fn reload_from_settings(settings: &crate::settings::AppSettings) {
+    if let Ok(mut config) = CONFIG.lock() {
+        *config = config_from_settings(settings);
+    }
+}
+
+fn policy_locks_path(locked_paths: &[String], path: &str) -> bool {
+    locked_paths.iter().any(|locked| {
+        let locked = locked.trim();
+        !locked.is_empty()
+            && (path.starts_with(locked) || format!("ideal.{path}").starts_with(locked))
+    })
+}
+
+fn metric_report_path(metric: &str) -> &'static str {
+    match metric {
+        "cpu" => "notifications.cpuUsage.reportToFleet",
+        "ram" => "notifications.ramUsage.reportToFleet",
+        _ => "notifications.networkUsage.reportToFleet",
+    }
+}
+
+fn ensure_report_to_fleet_changes_allowed(
+    current: &MetricAlertsConfig,
+    proposed: &MetricAlertsConfig,
+    settings: &crate::settings::AppSettings,
+) -> Result<(), String> {
+    let master_enabled = settings.ideal.security.require_all_device_alerts_in_fleet;
+    let master_locked = policy_locks_path(&settings.policy.locked_paths, MASTER_FLEET_ALERT_PATH);
+    if master_enabled
+        && master_locked
+        && [
+            proposed.cpu.report_to_fleet,
+            proposed.ram.report_to_fleet,
+            proposed.upload.report_to_fleet,
+            proposed.download.report_to_fleet,
+        ]
+        .iter()
+        .any(|enabled| !enabled)
+    {
+        return Err("Fleet policy requires all device alerts to be reported".to_string());
+    }
+
+    for (metric, before, after) in [
+        (
+            "cpu",
+            current.cpu.report_to_fleet,
+            proposed.cpu.report_to_fleet,
+        ),
+        (
+            "ram",
+            current.ram.report_to_fleet,
+            proposed.ram.report_to_fleet,
+        ),
+        (
+            "upload",
+            current.upload.report_to_fleet,
+            proposed.upload.report_to_fleet,
+        ),
+        (
+            "download",
+            current.download.report_to_fleet,
+            proposed.download.report_to_fleet,
+        ),
+    ] {
+        if before != after
+            && policy_locks_path(&settings.policy.locked_paths, metric_report_path(metric))
+        {
+            return Err("This Fleet alert setting is locked by administrator policy".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Per-metric evaluator state — not exposed; lives entirely in the sampler.
 struct AlertState {
     breach_start: Option<Instant>,
@@ -251,12 +344,23 @@ fn fire_alert(app: &AppHandle, alert: AlertFire<'_>) {
             "ram" => "ram_usage",
             _ => "network_usage",
         };
-        let detail = serde_json::json!({
-            "metric": alert.metric,
-            "value_pct": alert.value,
-            "threshold_pct": alert.threshold,
-            "duration_s": alert.sustained_secs,
-        });
+        let detail = if alert_type == "network_usage" {
+            // Throughput is sampled in MB/s, never percent. Keep its unit
+            // honest all the way to the Fleet console.
+            serde_json::json!({
+                "direction": alert.metric,
+                "value_mb_s": alert.value,
+                "threshold_mb_s": alert.threshold,
+                "duration_s": alert.sustained_secs,
+            })
+        } else {
+            serde_json::json!({
+                "metric": alert.metric,
+                "value_pct": alert.value,
+                "threshold_pct": alert.threshold,
+                "duration_s": alert.sustained_secs,
+            })
+        };
         let alert_type = alert_type.to_string();
         tauri::async_runtime::spawn(async move {
             if let Err(error) =
@@ -316,7 +420,7 @@ fn tick_metric(
 pub fn init(app: &AppHandle) {
     // Seed runtime config from persisted settings.
     if let Ok(s) = crate::settings::read_settings() {
-        *CONFIG.lock().unwrap() = s.app.metric_alerts.into();
+        reload_from_settings(&s);
     }
 
     let app = app.clone();
@@ -436,7 +540,20 @@ pub async fn metric_alerts_set_config(
         download: config.download.normalized(),
     };
 
-    *CONFIG.lock().unwrap() = normalized.clone();
+    let settings = crate::settings::read_settings()?;
+    let current = config_from_settings(&settings);
+    ensure_report_to_fleet_changes_allowed(&current, &normalized, &settings)?;
+
+    // A managed master policy is effective immediately. Persist the local
+    // preference for later, but never let it weaken the live report gate.
+    let mut effective = normalized.clone();
+    if settings.ideal.security.require_all_device_alerts_in_fleet {
+        effective.cpu.report_to_fleet = true;
+        effective.ram.report_to_fleet = true;
+        effective.upload.report_to_fleet = true;
+        effective.download.report_to_fleet = true;
+    }
+    *CONFIG.lock().unwrap() = effective.clone();
 
     // Persist via the settings patch path so the value survives restart.
     let patch = serde_json::json!({
@@ -451,7 +568,7 @@ pub async fn metric_alerts_set_config(
     });
     crate::settings::patch_settings(patch).map_err(|e| format!("persist failed: {}", e))?;
 
-    Ok(normalized)
+    Ok(effective)
 }
 
 /// Read the current metric-alert config. Free — reading the config doesn't
@@ -459,4 +576,43 @@ pub async fn metric_alerts_set_config(
 #[tauri::command]
 pub fn metric_alerts_get_config() -> MetricAlertsConfig {
     CONFIG.lock().unwrap().clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fleet_master_forces_cpu_and_network_reporting_effective() {
+        let mut settings = crate::settings::create_default_settings();
+        settings.ideal.security.require_all_device_alerts_in_fleet = true;
+
+        let config = config_from_settings(&settings);
+        assert!(config.cpu.report_to_fleet);
+        assert!(config.upload.report_to_fleet);
+        assert!(config.download.report_to_fleet);
+    }
+
+    #[test]
+    fn locked_fleet_master_rejects_local_report_disable() {
+        let mut settings = crate::settings::create_default_settings();
+        settings.ideal.security.require_all_device_alerts_in_fleet = true;
+        settings.policy.locked_paths = vec![MASTER_FLEET_ALERT_PATH.to_string()];
+        let current = config_from_settings(&settings);
+        let mut proposed = current.clone();
+        proposed.cpu.report_to_fleet = false;
+
+        assert!(ensure_report_to_fleet_changes_allowed(&current, &proposed, &settings).is_err());
+    }
+
+    #[test]
+    fn locked_network_report_path_rejects_either_network_direction() {
+        let mut settings = crate::settings::create_default_settings();
+        settings.policy.locked_paths = vec!["notifications.networkUsage.reportToFleet".to_string()];
+        let current = config_from_settings(&settings);
+        let mut proposed = current.clone();
+        proposed.download.report_to_fleet = !current.download.report_to_fleet;
+
+        assert!(ensure_report_to_fleet_changes_allowed(&current, &proposed, &settings).is_err());
+    }
 }

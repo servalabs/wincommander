@@ -959,6 +959,7 @@ pub struct DetectionEvent {
 const PENDING_REPORTS_CAP: usize = 20;
 static PENDING_REPORTS: Lazy<Mutex<VecDeque<ClipboardEventReport>>> =
     Lazy::new(|| Mutex::new(VecDeque::with_capacity(PENDING_REPORTS_CAP)));
+static FLEET_FLUSHING: AtomicBool = AtomicBool::new(false);
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -998,6 +999,46 @@ fn push_pending_report(report: ClipboardEventReport) {
         q.pop_front();
     }
     q.push_back(report);
+}
+
+fn requeue_pending_reports_front(reports: Vec<ClipboardEventReport>) {
+    let mut q = PENDING_REPORTS.lock().unwrap();
+    for report in reports.into_iter().rev() {
+        if q.len() >= PENDING_REPORTS_CAP {
+            q.pop_back();
+        }
+        q.push_front(report);
+    }
+}
+
+/// Transfer pending content-free reports into Pro's authenticated clipboard
+/// queue. The stable event id is retained across retries, and Pro rejects a
+/// duplicate already in its queue, so a retry cannot create two Fleet events.
+async fn flush_pending_reports_to_fleet() {
+    if FLEET_FLUSHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let reports: Vec<ClipboardEventReport> = PENDING_REPORTS.lock().unwrap().drain(..).collect();
+    let mut unaccepted = Vec::new();
+    for (index, report) in reports.iter().enumerate() {
+        match crate::fleet_agent::fleet_report_clipboard_event(report.clone()).await {
+            Ok(_) => {}
+            Err(error) => {
+                HEALTH.lock().unwrap().svc_reachable = false;
+                crate::flow_bridge::flow_trace(format!(
+                    "[PasteMonitor] Fleet clipboard report remains queued: {error}"
+                ));
+                unaccepted.extend_from_slice(&reports[index..]);
+                break;
+            }
+        }
+    }
+    if unaccepted.is_empty() {
+        HEALTH.lock().unwrap().svc_reachable = true;
+    } else {
+        requeue_pending_reports_front(unaccepted);
+    }
+    FLEET_FLUSHING.store(false, Ordering::SeqCst);
 }
 
 /// Build the content-free wire report for one emitted match — pulled out
@@ -1079,21 +1120,8 @@ fn should_submit_organisation_match(source: PolicySource, actions: &[Action]) ->
 
 /// Handle one `MatchOutcome::Emit` — the toast/`DetectionEvent`/log
 /// exactly matches the legacy engine's copy and behaviour (see
-/// `detection_copy`); the report-building/queuing and best-effort svc
-/// submission are new (plan §4.2 items 5/6).
-///
-/// **Honest caveat on the svc submission**: `svc.clipboard.report_event`
-/// is a `SessionHelper`-class verb (GROUNDING §7, D-2). As of this file's
-/// writing, `commander-svc/src/pipe.rs` does not yet unwrap `Envelope::
-/// Signed` request frames and its `SessionHelper` authorization gate is
-/// still fail-closed pending the D-2 peer-pinning wiring (see
-/// `clipboard-guard-helper`'s own handoff note, which documents the exact
-/// same gap for its standalone client) — this file did not, and by file
-/// ownership could not, fix that in `pipe.rs`. The call below degrades
-/// gracefully either way (`SvcClient` never panics or hangs — see its own
-/// module doc) and `HEALTH.svc_reachable` reports the true outcome; the
-/// queued `PENDING_REPORTS` ring is this file's OWN durable-enough record
-/// of what was detected regardless of whether the live call succeeds.
+/// `detection_copy`); Fleet-rule reports are then transferred into Pro's
+/// authenticated Clipboard Guard outbox without ever carrying clipboard text.
 fn handle_combined_emit(
     app: &AppHandle,
     fleet_policy_version: i64,
@@ -1175,6 +1203,7 @@ fn handle_combined_emit(
 
     // A local match never enters this loop. Fleet rules are the sole
     // authority allowed to create a content-free Fleet event.
+    let mut queued_fleet_report = false;
     for matched in combined.matches.iter().filter(|matched| {
         should_submit_organisation_match(matched.source, &matched.verdict.actions)
     }) {
@@ -1185,11 +1214,11 @@ fn handle_combined_emit(
             &fleet_outcome,
             matched.suppressed_since_last,
         );
-        push_pending_report(report.clone());
-        tauri::async_runtime::spawn(async move {
-            let ok = SvcClient::new().report_event(&report).await.is_ok();
-            HEALTH.lock().unwrap().svc_reachable = ok;
-        });
+        push_pending_report(report);
+        queued_fleet_report = true;
+    }
+    if queued_fleet_report {
+        tauri::async_runtime::spawn(flush_pending_reports_to_fleet());
     }
 }
 
@@ -1774,7 +1803,7 @@ pub async fn get_paste_monitor_auto_clear_on_lock() -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wincmd_clip_rules::{compile, CompiledRuleSet, RuleSetLimits};
+    use wincmd_clip_rules::{CompiledRuleSet, RuleSetLimits, compile};
 
     // ── Test helpers ──────────────────────────────────────────────────
 

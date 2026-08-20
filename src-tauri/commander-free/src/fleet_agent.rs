@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::sync::RwLock;
 use url::Url;
+use wincmd_shared::fleet::ClipboardEventReport;
 
 /// Canonicalize the operator-entered Fleet base URL before it is persisted or
 /// handed to Pro.  In particular, a Windows-style accidental extra slash in
@@ -790,6 +791,61 @@ pub async fn fleet_report_local_alert(
     .await
 }
 
+/// Queue a content-minimized security alert when the Fleet administrator has
+/// required reporting for every device alert. Background monitors use this
+/// instead of reading a UI-specific notification preference: the signed,
+/// lockable master policy is the sole decision point.
+///
+/// This deliberately accepts only closed metadata chosen by the producer. Do
+/// not add device names, paths, clipboard data, or other local evidence here.
+pub fn report_required_device_alert(
+    alert_type: &'static str,
+    class: &'static str,
+    severity: &'static str,
+) {
+    let Ok(settings) = crate::settings::read_settings() else {
+        return;
+    };
+    if !should_report_required_device_alert(&settings) {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = fleet_report_local_alert(
+            alert_type.to_string(),
+            serde_json::json!({ "class": class, "severity": severity }),
+        )
+        .await
+        {
+            crate::log_message(
+                "warn",
+                &format!("[Fleet] required device alert could not be queued: {error}"),
+            );
+        }
+    });
+}
+
+fn should_report_required_device_alert(settings: &crate::settings::AppSettings) -> bool {
+    settings.app.fleet.enabled && settings.ideal.security.require_all_device_alerts_in_fleet
+}
+
+/// Hand one content-free Clipboard Guard match to Pro's existing bounded
+/// clipboard-event outbox. The Free producer keeps its own pending record
+/// until Pro has accepted the stable event id, so a sidecar outage cannot
+/// silently discard the match.
+pub async fn fleet_report_clipboard_event(
+    report: ClipboardEventReport,
+) -> Result<serde_json::Value, String> {
+    crate::license::require_service_feature("fleet")?;
+    let settings = crate::settings::read_settings()?;
+    if !settings.app.fleet.enabled {
+        return Err("Fleet is not enabled on this device.".to_string());
+    }
+    let args = serde_json::to_value(report)
+        .map_err(|_| "Clipboard event could not be encoded".to_string())?;
+    crate::sidecar::dispatch_paid_command("fleet_agent_clipboard_event", args).await
+}
+
 /// Request to leave the fleet. Posts to the fleet server's unenroll-request
 /// endpoint so an admin (two Operator+ admins under MPA) can approve the
 /// departure. Idempotent — calling again while a pending request exists
@@ -915,8 +971,8 @@ mod tests {
         let obsolete_gate = ["require", "_paid(\"fleet agent\")"].concat();
         assert_eq!(
             source.matches(&service_gate).count(),
-            10,
-            "connect, status, policy apply, posture, privacy-shield status, local-alert reporting, unenroll request/status, and disconnect must all require Fleet"
+            11,
+            "connect, status, policy apply, posture, privacy-shield status, local-alert and clipboard-event reporting, unenroll request/status, and disconnect must all require Fleet"
         );
         assert!(!source.contains(&obsolete_gate));
     }
@@ -999,6 +1055,18 @@ mod tests {
         assert!(patch["app"]["fleet"]["enabled"].as_bool().unwrap());
         assert!(patch["app"]["fleet"]["serverUrl"].as_str().is_some());
         assert!(patch["app"]["fleet"]["signingKeyPub"].as_str().is_some());
+    }
+
+    #[test]
+    fn required_device_alerts_need_fleet_and_the_signed_master_policy() {
+        let mut settings = crate::settings::create_default_settings();
+        assert!(!super::should_report_required_device_alert(&settings));
+
+        settings.app.fleet.enabled = true;
+        assert!(!super::should_report_required_device_alert(&settings));
+
+        settings.ideal.security.require_all_device_alerts_in_fleet = true;
+        assert!(super::should_report_required_device_alert(&settings));
     }
 
     fn remote_update(

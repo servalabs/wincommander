@@ -55,11 +55,18 @@ export default function MetricAlertRow({
   const fleetEnabled = appSettings?.app?.fleet?.enabled === true;
   const fleetPath = FLEET_REPORT_PATH[metric];
   const lockedPaths = appSettings?.policy?.lockedPaths ?? [];
+  const allDeviceAlertsRequired = appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true;
+  const masterFleetAlertsLocked = lockedPaths.some(
+    (p) => p.trim().length > 0 && (
+      "security.requireAllDeviceAlertsInFleet".startsWith(p)
+      || "ideal.security.requireAllDeviceAlertsInFleet".startsWith(p)
+    ),
+  );
   // Tolerate both the bare dot-path convention the fleet server contract uses
   // ("notifications.cpuUsage.reportToFleet") and this app's registry
   // convention of prefixing generic toggle paths with "ideal." — whichever
   // the connected server actually publishes, this still locks correctly.
-  const reportToFleetLocked = lockedPaths.some(
+  const reportToFleetLocked = (allDeviceAlertsRequired && masterFleetAlertsLocked) || lockedPaths.some(
     (p) => p.trim().length > 0 && (fleetPath.startsWith(p) || `ideal.${fleetPath}`.startsWith(p))
   );
 
@@ -161,7 +168,7 @@ export default function MetricAlertRow({
         <label
           className="metric-alert-report-fleet"
           title={reportToFleetLocked
-            ? "Set by your Fleet administrator — cannot be changed on this device."
+            ? "Set by your Fleet administrator — this device must report alerts to Fleet."
             : "Forward this alert to your organization's Fleet console when it fires."}
         >
           <input

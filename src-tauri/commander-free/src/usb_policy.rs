@@ -125,7 +125,9 @@ pub fn usb_device_trust_score(device_key: String) -> Result<UsbTrustScore, Strin
 #[tauri::command]
 pub async fn block_usb_device(args: Value) -> Result<Value, String> {
     crate::license::require_paid("USB device trust policy")?;
-    crate::sidecar::dispatch_paid_command("Set-UsbDeviceBlock", args).await
+    let result = crate::sidecar::dispatch_paid_command("Set-UsbDeviceBlock", args).await?;
+    crate::fleet_agent::report_required_device_alert("usb_security", "policy_blocked", "warning");
+    Ok(result)
 }
 
 /// U-D: Re-enable a previously blocked USB device (Enable-PnpDevice).
@@ -152,7 +154,9 @@ pub async fn set_usb_volume_readonly(args: Value) -> Result<Value, String> {
 #[tauri::command]
 pub async fn quarantine_usb_device(args: Value) -> Result<Value, String> {
     crate::license::require_paid("USB device quarantine")?;
-    crate::sidecar::dispatch_paid_command("Invoke-UsbQuarantine", args).await
+    let result = crate::sidecar::dispatch_paid_command("Invoke-UsbQuarantine", args).await?;
+    crate::fleet_agent::report_required_device_alert("usb_security", "quarantined", "warning");
+    Ok(result)
 }
 
 #[cfg(test)]
