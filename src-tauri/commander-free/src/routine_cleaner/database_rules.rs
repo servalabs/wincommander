@@ -61,6 +61,9 @@ pub(super) fn add_targets(
                     path: profile.join(normalize_relative(file)),
                     operation: TargetOperation::Vacuum,
                     recommended: false,
+                    minimum_age: std::time::Duration::ZERO,
+                    containment_root: None,
+                    containment_source: None,
                 });
             }
         }

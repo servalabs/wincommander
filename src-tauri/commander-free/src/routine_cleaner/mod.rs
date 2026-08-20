@@ -24,6 +24,8 @@ const ALLOWED_CATEGORIES: &[&str] = &["system", "browsers", "applications", "gam
 struct CachedFile {
     path: std::path::PathBuf,
     bytes: u64,
+    minimum_age: Duration,
+    file_identity: Option<(u32, u64)>,
 }
 
 #[derive(Clone, Debug)]

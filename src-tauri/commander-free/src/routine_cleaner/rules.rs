@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TargetOperation {
@@ -18,6 +19,16 @@ pub(super) struct ScanTarget {
     pub path: PathBuf,
     pub operation: TargetOperation,
     pub recommended: bool,
+    pub minimum_age: Duration,
+    pub containment_root: Option<PathBuf>,
+    pub containment_source: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct ExpandedPath {
+    path: PathBuf,
+    containment_root: Option<PathBuf>,
+    containment_source: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -28,12 +39,17 @@ struct SystemRules {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 struct SystemTarget {
     path: String,
     subcategory: String,
     #[serde(default)]
     needs_admin: bool,
     child_subdir: Option<String>,
+    min_age_days: Option<u16>,
+    recursive_match: Option<RecursivePathMatch>,
+    #[serde(rename = "description")]
+    _description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -43,10 +59,28 @@ struct AppRules {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 struct AppTarget {
+    #[serde(rename = "id")]
+    _id: String,
     name: String,
     paths: Vec<String>,
     child_subdir: Option<String>,
+    min_age_days: Option<u16>,
+    recursive_match: Option<RecursivePathMatch>,
+    #[serde(rename = "description")]
+    _description: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+struct RecursivePathMatch {
+    anchor: String,
+    targets: Vec<String>,
+    #[serde(default)]
+    excluded_ancestors: Vec<String>,
+    max_depth: Option<u8>,
 }
 
 const SYSTEM_RULES: &str = include_str!("../../resources/maintenance-rules/win32/system.json");
@@ -98,13 +132,20 @@ pub(super) fn build_targets(categories: &HashSet<String>) -> Result<Vec<ScanTarg
                 continue;
             }
             let base = resolve_path(&rule.path, &variables)?;
-            for path in expand_child_subdir(&base, rule.child_subdir.as_deref()) {
+            for expanded in expand_rule_paths(
+                &base,
+                rule.child_subdir.as_deref(),
+                rule.recursive_match.as_ref(),
+            )? {
                 targets.push(ScanTarget {
                     category: "system".into(),
                     label: rule.subcategory.clone(),
-                    path,
+                    path: expanded.path,
                     operation: TargetOperation::Delete,
                     recommended: !rule.needs_admin,
+                    minimum_age: minimum_age(rule.min_age_days)?,
+                    containment_root: expanded.containment_root,
+                    containment_source: expanded.containment_source,
                 });
             }
         }
@@ -140,13 +181,20 @@ fn add_app_targets(
     for app in rules.apps {
         for raw in app.paths {
             let base = resolve_path(&raw, variables)?;
-            for path in expand_child_subdir(&base, app.child_subdir.as_deref()) {
+            for expanded in expand_rule_paths(
+                &base,
+                app.child_subdir.as_deref(),
+                app.recursive_match.as_ref(),
+            )? {
                 targets.push(ScanTarget {
                     category: category.into(),
                     label: app.name.clone(),
-                    path,
+                    path: expanded.path,
                     operation: TargetOperation::Delete,
                     recommended: true,
+                    minimum_age: minimum_age(app.min_age_days)?,
+                    containment_root: expanded.containment_root,
+                    containment_source: expanded.containment_source,
                 });
             }
         }
@@ -216,6 +264,35 @@ pub(super) fn normalize_relative(value: &str) -> String {
     }
 }
 
+fn minimum_age(days: Option<u16>) -> Result<Duration, String> {
+    let days = days.unwrap_or(0);
+    if days > 3650 {
+        return Err("routine cleaner rule minimum age exceeds 3650 days".into());
+    }
+    Ok(Duration::from_secs(u64::from(days) * 24 * 60 * 60))
+}
+
+fn expand_rule_paths(
+    base: &Path,
+    child_subdir: Option<&str>,
+    recursive_match: Option<&RecursivePathMatch>,
+) -> Result<Vec<ExpandedPath>, String> {
+    if child_subdir.is_some() && recursive_match.is_some() {
+        return Err("routine cleaner rule cannot combine childSubdir and recursiveMatch".into());
+    }
+    match recursive_match {
+        Some(rule) => resolve_recursive_paths(base, rule),
+        None => Ok(expand_child_subdir(base, child_subdir)
+            .into_iter()
+            .map(|path| ExpandedPath {
+                path,
+                containment_root: None,
+                containment_source: None,
+            })
+            .collect()),
+    }
+}
+
 fn expand_child_subdir(base: &Path, child_subdir: Option<&str>) -> Vec<PathBuf> {
     let Some(child_subdir) = child_subdir else {
         return vec![base.to_path_buf()];
@@ -233,13 +310,335 @@ fn expand_child_subdir(base: &Path, child_subdir: Option<&str>) -> Vec<PathBuf> 
         .collect()
 }
 
+const MAX_RECURSIVE_ENTRIES: usize = 100_000;
+const DEFAULT_RECURSIVE_DEPTH: u8 = 12;
+
+fn resolve_recursive_paths(
+    base: &Path,
+    rule: &RecursivePathMatch,
+) -> Result<Vec<ExpandedPath>, String> {
+    resolve_recursive_paths_with_limit(base, rule, MAX_RECURSIVE_ENTRIES)
+}
+
+fn resolve_recursive_paths_with_limit(
+    base: &Path,
+    rule: &RecursivePathMatch,
+    max_entries: usize,
+) -> Result<Vec<ExpandedPath>, String> {
+    if !valid_directory_name(&rule.anchor)
+        || rule.targets.is_empty()
+        || rule
+            .targets
+            .iter()
+            .any(|value| !valid_directory_name(value))
+        || rule
+            .excluded_ancestors
+            .iter()
+            .any(|value| !valid_directory_name(value))
+    {
+        return Err("routine cleaner recursive rule contains an unsafe directory name".into());
+    }
+    let max_depth = rule.max_depth.unwrap_or(DEFAULT_RECURSIVE_DEPTH);
+    if max_depth == 0 || max_depth > 32 {
+        return Err("routine cleaner recursive rule depth must be between 1 and 32".into());
+    }
+    let normalize = |name: &str| {
+        if cfg!(windows) {
+            name.to_ascii_lowercase()
+        } else {
+            name.to_string()
+        }
+    };
+    let anchor = normalize(&rule.anchor);
+    let targets: HashSet<String> = rule.targets.iter().map(|value| normalize(value)).collect();
+    let excluded: HashSet<String> = rule
+        .excluded_ancestors
+        .iter()
+        .map(|value| normalize(value))
+        .collect();
+    let base_is_anchor = base
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| normalize(name) == anchor);
+    if !base_is_anchor {
+        return Err("routine cleaner recursive rule base must be its declared anchor".into());
+    }
+    if !base.exists() {
+        return Ok(Vec::new());
+    }
+    reject_reparse_components(base)?;
+    let canonical_base = fs::canonicalize(base)
+        .map_err(|error| format!("routine cleaner recursive rule base is unavailable: {error}"))?;
+    if !canonical_matches_resolved_base(&canonical_base, base) {
+        return Err(
+            "routine cleaner recursive rule base resolves outside its approved path".into(),
+        );
+    }
+    let base_metadata = fs::symlink_metadata(&canonical_base)
+        .map_err(|error| format!("routine cleaner recursive rule base is unavailable: {error}"))?;
+    if !base_metadata.is_dir()
+        || base_metadata.file_type().is_symlink()
+        || is_reparse_point(&base_metadata)
+    {
+        return Err("routine cleaner recursive rule base is not a safe directory".into());
+    }
+    let mut resolved = Vec::new();
+    let mut stack = vec![(canonical_base.clone(), 0u8)];
+    let mut inspected = 0usize;
+    while let Some((directory, depth)) = stack.pop() {
+        let Ok(metadata) = fs::symlink_metadata(&directory) else {
+            continue;
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
+            continue;
+        }
+        let Ok(canonical_directory) = fs::canonicalize(&directory) else {
+            continue;
+        };
+        if canonical_directory != canonical_base
+            && !canonical_directory.starts_with(&canonical_base)
+        {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(canonical_directory) else {
+            continue;
+        };
+        if depth >= max_depth {
+            continue;
+        }
+        for entry in entries.flatten() {
+            inspected = inspected.saturating_add(1);
+            if inspected > max_entries {
+                return Err("routine cleaner recursive rule exceeded its entry limit".into());
+            }
+            let path = entry.path();
+            let Ok(metadata) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !metadata.is_dir()
+                || metadata.file_type().is_symlink()
+                || is_reparse_point(&metadata)
+            {
+                continue;
+            }
+            let name = normalize(&entry.file_name().to_string_lossy());
+            if excluded.contains(&name) {
+                continue;
+            }
+            let Ok(canonical_path) = fs::canonicalize(&path) else {
+                continue;
+            };
+            if !canonical_path.starts_with(&canonical_base) || canonical_path == canonical_base {
+                continue;
+            }
+            if targets.contains(&name) {
+                resolved.push(ExpandedPath {
+                    path: canonical_path,
+                    containment_root: Some(canonical_base.clone()),
+                    containment_source: Some(base.to_path_buf()),
+                });
+                continue;
+            }
+            if depth < max_depth {
+                stack.push((canonical_path, depth + 1));
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+fn reject_reparse_components(path: &Path) -> Result<(), String> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&current).map_err(|error| {
+            format!("routine cleaner recursive rule path component is unavailable: {error}")
+        })?;
+        if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
+            return Err("routine cleaner recursive rule base crosses a reparse point".into());
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_recursive_containment(source: &Path, expected: &Path) -> bool {
+    if reject_reparse_components(source).is_err() {
+        return false;
+    }
+    fs::canonicalize(source).is_ok_and(|canonical| {
+        canonical == expected && canonical_matches_resolved_base(&canonical, source)
+    })
+}
+
+fn canonical_matches_resolved_base(canonical: &Path, resolved: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let normalize = |path: &Path| {
+            path.to_string_lossy()
+                .trim_start_matches(r"\\?\")
+                .replace('/', r"\")
+                .trim_end_matches('\\')
+                .to_ascii_lowercase()
+        };
+        normalize(canonical) == normalize(resolved)
+    }
+    #[cfg(not(windows))]
+    {
+        canonical == resolved
+    }
+}
+
+fn valid_directory_name(value: &str) -> bool {
+    !value.is_empty() && value != "." && value != ".." && !value.contains(['/', '\\'])
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    metadata.file_attributes() & 0x400 != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    fn create_junction(link: &Path, target: &Path) {
+        let output = std::process::Command::new("cmd")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .expect("junction fixture command must start");
+        assert!(
+            output.status.success(),
+            "junction fixture failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn embedded_rule_files_parse() {
         assert!(parse_rules::<SystemRules>(SYSTEM_RULES, "system").is_ok());
         assert!(parse_rules::<AppRules>(APPS_RULES, "apps").is_ok());
+    }
+
+    #[test]
+    fn recursive_rules_reject_path_shaped_directory_names() {
+        assert!(valid_directory_name("Cache"));
+        assert!(!valid_directory_name("../Cache"));
+        assert!(!valid_directory_name("Default/Cache"));
+    }
+
+    #[test]
+    fn minimum_age_is_bounded() {
+        assert_eq!(minimum_age(Some(1)).unwrap(), Duration::from_secs(86_400));
+        assert!(minimum_age(Some(3651)).is_err());
+    }
+
+    #[test]
+    fn app_rules_reject_unsupported_safety_fields() {
+        let source = r#"{"apps":[{"id":"unsafe","name":"Unsafe","paths":["C:/cache"],"fileMatch":{"names":["x"]}}]}"#;
+        assert!(parse_rules::<AppRules>(source, "apps").is_err());
+    }
+
+    #[test]
+    fn recursive_rules_require_the_base_to_be_the_anchor() {
+        let temp = tempfile::tempdir().unwrap();
+        let rule = RecursivePathMatch {
+            anchor: "Partitions".into(),
+            targets: vec!["Cache".into()],
+            excluded_ancestors: Vec::new(),
+            max_depth: Some(8),
+        };
+        assert!(resolve_recursive_paths(temp.path(), &rule).is_err());
+    }
+
+    #[test]
+    fn recursive_rules_return_only_named_caches_below_the_anchor() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Partitions");
+        let allowed = root.join("preview").join("Cache");
+        let excluded = root.join("preview").join("IndexedDB").join("Cache");
+        fs::create_dir_all(&allowed).unwrap();
+        fs::create_dir_all(&excluded).unwrap();
+        let matches = resolve_recursive_paths(
+            &root,
+            &RecursivePathMatch {
+                anchor: "Partitions".into(),
+                targets: vec!["Cache".into()],
+                excluded_ancestors: vec!["IndexedDB".into()],
+                max_depth: Some(8),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            matches
+                .into_iter()
+                .map(|expanded| expanded.path)
+                .collect::<Vec<_>>(),
+            vec![fs::canonicalize(allowed).unwrap()]
+        );
+    }
+
+    #[test]
+    fn recursive_rules_bound_broad_directory_discovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Partitions");
+        fs::create_dir_all(root.join("one")).unwrap();
+        fs::create_dir_all(root.join("two")).unwrap();
+        fs::create_dir_all(root.join("three")).unwrap();
+        let error = resolve_recursive_paths_with_limit(
+            &root,
+            &RecursivePathMatch {
+                anchor: "Partitions".into(),
+                targets: vec!["Cache".into()],
+                excluded_ancestors: Vec::new(),
+                max_depth: Some(8),
+            },
+            2,
+        )
+        .unwrap_err();
+        assert!(error.contains("entry limit"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recursive_rules_reject_a_reparse_base() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside").join("Partitions");
+        fs::create_dir_all(outside.join("Cache")).unwrap();
+        let linked = temp.path().join("Partitions");
+        create_junction(&linked, &outside);
+        let result = resolve_recursive_paths(
+            &linked,
+            &RecursivePathMatch {
+                anchor: "Partitions".into(),
+                targets: vec!["Cache".into()],
+                excluded_ancestors: Vec::new(),
+                max_depth: Some(8),
+            },
+        );
+        assert!(result.is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recursive_containment_rejects_a_base_replaced_after_discovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("Partitions");
+        let outside = temp.path().join("outside").join("Partitions");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let expected = fs::canonicalize(&base).unwrap();
+        fs::remove_dir(&base).unwrap();
+        create_junction(&base, &outside);
+
+        assert!(!validate_recursive_containment(&base, &expected));
     }
 }

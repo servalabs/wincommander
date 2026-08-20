@@ -31,6 +31,9 @@ pub(super) fn add_targets(
             path: library.join("steamapps").join("shadercache"),
             operation: TargetOperation::Delete,
             recommended: true,
+            minimum_age: std::time::Duration::ZERO,
+            containment_root: None,
+            containment_source: None,
         });
 
         let common = library.join("steamapps").join("common");
@@ -53,6 +56,9 @@ pub(super) fn add_targets(
                         // Keep large redistributable removals opt-in even though
                         // Steam can restore them for installed games.
                         recommended: false,
+                        minimum_age: std::time::Duration::ZERO,
+                        containment_root: None,
+                        containment_source: None,
                     });
                 }
             }

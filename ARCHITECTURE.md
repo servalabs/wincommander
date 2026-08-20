@@ -169,8 +169,14 @@ reparse state, size/mtime or registry value before changing anything. Decoy
 mode and Investigator mode refuse state mutation in every new backend module.
 
 Routine cache targets are compiled from the attributed JSON catalog under
-`src-tauri/commander-free/resources/maintenance-rules/win32/`; a strict
-allowlist excludes security and audit-history cleaning from the Free binary.
+`src-tauri/commander-free/resources/maintenance-rules/win32/`; rules may set a
+bounded retention age or resolve only named cache directories beneath a named
+anchor. Recursive discovery rejects links and reparse points, has depth and
+entry-count limits, rejects unsupported catalog fields, and excludes
+persistent storage branches. On Windows, mutation reopens every previewed file
+with delete access, verifies its file identity and handle-resolved final path,
+rechecks its age, and applies deletion to that handle. A strict allowlist
+excludes security and audit-history cleaning from the Free binary.
 
 Storage & files presents a single "Reclaim disk space" card
 (`ReclaimSpaceCard.tsx`) whose segmented control picks *whose* storage is being

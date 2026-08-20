@@ -12,6 +12,16 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **Routine cleaner safety and coverage refresh** (2026-08-20) — imported the
+  compatible Kudu v2.1 cleaner improvements into WinCommander's native Rust
+  cleaner: per-rule retention ages, bounded named-cache discovery below an
+  explicit anchor, fail-closed timestamp checks, and cleanup-time file-identity,
+  age, and handle-resolved containment revalidation. Unsupported rule fields are
+  rejected instead of silently weakening a future catalog import. The catalog
+  now covers newer Discord, Slack, VS Code, npm, pnpm, Docker, Cursor, Notion,
+  and Logitech G HUB cache locations without traversing session or offline-data
+  branches. Preview results are listed largest first within each category.
+
 - **Windows Server tweak section** (2026-08-15) — twelve Server-SKU settings in
   a new `tweaks/server` module: no Ctrl+Alt+Del at logon, hide last signed-in
   user, console inactivity lock, no Shutdown Event Tracker, no Server Manager

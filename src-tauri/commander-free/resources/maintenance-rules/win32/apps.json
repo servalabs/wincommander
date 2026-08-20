@@ -8,9 +8,11 @@
       "paths": [
         "${APPDATA}/discord/Cache/Cache_Data",
         "${APPDATA}/discord/Code Cache",
-        "${APPDATA}/discord/GPUCache"
+        "${APPDATA}/discord/GPUCache",
+        "${APPDATA}/discord/logs"
       ],
-      "description": "Discord Electron app cache, compiled code cache, and GPU cache"
+      "minAgeDays": 1,
+      "description": "Discord Electron app cache, compiled code cache, GPU cache, and logs"
     },
     {
       "id": "teams",
@@ -24,9 +26,11 @@
       "paths": [
         "${APPDATA}/Slack/Cache/Cache_Data",
         "${APPDATA}/Slack/Code Cache",
-        "${APPDATA}/Slack/GPUCache"
+        "${APPDATA}/Slack/GPUCache",
+        "${APPDATA}/Slack/logs"
       ],
-      "description": "Slack Electron app cache, compiled code cache, and GPU cache"
+      "minAgeDays": 1,
+      "description": "Slack Electron app cache, compiled code cache, GPU cache, and logs"
     },
     {
       "id": "zoom",
@@ -53,11 +57,13 @@
       "name": "VS Code",
       "paths": [
         "${APPDATA}/Code/Cache/Cache_Data",
+        "${APPDATA}/Code/Code Cache",
+        "${APPDATA}/Code/GPUCache",
         "${APPDATA}/Code/CachedData",
         "${APPDATA}/Code/CachedExtensions",
         "${APPDATA}/Code/logs"
       ],
-      "description": "VS Code cached data, extensions, and log files"
+      "description": "VS Code web, compiled code, GPU, extension, and log caches"
     },
     {
       "id": "jetbrains",
@@ -97,8 +103,8 @@
     {
       "id": "npm",
       "name": "npm Cache",
-      "paths": ["${APPDATA}/npm-cache"],
-      "description": "npm downloaded package tarballs and metadata cache"
+      "paths": ["${LOCALAPPDATA}/npm-cache", "${APPDATA}/npm-cache"],
+      "description": "npm downloaded package tarballs and metadata cache in current and legacy Windows locations"
     },
     {
       "id": "yarn",
@@ -109,8 +115,8 @@
     {
       "id": "pnpm",
       "name": "pnpm Store",
-      "paths": ["${LOCALAPPDATA}/pnpm-store"],
-      "description": "pnpm content-addressable package store"
+      "paths": ["${LOCALAPPDATA}/pnpm/store", "${LOCALAPPDATA}/pnpm-cache", "${LOCALAPPDATA}/pnpm-store", "${HOME}/.pnpm-store"],
+      "description": "pnpm content-addressable package stores and downloaded-package caches"
     },
     {
       "id": "bun",
@@ -169,20 +175,26 @@
       "paths": [
         "${APPDATA}/Docker Desktop/cache",
         "${APPDATA}/Docker Desktop/Code Cache",
-        "${APPDATA}/Docker Desktop/GPUCache"
+        "${APPDATA}/Docker Desktop/GPUCache",
+        "${LOCALAPPDATA}/Docker/log/host",
+        "${LOCALAPPDATA}/Docker/log/vm"
       ],
-      "description": "Docker Desktop Electron app cache and GPU cache"
+      "minAgeDays": 1,
+      "description": "Docker Desktop Electron caches and settled host and VM logs"
     },
     {
       "id": "cursor",
       "name": "Cursor IDE",
       "paths": [
         "${APPDATA}/Cursor/Cache/Cache_Data",
+        "${APPDATA}/Cursor/Code Cache",
+        "${APPDATA}/Cursor/GPUCache",
         "${APPDATA}/Cursor/CachedData",
         "${APPDATA}/Cursor/CachedExtensions",
         "${APPDATA}/Cursor/logs"
       ],
-      "description": "Cursor IDE cached data, extensions, and log files"
+      "minAgeDays": 1,
+      "description": "Cursor IDE web, compiled code, GPU, extension, and settled log caches"
     },
     {
       "id": "signal",
@@ -332,9 +344,17 @@
       "paths": [
         "${APPDATA}/Notion/Cache/Cache_Data",
         "${APPDATA}/Notion/Code Cache",
-        "${APPDATA}/Notion/GPUCache"
+        "${APPDATA}/Notion/GPUCache",
+        "${APPDATA}/Notion/logs",
+        "${APPDATA}/Notion/Partitions/notion/Cache/Cache_Data",
+        "${APPDATA}/Notion/Partitions/notion/Code Cache",
+        "${APPDATA}/Notion/Partitions/notion/GPUCache",
+        "${APPDATA}/Notion/Partitions/notion/DawnCache",
+        "${APPDATA}/Notion/Partitions/notion/DawnGraphiteCache",
+        "${APPDATA}/Notion/Partitions/notion/DawnWebGPUCache",
+        "${APPDATA}/Notion/Partitions/notion/Shared Dictionary/cache"
       ],
-      "description": "Notion Electron app cache, compiled code cache, and GPU cache"
+      "description": "Notion web, compiled code, GPU, shader, dictionary, and log caches while preserving sessions and offline data"
     },
     {
       "id": "obsidian",
@@ -455,9 +475,11 @@
       "paths": [
         "${APPDATA}/G HUB/Cache/Cache_Data",
         "${APPDATA}/G HUB/Code Cache",
-        "${APPDATA}/G HUB/GPUCache"
+        "${APPDATA}/G HUB/GPUCache",
+        "${PROGRAMDATA}/LGHUB/cache"
       ],
-      "description": "Logitech G HUB Electron app cache and GPU cache"
+      "minAgeDays": 7,
+      "description": "Logitech G HUB Electron caches and settled downloaded packages"
     },
     {
       "id": "zen-browser",
@@ -558,6 +580,19 @@
       "name": "Google Cloud CLI Cache",
       "paths": ["${APPDATA}/gcloud/logs", "${APPDATA}/gcloud/cache"],
       "description": "Google Cloud CLI log files and cached API data"
+    },
+    {
+      "id": "cursor-partitions",
+      "name": "Cursor IDE Partitions",
+      "paths": ["${APPDATA}/Cursor/Partitions"],
+      "minAgeDays": 1,
+      "recursiveMatch": {
+        "anchor": "Partitions",
+        "targets": ["Cache", "Code Cache", "GPUCache", "DawnCache", "DawnGraphiteCache", "DawnWebGPUCache"],
+        "excludedAncestors": ["File System", "IndexedDB", "Local Storage", "Network", "Service Worker", "Session Storage", "Sessions", "WebStorage", "blob_storage", "databases"],
+        "maxDepth": 8
+      },
+      "description": "Cursor browser-partition caches while preserving sessions, storage, and workspace data"
     }
   ]
 }

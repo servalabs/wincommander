@@ -78,6 +78,9 @@ pub(super) fn add_targets(
                     path: profile_path.join(normalize_relative(relative)),
                     operation: TargetOperation::Delete,
                     recommended: true,
+                    minimum_age: std::time::Duration::ZERO,
+                    containment_root: None,
+                    containment_source: None,
                 });
             }
         }
@@ -134,6 +137,9 @@ fn add_firefox_profiles(targets: &mut Vec<ScanTarget>, label: &str, base: &Path)
             path: entry.path().join("cache2"),
             operation: TargetOperation::Delete,
             recommended: true,
+            minimum_age: std::time::Duration::ZERO,
+            containment_root: None,
+            containment_source: None,
         });
     }
 }
