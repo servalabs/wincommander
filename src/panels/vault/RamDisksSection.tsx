@@ -27,6 +27,8 @@ function RamDisksSection() {
     installRamDiskEngine,
     getRamDiskStatus,
     getSystemRamInfo,
+    getAvailableDriveLetters,
+    createRamDisk,
     removeRamDisk,
     removeAllRamDisks,
     openRamDisk,
@@ -69,7 +71,42 @@ function RamDisksSection() {
     savedAutostart.skipAfterLockdown,
   ]);
 
-  const saveAutostart = useCallback(async (override?: Partial<RamDiskAutostartSettings>) => {
+  const mountSavedAutostartSpec = useCallback(async (spec: RamDiskAutostartSettings) => {
+    const letter = (spec.driveLetter ?? "R").toUpperCase();
+    const sizeMB = normalizeRamDiskSizeMB(spec.sizeMB);
+    const available = await getAvailableDriveLetters();
+    const isAvailable = available.success && available.data?.letters?.some((value) => value.toUpperCase() === letter);
+
+    if (!isAvailable) {
+      const current = await getRamDiskStatus();
+      if (current.success && current.data?.disks.some((disk) => disk.letter?.toUpperCase() === letter)) {
+        setStatus(current.data);
+        showSuccess(`Startup RAM disk saved — ${letter}: is already mounted.`);
+      } else {
+        showError(`Startup RAM disk was saved, but ${letter}: is already used by another drive.`);
+      }
+      return;
+    }
+
+    const result = await createRamDisk({
+      SizeMB: sizeMB,
+      DriveLetter: letter,
+      Filesystem: spec.filesystem ?? "NTFS",
+      Label: spec.label || "TEMP",
+      ReadOnly: spec.readOnly ?? false,
+      Quick: true,
+    });
+    if (!result.success) {
+      showError(result.error || "Startup RAM disk was saved, but could not be mounted.");
+      return;
+    }
+
+    const current = await getRamDiskStatus();
+    if (current.success && current.data) setStatus(current.data);
+    showSuccess(`Startup RAM disk saved and mounted at ${letter}: (${fmtMB(sizeMB)}).`);
+  }, [createRamDisk, getAvailableDriveLetters, getRamDiskStatus]);
+
+  const saveAutostart = useCallback(async (override?: Partial<RamDiskAutostartSettings>): Promise<boolean> => {
     const next: RamDiskAutostartSettings = {
       enabled: autostartEnabled,
       sizeMB: normalizeRamDiskSizeMB(asSizeMB),
@@ -83,13 +120,30 @@ function RamDisksSection() {
     setAutostartSaving(true);
     try {
       await patchAppSettings({ app: { vault: { ramdiskAutostart: next } } } as any);
-      showSuccess(next.enabled ? "Autostart enabled — RAM disk will create on next launch." : "Autostart disabled.");
+      if (next.enabled) {
+        await mountSavedAutostartSpec(next);
+      } else {
+        showSuccess("Autostart disabled.");
+      }
+      return true;
     } catch {
       showError("Failed to save autostart settings.");
+      return false;
     } finally {
       setAutostartSaving(false);
     }
-  }, [asSizeMB, autostartEnabled, asLetter, asFs, asLabel, asReadOnly, asSkipAfterLockdown, patchAppSettings]);
+  }, [asSizeMB, autostartEnabled, asLetter, asFs, asLabel, asReadOnly, asSkipAfterLockdown, mountSavedAutostartSpec, patchAppSettings]);
+
+  const cancelAutostartConfig = useCallback(() => {
+    setAutostartConfigOpen(false);
+    setAutostartEnabled(!!savedAutostart.enabled);
+    setAsSizeMB(normalizeRamDiskSizeMB(savedAutostart.sizeMB));
+    setAsLetter(savedAutostart.driveLetter ?? "R");
+    setAsFs(savedAutostart.filesystem ?? "NTFS");
+    setAsLabel(savedAutostart.label ?? "TEMP");
+    setAsReadOnly(!!savedAutostart.readOnly);
+    setAsSkipAfterLockdown(!!savedAutostart.skipAfterLockdown);
+  }, [savedAutostart.driveLetter, savedAutostart.enabled, savedAutostart.filesystem, savedAutostart.label, savedAutostart.readOnly, savedAutostart.sizeMB, savedAutostart.skipAfterLockdown]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -289,11 +343,15 @@ function RamDisksSection() {
                 style={{ marginBottom: 0 }}
                 onChange={(e) => {
                   const next = e.currentTarget.checked;
-                  setAutostartEnabled(next);
-                  // Open the modal on first enable so the user can confirm
-                  // size / drive letter / filesystem before the spec lands.
-                  setAutostartConfigOpen(next);
-                  void saveAutostart({ enabled: next });
+                  if (next) {
+                    // Do not silently save the 256 MB fallback. The startup disk
+                    // only becomes active after the user confirms its full spec.
+                    setAutostartEnabled(true);
+                    setAutostartConfigOpen(true);
+                    return;
+                  }
+                  setAutostartEnabled(false);
+                  void saveAutostart({ enabled: false });
                 }}
               />
             </div>
@@ -368,7 +426,7 @@ function RamDisksSection() {
           Three across was cramped at 560px and made the labels overflow. */}
       <Dialog
         isOpen={autostartConfigOpen && autostartEnabled}
-        onClose={() => setAutostartConfigOpen(false)}
+        onClose={cancelAutostartConfig}
         title="Auto-create RAM disk on startup"
         icon="automatic-updates"
         className={`ramdisk-autostart-dialog ${Classes.DARK}`}
@@ -376,6 +434,9 @@ function RamDisksSection() {
       >
         <div className={Classes.DIALOG_BODY}>
           <div className="ramdisk-autostart-form ramdisk-autostart-form--modal">
+            <p className="vault-card-status-line">
+              Choose the same size and options you want at startup. The 3 GB Windows headroom limit still applies.
+            </p>
             <div className="vault-range-wrapper">
               <div className="vault-range-label">
                 Size
@@ -445,8 +506,9 @@ function RamDisksSection() {
                 text={autostartSaving ? 'Saving…' : 'Save spec'}
                 loading={autostartSaving}
                 onClick={async () => {
-                  await saveAutostart();
-                  setAutostartConfigOpen(false);
+                  if (await saveAutostart()) {
+                    setAutostartConfigOpen(false);
+                  }
                 }}
               />
             </div>

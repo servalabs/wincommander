@@ -24,7 +24,7 @@ import useEntitlements from "../hooks/useEntitlements";
 import { isModuleEnabled } from "../types/modules";
 import { showWarning, showError, showSuccess } from "../utils/toast";
 import { recordEvidence } from "../lib/evidence";
-import { normalizeRamDiskSizeMB } from "../lib/ramDisk";
+import { MIN_RAM_DISK_SIZE_MB, normalizeRamDiskSizeMB } from "../lib/ramDisk";
 import useAutoHeal from "../hooks/useAutoHeal";
 import useAdoptCurrentState from "../hooks/useAdoptCurrentState";
 import { privacyShieldBlurTriggers, resolvePrivacyShieldMode } from "../lib/privacyShieldMode";
@@ -667,7 +667,19 @@ export default function BackgroundPollers({
           console.log(`[BackgroundPollers] RAM disk autostart skipped — ${letter}: drive letter is already occupied`);
           return;
         }
-        const sizeMB = normalizeRamDiskSizeMB(cfg.sizeMB);
+        // Never turn a missing/corrupt saved size into a surprise 256 MB disk.
+        // The user must explicitly save the size they chose in the RAM Disks
+        // panel.  The backend still enforces the total-RAM minus 3 GB cap.
+        const configuredSizeMB = Number(cfg.sizeMB);
+        if (!Number.isFinite(configuredSizeMB) || configuredSizeMB < MIN_RAM_DISK_SIZE_MB) {
+          showError(
+            "RAM disk autostart needs a saved size. Open RAM Disks, choose the size, and save the startup spec.",
+            undefined,
+            { kind: "notification" },
+          );
+          return;
+        }
+        const sizeMB = normalizeRamDiskSizeMB(configuredSizeMB);
         const r = await createRamDisk({
           SizeMB: sizeMB,
           DriveLetter: letter,

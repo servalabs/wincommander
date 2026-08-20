@@ -495,8 +495,9 @@ export interface VaultSettings {
   /** Auto-create a RAM disk on PC startup. When `enabled` is true, the
    *  frontend invokes createRamDisk with the embedded spec right after
    *  the splash dismisses (and the ImDisk engine is confirmed installed).
-   *  All sub-fields are optional so the user can save a partial config;
-   *  the autostart hook fills in safe defaults for anything missing. */
+   *  A saved size is required before startup will create a disk.  This avoids
+   *  silently creating the 256 MB minimum when a legacy/partial setting is
+   *  encountered. */
   ramdiskAutostart?: RamDiskAutostartSettings;
   /** Preferred mount scope for new mounts: who can see the drive once it's
    *  mounted. `"auto"` (default, and the meaning of an absent value) resolves

@@ -833,11 +833,17 @@ pub struct VaultSettings {
 #[serde(rename_all = "camelCase")]
 pub struct RamDiskAutostartSettings {
     pub enabled: Option<bool>,
+    // TypeScript uses the initialism `MB` in this persisted key.  `rename_all`
+    // would produce `sizeMb`, which serde then silently ignores on every
+    // settings patch and startup falls back to 256 MB.
+    #[serde(rename = "sizeMB", alias = "sizeMb")]
     pub size_mb: Option<u32>,
     pub drive_letter: Option<String>,
     pub filesystem: Option<String>,
     pub label: Option<String>,
     pub read_only: Option<bool>,
+    #[serde(default)]
+    pub skip_after_lockdown: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -3765,6 +3771,23 @@ pub fn update_current_state(probe: serde_json::Value) -> Result<serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ramdisk_autostart_preserves_the_typescript_size_mb_key() {
+        let parsed: RamDiskAutostartSettings = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "sizeMB": 4096,
+            "driveLetter": "J"
+        }))
+        .unwrap();
+
+        assert_eq!(parsed.size_mb, Some(4096));
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["sizeMB"],
+            serde_json::json!(4096),
+            "the persisted key must match the frontend contract exactly"
+        );
+    }
 
     #[test]
     fn privacy_shield_notify_mode_round_trips_through_settings_json() {
