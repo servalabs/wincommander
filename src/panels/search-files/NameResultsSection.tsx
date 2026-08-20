@@ -27,6 +27,8 @@ interface NameResultsSectionProps {
   copiedPath: string | null;
   scrollContainer: HTMLElement | null;
   loadNativeIcons: boolean;
+  /** The panel renders the shared tab label. */
+  headerless?: boolean;
 }
 
 export default function NameResultsSection({
@@ -43,6 +45,7 @@ export default function NameResultsSection({
   copiedPath,
   scrollContainer,
   loadNativeIcons,
+  headerless = false,
 }: NameResultsSectionProps) {
   const resultWindow = useSearchResultWindow({
     itemCount: results.length,
@@ -54,7 +57,7 @@ export default function NameResultsSection({
 
   return (
     <div className="sfp-section">
-      <div className="sfp-section-bar">
+      {!headerless && <div className="sfp-section-bar">
         <span className="sfp-section-label">
           File names
           {!isSearching && results.length > 0 && (
@@ -66,7 +69,7 @@ export default function NameResultsSection({
             filename indexer unavailable — showing indexed-name matches under "Inside files"
           </span>
         )}
-      </div>
+      </div>}
       {showNoMatches && (
         <div className="sfp-section-empty">
           No file names match <strong>"{query}"</strong>

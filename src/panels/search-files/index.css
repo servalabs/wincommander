@@ -921,6 +921,49 @@ html.light .sfp-section-bar {
   gap: 10px;
 }
 
+/* Result types are parallel choices, not a long sequential report. */
+.sfp-result-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg-secondary) 94%, #000 6%);
+}
+
+.sfp-result-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: .04em;
+  cursor: pointer;
+}
+
+.sfp-result-tab + .sfp-result-tab { border-left: 1px solid var(--color-border); }
+.sfp-result-tab:hover:not(:disabled) { color: var(--color-text-primary); background: var(--color-accent-subtle); }
+.sfp-result-tab[aria-selected="true"] { color: var(--color-accent); border-bottom-color: var(--color-accent); background: var(--color-accent-subtle); }
+.sfp-result-tab:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -3px; }
+.sfp-result-tab:disabled { opacity: .55; cursor: default; }
+.sfp-result-tab span { padding: 1px 7px; border-radius: var(--radius-full); background: var(--color-accent-subtle); font-family: var(--font-mono); font-size: 10px; }
+
+.sfp-content-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-accent) 18%, var(--color-border));
+}
+
 .sfp-result-limit-control {
   display: inline-flex;
   align-items: center;

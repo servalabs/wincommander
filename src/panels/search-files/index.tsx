@@ -55,6 +55,7 @@ export default function SearchFilesPanel() {
   // Virtual selection across BOTH groups as one flat list; -1 = none.
   // Focus never leaves the input — rows are aria options, not tab stops.
   const [selected, setSelected] = useState(-1);
+  const [activeResultTab, setActiveResultTab] = useState<"names" | "content">("names");
   const inputRef = useRef<HTMLInputElement>(null);
   const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(null);
   const tabFilter = useMemo(
@@ -104,9 +105,13 @@ export default function SearchFilesPanel() {
     [content.contentRows],
   );
 
+  // Only the visible tab participates in arrow-key navigation. This keeps the
+  // input's active descendant on a row the user can actually see.
   const entries = useMemo(
-    () => buildSelectionEntries(search.results.length, textContentRows.length),
-    [search.results.length, textContentRows.length],
+    () => activeResultTab === "names"
+      ? buildSelectionEntries(search.results.length, 0)
+      : buildSelectionEntries(0, textContentRows.length),
+    [activeResultTab, search.results.length, textContentRows.length],
   );
 
   const savedResultLimit = appSettings?.app?.fileSearch?.resultLimit;
@@ -142,6 +147,7 @@ export default function SearchFilesPanel() {
 
   // New query text = new list; drop the old selection.
   useEffect(() => { setSelected(-1); }, [search.query]);
+  useEffect(() => { setSelected(-1); }, [activeResultTab]);
   // Clamp a stale selection when the list shrinks under it.
   useEffect(() => {
     setSelected((s) => (s >= entries.length ? (entries.length > 0 ? entries.length - 1 : -1) : s));
@@ -253,6 +259,22 @@ export default function SearchFilesPanel() {
   const showEmptyState = !showNameSection && !trimmed && content.currentRoots.length > 0 && !showIndexSettings;
   const anySearching = search.isSearching || content.contentLoading;
   const showFooter = (showNameSection || textContentRows.length > 0) && !activeError;
+  const canShowNameTab = showNameSection;
+  const canShowContentTab = showContentSection;
+
+  // If a tab becomes unavailable (for example before the first name search),
+  // move to the tab that still has a meaningful surface.
+  useEffect(() => {
+    if (activeResultTab === "names" && !canShowNameTab && canShowContentTab) setActiveResultTab("content");
+    if (activeResultTab === "content" && !canShowContentTab && canShowNameTab) setActiveResultTab("names");
+  }, [activeResultTab, canShowContentTab, canShowNameTab]);
+
+  const switchResultTab = useCallback((tab: "names" | "content") => {
+    if ((tab === "names" && canShowNameTab) || (tab === "content" && canShowContentTab)) {
+      setSelected(-1);
+      setActiveResultTab(tab);
+    }
+  }, [canShowContentTab, canShowNameTab]);
 
   return (
     <div className="search-files-panel">
@@ -345,18 +367,65 @@ export default function SearchFilesPanel() {
       {/* Initial empty state — nothing typed, nothing searched */}
       {showEmptyState && <SearchEmptyState indexStatus={content.indexStatus} />}
 
-      {/* One results surface, one scroll, two groups */}
+      {/* The two independent result sets share a tab strip instead of making
+          text hits wait below a long filename list. */}
       {!showEmptyState && (showNameSection || showContentSection) && (
         <div className="sfp-results-card">
+          <div className="sfp-result-tabs" role="tablist" aria-label="Search result type">
+            <button
+              type="button"
+              role="tab"
+              id="sfp-tab-names"
+              aria-selected={activeResultTab === "names"}
+              aria-controls="sfp-tabpanel-names"
+              tabIndex={activeResultTab === "names" ? 0 : -1}
+              disabled={!canShowNameTab}
+              className="sfp-result-tab"
+              onClick={() => switchResultTab("names")}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowRight" && canShowContentTab) {
+                  event.preventDefault();
+                  switchResultTab("content");
+                  document.getElementById("sfp-tab-content")?.focus();
+                }
+              }}
+            >
+              File names
+              {!search.isSearching && search.results.length > 0 && <span>{search.results.length.toLocaleString()}</span>}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="sfp-tab-content"
+              aria-selected={activeResultTab === "content"}
+              aria-controls="sfp-tabpanel-content"
+              tabIndex={activeResultTab === "content" ? 0 : -1}
+              disabled={!canShowContentTab}
+              className="sfp-result-tab"
+              onClick={() => switchResultTab("content")}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft" && canShowNameTab) {
+                  event.preventDefault();
+                  switchResultTab("names");
+                  document.getElementById("sfp-tab-names")?.focus();
+                }
+              }}
+            >
+              Text inside files
+              {!content.contentLoading && textContentRows.length > 0 && <span>{textContentRows.length.toLocaleString()}</span>}
+            </button>
+          </div>
           <div
             ref={setScrollContainer}
             className="sfp-results-scroll"
-            id="sfp-results-listbox"
-            role="listbox"
-            aria-label="Search results"
+            role="tabpanel"
+            id={activeResultTab === "names" ? "sfp-tabpanel-names" : "sfp-tabpanel-content"}
+            aria-labelledby={activeResultTab === "names" ? "sfp-tab-names" : "sfp-tab-content"}
           >
-            {showNameSection && (
-              <NameResultsSection
+            <div role="listbox" aria-label={`${activeResultTab === "names" ? "File-name" : "Text inside files"} search results`}>
+              {activeResultTab === "names" && showNameSection && (
+                <div>
+                <NameResultsSection
                 results={search.results}
                 query={search.query}
                 isSearching={search.isSearching}
@@ -370,10 +439,13 @@ export default function SearchFilesPanel() {
                 copiedPath={copiedPath}
                 scrollContainer={scrollContainer}
                 loadNativeIcons={!search.isSearching && search.resultsQuery === search.query}
-              />
-            )}
-            {showContentSection && (
-              <ContentResultsSection
+                headerless
+                />
+                </div>
+              )}
+              {activeResultTab === "content" && showContentSection && (
+                <div>
+                <ContentResultsSection
                 rows={textContentRows}
                 query={search.query}
                 contentLoading={content.contentLoading}
@@ -395,7 +467,7 @@ export default function SearchFilesPanel() {
                 expandedLoading={content.expandedLoading}
                 expandedError={content.expandedError}
                 onToggleExpand={content.toggleExpand}
-                flatOffset={search.results.length}
+                flatOffset={0}
                 selectedIndex={selected}
                 onSelect={setSelected}
                 onOpenFile={openFile}
@@ -403,8 +475,11 @@ export default function SearchFilesPanel() {
                 onCopyPath={copyPath}
                 copiedPath={copiedPath}
                 loadNativeIcons={!content.contentLoading && content.contentQuery === search.query}
-              />
-            )}
+                headerless
+                />
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

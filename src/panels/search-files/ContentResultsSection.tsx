@@ -52,6 +52,8 @@ interface ContentResultsSectionProps {
   onCopyPath: (path: string) => void;
   copiedPath: string | null;
   loadNativeIcons: boolean;
+  /** The panel renders the shared tab label. */
+  headerless?: boolean;
 }
 
 export default function ContentResultsSection(props: ContentResultsSectionProps) {
@@ -64,11 +66,12 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
     flatOffset, selectedIndex, onSelect,
     onOpenFile, onOpenFolder, onCopyPath, copiedPath,
     loadNativeIcons,
+    headerless = false,
   } = props;
 
   return (
     <div className="sfp-section">
-      <div className="sfp-section-bar">
+      {!headerless && <div className="sfp-section-bar">
         <span className="sfp-section-label">
           Text inside files
           {!contentLoading && rows.length > 0 && (
@@ -95,7 +98,28 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
             Indexed folders
           </Button>
         </div>
-      </div>
+      </div>}
+
+      {headerless && (
+        <div className="sfp-content-tools">
+          {indexStatus && !indexStatus.is_indexing && indexStatus.indexed_docs > 0 && (
+            <span className="sfp-index-status">
+              {indexStatus.indexed_docs.toLocaleString()} files indexed
+              {indexDisplayError && <span className="sfp-index-status__error"> · {indexDisplayError}</span>}
+            </span>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-pressed={showIndexSettings}
+            title="Choose which folders are indexed for inside-file search"
+            onClick={onToggleIndexSettings}
+          >
+            <Icon icon="cog" size={14} />
+            Indexed folders
+          </Button>
+        </div>
+      )}
 
       {indexStatus?.is_indexing && (
         <div className="sfp-indexing-bar" role="status" aria-live="polite">
