@@ -17,6 +17,32 @@ export type Action = "notify_user" | "clear_clipboard" | "quarantine_clipboard" 
 export type ActionClass = "safe" | "destructive" | "irreversible";
 
 /**
+ * A device-signed, hash-chained record of an action outcome. These records
+ * travel only inside the authenticated check-in envelope; `device_id` is
+ * nevertheless signed so a captured record cannot be replayed for another
+ * device.
+ */
+export type ActionOutcome = { version: number, receipt_id: string, device_id: DeviceId, sequence: bigint, previous_hash: string | null, command_id: string | null, catalog_id: string, action_class: ActionClass, outcome: ActionOutcomeState, observed_at: string, 
+/**
+ * Bounded structured data interpreted by the catalog-specific result
+ * seam. The server validates its size and readiness-self-test shape.
+ */
+result_digest: JsonValue, 
+/**
+ * Lowercase SHA-256 hex of [`canonical_action_outcome_bytes`].
+ */
+record_hash: string, 
+/**
+ * Base64 Ed25519 signature over the 32 raw bytes of `record_hash`.
+ */
+signature: string, };
+
+/**
+ * Factual outcome state. `Unknown` is deliberately distinct from a success.
+ */
+export type ActionOutcomeState = "pass" | "fail" | "unknown";
+
+/**
  * One admin account as listed by the admin-management UI. Carries `admin_id`
  * (needed to update/delete), unlike `AdminView` (the "who am I" shape).
  */
@@ -96,8 +122,11 @@ magnitude: bigint,
 /**
  * "info" | "warn" | "critical"
  */
-severity: string, consent_version: number, disclosure_version: number,
-/** Stable device-minted idempotency key; absent on older agents. */
+severity: string, consent_version: number, disclosure_version: number, 
+/**
+ * Stable, device-minted idempotency key for a retried signal. Older
+ * agents omit it, in which case the server preserves legacy insertion.
+ */
 event_id: string | null, };
 
 /**
@@ -142,15 +171,15 @@ export type AuditEntry = { actor: string, action: string, target: string | null,
  * content-free cooldown metric from `wincmd_clip_rules::CooldownLedger::
  * should_emit`'s `Emit::Suppressed { count }`.
  */
-export type ClipboardEventReport = {
+export type ClipboardEventReport = { 
 /**
  * Device-minted UUIDv7 — the idempotency key.
  */
-event_id: string,
+event_id: string, 
 /**
  * RFC3339, agent clock.
  */
-occurred_at: string, policy_version: bigint,
+occurred_at: string, policy_version: bigint, 
 /**
  * String form of a `wincmd_clip_rules::RuleId` — see the struct doc.
  */
@@ -535,17 +564,17 @@ export type HashResult = { ok: boolean, path: string, detail: string | null, alg
  * controlled-PDF lane (plan §5) is that Fleet learns a page COUNT and an
  * OUTCOME, never what was printed or by whom on the machine.
  */
-export type InkReceiptReport = {
+export type InkReceiptReport = { 
 /**
  * Device-minted UUID — the idempotency key.
  */
-receipt_id: string,
+receipt_id: string, 
 /**
  * The `IR-<uuid-simple>` ticket id (D-5) this receipt completes.
  * Treated as pseudonymous and encrypted at rest (D-8) — the route
  * layer, not this type, owns that encryption and any format check.
  */
-ticket_id: string, printer_class: PrinterClass, pages: number, status: InkReceiptStatus, policy_version: bigint,
+ticket_id: string, printer_class: PrinterClass, pages: number, status: InkReceiptStatus, policy_version: bigint, 
 /**
  * RFC3339, agent clock.
  */
@@ -712,6 +741,17 @@ export type ProductivitySample = { window_start: string, window_end: string, act
  * Aggregate category → score map, e.g. `{"productive": 0.8}`. Aggregate only.
  */
 category_scores: JsonValue, consent_version: number, disclosure_version: number, };
+
+/**
+ * Structured result required for the `readiness.self_test` outcome catalog.
+ * It documents verification only; it never authorizes a destructive action.
+ */
+export type ReadinessSelfTestResult = { arm_predicate: ReadinessState, signed_dispatch: ReadinessState, simulate_branch: ReadinessState, recovery_path: ReadinessState, observed_at: string, };
+
+/**
+ * Per-step status for a non-destructive readiness self-test.
+ */
+export type ReadinessState = "pass" | "fail" | "unknown";
 
 /**
  * One entry in a device's Downloads folder, returned by the

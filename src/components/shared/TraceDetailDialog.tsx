@@ -47,6 +47,15 @@ export default function TraceDetailDialog({
 }: TraceDetailDialogProps) {
   const [query, setQuery] = useState("");
   const view = useMemo(() => buildTraceView(rawData, items), [rawData, items]);
+  const isPreviewTruncated = !!(
+    rawData &&
+    typeof rawData === "object" &&
+    "truncated" in rawData &&
+    (rawData as { truncated?: unknown }).truncated === true
+  );
+  const previewLimit = isPreviewTruncated && rawData && typeof rawData === "object" && "previewLimit" in rawData
+    ? (rawData as { previewLimit?: unknown }).previewLimit
+    : null;
   const groupedViews = useMemo(
     () => (groupedItems ?? []).map((group) => ({
       ...group,
@@ -99,6 +108,11 @@ export default function TraceDetailDialog({
             ) : null}
           </label>
         </div>
+        {isPreviewTruncated ? (
+          <p className="trace-dialog__bounded-preview" role="status">
+            Showing the first {typeof previewLimit === "number" ? previewLimit : items.length} entries. The total above includes every item found.
+          </p>
+        ) : null}
         <div className="trace-dialog__items">
           {view.metadata.length > 0 && groupedViews.length === 0 ? (
             <section className="trace-dialog__metadata" aria-label="Artifact summary">

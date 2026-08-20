@@ -11,6 +11,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 /// Re-exported from `wincmd-clip-rules`, the clipboard-guard rule engine's
 /// SSOT for policy types (plan §4.1). This crate deliberately does NOT
@@ -96,6 +97,26 @@ pub const DURESS_CATALOG_IDS: &[&str] = &[
     "suspend_deadman",
     "set_deadman_policy",
     "set_posture_policy",
+];
+
+/// Canonical Android/operator command action classes. Android consumers must
+/// validate their local table against `bindings/android-action-class-v1.json`,
+/// which is pinned to this list by the `android_action_class_vectors_are_canonical`
+/// test. Keeping the small operator-control table outside the feature-gated
+/// desktop catalog makes it available to every verifier without adding a
+/// platform-specific transport or a second source of truth.
+pub const DURESS_ACTION_CLASS_VECTORS: &[(&str, ActionClass)] = &[
+    ("duress_seal", ActionClass::Destructive),
+    ("raise_posture", ActionClass::Destructive),
+    ("duress_wipe", ActionClass::Irreversible),
+    ("all_clear_revoke", ActionClass::Irreversible),
+    ("duress_unseal", ActionClass::Safe),
+    ("all_clear", ActionClass::Safe),
+    ("rotate_key", ActionClass::Safe),
+    ("unenroll", ActionClass::Destructive),
+    ("suspend_deadman", ActionClass::Safe),
+    ("set_deadman_policy", ActionClass::Safe),
+    ("set_posture_policy", ActionClass::Safe),
 ];
 
 /// Whether `catalog_id` is an operator-signed control command (see
@@ -207,6 +228,9 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
         summary: "Collect bounded processes, listening ports, and services for device triage",
         payload_schema: Some(r#"{"type":"object","properties":{},"additionalProperties":false}"#),
     },
+    CommandMeta { catalog_id: "forensics.browser_traces.view", action_class: ActionClass::Safe, summary: "Read bounded browser-trace cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.event_log_remnants.view", action_class: ActionClass::Safe, summary: "Read bounded event-log cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.prefetch_remnants.view", action_class: ActionClass::Safe, summary: "Read bounded prefetch cleanup evidence", payload_schema: None },
     CommandMeta {
         catalog_id: "velociraptor.collect.client_info",
         action_class: ActionClass::Safe,
@@ -658,9 +682,9 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
     CommandMeta {
         catalog_id: "lockdown.full",
         action_class: ActionClass::Irreversible,
-        summary: "Full lockdown: dismount encrypted volumes, erase specified folders and privacy traces, then shut down",
+        summary: "Full lockdown: optional fixed-policy backup, dismount encrypted volumes, clear privacy traces, then shut down",
         payload_schema: Some(
-            r#"{"type":"object","properties":{"shredPaths":{"type":"array","items":{"type":"string"}},"clearTraces":{"type":"boolean"}}}"#,
+            r#"{"type":"object","additionalProperties":false,"properties":{"clearTraces":{"type":"boolean"},"backupPolicyId":{"type":"string","enum":["lockdown-records-abort-v1","lockdown-records-continue-v1"]}}}"#,
         ),
     },
     CommandMeta {
@@ -886,6 +910,77 @@ pub struct SignedCommand {
     pub epoch_version: i64,
     pub signature: String,
     pub signer_key: String,
+}
+
+/// A device-signed, hash-chained record of an action outcome. These records
+/// travel only inside the authenticated check-in envelope; `device_id` is
+/// nevertheless signed so a captured record cannot be replayed for another
+/// device.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct ActionOutcome {
+    #[serde(default = "default_action_outcome_version")]
+    pub version: u16,
+    pub receipt_id: String,
+    pub device_id: DeviceId,
+    pub sequence: u64,
+    #[serde(default)]
+    pub previous_hash: Option<String>,
+    #[serde(default)]
+    pub command_id: Option<String>,
+    pub catalog_id: String,
+    pub action_class: ActionClass,
+    pub outcome: ActionOutcomeState,
+    pub observed_at: String,
+    /// Bounded structured data interpreted by the catalog-specific result
+    /// seam. The server validates its size and readiness-self-test shape.
+    pub result_digest: Value,
+    /// Lowercase SHA-256 hex of [`canonical_action_outcome_bytes`].
+    pub record_hash: String,
+    /// Base64 Ed25519 signature over the 32 raw bytes of `record_hash`.
+    pub signature: String,
+}
+
+fn default_action_outcome_version() -> u16 {
+    1
+}
+
+/// Factual outcome state. `Unknown` is deliberately distinct from a success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(rename_all = "snake_case")]
+pub enum ActionOutcomeState {
+    Pass,
+    Fail,
+    Unknown,
+}
+
+/// Per-step status for a non-destructive readiness self-test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(rename_all = "snake_case")]
+pub enum ReadinessState {
+    Pass,
+    Fail,
+    Unknown,
+}
+
+/// Structured result required for the `readiness.self_test` outcome catalog.
+/// It documents verification only; it never authorizes a destructive action.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct ReadinessSelfTestResult {
+    pub arm_predicate: ReadinessState,
+    pub signed_dispatch: ReadinessState,
+    pub simulate_branch: ReadinessState,
+    pub recovery_path: ReadinessState,
+    pub observed_at: String,
 }
 
 /// Request a single-use confirmation token for an irreversible action.
@@ -2154,6 +2249,92 @@ pub fn canonical_command_bytes(
     out.into_bytes()
 }
 
+/// Canonical bytes whose SHA-256 becomes an action outcome's `record_hash`.
+/// This is intentionally independent of serde's map ordering and excludes the
+/// derived hash/signature fields, so every endpoint implementation signs the
+/// same record.
+pub fn canonical_action_outcome_bytes(outcome: &ActionOutcome) -> Vec<u8> {
+    let envelope = serde_json::json!({
+        "version": outcome.version,
+        "receipt_id": outcome.receipt_id,
+        "device_id": outcome.device_id.0,
+        "sequence": outcome.sequence,
+        "previous_hash": outcome.previous_hash,
+        "command_id": outcome.command_id,
+        "catalog_id": outcome.catalog_id,
+        "action_class": outcome.action_class.as_wire_str(),
+        "outcome": match outcome.outcome {
+            ActionOutcomeState::Pass => "pass",
+            ActionOutcomeState::Fail => "fail",
+            ActionOutcomeState::Unknown => "unknown",
+        },
+        "observed_at": outcome.observed_at,
+        "result_digest": outcome.result_digest,
+    });
+    let mut canonical = String::new();
+    write_canonical(&envelope, &mut canonical);
+    canonical.into_bytes()
+}
+
+/// SHA-256 hex digest for an action outcome's canonical bytes.
+pub fn action_outcome_hash(outcome: &ActionOutcome) -> String {
+    let digest = Sha256::digest(canonical_action_outcome_bytes(outcome));
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// SHA-256 of a JSON value after the Fleet canonical encoder has sorted every
+/// object key. Action outcomes use this to bind their device signature to the
+/// complete typed command result which travels in the HMAC-authenticated ack.
+/// It deliberately hashes `null` too: absent evidence is an explicit state,
+/// never an implicit success.
+pub fn canonical_json_sha256(value: &Value) -> String {
+    let mut canonical = String::new();
+    write_canonical(value, &mut canonical);
+    let digest = Sha256::digest(canonical.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Verify both the canonical record hash and its device outcome-key signature.
+/// Invalid encoding, an invalid key, or an invalid signature all fail closed.
+pub fn verify_action_outcome(outcome: &ActionOutcome, public_key_b64: &str) -> bool {
+    if outcome.version != 1 || outcome.record_hash != action_outcome_hash(outcome) {
+        return false;
+    }
+    let Ok(hash) = hex_to_32_bytes(&outcome.record_hash) else {
+        return false;
+    };
+    let Ok(key_bytes) = B64.decode(public_key_b64) else {
+        return false;
+    };
+    let Ok(key_array) = <[u8; 32]>::try_from(key_bytes.as_slice()) else {
+        return false;
+    };
+    let Ok(verifying_key) = VerifyingKey::from_bytes(&key_array) else {
+        return false;
+    };
+    let Ok(signature_bytes) = B64.decode(&outcome.signature) else {
+        return false;
+    };
+    let Ok(signature) = Signature::from_slice(&signature_bytes) else {
+        return false;
+    };
+    verifying_key.verify(&hash, &signature).is_ok()
+}
+
+fn hex_to_32_bytes(input: &str) -> Result<[u8; 32], ()> {
+    if input.len() != 64 || !input.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(());
+    }
+    let mut bytes = [0u8; 32];
+    for (index, chunk) in input.as_bytes().chunks_exact(2).enumerate() {
+        bytes[index] = std::str::from_utf8(chunk)
+            .ok()
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            .ok_or(())?;
+    }
+    Ok(bytes)
+}
+
 /// Canonical signing preimage for a [`ResolvedPolicy`].  The fleet server
 /// signs this; the agent rebuilds the identical bytes to verify before applying
 /// the policy.
@@ -2986,6 +3167,102 @@ mod tests {
             ids.len(),
             deduped.len(),
             "COMMAND_METADATA has a duplicate catalog_id"
+        );
+    }
+
+    #[cfg(feature = "command-metadata")]
+    #[test]
+    fn lockdown_metadata_accepts_only_fixed_backup_policy_fields() {
+        let schema = COMMAND_METADATA
+            .iter()
+            .find(|entry| entry.catalog_id == "lockdown.full")
+            .and_then(|entry| entry.payload_schema)
+            .expect("lockdown.full schema");
+        assert!(schema.contains("\"additionalProperties\":false"));
+        assert!(schema.contains("lockdown-records-abort-v1"));
+        assert!(schema.contains("lockdown-records-continue-v1"));
+        assert!(!schema.contains("shredPaths"));
+        assert!(!schema.contains("sourcePath"));
+        assert!(!schema.contains("destinationPath"));
+    }
+
+    #[test]
+    fn action_outcome_signature_binds_canonical_record_and_device() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let signing_key = SigningKey::from_bytes(&[17; 32]);
+        let mut outcome = ActionOutcome {
+            version: 1,
+            receipt_id: "11111111-1111-1111-1111-111111111111".into(),
+            device_id: DeviceId("device-one".into()),
+            sequence: 1,
+            previous_hash: None,
+            command_id: Some("command-one".into()),
+            catalog_id: "device.lock".into(),
+            action_class: ActionClass::Irreversible,
+            outcome: ActionOutcomeState::Pass,
+            observed_at: "2026-08-19T00:00:00Z".into(),
+            result_digest: serde_json::json!({"status":"completed"}),
+            record_hash: String::new(),
+            signature: String::new(),
+        };
+        outcome.record_hash = action_outcome_hash(&outcome);
+        let hash = hex_to_32_bytes(&outcome.record_hash).unwrap();
+        outcome.signature = B64.encode(signing_key.sign(&hash).to_bytes());
+        let public_key = B64.encode(signing_key.verifying_key().to_bytes());
+        assert!(verify_action_outcome(&outcome, &public_key));
+
+        let wrong_key = B64.encode(SigningKey::from_bytes(&[18; 32]).verifying_key().to_bytes());
+        assert!(!verify_action_outcome(&outcome, &wrong_key));
+        outcome.device_id = DeviceId("device-two".into());
+        assert!(!verify_action_outcome(&outcome, &public_key));
+    }
+
+    #[test]
+    fn typed_result_digest_is_order_independent_and_binds_null() {
+        let a = serde_json::json!({"result": {"z": 2, "a": 1}});
+        let b = serde_json::json!({"result": {"a": 1, "z": 2}});
+        assert_eq!(canonical_json_sha256(&a), canonical_json_sha256(&b));
+        assert_ne!(
+            canonical_json_sha256(&a),
+            canonical_json_sha256(&Value::Null)
+        );
+    }
+
+    #[test]
+    fn android_action_class_vectors_are_canonical() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../bindings/android-action-class-v1.json"))
+                .expect("Android action-class fixture must be valid JSON");
+        assert_eq!(fixture["version"], 1);
+        let fixture_rows: Vec<(String, String)> = fixture["commands"]
+            .as_array()
+            .expect("commands must be an array")
+            .iter()
+            .map(|row| {
+                (
+                    row["catalog_id"]
+                        .as_str()
+                        .expect("catalog_id must be a string")
+                        .to_owned(),
+                    row["action_class"]
+                        .as_str()
+                        .expect("action_class must be a string")
+                        .to_owned(),
+                )
+            })
+            .collect();
+        let canonical_rows: Vec<(String, String)> = DURESS_ACTION_CLASS_VECTORS
+            .iter()
+            .map(|(id, class)| ((*id).to_owned(), class.as_wire_str().to_owned()))
+            .collect();
+        assert_eq!(fixture_rows, canonical_rows);
+        assert_eq!(
+            DURESS_ACTION_CLASS_VECTORS
+                .iter()
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>(),
+            DURESS_CATALOG_IDS,
+            "every Android/operator vector must remain operator-key routed"
         );
     }
 }

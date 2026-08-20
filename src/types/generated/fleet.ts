@@ -18,6 +18,32 @@ export type Action = "notify_user" | "clear_clipboard" | "quarantine_clipboard" 
 export type ActionClass = "safe" | "destructive" | "irreversible";
 
 /**
+ * A device-signed, hash-chained record of an action outcome. These records
+ * travel only inside the authenticated check-in envelope; `device_id` is
+ * nevertheless signed so a captured record cannot be replayed for another
+ * device.
+ */
+export type ActionOutcome = { version: number, receipt_id: string, device_id: DeviceId, sequence: bigint, previous_hash: string | null, command_id: string | null, catalog_id: string, action_class: ActionClass, outcome: ActionOutcomeState, observed_at: string,
+/**
+ * Bounded structured data interpreted by the catalog-specific result
+ * seam. The server validates its size and readiness-self-test shape.
+ */
+result_digest: JsonValue,
+/**
+ * Lowercase SHA-256 hex of [`canonical_action_outcome_bytes`].
+ */
+record_hash: string,
+/**
+ * Base64 Ed25519 signature over the 32 raw bytes of `record_hash`.
+ */
+signature: string, };
+
+/**
+ * Factual outcome state. `Unknown` is deliberately distinct from a success.
+ */
+export type ActionOutcomeState = "pass" | "fail" | "unknown";
+
+/**
  * One admin account as listed by the admin-management UI. Carries `admin_id`
  * (needed to update/delete), unlike `AdminView` (the "who am I" shape).
  */
@@ -99,17 +125,8 @@ magnitude: bigint,
  */
 severity: string, consent_version: number, disclosure_version: number,
 /**
- * Device-minted idempotency key (D-6, plan §2.5): a fresh id generated
- * the FIRST time a signal is constructed, resent UNCHANGED on every
- * requeue-after-transport-failure retry of that same signal, so a
- * lost-200 (agent never saw the response, server already ingested it)
- * doesn't get double-counted on the next check-in. `None` for an agent
- * built before this field existed — the server treats that exactly as
- * it always has (an unconditional insert, nothing to dedup against).
- * Optional/`#[serde(default)]` in both directions on purpose: this
- * struct has no `#[serde(deny_unknown_fields)]`, so an OLD server
- * tolerates a NEW agent sending this field, and `#[serde(default)]`
- * means a NEW server tolerates an OLD agent that omits it.
+ * Stable, device-minted idempotency key for a retried signal. Older
+ * agents omit it, in which case the server preserves legacy insertion.
  */
 event_id: string | null, };
 
@@ -738,6 +755,17 @@ export type ProductivitySample = { window_start: string, window_end: string, act
  * Aggregate category → score map, e.g. `{"productive": 0.8}`. Aggregate only.
  */
 category_scores: JsonValue, consent_version: number, disclosure_version: number, };
+
+/**
+ * Structured result required for the `readiness.self_test` outcome catalog.
+ * It documents verification only; it never authorizes a destructive action.
+ */
+export type ReadinessSelfTestResult = { arm_predicate: ReadinessState, signed_dispatch: ReadinessState, simulate_branch: ReadinessState, recovery_path: ReadinessState, observed_at: string, };
+
+/**
+ * Per-step status for a non-destructive readiness self-test.
+ */
+export type ReadinessState = "pass" | "fail" | "unknown";
 
 /**
  * One entry in a device's Downloads folder, returned by the

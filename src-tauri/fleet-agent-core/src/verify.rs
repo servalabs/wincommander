@@ -146,6 +146,10 @@ pub struct HealthSnapshot {
     pub av_on: Option<bool>,
     pub os_version: Option<String>,
     pub sovereignty_score: Option<i64>,
+    /// Additive bounded platform facts. The server selects facts using its
+    /// stored device kind and derives compliance; agents never send verdicts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_facts: Option<serde_json::Value>,
 }
 
 /// Check-in response: zero or more signed commands to execute.
@@ -628,6 +632,7 @@ mod tests {
             av_on: Some(true),
             os_version: Some("Windows 11 Pro 24H2".to_string()),
             sovereignty_score: Some(82),
+            platform_facts: None,
         };
         let json = serde_json::to_value(&health).unwrap();
         assert_eq!(
@@ -702,6 +707,7 @@ mod tests {
             av_on: None,
             os_version: Some("Windows 11 Pro 24H2".to_string()),
             sovereignty_score: None,
+            platform_facts: None,
         };
         let req = CheckinRequest {
             device_id: "dev-1".to_string(),

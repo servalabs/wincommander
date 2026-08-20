@@ -884,6 +884,7 @@ mod tests {
                 encryption_on: Some(true),
                 patch_state: Some("current".to_string()),
                 av_on: Some(false),
+                platform_facts: None,
                 os_version: Some("Windows 11 Pro 24H2".to_string()),
                 sovereignty_score: Some(50),
             }),
