@@ -377,7 +377,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
           </TierGate>
         </div>
 
-        {paid && (
+        {paid && volumes.length === 1 && (
           <div className="vault-backup-target" role="group" aria-label="Emergency encrypted backup target">
             <div>
               <strong>Emergency backup target</strong>
