@@ -1429,7 +1429,12 @@ pub(crate) fn get_command_tier(command: &str) -> &'static str {
         // ── Two-password volume creation (paid; headless engine, Pro-Rust handler) ──
         "Create-DualVolume" => "paid",
         // ── Vault/volumes create+mount+dismount (paid; stdin-based engine, Pro-Rust handler) ──
-        "Mount-EncryptionVolume" | "Create-EncryptionVolume" | "Dismount-EncryptionVolume" => "paid",
+        "Mount-EncryptionVolume"
+        | "Create-EncryptionVolume"
+        | "Dismount-EncryptionVolume"
+        | "Get-EncryptedBackupTargetStatus"
+        | "Provision-EncryptedBackupTarget"
+        | "Clear-EncryptedBackupTarget" => "paid",
         // ── Tweaks Security (paid · A R F for defender; A R for AF-flag-free) ──
         "Enable-WindowsDefender"
         | "Enable-USBWriteProtect" | "Disable-USBWriteProtect"
@@ -1620,6 +1625,9 @@ mod command_tier_tests {
         assert_eq!(get_command_tier("Mount-EncryptionVolume"), "paid");
         assert_eq!(get_command_tier("Create-EncryptionVolume"), "paid");
         assert_eq!(get_command_tier("Dismount-EncryptionVolume"), "paid");
+        assert_eq!(get_command_tier("Get-EncryptedBackupTargetStatus"), "paid");
+        assert_eq!(get_command_tier("Provision-EncryptedBackupTarget"), "paid");
+        assert_eq!(get_command_tier("Clear-EncryptedBackupTarget"), "paid");
     }
 
     #[test]
@@ -2404,6 +2412,9 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Get-SystemEncryptionEligibility" => Some("vault/volumes"),
         "Get-EncryptionPartitions" => Some("vault/volumes"),
         "Get-AvailableDriveLetters" => Some("vault/volumes"),
+        "Get-EncryptedBackupTargetStatus" => Some("vault/volumes"),
+        "Provision-EncryptedBackupTarget" => Some("vault/volumes"),
+        "Clear-EncryptedBackupTarget" => Some("vault/volumes"),
 
         // Storage - RAM Disks (ImDisk)
         "Test-RamDiskInstalled" => Some("vault/ramdisks"),
@@ -2589,6 +2600,9 @@ pub fn list_all_commands() -> Vec<String> {
         "Create-DualVolume",
         "Create-StegoMp4",
         "Extract-StegoMp4",
+        "Get-EncryptedBackupTargetStatus",
+        "Provision-EncryptedBackupTarget",
+        "Clear-EncryptedBackupTarget",
         "Start-PrivacyShield",
         "Stop-PrivacyShield",
         "Start-ProductivityTracker",
@@ -3662,6 +3676,7 @@ pub async fn run_backend_script(
             || command.starts_with("Erase-")
             || command.starts_with("Remove-")
             || command.starts_with("Reset-")
+            || command == "Provision-EncryptedBackupTarget"
             || command == "Invoke-AIControlOperation"
             || command == "Invoke-CleanupClearAllUsers";
         if mutating {

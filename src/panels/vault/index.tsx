@@ -92,14 +92,20 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [mountType, setMountType] = useState<'file' | 'partition'>('file');
   const [partitions, setPartitions] = useState<EncryptionPartition[]>([]);
   const [mountDetailsLoading, setMountDetailsLoading] = useState(false);
+  const [backupTargetBound, setBackupTargetBound] = useState<boolean | null>(null);
+  const [backupTargetBusy, setBackupTargetBusy] = useState(false);
 
   const {
     mountVolume,
     getAvailableDriveLetters,
     getEncryptionPartitions,
+    getEncryptedBackupTargetStatus,
+    provisionEncryptedBackupTarget,
+    clearEncryptedBackupTarget,
     error
   } = useBackend();
   const { canUse } = useEntitlements();
+  const paid = canUse("paid");
 
   const [mounting, setMounting] = useState(false);
   const canMount = Boolean(
@@ -263,6 +269,59 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     if (error) showError(error);
   }, [error]);
 
+  useEffect(() => {
+    if (!paid) {
+      setBackupTargetBound(null);
+      return;
+    }
+    let cancelled = false;
+    void getEncryptedBackupTargetStatus().then((result) => {
+      if (!cancelled && result.success && result.data) {
+        setBackupTargetBound(result.data.bound);
+      }
+    });
+    return () => { cancelled = true; };
+    // The backend function is a thin command wrapper recreated by useBackend.
+    // Re-check only when entitlement changes; provision/clear update state directly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paid]);
+
+  const handleProvisionBackupTarget = useCallback(async () => {
+    if (volumes.length !== 1) {
+      showError("Mount exactly one encrypted file container before registering it.");
+      return;
+    }
+    setBackupTargetBusy(true);
+    try {
+      const result = await provisionEncryptedBackupTarget();
+      if (!result.success || !result.data?.bound) {
+        throw new Error(result.error || "The encrypted backup target could not be registered.");
+      }
+      setBackupTargetBound(true);
+      showSuccess("Emergency backup target registered. Its identity will be checked again before use.");
+    } catch (e) {
+      showError(e instanceof Error ? e.message : "The encrypted backup target could not be registered.");
+    } finally {
+      setBackupTargetBusy(false);
+    }
+  }, [provisionEncryptedBackupTarget, volumes.length]);
+
+  const handleClearBackupTarget = useCallback(async () => {
+    setBackupTargetBusy(true);
+    try {
+      const result = await clearEncryptedBackupTarget();
+      if (!result.success || !result.data?.cleared) {
+        throw new Error(result.error || "The encrypted backup target registration could not be cleared.");
+      }
+      setBackupTargetBound(false);
+      showSuccess("Emergency backup registration cleared. No files were deleted.");
+    } catch (e) {
+      showError(e instanceof Error ? e.message : "The encrypted backup target registration could not be cleared.");
+    } finally {
+      setBackupTargetBusy(false);
+    }
+  }, [clearEncryptedBackupTarget]);
+
   return (
     <>
       <SectionCard
@@ -317,6 +376,38 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             />
           </TierGate>
         </div>
+
+        {paid && (
+          <div className="vault-backup-target" role="group" aria-label="Emergency encrypted backup target">
+            <div>
+              <strong>Emergency backup target</strong>
+              <span role="status">
+                {backupTargetBound === null ? "Checking…" : backupTargetBound ? "Registered" : "Not registered"}
+              </span>
+              <p>
+                Uses the only mounted encrypted file container. This screen accepts no path;
+                raw partitions and ambiguous mounts are refused by the backend.
+              </p>
+            </div>
+            <div className="vault-backup-target__actions">
+              <Button
+                small
+                icon="endorsed"
+                text={backupTargetBusy ? "Working…" : "Use mounted container"}
+                disabled={backupTargetBusy || volumes.length !== 1}
+                onClick={() => void handleProvisionBackupTarget()}
+              />
+              <Button
+                small
+                minimal
+                icon="cross"
+                text="Clear registration"
+                disabled={backupTargetBusy || backupTargetBound !== true}
+                onClick={() => void handleClearBackupTarget()}
+              />
+            </div>
+          </div>
+        )}
 
         <div className={`vault-content ${volumes.length === 0 ? "vault-content--empty" : ""}`}>
           {initialLoading ? (

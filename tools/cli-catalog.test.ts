@@ -27,13 +27,13 @@ describe("generated WinCommander CLI catalog", () => {
   test("matches the command totals quoted in the docs", () => {
     const tauri = (catalog.commands as Entry[]).filter((entry) => entry.transport === "tauri");
     const backend = (catalog.commands as Entry[]).filter((entry) => entry.transport === "backend-script");
-    expect(catalog.commands.length).toBe(1224);
-    expect(tauri.length).toBe(429);
-    expect(backend.length).toBe(795);
+    expect(catalog.commands.length).toBe(1240);
+    expect(tauri.length).toBe(437);
+    expect(backend.length).toBe(803);
     const releaseExecutable = (catalog.commands as Entry[]).filter(
       (entry) => entry.registered && !entry.debugOnly,
     );
-    expect(releaseExecutable.length).toBe(1220);
+    expect(releaseExecutable.length).toBe(1236);
   });
 
   test("has stable unique identifiers and valid references", () => {

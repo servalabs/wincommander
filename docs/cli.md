@@ -30,7 +30,7 @@ exit $process.ExitCode
 
 ## Catalog and runtime
 
-The generated catalog contains 1,224 entries: 795 backend-script commands and 429 Tauri handlers. Four Tauri handlers are debug-only, so the shipped release binary executes 1,220 commands; it retains the four debug-only entries for catalog-drift auditing and refuses them at runtime.
+The generated catalog contains 1,240 entries: 803 backend-script commands and 437 Tauri handlers. Four Tauri handlers are debug-only, so the shipped release binary executes 1,236 commands; it retains the four debug-only entries for catalog-drift auditing and refuses them at runtime.
 
 Backend commands run in a windowless Tauri context. Native commands run through a real, invisible `cli-runtime.html` Tauri WebView that invokes the same production handler as the GUI. CLI mode never mounts the React dashboard or creates a tray icon, taskbar window, hotkeys, ambient monitors, autostart state, or updater polling.
 
@@ -57,6 +57,8 @@ Risk is assigned in a fail-closed priority order rather than by name alone:
 Step 4 runs after the read-only allowlist, so `Get-AutoEraseSchedules` remains a read while `Invoke-7Erase` is destructive. It deliberately over-classifies a few configuration commands that schedule erasure rather than performing it — `Set-AutoEraseSchedule`, `Set-MultiUserAutoEraseSchedule`, `Set-ShredPolicy` — which require `DESTROY:`. Classification remains a safeguard, not authentication; `commands describe <id>` always reports the exact token a command needs.
 - Parameters must be a JSON object supplied inline, as `@path`, or as `-` for stdin. Native Tauri dispatch preserves JSON values; backend-script dispatch serializes object values to their string/JSON representations for its existing dispatcher. Neither path evaluates parameter text as shell code.
 - Existing licence, module, administrator, investigator-mode, and Pro-sidecar checks are preserved because CLI commands use the same backend and Tauri dispatchers as the GUI.
+
+The encrypted emergency-backup commands have fixed empty payloads. `backend:Get-EncryptedBackupTargetStatus` is read-only and may report only `bound` plus a schema version; it never returns the target path or identity hash. `backend:Provision-EncryptedBackupTarget` is mutating and `backend:Clear-EncryptedBackupTarget` is conservatively destructive, so both remain desktop-only under the current production CLI policy. The desktop backend derives the sole mounted file-container identity and rejects every supplied field.
 
 Examples:
 
@@ -92,7 +94,9 @@ The process exits after one response. A read-only wait timeout returns exit code
 Automation should account for these; they are open, not oversights.
 
 - Settings writes are last-writer-wins. The cross-process lock serialises CLI mutations against each other; the desktop app never takes it, so a concurrent GUI change and `run tauri:set_settings` can discard one side. Do not run CLI settings mutations against a machine someone is actively using.
-- A content reindex removes and rebuilds the search-index directory while read-only search commands, which take no lock, may be reading it.
+- Search-index readers and reindex/replacement now share one bounded session-
+  local lock and fail closed with a busy result instead of racing the directory
+  replacement. Signed-build GUI/CLI contention acceptance remains pending.
 - Confirmation tokens are safeguards against mistakes and mis-targeting, not authentication. Anyone able to run the executable can supply them.
 - A destructive command's exit code reports dispatch, not completion. `lockdown` and `full_lockdown` in particular acknowledge only that the worker was launched — verify the result independently.
 - Risk grading is fail-closed and deliberately over-classifies a few commands that *schedule* erasure rather than perform it (`Set-AutoEraseSchedule`, `Set-MultiUserAutoEraseSchedule`, `Set-ShredPolicy`), so those require `DESTROY:`.

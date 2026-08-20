@@ -92,6 +92,11 @@ flowchart TB
 
 - PowerShell dispatch never builds command strings from frontend data — the command name and parameters travel out-of-band via environment variables and are hydrated as data, not code. Blocking CI gates enforce this.
 - Destructive commands are enumerated in a Rust registry and require a single-use, args-bound authorization capability minted only by a Rust-verified PIN, native dialog, or real duress trigger. Filesystem-destructive paths are canonicalized and confined against `..`/symlink traversal.
+- Emergency backup registration is a paid empty-payload command. The WebView
+  cannot name a path: Pro derives exactly one current mounted volume, requires
+  a regular non-reparse file container, stores a machine-DPAPI-bound stable
+  identity, returns no identity/path, and re-verifies it before backup. Clear
+  deletes only the binding and is also refused in Investigator mode.
 
 **Data handling**
 
