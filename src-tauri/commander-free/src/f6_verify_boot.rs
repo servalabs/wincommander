@@ -88,7 +88,11 @@ fn now_unix() -> i64 {
 // BootNext entry are already committed by the time this is written.
 
 fn armed_marker_path() -> Result<std::path::PathBuf, String> {
-    Ok(crate::paths::user_data_dir()?.join("f6-verify-boot-armed.json"))
+    crate::paths::machine_state_file("f6-verify-boot-armed.json")
+}
+
+fn legacy_armed_marker_path() -> Result<std::path::PathBuf, String> {
+    crate::paths::legacy_user_state_file("f6-verify-boot-armed.json")
 }
 
 fn write_armed_marker(
@@ -97,6 +101,9 @@ fn write_armed_marker(
     nonce_hex: &str,
     expires_at: i64,
 ) {
+    let Ok(_lock) = crate::paths::acquire_machine_state_lock("f6-verify-boot") else {
+        return;
+    };
     let path = match armed_marker_path() {
         Ok(p) => p,
         Err(_) => return,
@@ -107,7 +114,7 @@ fn write_armed_marker(
         "nonceHex": nonce_hex,
         "expiresAtUnix": expires_at,
     });
-    if let Err(e) = std::fs::write(&path, marker.to_string()) {
+    if let Err(e) = crate::paths::atomic_write_machine_state(&path, marker.to_string().as_bytes()) {
         crate::log_message(
             "warn",
             &format!(
@@ -119,9 +126,40 @@ fn write_armed_marker(
 }
 
 fn clear_armed_marker() {
+    let Ok(_lock) = crate::paths::acquire_machine_state_lock("f6-verify-boot") else {
+        return;
+    };
     if let Ok(path) = armed_marker_path() {
         let _ = std::fs::remove_file(path);
     }
+    // A cancelled self-test must also clear the pre-machine-scope marker; a
+    // stale per-user marker must not make a later operator think BootNext is armed.
+    if let Ok(path) = legacy_armed_marker_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn read_armed_marker() -> Option<Value> {
+    let _lock = crate::paths::acquire_machine_state_lock("f6-verify-boot").ok()?;
+    let machine_path = armed_marker_path().ok()?;
+    if machine_path.exists() {
+        return std::fs::read_to_string(&machine_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok());
+    }
+
+    let legacy_path = legacy_armed_marker_path().ok()?;
+    let raw = std::fs::read_to_string(&legacy_path).ok()?;
+    let marker: Value = serde_json::from_str(&raw).ok()?;
+    // A marker is only recovery metadata, but it tracks a real BootNext action.
+    // Promote a valid marker so any administrator can safely disarm/check after
+    // reboot; keep the legacy source if the ProgramData write fails.
+    if crate::paths::atomic_write_machine_state(&machine_path, marker.to_string().as_bytes())
+        .is_ok()
+    {
+        let _ = std::fs::remove_file(legacy_path);
+    }
+    Some(marker)
 }
 
 /// Report whether a self-test is currently armed, per the durable marker
@@ -130,18 +168,14 @@ fn clear_armed_marker() {
 #[tauri::command]
 pub fn f6_verify_usb_boot_status() -> Result<Value, String> {
     crate::license::require_paid("f6 verify usb boot")?;
-    let path = armed_marker_path()?;
-    match std::fs::read_to_string(&path) {
-        Ok(raw) => match serde_json::from_str::<Value>(&raw) {
-            Ok(mut v) => {
-                v["armed"] = json!(true);
-                Ok(v)
-            }
-            // Corrupt/unreadable marker -- treat as "nothing armed" rather
-            // than erroring the whole status check.
-            Err(_) => Ok(json!({ "armed": false })),
-        },
-        Err(_) => Ok(json!({ "armed": false })),
+    match read_armed_marker() {
+        Some(mut marker) => {
+            marker["armed"] = json!(true);
+            Ok(marker)
+        }
+        // Corrupt/unreadable marker -- treat as "nothing armed" rather than
+        // erroring the whole status check.
+        None => Ok(json!({ "armed": false })),
     }
 }
 

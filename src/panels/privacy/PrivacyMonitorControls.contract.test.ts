@@ -64,7 +64,7 @@ describe("Privacy Monitor control accessibility", () => {
     expect(usb).toContain('aria-label="Clear USB auto-isolate actions"');
     expect(usb).toContain("aria-pressed={autoSandboxMode === m}");
     expect(usb).toContain('aria-label="Refresh USB device timeline"');
-    expect(usb).toContain('aria-label="Clear BadUSB alerts"');
+    expect(usb).toContain('aria-label="Clear USB HID timing alerts"');
     expect(usb).toContain('role="group" aria-label="USB auto-isolate mode"');
 
     expect(canary).toContain('aria-label="Canary token type"');

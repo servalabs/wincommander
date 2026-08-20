@@ -36,6 +36,7 @@ const SEARCH_FILES_HANDOFF_KEY = "wincommander.search-files-query";
 
 export default function SearchFilesPanel() {
   const search = useFileSearch();
+  const { resultLimit, setResultLimit } = search;
   const { appSettings, patchAppSettings } = useAppState();
   const setFileSearchQuery = search.setQuery;
   // KT: content search previously ignored the Type/Size/Modified chips
@@ -127,14 +128,14 @@ export default function SearchFilesPanel() {
   // Settings arrive after the panel mounts. Apply the saved/admin-provided
   // value then, rather than leaving this session on the old 200-row default.
   useEffect(() => {
-    if (typeof savedResultLimit === "number" && effectiveSavedResultLimit !== search.resultLimit) {
-      search.setResultLimit(effectiveSavedResultLimit);
+    if (typeof savedResultLimit === "number" && effectiveSavedResultLimit !== resultLimit) {
+      setResultLimit(effectiveSavedResultLimit);
     }
-  }, [effectiveSavedResultLimit, savedResultLimit, search.resultLimit, search.setResultLimit]);
+  }, [effectiveSavedResultLimit, resultLimit, savedResultLimit, setResultLimit]);
 
   const changeResultLimit = useCallback((value: number) => {
     const next = normalizeResultLimit(value);
-    search.setResultLimit(next);
+    setResultLimit(next);
     void patchAppSettings({
       app: {
         fileSearch: {
@@ -143,7 +144,7 @@ export default function SearchFilesPanel() {
         },
       },
     });
-  }, [appSettings?.app?.fileSearch, patchAppSettings, search]);
+  }, [appSettings?.app?.fileSearch, patchAppSettings, setResultLimit]);
 
   // New query text = new list; drop the old selection.
   useEffect(() => { setSelected(-1); }, [search.query]);

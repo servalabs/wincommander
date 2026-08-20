@@ -473,7 +473,7 @@ describe("redesign surface copy guardrails", () => {
     expect(css).toContain("html.light .view-toggle-btn.active {");
   });
 
-  test("USB Intelligence renders backend numeric trust scores", async () => {
+  test("USB Intelligence renders Pro-derived numeric trust scores", async () => {
     const source = await read("src/panels/privacy/UsbDevicesSection.tsx");
     const lib = await read("src-tauri/commander-free/src/lib.rs");
 
@@ -481,6 +481,6 @@ describe("redesign surface copy guardrails", () => {
     expect(source).toContain("formatTrustScore");
     expect(source).toContain("trustScoreTone");
     expect(source).toContain("Trust score");
-    expect(lib).toContain("usb_policy::usb_device_trust_score");
+    expect(lib).toContain("usb_guard::usb_device_trust_score");
   });
 });

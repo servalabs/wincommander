@@ -18,6 +18,10 @@ const APP_DISPLAY_NAME: &str = match option_env!("WINCMD_APP_NAME") {
     None => "WinCommander",
 };
 
+const MACHINE_STATE_SUBDIR: &str = "machine-state";
+static MACHINE_STATE_ACL_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+const MACHINE_STATE_LOCK_TIMEOUT_MS: u32 = 5_000;
+
 /// The base display name (e.g. "WinCommander").
 pub fn app_display_name() -> &'static str {
     APP_DISPLAY_NAME
@@ -148,6 +152,177 @@ pub fn machine_data_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn is_valid_state_filename(filename: &str) -> bool {
+    !filename.is_empty()
+        && filename.len() <= 96
+        && filename
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+}
+
+fn state_file_from_dir(dir: PathBuf, filename: &str) -> Result<PathBuf, String> {
+    if !is_valid_state_filename(filename) {
+        return Err("invalid state filename".to_string());
+    }
+    Ok(dir.join(filename))
+}
+
+fn machine_state_dir() -> Result<PathBuf, String> {
+    let dir = machine_data_dir()?.join(MACHINE_STATE_SUBDIR);
+    let was_missing = !dir.exists();
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("Failed to create machine state directory: {error}"))?;
+
+    // The root also contains installer-owned assets which predate this policy
+    // boundary. Harden this dedicated directory once per process (and whenever
+    // recreated) so low-privilege profiles cannot replace device-security
+    // state, without spawning icacls on every USB event.
+    if was_missing || MACHINE_STATE_ACL_INITIALIZED.get().is_none() {
+        harden_dir_acl(&dir);
+        let _ = MACHINE_STATE_ACL_INITIALIZED.set(());
+    }
+    Ok(dir)
+}
+
+/// A fixed-name state file that is part of the device policy, rather than an
+/// interactive user's scratch data.  Keep filenames constrained here because
+/// several security monitors use this helper while handling startup recovery.
+pub fn machine_state_file(filename: &str) -> Result<PathBuf, String> {
+    state_file_from_dir(machine_state_dir()?, filename)
+}
+
+/// Location used by released builds before a state file was moved to the
+/// machine scope.  Callers may read this only to perform a one-time, validated
+/// import; new writes must always use `machine_state_file`.
+pub fn legacy_user_state_file(filename: &str) -> Result<PathBuf, String> {
+    state_file_from_dir(user_data_dir()?, filename)
+}
+
+/// A bounded cross-session guard for one named machine-state resource. Use it
+/// around a full read-modify-write sequence, not just the final file write.
+pub struct MachineStateLock {
+    #[cfg(windows)]
+    handle: isize,
+}
+
+fn is_valid_machine_state_resource(resource: &str) -> bool {
+    !resource.is_empty()
+        && resource.len() <= 64
+        && resource
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+pub fn acquire_machine_state_lock(resource: &str) -> Result<MachineStateLock, String> {
+    if !is_valid_machine_state_resource(resource) {
+        return Err("invalid machine state lock name".to_string());
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+
+        const WAIT_OBJECT_0: u32 = 0;
+        const WAIT_ABANDONED: u32 = 0x80;
+        const WAIT_TIMEOUT: u32 = 0x102;
+        let name: Vec<u16> = format!("Global\\WinCommander_{resource}_lock\0")
+            .encode_utf16()
+            .collect();
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if handle.is_null() {
+            return Err("machine-state lock is unavailable".to_string());
+        }
+        match unsafe { WaitForSingleObject(handle, MACHINE_STATE_LOCK_TIMEOUT_MS) } {
+            // Atomic replacement means an abandoned writer cannot leave the
+            // destination half-written, so ownership can safely transfer.
+            WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(MachineStateLock {
+                handle: handle as isize,
+            }),
+            WAIT_TIMEOUT => {
+                unsafe { CloseHandle(handle) };
+                Err("machine-state operation is busy; retry shortly".to_string())
+            }
+            _ => {
+                unsafe { CloseHandle(handle) };
+                Err("machine-state lock wait failed".to_string())
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(MachineStateLock {})
+    }
+}
+
+impl Drop for MachineStateLock {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if self.handle != 0 {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::ReleaseMutex;
+            unsafe {
+                ReleaseMutex(self.handle as _);
+                CloseHandle(self.handle as _);
+            }
+        }
+    }
+}
+
+/// Durably replace one file inside the ACL-hardened machine-state directory.
+/// `std::fs::rename` cannot replace an existing destination on Windows, so
+/// use MoveFileExW with replacement + write-through there.
+pub fn atomic_write_machine_state(path: &std::path::Path, data: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "machine-state file has no parent directory".to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "machine-state file has no valid filename".to_string())?;
+    let expected_parent = machine_state_dir()?;
+    if parent != expected_parent || !is_valid_state_filename(file_name) {
+        return Err("machine-state write escaped the policy directory".to_string());
+    }
+    let temp = parent.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
+    {
+        let mut file =
+            fs::File::create(&temp).map_err(|error| format!("create state temp: {error}"))?;
+        use std::io::Write;
+        file.write_all(data)
+            .map_err(|error| format!("write state temp: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("sync state temp: {error}"))?;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+        const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+        const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+        let from: Vec<u16> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
+        let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let moved = unsafe {
+            MoveFileExW(
+                from.as_ptr(),
+                to.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if moved == 0 {
+            let _ = fs::remove_file(&temp);
+            return Err("replace machine-state file failed".to_string());
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(&temp, path).map_err(|error| {
+            let _ = fs::remove_file(&temp);
+            format!("replace machine-state file: {error}")
+        })?;
+    }
+    Ok(())
+}
+
 pub fn user_settings_path() -> Result<PathBuf, String> {
     Ok(user_data_dir()?.join("settings.json"))
 }
@@ -242,4 +417,54 @@ pub fn migrate_user_data_layout() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{is_valid_machine_state_resource, is_valid_state_filename, state_file_from_dir};
+
+    #[test]
+    fn machine_state_filenames_cannot_escape_programdata() {
+        for invalid in [
+            "",
+            "../usb_timeline.json",
+            "folder\\state.json",
+            "state/name",
+            "state\u{0}",
+        ] {
+            assert!(
+                !is_valid_state_filename(invalid),
+                "{invalid:?} must not be usable as a machine-state filename"
+            );
+        }
+        assert!(is_valid_state_filename("usb_auto_sandbox.json"));
+        assert!(is_valid_state_filename("f6-verify-boot-armed.json"));
+    }
+
+    #[test]
+    fn machine_state_files_are_anchored_to_the_shared_device_directory() {
+        let root = PathBuf::from(r"C:\ProgramData\WinCommander\machine-state");
+        assert_eq!(
+            state_file_from_dir(root, "usb_hid_guard.json").unwrap(),
+            PathBuf::from(r"C:\ProgramData\WinCommander\machine-state\usb_hid_guard.json")
+        );
+    }
+
+    #[test]
+    fn machine_state_lock_names_reject_registry_or_path_syntax() {
+        for invalid in [
+            "usb/timeline",
+            "usb\\timeline",
+            "Global\\other",
+            "state name",
+        ] {
+            assert!(
+                !is_valid_machine_state_resource(invalid),
+                "{invalid:?} must not be usable as a machine-state lock name"
+            );
+        }
+        assert!(is_valid_machine_state_resource("usb-policy"));
+    }
 }

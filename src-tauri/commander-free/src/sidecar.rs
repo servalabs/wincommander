@@ -1028,6 +1028,26 @@ fn is_agent_affine(feature_id: &str) -> bool {
         || feature_id.starts_with("start_session_monitor")
         || feature_id.starts_with("stop_session_monitor")
         || feature_id == "session_monitor_status"
+        // Decoy monitoring has a watcher, audit listener, recent-event ring,
+        // and Fleet queue that must remain in one durable Pro process. Keep
+        // this closed list: a name containing "decoy" is not an entitlement
+        // or process-affinity contract by itself.
+        || matches!(feature_id,
+            "start_decoy_monitor"
+                | "stop_decoy_monitor"
+                | "decoy_monitor_status"
+                | "enroll_decoy"
+                | "remove_decoy"
+                | "list_decoys"
+                | "drop_standard_decoys"
+                | "delete_decoy"
+                | "get_decoy_recent"
+                | "clear_decoy_recent"
+                | "set_decoy_read_audit_enabled"
+                | "decoy_read_audit_status"
+                | "get_last_access_tracking_status"
+                | "enable_last_access_tracking"
+        )
         // "Access & Session Monitor" (Windows Security-log anomaly detector):
         // its collector state + the "access" Argus signals it enqueues live in
         // the ONE fleet-agent process, so its start/stop/status/recent/clear
@@ -1424,6 +1444,11 @@ mod tests {
             "get_auth_anomaly_recent",
             "clear_auth_anomaly_recent",
             "set_auth_anomaly_config",
+            "start_decoy_monitor",
+            "stop_decoy_monitor",
+            "decoy_monitor_status",
+            "enroll_decoy",
+            "set_decoy_read_audit_enabled",
         ] {
             assert!(is_agent_affine(id), "{id} should be agent-affine");
         }

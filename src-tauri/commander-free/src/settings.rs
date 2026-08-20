@@ -983,9 +983,9 @@ pub struct PrivacySettings {
     pub browser_extensions: Option<std::collections::HashMap<String, bool>>,
 }
 
-/// F-2: filesystem honeypots. The runtime authority lives in
-/// `decoy_monitor::WATCHED_DECOYS` (a Mutex set by the frontend on
-/// every settings change); this struct is the persistence layer.
+/// F-2: filesystem honeypots. This is Free's persisted rearm intent; the
+/// watcher and canonical ProgramData registry are Pro-owned. Re-arm merges
+/// paths additively, while explicit Pro remove/delete operations unenrol them.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DecoyMonitorSettings {
@@ -1058,6 +1058,7 @@ pub struct AuthAnomalyMonitorSettings {
 pub struct UsbSecurityMonitorSettings {
     pub monitor_enabled: Option<bool>,
     pub hid_guard_enabled: Option<bool>,
+    pub metering_enabled: Option<bool>,
     pub auto_sandbox_enabled: Option<bool>,
 }
 
@@ -4649,11 +4650,13 @@ mod tests {
         let parsed: UsbSecurityMonitorSettings = serde_json::from_value(serde_json::json!({
             "monitorEnabled": true,
             "hidGuardEnabled": true,
+            "meteringEnabled": true,
             "autoSandboxEnabled": false
         }))
         .unwrap();
         assert_eq!(parsed.monitor_enabled, Some(true));
         assert_eq!(parsed.hid_guard_enabled, Some(true));
+        assert_eq!(parsed.metering_enabled, Some(true));
         assert_eq!(parsed.auto_sandbox_enabled, Some(false));
 
         let encoded = serde_json::to_value(parsed).unwrap();

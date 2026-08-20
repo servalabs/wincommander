@@ -58,15 +58,21 @@ function Disable-ClassicContextMenu {
 # --- TASKBAR ---
 
 function Enable-EndTaskOnTaskbar {
+    if (-not (Test-ExplorerShellAvailable)) {
+        return @{ status = 'unsupported'; profilesUpdated = 0; requiresSignOut = $false; warning = 'End Task on Taskbar requires Explorer Desktop Experience and is unavailable on Windows Server Core.' }
+    }
     $updated = Set-AllUserExplorerDword -SubKey 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings' -Name 'TaskbarEndTask' -Value 1
     $restart = Restart-Explorer -AllUsers
-    @{ status = 'enabled'; profilesUpdated = $updated; explorerRestart = $restart }
+    @{ status = 'enabled'; profilesUpdated = $updated; shellRefresh = $restart; requiresSignOut = $true }
 }
 
 function Disable-EndTaskOnTaskbar {
+    if (-not (Test-ExplorerShellAvailable)) {
+        return @{ status = 'unsupported'; profilesUpdated = 0; requiresSignOut = $false; warning = 'End Task on Taskbar requires Explorer Desktop Experience and is unavailable on Windows Server Core.' }
+    }
     $updated = Set-AllUserExplorerDword -SubKey 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings' -Name 'TaskbarEndTask' -Value 0 -Remove
     $restart = Restart-Explorer -AllUsers
-    @{ status = 'disabled'; profilesUpdated = $updated; explorerRestart = $restart }
+    @{ status = 'disabled'; profilesUpdated = $updated; shellRefresh = $restart; requiresSignOut = $true }
 }
 
 # --- SEARCH ---
@@ -320,17 +326,24 @@ function Disable-FullPathInTitleBar {
 # --- Taskbar Debloat (always-on: hide widgets, task view, search, chat, people bar, meet now) ---
 function Set-TaskbarDebloated {
     Assert-IsAdmin
+    if (-not (Test-ExplorerShellAvailable)) {
+        return @{ status = 'unsupported'; profilesUpdated = 0; requiresSignOut = $false; warning = 'Taskbar Debloat requires Explorer Desktop Experience and is unavailable on Windows Server Core.' }
+    }
     try {
-        $adv = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-        # Hide Task View button
-        Set-ItemProperty -Path $adv -Name "ShowTaskViewButton" -Value 0 -Type DWord -Force
-        # Hide Widgets (TaskbarDa)
-        Set-ItemProperty -Path $adv -Name "TaskbarDa" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-        # Hide Chat icon (TaskbarMn)
-        Set-ItemProperty -Path $adv -Name "TaskbarMn" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
-        # Hide Search and align taskbar left
-        Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Type DWord -Force
-        Set-ItemProperty -Path $adv -Name "TaskbarAl" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        # Taskbar choices are HKCU-only, so apply them to every known profile
+        # plus Default instead of leaving an RDS host half-configured.
+        $profilesUpdated = 0
+        foreach ($entry in @(
+            @('Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', 'ShowTaskViewButton', 0),
+            @('Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', 'TaskbarDa', 0),
+            @('Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', 'TaskbarMn', 0),
+            @('Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', 'TaskbarAl', 0),
+            @('Software\Microsoft\Windows\CurrentVersion\Search', 'SearchboxTaskbarMode', 0),
+            @('Software\Policies\Microsoft\Windows\Explorer', 'HidePeopleBar', 1),
+            @('Software\Microsoft\Windows\CurrentVersion\Policies\Explorer', 'HideSCAMeetNow', 1)
+        )) {
+            $profilesUpdated = [Math]::Max($profilesUpdated, (Set-AllUserExplorerDword -SubKey $entry[0] -Name $entry[1] -Value $entry[2]))
+        }
 
         # Policy-level blocks
         $feedsPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds"
@@ -345,34 +358,34 @@ function Set-TaskbarDebloated {
         if (!(Test-Path $dshPath)) { New-Item -Path $dshPath -Force | Out-Null }
         Set-ItemProperty -Path $dshPath -Name "AllowNewsAndInterests" -Value 0 -Type DWord -Force
 
-        # Hide People Bar
-        $polExplorer = "HKCU:\Software\Policies\Microsoft\Windows\Explorer"
-        if (!(Test-Path $polExplorer)) { New-Item -Path $polExplorer -Force | Out-Null }
-        Set-ItemProperty -Path $polExplorer -Name "HidePeopleBar" -Value 1 -Type DWord -Force
-
-        # Hide Meet Now
-        $polExplorerCU = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
-        if (!(Test-Path $polExplorerCU)) { New-Item -Path $polExplorerCU -Force | Out-Null }
-        Set-ItemProperty -Path $polExplorerCU -Name "HideSCAMeetNow" -Value 1 -Type DWord -Force
-
-        Restart-Explorer -AllUsers | Out-Null
-        @{ status = "debloated" }
+        $shellRefresh = Restart-Explorer -AllUsers
+        @{ status = "debloated"; profilesUpdated = $profilesUpdated; shellRefresh = $shellRefresh; requiresSignOut = $true }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
 
 function Reset-TaskbarDebloated {
+    Assert-IsAdmin
+    if (-not (Test-ExplorerShellAvailable)) {
+        return @{ status = 'unsupported'; profilesUpdated = 0; requiresSignOut = $false; warning = 'Taskbar Debloat requires Explorer Desktop Experience and is unavailable on Windows Server Core.' }
+    }
     try {
-        $adv = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-        Set-ItemProperty -Path $adv -Name "ShowTaskViewButton" -Value 1 -Type DWord -Force
-        Remove-ItemSecure -Path $adv -Name "TaskbarDa" -ErrorAction SilentlyContinue
-        Remove-ItemSecure -Path $adv -Name "TaskbarMn" -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 2 -Type DWord -Force
-        Set-ItemProperty -Path $adv -Name "TaskbarAl" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
-        Remove-ItemSecure -Path "HKCU:\Software\Policies\Microsoft\Windows\Explorer" -Name "HidePeopleBar" -ErrorAction SilentlyContinue
-        Remove-ItemSecure -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Name "HideSCAMeetNow" -ErrorAction SilentlyContinue
-        Restart-Explorer -AllUsers | Out-Null
-        @{ status = "reset" }
+        $profilesUpdated = 0
+        foreach ($entry in @(
+            @('Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', 'ShowTaskViewButton', 1, $false),
+            @('Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', 'TaskbarDa', 0, $true),
+            @('Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', 'TaskbarMn', 0, $true),
+            @('Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', 'TaskbarAl', 1, $false),
+            @('Software\Microsoft\Windows\CurrentVersion\Search', 'SearchboxTaskbarMode', 2, $false),
+            @('Software\Policies\Microsoft\Windows\Explorer', 'HidePeopleBar', 0, $true),
+            @('Software\Microsoft\Windows\CurrentVersion\Policies\Explorer', 'HideSCAMeetNow', 0, $true)
+        )) {
+            $params = @{ SubKey = $entry[0]; Name = $entry[1]; Value = $entry[2] }
+            if ($entry[3]) { $params['Remove'] = $true }
+            $profilesUpdated = [Math]::Max($profilesUpdated, (Set-AllUserExplorerDword @params))
+        }
+        $shellRefresh = Restart-Explorer -AllUsers
+        @{ status = "reset"; profilesUpdated = $profilesUpdated; shellRefresh = $shellRefresh; requiresSignOut = $true }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }

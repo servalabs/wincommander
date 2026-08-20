@@ -6,9 +6,10 @@
 // Later phases (U-B metering, U-C HID-guard, U-D policy) build on the public
 // contract: subscribe(), current_devices(), identity_for_key(), is_running().
 //
-// U-C BadUSB / HID-injection guard is appended below the timeline table.
-// Privacy: the guard alert payload carries ONLY timing counts and device
-// identity — never any keystroke content.
+// U-C USB HID timing-anomaly guard is appended below the timeline table.
+// The low-level hook cannot identify which keyboard produced an event, so the
+// UI must describe correlation to a recently attached HID as low-confidence.
+// The payload carries timing counts only — never keystroke content.
 //
 // U-F Auto-isolate subsection is appended after U-C. SAFETY: default mode is
 // OBSERVE (alert-only). ENFORCE requires explicit opt-in and acts ONLY on
@@ -32,6 +33,8 @@ import { showSuccess, showError } from '../../utils/toast';
 import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
 import { useAppState } from '../../context/AppContext';
 import PrivacyEventTable from './PrivacyEventTable';
+import TierGate from '../../components/shared/TierGate';
+import useEntitlements from '../../hooks/useEntitlements';
 
 // U-C: shape returned by get_usb_hid_alerts (timing + device identity — no keystroke content).
 interface HidInjectionAlert {
@@ -255,6 +258,8 @@ interface AutoActionRecord {
 }
 
 export default function UsbDevicesSection() {
+  const { hasPaid, isLoading: entitlementLoading } = useEntitlements();
+  const advancedAvailable = hasPaid && !entitlementLoading;
   const { patchAppSettings } = useAppState();
   const requestConfirm = useAppConfirm();
   const [running, setRunning] = useState(false);
@@ -354,6 +359,16 @@ export default function UsbDevicesSection() {
       // awaited here. Awaiting it used to wedge the whole refresh (and any toggle
       // that does `await refresh()`) with the busy spinner stuck on.
       void refreshVolumes();
+      if (!advancedAvailable) {
+        setTrustScores({});
+        setMetering(false);
+        setStats([]);
+        setHidGuardRunning(false);
+        setHidAlerts([]);
+        setAutoSandboxRunning(false);
+        setAutoActions([]);
+        return;
+      }
       const scorePairs = await Promise.all(
         rows.map(async (entry) => {
           try {
@@ -396,7 +411,7 @@ export default function UsbDevicesSection() {
     } catch (e) {
       setError(String(e));
     }
-  }, [refreshVolumes]);
+  }, [advancedAvailable, refreshVolumes]);
 
   useEffect(() => {
     void refresh();
@@ -420,14 +435,14 @@ export default function UsbDevicesSection() {
   // tick up as data copies. Without this the stats only moved on a manual
   // Refresh or an attach/detach event, so an in-progress copy looked like "0".
   useEffect(() => {
-    if (!running || !metering) return;
+    if (!advancedAvailable || !running || !metering) return;
     const id = window.setInterval(() => {
       invoke<UsbTransferStat[]>('get_usb_transfer_stats')
         .then((ts) => setStats(Array.isArray(ts) ? ts : []))
         .catch(() => { /* best-effort live poll */ });
     }, 3000);
     return () => window.clearInterval(id);
-  }, [running, metering]);
+  }, [advancedAvailable, running, metering]);
 
   // Keep volume names/letters fresh while a storage device is present: a drive
   // mounts a moment AFTER its device attaches, so the attach-time fetch can miss
@@ -436,7 +451,7 @@ export default function UsbDevicesSection() {
   // guard so a slow query can't stack up.
   const hasStorage = entries.some((e) => e.deviceClass === 'Storage');
   useEffect(() => {
-    if (!running || !hasStorage) return;
+    if (!advancedAvailable || !running || !hasStorage) return;
     let inFlight = false;
     const tick = async () => {
       if (inFlight) return;
@@ -449,7 +464,7 @@ export default function UsbDevicesSection() {
     };
     const id = window.setInterval(() => void tick(), 8000);
     return () => window.clearInterval(id);
-  }, [running, hasStorage, refreshVolumes]);
+  }, [advancedAvailable, running, hasStorage, refreshVolumes]);
 
   // Live-update: re-fetch timeline on attach/detach events. On attach, also
   // schedule two quick volume re-fetches — Windows mounts the volume a few
@@ -482,6 +497,7 @@ export default function UsbDevicesSection() {
 
   // U-C: live-update on HID-injection detection event (timing/device only — no keystroke content).
   useEffect(() => {
+    if (!advancedAvailable) return;
     let unmounted = false;
     const injectionPromise = listen<HidInjectionAlert>('usb-hid-injection', (ev) => {
       if (!unmounted) {
@@ -495,10 +511,11 @@ export default function UsbDevicesSection() {
       unmounted = true;
       void injectionPromise.then((unlisten) => unlisten());
     };
-  }, []);
+  }, [advancedAvailable]);
 
   // U-F: live-update on auto-sandbox action events.
   useEffect(() => {
+    if (!advancedAvailable) return;
     let unmounted = false;
     const actionPromise = listen<AutoActionRecord>('usb-autosandbox-action', (ev) => {
       if (!unmounted) {
@@ -512,7 +529,7 @@ export default function UsbDevicesSection() {
       unmounted = true;
       void actionPromise.then((unlisten) => unlisten());
     };
-  }, []);
+  }, [advancedAvailable]);
 
   const toggle = useCallback(
     async (on: boolean) => {
@@ -531,7 +548,7 @@ export default function UsbDevicesSection() {
     [patchAppSettings, refresh],
   );
 
-  // U-C: toggle BadUSB / HID-injection guard
+  // U-C: toggle the low-confidence USB HID timing-anomaly guard.
   const toggleHidGuard = useCallback(
     async (on: boolean) => {
       setBusy(true);
@@ -554,7 +571,7 @@ export default function UsbDevicesSection() {
   const clearHidAlerts = useCallback(async () => {
     const accepted = await requestConfirm({
       title: 'Clear recent USB HID alerts?',
-      description: 'This removes the recent keystroke-injection alert metadata recorded for this app session.',
+      description: 'This removes recent USB HID timing-anomaly metadata recorded on this machine.',
       confirmLabel: 'Clear alerts',
     });
     if (!accepted) return;
@@ -605,7 +622,9 @@ export default function UsbDevicesSection() {
       setBusy(true);
       setError(null);
       try {
+        if (on) await invoke('start_usb_monitor');
         await invoke(on ? 'start_usb_metering' : 'stop_usb_metering');
+        await patchAppSettings({ ideal: { privacy: { usbSecurity: { meteringEnabled: on } } } }).catch(() => {});
         setMetering(on);
         await refresh();
       } catch (e) {
@@ -614,7 +633,7 @@ export default function UsbDevicesSection() {
         setBusy(false);
       }
     },
-    [refresh],
+    [patchAppSettings, refresh],
   );
 
   // U-D: block / allow a device by its raw Windows InstanceId. U-A now exposes
@@ -864,12 +883,18 @@ export default function UsbDevicesSection() {
             onChange={(e) => toggleNotify((e.target as HTMLInputElement).checked)}
             label="Notify on plug/unplug"
           />
-          <Switch
-            checked={metering}
-            disabled={busy || !running}
-            onChange={(e) => toggleMetering((e.target as HTMLInputElement).checked)}
-            label="Meter data transfer"
-          />
+          <TierGate
+            tier="paid"
+            featureLabel="USB transfer metering"
+            fallback={<span className="text-xs text-[var(--shield-text-muted)]">Pro: USB transfer metering</span>}
+          >
+            <Switch
+              checked={metering}
+              disabled={busy || !running}
+              onChange={(e) => toggleMetering((e.target as HTMLInputElement).checked)}
+              label="Meter data transfer"
+            />
+          </TierGate>
           <Button icon="refresh" minimal small onClick={() => void refresh()} disabled={busy} aria-label="Refresh USB device timeline">
             Refresh
           </Button>
@@ -886,9 +911,9 @@ export default function UsbDevicesSection() {
           {busy && <Spinner size={14} />}
         </div>
 
-        {running && metering && stats.length > 0 && (
+        {advancedAvailable && running && metering && stats.length > 0 && (
           <div className="flex flex-col gap-1 border-t border-white/10 pt-2">
-            <div className="text-xs font-semibold opacity-70">Data transferred (this session)</div>
+            <div className="text-xs font-semibold opacity-70">Recorded USB data transfer (since cleared)</div>
             {stats.map((s) => {
               const statEntry = entries.find((e) => e.key === s.deviceKey);
               const label = statEntry
@@ -903,7 +928,7 @@ export default function UsbDevicesSection() {
             })}
           </div>
         )}
-        {running && metering && stats.length === 0 && (
+        {advancedAvailable && running && metering && stats.length === 0 && (
           <div className="border-t border-white/10 pt-2 text-xs opacity-60">
             Metering active — plug in or copy to a USB drive and totals will appear here.
             Figures are approximate (all volume I/O, sampled every few seconds).
@@ -929,7 +954,7 @@ export default function UsbDevicesSection() {
                 <span className="privacy-stat-n">{formatTotalTime(totalPlugSecs)}</span>
                 <span className="privacy-stat-l">Total plug time</span>
               </div>
-              {stats.length > 0 && (
+              {advancedAvailable && stats.length > 0 && (
                 <>
                   <div className="privacy-stat-divider" />
                   <div className="privacy-stat">
@@ -938,13 +963,15 @@ export default function UsbDevicesSection() {
                   </div>
                 </>
               )}
-              <div className="privacy-stat-divider" />
-              <div className="privacy-stat">
-                <span className={`privacy-stat-n${highCount > 0 ? ' usb-stat-high' : ''}`}>
-                  {highCount}
-                </span>
-                <span className="privacy-stat-l">High risk</span>
-              </div>
+              {advancedAvailable && <>
+                <div className="privacy-stat-divider" />
+                <div className="privacy-stat">
+                  <span className={`privacy-stat-n${highCount > 0 ? ' usb-stat-high' : ''}`}>
+                    {highCount}
+                  </span>
+                  <span className="privacy-stat-l">High risk</span>
+                </div>
+              </>}
             </div>
           );
         })()}
@@ -962,7 +989,11 @@ export default function UsbDevicesSection() {
             <div className="text-xs opacity-60">
               <strong>Block</strong> disables a device in Windows so it stops working (like Device
               Manager → Disable); <strong>Allow</strong> re-enables a blocked one.
-              {!proInstalled && (
+              {!advancedAvailable ? (
+                <>
+                  {' '}Device blocking, read-only mode, trust scores, and attack prevention are <strong>WinCommander Pro</strong> controls.
+                </>
+              ) : !proInstalled && (
                 <>
                   {' '}These need <strong>WinCommander Pro</strong> installed — open Settings → Pro to
                   enable them.
@@ -986,20 +1017,20 @@ export default function UsbDevicesSection() {
                     <Tag minimal={entry.deviceClass === 'Other'} intent={classIntent(entry.deviceClass)} className="font-mono">
                       {entry.deviceClass}
                     </Tag>
-                    {(() => {
+                    {advancedAvailable && (() => {
                       const level = riskLevel(entry, hidAlerts, autoActions);
                       return (
                         <Tag
                           minimal
                           intent={riskIntent(level)}
                           className="font-mono"
-                          title="Heuristic risk score derived from HID-injection alerts and auto-sandbox quarantine history — not a definitive trust score."
+                          title="Heuristic risk score derived from low-confidence HID timing alerts and auto-isolation history — not a definitive trust score."
                         >
                           {level}
                         </Tag>
                       );
                     })()}
-                    {(() => {
+                    {advancedAvailable && (() => {
                       const score = trustScores[entry.key];
                       if (!score) return null;
                       return (
@@ -1048,10 +1079,12 @@ export default function UsbDevicesSection() {
                         minimal
                         small
                         aria-label={`Block ${name}`}
-                        disabled={busy || isBlocked || !proInstalled}
+                        disabled={busy || isBlocked || !proInstalled || !advancedAvailable}
                         onClick={() => void blockDevice(entry)}
                         title={
-                          proInstalled
+                          !advancedAvailable
+                            ? 'WinCommander Pro is required to disable or re-enable USB devices.'
+                            : proInstalled
                             ? 'Disable this device in Windows so it stops working (Device Manager → Disable). Reversible with Allow. Needs admin.'
                             : 'Install WinCommander Pro (Settings → Pro) to disable/enable USB devices.'
                         }
@@ -1063,10 +1096,12 @@ export default function UsbDevicesSection() {
                         minimal
                         small
                         aria-label={`Allow ${name}`}
-                        disabled={busy || !proInstalled}
+                        disabled={busy || !proInstalled || !advancedAvailable}
                         onClick={() => void allowDevice(entry)}
                         title={
-                          proInstalled
+                          !advancedAvailable
+                            ? 'WinCommander Pro is required to disable or re-enable USB devices.'
+                            : proInstalled
                             ? 'Re-enable this device in Windows if it was blocked/disabled. Needs admin.'
                             : 'Install WinCommander Pro (Settings → Pro) to disable/enable USB devices.'
                         }
@@ -1083,12 +1118,14 @@ export default function UsbDevicesSection() {
                             minimal
                             small
                             aria-label={`Make ${name} read-only`}
-                            disabled={busy || !resolvedLetter}
+                            disabled={busy || !resolvedLetter || !advancedAvailable}
                             onClick={() =>
                               resolvedLetter && void setVolumeReadonly(resolvedLetter, true)
                             }
                             title={
-                              resolvedLetter
+                              !advancedAvailable
+                                ? 'WinCommander Pro is required for USB read-only enforcement.'
+                                : resolvedLetter
                                 ? `Force volume ${resolvedLetter} read-only via diskpart (best-effort)`
                                 : 'No mounted drive letter resolved for this device yet — re-plug or refresh'
                             }
@@ -1105,15 +1142,20 @@ export default function UsbDevicesSection() {
           </div>
         )}
 
-        {/* U-C: BadUSB / HID-injection guard */}
+        <TierGate
+          tier="paid"
+          featureLabel="USB HID anomaly alerts and auto-isolate"
+          fallback={<p className="border-t border-white/10 pt-3 text-xs text-[var(--shield-text-subtle)]">Pro adds low-confidence USB HID timing-anomaly alerts, trust scoring, and automatic isolation. Free keeps the simple attach/detach timeline.</p>}
+        >
+        {/* U-C: low-confidence USB HID timing correlation */}
         <div className="border-t border-white/10 pt-3 flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-3">
-            <div className="text-sm font-semibold">BadUSB guard</div>
+            <div className="text-sm font-semibold">USB HID timing anomalies</div>
             <Switch
               checked={hidGuardRunning}
               disabled={busy}
               onChange={(e) => toggleHidGuard((e.target as HTMLInputElement).checked)}
-              label="Detect HID-injection / Rubber Ducky"
+              label="Alert on superhuman USB-keyboard timing"
             />
             {hidAlerts.length > 0 && (
               <Button
@@ -1122,7 +1164,7 @@ export default function UsbDevicesSection() {
                 small
                 onClick={clearHidAlerts}
                 disabled={busy}
-                aria-label="Clear BadUSB alerts"
+                aria-label="Clear USB HID timing alerts"
               >
                 Clear alerts
               </Button>
@@ -1132,10 +1174,12 @@ export default function UsbDevicesSection() {
             </Tag>
           </div>
           <div className="text-xs opacity-60">
-            Detects USB devices that enumerate as a keyboard and type superhumanly fast (BadUSB /
-            Rubber Ducky / HID-injection). Timing only — keystroke content is never read or logged.
+            Correlates superhuman input timing with a recently attached USB keyboard. The Windows
+            low-level hook cannot prove which keyboard produced the input, so this is a low-confidence
+            anomaly alert—not proof of a BadUSB, Flipper, Rubber Ducky, or O.MG device. Keystroke
+            content is never read or logged.
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs" role="group" aria-label="BadUSB guard sensitivity">
+          <div className="flex flex-wrap items-center gap-2 text-xs" role="group" aria-label="USB HID timing sensitivity">
             <span className="opacity-70">Sensitivity:</span>
             {(['lenient', 'balanced', 'strict'] as const).map((preset) => (
               <Button
@@ -1158,8 +1202,8 @@ export default function UsbDevicesSection() {
 
           {hidAlerts.length > 0 && (
             <div className="flex flex-col gap-1 mt-1">
-              <div className="text-xs font-semibold opacity-70">Recent injection alerts — an evidence report is recorded automatically; block remains an explicit, reversible response.</div>
-              <PrivacyEventTable title="USB injection alerts" columns={["Time", "Device", "Flag", "Keys", "Median gap", "Response"]} rows={hidAlerts.map((a, i) => {
+              <div className="text-xs font-semibold opacity-70">Recent timing anomalies — an evidence report is recorded automatically; block remains an explicit, reversible response.</div>
+              <PrivacyEventTable title="USB HID timing anomalies" columns={["Time", "Correlated device", "Flag", "Events", "Median gap", "Response"]} rows={hidAlerts.map((a, i) => {
                 const attached = entries.find((entry) => entry.key === a.deviceKey && entry.attached);
                 return {
                   id: `${a.deviceKey}-${a.detectedAt}-${i}`,
@@ -1176,7 +1220,7 @@ export default function UsbDevicesSection() {
           )}
 
           {hidAlerts.length === 0 && hidGuardRunning && (
-            <div className="text-xs opacity-50">No injection events detected this session.</div>
+            <div className="text-xs opacity-50">No USB HID timing anomalies detected.</div>
           )}
         </div>
 
@@ -1281,6 +1325,7 @@ export default function UsbDevicesSection() {
             <div className="text-xs opacity-50">No auto-isolate events this session.</div>
           )}
         </div>
+        </TierGate>
       </div>
     </SectionCard>
   );

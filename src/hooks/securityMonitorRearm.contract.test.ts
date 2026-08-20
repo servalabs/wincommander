@@ -14,26 +14,43 @@ describe("security monitor startup contracts", () => {
     expect(folders).toBeGreaterThan(config);
     expect(arm).toBeGreaterThan(folders);
     expect(hook).toContain("attempt < 3");
+    expect(hook).toContain('action: hasPaid ? action : "monitor"');
   });
 
-  test("decoy read auditing follows the persisted setting", async () => {
+  test("decoy rearm forwards one full persisted configuration", async () => {
     const hook = source("src/hooks/useDecoyMonitor.ts");
-    expect(hook).toContain('{ enabled: readAuditEnabled }');
-    expect(hook).not.toContain('{ enabled: true }');
+    expect(hook).toContain('await invoke("start_decoy_monitor", {');
+    expect(hook).toContain("paths: enrolledPaths");
+    expect(hook).toContain("readAuditEnabled");
+    expect(hook).toContain("fleetAlertEnabled");
+    expect(hook).not.toContain('invoke("list_decoys")');
+    expect(hook).not.toContain('invoke("enroll_decoy")');
+    expect(hook).toContain("lastReconciled.current = fingerprint");
+    expect(hook).toContain("attempt < MAX_REARM_ATTEMPTS");
   });
 
-  test("USB dependent guards rearm only after the attach monitor", async () => {
+  test("USB basic rearm is Free and paid guards clean up after expiry", async () => {
     const app = source("src/App.tsx");
-    const blockStart = app.indexOf("// USB monitor arm state is persisted");
+    const blockStart = app.indexOf("// Free owns only the basic attach timeline");
     const blockEnd = app.indexOf("// Wi-Fi Guard retains", blockStart);
     const block = app.slice(blockStart, blockEnd);
-    expect(block.indexOf('await invoke("start_usb_monitor")')).toBeGreaterThan(-1);
-    expect(block.indexOf('"start_usb_hid_guard"')).toBeGreaterThan(
-      block.indexOf('await invoke("start_usb_monitor")'),
+    expect(block.indexOf('await invoke(basicMonitorDesired ? "start_usb_monitor"')).toBeGreaterThan(-1);
+    expect(block.indexOf('"reconcile_usb_guard"')).toBeGreaterThan(
+      block.indexOf('await invoke(basicMonitorDesired ? "start_usb_monitor"'),
     );
-    expect(block.indexOf('"start_usb_autosandbox"')).toBeGreaterThan(
-      block.indexOf('"start_usb_hid_guard"'),
-    );
+    expect(block).toContain("Pro's ProgramData state is canonical");
+    expect(block).toContain('invoke<{ installed?: boolean }>("get_pro_install_status")');
+    expect(block).toContain('await invoke("stop_usb_autosandbox")');
+    expect(block).toContain('await invoke("stop_usb_metering")');
+    expect(block).toContain('await invoke("stop_usb_hid_guard")');
+  });
+
+  test("expired paid settings cannot re-arm the decoy watcher", async () => {
+    const app = source("src/App.tsx");
+    expect(app).toContain("useDecoyMonitor(hasPaid && decoyEnabled");
+    const hook = source("src/hooks/useDecoyMonitor.ts");
+    expect(hook).toContain("if (entitlementLoading || mode === \"decoy\") return");
+    expect(hook).toContain('await invoke("stop_decoy_monitor")');
   });
 
   test("saved screen-capture detection is reconciled at app startup", async () => {

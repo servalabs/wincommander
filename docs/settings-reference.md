@@ -65,8 +65,8 @@ auto-healed.
 ## Where settings live
 
 Settings are persisted **machine-wide** under `%ProgramData%`, not per-user, so
-every Windows account on the device shares one configuration (the app runs
-elevated). Persistence goes through the app-data store
+every Windows account on the device — including Windows Server/RDS sessions —
+shares one protection, policy and monitor configuration. Persistence goes through the app-data store
 ([`datastore.rs`](../src-tauri/commander-free/src/datastore.rs)), which encodes
 each section at rest:
 
@@ -77,12 +77,34 @@ each section at rest:
 A wrong passphrase on the private section yields an AES-256-GCM authentication
 failure — there is no plaintext fallback.
 
-### Legacy migration
+### Legacy migration and deliberate per-user exceptions
 
-Earlier builds stored a plaintext `%APPDATA%\WinCommander\settings.json`. On
-first run with the encoded store, that legacy file is read, migrated into the
-store, and deleted. Schema versions below the current version are migrated on
-load.
+Earlier builds stored a plaintext `%APPDATA%\WinCommander\settings.json` or
+`%LOCALAPPDATA%\WinCommander\settings.json`.
+On the first elevated launch with no machine store, the current interactive
+account's legacy record is imported into `%ProgramData%` and the plaintext
+copy is removed only after the encrypted write succeeds. This establishes one
+machine policy; conflicting legacy settings from other profiles are not merged
+silently. Schema versions below the current version are migrated on load.
+
+The following are intentionally per-user because Windows scopes them to the
+interactive session or they contain private user data — they are not device
+policy:
+
+- File-content-search index — `%LOCALAPPDATA%\WinCommander\file-search\fts`.
+- Local encrypted logs and privacy-shield quota.
+- Clipboard Guard authoring rules — current-user DPAPI encryption.
+- Safe Copy/Paste scratch state and WebView/session UI caches.
+- A vault explicitly mounted with `mountScope: "per-user"` on a multi-session host.
+
+The basic Free USB timeline, Pro-disabled state, F6 boot-verification recovery
+state, and security-event timeline are machine files in
+`%ProgramData%\WinCommander\machine-state`. Pro's HID timing policy,
+device-intelligence history, and automatic-isolation policy live separately in
+its ACL-hardened `%ProgramData%\WinCommander\usb-guard` store. These stores use
+bounded global Windows mutexes plus atomic replacement so concurrent RDS
+sessions do not overwrite one another. Valid legacy current-user files are
+imported once and removed only after their ProgramData replacement is durable.
 
 ### Caching and writes
 
@@ -360,7 +382,7 @@ Persisted under `ideal.privacy.*`. Several are paid (Pro sidecar). See
 | `clipboard.pasteMonitorCryptoSwapEnabled` | Detect clipboard-hijack malware that swaps a copied crypto address.        | paid |
 | `clipboard.pasteMonitorAutoClearEnabled` / `…Seconds` | Auto-clear clipboard N seconds after a detection.              | paid |
 | `clipboard.pasteMonitorAutoClearOnLock` | Erase clipboard on workstation lock.                                        | free |
-| `decoyMonitor`                    | Filesystem honeypots — watch decoy files for modify/rename/delete.                | —    |
+| `decoyMonitor`                    | Pro filesystem honeypots — Free stores desired paths, while Pro performs watching, read auditing, and optional Fleet tripwire reporting. | paid |
 | `ransomwareMonitor`               | Anti-ransomware mass-modify detection over user-content folders; `action` = monitor/suspend/kill on the Pro ETW path. | —    |
 | `remoteAccessMonitor`             | Detect active incoming remote-control sessions (AnyDesk/TeamViewer/RustDesk/VNC/RDP/Quick Assist). | paid |
 | `screenCapture`                   | Screen-capture tool detection + own-window capture protection.                    | paid |
@@ -391,7 +413,7 @@ noted.
 | Classic Context Menu        | `Enable-ClassicContextMenu`     | `Disable-ClassicContextMenu`     | CLSID in HKCU                                      |
 | File Extensions             | `Show-FileExtensions`           | `Hide-FileExtensions`            | HKCU Explorer\Advanced                            |
 | Hidden Files                | `Show-HiddenFiles`              | `Hide-HiddenFiles`               | HKCU Explorer\Advanced                            |
-| End Task on Taskbar         | `Enable-EndTaskOnTaskbar`       | `Disable-EndTaskOnTaskbar`       | HKCU TaskbarDeveloperSettings                      |
+| End Task on Taskbar         | `Enable-EndTaskOnTaskbar`       | `Disable-EndTaskOnTaskbar`       | Every existing profile + Default profile; no Explorer process is terminated. Each active desktop applies it at next sign-in; unavailable on Server Core. |
 | Gallery & Home              | `Enable-RemoveGalleryHome`      | `Disable-RemoveGalleryHome`      | HKCU HideDesktopIcons                              |
 | Bing Search                 | `Disable-BingSearch`            | `Enable-BingSearch`              | HKCU Explorer                                      |
 | Context Menu Shredder       | `toggle_context_menu` (Rust)    | `toggle_context_menu` (Rust)     | HKCU Shell entries                                 |
@@ -400,7 +422,7 @@ noted.
 | Folder Type Discovery       | `Disable-FolderTypeDiscovery`   | `Enable-FolderTypeDiscovery`     | FolderType=NotSpecified (slow-media fix)           |
 | Shortcut Suffix             | `Remove-ShortcutSuffix`         | `Restore-ShortcutSuffix`         | Removes " - Shortcut" text                         |
 | AutoPlay/AutoRun            | `Disable-AutoPlay`              | `Enable-AutoPlay`                | All drives                                         |
-| Taskbar Debloat             | `Set-TaskbarDebloated`          | `Reset-TaskbarDebloated`         | Chat, Widgets, Meet Now, Task View, People, News  |
+| Taskbar Debloat             | `Set-TaskbarDebloated`          | `Reset-TaskbarDebloated`         | Machine policies plus every existing profile + Default profile for taskbar choices; active desktops apply per-user choices at next sign-in. |
 | Start Recommendations       | `Disable-StartRecommendations`  | `Enable-StartRecommendations`    | Start menu                                         |
 | Low Disk Warnings           | `Disable-LowDiskCheck`          | `Enable-LowDiskCheck`            | HKCU Policies                                      |
 | Explorer → This PC          | `Set-ExplorerOpensThisPC`       | `Set-ExplorerOpensQuickAccess`   | HKCU Explorer                                      |

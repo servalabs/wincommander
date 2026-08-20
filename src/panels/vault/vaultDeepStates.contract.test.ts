@@ -25,7 +25,7 @@ describe("secure storage deep-state contracts", () => {
   });
 
   test("emergency backup registration is paid, no-path, and one-mount only", () => {
-    expect(vaultSource).toContain('{paid && (');
+    expect(vaultSource).toContain('{paid && volumes.length === 1 && (');
     expect(vaultSource).toContain('getEncryptedBackupTargetStatus');
     expect(vaultSource).toContain('provisionEncryptedBackupTarget()');
     expect(vaultSource).toContain('clearEncryptedBackupTarget()');

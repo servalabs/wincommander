@@ -12,6 +12,25 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **Commercial boundary for organisation-grade attack defenses** (2026-08-21)
+  — the Free executable now retains the everyday safety baseline: a simple
+  machine-wide USB attach/detach timeline and the local mass-file-change
+  ransomware alarm. Filesystem decoy watching/read attribution and advanced
+  USB transfer intelligence, trust scoring, HID timing anomalies, allow-list
+  policy, and reactive auto-isolation execute only in the independently
+  entitled Pro sidecar. Free contains typed paid IPC wrappers and the UI, not
+  those detection/decision engines. Stop-only cleanup remains available after
+  entitlement expiry so a monitor cannot be trapped on.
+
+- **Machine-wide security-state completion** (2026-08-21) — USB timeline,
+  Pro-disabled marker,
+  F6 boot-verification recovery marker and security-event timeline now live in `%ProgramData%` with the
+  main policy store, so Windows Server/RDS users see the same device-security
+  posture. Pro's USB intelligence/auto-isolation policy uses a separate
+  ACL-hardened ProgramData store. A validated current-user legacy file migrates
+  only after its ProgramData replacement succeeds; session/private scratch
+  remains per-user.
+
 - **Operator-configurable security monitors** (2026-08-21) — Access & Session
   monitoring now persists working days/hours, local or UTC schedule basis,
   per-account failed-sign-in threshold/window, RDP/new-account/off-hours
@@ -26,14 +45,15 @@ commit timestamps). Shipped capabilities (not fixes) live in
   from saved intent; driver-watch cadence is selectable and applied immediately.
 
 - **USB HID and device-control hardening** (2026-08-20) — composite HID
-  functions now reach the USB monitor and injection guard; the guard remains
-  armed for an attached unallowlisted HID, preserves sub-8 ms intervals, and
-  clears pre-attach timing. USB serial/network functions remain outside HID and
-  storage enforcement. HID sensitivity presets and auto-isolate mode/scope/
-  exceptions now persist locally; Enforce stays storage-only until HID scope is
-  explicitly confirmed. Pro device control now rejects non-USB/HID PnP targets
-  before PowerShell. Source tests pass; physical BadUSB, Flipper Zero, Hak5
-  Rubber Ducky, O.MG cable, and composite-device verification remain open.
+  functions reach Pro's timing-anomaly monitor; sub-8 ms intervals are retained
+  and pre-attach timing is cleared. The Windows low-level hook cannot identify
+  the source keyboard, so the alert is explicitly low-confidence and cannot
+  directly enforce. USB serial/network functions remain outside HID/storage
+  response. Sensitivity and auto-isolate mode/scope/exceptions are machine-wide;
+  Enforce stays storage-only until HID scope is separately confirmed. Pro
+  device control rejects non-USB/HID PnP targets and propagates Windows command
+  failures instead of reporting false success. Physical BadUSB, Flipper Zero,
+  Hak5 Rubber Ducky, O.MG cable, and composite-device verification remain open.
 
 - **Signed-updater version binding** (2026-08-20) — staged installer bytes are
   reused only when a fresh signed manifest still names the same version. If the

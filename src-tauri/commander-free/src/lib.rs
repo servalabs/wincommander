@@ -58,7 +58,6 @@ mod license;
 mod local_clipboard_rules;
 mod log;
 mod malware_scan;
-mod monitor_util;
 mod native_notify;
 mod net;
 mod net_traffic_alert;
@@ -107,11 +106,7 @@ mod sanitize_plan;
 mod system_metrics;
 mod uninstall_leftovers;
 mod updater;
-mod usb_auto_sandbox;
-mod usb_hid_guard;
-mod usb_metering;
-mod usb_monitor;
-mod usb_policy;
+mod usb_guard;
 mod vm_sandbox;
 mod vpn_kill_switch;
 mod wifi_check;
@@ -2680,44 +2675,45 @@ pub fn run() {
             canary_tokens::canary_listener_status,
             canary_tokens::get_canary_recent,
             canary_tokens::clear_canary_recent,
-            // ── USB control suite — U-A device-attach/detach timeline (paid) ──
-            usb_monitor::start_usb_monitor,
-            usb_monitor::stop_usb_monitor,
-            usb_monitor::usb_monitor_status,
-            usb_monitor::get_usb_timeline,
-            usb_monitor::get_usb_storage_volumes,
-            usb_monitor::clear_usb_timeline,
-            usb_monitor::set_usb_monitor_notify,
+            // ── USB U-A — basic machine-wide attach/detach timeline (Free) ──
+            usb_guard::start_usb_monitor,
+            usb_guard::stop_usb_monitor,
+            usb_guard::usb_monitor_status,
+            usb_guard::get_usb_timeline,
+            usb_guard::get_usb_storage_volumes,
+            usb_guard::clear_usb_timeline,
+            usb_guard::set_usb_monitor_notify,
             // ── USB U-B: data-transfer metering (paid · observability) ──
-            usb_metering::start_usb_metering,
-            usb_metering::stop_usb_metering,
-            usb_metering::usb_metering_status,
-            usb_metering::get_usb_transfer_stats,
-            usb_metering::clear_usb_transfer_stats,
-            usb_metering::set_usb_metering_config,
-            // ── USB U-C: HID-injection / BadUSB guard (paid · detection only) ──
-            usb_hid_guard::start_usb_hid_guard,
-            usb_hid_guard::stop_usb_hid_guard,
-            usb_hid_guard::usb_hid_guard_status,
-            usb_hid_guard::set_usb_hid_guard_sensitivity,
-            usb_hid_guard::get_usb_hid_alerts,
-            usb_hid_guard::clear_usb_hid_alerts,
-            usb_hid_guard::usb_hid_guard_allow_device,
-            usb_hid_guard::usb_hid_guard_disallow_device,
-            usb_hid_guard::usb_hid_guard_allow_list,
+            usb_guard::reconcile_usb_guard,
+            usb_guard::start_usb_metering,
+            usb_guard::stop_usb_metering,
+            usb_guard::usb_metering_status,
+            usb_guard::get_usb_transfer_stats,
+            usb_guard::clear_usb_transfer_stats,
+            usb_guard::set_usb_metering_config,
+            // ── USB U-C: low-confidence HID timing anomaly (paid · Pro alert only) ──
+            usb_guard::start_usb_hid_guard,
+            usb_guard::stop_usb_hid_guard,
+            usb_guard::usb_hid_guard_status,
+            usb_guard::set_usb_hid_guard_sensitivity,
+            usb_guard::get_usb_hid_alerts,
+            usb_guard::clear_usb_hid_alerts,
+            usb_guard::usb_hid_guard_allow_device,
+            usb_guard::usb_hid_guard_disallow_device,
+            usb_guard::usb_hid_guard_allow_list,
             // ── USB U-D trust policy + U-E per-volume read-only (paid · Pro enforcement) ──
-            usb_policy::block_usb_device,
-            usb_policy::allow_usb_device,
-            usb_policy::set_usb_volume_readonly,
-            usb_policy::quarantine_usb_device,
-            usb_policy::usb_device_trust_score,
-            // ── USB U-F: auto-sandbox / quarantine orchestration (Free decision layer) ──
-            usb_auto_sandbox::start_usb_autosandbox,
-            usb_auto_sandbox::stop_usb_autosandbox,
-            usb_auto_sandbox::usb_autosandbox_status,
-            usb_auto_sandbox::set_usb_autosandbox_config,
-            usb_auto_sandbox::get_usb_autosandbox_recent,
-            usb_auto_sandbox::clear_usb_autosandbox_recent,
+            usb_guard::block_usb_device,
+            usb_guard::allow_usb_device,
+            usb_guard::set_usb_volume_readonly,
+            usb_guard::quarantine_usb_device,
+            usb_guard::usb_device_trust_score,
+            // ── USB U-F: reactive auto-isolation (paid · Pro decision/enforcement) ──
+            usb_guard::start_usb_autosandbox,
+            usb_guard::stop_usb_autosandbox,
+            usb_guard::usb_autosandbox_status,
+            usb_guard::set_usb_autosandbox_config,
+            usb_guard::get_usb_autosandbox_recent,
+            usb_guard::clear_usb_autosandbox_recent,
             // ── #10 AI Security Advisor — FREE context assembler ──
             advisor::advisor_build_context,
             // ── Network guard quick-toggles (PAID) ──

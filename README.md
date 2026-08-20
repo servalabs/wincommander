@@ -8,7 +8,7 @@ One command console to switch off Microsoft's tracking, block trackers on your n
 
 [![Latest release](https://img.shields.io/github/v/release/servalabs/wincommander)](https://github.com/servalabs/wincommander/releases)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-0078D4)](https://github.com/servalabs/wincommander/releases)
+[![Platform: Windows 11 + Server](https://img.shields.io/badge/platform-Windows%2011%20%2B%20Server-0078D4)](https://github.com/servalabs/wincommander/releases)
 [![Telemetry: zero](https://img.shields.io/badge/telemetry-zero-brightgreen)](SECURITY.md)
 
 [**Download**](https://github.com/servalabs/wincommander/releases) · [Features](FEATURES.md) · [Security](SECURITY.md) · [Why it exists](POSITIONING.md)
@@ -30,7 +30,7 @@ WinCommander is the third option: a single, open-source command console that sho
 - **Block trackers network-wide** — one-click blocklists for ads, telemetry, and known bad hosts.
 - **Find any file instantly** — press `Ctrl+Space` anywhere for fast search across file names *and* file contents. The index never leaves your machine.
 - **Erase your trail** — clear the histories, caches, and junk Windows quietly keeps about what you do.
-- **Stand guard 24/7** — ransomware alerts, USB protection, clipboard watch, and a VPN kill-switch run in the background.
+- **Stand guard 24/7** — Free includes ransomware/USB attach alerts, clipboard watch, and a VPN kill-switch; Pro adds attack attribution, device intelligence, and reactive containment.
 - **Emergency lockdown** — an opt-in panic sequence you can fire with a single hotkey (`Ctrl+Shift+Q`) when it matters most.
 
 **No accounts. No cloud. Zero telemetry.** The app's only network calls are the update check and (if you buy Pro) license activation.
@@ -38,7 +38,7 @@ WinCommander is the third option: a single, open-source command console that sho
 ## Install
 
 1. Download the latest installer from [Releases](https://github.com/servalabs/wincommander/releases).
-2. Run it on Windows 11 (most features need Administrator).
+2. For desktop operation, use Windows 11 or Windows Server 2019, 2022, or 2025 with Desktop Experience and WebView2 (most features need Administrator). Server Core is not a full GUI target: it has no Explorer/taskbar, and CLI commands work only when WebView2 and that command's prerequisites are installed. Live Server acceptance remains pending.
 3. Pick **Casual** or **Secure** in the first-run setup — that's it.
 
 Or run from source:
@@ -76,6 +76,7 @@ on the GitHub Release:
 | Doc                                | What's inside                                                 |
 | :--------------------------------- | :------------------------------------------------------------ |
 | [FEATURES.md](FEATURES.md)         | Every feature, exhaustively — Free and Pro                    |
+| [docs/security-defense-matrix.md](docs/security-defense-matrix.md) | Attack defenses, tier boundary, settings, and honest limits |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How it's built: two binaries, encrypted modules, IPC          |
 | [SECURITY.md](SECURITY.md)         | Threat model, security posture, how to report a vulnerability |
 | [docs/cli.md](docs/cli.md)         | Automate the same Free executable with JSON and safety gates   |

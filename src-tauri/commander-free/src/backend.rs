@@ -1411,8 +1411,9 @@ pub(crate) fn get_command_tier(command: &str) -> &'static str {
     }
     // Fallback: built-in match table (retained until P1–P3 fully register).
     match command {
-        // ── USB intelligence (free; read-only Tauri score surface) ──
-        "usb_device_trust_score" => "free",
+        // ── USB device intelligence (Pro-owned; Free keeps only a basic
+        // attach/detach timeline and read-only storage-volume query) ──
+        "usb_device_trust_score" | "reconcile_usb_guard" => "paid",
         // ── Pro malware scan/quarantine wrappers ──
         "malware_scan_start"
         | "malware_scan_status"
@@ -1663,6 +1664,14 @@ mod command_tier_tests {
             get_command_tier("Launch-VeraCryptForSystemEncryption"),
             "paid"
         );
+    }
+
+    #[test]
+    fn usb_device_intelligence_stays_paid() {
+        // The score is derived by Pro from HID, metering, allow-list and
+        // containment signals. Calling it read-only does not make that
+        // organisation-facing intelligence a Free implementation.
+        assert_eq!(get_command_tier("usb_device_trust_score"), "paid");
     }
 }
 

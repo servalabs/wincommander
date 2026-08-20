@@ -27,6 +27,7 @@ export const DEFAULT_RANSOMWARE_ACTION: RansomwareAction = "suspend";
 
 export default function useRansomwareMonitor(
   enabled: boolean,
+  hasPaid: boolean,
   threshold: number,
   windowSeconds: number,
   alertCooldownSeconds: number,
@@ -57,8 +58,11 @@ export default function useRansomwareMonitor(
             threshold,
             windowSeconds,
             alertCooldownSeconds,
-            attributionMinFiles,
-            action,
+            // The basic alarm remains Free. PID attribution and automatic
+            // suspend/kill are Pro controls, so stale paid settings must not
+            // be replayed after a licence expires.
+            attributionMinFiles: hasPaid ? attributionMinFiles : DEFAULT_RANSOMWARE_ATTRIBUTION_MIN_FILES,
+            action: hasPaid ? action : "monitor",
           },
         });
         if (cancelled) return;
@@ -87,5 +91,5 @@ export default function useRansomwareMonitor(
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [enabled, threshold, windowSeconds, alertCooldownSeconds, attributionMinFiles, action, watchDirsJson, warnOnce]);
+  }, [enabled, hasPaid, threshold, windowSeconds, alertCooldownSeconds, attributionMinFiles, action, watchDirsJson, warnOnce]);
 }

@@ -136,8 +136,8 @@ export function DecoyMonitorIntro({ isOpen, onClose }: IntroProps) {
     return (
         <IntroFrame
             title="What is file access monitoring?"
-            subtitle="Trap files that trigger lockdown when touched"
-            body="Drop decoy files — plausible account notes, wallet checklists, and client lists — in places an intruder is most likely to look first. The system watches those exact paths. A real content change, rename, or removal triggers the alert; background file metadata is ignored. Real files stay untouched."
+            subtitle="Tripwire files that alert when touched"
+            body="Drop decoy files — plausible account notes, wallet checklists, and client lists — in places an intruder is likely to inspect. Pro watches those exact paths. A real content change, rename, or removal raises an alert; optional Windows auditing can also report opens. Background metadata is ignored, and no lockdown action is implied."
             onClose={onClose}
         >
             <DecoyMonitorAnimation />
@@ -152,7 +152,7 @@ export function RansomwareMonitorIntro({ isOpen, onClose }: IntroProps) {
         <IntroFrame
             title="What is ransomware monitoring?"
             subtitle="Catches mass-encryption attacks early"
-            body="Ransomware touches files rapidly — encrypting many in seconds. This monitor watches your file system for that exact pattern: a spike of modifications inside a short rolling window. When the rate crosses your threshold (default: 7 files in 5 seconds), it triggers the lockdown before the attack can finish. False positives are rare because normal use almost never hits the rate."
+            body="Ransomware often modifies many files quickly. The Free monitor raises a loud alarm when modifications cross the configured rolling threshold (default: 50 files in 30 seconds). Pro can then attribute a sufficiently evidenced process and optionally suspend or terminate it. Build tools and bulk file operations can also trigger the pattern, so tune the threshold and review the evidence."
             onClose={onClose}
         >
             <RansomwareMonitorAnimation />

@@ -10,10 +10,10 @@
 //   - Add custom decoy by path (file picker via plugin-dialog)
 //   - Recent access events (last 10, in-memory ring on Rust side)
 //
-// The runtime authority for which paths are watched lives in
-// `decoy_monitor::WATCHED_DECOYS`; the persisted source-of-truth is
-// `appSettings.ideal.privacy.decoyMonitor.enrolledPaths`. The global
-// `useDecoyMonitor` hook reconciles the two on every settings change.
+// Pro owns the watcher and canonical machine registry. The persisted Free
+// setting is additive rearm intent; explicit remove/delete actions are the
+// only operations that unenrol a Pro registration. The global hook sends one
+// complete atomic arm request rather than a start/list/path-diff sequence.
 
 import { Switch, Icon, Button } from "@/components/ui/bp";
 import { invoke } from "@tauri-apps/api/core";
@@ -24,6 +24,8 @@ import { DecoyMonitorIntro } from "./MonitorIntros";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import PrivacyEventTable from './PrivacyEventTable';
+import TierGate from "../../components/shared/TierGate";
+import useEntitlements from "../../hooks/useEntitlements";
 
 interface DecoyInfoRow {
   path: string;
@@ -65,6 +67,7 @@ export default function DecoyMonitorSection({
   expanded: expandedProp,
   onExpandedChange,
 }: Props) {
+  const { hasPaid } = useEntitlements();
   const requestConfirm = useAppConfirm();
   const [expandedLocal, setExpandedLocal] = useState(false);
   const isControlled = expandedProp !== undefined && onExpandedChange !== undefined;
@@ -79,34 +82,44 @@ export default function DecoyMonitorSection({
   const [recent, setRecent] = useState<DecoyAccessRow[]>([]);
 
   const refreshDecoys = useCallback(async () => {
+    if (!hasPaid) return;
     try {
       const list = await invoke<DecoyInfoRow[]>("list_decoys");
       setDecoys(list);
     } catch {
       setDecoys([]);
     }
-  }, []);
+  }, [hasPaid]);
 
   const refreshRecent = useCallback(async () => {
+    if (!hasPaid) return;
     try {
       const r = await invoke<DecoyAccessRow[]>("get_decoy_recent");
       setRecent(r);
     } catch {
       setRecent([]);
     }
-  }, []);
+  }, [hasPaid]);
 
   // Refresh on mount + whenever the settings list changes — handles
   // the case where the user just dropped standard decoys (which
   // mutates Rust's internal set independently of settings).
   useEffect(() => {
+    if (!hasPaid) {
+      setDecoys([]);
+      return;
+    }
     refreshDecoys();
-  }, [refreshDecoys, enrolledPaths.length]);
+  }, [hasPaid, refreshDecoys, enrolledPaths.length]);
 
   // Recent log: poll-while-expanded so the "Recent (3)" mini-list
   // stays current. When collapsed only refresh on settings changes
   // (count badge can be stale by up to 30s — fine).
   useEffect(() => {
+    if (!hasPaid) {
+      setRecent([]);
+      return;
+    }
     if (!enabled) {
       setRecent([]);
       return;
@@ -114,9 +127,27 @@ export default function DecoyMonitorSection({
     refreshRecent();
     const id = setInterval(refreshRecent, expanded ? 5_000 : 30_000);
     return () => clearInterval(id);
-  }, [enabled, expanded, refreshRecent]);
+  }, [enabled, expanded, hasPaid, refreshRecent]);
 
   if (searchQuery.trim()) return null;
+
+  if (!hasPaid) {
+    return (
+      <SectionCard title="Decoy File Monitor" icon="document">
+        <TierGate
+          tier="paid"
+          featureLabel="Decoy File Monitor"
+          fallback={(
+            <p className="text-xs text-[var(--shield-text-subtle)]">
+              Pro adds organisation-grade filesystem tripwires: decoy files, access auditing, and optional Fleet alerts. It is kept out of Free so everyday users are not asked to manage security bait files.
+            </p>
+          )}
+        >
+          {null}
+        </TierGate>
+      </SectionCard>
+    );
+  }
 
   const onDropStandard = async () => {
     try {

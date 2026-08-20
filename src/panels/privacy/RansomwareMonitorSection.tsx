@@ -24,6 +24,8 @@ import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import PrivacyEventTable from './PrivacyEventTable';
 import type { RansomwareAction } from "../../types/settings";
+import TierGate from "../../components/shared/TierGate";
+import useEntitlements from "../../hooks/useEntitlements";
 
 interface RansomwareDetection {
   count: number;
@@ -92,6 +94,7 @@ export default function RansomwareMonitorSection({
   expanded: expandedProp,
   onExpandedChange,
 }: Props) {
+  const { hasPaid } = useEntitlements();
   const requestConfirm = useAppConfirm();
   const [expandedLocal, setExpandedLocal] = useState(false);
   const isControlled = expandedProp !== undefined && onExpandedChange !== undefined;
@@ -115,7 +118,9 @@ export default function RansomwareMonitorSection({
     try {
       const [r, runtimeHealth] = await Promise.all([
         invoke<RansomwareDetection[]>("get_ransomware_recent"),
-        invoke<RansomwareMonitorHealth>("ransomware_monitor_health"),
+        hasPaid
+          ? invoke<RansomwareMonitorHealth>("ransomware_monitor_health")
+          : Promise.resolve(null),
       ]);
       setRecent(r);
       setHealth(runtimeHealth);
@@ -123,7 +128,7 @@ export default function RansomwareMonitorSection({
       setRecent([]);
       setHealth(null);
     }
-  }, []);
+  }, [hasPaid]);
 
   const refreshWatchedDirs = useCallback(async () => {
     try {
@@ -330,25 +335,31 @@ export default function RansomwareMonitorSection({
                     </span>
                   </div>
 
-                  <div className="flex flex-col gap-1">
-                    <div className="flex justify-between text-[11px] text-[var(--shield-text-subtle)]">
-                      <span>Process evidence (distinct files)</span>
-                      <span className="font-mono tabular-nums text-[var(--color-accent)]">{Math.min(attributionMinFiles, threshold)}</span>
+                  <TierGate
+                    tier="paid"
+                    featureLabel="Ransomware process attribution"
+                    fallback={<p className="text-[10px] text-[var(--shield-text-muted)]">Pro identifies the process behind an alarm and lets your team set the evidence threshold before any response.</p>}
+                  >
+                    <div className="flex flex-col gap-1">
+                      <div className="flex justify-between text-[11px] text-[var(--shield-text-subtle)]">
+                        <span>Process evidence (distinct files)</span>
+                        <span className="font-mono tabular-nums text-[var(--color-accent)]">{Math.min(attributionMinFiles, threshold)}</span>
+                      </div>
+                      <Slider
+                        ariaLabel="Distinct files required before attributing a ransomware process"
+                        min={3}
+                        max={Math.max(3, threshold)}
+                        stepSize={1}
+                        labelStepSize={Math.max(5, Math.round(threshold / 4))}
+                        value={Math.min(attributionMinFiles, threshold)}
+                        onChange={(v) => onPatchRansomware({ attributionMinFiles: v })}
+                        labelRenderer={(v) => `${v}`}
+                      />
+                      <span className="text-[10px] text-[var(--shield-text-muted)]">
+                        Pro must see one process touch at least this many protected files before it names, suspends, or stops that process.
+                      </span>
                     </div>
-                    <Slider
-                      ariaLabel="Distinct files required before attributing a ransomware process"
-                      min={3}
-                      max={Math.max(3, threshold)}
-                      stepSize={1}
-                      labelStepSize={Math.max(5, Math.round(threshold / 4))}
-                      value={Math.min(attributionMinFiles, threshold)}
-                      onChange={(v) => onPatchRansomware({ attributionMinFiles: v })}
-                      labelRenderer={(v) => `${v}`}
-                    />
-                    <span className="text-[10px] text-[var(--shield-text-muted)]">
-                      Pro must see one process touch at least this many protected files before it names, suspends, or stops that process.
-                    </span>
-                  </div>
+                  </TierGate>
 
                   {(threshold !== DEFAULT_RANSOMWARE_THRESHOLD
                     || windowSeconds !== DEFAULT_RANSOMWARE_WINDOW_SECONDS
@@ -374,6 +385,11 @@ export default function RansomwareMonitorSection({
                 {/* Automated response (F-3 v2 — Pro ETW attribution).
                     Only the ETW path can act on a PID; the notify
                     fallback always behaves as "Alert only". */}
+                <TierGate
+                  tier="paid"
+                  featureLabel="Ransomware automatic response"
+                  fallback={<p className="text-[10px] text-[var(--shield-text-muted)]">Free raises the mass-change alarm. Pro can identify the responsible process and suspend or stop it, with an Administrator-approved response.</p>}
+                >
                 <div className="flex flex-col gap-2">
                   <span className="text-[10px] font-medium uppercase tracking-widest text-[var(--shield-text-muted)]">
                     When ransomware is detected
@@ -412,7 +428,13 @@ export default function RansomwareMonitorSection({
                     </div>
                   )}
                 </div>
+                </TierGate>
 
+                <TierGate
+                  tier="paid"
+                  featureLabel="Fleet ransomware reporting"
+                  fallback={<p className="text-[10px] text-[var(--shield-text-muted)]">Pro can send path-free ransomware alarms to the Fleet console for an organisation-wide response.</p>}
+                >
                 <label className={`flex items-start gap-2 rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[11px] text-[var(--shield-text-subtle)] ${fleetReportingRequired ? "opacity-70" : "cursor-pointer"}`}>
                   <input
                     type="checkbox"
@@ -429,6 +451,7 @@ export default function RansomwareMonitorSection({
                     </span>
                   </span>
                 </label>
+                </TierGate>
 
                 {/* Watched directories — standard set (read-only) +
                     user-added custom dirs (with remove button) */}
@@ -521,7 +544,21 @@ export default function RansomwareMonitorSection({
                         Clear
                       </Button>
                     </div>
-                    <PrivacyEventTable title="Mass-encryption alerts" columns={["Time", "Files", "Window", "Process", "Action", "Sample paths"]} rows={recent.map((r, i) => ({ id: `${r.detected_at}-${i}`, search: `${r.image_name ?? ''} ${r.action_taken ?? ''} ${r.sample_paths.join(' ')}`, sort: [r.detected_at, String(r.count), String(r.window_seconds), r.image_name ?? '', r.action_taken ?? '', r.sample_paths.join(' ')], cells: [formatRelative(r.detected_at), String(r.count), `${r.window_seconds}s`, r.image_name ? `${r.image_name}${r.pid ? ` · PID ${r.pid}` : ''}` : '—', r.action_taken ? actionLabel(r.action_taken) : '—', <span className="font-mono" title={r.sample_paths.join('\n')}>{r.sample_paths.slice(0, 3).map(shortPath).join(', ') || '—'}{r.sample_paths.length > 3 ? ` +${r.sample_paths.length - 3}` : ''}</span>] }))} />
+                    <PrivacyEventTable
+                      title="Mass-encryption alerts"
+                      columns={hasPaid ? ["Time", "Files", "Window", "Process", "Action", "Sample paths"] : ["Time", "Files", "Window", "Sample paths"]}
+                      rows={recent.map((r, i) => {
+                        const paths = <span className="font-mono" title={r.sample_paths.join('\n')}>{r.sample_paths.slice(0, 3).map(shortPath).join(', ') || '—'}{r.sample_paths.length > 3 ? ` +${r.sample_paths.length - 3}` : ''}</span>;
+                        return {
+                          id: `${r.detected_at}-${i}`,
+                          search: hasPaid ? `${r.image_name ?? ''} ${r.action_taken ?? ''} ${r.sample_paths.join(' ')}` : r.sample_paths.join(' '),
+                          sort: hasPaid ? [r.detected_at, String(r.count), String(r.window_seconds), r.image_name ?? '', r.action_taken ?? '', r.sample_paths.join(' ')] : [r.detected_at, String(r.count), String(r.window_seconds), r.sample_paths.join(' ')],
+                          cells: hasPaid
+                            ? [formatRelative(r.detected_at), String(r.count), `${r.window_seconds}s`, r.image_name ? `${r.image_name}${r.pid ? ` · PID ${r.pid}` : ''}` : '—', r.action_taken ? actionLabel(r.action_taken) : '—', paths]
+                            : [formatRelative(r.detected_at), String(r.count), `${r.window_seconds}s`, paths],
+                        };
+                      })}
+                    />
                   </div>
                 )}
               </div>

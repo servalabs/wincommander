@@ -629,7 +629,15 @@ function AppContent() {
   const decoyEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.enabled ?? false;
   const decoyEnrolledPaths = appSettings?.ideal?.privacy?.decoyMonitor?.enrolledPaths ?? [];
   const decoyReadAuditEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.readAuditEnabled ?? false;
-  useDecoyMonitor(decoyEnabled, decoyEnrolledPaths, decoyReadAuditEnabled);
+  const decoyFleetAlertEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.fleetAlertEnabled ?? false;
+  // Filesystem decoys are an organisation-facing tripwire. Do not leave a
+  // persisted trial setting armed after the licence expires.
+  useDecoyMonitor(hasPaid && decoyEnabled,
+    decoyEnrolledPaths,
+    decoyReadAuditEnabled,
+    decoyFleetAlertEnabled,
+    entitlementLoading,
+  );
 
   // F-3 Anti-ransomware monitor — mass-modify detector over user-content
   // dirs. Hook syncs threshold/window first then start/stop watcher.
@@ -642,6 +650,7 @@ function AppContent() {
   const ransomwareAction = appSettings?.ideal?.privacy?.ransomwareMonitor?.action ?? DEFAULT_RANSOMWARE_ACTION;
   useRansomwareMonitor(
     ransomwareEnabled,
+    hasPaid,
     ransomwareThreshold,
     ransomwareWindowSeconds,
     ransomwareAlertCooldownSeconds,
@@ -656,30 +665,54 @@ function AppContent() {
   const remoteAccessTools = appSettings?.ideal?.privacy?.remoteAccessMonitor?.tools ?? null;
   useRemoteAccessMonitor(remoteAccessEnabled, remoteAccessTools);
 
-  // USB monitor arm state is persisted separately from sensitivity/mode. Re-arm
-  // the attach timeline first because HID and auto-isolate consume its events.
+  // Free owns only the basic attach timeline. Pro owns HID timing intelligence
+  // and automatic isolation. Reconcile them separately so a Free user keeps
+  // their simple timeline while an expired entitlement can still deactivate
+  // already-running paid monitors.
   const usbSecurity = appSettings?.ideal?.privacy?.usbSecurity;
   const usbMonitorEnabled = usbSecurity?.monitorEnabled === true;
   const usbHidGuardEnabled = usbSecurity?.hidGuardEnabled === true;
+  const usbMeteringEnabled = usbSecurity?.meteringEnabled === true;
   const usbAutoSandboxEnabled = usbSecurity?.autoSandboxEnabled === true;
   const usbSecurityConfigured = usbSecurity !== undefined;
   const usbRearmFailureRef = useRef<string | null>(null);
   useEffect(() => {
-    if (entitlementLoading || !hasPaid || !usbSecurityConfigured) return;
+    if (!usbSecurityConfigured) return;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
-    const monitorDesired = usbMonitorEnabled || usbHidGuardEnabled || usbAutoSandboxEnabled;
+    const paidMonitorDesired = usbHidGuardEnabled || usbMeteringEnabled || usbAutoSandboxEnabled;
+    const basicMonitorDesired = usbMonitorEnabled || (hasPaid && paidMonitorDesired);
     const reconcile = async () => {
       try {
-        if (monitorDesired) {
-          await invoke("start_usb_monitor");
-          await invoke(usbHidGuardEnabled ? "start_usb_hid_guard" : "stop_usb_hid_guard");
-          await invoke(usbAutoSandboxEnabled ? "start_usb_autosandbox" : "stop_usb_autosandbox");
+        await invoke(basicMonitorDesired ? "start_usb_monitor" : "stop_usb_monitor");
+
+        if (entitlementLoading) {
+          usbRearmFailureRef.current = null;
+          return;
+        }
+        if (hasPaid) {
+          // Pro's ProgramData state is canonical. Legacy AppSettings are used
+          // only if that Pro state does not exist yet, so a stale RDS process
+          // cannot overwrite a policy changed in another session.
+          await invoke("reconcile_usb_guard", {
+            legacy: {
+              monitorEnabled: usbMonitorEnabled,
+              hidGuardEnabled: usbHidGuardEnabled,
+              meteringEnabled: usbMeteringEnabled,
+              autoSandboxEnabled: usbAutoSandboxEnabled,
+            },
+          });
         } else {
-          await invoke("stop_usb_autosandbox");
-          await invoke("stop_usb_hid_guard");
-          await invoke("stop_usb_monitor");
+          const pro = await invoke<{ installed?: boolean }>("get_pro_install_status");
+          if (pro?.installed) {
+            // Fixed deactivation-only feature IDs remain available after an
+            // entitlement expires. Run them even on a fresh app process so a
+            // persisted or orphaned Pro policy cannot remain armed.
+            await invoke("stop_usb_autosandbox");
+            await invoke("stop_usb_metering");
+            await invoke("stop_usb_hid_guard");
+          }
         }
         usbRearmFailureRef.current = null;
       } catch (err) {
@@ -706,6 +739,7 @@ function AppContent() {
     usbSecurityConfigured,
     usbMonitorEnabled,
     usbHidGuardEnabled,
+    usbMeteringEnabled,
     usbAutoSandboxEnabled,
   ]);
 

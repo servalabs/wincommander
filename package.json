@@ -17,7 +17,7 @@
     "dev:free": "bun run setup:dev && bun run tools/dev-server.ts --free",
     "dev:tauri": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/dev.ps1",
     "dev:tauri:free": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/dev.ps1",
-    "dev:reset": "powershell -Command \"Remove-Item -Path $env:LOCALAPPDATA\\WinCommander\\store\\settings.dat -ErrorAction SilentlyContinue; Remove-Item -Path $env:LOCALAPPDATA\\WinCommander\\settings.json -ErrorAction SilentlyContinue; Remove-Item -Path $env:APPDATA\\WinCommander\\settings.json -ErrorAction SilentlyContinue\"; bun run dev:tauri",
+    "dev:reset": "powershell -Command \"Remove-Item -Path $env:ProgramData\\WinCommander\\store\\settings.dat -ErrorAction SilentlyContinue; Remove-Item -Path $env:LOCALAPPDATA\\WinCommander\\settings.json -ErrorAction SilentlyContinue; Remove-Item -Path $env:APPDATA\\WinCommander\\settings.json -ErrorAction SilentlyContinue\"; bun run dev:tauri",
     "dev:all": "bun run tools/dev-all.ts",
     "hash-pro": "bun run tools/hash-pro.ts",
     "build:free": "bun run encrypt-backend && bun x tsc && bun x vite build",

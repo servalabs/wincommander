@@ -213,7 +213,8 @@ automations (that's v2, above).
 | `start_paste_monitor` … `cancel_paste_monitor_snooze` (F-1) | Free core; paid crypto-swap/timed auto-clear | Clipboard credential watcher — start/stop/status, category + snooze + recent config, crypto-swap and auto-clear/auto-clear-on-lock toggles. |
 | `load_local_clipboard_guard_rules` / `save_local_clipboard_guard_rules` / `get_managed_clipboard_guard_rules` | Free local IPC | Load or atomically validate, encrypt, persist, and activate the current Windows user's local rules; read the managed source separately. Local rules can't request Fleet/admin reporting, and managed rows are read-only in the desktop UI. |
 | `start_decoy_monitor` … `enable_last_access_tracking` (F-2) | Paid | Decoy-file sentinel — start/stop/status, enroll/remove/list/delete decoys, drop standard decoys, recent log, last-access tracking. |
-| `start_ransomware_monitor` … `set_ransomware_watch_dirs`, `ransomware_monitor_health` (F-3) | Paid | Mass-modify detector — ordered startup policy, thresholds/window/cooldown/attribution evidence, response, recent, watched dirs, and separate local-detection versus Pro automatic-response health. |
+| `start_ransomware_monitor` … `set_ransomware_watch_dirs`, `get_ransomware_recent` (F-3 core) | Free | Local mass-modify alarm — ordered startup policy, threshold/window/cooldown, watched folders, and recent detections. It does not identify or control a process. |
+| `ransomware_monitor_health` + ETW attribution/response fields (F-3 Pro layer) | Paid / Pro | Reports attribution readiness and, after a Free alarm, can identify a sufficiently evidenced process and apply the configured Monitor/Suspend/Kill response. |
 | `start_lockdown_words` … `test_fire_lockdown_words` (F-5) | Paid | Lockdown-word keyboard trigger — start/stop/status, register/set/list words, test-fire. |
 | `register_distress_phrase` / `set_distress_phrases` / `list_distress_phrases` / `check_distress_phrase` | Paid | Distress-phrase registration + match check (keyboard-hook + palette). |
 
@@ -244,12 +245,12 @@ All Paid, dispatched to Pro's `vm_sandbox.rs`.
 
 | Command group | Tier | Purpose |
 |---------------|------|---------|
-| `start_usb_monitor` … `set_usb_monitor_notify` (U-A) | Paid | Device attach/detach timeline. |
-| `start_usb_metering` … `set_usb_metering_config` (U-B) | Paid | Data-transfer metering. |
-| `start_usb_hid_guard` … `clear_usb_hid_alerts`, `set_usb_hid_guard_sensitivity` (U-C) | Paid | BadUSB / HID-injection timing guard and locally retained sensitivity preset; detection/alerting only. |
-| `usb_device_trust_score` | Free | Read-only 0-100 score combining identity stability, vendor signal, HID alerts, quarantine history, and transfer volume. |
+| `start_usb_monitor` … `set_usb_monitor_notify` (U-A) | Free | Basic machine-wide device attach/detach timeline; no attack heuristic or device action. |
+| `start_usb_metering` … `set_usb_metering_config` (U-B) | Paid / Pro | Removable-volume transfer intelligence. |
+| `start_usb_hid_guard` … `clear_usb_hid_alerts`, `set_usb_hid_guard_sensitivity` (U-C) | Paid / Pro | Timing-only, low-confidence HID anomaly correlation. The hook does not identify the source keyboard and never enforces from timing alone. |
+| `usb_device_trust_score` | Paid / Pro | Read-only presentation of a Pro-derived 0-100 score combining identity stability, vendor signal, HID alerts, quarantine history, and transfer volume. |
 | `block_usb_device` / `allow_usb_device` / `set_usb_volume_readonly` / `quarantine_usb_device` (U-D/E) | Paid | Trust-policy enforcement (dispatched to Pro). |
-| `start_usb_autosandbox` … `clear_usb_autosandbox_recent` (U-F) | Free decision layer | Auto-sandbox / quarantine orchestration — start/stop/status, config, recent. |
+| `start_usb_autosandbox` … `clear_usb_autosandbox_recent` (U-F) | Paid / Pro | Reactive post-attach isolation — start/stop/status, config, recent. Observe is default; HID action is separately confirmed. |
 
 ### Session Assurance (insider-risk / attention)
 

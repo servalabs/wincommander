@@ -337,12 +337,9 @@ if (Test-Path `$webCacheDir) {
 }
 "@
     'thumbnailDb'       = @"
-Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 500
 `$thumbDir = "`$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
 Get-ChildItem -LiteralPath `$thumbDir -Filter 'thumbcache_*.db' -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
 Get-ChildItem -LiteralPath `$thumbDir -Filter 'iconcache_*.db' -Force -ErrorAction SilentlyContinue | ForEach-Object { Erase-OneFile `$_.FullName }
-Start-Process explorer.exe -ErrorAction SilentlyContinue
 "@
     'notificationDb'    = @"
 Get-Service -Name 'WpnUserService*' -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue

@@ -1,81 +1,85 @@
-// src/hooks/useDecoyMonitor.ts
-//
-// useDecoyMonitor — drives the F-2 filesystem honeypot watcher off
-// settings. Same pattern as usePasteMonitor: a single global hook
-// reads `enabled` + `enrolledPaths` and reconciles the Rust runtime
-// state. Watcher start/stop is idempotent on the Rust side; same with
-// enroll_decoy / remove_decoy.
-//
-// Reconciliation logic on every settings change:
-//   1. If enabled, ensure watcher is running.
-//   2. Diff settings paths against what Rust currently watches via
-//      `list_decoys`; enroll missing, remove orphaned. Idempotent
-//      so a duplicate enroll for an already-enrolled path is harmless.
-//   3. If disabled, stop watcher.
+// useDecoyMonitor — atomically reconciles the paid Pro decoy monitor.
+// A pooled sidecar cannot safely receive a start/list/enrol/remove sequence:
+// those calls could land in different processes. One full arm request carries
+// the persisted paths and switches to the single Pro monitor owner instead.
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAuthMode } from "../context/AuthModeContext";
+import { showWarning } from "../utils/toast";
 
-interface DecoyInfoFromRust {
-  path: string;
-  exists: boolean;
-}
+const MAX_REARM_ATTEMPTS = 3;
 
 export default function useDecoyMonitor(
   enabled: boolean,
   enrolledPaths: string[],
   readAuditEnabled: boolean,
+  fleetAlertEnabled: boolean,
+  entitlementLoading: boolean,
 ) {
   const { mode } = useAuthMode();
   const lastReconciled = useRef<string>("");
+  const warnedFailures = useRef(new Set<string>());
+  const warnOnce = useCallback((key: string, message: string, error: unknown) => {
+    console.warn(`[useDecoyMonitor] ${key} failed:`, error);
+    if (warnedFailures.current.has(key)) return;
+    warnedFailures.current.add(key);
+    showWarning(message, 12_000);
+  }, []);
 
   useEffect(() => {
-    // Decoy mode nulls appSettings → enabled=false, which would stop the
-    // honeypot watcher exactly when a coerced session is most at risk. Leave
-    // the watcher in its last-armed state; reconciliation resumes on exit.
-    if (mode === "decoy") return;
+    // Do not treat the intentionally false pre-resolution entitlement value
+    // as expiry. Once resolved, false deliberately stops any old Pro watcher.
+    if (entitlementLoading || mode === "decoy") return;
+
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    const fingerprint = `${enabled}|${readAuditEnabled}|${fleetAlertEnabled}|${[...enrolledPaths].sort().join("\n")}`;
+    if (fingerprint === lastReconciled.current) return;
+
     const reconcile = async () => {
-      if (cancelled) return;
       try {
         if (!enabled) {
-          await invoke("stop_decoy_monitor");
-          return;
-        }
-        await invoke("start_decoy_monitor");
-        // Reconcile the enrolled set against Rust's current view.
-        const current = await invoke<DecoyInfoFromRust[]>("list_decoys");
-        const currentSet = new Set(current.map((d) => d.path));
-        const targetSet = new Set(enrolledPaths);
-        // Add missing
-        for (const p of enrolledPaths) {
-          if (!currentSet.has(p)) {
-            await invoke("enroll_decoy", { path: p }).catch(() => {});
+          // This cleanup command remains available after entitlement expiry.
+          // Do not manufacture a Pro-missing retry/toast for ordinary Free
+          // startup; only an installed sidecar could possibly need cleanup.
+          const pro = await invoke<{ installed?: boolean }>("get_pro_install_status");
+          if (pro?.installed) {
+            await invoke("stop_decoy_monitor");
           }
+        } else {
+          await invoke("start_decoy_monitor", {
+            paths: enrolledPaths,
+            readAuditEnabled,
+            fleetAlertEnabled,
+          });
         }
-        // Remove orphaned (in Rust but not in settings)
-        for (const p of currentSet) {
-          if (!targetSet.has(p)) {
-            await invoke("remove_decoy", { path: p });
-          }
+        if (cancelled) return;
+        // Success only: a failed sidecar spawn must be retried instead of
+        // being permanently hidden by a render-level fingerprint dedupe.
+        lastReconciled.current = fingerprint;
+        warnedFailures.current.delete("reconcile");
+      } catch (error) {
+        if (cancelled) return;
+        warnOnce(
+          "reconcile",
+          enabled
+            ? "Decoy monitoring could not fully arm. WinCommander will retry automatically."
+            : "Decoy monitoring could not stop cleanly. WinCommander will retry automatically.",
+          error,
+        );
+        attempt += 1;
+        if (attempt < MAX_REARM_ATTEMPTS) {
+          retryTimer = setTimeout(() => { void reconcile(); }, attempt * 5_000);
         }
-        // Rules can only be installed after the files have been enrolled.
-        // Doing this first left a persisted read-audit setting blocking the
-        // entire reconciliation after an app restart.
-        await invoke("set_decoy_read_audit_enabled", { enabled: readAuditEnabled });
-      } catch (err) {
-        console.warn("[useDecoyMonitor] reconcile failed:", err);
       }
     };
 
-    // Skip if nothing changed since last reconciliation. Cheap dedup
-    // for re-renders that don't change the actual values.
-    const fingerprint = `${enabled}|${readAuditEnabled}|${[...enrolledPaths].sort().join("\n")}`;
-    if (fingerprint === lastReconciled.current) return;
-    lastReconciled.current = fingerprint;
-
-    reconcile();
-    return () => { cancelled = true; };
-  }, [enabled, enrolledPaths, readAuditEnabled, mode]);
+    void reconcile();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [enabled, enrolledPaths, readAuditEnabled, fleetAlertEnabled, entitlementLoading, mode, warnOnce]);
 }

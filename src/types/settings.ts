@@ -922,8 +922,10 @@ export interface AuthAnomalyMonitorSettings {
 export interface UsbSecurityMonitorSettings {
   /** Device attach/detach monitor. Also armed when a dependent guard is on. */
   monitorEnabled?: boolean | null;
-  /** BadUSB/HID timing detector (alert-only). */
+  /** Pro low-confidence USB HID timing-anomaly detector (alert-only). */
   hidGuardEnabled?: boolean | null;
+  /** Pro removable-volume transfer intelligence. */
+  meteringEnabled?: boolean | null;
   /** Observe/enforce new-device auto-isolation according to its saved mode. */
   autoSandboxEnabled?: boolean | null;
 }

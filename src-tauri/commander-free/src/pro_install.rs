@@ -100,6 +100,7 @@ pub fn pro_is_installed() -> bool {
 ///   - release builds → installed path first (the production user flow
 ///     where `cargo build` siblings are absent)
 pub fn pro_resolve_path() -> Option<PathBuf> {
+    migrate_legacy_disabled_marker();
     if pro_disabled_marker_path()
         .ok()
         .filter(|p| p.exists())
@@ -166,7 +167,54 @@ fn pro_install_metadata_path() -> Result<PathBuf, String> {
 }
 
 fn pro_disabled_marker_path() -> Result<PathBuf, String> {
-    Ok(crate::paths::user_data_dir()?.join("wincommander-pro.disabled"))
+    crate::paths::machine_state_file("wincommander-pro.disabled")
+}
+
+fn legacy_pro_disabled_marker_path() -> Result<PathBuf, String> {
+    crate::paths::legacy_user_state_file("wincommander-pro.disabled")
+}
+
+fn migrate_legacy_disabled_marker() {
+    let Ok(_lock) = crate::paths::acquire_machine_state_lock("pro-disabled-marker") else {
+        return;
+    };
+    let Ok(machine_marker) = pro_disabled_marker_path() else {
+        return;
+    };
+    if machine_marker.exists() {
+        return;
+    }
+    let Ok(legacy_marker) = legacy_pro_disabled_marker_path() else {
+        return;
+    };
+    if !legacy_marker.exists() {
+        return;
+    }
+    // The marker represents an explicit elevated uninstall. Keep the old copy
+    // unless its replacement in ProgramData succeeds, so a failed migration
+    // cannot unexpectedly reactivate Pro for the user who disabled it.
+    if crate::paths::atomic_write_machine_state(&machine_marker, b"disabled\n").is_ok() {
+        let _ = std::fs::remove_file(legacy_marker);
+    }
+}
+
+fn write_disabled_marker() -> Result<PathBuf, String> {
+    let _lock = crate::paths::acquire_machine_state_lock("pro-disabled-marker")?;
+    let marker = pro_disabled_marker_path()?;
+    crate::paths::atomic_write_machine_state(&marker, b"disabled\n")?;
+    Ok(marker)
+}
+
+fn clear_disabled_markers() {
+    let Ok(_lock) = crate::paths::acquire_machine_state_lock("pro-disabled-marker") else {
+        return;
+    };
+    if let Ok(marker) = pro_disabled_marker_path() {
+        let _ = std::fs::remove_file(marker);
+    }
+    if let Ok(marker) = legacy_pro_disabled_marker_path() {
+        let _ = std::fs::remove_file(marker);
+    }
 }
 
 fn compute_pro_sha256_at(path: &std::path::Path) -> Option<String> {
@@ -323,9 +371,8 @@ pub async fn delete_pro_binary() -> Result<serde_json::Value, String> {
         remove_file(legacy_path.with_file_name("wincommander-pro.json"))?;
         remove_file(legacy_path)?;
     }
-    let disabled_marker = pro_disabled_marker_path()?;
-    std::fs::write(&disabled_marker, b"disabled\n")
-        .map_err(|e| format!("disk:disable pro marker: {}", e))?;
+    let disabled_marker =
+        write_disabled_marker().map_err(|e| format!("disk:disable pro marker: {}", e))?;
 
     Ok(serde_json::json!({
         "ok": true,
@@ -735,9 +782,7 @@ pub async fn install_pro_binary(
             .map(|sha| sha.eq_ignore_ascii_case(&expected_sha256))
             .unwrap_or(false)
     {
-        if let Ok(marker) = pro_disabled_marker_path() {
-            let _ = std::fs::remove_file(marker);
-        }
+        clear_disabled_markers();
         if let Err(e) = write_pro_install_metadata(pro_version.clone(), &expected_sha256) {
             crate::log_message(
                 "warn",
@@ -832,9 +877,7 @@ pub async fn install_pro_binary(
 
     remove_existing_pro_binary(&install_path).await?;
     std::fs::rename(&tmp_path, &install_path).map_err(|e| format!("disk:atomic rename: {}", e))?;
-    if let Ok(marker) = pro_disabled_marker_path() {
-        let _ = std::fs::remove_file(marker);
-    }
+    clear_disabled_markers();
     if let Err(e) = write_pro_install_metadata(pro_version.clone(), &expected_sha256) {
         crate::log_message(
             "warn",

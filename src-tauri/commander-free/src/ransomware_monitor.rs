@@ -710,11 +710,10 @@ fn stop_local_watcher() {
 
 #[tauri::command]
 pub async fn start_ransomware_monitor(app: AppHandle) -> Result<(), String> {
-    crate::license::require_paid("ransomware monitor")?;
-
     // The notify watcher is always the detector — reliable, no admin needed,
-    // catches every kind of mass-modify (including in-place overwrites).
-    // Start it unconditionally.
+    // catches every kind of mass-modify (including in-place overwrites). This
+    // baseline alarm is intentionally Free; Pro monetises PID attribution,
+    // automatic suspend/kill, Fleet policy, and organisation reporting.
     start_local_watcher(app);
 
     // Layer the Pro ETW attribution feed on top when available (sidecar up
@@ -722,9 +721,15 @@ pub async fn start_ransomware_monitor(app: AppHandle) -> Result<(), String> {
     // trips. If it can't start, ATTRIB_READY stays false and we simply fire
     // the alarm without attribution (v1 behaviour). The two run together as
     // one pipeline — not rival detectors, so there's still only one alarm.
-    let ready = crate::sidecar::dispatch_paid_command("start_ransomware_etw", etw_args())
-        .await
-        .is_ok();
+    // Do not spawn a Pro worker merely to receive an expected entitlement
+    // rejection for a Free user. The local detector remains fully active.
+    let ready = if crate::license::has_paid_entitlement() {
+        crate::sidecar::dispatch_paid_command("start_ransomware_etw", etw_args())
+            .await
+            .is_ok()
+    } else {
+        false
+    };
     ATTRIB_READY.store(ready, Ordering::SeqCst);
     crate::log_message(
         "info",

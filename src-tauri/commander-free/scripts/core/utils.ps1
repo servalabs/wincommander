@@ -287,45 +287,23 @@ function Resolve-DataPath {
 }
 
 
+function Test-ExplorerShellAvailable {
+    # Server Core has no Explorer process or taskbar. Let unknown future values
+    # through so a new Desktop Experience SKU is not falsely rejected.
+    try {
+        $installationType = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'InstallationType' -ErrorAction Stop).InstallationType
+        return $installationType -notmatch 'Server Core|ServerCore'
+    }
+    catch { return $true }
+}
+
 function Restart-Explorer {
     param([switch]$AllUsers)
 
-    if ($AllUsers) {
-        Assert-IsAdmin
-        $targets = @(Get-Process -Name explorer -ErrorAction SilentlyContinue)
-        if ($targets.Count -eq 0) {
-            return @{ status = 'no_explorer_sessions'; restartedSessions = @() }
-        }
-
-        $sessionIds = @($targets | ForEach-Object { $_.SessionId } | Sort-Object -Unique)
-        $targets | Stop-Process -Force -ErrorAction SilentlyContinue
-
-        # Windows restores explorer.exe as each interactive user's configured
-        # shell. Wait briefly so callers can report whether every session came
-        # back instead of pretending a current-user refresh was global.
-        $remaining = @()
-        for ($attempt = 0; $attempt -lt 12; $attempt++) {
-            Start-Sleep -Milliseconds 250
-            $remaining = @(Get-Process -Name explorer -ErrorAction SilentlyContinue |
-                Where-Object { $_.SessionId -in $sessionIds })
-            if ((@($remaining | ForEach-Object { $_.SessionId } | Sort-Object -Unique).Count) -eq $sessionIds.Count) {
-                break
-            }
-        }
-
-        $restartedSessions = @($remaining | ForEach-Object { $_.SessionId } | Sort-Object -Unique)
-        $missingSessions = @($sessionIds | Where-Object { $_ -notin $restartedSessions })
-        return @{
-            status = if ($missingSessions.Count -eq 0) { 'all_users_restarted' } else { 'restart_incomplete' }
-            restartedSessions = $restartedSessions
-            missingSessions = $missingSessions
-            warning = if ($missingSessions.Count -gt 0) { 'Explorer did not restart in every session; affected users should sign out and back in.' } else { $null }
-        }
-    }
-
-    # Per-user settings only need a shell association refresh for the current
-    # desktop. Do not interrupt other users for a preference that was not
-    # applied to their profile.
+    # Explorer is the interactive user's shell. Terminating by image name would
+    # disrupt every RDS desktop and Windows does not guarantee it will recreate
+    # an administrator-started shell in another session. Keep this historical
+    # command name for its IPC callers, but issue a non-destructive notification.
     try {
         Add-Type -TypeDefinition @'
 using System;
@@ -333,13 +311,38 @@ using System.Runtime.InteropServices;
 public static class WinCommanderShellRefresh {
     [DllImport("shell32.dll")]
     public static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr item1, IntPtr item2);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd, uint message, UIntPtr wParam, string lParam,
+        uint flags, uint timeout, out UIntPtr result);
 }
 '@ -ErrorAction SilentlyContinue
         [WinCommanderShellRefresh]::SHChangeNotify(0x08000000, 0x1000, [IntPtr]::Zero, [IntPtr]::Zero)
-        return @{ status = 'refresh_requested'; requiresSignOut = $true }
+        [UIntPtr]$result = [UIntPtr]::Zero
+        [WinCommanderShellRefresh]::SendMessageTimeout(
+            [IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 0x0002, 1000, [ref]$result
+        ) | Out-Null
+        return @{
+            status = 'refresh_requested'
+            requiresSignOut = [bool]$AllUsers
+            warning = if ($AllUsers) {
+                'Changes were written for user profiles. Existing RDS and console sessions apply them when each user signs out and back in.'
+            } else {
+                $null
+            }
+        }
     }
     catch {
-        return @{ status = 'refresh_deferred'; requiresSignOut = $true; warning = $_.Exception.Message }
+        return @{
+            status = 'refresh_deferred'
+            requiresSignOut = [bool]$AllUsers
+            warning = if ($AllUsers) {
+                "Changes were written for user profiles. Existing RDS and console sessions apply them when each user signs out and back in. Shell notification failed: $($_.Exception.Message)"
+            } else {
+                $_.Exception.Message
+            }
+        }
     }
 }
 

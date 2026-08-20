@@ -8001,7 +8001,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/useDecoyMonitor.ts",
         "src/panels/privacy/DecoyMonitorSection.tsx"
       ]
     },
@@ -8914,7 +8913,9 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/App.tsx",
         "src/components/LicenseGate.tsx",
+        "src/hooks/useDecoyMonitor.ts",
         "src/hooks/useProInstall.ts",
         "src/panels/privacy/UsbDevicesSection.tsx"
       ]
@@ -9384,7 +9385,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/useDecoyMonitor.ts",
         "src/panels/privacy/DecoyMonitorSection.tsx"
       ]
     },
@@ -9779,6 +9779,16 @@
       ]
     },
     {
+      "id": "tauri:reconcile_usb_guard",
+      "name": "reconcile_usb_guard",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/App.tsx"
+      ]
+    },
+    {
       "id": "tauri:refresh_license",
       "name": "refresh_license",
       "transport": "tauri",
@@ -9877,7 +9887,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/useDecoyMonitor.ts",
         "src/panels/privacy/DecoyMonitorSection.tsx"
       ]
     },
@@ -10336,9 +10345,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useDecoyMonitor.ts"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:set_distress_phrases",
@@ -10793,7 +10800,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/App.tsx",
         "src/panels/privacy/UsbDevicesSection.tsx"
       ]
     },
@@ -10974,7 +10980,9 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": []
+      "frontendReferences": [
+        "src/App.tsx"
+      ]
     },
     {
       "id": "tauri:stop_usb_monitor",
@@ -10982,9 +10990,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/App.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:stop_wifi_guard",
