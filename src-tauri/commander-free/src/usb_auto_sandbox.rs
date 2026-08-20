@@ -24,6 +24,8 @@
 //   Closed + Lagged handling, require_paid on mutations.
 
 use std::collections::VecDeque;
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,7 +35,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::usb_monitor::{subscribe, UsbEvent};
+use crate::usb_monitor::{UsbEvent, subscribe};
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -42,6 +44,10 @@ const RECENT_CAP: usize = 50;
 
 /// Per-device attach-debounce in milliseconds (mirrors U-A ATTACH_DEBOUNCE_MS).
 const DEBOUNCE_MS: u64 = 2_000;
+
+/// Kept separate from the USB timeline so operator policy survives restart
+/// without becoming forensic device history.
+const CONFIG_FILENAME: &str = "usb_auto_sandbox.json";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +133,11 @@ pub struct AutoSandboxStatus {
     pub running: bool,
     pub mode: Mode,
     pub recent_count: usize,
+    /// Returned so a UI mode change can patch one field without erasing trust
+    /// exceptions or expanding enforcement scope.
+    pub allow_keys: Vec<String>,
+    pub allow_vids: Vec<String>,
+    pub act_on_hid: bool,
 }
 
 // ── Process-lifetime singletons ───────────────────────────────────────────────
@@ -135,6 +146,7 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 static RUN_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
+static CONFIG_LOADED: OnceLock<Mutex<bool>> = OnceLock::new();
 static RECENT: OnceLock<Mutex<VecDeque<AutoActionRecord>>> = OnceLock::new();
 /// Per-device-key debounce: last fire timestamp (ms since UNIX epoch).
 static DEBOUNCE: OnceLock<Mutex<std::collections::HashMap<String, u64>>> = OnceLock::new();
@@ -143,6 +155,98 @@ static LISTENER: OnceLock<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> =
 
 fn cfg() -> &'static Mutex<Config> {
     CONFIG.get_or_init(|| Mutex::new(Config::default()))
+}
+
+fn config_loaded() -> &'static Mutex<bool> {
+    CONFIG_LOADED.get_or_init(|| Mutex::new(false))
+}
+
+fn config_path() -> Result<PathBuf, String> {
+    Ok(crate::paths::user_data_dir()?.join(CONFIG_FILENAME))
+}
+
+fn validate_config(config: &Config) -> Result<(), String> {
+    const MAX_ENTRIES: usize = 128;
+    const MAX_KEY_LEN: usize = 256;
+    if config.allow_keys.len() > MAX_ENTRIES || config.allow_vids.len() > MAX_ENTRIES {
+        return Err(format!(
+            "USB auto-sandbox allow-lists support at most {MAX_ENTRIES} entries"
+        ));
+    }
+    if config.allow_keys.iter().any(|key| {
+        let key = key.trim();
+        key.is_empty() || key.len() > MAX_KEY_LEN || key.contains(['\r', '\n', '\0'])
+    }) {
+        return Err(
+            "USB auto-sandbox device keys must be non-empty, short, and single-line".into(),
+        );
+    }
+    if config.allow_vids.iter().any(|vid| {
+        let vid = vid.trim();
+        vid.len() != 4 || !vid.bytes().all(|b| b.is_ascii_hexdigit())
+    }) {
+        return Err(
+            "USB auto-sandbox vendor IDs must be exactly four hexadecimal characters".into(),
+        );
+    }
+    Ok(())
+}
+
+fn normalise_config(mut config: Config) -> Config {
+    config.allow_keys = config
+        .allow_keys
+        .into_iter()
+        .map(|key| key.trim().to_string())
+        .collect();
+    config.allow_vids = config
+        .allow_vids
+        .into_iter()
+        .map(|vid| vid.trim().to_ascii_lowercase())
+        .collect();
+    config
+}
+
+fn ensure_config_loaded() {
+    let mut loaded = config_loaded().lock().unwrap();
+    if *loaded {
+        return;
+    }
+    if let Ok(path) = config_path() {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Ok(saved) = serde_json::from_str::<Config>(&raw) {
+                if validate_config(&saved).is_ok() {
+                    *cfg().lock().unwrap() = normalise_config(saved);
+                }
+            }
+        }
+    }
+    *loaded = true;
+}
+
+fn persist_config(config: &Config) -> Result<(), String> {
+    let path = config_path()?;
+    let data = serde_json::to_string(config)
+        .map_err(|e| format!("Serialize USB auto-sandbox config: {e}"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "USB auto-sandbox config has no parent".to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "USB auto-sandbox config has no file name".to_string())?;
+    let tmp = parent.join(format!(".{file_name}.tmp"));
+    {
+        let mut file = std::fs::File::create(&tmp)
+            .map_err(|e| format!("Create USB auto-sandbox config: {e}"))?;
+        file.write_all(data.as_bytes())
+            .map_err(|e| format!("Write USB auto-sandbox config: {e}"))?;
+        file.sync_all()
+            .map_err(|e| format!("Sync USB auto-sandbox config: {e}"))?;
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Save USB auto-sandbox config: {e}")
+    })
 }
 
 fn recent() -> &'static Mutex<VecDeque<AutoActionRecord>> {
@@ -452,6 +556,7 @@ fn spawn_listener(app: AppHandle, epoch: u64) -> tauri::async_runtime::JoinHandl
 #[tauri::command]
 pub async fn start_usb_autosandbox(app: AppHandle) -> Result<serde_json::Value, String> {
     crate::license::require_paid("USB auto-sandbox")?;
+    ensure_config_loaded();
     if RUNNING.swap(true, Ordering::Relaxed) {
         return Ok(json!({ "ok": true, "already": true }));
     }
@@ -484,14 +589,18 @@ pub async fn stop_usb_autosandbox() -> Result<serde_json::Value, String> {
 /// Read-only — ungated.
 #[tauri::command]
 pub fn usb_autosandbox_status() -> AutoSandboxStatus {
-    let (mode, _) = {
+    ensure_config_loaded();
+    let config = {
         let c = cfg().lock().unwrap();
-        (c.mode, ())
+        c.clone()
     };
     AutoSandboxStatus {
         running: RUNNING.load(Ordering::Relaxed),
-        mode,
+        mode: config.mode,
         recent_count: recent().lock().unwrap().len(),
+        allow_keys: config.allow_keys,
+        allow_vids: config.allow_vids,
+        act_on_hid: config.act_on_hid,
     }
 }
 
@@ -500,8 +609,18 @@ pub fn usb_autosandbox_status() -> AutoSandboxStatus {
 #[tauri::command]
 pub async fn set_usb_autosandbox_config(config: Config) -> Result<serde_json::Value, String> {
     crate::license::require_paid("USB auto-sandbox")?;
-    *cfg().lock().unwrap() = config;
-    Ok(json!({ "ok": true }))
+    validate_config(&config)?;
+    let config = normalise_config(config);
+    persist_config(&config)?;
+    *cfg().lock().unwrap() = config.clone();
+    *config_loaded().lock().unwrap() = true;
+    Ok(json!({
+        "ok": true,
+        "mode": config.mode,
+        "allowKeys": config.allow_keys,
+        "allowVids": config.allow_vids,
+        "actOnHid": config.act_on_hid,
+    }))
 }
 
 /// Return the recent auto-action ring (newest first), up to 50 entries.
@@ -629,6 +748,33 @@ mod tests {
             decide_auto_action(Mode::Enforce, true, true, false, false),
             AutoAction::Quarantine
         );
+    }
+
+    #[test]
+    fn config_validation_rejects_multiline_keys_and_non_hex_vendor_ids() {
+        let bad_key = Config {
+            allow_keys: vec!["USB:SAFE\nINJECTED".into()],
+            ..Config::default()
+        };
+        assert!(validate_config(&bad_key).is_err());
+        let bad_vid = Config {
+            allow_vids: vec!["12g4".into()],
+            ..Config::default()
+        };
+        assert!(validate_config(&bad_vid).is_err());
+    }
+
+    #[test]
+    fn config_normalisation_preserves_scope_and_canonicalises_exceptions() {
+        let config = normalise_config(Config {
+            mode: Mode::Enforce,
+            allow_keys: vec![" USB:ABCD:1234:SERIAL ".into()],
+            allow_vids: vec!["05AC".into()],
+            act_on_hid: true,
+        });
+        assert_eq!(config.allow_keys, ["USB:ABCD:1234:SERIAL"]);
+        assert_eq!(config.allow_vids, ["05ac"]);
+        assert!(config.act_on_hid);
     }
 
     #[test]

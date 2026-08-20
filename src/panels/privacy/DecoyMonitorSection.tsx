@@ -46,8 +46,9 @@ interface Props {
   searchQuery: string;
   enabled: boolean;
   enrolledPaths: string[];
+  readAuditEnabled: boolean;
   fleetAlertEnabled: boolean;
-  onPatchDecoy: (patch: { enabled?: boolean; enrolledPaths?: string[]; fleetAlertEnabled?: boolean }) => void;
+  onPatchDecoy: (patch: { enabled?: boolean; enrolledPaths?: string[]; readAuditEnabled?: boolean; fleetAlertEnabled?: boolean }) => void;
   /** Controlled expand for accordion behaviour in monitoring/safeguards grids. */
   expanded?: boolean;
   onExpandedChange?: (next: boolean) => void;
@@ -58,6 +59,7 @@ export default function DecoyMonitorSection({
   searchQuery,
   enabled,
   enrolledPaths,
+  readAuditEnabled,
   fleetAlertEnabled,
   onPatchDecoy,
   expanded: expandedProp,
@@ -243,8 +245,12 @@ export default function DecoyMonitorSection({
           <div className="flex items-start justify-between gap-3">
             <p className="text-xs text-[var(--shield-text-subtle)] text-pretty max-w-[420px]">
               {isAdvanced
-                ? "Reads and opens, edits, renames, and removals trigger an immediate warning. Background metadata activity is ignored."
-                : "Fake sensitive-looking files alert you when opened, read, or changed."}
+                ? readAuditEnabled
+                  ? "Reads, opens, edits, renames, and removals trigger an immediate warning. Background metadata activity is ignored."
+                  : "Edits, renames, and removals trigger immediately. Turn on read auditing below to also detect opens."
+                : readAuditEnabled
+                  ? "Fake sensitive-looking files alert you when opened, read, or changed."
+                  : "Fake sensitive-looking files alert you when changed; read/open detection is optional."}
             </p>
             <button
               type="button"
@@ -275,6 +281,21 @@ export default function DecoyMonitorSection({
           )}
           {enabled && (
             <div className="grid gap-2">
+              <label className="flex items-start gap-2 rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[11px] text-[var(--shield-text-subtle)] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={readAuditEnabled}
+                  onChange={(e) => onPatchDecoy({ readAuditEnabled: e.currentTarget.checked })}
+                  aria-label="Detect reads and opens of decoy files"
+                  className="mt-0.5 accent-[var(--color-accent)]"
+                />
+                <span>
+                  Detect reads and opens
+                  <span className="block text-[10px] text-[var(--shield-text-muted)]">
+                    Adds Windows file auditing for enrolled decoys. Requires Administrator approval; changes, renames, and deletes are detected without it.
+                  </span>
+                </span>
+              </label>
               <label className="flex items-start gap-2 rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[11px] text-[var(--shield-text-subtle)] cursor-pointer">
                 <input
                   type="checkbox"

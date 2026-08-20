@@ -12,11 +12,26 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **Operator-configurable security monitors** (2026-08-21) — Access & Session
+  monitoring now persists working days/hours, local or UTC schedule basis,
+  per-account failed-sign-in threshold/window, RDP/new-account/off-hours
+  signals, repeat-alert delay, and Fleet reporting; off-hours context applies
+  to RDP and the Fleet-wide reporting requirement cannot be locally bypassed.
+  Wi-Fi Guard now persists and re-arms its bounded learning window, baseline,
+  poll/debounce policy, and path-free Fleet alert preference. Ransomware policy
+  adds repeat-alert/action cooldown, per-process evidence floor, ordered/retried
+  startup, Fleet reporting, and honest detection-versus-containment health.
+  Decoy read auditing now follows its actual saved switch. Screen-capture,
+  USB/HID/auto-isolate, Wi-Fi, auth, and remote-access monitors re-arm or retry
+  from saved intent; driver-watch cadence is selectable and applied immediately.
+
 - **USB HID and device-control hardening** (2026-08-20) — composite HID
   functions now reach the USB monitor and injection guard; the guard remains
   armed for an attached unallowlisted HID, preserves sub-8 ms intervals, and
   clears pre-attach timing. USB serial/network functions remain outside HID and
-  storage enforcement. Pro device control now rejects non-USB/HID PnP targets
+  storage enforcement. HID sensitivity presets and auto-isolate mode/scope/
+  exceptions now persist locally; Enforce stays storage-only until HID scope is
+  explicitly confirmed. Pro device control now rejects non-USB/HID PnP targets
   before PowerShell. Source tests pass; physical BadUSB, Flipper Zero, Hak5
   Rubber Ducky, O.MG cable, and composite-device verification remain open.
 

@@ -13,6 +13,8 @@ describe("generated WinCommander CLI catalog", () => {
     expect(catalog.schemaVersion).toBe(2);
     expect(catalog.commands.length).toBeGreaterThan(400);
     expect(byId.get("tauri:get_settings")?.registered).toBe(true);
+    expect(byId.get("tauri:configure_wifi_guard")?.registered).toBe(true);
+    expect(byId.get("tauri:get_wifi_guard_baseline")?.registered).toBe(true);
     expect(byId.get("tauri:run_backend_script")?.registered).toBe(true);
     expect(byId.get("backend:Get-SystemInfo")?.registered).toBe(true);
     expect(byId.get("backend:Get-ShellBags")?.registered).toBe(true);
@@ -27,13 +29,13 @@ describe("generated WinCommander CLI catalog", () => {
   test("matches the command totals quoted in the docs", () => {
     const tauri = (catalog.commands as Entry[]).filter((entry) => entry.transport === "tauri");
     const backend = (catalog.commands as Entry[]).filter((entry) => entry.transport === "backend-script");
-    expect(catalog.commands.length).toBe(1240);
-    expect(tauri.length).toBe(437);
+    expect(catalog.commands.length).toBe(1245);
+    expect(tauri.length).toBe(442);
     expect(backend.length).toBe(803);
     const releaseExecutable = (catalog.commands as Entry[]).filter(
       (entry) => entry.registered && !entry.debugOnly,
     );
-    expect(releaseExecutable.length).toBe(1236);
+    expect(releaseExecutable.length).toBe(1241);
   });
 
   test("has stable unique identifiers and valid references", () => {

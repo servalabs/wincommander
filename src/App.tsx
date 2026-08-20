@@ -5,6 +5,7 @@ import {
   useState,
   useCallback,
   useRef,
+  useMemo,
   type ComponentType,
   type LazyExoticComponent,
 } from "react";
@@ -42,9 +43,24 @@ import useDecoyMonitor from "./hooks/useDecoyMonitor";
 import useRansomwareMonitor, {
   DEFAULT_RANSOMWARE_THRESHOLD,
   DEFAULT_RANSOMWARE_WINDOW_SECONDS,
+  DEFAULT_RANSOMWARE_ALERT_COOLDOWN_SECONDS,
+  DEFAULT_RANSOMWARE_ATTRIBUTION_MIN_FILES,
   DEFAULT_RANSOMWARE_ACTION,
 } from "./hooks/useRansomwareMonitor";
 import useRemoteAccessMonitor from "./hooks/useRemoteAccessMonitor";
+import useWifiGuardMonitor, {
+  DEFAULT_WIFI_GUARD_ALERT_DEBOUNCE_SECS,
+  DEFAULT_WIFI_GUARD_LEARNING_WINDOW_SECS,
+  DEFAULT_WIFI_GUARD_POLL_INTERVAL_SECS,
+} from "./hooks/useWifiGuardMonitor";
+import useAuthAnomalyMonitor, {
+  DEFAULT_AUTH_ALERT_DEBOUNCE_SECS,
+  DEFAULT_AUTH_FAILED_BURST_THRESHOLD,
+  DEFAULT_AUTH_FAILED_BURST_WINDOW_SECS,
+  DEFAULT_AUTH_WORK_END_HOUR,
+  DEFAULT_AUTH_WORK_DAYS,
+  DEFAULT_AUTH_WORK_START_HOUR,
+} from "./hooks/useAuthAnomalyMonitor";
 import useAcquisitionWatch from "./hooks/useAcquisitionWatch";
 import useFleetEpoch from "./hooks/useFleetEpoch";
 import useLockdownWords from "./hooks/useLockdownWords";
@@ -73,6 +89,7 @@ import UpdateFlowDialog from "./components/UpdateFlowDialog";
 import { startUpdaterListener, useUpdater } from "./hooks/updaterStore";
 import useAutomaticUpdate from "./hooks/useAutomaticUpdate";
 import { PANEL_MANIFESTS, type PanelId } from "./types/panels";
+import type { WifiGuardBaselineEntry } from "./types/settings";
 import { getModuleForPanel, isModuleEnabled } from "./types/modules";
 import { setSoundEnabled } from "./utils/sound";
 import { importPanelWithRetry } from "./lib/panelLoading";
@@ -611,22 +628,149 @@ function AppContent() {
   // start/stop + per-path enroll/remove.
   const decoyEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.enabled ?? false;
   const decoyEnrolledPaths = appSettings?.ideal?.privacy?.decoyMonitor?.enrolledPaths ?? [];
-  useDecoyMonitor(decoyEnabled, decoyEnrolledPaths);
+  const decoyReadAuditEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.readAuditEnabled ?? false;
+  useDecoyMonitor(decoyEnabled, decoyEnrolledPaths, decoyReadAuditEnabled);
 
   // F-3 Anti-ransomware monitor — mass-modify detector over user-content
   // dirs. Hook syncs threshold/window first then start/stop watcher.
   const ransomwareEnabled = appSettings?.ideal?.privacy?.ransomwareMonitor?.enabled ?? false;
   const ransomwareThreshold = appSettings?.ideal?.privacy?.ransomwareMonitor?.threshold ?? DEFAULT_RANSOMWARE_THRESHOLD;
   const ransomwareWindowSeconds = appSettings?.ideal?.privacy?.ransomwareMonitor?.windowSeconds ?? DEFAULT_RANSOMWARE_WINDOW_SECONDS;
+  const ransomwareAlertCooldownSeconds = appSettings?.ideal?.privacy?.ransomwareMonitor?.alertCooldownSeconds ?? DEFAULT_RANSOMWARE_ALERT_COOLDOWN_SECONDS;
+  const ransomwareAttributionMinFiles = appSettings?.ideal?.privacy?.ransomwareMonitor?.attributionMinFiles ?? DEFAULT_RANSOMWARE_ATTRIBUTION_MIN_FILES;
   const ransomwareCustomDirs = appSettings?.ideal?.privacy?.ransomwareMonitor?.customWatchDirs ?? [];
   const ransomwareAction = appSettings?.ideal?.privacy?.ransomwareMonitor?.action ?? DEFAULT_RANSOMWARE_ACTION;
-  useRansomwareMonitor(ransomwareEnabled, ransomwareThreshold, ransomwareWindowSeconds, ransomwareCustomDirs, ransomwareAction);
+  useRansomwareMonitor(
+    ransomwareEnabled,
+    ransomwareThreshold,
+    ransomwareWindowSeconds,
+    ransomwareAlertCooldownSeconds,
+    ransomwareAttributionMinFiles,
+    ransomwareCustomDirs,
+    ransomwareAction,
+  );
 
   // #4 Remote-access monitor — paid Pro-sidecar detector. Hook pushes
   // per-tool overrides then start/stop; Pro + Free wrapper enforce paid.
   const remoteAccessEnabled = appSettings?.ideal?.privacy?.remoteAccessMonitor?.enabled ?? false;
   const remoteAccessTools = appSettings?.ideal?.privacy?.remoteAccessMonitor?.tools ?? null;
   useRemoteAccessMonitor(remoteAccessEnabled, remoteAccessTools);
+
+  // USB monitor arm state is persisted separately from sensitivity/mode. Re-arm
+  // the attach timeline first because HID and auto-isolate consume its events.
+  const usbSecurity = appSettings?.ideal?.privacy?.usbSecurity;
+  const usbMonitorEnabled = usbSecurity?.monitorEnabled === true;
+  const usbHidGuardEnabled = usbSecurity?.hidGuardEnabled === true;
+  const usbAutoSandboxEnabled = usbSecurity?.autoSandboxEnabled === true;
+  const usbSecurityConfigured = usbSecurity !== undefined;
+  const usbRearmFailureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (entitlementLoading || !hasPaid || !usbSecurityConfigured) return;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    const monitorDesired = usbMonitorEnabled || usbHidGuardEnabled || usbAutoSandboxEnabled;
+    const reconcile = async () => {
+      try {
+        if (monitorDesired) {
+          await invoke("start_usb_monitor");
+          await invoke(usbHidGuardEnabled ? "start_usb_hid_guard" : "stop_usb_hid_guard");
+          await invoke(usbAutoSandboxEnabled ? "start_usb_autosandbox" : "stop_usb_autosandbox");
+        } else {
+          await invoke("stop_usb_autosandbox");
+          await invoke("stop_usb_hid_guard");
+          await invoke("stop_usb_monitor");
+        }
+        usbRearmFailureRef.current = null;
+      } catch (err) {
+        if (cancelled) return;
+        const message = String(err);
+        if (usbRearmFailureRef.current !== message) {
+          usbRearmFailureRef.current = message;
+          showWarning("USB security monitors could not fully re-arm. WinCommander will retry automatically.", 12_000);
+        }
+        attempt += 1;
+        if (attempt < 3) {
+          retryTimer = setTimeout(() => { void reconcile(); }, attempt * 5_000);
+        }
+      }
+    };
+    void reconcile();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [
+    entitlementLoading,
+    hasPaid,
+    usbSecurityConfigured,
+    usbMonitorEnabled,
+    usbHidGuardEnabled,
+    usbAutoSandboxEnabled,
+  ]);
+
+  // Wi-Fi Guard retains trusted SSID/BSSID observations in the local settings
+  // file, then rehydrates/re-arms the Pro detector after an app restart. Its
+  // baseline never travels in a Fleet event.
+  const wifiGuard = appSettings?.ideal?.network?.wifiGuard;
+  const wifiGuardEnabled = wifiGuard?.enabled ?? false;
+  const wifiGuardLearningWindowSecs = wifiGuard?.learningWindowSecs
+    ?? DEFAULT_WIFI_GUARD_LEARNING_WINDOW_SECS;
+  const wifiGuardLearningUntil = wifiGuard?.learningUntil ?? null;
+  const wifiGuardPollIntervalSecs = wifiGuard?.pollIntervalSecs
+    ?? DEFAULT_WIFI_GUARD_POLL_INTERVAL_SECS;
+  const wifiGuardAlertDebounceSecs = wifiGuard?.alertDebounceSecs
+    ?? DEFAULT_WIFI_GUARD_ALERT_DEBOUNCE_SECS;
+  const wifiGuardBaseline = wifiGuard?.baseline ?? [];
+  const persistWifiGuardBaseline = useCallback((baseline: WifiGuardBaselineEntry[], learningUntil: string | null) => {
+    patchAppSettings({ ideal: { network: { wifiGuard: { baseline, learningUntil } } } }).catch(() => {});
+  }, [patchAppSettings]);
+  useWifiGuardMonitor(
+    wifiGuardEnabled,
+    {
+      learningWindowSecs: wifiGuardLearningWindowSecs,
+      learningUntil: wifiGuardLearningUntil,
+      pollIntervalSecs: wifiGuardPollIntervalSecs,
+      alertDebounceSecs: wifiGuardAlertDebounceSecs,
+    },
+    wifiGuardBaseline,
+    persistWifiGuardBaseline,
+  );
+
+  const authAnomaly = appSettings?.ideal?.privacy?.authAnomalyMonitor;
+  const authAnomalyEnabled = authAnomaly?.enabled ?? false;
+  const authAnomalyWorkDays = authAnomaly?.workDays;
+  const authAnomalyPolicy = useMemo(() => ({
+    failedBurstThreshold: authAnomaly?.failedBurstThreshold ?? DEFAULT_AUTH_FAILED_BURST_THRESHOLD,
+    failedBurstWindowSecs: authAnomaly?.failedBurstWindowSecs ?? DEFAULT_AUTH_FAILED_BURST_WINDOW_SECS,
+    workStartHour: authAnomaly?.workStartHour ?? DEFAULT_AUTH_WORK_START_HOUR,
+    workEndHour: authAnomaly?.workEndHour ?? DEFAULT_AUTH_WORK_END_HOUR,
+    workDays: authAnomalyWorkDays ?? [...DEFAULT_AUTH_WORK_DAYS],
+    timeBasis: authAnomaly?.timeBasis ?? "local",
+    detectRdp: authAnomaly?.detectRdp ?? true,
+    detectNewAccounts: authAnomaly?.detectNewAccounts ?? true,
+    detectOffHours: authAnomaly?.detectOffHours ?? true,
+    alertDebounceSecs: authAnomaly?.alertDebounceSecs ?? DEFAULT_AUTH_ALERT_DEBOUNCE_SECS,
+    reportToFleet: authAnomaly?.reportToFleet ?? true,
+  }), [
+    authAnomaly?.failedBurstThreshold,
+    authAnomaly?.failedBurstWindowSecs,
+    authAnomaly?.workStartHour,
+    authAnomaly?.workEndHour,
+    authAnomalyWorkDays,
+    authAnomaly?.timeBasis,
+    authAnomaly?.detectRdp,
+    authAnomaly?.detectNewAccounts,
+    authAnomaly?.detectOffHours,
+    authAnomaly?.alertDebounceSecs,
+    authAnomaly?.reportToFleet,
+  ]);
+  useAuthAnomalyMonitor(
+    authAnomalyEnabled,
+    authAnomalyPolicy,
+    hasPaid,
+    appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true,
+  );
 
   // Anti-Acquisition Defenses: continuous WARN-mode watcher — polls the
   // existing read-only Scan-AcquisitionThreats detector; warns only, no
@@ -651,6 +795,29 @@ function AppContent() {
     if (desired === undefined) return;
     void invoke("set_capture_protection", { enabled: desired === true }).catch(() => {});
   }, [appSettings?.ideal?.privacy?.screenCapture?.protectWindow]);
+
+  // Detection is also sidecar runtime state, so a saved ON preference must
+  // re-arm after every app/sidecar restart. The panel toggle remains the
+  // interactive control; this reconciler makes persistence truthful.
+  const screenCaptureRearmFailureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (entitlementLoading) return;
+    const desired = appSettings?.ideal?.privacy?.screenCapture?.detectionEnabled;
+    if (desired === undefined) return;
+    if (!hasPaid && desired === true) return;
+    const command = desired === true
+      ? "start_screen_capture_watch"
+      : "stop_screen_capture_watch";
+    void invoke(command)
+      .then(() => { screenCaptureRearmFailureRef.current = null; })
+      .catch((err) => {
+        if (desired !== true) return;
+        const message = String(err);
+        if (screenCaptureRearmFailureRef.current === message) return;
+        screenCaptureRearmFailureRef.current = message;
+        showWarning("Screen-capture detection could not re-arm. Open Privacy → Screen capture to retry.", 12_000);
+      });
+  }, [appSettings?.ideal?.privacy?.screenCapture?.detectionEnabled, entitlementLoading, hasPaid]);
 
   // F-5 Coercion code-phrase trigger — paid. The hook gates on hasPaid
   // and the Rust start command also enforces require_paid.

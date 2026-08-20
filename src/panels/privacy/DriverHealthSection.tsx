@@ -119,6 +119,7 @@ function remediation(d: DriverProblem): string {
 export default function DriverHealthSection({ isAdvanced = false, embedded = false, scanKey = 0, hideActions = false }: DriverHealthSectionProps) {
   const { appSettings, patchAppSettings } = useAppState();
   const watchEnabled = appSettings?.ideal?.security?.drivers?.watchEnabled ?? false;
+  const watchIntervalSecs = appSettings?.ideal?.security?.drivers?.watchIntervalSecs ?? 60;
   const ignoredFindingIds = appSettings?.app?.ignoredFindingIds ?? [];
 
   const [report, setReport] = useState<DriverHealthReport | null>(null);
@@ -182,7 +183,7 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
       setError(null);
       try {
         if (next) {
-          await invoke('start_driver_watch', { intervalSecs: null });
+          await invoke('start_driver_watch', { intervalSecs: watchIntervalSecs });
         } else {
           await invoke('stop_driver_watch');
         }
@@ -195,8 +196,20 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
         setWatchBusy(false);
       }
     },
-    [patchAppSettings],
+    [patchAppSettings, watchIntervalSecs],
   );
+
+  const handleWatchIntervalChange = useCallback(async (next: number) => {
+    const bounded = Math.max(30, Math.min(3600, next));
+    await patchAppSettings({
+      ideal: { security: { drivers: { watchIntervalSecs: bounded } } },
+    }).catch(() => {});
+    if (watchEnabled) {
+      await invoke('start_driver_watch', { intervalSecs: bounded }).catch((err) => {
+        setError(String(err));
+      });
+    }
+  }, [patchAppSettings, watchEnabled]);
 
   const summary = report?.summary;
   const sortedDevices = report
@@ -258,6 +271,23 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
               label="Watch for new driver problems"
               className="driver-health-watch-switch"
             />
+          )}
+          {isAdvanced && watchEnabled && (
+            <label className="flex items-center gap-2 text-[11px]">
+              Check every
+              <select
+                value={watchIntervalSecs}
+                onChange={(e) => void handleWatchIntervalChange(Number(e.currentTarget.value))}
+                aria-label="Driver health watch interval"
+                className="rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] px-2 py-1"
+              >
+                <option value={30}>30 seconds</option>
+                <option value={60}>1 minute</option>
+                <option value={300}>5 minutes</option>
+                <option value={900}>15 minutes</option>
+                <option value={3600}>1 hour</option>
+              </select>
+            </label>
           )}
           {ignoredDriverCount > 0 && <Button icon="reset" minimal small onClick={restoreDriverFindings}>Restore ignored ({ignoredDriverCount})</Button>}
         </div>

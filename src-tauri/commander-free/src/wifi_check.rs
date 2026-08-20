@@ -25,6 +25,24 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WifiGuardBaselineEntry {
+    pub ssid: String,
+    pub bssids: Vec<String>,
+    pub best_auth_strength: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WifiGuardConfig {
+    pub learning_window_secs: u64,
+    pub learning_until: Option<String>,
+    pub poll_interval_secs: u64,
+    pub alert_debounce_secs: u64,
+    pub baseline: Option<Vec<WifiGuardBaselineEntry>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WifiGuardHit {
     pub ssid: String,
     pub bssid: String,
@@ -40,9 +58,13 @@ pub struct WifiGuardHit {
 pub struct WifiGuardStatus {
     pub running: bool,
     pub learning: bool,
+    pub learning_until: Option<String>,
     pub known_ssid_count: usize,
     pub current_ssid: Option<String>,
     pub current_bssid: Option<String>,
+    pub learning_window_secs: u64,
+    pub poll_interval_secs: u64,
+    pub alert_debounce_secs: u64,
 }
 
 #[tauri::command]
@@ -87,6 +109,29 @@ pub async fn get_wifi_guard_known() -> Result<Vec<(String, Vec<String>)>, String
     let v = crate::sidecar::dispatch_paid_command("get_wifi_guard_known", serde_json::Value::Null)
         .await?;
     serde_json::from_value(v).map_err(|e| format!("wifi_guard known decode: {}", e))
+}
+
+/// Return the complete device-local baseline so Free can persist it across a
+/// sidecar/app restart. This is never used for Fleet reporting.
+#[tauri::command]
+pub async fn get_wifi_guard_baseline() -> Result<Vec<WifiGuardBaselineEntry>, String> {
+    let v =
+        crate::sidecar::dispatch_paid_command("get_wifi_guard_baseline", serde_json::Value::Null)
+            .await?;
+    serde_json::from_value(v).map_err(|e| format!("wifi_guard baseline decode: {}", e))
+}
+
+/// Apply the operator policy before the detector is armed. The Pro sidecar
+/// clamps the cadence, learning window, and alert cooldown to safe bounds.
+#[tauri::command]
+pub async fn configure_wifi_guard(config: WifiGuardConfig) -> Result<WifiGuardStatus, String> {
+    crate::license::require_paid("wifi guard")?;
+    let v = crate::sidecar::dispatch_paid_command(
+        "configure_wifi_guard",
+        serde_json::json!({ "config": config }),
+    )
+    .await?;
+    serde_json::from_value(v).map_err(|e| format!("wifi_guard config decode: {}", e))
 }
 
 #[tauri::command]

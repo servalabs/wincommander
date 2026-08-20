@@ -573,6 +573,11 @@ export interface PrivacySettings {
    *  sessions (AnyDesk / TeamViewer / RustDesk / VNC / RDP / Quick Assist).
    *  Paid. Off by default. */
   remoteAccessMonitor: RemoteAccessMonitorSettings;
+  /** Paid Security-log sign-in anomaly monitor. */
+  authAnomalyMonitor?: AuthAnomalyMonitorSettings;
+  /** USB security monitor arm preferences. Parameters/allow-lists are stored
+   *  separately by their bounded Rust modules; these booleans drive re-arm. */
+  usbSecurity?: UsbSecurityMonitorSettings;
   /** #5: screen-capture detection (best-effort tool-presence) + own-window
    *  capture protection (SetWindowDisplayAffinity). Paid. */
   screenCapture: ScreenCaptureSettings;
@@ -866,12 +871,20 @@ export interface RansomwareMonitorSettings {
   threshold: number | null;
   /** Sliding window length in seconds. Default 30. Clamped 5..=300. */
   windowSeconds: number | null;
+  /** Suppress repeated alerts/actions after a detection while monitoring
+   *  continues. Default 300 seconds. Clamped 30..=3600. */
+  alertCooldownSeconds?: number | null;
+  /** Distinct files one process must touch before Pro names or acts on it.
+   *  Default 5. Clamped 3..=threshold. */
+  attributionMinFiles?: number | null;
   /** User-added extra watch directories. Standard set (Documents,
    *  Pictures, Desktop, Downloads) is always watched in addition. */
   customWatchDirs: string[] | null;
   /** F-3 v2: automated response on the Pro ETW path. Default "suspend".
    *  Null = backend default. */
   action?: RansomwareAction | null;
+  /** Send a coarse, path-free ransomware alarm to the enrolled Fleet. */
+  reportToFleet?: boolean | null;
 }
 
 /** #4: remote-access monitor persistence layer. Runtime authority lives
@@ -883,6 +896,36 @@ export interface RemoteAccessMonitorSettings {
   /** Per-tool enable overrides keyed by catalogue id ("teamviewer",
    *  "anydesk", …). Missing key = tool enabled by default. Null = all on. */
   tools?: Record<string, boolean> | null;
+}
+
+export type AuthAnomalyTimeBasis = "local" | "utc";
+
+/** Access & Session Monitor policy. Null values retain the conservative
+ * sidecar defaults so settings created before this policy stay compatible. */
+export interface AuthAnomalyMonitorSettings {
+  enabled?: boolean | null;
+  failedBurstThreshold?: number | null;
+  failedBurstWindowSecs?: number | null;
+  workStartHour?: number | null;
+  workEndHour?: number | null;
+  /** ISO weekday numbers: Monday=1 through Sunday=7. Missing = weekdays. */
+  workDays?: number[] | null;
+  /** Device local time or UTC for off-hours schedule evaluation. */
+  timeBasis?: AuthAnomalyTimeBasis | null;
+  detectRdp?: boolean | null;
+  detectNewAccounts?: boolean | null;
+  detectOffHours?: boolean | null;
+  alertDebounceSecs?: number | null;
+  reportToFleet?: boolean | null;
+}
+
+export interface UsbSecurityMonitorSettings {
+  /** Device attach/detach monitor. Also armed when a dependent guard is on. */
+  monitorEnabled?: boolean | null;
+  /** BadUSB/HID timing detector (alert-only). */
+  hidGuardEnabled?: boolean | null;
+  /** Observe/enforce new-device auto-isolation according to its saved mode. */
+  autoSandboxEnabled?: boolean | null;
 }
 
 /** #5: screen-capture detection + own-window capture protection. Paid. */
@@ -1351,6 +1394,34 @@ export interface NetworkSettings {
   hosts: HostsSettings;
   firewall: FirewallSettings;
   vpnKillSwitch?: VpnKillSwitchSettings;
+  /** Rogue-AP detector policy and its device-local trusted-network baseline. */
+  wifiGuard?: WifiGuardSettings;
+}
+
+export interface WifiGuardBaselineEntry {
+  /** Stored locally only; never included in a Fleet alert. */
+  ssid: string;
+  /** BSSIDs observed/trusted for this SSID. */
+  bssids: string[];
+  /** Internal authentication-strength score retained for downgrade detection. */
+  bestAuthStrength: number;
+}
+
+export interface WifiGuardSettings {
+  /** Re-arm automatically after WinCommander starts. Paid Pro detector. */
+  enabled?: boolean | null;
+  /** How long a newly empty baseline observes before alerting (5 min–7 days). */
+  learningWindowSecs?: number | null;
+  /** UTC deadline for an in-progress learning window; keeps learning honest across restarts. */
+  learningUntil?: string | null;
+  /** netsh association check cadence (5–300 seconds). */
+  pollIntervalSecs?: number | null;
+  /** Repeat-alert cooldown for one SSID/BSSID pair (30–3600 seconds). */
+  alertDebounceSecs?: number | null;
+  /** Device-local baseline; SSIDs/BSSIDs are not sent to Fleet. */
+  baseline?: WifiGuardBaselineEntry[] | null;
+  /** Forward only a coarse rogue-AP alarm class to Fleet. */
+  reportToFleet?: boolean | null;
 }
 
 export interface VpnKillSwitchSettings {

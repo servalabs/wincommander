@@ -80,7 +80,8 @@ static RECENT_FIRES: Lazy<Mutex<VecDeque<RansomwareDetection>>> =
 /// runtime authority is set via `set_ransomware_watch_dirs`.
 static EXTRA_WATCH_DIRS: Lazy<Mutex<HashSet<PathBuf>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
-const SNOOZE_AFTER_FIRE_SECS: u64 = 300; // 5 min — prevent toast-spam during sustained attack
+const DEFAULT_ALERT_COOLDOWN_SECS: u32 = 300;
+const DEFAULT_ATTRIBUTION_MIN_FILES: u32 = 5;
 const RECENT_CAP: usize = 5;
 
 // File extensions ransomware doesn't bother with + things browsers /
@@ -259,6 +260,16 @@ pub struct RansomwareConfig {
     pub threshold: u32,
     /// Length of the rolling window in seconds. Default 30.
     pub window_seconds: u32,
+    /// Suppress duplicate alerts for this many seconds after a detection.
+    /// The detector keeps running; only repeated notifications/actions are
+    /// suppressed. Default 300, bounded 30..=3600.
+    #[serde(default = "default_alert_cooldown_seconds")]
+    pub alert_cooldown_seconds: u32,
+    /// Minimum distinct user files one PID must modify before Pro may name or
+    /// act on it. This is deliberately separate from the overall detector
+    /// threshold and is always bounded to that threshold.
+    #[serde(default = "default_attribution_min_files")]
+    pub attribution_min_files: u32,
     /// Automated response on the ETW (v2) path. `#[serde(default)]` so a
     /// frontend that omits it (or a stored v1 config) decodes to the
     /// Suspend default rather than failing.
@@ -271,8 +282,29 @@ impl Default for RansomwareConfig {
         Self {
             threshold: 50,
             window_seconds: 30,
+            alert_cooldown_seconds: DEFAULT_ALERT_COOLDOWN_SECS,
+            attribution_min_files: DEFAULT_ATTRIBUTION_MIN_FILES,
             action: RansomwareAction::Suspend,
         }
+    }
+}
+
+const fn default_alert_cooldown_seconds() -> u32 {
+    DEFAULT_ALERT_COOLDOWN_SECS
+}
+
+const fn default_attribution_min_files() -> u32 {
+    DEFAULT_ATTRIBUTION_MIN_FILES
+}
+
+fn bounded_config(config: RansomwareConfig) -> RansomwareConfig {
+    let threshold = config.threshold.clamp(10, 500);
+    RansomwareConfig {
+        threshold,
+        window_seconds: config.window_seconds.clamp(5, 300),
+        alert_cooldown_seconds: config.alert_cooldown_seconds.clamp(30, 3600),
+        attribution_min_files: config.attribution_min_files.clamp(3, threshold),
+        action: config.action,
     }
 }
 
@@ -374,10 +406,10 @@ fn handle_fs_event(app: &AppHandle, event: Event) {
     let window = Duration::from_secs(cfg.window_seconds as u64);
 
     // Snooze check — once we've fired recently, suppress further fires
-    // for SNOOZE_AFTER_FIRE_SECS so a sustained attack produces one
+    // for the configured cooldown so a sustained attack produces one
     // alert, not 100.
     if let Some(last_fire) = *LAST_FIRE.lock().unwrap() {
-        if now.duration_since(last_fire).as_secs() < SNOOZE_AFTER_FIRE_SECS {
+        if now.duration_since(last_fire).as_secs() < cfg.alert_cooldown_seconds as u64 {
             return;
         }
     }
@@ -629,6 +661,7 @@ fn etw_args() -> serde_json::Value {
     serde_json::json!({
         "threshold": cfg.threshold,
         "windowSeconds": cfg.window_seconds,
+        "attributionMinFiles": cfg.attribution_min_files,
         "action": cfg.action.as_wire(),
         "dirs": dirs,
     })
@@ -724,16 +757,34 @@ pub async fn ransomware_monitor_status() -> Result<bool, String> {
     Ok(RUNNING.load(Ordering::SeqCst))
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RansomwareMonitorHealth {
+    pub detection_running: bool,
+    pub process_attribution_ready: bool,
+    pub automatic_response_ready: bool,
+}
+
+/// Separates the always-available mass-change alarm from the privileged Pro
+/// attribution/action layer so the UI never calls a degraded monitor fully
+/// operational.
+#[tauri::command]
+pub async fn ransomware_monitor_health() -> Result<RansomwareMonitorHealth, String> {
+    let detection_running = RUNNING.load(Ordering::SeqCst);
+    let process_attribution_ready = ATTRIB_READY.load(Ordering::SeqCst);
+    Ok(RansomwareMonitorHealth {
+        detection_running,
+        process_attribution_ready,
+        automatic_response_ready: detection_running && process_attribution_ready,
+    })
+}
+
 #[tauri::command]
 pub async fn set_ransomware_config(config: RansomwareConfig) -> Result<(), String> {
     // Hard bounds — don't let the user accidentally configure a
     // detector that never fires (huge threshold) or fires on every
     // save (1 file).
-    let bounded = RansomwareConfig {
-        threshold: config.threshold.clamp(10, 500),
-        window_seconds: config.window_seconds.clamp(5, 300),
-        action: config.action,
-    };
+    let bounded = bounded_config(config);
     *CONFIG.lock().unwrap() = bounded;
     // Keep the Pro attribution feed's window + action preset in sync.
     if ATTRIB_READY.load(Ordering::SeqCst) {
@@ -805,4 +856,36 @@ pub async fn set_ransomware_watch_dirs(dirs: Vec<String>) -> Result<(), String> 
         let _ = crate::sidecar::dispatch_paid_command("start_ransomware_etw", etw_args()).await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn config_bounds_cooldown_and_attribution_floor() {
+        let bounded = bounded_config(RansomwareConfig {
+            threshold: 10,
+            window_seconds: 1,
+            alert_cooldown_seconds: 1,
+            attribution_min_files: 99,
+            action: RansomwareAction::Monitor,
+        });
+        assert_eq!(bounded.threshold, 10);
+        assert_eq!(bounded.window_seconds, 5);
+        assert_eq!(bounded.alert_cooldown_seconds, 30);
+        assert_eq!(bounded.attribution_min_files, 10);
+    }
+
+    #[test]
+    fn legacy_config_uses_safe_new_defaults() {
+        let decoded: RansomwareConfig = serde_json::from_value(serde_json::json!({
+            "threshold": 50,
+            "windowSeconds": 30,
+            "action": "suspend"
+        }))
+        .unwrap();
+        assert_eq!(decoded.alert_cooldown_seconds, DEFAULT_ALERT_COOLDOWN_SECS);
+        assert_eq!(decoded.attribution_min_files, DEFAULT_ATTRIBUTION_MIN_FILES);
+    }
 }

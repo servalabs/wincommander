@@ -22,8 +22,10 @@
 //   and the RECENT ring contain ONLY timing counts and device identity.
 
 use std::collections::{HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use once_cell::sync::Lazy;
@@ -57,6 +59,10 @@ const RECENT_CAP: usize = 50;
 /// Rolling window of arrival timestamps kept in KEY_TIMES.
 const KEY_TIMES_CAP: usize = 64;
 
+/// Policy is intentionally separate from the forensic USB timeline. It stores
+/// only operator choices, never keystrokes or alert records.
+const PREFERENCES_FILENAME: &str = "usb_hid_guard.json";
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 /// Runtime-tunable sensitivity configuration.
@@ -78,6 +84,13 @@ pub enum Sensitivity {
 struct EffectiveThresholds {
     human_floor_ms: u64,
     min_burst_keys: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct HidGuardPreferences {
+    sensitivity: Sensitivity,
+    allow_list: Vec<String>,
 }
 
 fn effective_thresholds(s: Sensitivity) -> EffectiveThresholds {
@@ -146,6 +159,7 @@ static CONSUMER_TASK: Lazy<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> 
     Lazy::new(|| Mutex::new(None));
 
 static SENSITIVITY: Lazy<Mutex<Sensitivity>> = Lazy::new(|| Mutex::new(Sensitivity::Balanced));
+static PREFERENCES_LOADED: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));
 
 /// Currently-open arming state (Some while an unallowlisted HID remains attached).
 static ARM: Lazy<Mutex<Option<ArmState>>> = Lazy::new(|| Mutex::new(None));
@@ -162,6 +176,69 @@ static LAST_FIRE: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
 
 /// Recent detection ring (capped at RECENT_CAP). No keystroke content.
 static RECENT: Lazy<Mutex<VecDeque<HidInjectionAlert>>> = Lazy::new(|| Mutex::new(VecDeque::new()));
+
+fn preferences_path() -> Result<PathBuf, String> {
+    Ok(crate::paths::user_data_dir()?.join(PREFERENCES_FILENAME))
+}
+
+fn ensure_preferences_loaded() {
+    let mut loaded = PREFERENCES_LOADED.lock().unwrap();
+    if *loaded {
+        return;
+    }
+    if let Ok(path) = preferences_path() {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Ok(saved) = serde_json::from_str::<HidGuardPreferences>(&raw) {
+                let valid = saved.allow_list.len() <= 128
+                    && saved.allow_list.iter().all(|key| {
+                        let key = key.trim();
+                        !key.is_empty() && key.len() <= 256 && !key.contains(['\r', '\n', '\0'])
+                    });
+                if valid {
+                    *SENSITIVITY.lock().unwrap() = saved.sensitivity;
+                    *ALLOW_LIST.lock().unwrap() = saved
+                        .allow_list
+                        .into_iter()
+                        .map(|key| key.trim().to_string())
+                        .collect();
+                }
+            }
+        }
+    }
+    *loaded = true;
+}
+
+fn persist_preferences() -> Result<(), String> {
+    let mut allow_list: Vec<String> = ALLOW_LIST.lock().unwrap().iter().cloned().collect();
+    allow_list.sort();
+    let preferences = HidGuardPreferences {
+        sensitivity: *SENSITIVITY.lock().unwrap(),
+        allow_list,
+    };
+    let data = serde_json::to_string(&preferences)
+        .map_err(|e| format!("Serialize USB HID guard preferences: {e}"))?;
+    let path = preferences_path()?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "USB HID guard preferences have no parent".to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "USB HID guard preferences have no file name".to_string())?;
+    let tmp = parent.join(format!(".{file_name}.tmp"));
+    {
+        let mut file = std::fs::File::create(&tmp)
+            .map_err(|e| format!("Create USB HID guard preferences: {e}"))?;
+        file.write_all(data.as_bytes())
+            .map_err(|e| format!("Write USB HID guard preferences: {e}"))?;
+        file.sync_all()
+            .map_err(|e| format!("Sync USB HID guard preferences: {e}"))?;
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("Save USB HID guard preferences: {e}")
+    })
+}
 
 #[cfg(test)]
 static HID_GUARD_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
@@ -543,6 +620,7 @@ async fn consumer_task(app: AppHandle) {
 #[tauri::command]
 pub async fn start_usb_hid_guard(app: AppHandle) -> Result<serde_json::Value, String> {
     crate::license::require_paid("USB HID-injection guard")?;
+    ensure_preferences_loaded();
 
     if RUNNING
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -593,10 +671,35 @@ pub async fn stop_usb_hid_guard() -> Result<serde_json::Value, String> {
 /// Ungated read.
 #[tauri::command]
 pub fn usb_hid_guard_status() -> serde_json::Value {
+    ensure_preferences_loaded();
+    let sensitivity = *SENSITIVITY.lock().unwrap();
+    let thresholds = effective_thresholds(sensitivity);
     serde_json::json!({
         "running": RUNNING.load(Ordering::Relaxed),
         "alertCount": RECENT.lock().unwrap().len(),
+        "sensitivity": sensitivity,
+        "humanFloorMs": thresholds.human_floor_ms,
+        "minBurstKeys": thresholds.min_burst_keys,
     })
+}
+
+/// Select a preset that changes the HID timing threshold and burst length.
+/// Requires paid licence and is retained across restarts.
+#[tauri::command]
+pub fn set_usb_hid_guard_sensitivity(
+    sensitivity: Sensitivity,
+) -> Result<serde_json::Value, String> {
+    crate::license::require_paid("USB HID-injection guard")?;
+    ensure_preferences_loaded();
+    *SENSITIVITY.lock().unwrap() = sensitivity;
+    persist_preferences()?;
+    let thresholds = effective_thresholds(sensitivity);
+    Ok(serde_json::json!({
+        "ok": true,
+        "sensitivity": sensitivity,
+        "humanFloorMs": thresholds.human_floor_ms,
+        "minBurstKeys": thresholds.min_burst_keys,
+    }))
 }
 
 /// Returns recent injection alerts (device + timing summary, no keystroke content).
@@ -631,11 +734,13 @@ pub fn clear_usb_hid_alerts() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub fn usb_hid_guard_allow_device(device_key: String) -> Result<serde_json::Value, String> {
     crate::license::require_paid("USB HID-injection guard")?;
+    ensure_preferences_loaded();
     let key = device_key.trim();
     if key.is_empty() {
         return Err("device_key must not be empty".to_string());
     }
     ALLOW_LIST.lock().unwrap().insert(key.to_string());
+    persist_preferences()?;
     try_disarm(key);
     crate::log_message(
         "info",
@@ -649,7 +754,9 @@ pub fn usb_hid_guard_allow_device(device_key: String) -> Result<serde_json::Valu
 #[tauri::command]
 pub fn usb_hid_guard_disallow_device(device_key: String) -> Result<serde_json::Value, String> {
     crate::license::require_paid("USB HID-injection guard")?;
+    ensure_preferences_loaded();
     let removed = ALLOW_LIST.lock().unwrap().remove(device_key.trim());
+    persist_preferences()?;
     crate::log_message(
         "info",
         &format!(
@@ -664,6 +771,7 @@ pub fn usb_hid_guard_disallow_device(device_key: String) -> Result<serde_json::V
 /// Returns the current local trusted-device allow-list. Ungated read.
 #[tauri::command]
 pub fn usb_hid_guard_allow_list() -> Vec<String> {
+    ensure_preferences_loaded();
     let mut list: Vec<String> = ALLOW_LIST.lock().unwrap().iter().cloned().collect();
     list.sort();
     list

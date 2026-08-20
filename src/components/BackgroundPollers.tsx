@@ -382,8 +382,13 @@ export default function BackgroundPollers({
     // The Fleet master policy sends only an alarm class and small counters —
     // never a clipboard pattern, process/tool name, path, peer, SSID, or
     // device name. Pro validates this closed shape again before queueing.
-    const reportRequiredFleetAlert = (alertType: string, detail: Record<string, string | number>) => {
-      if (appSettingsRef.current?.ideal?.security?.requireAllDeviceAlertsInFleet !== true) return;
+    const reportConfiguredFleetAlert = (
+      alertType: string,
+      detail: Record<string, string | number>,
+      monitorReportingEnabled = false,
+    ) => {
+      if (appSettingsRef.current?.ideal?.security?.requireAllDeviceAlertsInFleet !== true
+          && !monitorReportingEnabled) return;
       invoke("fleet_report_local_alert", { alertType, detail }).catch(() => {
         // A Fleet outage must never interfere with the local protection or toast.
       });
@@ -411,7 +416,7 @@ export default function BackgroundPollers({
             `Looks like you copied a ${pattern} — be careful where you paste it.`,
           );
         }
-        reportRequiredFleetAlert("clipboard_guard", { class: "local_match", severity: severity === "danger" ? "danger" : "warning" });
+        reportConfiguredFleetAlert("clipboard_guard", { class: "local_match", severity: severity === "danger" ? "danger" : "warning" });
       },
     );
 
@@ -467,7 +472,11 @@ export default function BackgroundPollers({
           `DISCONNECT NETWORK NOW (Ethernet/WiFi off). ${actionMsg}`,
           30_000,
         );
-        reportRequiredFleetAlert("ransomware", { class: "mass_modification", severity: "danger", count });
+        reportConfiguredFleetAlert(
+          "ransomware",
+          { class: "mass_modification", severity: "danger", count },
+          appSettingsRef.current?.ideal?.privacy?.ransomwareMonitor?.reportToFleet === true,
+        );
       },
     );
 
@@ -525,7 +534,7 @@ export default function BackgroundPollers({
         } else {
           showWarning(`${tool} is running — no active session detected yet.`, 5_000);
         }
-        reportRequiredFleetAlert("remote_access", {
+        reportConfiguredFleetAlert("remote_access", {
           class: conf === "high" ? "incoming_session" : "tool_detected",
           severity: conf === "high" ? "danger" : "warning",
         });
@@ -567,15 +576,19 @@ export default function BackgroundPollers({
         const text = event.payload?.problemText ?? "driver problem";
         recordEvidence("system", "warn", `Driver problem: ${name}`, text);
         showError(`Driver problem: ${name} — ${text}`, 12_000);
-        reportRequiredFleetAlert("driver_health", { class: "critical_problem", severity: "warning" });
+        reportConfiguredFleetAlert("driver_health", { class: "critical_problem", severity: "warning" });
       },
     );
 
     const unlistenWifiGuard = listen("wifi-guard-detected", () => {
-      reportRequiredFleetAlert("wifi_guard", { class: "rogue_access_point", severity: "warning" });
+      reportConfiguredFleetAlert(
+        "wifi_guard",
+        { class: "rogue_access_point", severity: "warning" },
+        appSettingsRef.current?.ideal?.network?.wifiGuard?.reportToFleet === true,
+      );
     });
     const unlistenNetworkHoneypot = listen("network-honeypot-detected", () => {
-      reportRequiredFleetAlert("network_honeypot", { class: "connection", severity: "warning" });
+      reportConfiguredFleetAlert("network_honeypot", { class: "connection", severity: "warning" });
     });
 
     // ── Tauri event: panic-trigger-test ──────────────────────────────────

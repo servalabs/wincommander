@@ -21,6 +21,7 @@ import PasteMonitorSection from "./PasteMonitorSection";
 import DecoyMonitorSection from "./DecoyMonitorSection";
 import RansomwareMonitorSection from "./RansomwareMonitorSection";
 import RemoteAccessMonitorSection from "./RemoteAccessMonitorSection";
+import AuthAnomalySection from "./AuthAnomalySection";
 import ArgusDlpSection from "./ArgusDlpSection";
 import ArgusTamperSection from "./ArgusTamperSection";
 import ArgusPrintUsbSection from "./ArgusPrintUsbSection";
@@ -33,9 +34,19 @@ import { useSettingsQuery } from "../../hooks/queries/useSettingsQuery";
 import {
     DEFAULT_RANSOMWARE_THRESHOLD,
     DEFAULT_RANSOMWARE_WINDOW_SECONDS,
+    DEFAULT_RANSOMWARE_ALERT_COOLDOWN_SECONDS,
+    DEFAULT_RANSOMWARE_ATTRIBUTION_MIN_FILES,
     DEFAULT_RANSOMWARE_ACTION,
 } from "../../hooks/useRansomwareMonitor";
-import type { RansomwareAction } from "../../types/settings";
+import {
+    DEFAULT_AUTH_ALERT_DEBOUNCE_SECS,
+    DEFAULT_AUTH_FAILED_BURST_THRESHOLD,
+    DEFAULT_AUTH_FAILED_BURST_WINDOW_SECS,
+    DEFAULT_AUTH_WORK_END_HOUR,
+    DEFAULT_AUTH_WORK_DAYS,
+    DEFAULT_AUTH_WORK_START_HOUR,
+} from "../../hooks/useAuthAnomalyMonitor";
+import type { AuthAnomalyTimeBasis, RansomwareAction } from "../../types/settings";
 import useClipboardGuardRules from "../../hooks/useClipboardGuardRules";
 import './index.css';
 
@@ -83,21 +94,30 @@ export default function PrivacyPanel() {
 
     const decoyEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.enabled ?? false;
     const decoyEnrolledPaths = appSettings?.ideal?.privacy?.decoyMonitor?.enrolledPaths ?? [];
+    const decoyReadAuditEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.readAuditEnabled ?? false;
     const decoyFleetAlertEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.fleetAlertEnabled ?? false;
-    const patchDecoy = (patch: { enabled?: boolean; enrolledPaths?: string[]; fleetAlertEnabled?: boolean }) =>
+    const patchDecoy = (patch: { enabled?: boolean; enrolledPaths?: string[]; readAuditEnabled?: boolean; fleetAlertEnabled?: boolean }) =>
         patchAppSettings({ ideal: { privacy: { decoyMonitor: patch } } } as any).catch(() => {});
 
+    const allDeviceAlertsRequired = appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true;
     const ransomwareEnabled = appSettings?.ideal?.privacy?.ransomwareMonitor?.enabled ?? false;
     const ransomwareThreshold = appSettings?.ideal?.privacy?.ransomwareMonitor?.threshold ?? DEFAULT_RANSOMWARE_THRESHOLD;
     const ransomwareWindowSeconds = appSettings?.ideal?.privacy?.ransomwareMonitor?.windowSeconds ?? DEFAULT_RANSOMWARE_WINDOW_SECONDS;
+    const ransomwareAlertCooldownSeconds = appSettings?.ideal?.privacy?.ransomwareMonitor?.alertCooldownSeconds ?? DEFAULT_RANSOMWARE_ALERT_COOLDOWN_SECONDS;
+    const ransomwareAttributionMinFiles = appSettings?.ideal?.privacy?.ransomwareMonitor?.attributionMinFiles ?? DEFAULT_RANSOMWARE_ATTRIBUTION_MIN_FILES;
     const ransomwareCustomDirs = appSettings?.ideal?.privacy?.ransomwareMonitor?.customWatchDirs ?? [];
     const ransomwareAction = appSettings?.ideal?.privacy?.ransomwareMonitor?.action ?? DEFAULT_RANSOMWARE_ACTION;
+    const ransomwareReportToFleet = allDeviceAlertsRequired
+        || appSettings?.ideal?.privacy?.ransomwareMonitor?.reportToFleet === true;
     const patchRansomware = (patch: {
         enabled?: boolean;
         threshold?: number;
         windowSeconds?: number;
+        alertCooldownSeconds?: number;
+        attributionMinFiles?: number;
         customWatchDirs?: string[];
         action?: RansomwareAction;
+        reportToFleet?: boolean;
     }) =>
         patchAppSettings({ ideal: { privacy: { ransomwareMonitor: patch } } } as any).catch(() => {});
 
@@ -106,9 +126,26 @@ export default function PrivacyPanel() {
     const patchRemoteAccess = (patch: { enabled?: boolean; tools?: Record<string, boolean> }) =>
         patchAppSettings({ ideal: { privacy: { remoteAccessMonitor: patch } } } as any).catch(() => {});
 
+    const authAnomaly = appSettings?.ideal?.privacy?.authAnomalyMonitor;
+    const authAnomalyEnabled = authAnomaly?.enabled ?? false;
+    const authAnomalyPolicy = {
+        failedBurstThreshold: authAnomaly?.failedBurstThreshold ?? DEFAULT_AUTH_FAILED_BURST_THRESHOLD,
+        failedBurstWindowSecs: authAnomaly?.failedBurstWindowSecs ?? DEFAULT_AUTH_FAILED_BURST_WINDOW_SECS,
+        workStartHour: authAnomaly?.workStartHour ?? DEFAULT_AUTH_WORK_START_HOUR,
+        workEndHour: authAnomaly?.workEndHour ?? DEFAULT_AUTH_WORK_END_HOUR,
+        workDays: authAnomaly?.workDays ?? [...DEFAULT_AUTH_WORK_DAYS],
+        timeBasis: (authAnomaly?.timeBasis ?? "local") as AuthAnomalyTimeBasis,
+        detectRdp: authAnomaly?.detectRdp ?? true,
+        detectNewAccounts: authAnomaly?.detectNewAccounts ?? true,
+        detectOffHours: authAnomaly?.detectOffHours ?? true,
+        alertDebounceSecs: authAnomaly?.alertDebounceSecs ?? DEFAULT_AUTH_ALERT_DEBOUNCE_SECS,
+        reportToFleet: allDeviceAlertsRequired || authAnomaly?.reportToFleet !== false,
+    };
+    const patchAuthAnomaly = (patch: Partial<typeof authAnomalyPolicy> & { enabled?: boolean }) =>
+        patchAppSettings({ ideal: { privacy: { authAnomalyMonitor: patch } } } as any).catch(() => {});
+
     const screenCaptureDetectionEnabled = appSettings?.ideal?.privacy?.screenCapture?.detectionEnabled ?? false;
     const screenCaptureProtectWindow = appSettings?.ideal?.privacy?.screenCapture?.protectWindow ?? false;
-    const allDeviceAlertsRequired = appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true;
     const screenCaptureReportToFleet = allDeviceAlertsRequired
         || appSettings?.ideal?.privacy?.screenCapture?.reportToFleet === true;
     const patchScreenCapture = (patch: { detectionEnabled?: boolean; protectWindow?: boolean; reportToFleet?: boolean }) =>
@@ -363,6 +400,14 @@ export default function PrivacyPanel() {
                                                     onPatch={patchRemoteAccess}
                                                 />
                                             </div>
+                                            <div className="privacy-monitor-cell">
+                                                <AuthAnomalySection
+                                                    enabled={authAnomalyEnabled}
+                                                    {...authAnomalyPolicy}
+                                                    fleetReportingRequired={allDeviceAlertsRequired}
+                                                    onPatch={patchAuthAnomaly}
+                                                />
+                                            </div>
                                             <div className="privacy-monitor-cell"><ArgusDlpSection /></div>
                                             <div className="privacy-monitor-cell"><ArgusPrintUsbSection /></div>
                                             <div className="privacy-monitor-cell"><UsbDevicesSection /></div>
@@ -373,8 +418,12 @@ export default function PrivacyPanel() {
                                                     enabled={ransomwareEnabled}
                                                     threshold={ransomwareThreshold}
                                                     windowSeconds={ransomwareWindowSeconds}
+                                                    alertCooldownSeconds={ransomwareAlertCooldownSeconds}
+                                                    attributionMinFiles={ransomwareAttributionMinFiles}
                                                     customWatchDirs={ransomwareCustomDirs}
                                                     action={ransomwareAction}
+                                                    reportToFleet={ransomwareReportToFleet}
+                                                    fleetReportingRequired={allDeviceAlertsRequired}
                                                     onPatchRansomware={patchRansomware}
                                                 />
                                             </div>
@@ -387,6 +436,7 @@ export default function PrivacyPanel() {
                                                     searchQuery=""
                                                     enabled={decoyEnabled}
                                                     enrolledPaths={decoyEnrolledPaths}
+                                                    readAuditEnabled={decoyReadAuditEnabled}
                                                     fleetAlertEnabled={decoyFleetAlertEnabled}
                                                     onPatchDecoy={patchDecoy}
                                                 />

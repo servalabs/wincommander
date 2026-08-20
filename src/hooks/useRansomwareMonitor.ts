@@ -13,12 +13,15 @@
 // On every settings change we sync config first (so the next event
 // uses the fresh thresholds), then start/stop the watcher.
 
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { RansomwareAction } from "../types/settings";
+import { showWarning } from "../utils/toast";
 
 export const DEFAULT_RANSOMWARE_THRESHOLD = 50;
 export const DEFAULT_RANSOMWARE_WINDOW_SECONDS = 30;
+export const DEFAULT_RANSOMWARE_ALERT_COOLDOWN_SECONDS = 300;
+export const DEFAULT_RANSOMWARE_ATTRIBUTION_MIN_FILES = 5;
 // Suspend-by-default per roadmap (F-3 v2): reversible, names the culprit.
 export const DEFAULT_RANSOMWARE_ACTION: RansomwareAction = "suspend";
 
@@ -26,47 +29,63 @@ export default function useRansomwareMonitor(
   enabled: boolean,
   threshold: number,
   windowSeconds: number,
+  alertCooldownSeconds: number,
+  attributionMinFiles: number,
   customWatchDirs: string[],
   action: RansomwareAction,
 ) {
-  const watchDirsFingerprint = useMemo(
-    () => customWatchDirs.join("\n"),
-    [customWatchDirs],
-  );
+  const warnedFailures = useRef(new Set<string>());
+  const warnOnce = useCallback((key: string, message: string, err: unknown) => {
+    console.warn(`[useRansomwareMonitor] ${key} failed:`, err);
+    if (warnedFailures.current.has(key)) return;
+    warnedFailures.current.add(key);
+    showWarning(message, 12_000);
+  }, []);
+  const watchDirsJson = JSON.stringify(customWatchDirs);
 
-  // Push config first — if the watcher is already running, the next
-  // event will use these bounds; if it's about to start, the config
-  // is in place by the time it spins up. `action` only affects the Pro
-  // ETW path (the notify fallback can't attribute a PID), but we always
-  // forward it so a live ETW session picks up a preset change at once.
+  // Reconcile in one ordered transaction: config, folders, then start/stop.
+  // Separate effects raced during startup and could briefly arm ETW with old
+  // defaults or an incomplete directory set.
   useEffect(() => {
-    invoke("set_ransomware_config", {
-      config: { threshold, windowSeconds, action },
-    }).catch((err) => {
-      console.warn("[useRansomwareMonitor] set_config failed:", err);
-    });
-  }, [threshold, windowSeconds, action]);
-
-  // Sync custom watch dirs. Rust diff-reconciles against the running
-  // watcher, so this is safe to call whenever the array changes.
-  useEffect(() => {
-    invoke("set_ransomware_watch_dirs", { dirs: customWatchDirs }).catch((err) => {
-      console.warn("[useRansomwareMonitor] set_watch_dirs failed:", err);
-    });
-    // Use a stable fingerprint to avoid spurious effect re-runs from
-    // array-identity churn during patchAppSettings.
-  }, [customWatchDirs, watchDirsFingerprint]);
-
-  // Start / stop.
-  useEffect(() => {
-    if (enabled) {
-      invoke("start_ransomware_monitor").catch((err) => {
-        console.warn("[useRansomwareMonitor] start failed:", err);
-      });
-    } else {
-      invoke("stop_ransomware_monitor").catch((err) => {
-        console.warn("[useRansomwareMonitor] stop failed:", err);
-      });
-    }
-  }, [enabled]);
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    const reconcile = async () => {
+      try {
+        await invoke("set_ransomware_config", {
+          config: {
+            threshold,
+            windowSeconds,
+            alertCooldownSeconds,
+            attributionMinFiles,
+            action,
+          },
+        });
+        if (cancelled) return;
+        await invoke("set_ransomware_watch_dirs", {
+          dirs: JSON.parse(watchDirsJson) as string[],
+        });
+        if (cancelled) return;
+        await invoke(enabled ? "start_ransomware_monitor" : "stop_ransomware_monitor");
+        warnedFailures.current.delete("reconcile");
+      } catch (err) {
+        warnOnce(
+          "reconcile",
+          enabled
+            ? "Mass-encryption protection could not fully arm. WinCommander will retry automatically."
+            : "Mass-encryption protection could not stop cleanly. WinCommander will retry automatically.",
+          err,
+        );
+        attempt += 1;
+        if (!cancelled && attempt < 3) {
+          retryTimer = setTimeout(() => { void reconcile(); }, attempt * 5_000);
+        }
+      }
+    };
+    void reconcile();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [enabled, threshold, windowSeconds, alertCooldownSeconds, attributionMinFiles, action, watchDirsJson, warnOnce]);
 }

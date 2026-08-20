@@ -4,9 +4,9 @@
 //
 // Watches user-content directories (Documents, Pictures, Desktop,
 // Downloads) for mass-modification patterns. Threshold + window are
-// user-tunable but bounded. v1 just notifies; v2 will add Pro
-// kill-process / dismount-vault actions when ETW gives us
-// process attribution.
+// user-tunable but bounded. The Pro ETW layer can attribute a process and
+// suspend/terminate it; the local filesystem watcher remains the alert-only
+// fallback when privileged attribution is unavailable.
 
 import { Switch, Icon, Slider, Button } from "@/components/ui/bp";
 import { invoke } from "@tauri-apps/api/core";
@@ -17,6 +17,8 @@ import { RansomwareMonitorIntro } from "./MonitorIntros";
 import {
   DEFAULT_RANSOMWARE_THRESHOLD,
   DEFAULT_RANSOMWARE_WINDOW_SECONDS,
+  DEFAULT_RANSOMWARE_ALERT_COOLDOWN_SECONDS,
+  DEFAULT_RANSOMWARE_ATTRIBUTION_MIN_FILES,
 } from "../../hooks/useRansomwareMonitor";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
@@ -35,6 +37,12 @@ interface RansomwareDetection {
   action_taken?: string;
 }
 
+interface RansomwareMonitorHealth {
+  detectionRunning: boolean;
+  processAttributionReady: boolean;
+  automaticResponseReady: boolean;
+}
+
 const ACTION_OPTIONS: { value: RansomwareAction; label: string; hint: string }[] = [
   { value: "monitor", label: "Alert only", hint: "Notify and name the process. No automatic action." },
   { value: "suspend", label: "Suspend", hint: "Freeze the process (reversible — resume from Task Manager)." },
@@ -47,14 +55,21 @@ interface Props {
   enabled: boolean;
   threshold: number;
   windowSeconds: number;
+  alertCooldownSeconds: number;
+  attributionMinFiles: number;
   customWatchDirs: string[];
   action: RansomwareAction;
+  reportToFleet: boolean;
+  fleetReportingRequired: boolean;
   onPatchRansomware: (patch: {
     enabled?: boolean;
     threshold?: number;
     windowSeconds?: number;
+    alertCooldownSeconds?: number;
+    attributionMinFiles?: number;
     customWatchDirs?: string[];
     action?: RansomwareAction;
+    reportToFleet?: boolean;
   }) => void;
   /** Controlled expand for accordion behaviour in monitoring/safeguards grids. */
   expanded?: boolean;
@@ -67,8 +82,12 @@ export default function RansomwareMonitorSection({
   enabled,
   threshold,
   windowSeconds,
+  alertCooldownSeconds,
+  attributionMinFiles,
   customWatchDirs,
   action,
+  reportToFleet,
+  fleetReportingRequired,
   onPatchRansomware,
   expanded: expandedProp,
   onExpandedChange,
@@ -85,6 +104,7 @@ export default function RansomwareMonitorSection({
   const [showIntro, setShowIntro] = useState(false);
   const [recent, setRecent] = useState<RansomwareDetection[]>([]);
   const [watchedDirs, setWatchedDirs] = useState<string[]>([]);
+  const [health, setHealth] = useState<RansomwareMonitorHealth | null>(null);
 
   // Distinguish standard dirs (hardcoded, can't remove) from custom
   // ones (user-added, with remove button).
@@ -93,10 +113,15 @@ export default function RansomwareMonitorSection({
 
   const refreshRecent = useCallback(async () => {
     try {
-      const r = await invoke<RansomwareDetection[]>("get_ransomware_recent");
+      const [r, runtimeHealth] = await Promise.all([
+        invoke<RansomwareDetection[]>("get_ransomware_recent"),
+        invoke<RansomwareMonitorHealth>("ransomware_monitor_health"),
+      ]);
       setRecent(r);
+      setHealth(runtimeHealth);
     } catch {
       setRecent([]);
+      setHealth(null);
     }
   }, []);
 
@@ -285,7 +310,50 @@ export default function RansomwareMonitorSection({
                     </span>
                   </div>
 
-                  {(threshold !== DEFAULT_RANSOMWARE_THRESHOLD || windowSeconds !== DEFAULT_RANSOMWARE_WINDOW_SECONDS) && (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex justify-between text-[11px] text-[var(--shield-text-subtle)]">
+                      <span>Repeat-alert cooldown</span>
+                      <span className="font-mono tabular-nums text-[var(--color-accent)]">{Math.round(alertCooldownSeconds / 60)}m</span>
+                    </div>
+                    <Slider
+                      ariaLabel="Ransomware repeat alert cooldown in seconds"
+                      min={30}
+                      max={1800}
+                      stepSize={30}
+                      labelStepSize={300}
+                      value={alertCooldownSeconds}
+                      onChange={(v) => onPatchRansomware({ alertCooldownSeconds: v })}
+                      labelRenderer={(v) => v < 60 ? `${v}s` : `${Math.round(v / 60)}m`}
+                    />
+                    <span className="text-[10px] text-[var(--shield-text-muted)]">
+                      Monitoring stays active; this only prevents one sustained incident from repeating the alert and automatic action.
+                    </span>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <div className="flex justify-between text-[11px] text-[var(--shield-text-subtle)]">
+                      <span>Process evidence (distinct files)</span>
+                      <span className="font-mono tabular-nums text-[var(--color-accent)]">{Math.min(attributionMinFiles, threshold)}</span>
+                    </div>
+                    <Slider
+                      ariaLabel="Distinct files required before attributing a ransomware process"
+                      min={3}
+                      max={Math.max(3, threshold)}
+                      stepSize={1}
+                      labelStepSize={Math.max(5, Math.round(threshold / 4))}
+                      value={Math.min(attributionMinFiles, threshold)}
+                      onChange={(v) => onPatchRansomware({ attributionMinFiles: v })}
+                      labelRenderer={(v) => `${v}`}
+                    />
+                    <span className="text-[10px] text-[var(--shield-text-muted)]">
+                      Pro must see one process touch at least this many protected files before it names, suspends, or stops that process.
+                    </span>
+                  </div>
+
+                  {(threshold !== DEFAULT_RANSOMWARE_THRESHOLD
+                    || windowSeconds !== DEFAULT_RANSOMWARE_WINDOW_SECONDS
+                    || alertCooldownSeconds !== DEFAULT_RANSOMWARE_ALERT_COOLDOWN_SECONDS
+                    || attributionMinFiles !== DEFAULT_RANSOMWARE_ATTRIBUTION_MIN_FILES) && (
                     <div>
                       <Button
                         small
@@ -293,6 +361,8 @@ export default function RansomwareMonitorSection({
                         onClick={() => onPatchRansomware({
                           threshold: DEFAULT_RANSOMWARE_THRESHOLD,
                           windowSeconds: DEFAULT_RANSOMWARE_WINDOW_SECONDS,
+                          alertCooldownSeconds: DEFAULT_RANSOMWARE_ALERT_COOLDOWN_SECONDS,
+                          attributionMinFiles: DEFAULT_RANSOMWARE_ATTRIBUTION_MIN_FILES,
                         })}
                       >
                         Reset to defaults
@@ -334,7 +404,31 @@ export default function RansomwareMonitorSection({
                     {action !== "monitor" &&
                       " Requires WinCommander Pro running as Administrator — otherwise detection falls back to alert-only."}
                   </span>
+                  {action !== "monitor" && health && !health.automaticResponseReady && (
+                    <div role="status" className="rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-[10px] text-[var(--color-warning)]">
+                      {health.detectionRunning
+                        ? `Alarm detection is running, but process attribution is unavailable. WinCommander will alert you; automatic ${action === "kill" ? "termination" : "suspension"} needs Pro running as Administrator.`
+                        : "The detector is configured but is not currently running. Toggle it off and on to retry."}
+                    </div>
+                  )}
                 </div>
+
+                <label className={`flex items-start gap-2 rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[11px] text-[var(--shield-text-subtle)] ${fleetReportingRequired ? "opacity-70" : "cursor-pointer"}`}>
+                  <input
+                    type="checkbox"
+                    checked={reportToFleet}
+                    disabled={fleetReportingRequired}
+                    onChange={(e) => onPatchRansomware({ reportToFleet: e.currentTarget.checked })}
+                    aria-label="Notify Fleet admins about ransomware detections"
+                    className="mt-0.5 accent-[var(--color-accent)]"
+                  />
+                  <span>
+                    Notify Fleet admins
+                    <span className="block text-[10px] text-[var(--shield-text-muted)]">
+                      Sends only the alarm class and file count—never filenames or paths.{fleetReportingRequired ? " Required by your Fleet policy." : ""}
+                    </span>
+                  </span>
+                </label>
 
                 {/* Watched directories — standard set (read-only) +
                     user-added custom dirs (with remove button) */}

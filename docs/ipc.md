@@ -213,7 +213,7 @@ automations (that's v2, above).
 | `start_paste_monitor` … `cancel_paste_monitor_snooze` (F-1) | Free core; paid crypto-swap/timed auto-clear | Clipboard credential watcher — start/stop/status, category + snooze + recent config, crypto-swap and auto-clear/auto-clear-on-lock toggles. |
 | `load_local_clipboard_guard_rules` / `save_local_clipboard_guard_rules` / `get_managed_clipboard_guard_rules` | Free local IPC | Load or atomically validate, encrypt, persist, and activate the current Windows user's local rules; read the managed source separately. Local rules can't request Fleet/admin reporting, and managed rows are read-only in the desktop UI. |
 | `start_decoy_monitor` … `enable_last_access_tracking` (F-2) | Paid | Decoy-file sentinel — start/stop/status, enroll/remove/list/delete decoys, drop standard decoys, recent log, last-access tracking. |
-| `start_ransomware_monitor` … `set_ransomware_watch_dirs` (F-3) | Paid | Mass-modify (ransomware) detector — start/stop/status, config, recent, watched/extra dirs. |
+| `start_ransomware_monitor` … `set_ransomware_watch_dirs`, `ransomware_monitor_health` (F-3) | Paid | Mass-modify detector — ordered startup policy, thresholds/window/cooldown/attribution evidence, response, recent, watched dirs, and separate local-detection versus Pro automatic-response health. |
 | `start_lockdown_words` … `test_fire_lockdown_words` (F-5) | Paid | Lockdown-word keyboard trigger — start/stop/status, register/set/list words, test-fire. |
 | `register_distress_phrase` / `set_distress_phrases` / `list_distress_phrases` / `check_distress_phrase` | Paid | Distress-phrase registration + match check (keyboard-hook + palette). |
 
@@ -222,11 +222,11 @@ automations (that's v2, above).
 | Command group | Tier | Purpose |
 |---------------|------|---------|
 | `start_network_honeypot` … `remove_network_honeypot_custom_port` | Paid | Internal-recon honeypot — start/stop/status, recent, bind-all-interfaces, per-port enable + custom ports. |
-| `start_wifi_guard` … `add_wifi_guard_ssid` | Paid | Rogue-AP / Wi-Fi guard — start/stop/status, recent, known-AP list + add SSID. |
+| `start_wifi_guard` … `add_wifi_guard_ssid`, `configure_wifi_guard`, `get_wifi_guard_baseline` | Paid | Rogue-AP / Wi-Fi guard — start/stop/status, recent, known-AP list + add SSID; apply bounded learning/poll/debounce policy and retrieve the device-local baseline for restart recovery. |
 | `start_remote_access_monitor` … `set_remote_access_tool_enabled` | Paid | Remote-session monitor — start/stop/status, recent, tool list + enable. |
 | `start_screen_capture_watch` … `clear_recent_screen_capture` | Paid | Screen-capture watch — start/stop/status, recent. |
 | `get_driver_health` / `start_driver_watch` / `stop_driver_watch` / `driver_watch_status` / `get_vulnerable_drivers` / `open_device_manager` | Paid (Device Manager Free) | Driver-health scan/watch + BYOVD/loldrivers check; `open_device_manager` is Free. |
-| `start_auth_anomaly_monitor` … `clear_auth_anomaly_recent` | Paid | Login/auth-anomaly monitor (4625/4720/4624+4778/off-hours) — start/stop/status, recent. |
+| `start_auth_anomaly_monitor` … `clear_auth_anomaly_recent`, `set_auth_anomaly_config` | Paid | Login/auth-anomaly monitor (4625/4720/4624+4778/off-hours) — start/stop/status, recent, and persisted policy (working days, schedule/time basis, failed-login threshold/window, signal toggles, debounce, Fleet reporting). A signed all-device Fleet-reporting policy overrides a local `reportToFleet: false`. |
 
 ### Disposable isolation (VM / Sandbox)
 
@@ -246,7 +246,7 @@ All Paid, dispatched to Pro's `vm_sandbox.rs`.
 |---------------|------|---------|
 | `start_usb_monitor` … `set_usb_monitor_notify` (U-A) | Paid | Device attach/detach timeline. |
 | `start_usb_metering` … `set_usb_metering_config` (U-B) | Paid | Data-transfer metering. |
-| `start_usb_hid_guard` … `clear_usb_hid_alerts` (U-C) | Paid | BadUSB / HID-injection guard (detection only). |
+| `start_usb_hid_guard` … `clear_usb_hid_alerts`, `set_usb_hid_guard_sensitivity` (U-C) | Paid | BadUSB / HID-injection timing guard and locally retained sensitivity preset; detection/alerting only. |
 | `usb_device_trust_score` | Free | Read-only 0-100 score combining identity stability, vendor signal, HID alerts, quarantine history, and transfer volume. |
 | `block_usb_device` / `allow_usb_device` / `set_usb_volume_readonly` / `quarantine_usb_device` (U-D/E) | Paid | Trust-policy enforcement (dispatched to Pro). |
 | `start_usb_autosandbox` … `clear_usb_autosandbox_recent` (U-F) | Free decision layer | Auto-sandbox / quarantine orchestration — start/stop/status, config, recent. |

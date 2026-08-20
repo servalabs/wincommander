@@ -25,6 +25,7 @@ interface DecoyInfoFromRust {
 export default function useDecoyMonitor(
   enabled: boolean,
   enrolledPaths: string[],
+  readAuditEnabled: boolean,
 ) {
   const { mode } = useAuthMode();
   const lastReconciled = useRef<string>("");
@@ -62,7 +63,7 @@ export default function useDecoyMonitor(
         // Rules can only be installed after the files have been enrolled.
         // Doing this first left a persisted read-audit setting blocking the
         // entire reconciliation after an app restart.
-        await invoke("set_decoy_read_audit_enabled", { enabled: true });
+        await invoke("set_decoy_read_audit_enabled", { enabled: readAuditEnabled });
       } catch (err) {
         console.warn("[useDecoyMonitor] reconcile failed:", err);
       }
@@ -70,11 +71,11 @@ export default function useDecoyMonitor(
 
     // Skip if nothing changed since last reconciliation. Cheap dedup
     // for re-renders that don't change the actual values.
-    const fingerprint = `${enabled}|${[...enrolledPaths].sort().join("\n")}`;
+    const fingerprint = `${enabled}|${readAuditEnabled}|${[...enrolledPaths].sort().join("\n")}`;
     if (fingerprint === lastReconciled.current) return;
     lastReconciled.current = fingerprint;
 
     reconcile();
     return () => { cancelled = true; };
-  }, [enabled, enrolledPaths, mode]);
+  }, [enabled, enrolledPaths, readAuditEnabled, mode]);
 }

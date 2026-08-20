@@ -1423,6 +1423,7 @@ mod tests {
             "auth_anomaly_status",
             "get_auth_anomaly_recent",
             "clear_auth_anomaly_recent",
+            "set_auth_anomaly_config",
         ] {
             assert!(is_agent_affine(id), "{id} should be agent-affine");
         }

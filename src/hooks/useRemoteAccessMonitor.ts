@@ -27,38 +27,45 @@ export default function useRemoteAccessMonitor(
 
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    const fingerprint = `${enabled}|${JSON.stringify(
+      Object.entries(toolOverrides ?? {}).sort(),
+    )}`;
     const reconcile = async () => {
       if (cancelled) return;
       try {
         if (!enabled) {
-          await invoke("stop_remote_access_monitor").catch(() => {});
+          await invoke("stop_remote_access_monitor");
+          lastReconciled.current = fingerprint;
           return;
         }
         // Push per-tool overrides BEFORE start so the first poll already
         // honours a trimmed catalogue. Missing key = tool stays on.
         if (toolOverrides) {
           for (const [toolId, on] of Object.entries(toolOverrides)) {
-            await invoke("set_remote_access_tool_enabled", { toolId, enabled: on }).catch(
-              () => {},
-            );
+            await invoke("set_remote_access_tool_enabled", { toolId, enabled: on });
           }
         }
-        await invoke("start_remote_access_monitor").catch(() => {});
+        await invoke("start_remote_access_monitor");
+        lastReconciled.current = fingerprint;
       } catch (err) {
         console.warn("[useRemoteAccessMonitor] reconcile failed:", err);
+        attempt += 1;
+        if (!cancelled && attempt < 3) {
+          retryTimer = setTimeout(() => { void reconcile(); }, attempt * 5_000);
+        }
       }
     };
 
-    // Cheap dedup: skip if nothing changed since the last reconciliation.
-    const fingerprint = `${enabled}|${JSON.stringify(
-      Object.entries(toolOverrides ?? {}).sort(),
-    )}`;
+    // Skip only a previously successful reconciliation. A sidecar startup
+    // race must not make an ON preference silently inert until settings move.
     if (fingerprint === lastReconciled.current) return;
-    lastReconciled.current = fingerprint;
 
-    reconcile();
+    void reconcile();
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [enabled, toolOverrides]);
 }

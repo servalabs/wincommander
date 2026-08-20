@@ -15,6 +15,13 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Button, Icon, InputGroup, Spinner, Switch, Tag } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
 import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
+import { useAppState } from '../../context/AppContext';
+import {
+  DEFAULT_WIFI_GUARD_ALERT_DEBOUNCE_SECS,
+  DEFAULT_WIFI_GUARD_LEARNING_WINDOW_SECS,
+  DEFAULT_WIFI_GUARD_POLL_INTERVAL_SECS,
+} from '../../hooks/useWifiGuardMonitor';
+import type { WifiGuardBaselineEntry } from '../../types/settings';
 
 /** Local callout replacement — our global `.bp6-callout` overrides
  *  fight BP's default `::before` icon (absolute-positioned) so icons
@@ -94,6 +101,10 @@ interface WifiGuardStatus {
   knownSsidCount: number;
   currentSsid: string | null;
   currentBssid: string | null;
+  learningUntil: string | null;
+  learningWindowSecs: number;
+  pollIntervalSecs: number;
+  alertDebounceSecs: number;
 }
 
 interface WifiGuardHit {
@@ -121,6 +132,12 @@ function formatTime(iso: string): string {
   }
 }
 
+function formatDuration(seconds: number): string {
+  if (seconds % 3600 === 0) return `${seconds / 3600} h`;
+  if (seconds >= 60) return `${Math.round(seconds / 60)} min`;
+  return `${seconds} s`;
+}
+
 function reasonLabel(reason: string): { label: string; intent: 'danger' | 'warning' } {
   switch (reason) {
     case 'both':
@@ -134,6 +151,95 @@ function reasonLabel(reason: string): { label: string; intent: 'danger' | 'warni
   }
 }
 
+function WifiGuardPolicyControls({
+  enabled,
+  learningWindowSecs,
+  pollIntervalSecs,
+  alertDebounceSecs,
+  reportToFleet,
+  fleetReportingRequired,
+  onPatch,
+}: {
+  enabled: boolean;
+  learningWindowSecs: number;
+  pollIntervalSecs: number;
+  alertDebounceSecs: number;
+  reportToFleet: boolean;
+  fleetReportingRequired: boolean;
+  onPatch: (patch: {
+    enabled?: boolean;
+    learningWindowSecs?: number;
+    pollIntervalSecs?: number;
+    alertDebounceSecs?: number;
+    learningUntil?: string | null;
+    reportToFleet?: boolean;
+  }) => void;
+}) {
+  const numberValue = (value: string, fallback: number, min: number, max: number) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.round(parsed))) : fallback;
+  };
+  return (
+    <div
+      style={{
+        display: 'flex', flexDirection: 'column', gap: 8, padding: 10,
+        background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)', borderRadius: 4,
+      }}
+    >
+      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6, color: 'var(--color-text-muted)' }}>
+        Guard policy
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', lineHeight: 1.45 }}>
+        These values tune observation and repeat alerts; they do not block Wi-Fi or prove that a hotspot is malicious.
+      </div>
+      <Switch
+        checked={enabled}
+        onChange={(event) => onPatch({ enabled: (event.target as HTMLInputElement).checked })}
+        label="Re-arm automatically after WinCommander starts"
+        style={{ marginBottom: 0 }}
+      />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(115px, 1fr))', gap: 8 }}>
+        <label style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+          Learning (hours)
+          <InputGroup
+            type="number" min={1 / 12} max={168}
+            value={String(learningWindowSecs / 3600)} small
+            onChange={(event) => onPatch({ learningWindowSecs: numberValue((event.target as HTMLInputElement).value, learningWindowSecs / 3600, 1 / 12, 168) * 3600 })}
+          />
+        </label>
+        <label style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+          Check every (seconds)
+          <InputGroup
+            type="number" min={5} max={300}
+            value={String(pollIntervalSecs)} small
+            onChange={(event) => onPatch({ pollIntervalSecs: numberValue((event.target as HTMLInputElement).value, pollIntervalSecs, 5, 300) })}
+          />
+        </label>
+        <label style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+          Repeat alert (seconds)
+          <InputGroup
+            type="number" min={30} max={3600}
+            value={String(alertDebounceSecs)} small
+            onChange={(event) => onPatch({ alertDebounceSecs: numberValue((event.target as HTMLInputElement).value, alertDebounceSecs, 30, 3600) })}
+          />
+        </label>
+      </div>
+      <Switch
+        checked={fleetReportingRequired || reportToFleet}
+        disabled={fleetReportingRequired}
+        onChange={(event) => onPatch({ reportToFleet: (event.target as HTMLInputElement).checked })}
+        label={fleetReportingRequired
+          ? 'Fleet reporting required by device policy'
+          : 'Report a coarse Wi-Fi Guard alert to Fleet'}
+        style={{ marginBottom: 0 }}
+      />
+      <div style={{ fontSize: 10, color: 'var(--color-text-muted)', lineHeight: 1.4 }}>
+        Fleet receives only “rogue access point” severity—not the SSID, BSSID, or baseline stored on this device.
+      </div>
+    </div>
+  );
+}
+
 export default function WifiGuardSection({
   embedded = false,
 }: {
@@ -144,6 +250,14 @@ export default function WifiGuardSection({
   embedded?: boolean;
 } = {}) {
   const requestConfirm = useAppConfirm();
+  const { appSettings, patchAppSettings } = useAppState();
+  const persisted = appSettings?.ideal?.network?.wifiGuard;
+  const configuredEnabled = persisted?.enabled ?? false;
+  const learningWindowSecs = persisted?.learningWindowSecs ?? DEFAULT_WIFI_GUARD_LEARNING_WINDOW_SECS;
+  const pollIntervalSecs = persisted?.pollIntervalSecs ?? DEFAULT_WIFI_GUARD_POLL_INTERVAL_SECS;
+  const alertDebounceSecs = persisted?.alertDebounceSecs ?? DEFAULT_WIFI_GUARD_ALERT_DEBOUNCE_SECS;
+  const reportToFleet = persisted?.reportToFleet ?? false;
+  const fleetReportingRequired = appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true;
   const [status, setStatus] = useState<WifiGuardStatus | null>(null);
   const [recent, setRecent] = useState<WifiGuardHit[]>([]);
   const [known, setKnown] = useState<KnownEntry[]>([]);
@@ -156,6 +270,26 @@ export default function WifiGuardSection({
   // Track when we last armed so a near-immediate Refresh doesn't flip running→false
   // before the backend state has propagated (Rust may take ~1-2s to reflect).
   const lastArmRef = useRef(0);
+
+  const patchWifiGuard = useCallback((patch: {
+    enabled?: boolean;
+    learningWindowSecs?: number;
+    pollIntervalSecs?: number;
+    alertDebounceSecs?: number;
+    learningUntil?: string | null;
+    baseline?: WifiGuardBaselineEntry[];
+    reportToFleet?: boolean;
+  }) => {
+    void patchAppSettings({ ideal: { network: { wifiGuard: patch } } });
+  }, [patchAppSettings]);
+
+  const persistRuntimeBaseline = useCallback(async () => {
+    const [baseline, runtime] = await Promise.all([
+      invoke<WifiGuardBaselineEntry[]>('get_wifi_guard_baseline'),
+      invoke<WifiGuardStatus>('wifi_guard_status'),
+    ]);
+    patchWifiGuard({ baseline, learningUntil: runtime.learningUntil });
+  }, [patchWifiGuard]);
 
   const refresh = useCallback(async () => {
     try {
@@ -212,6 +346,7 @@ export default function WifiGuardSection({
           await invoke('stop_wifi_guard');
           await refresh();
         }
+        patchWifiGuard({ enabled: next, ...(next ? {} : { learningUntil: null }) });
       } catch (err) {
         const msg = String(err);
         setError(
@@ -223,7 +358,7 @@ export default function WifiGuardSection({
         setToggling(false);
       }
     },
-    [refresh],
+    [refresh, patchWifiGuard],
   );
 
   const handleAddSsid = useCallback(async () => {
@@ -240,6 +375,7 @@ export default function WifiGuardSection({
       setStatus(s);
       setAddSsid('');
       setAddBssid('');
+      await persistRuntimeBaseline();
       await refresh();
     } catch (err) {
       const msg = String(err);
@@ -251,7 +387,7 @@ export default function WifiGuardSection({
     } finally {
       setAddingSsid(false);
     }
-  }, [addSsid, addBssid, refresh]);
+  }, [addSsid, addBssid, refresh, persistRuntimeBaseline]);
 
   const handleClearKnown = useCallback(async () => {
     const accepted = await requestConfirm({
@@ -262,11 +398,12 @@ export default function WifiGuardSection({
     if (!accepted) return;
     try {
       await invoke('clear_wifi_guard_known');
+      await persistRuntimeBaseline();
       await refresh();
     } catch (err) {
       setError(String(err));
     }
-  }, [refresh, requestConfirm]);
+  }, [refresh, requestConfirm, persistRuntimeBaseline]);
 
   const handleClearRecent = useCallback(async () => {
     const accepted = await requestConfirm({
@@ -362,10 +499,20 @@ export default function WifiGuardSection({
         {running && learning && (
           <IntelNotice intent="warning" icon="learning" title="Learning window active">
             The detector is observing your Wi-Fi associations and
-            won&apos;t fire yet. After 24 h every SSID it has seen
+            won&apos;t fire yet. After {formatDuration(learningWindowSecs)} every SSID it has seen
             becomes a guarded baseline.
           </IntelNotice>
         )}
+
+        <WifiGuardPolicyControls
+          enabled={configuredEnabled}
+          learningWindowSecs={learningWindowSecs}
+          pollIntervalSecs={pollIntervalSecs}
+          alertDebounceSecs={alertDebounceSecs}
+          reportToFleet={reportToFleet}
+          fleetReportingRequired={fleetReportingRequired}
+          onPatch={patchWifiGuard}
+        />
 
         {error && (
           <IntelNotice intent="danger" icon="error" title="Detector error">
@@ -662,10 +809,20 @@ export default function WifiGuardSection({
         {/* Learning indicator */}
         {running && learning && (
           <IntelNotice intent="warning" icon="time" title="Learning mode">
-            Passively learning BSSID associations. Full detection activates after 24 h of
+            Passively learning BSSID associations. Full detection activates after {formatDuration(learningWindowSecs)} of
             trusted-network observations.
           </IntelNotice>
         )}
+
+        <WifiGuardPolicyControls
+          enabled={configuredEnabled}
+          learningWindowSecs={learningWindowSecs}
+          pollIntervalSecs={pollIntervalSecs}
+          alertDebounceSecs={alertDebounceSecs}
+          reportToFleet={reportToFleet}
+          fleetReportingRequired={fleetReportingRequired}
+          onPatch={patchWifiGuard}
+        />
 
         {/* Recent fires — compact, last 2 */}
         {recent.length > 0 && (

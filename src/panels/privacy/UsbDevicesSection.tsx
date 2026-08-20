@@ -30,6 +30,7 @@ import SectionCard from '../../components/shared/SectionCard';
 import { formatTrustScore, trustScoreTone } from '../../lib/usbTrust';
 import { showSuccess, showError } from '../../utils/toast';
 import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
+import { useAppState } from '../../context/AppContext';
 import PrivacyEventTable from './PrivacyEventTable';
 
 // U-C: shape returned by get_usb_hid_alerts (timing + device identity — no keystroke content).
@@ -239,6 +240,9 @@ interface AutoSandboxStatus {
   running: boolean;
   mode: AutoSandboxMode;
   recentCount: number;
+  allowKeys: string[];
+  allowVids: string[];
+  actOnHid: boolean;
 }
 
 interface AutoActionRecord {
@@ -251,6 +255,7 @@ interface AutoActionRecord {
 }
 
 export default function UsbDevicesSection() {
+  const { patchAppSettings } = useAppState();
   const requestConfirm = useAppConfirm();
   const [running, setRunning] = useState(false);
   const [notifyEnabled, setNotifyEnabled] = useState(false);
@@ -275,10 +280,13 @@ export default function UsbDevicesSection() {
   const [nowSec, setNowSec] = useState<number>(() => Math.floor(Date.now() / 1000));
   // U-C: HID-injection guard state
   const [hidGuardRunning, setHidGuardRunning] = useState(false);
+  const [hidSensitivity, setHidSensitivity] = useState<'lenient' | 'balanced' | 'strict'>('balanced');
+  const [hidThresholds, setHidThresholds] = useState({ humanFloorMs: 30, minBurstKeys: 12 });
   const [hidAlerts, setHidAlerts] = useState<HidInjectionAlert[]>([]);
   // U-F: auto-sandbox state
   const [autoSandboxRunning, setAutoSandboxRunning] = useState(false);
   const [autoSandboxMode, setAutoSandboxMode] = useState<AutoSandboxMode>('observe');
+  const [autoSandboxConfig, setAutoSandboxConfig] = useState({ allowKeys: [] as string[], allowVids: [] as string[], actOnHid: false });
   const [autoActions, setAutoActions] = useState<AutoActionRecord[]>([]);
   const [autoSandboxBusy, setAutoSandboxBusy] = useState(false);
 
@@ -368,14 +376,21 @@ export default function UsbDevicesSection() {
       const ts = await invoke<UsbTransferStat[]>('get_usb_transfer_stats');
       setStats(Array.isArray(ts) ? ts : []);
       // U-C: fetch HID guard status + recent alerts
-      const hidStatus = await invoke<{ running: boolean; alertCount: number }>('usb_hid_guard_status');
+      const hidStatus = await invoke<{ running: boolean; alertCount: number; sensitivity?: 'lenient' | 'balanced' | 'strict'; humanFloorMs?: number; minBurstKeys?: number }>('usb_hid_guard_status');
       setHidGuardRunning(!!hidStatus?.running);
+      setHidSensitivity(hidStatus?.sensitivity ?? 'balanced');
+      setHidThresholds({ humanFloorMs: hidStatus?.humanFloorMs ?? 30, minBurstKeys: hidStatus?.minBurstKeys ?? 12 });
       const alerts = await invoke<HidInjectionAlert[]>('get_usb_hid_alerts');
       setHidAlerts(Array.isArray(alerts) ? alerts : []);
       // U-F: fetch auto-sandbox status + recent actions
       const asSt = await invoke<AutoSandboxStatus>('usb_autosandbox_status');
       setAutoSandboxRunning(!!asSt?.running);
       setAutoSandboxMode(asSt?.mode ?? 'observe');
+      setAutoSandboxConfig({
+        allowKeys: asSt?.allowKeys ?? [],
+        allowVids: asSt?.allowVids ?? [],
+        actOnHid: !!asSt?.actOnHid,
+      });
       const recent = await invoke<AutoActionRecord[]>('get_usb_autosandbox_recent');
       setAutoActions(Array.isArray(recent) ? recent : []);
     } catch (e) {
@@ -505,6 +520,7 @@ export default function UsbDevicesSection() {
       setError(null);
       try {
         await invoke(on ? 'start_usb_monitor' : 'stop_usb_monitor');
+        await patchAppSettings({ ideal: { privacy: { usbSecurity: { monitorEnabled: on } } } }).catch(() => {});
         await refresh();
       } catch (e) {
         setError(String(e));
@@ -512,7 +528,7 @@ export default function UsbDevicesSection() {
         setBusy(false);
       }
     },
-    [refresh],
+    [patchAppSettings, refresh],
   );
 
   // U-C: toggle BadUSB / HID-injection guard
@@ -521,7 +537,9 @@ export default function UsbDevicesSection() {
       setBusy(true);
       setError(null);
       try {
+        if (on) await invoke('start_usb_monitor');
         await invoke(on ? 'start_usb_hid_guard' : 'stop_usb_hid_guard');
+        await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidGuardEnabled: on } } } }).catch(() => {});
         setHidGuardRunning(on);
         await refresh();
       } catch (e) {
@@ -530,7 +548,7 @@ export default function UsbDevicesSection() {
         setBusy(false);
       }
     },
-    [refresh],
+    [patchAppSettings, refresh],
   );
 
   const clearHidAlerts = useCallback(async () => {
@@ -551,6 +569,20 @@ export default function UsbDevicesSection() {
       setBusy(false);
     }
   }, [requestConfirm]);
+
+  const setHidSensitivityCmd = useCallback(async (sensitivity: 'lenient' | 'balanced' | 'strict') => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await invoke<{ humanFloorMs: number; minBurstKeys: number }>('set_usb_hid_guard_sensitivity', { sensitivity });
+      setHidSensitivity(sensitivity);
+      setHidThresholds({ humanFloorMs: next.humanFloorMs, minBurstKeys: next.minBurstKeys });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const toggleNotify = useCallback(
     async (on: boolean) => {
@@ -693,7 +725,9 @@ export default function UsbDevicesSection() {
       setAutoSandboxBusy(true);
       setError(null);
       try {
+        if (on) await invoke('start_usb_monitor');
         await invoke(on ? 'start_usb_autosandbox' : 'stop_usb_autosandbox');
+        await patchAppSettings({ ideal: { privacy: { usbSecurity: { autoSandboxEnabled: on } } } }).catch(() => {});
         setAutoSandboxRunning(on);
         await refresh();
       } catch (e) {
@@ -702,7 +736,7 @@ export default function UsbDevicesSection() {
         setAutoSandboxBusy(false);
       }
     },
-    [refresh],
+    [patchAppSettings, refresh],
   );
 
   // U-F: change operating mode (off / observe / enforce).
@@ -718,6 +752,14 @@ export default function UsbDevicesSection() {
           allowVids: string[];
           actOnHid: boolean;
         }>('usb_autosandbox_status').catch(() => null);
+        if (mode === 'enforce' && current?.actOnHid) {
+          const accepted = await requestConfirm({
+            title: 'Enforce automatic keyboard quarantine?',
+            description: 'HID scope is already saved. Switching to Enforce can immediately disable a newly attached untrusted keyboard. Continue only if you have tested a recovery path.',
+            confirmLabel: 'Enforce with HID scope',
+          });
+          if (!accepted) return;
+        }
         // Patch ONLY the mode; preserve the rest of the current config. The
         // previous code wrote `current ? [] : []` (both branches empty), so
         // every mode switch silently wiped the approved-device allow-list and
@@ -732,14 +774,42 @@ export default function UsbDevicesSection() {
           },
         });
         setAutoSandboxMode(mode);
+        setAutoSandboxConfig({
+          allowKeys: current?.allowKeys ?? [],
+          allowVids: current?.allowVids ?? [],
+          actOnHid: current?.actOnHid ?? false,
+        });
       } catch (e) {
         setError(String(e));
       } finally {
         setAutoSandboxBusy(false);
       }
     },
-    [],
+    [requestConfirm],
   );
+
+  const setAutoSandboxHidScope = useCallback(async (actOnHid: boolean) => {
+    if (actOnHid && autoSandboxMode === 'enforce') {
+      const accepted = await requestConfirm({
+        title: 'Also auto-quarantine newly attached keyboards?',
+        description: 'In Enforce mode, an untrusted USB keyboard can be disabled immediately after it attaches. Keep this off unless you have tested a recovery path.',
+        confirmLabel: 'Include HID devices',
+      });
+      if (!accepted) return;
+    }
+    setAutoSandboxBusy(true);
+    setError(null);
+    try {
+      await invoke('set_usb_autosandbox_config', {
+        config: { mode: autoSandboxMode, ...autoSandboxConfig, actOnHid },
+      });
+      setAutoSandboxConfig((current) => ({ ...current, actOnHid }));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setAutoSandboxBusy(false);
+    }
+  }, [autoSandboxConfig, autoSandboxMode, requestConfirm]);
 
   // U-F: clear recent actions ring.
   const clearAutoActions = useCallback(async () => {
@@ -1065,11 +1135,43 @@ export default function UsbDevicesSection() {
             Detects USB devices that enumerate as a keyboard and type superhumanly fast (BadUSB /
             Rubber Ducky / HID-injection). Timing only — keystroke content is never read or logged.
           </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs" role="group" aria-label="BadUSB guard sensitivity">
+            <span className="opacity-70">Sensitivity:</span>
+            {(['lenient', 'balanced', 'strict'] as const).map((preset) => (
+              <Button
+                key={preset}
+                small
+                minimal={hidSensitivity !== preset}
+                intent={hidSensitivity === preset && preset === 'strict' ? 'warning' : undefined}
+                disabled={busy}
+                aria-pressed={hidSensitivity === preset}
+                onClick={() => void setHidSensitivityCmd(preset)}
+                title={preset === 'strict' ? 'Alerts on shorter, slower bursts; may increase false positives.' : preset === 'lenient' ? 'Requires a longer, faster burst; fewer false positives.' : 'Balanced default for normal keyboards.'}
+              >
+                {preset.charAt(0).toUpperCase() + preset.slice(1)}
+              </Button>
+            ))}
+            <span className="opacity-50">
+              {hidThresholds.minBurstKeys}+ gaps under {hidThresholds.humanFloorMs}ms; saved on this PC.
+            </span>
+          </div>
 
           {hidAlerts.length > 0 && (
             <div className="flex flex-col gap-1 mt-1">
-              <div className="text-xs font-semibold opacity-70">Recent injection alerts</div>
-              <PrivacyEventTable title="USB injection alerts" columns={["Time", "Device", "Flag", "Keys", "Median gap"]} rows={hidAlerts.map((a, i) => ({ id: `${a.deviceKey}-${a.detectedAt}-${i}`, search: `${a.friendlyName} ${a.redFlag} ${a.severity}`, sort: [a.detectedAt, a.friendlyName, a.redFlag, String(a.gapsSampled), String(a.medianGapMs)], cells: [new Date(a.detectedAt).toLocaleString(), a.friendlyName, a.redFlag, String(a.gapsSampled), `${a.medianGapMs}ms`] }))} />
+              <div className="text-xs font-semibold opacity-70">Recent injection alerts — an evidence report is recorded automatically; block remains an explicit, reversible response.</div>
+              <PrivacyEventTable title="USB injection alerts" columns={["Time", "Device", "Flag", "Keys", "Median gap", "Response"]} rows={hidAlerts.map((a, i) => {
+                const attached = entries.find((entry) => entry.key === a.deviceKey && entry.attached);
+                return {
+                  id: `${a.deviceKey}-${a.detectedAt}-${i}`,
+                  search: `${a.friendlyName} ${a.redFlag} ${a.severity}`,
+                  sort: [a.detectedAt, a.friendlyName, a.redFlag, String(a.gapsSampled), String(a.medianGapMs), attached ? 'block' : 'detached'],
+                  cells: [
+                    new Date(a.detectedAt).toLocaleString(), a.friendlyName, a.redFlag,
+                    String(a.gapsSampled), `${a.medianGapMs}ms`,
+                    attached ? <Button intent="danger" minimal small disabled={busy || !proInstalled} onClick={() => void blockDevice(attached)} title="Disable the still-attached device in Windows. Reversible with Allow; requires Pro and admin.">Block now</Button> : 'Detached',
+                  ],
+                };
+              })} />
             </div>
           )}
 
@@ -1115,6 +1217,16 @@ export default function UsbDevicesSection() {
             only — no enforcement. <strong>Enforce</strong> auto-quarantines removable mass-storage
             via the Pro sidecar so its files are inaccessible until you approve it. Requires USB
             monitoring to be enabled first.
+          </div>
+
+          <Switch
+            checked={autoSandboxConfig.actOnHid}
+            disabled={autoSandboxBusy}
+            onChange={(e) => void setAutoSandboxHidScope((e.target as HTMLInputElement).checked)}
+            label="Include newly attached HID keyboards (off by default)"
+          />
+          <div className="text-xs opacity-50">
+            This setting and approved-device exceptions are retained on this PC. It does not cover USB network, serial, DMA/Thunderbolt, or non-USB devices.
           </div>
 
           {/* Mode selector */}

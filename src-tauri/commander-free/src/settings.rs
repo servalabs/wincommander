@@ -950,6 +950,14 @@ pub struct PrivacySettings {
     /// #4: remote-access monitor — active incoming-session detector. Paid.
     #[serde(default)]
     pub remote_access_monitor: RemoteAccessMonitorSettings,
+    /// Access & Session Monitor policy. Runtime authority lives in the Pro
+    /// sidecar; this persists its bounded detector and reporting preferences.
+    #[serde(default)]
+    pub auth_anomaly_monitor: AuthAnomalyMonitorSettings,
+    /// USB security runtime arm preferences. Module-specific policies and
+    /// allow-lists remain in their bounded local preference files.
+    #[serde(default)]
+    pub usb_security: UsbSecurityMonitorSettings,
     /// #5: screen-capture detection + own-window capture protection. Paid.
     #[serde(default)]
     pub screen_capture: ScreenCaptureSettings,
@@ -1000,12 +1008,18 @@ pub struct RansomwareMonitorSettings {
     pub enabled: Option<bool>,
     pub threshold: Option<u32>,
     pub window_seconds: Option<u32>,
+    /// Duplicate alert/action cooldown while detection remains active.
+    pub alert_cooldown_seconds: Option<u32>,
+    /// Minimum per-process distinct-file evidence before Pro attribution.
+    pub attribution_min_files: Option<u32>,
     /// User-added extra watch directories (in addition to the standard
     /// Documents/Pictures/Desktop/Downloads set).
     pub custom_watch_dirs: Option<Vec<String>>,
     /// F-3 v2 automated response on the Pro ETW path:
     /// "monitor" | "suspend" | "kill". None = backend default (suspend).
     pub action: Option<String>,
+    /// Send a coarse, path-free ransomware event to Fleet.
+    pub report_to_fleet: Option<bool>,
 }
 
 /// #4: remote-access monitor. Persistence layer only; runtime authority
@@ -1016,6 +1030,35 @@ pub struct RansomwareMonitorSettings {
 pub struct RemoteAccessMonitorSettings {
     pub enabled: Option<bool>,
     pub tools: Option<std::collections::HashMap<String, bool>>,
+}
+
+/// Security-log access anomaly policy. `None` uses the conservative Pro
+/// defaults so older settings files remain valid.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthAnomalyMonitorSettings {
+    pub enabled: Option<bool>,
+    pub failed_burst_threshold: Option<u32>,
+    pub failed_burst_window_secs: Option<u32>,
+    pub work_start_hour: Option<u32>,
+    pub work_end_hour: Option<u32>,
+    /// ISO weekday numbers: Monday=1 through Sunday=7. Missing = weekdays.
+    pub work_days: Option<Vec<u8>>,
+    /// "local" (device time) or "utc".
+    pub time_basis: Option<String>,
+    pub detect_rdp: Option<bool>,
+    pub detect_new_accounts: Option<bool>,
+    pub detect_off_hours: Option<bool>,
+    pub alert_debounce_secs: Option<u32>,
+    pub report_to_fleet: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UsbSecurityMonitorSettings {
+    pub monitor_enabled: Option<bool>,
+    pub hid_guard_enabled: Option<bool>,
+    pub auto_sandbox_enabled: Option<bool>,
 }
 
 /// #5: screen-capture detection + own-window capture protection. Paid.
@@ -1731,6 +1774,32 @@ pub struct NetworkSettings {
     pub firewall: FirewallSettings,
     #[serde(default)]
     pub vpn_kill_switch: VpnKillSwitchSettings,
+    /// Rogue-AP detector policy and device-local trusted-network baseline.
+    #[serde(default)]
+    pub wifi_guard: WifiGuardSettings,
+}
+
+/// Wi-Fi Guard's policy is stored by Free so the private Pro sidecar can be
+/// reconfigured after a restart. Network identifiers remain local: Fleet gets
+/// only a coarse alert type when `report_to_fleet` is enabled.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WifiGuardSettings {
+    pub enabled: Option<bool>,
+    pub learning_window_secs: Option<u64>,
+    pub learning_until: Option<String>,
+    pub poll_interval_secs: Option<u64>,
+    pub alert_debounce_secs: Option<u64>,
+    pub baseline: Option<Vec<WifiGuardBaselineEntry>>,
+    pub report_to_fleet: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WifiGuardBaselineEntry {
+    pub ssid: String,
+    pub bssids: Vec<String>,
+    pub best_auth_strength: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -4498,7 +4567,7 @@ mod tests {
         let _lock = super::GLOBAL_STATE_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        use base64::{Engine, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine};
         use ed25519_dalek::{Signer, SigningKey};
 
         let signing_key = SigningKey::generate(&mut rand_core::OsRng);
@@ -4573,5 +4642,22 @@ mod tests {
             None,
             "a signer-key-mismatched epoch must never reach the subtree relay"
         );
+    }
+
+    #[test]
+    fn usb_security_arm_preferences_use_frontend_camel_case() {
+        let parsed: UsbSecurityMonitorSettings = serde_json::from_value(serde_json::json!({
+            "monitorEnabled": true,
+            "hidGuardEnabled": true,
+            "autoSandboxEnabled": false
+        }))
+        .unwrap();
+        assert_eq!(parsed.monitor_enabled, Some(true));
+        assert_eq!(parsed.hid_guard_enabled, Some(true));
+        assert_eq!(parsed.auto_sandbox_enabled, Some(false));
+
+        let encoded = serde_json::to_value(parsed).unwrap();
+        assert_eq!(encoded["hidGuardEnabled"], true);
+        assert!(encoded.get("hid_guard_enabled").is_none());
     }
 }

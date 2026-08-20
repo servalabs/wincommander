@@ -2573,6 +2573,7 @@ pub fn run() {
             ransomware_monitor::start_ransomware_monitor,
             ransomware_monitor::stop_ransomware_monitor,
             ransomware_monitor::ransomware_monitor_status,
+            ransomware_monitor::ransomware_monitor_health,
             ransomware_monitor::set_ransomware_config,
             ransomware_monitor::get_ransomware_config,
             ransomware_monitor::get_ransomware_recent,
@@ -2599,6 +2600,8 @@ pub fn run() {
             wifi_check::get_wifi_guard_recent,
             wifi_check::clear_wifi_guard_recent,
             wifi_check::get_wifi_guard_known,
+            wifi_check::get_wifi_guard_baseline,
+            wifi_check::configure_wifi_guard,
             wifi_check::clear_wifi_guard_known,
             wifi_check::add_wifi_guard_ssid,
             // ── #4 Remote-session monitor (PAID, Pro detector via B2) ──
@@ -2640,6 +2643,7 @@ pub fn run() {
             auth_anomaly::auth_anomaly_status,
             auth_anomaly::get_auth_anomaly_recent,
             auth_anomaly::clear_auth_anomaly_recent,
+            auth_anomaly::set_auth_anomaly_config,
             // ── Session Assurance (insider-risk / attention monitor, PAID via Pro) ──
             session_assurance::start_session_monitor,
             session_assurance::stop_session_monitor,
@@ -2695,6 +2699,7 @@ pub fn run() {
             usb_hid_guard::start_usb_hid_guard,
             usb_hid_guard::stop_usb_hid_guard,
             usb_hid_guard::usb_hid_guard_status,
+            usb_hid_guard::set_usb_hid_guard_sensitivity,
             usb_hid_guard::get_usb_hid_alerts,
             usb_hid_guard::clear_usb_hid_alerts,
             usb_hid_guard::usb_hid_guard_allow_device,
