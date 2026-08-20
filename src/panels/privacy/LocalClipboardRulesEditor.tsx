@@ -204,12 +204,6 @@ function RuleForm({ rule, error, onChange, onSave, onCancel }: {
   );
 }
 
-/**
- * CheckboxControl is a Radix button, not a native input. A HTML label does
- * not activate a nested button, which made the action text look clickable
- * while only its small checkbox target actually worked. Treat each option as
- * one click target and stop the checkbox click from toggling it twice.
- */
 function LocalActionOption({
   checked,
   label,
@@ -220,20 +214,19 @@ function LocalActionOption({
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
-    <div
-      className="flex cursor-pointer items-center gap-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-primary)] px-2 py-1.5 transition-colors hover:border-[var(--color-accent)]/45"
-      onClick={() => onCheckedChange(!checked)}
-    >
+    <div className="flex items-center gap-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-primary)] px-2 py-1.5 transition-colors hover:border-[var(--color-accent)]/45">
       <CheckboxControl
         checked={checked}
         onChange={(event) => onCheckedChange(event.currentTarget.checked)}
-        onClick={(event) => event.stopPropagation()}
         ariaLabel={label}
       />
-      <span className="font-medium">{label}</span>
-      <span className="font-mono text-[9px] text-[var(--color-accent)]" aria-hidden="true">
-        {checked ? "ON" : "OFF"}
-      </span>
+      <button
+        type="button"
+        className="cursor-pointer font-medium text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-line)]"
+        onClick={() => onCheckedChange(!checked)}
+      >
+        {label}
+      </button>
     </div>
   );
 }
