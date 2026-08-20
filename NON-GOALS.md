@@ -1,28 +1,80 @@
 # Non-Goals — WinCommander
 
-What this project deliberately is NOT and will not do. These scope boundaries derive from the code's intentional choices and the open-core model. See [POSITIONING.md](POSITIONING.md) for what it *is*, and [SECURITY.md](SECURITY.md) for the threat-model boundaries.
+This document defines the boundaries that keep WinCommander understandable and
+safe. `POSITIONING.md` explains the product; `SECURITY.md` explains the threat
+model; the private Pro roadmap owns future paid work.
 
-## This is NOT
+## Product scope
 
-- **NOT cross-platform.** Windows 11 only (`x86_64-pc-windows-msvc`; pinned in `rust-toolchain.toml`, Win32/PowerShell/registry-bound throughout). There is no macOS or Linux target.
-- **NOT a telemetry / cloud product.** Zero telemetry; all state is local — settings, PIN hashes, licence cache, and the hidden-mode flag under `%ProgramData%\WinCommander\`, per-user scratch (logs, Privacy Shield quota) under `%LOCALAPPDATA%\WinCommander\`. There is no analytics pipeline, no account system, and no server-side state beyond paid licence rows.
-- **NOT a plugin platform.** No plugin marketplace, no third-party plugin SDK, no signed `.wcplugin` packages. Exactly two ServaLabs-signed binaries (`wincommander-free.exe`, `wincommander-pro.exe`) plus the shared IPC crate.
-- **NOT a fully open-source product.** The Free tier is AGPL-3.0; the paid Pro tier is closed source, private, and proprietary. Its runtime entitlement check governs use, while the [WinCommander EULA](https://servalabs.com/eula) governs the commercial code (see [OPEN_CORE.md](OPEN_CORE.md)).
-- **NOT antivirus / EDR.** It hardens, audits, and can disable Defender (paid) — it does not replace real-time malware scanning or endpoint detection & response.
-- **NOT a general forensic/incident-response suite for arbitrary OSes.** WinCommander targets Windows endpoints; it is not a substitute for a full cleanup lab.
-- **NOT a consumer "one-click optimizer" that hides risk.** Irreversible and security-reducing actions are surfaced with explicit warnings, countdowns, and tier gating — not buried.
+- **Windows client, not one cross-platform desktop binary.** WinCommander owns
+  Windows 11. TuxCommander and secureOS/Privon are separate products sharing
+  explicit Fleet contracts where appropriate.
+- **Local-first, not default cloud telemetry.** Free keeps operational state on
+  the device. Fleet reporting occurs only after explicit enrollment into an
+  organization and uses documented, bounded contracts.
+- **Open core, not an entirely open product.** Free is AGPL-3.0; Pro remains a
+  separately licensed proprietary sidecar. Public code must never contain or
+  reconstruct private Pro implementation.
+- **Security control and evidence, not antivirus replacement.** WinCommander
+  can inspect posture, harden configuration, and orchestrate approved actions;
+  it does not replace Microsoft Defender or a dedicated EDR.
+- **Bounded authorized investigation, not a universal forensic laboratory.**
+  Fleet may request fixed, typed views and Investigator may collect approved
+  evidence. Neither becomes unrestricted remote shell, arbitrary disk
+  acquisition, or a substitute for specialist lab tooling.
+- **Explicit risk, not a one-click optimizer.** Destructive or
+  security-reducing actions remain visible, classified, confirmed, and
+  auditable.
 
-## We will not
+## Architecture boundaries
 
-- **We will not ship Defender-flaggable execution logic in the Free binary.** Higher-risk execution logic lives only in the licence-gated Pro sidecar; the Free binary retains the safeguards and re-harden/revert paths. CI blocks forbidden strings from the Free build.
-- **We will not trust the frontend for security decisions.** UI gating is cosmetic; the backend re-checks entitlement, module enablement, and command classification.
-- **We will not accept network hosts or integrity hashes from the frontend.** The Pro download host is pinned in Rust and artifacts are verified before use.
-- **We will not bypass entitlement checks in development or release builds.** Every paid action requires a valid entitlement or trial.
-- **We will not widen the Tauri filesystem/shell capability surface casually.** New webviews require their own narrow capability instead of inheriting broad permissions.
-- **We will not phone home on the Free tier.** Without a paid licence, the licence worker is never contacted; the only baseline call is the update check.
-- **We will not ship a voice-triggered lockdown.** Safety-critical duress triggers must be deterministic.
+- **No plugin marketplace or third-party executable SDK.** The trusted desktop
+  boundary remains the ServaLabs-signed Free binary plus separately entitled
+  Pro components.
+- **No frontend security authority.** Entitlement, scope, role, command class,
+  confirmation, and device ownership are rechecked behind the UI.
+- **No arbitrary command, path, host, query, or integrity value from the
+  browser.** Remote operations use fixed catalog IDs and server-derived risk;
+  download hosts and artifact identities are pinned in trusted code.
+- **No second Fleet command or policy system.** New work reuses enrollment,
+  signed epochs, check-in, approvals, MPA, result ingestion, and audit.
+- **No central hoarding of endpoint forensic content.** Search and System
+  Cleanup filtering happen on the endpoint; Fleet receives bounded typed
+  projections. Detailed acquisition belongs to an explicit Investigator case.
+- **No home-grown inventory or vulnerability scanner.** Fleet may wrap pinned,
+  verified FOSS engines and normalize their outputs, but it does not recreate
+  their package catalogues, SBOM formats, or vulnerability databases.
+- **No casual webview privilege expansion.** Remote content never inherits the
+  trusted main-window capability set.
+- **No entitlement bypass.** Development, trial, portable, and release paths
+  all recheck paid authority at the trusted boundary.
 
-## Out of scope
+## Safety and claim boundaries
 
-- **Mobile companion app** — WinCommander owns the desktop; the phone/server are sibling products, not this repo.
-- **Non-NIST/online-only cleanup enrichment** — not a current guarantee.
+- **No destructive voice trigger.** Emergency actions require deterministic,
+  authenticated inputs.
+- **No universal flash-wipe claim.** Overwrite passes cannot guarantee removal
+  from SSD/NVMe remapped cells. Prefer key destruction and supported firmware
+  sanitize, with exact/degraded results.
+- **No silent replacement of OEM or Windows recovery partitions.** A managed
+  wipe environment uses an explicitly allocated, verified partition and must
+  have uninstall and boot-recovery paths.
+- **No self-issued certification claims.** Evidence reports describe observed
+  controls; they do not declare legal compliance, FIPS validation, or forensic
+  admissibility by themselves.
+- **No claim that delivery equals execution.** Server approval, device receipt,
+  process launch, and observed result are separate states.
+- **No claim that mesh reachability is an air gap.** A private overlay network
+  is still a network and retains observable connection metadata.
+- **No production secret in logs, docs, fixtures, repository history, or client
+  responses.** One-time tokens are shown once and protected thereafter.
+
+## Deliberately separate products or decisions
+
+- Mobile UI and phone lifecycle remain secureOS/Privon responsibilities.
+- Full case acquisition, sealing, and examiner workflow remain Investigator
+  responsibilities.
+- Provider-native Wazuh/Velociraptor administration stays in their own tools;
+  Fleet stores normalized references and approved command results.
+- New high-risk collection categories require a separate evidence contract and
+  cannot arrive as an incidental extension of search or cleanup.

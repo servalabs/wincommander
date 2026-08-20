@@ -21,6 +21,12 @@ commit timestamps). Shipped capabilities (not fixes) live in
   now covers newer Discord, Slack, VS Code, npm, pnpm, Docker, Cursor, Notion,
   and Logitech G HUB cache locations without traversing session or offline-data
   branches. Preview results are listed largest first within each category.
+- **Signed recovery-wipe admission foundation** (2026-08-20) — the future
+  no-USB recovery environment now verifies a canonical Ed25519-signed plan,
+  binds it to the device wipe-token nonce and exact disk/partition identities,
+  hashes the real staged WIM/tool files, and atomically consumes the nonce.
+  This does not install a partition or erase a disk; WIM packaging, one-shot
+  boot integration and destructive acceptance remain release gates.
 
 - **Windows Server tweak section** (2026-08-15) — twelve Server-SKU settings in
   a new `tweaks/server` module: no Ctrl+Alt+Del at logon, hide last signed-in
@@ -55,6 +61,13 @@ commit timestamps). Shipped capabilities (not fixes) live in
   console.
 
 ### Fixed
+
+- **Investigator release-shell fail-closed validation** (2026-08-19) — signed
+  two-artifact manifests now reject unknown fields, reordered app/sidecar
+  entries, and noncanonical uppercase SHA-256 values. Entitlement matching has
+  a regression test proving ordinary Pro's `paid` feature cannot satisfy the
+  explicit Investigator `advanced` gate. Clean-machine release acceptance
+  remains checkpoint-gated in the private release record.
 
 - **Fresh Windows developer bootstrap now installs rustup reliably**
   (2026-08-18). The installer keeps rustup's required `rustup-init.exe`

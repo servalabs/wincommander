@@ -65,6 +65,12 @@ flowchart TB
 - **Fleet agent ↔ fleet server (HTTP).** Devices are untrusted callers (per-device HMAC auth); the server is equally untrusted by devices (all config and commands must verify against a key pinned at enrollment).
 - **Network responses.** Updater manifests/artifacts, licence-worker responses, the Pro download, and DoH answers — hostile until verified.
 - **Filesystem / clipboard input** consumed by the monitors, the search indexer, and the metadata scrubber.
+- **Future recovery-partition executor.** A recovery WIM is not trusted merely
+  because Windows booted it. The pre-execution gate verifies the device-bound
+  wipe token and canonical signed plan, hashes the staged WIM/tools, rechecks
+  exact partition/target-disk identities, requires external power and
+  atomically consumes the plan nonce. The current source does not yet install
+  or boot that WIM and must not be described as a completed wipe feature.
 
 **Assets protected:** the licence-entitlement gate, the encrypted PowerShell module loader, the Free↔Pro trust relationship, the updater signing chain, locally stored settings/licence/trial state, fleet org isolation and seat/last-admin invariants, and evidence-vault chain integrity.
 
@@ -140,7 +146,7 @@ flowchart TB
 - Several operations are intentionally irreversible (secure shred, privacy-clean erases, self-destruct); they show explicit warnings and countdowns — treat them as one-way.
 - **Fleet:** set the server signing key before first start; enroll devices via the in-app "Enroll this device" flow so the entitlement check, settings persistence, and key pinning all run through the gated path. Rotating the signing key requires re-enrolling devices.
 - **Argus:** review consent records and version coupling after any disclosure policy change.
-- **Secure erase:** treat overwrite-based clearing on flash drives as trace reduction, not a guarantee; prefer crypto-erase where a guarantee is required. A **degraded** grade on an erasure certificate means only an overwrite fallback ran — physically destroy the drive if the data was sensitive.
+- **Secure erase:** treat overwrite-based clearing on flash drives as trace reduction, not a guarantee; prefer crypto-erase where a guarantee is required. A **degraded** wipe result means only an overwrite fallback ran — physically destroy the drive if the data was sensitive.
 - Build keys (updater minisign, licence Ed25519, fleet signing key, R2 credentials) belong only in CI/build secrets. If a secret is ever committed, email security@servalabs.com so it can be rotated.
 
 ## Scope
