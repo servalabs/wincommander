@@ -214,19 +214,17 @@ function LocalActionOption({
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
-    <div className="flex items-center gap-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-primary)] px-2 py-1.5 transition-colors hover:border-[var(--color-accent)]/45">
+    <div
+      className="flex cursor-pointer items-center gap-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-primary)] px-2 py-1.5 transition-colors hover:border-[var(--color-accent)]/45"
+      onClick={() => onCheckedChange(!checked)}
+    >
       <CheckboxControl
         checked={checked}
         onChange={(event) => onCheckedChange(event.currentTarget.checked)}
+        onClick={(event) => event.stopPropagation()}
         ariaLabel={label}
       />
-      <button
-        type="button"
-        className="cursor-pointer font-medium text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-line)]"
-        onClick={() => onCheckedChange(!checked)}
-      >
-        {label}
-      </button>
+      <span className="font-medium">{label}</span>
     </div>
   );
 }
