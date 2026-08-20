@@ -17,6 +17,13 @@ interface ThemeProviderProps {
 
 const THEME_STORAGE_KEY = 'wc-theme';
 
+function applyThemeClass(theme: Theme) {
+    const root = window.document.documentElement;
+    root.classList.remove('light', 'dark');
+    root.classList.add(theme);
+    root.setAttribute('data-theme', theme === 'light' ? 'daylight' : 'anduril');
+}
+
 // Read the cached theme synchronously so initial render matches the user's
 // choice. The inline script in index.html already applied the class to <html>
 // before React mounted; this just keeps React state in sync with that.
@@ -25,32 +32,35 @@ function readCachedTheme(): Theme {
         const cached = localStorage.getItem(THEME_STORAGE_KEY);
         if (cached === 'dark' || cached === 'light') return cached;
     } catch { /* localStorage may be unavailable */ }
-    return 'dark';
+    return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     const [theme, setThemeState] = useState<Theme>(readCachedTheme);
+    const [themeReady, setThemeReady] = useState(false);
 
-    // Hydrate from settings.json (authoritative) — corrects the cache if it drifted.
+    // The splash must start only after the persisted setting has won over a
+    // stale WebView cache. Otherwise it starts light, is corrected to dark,
+    // and visibly restarts mid-animation in packaged builds.
     useEffect(() => {
         invoke<string>('get_setting', { path: 'app.theme' })
             .then((settingsTheme) => {
-                if (settingsTheme === 'dark' || settingsTheme === 'light') {
-                    setThemeState(settingsTheme);
-                    try { localStorage.setItem(THEME_STORAGE_KEY, settingsTheme); } catch { /* */ }
-                }
+                const resolvedTheme = settingsTheme === 'dark' || settingsTheme === 'light'
+                    ? settingsTheme
+                    : readCachedTheme();
+                applyThemeClass(resolvedTheme);
+                setThemeState(resolvedTheme);
+                try { localStorage.setItem(THEME_STORAGE_KEY, resolvedTheme); } catch { /* */ }
             })
-            .catch(() => { });
+            .catch(() => applyThemeClass(readCachedTheme()))
+            .finally(() => {
+                window.document.documentElement.setAttribute('data-theme-ready', 'true');
+                setThemeReady(true);
+            });
     }, []);
 
     useEffect(() => {
-        const root = window.document.documentElement;
-        root.classList.remove('light', 'dark');
-        root.classList.add(theme);
-        // V2: the named theme attribute drives the V2 token blocks and is
-        // forward-compatible with adding Palantir/Vault later. Light ↔ Daylight,
-        // dark ↔ Anduril (the warm-orange default).
-        root.setAttribute('data-theme', theme === 'light' ? 'daylight' : 'anduril');
+        applyThemeClass(theme);
     }, [theme]);
 
     // Cross-window sync: when the main window changes theme it writes to
@@ -88,7 +98,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
 
     return (
         <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>
-            {children}
+            {themeReady ? children : null}
         </ThemeContext.Provider>
     );
 };

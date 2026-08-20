@@ -556,29 +556,33 @@ pub fn enter_calculator_mode_with(
     // Set AUMID BEFORE any window.show() call so taskbar sees "Calculator" from frame 1.
     write_calculator_process_identity();
 
-    window.set_title("Calculator").map_err(|e| e.to_string())?;
+    // Native window calls are presentation only. Never leave a configured PIN
+    // gate blank because WebView2/Windows rejects one transition while the
+    // packaged app is starting or restoring.
+    let _ = window.set_title("Calculator");
     // Un-maximize first — re-locking from an unlocked (disguised) session leaves
     // the window maximized, and Windows ignores set_size while maximized.
     let _ = window.unmaximize();
-    window.set_resizable(false).map_err(|e| e.to_string())?;
-    window
-        .set_size(tauri::Size::Logical(tauri::LogicalSize {
-            width: 402.0,
-            height: 660.0,
-        }))
-        .map_err(|e| e.to_string())?;
-    window.center().map_err(|e| e.to_string())?;
+    let _ = window.set_resizable(false);
+    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+        width: 402.0,
+        height: 660.0,
+    }));
+    let _ = window.center();
 
     // Show window in taskbar with the calculator icon
     let _ = window.set_skip_taskbar(false);
-    let calc_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/calc.png"))
-        .map_err(|e| e.to_string())?;
-    let _ = window.set_icon(calc_icon.clone());
+    let calc_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/calc.png")).ok();
+    if let Some(icon) = calc_icon.as_ref() {
+        let _ = window.set_icon(icon.clone());
+    }
 
     // Calculator mode never exposes a tray icon. A non-revealing entry stays
     // fully dark until the peek hotkey shows this calculator window.
     if let Some(tray) = window.app_handle().tray_by_id("tray") {
-        let _ = tray.set_icon(Some(calc_icon));
+        if let Some(icon) = calc_icon {
+            let _ = tray.set_icon(Some(icon));
+        }
         let _ = tray.set_visible(false);
     }
     if reveal {
@@ -622,20 +626,19 @@ pub fn exit_calculator_mode(window: tauri::WebviewWindow, title: String) -> Resu
     // branding + the tray.
     let armed = startup_pin_is_configured_sync();
 
-    window.set_resizable(true).map_err(|e| e.to_string())?;
-    window
-        .set_size(tauri::Size::Logical(tauri::LogicalSize {
-            width: 1200.0,
-            height: 800.0,
-        }))
-        .map_err(|e| e.to_string())?;
-    window
-        .set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize {
-            width: 900.0,
-            height: 600.0,
-        })))
-        .map_err(|e| e.to_string())?;
-    window.center().map_err(|e| e.to_string())?;
+    // A valid PIN must never be rejected because Windows declines a cosmetic
+    // resize/focus request (common while a packaged app is restoring). The
+    // session state above is authoritative; window restoration is best-effort.
+    let _ = window.set_resizable(true);
+    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+        width: 1200.0,
+        height: 800.0,
+    }));
+    let _ = window.set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize {
+        width: 900.0,
+        height: 600.0,
+    })));
+    let _ = window.center();
     let _ = window.set_skip_taskbar(false);
     let _ = window.show();
     let _ = window.unminimize();

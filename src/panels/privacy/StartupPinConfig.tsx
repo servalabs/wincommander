@@ -70,7 +70,7 @@ export default function StartupPinConfig() {
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <p style={{ margin: 0, fontSize: 12, color: "var(--color-text-muted)" }}>
         WinCommander opens as a working calculator. Type a PIN and press{" "}
-        <kbd style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>=</kbd> twice to unlock.
+        <kbd style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>=</kbd> to unlock.
         Only a hand-typed PIN counts — a calculation that equals it will not. Plaintext is never stored, only a one-way hash.
       </p>
       <div

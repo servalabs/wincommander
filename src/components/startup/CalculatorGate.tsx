@@ -21,10 +21,7 @@ interface CalcState {
   // PIN-gate hardening: `typed` is true only while the display is a value the
   // user keyed in digit-by-digit — any operator, function, recall, or computed
   // result clears it, so a sum that happens to equal a PIN can never unlock.
-  // `eqArmed` requires a SECOND consecutive "=" on that typed value before the
-  // PIN check fires, so a single accidental "=" never authenticates.
   typed:              boolean;
-  eqArmed:            boolean;
 }
 
 interface HistoryEntry {
@@ -35,7 +32,7 @@ interface HistoryEntry {
 const INITIAL: CalcState = {
   display: "0", expression: "", operand: null,
   op: null, waitingForOperand: false, justEvaled: false, error: null,
-  typed: false, eqArmed: false,
+  typed: false,
 };
 
 // ── Arithmetic ───────────────────────────────────────────────────
@@ -94,8 +91,7 @@ function renderResultDisplay(formatted: string): React.ReactNode {
 // ── Component ────────────────────────────────────────────────────
 
 interface Props {
-  onAuth:    (mode: AuthMode) => void;
-  onDestroy: () => void;
+  onAuth: (mode: AuthMode) => void;
 }
 
 export default function CalculatorGate({ onAuth }: Props) {
@@ -105,12 +101,8 @@ export default function CalculatorGate({ onAuth }: Props) {
   const [showHistory, setShowHistory] = useState(false);
   const containerRef            = useRef<HTMLDivElement>(null);
   const appWindow               = getCurrentWindow();
-  // Latches once a PIN check has resolved to a real/decoy/destroy outcome.
-  // Without this, mashing "=" after unlocking re-arms the double-equals gate
-  // (see `eqArmed` above) and queues another checkPin before React has had a
-  // chance to unmount this component, so exit_calculator_mode (full
-  // resize/show/maximize/focus) and onAuth fire again for every extra pair of
-  // presses — visible as the window repeatedly "reloading".
+  // Latches once a PIN check has resolved to a real/decoy/destroy outcome so
+  // repeated presses while the native window transition completes are ignored.
   const authResolvedRef         = useRef(false);
 
   // ── PIN check on equals ──────────────────────────────────────────
@@ -153,9 +145,6 @@ export default function CalculatorGate({ onAuth }: Props) {
   const dispatch = useCallback((action: Action) => {
     setS((prev) => {
       let next = { ...prev };
-
-      // Any input other than "=" breaks a pending double-"=" sequence.
-      if (action.type !== "equals") next.eqArmed = false;
 
       switch (action.type) {
         case "digit": {
@@ -225,21 +214,12 @@ export default function CalculatorGate({ onAuth }: Props) {
             next.display    = fmt(r);
             // A computed result is no longer a hand-typed PIN candidate.
             next.typed      = false;
-            next.eqArmed    = false;
           } else {
             next.expression = `${fmt(cur)} =`;
-            // Gate trigger: ONLY for a value typed digit-by-digit (never a
-            // computed result), and ONLY on the second consecutive "=". The
-            // bare idle "0" is excluded so an empty calc can't authenticate.
+            // Gate trigger: only a value keyed digit-by-digit can authenticate.
+            // A computed result (including one equal to a PIN) is never valid.
             if (next.typed && next.display !== "0") {
-              if (next.eqArmed) {
-                next.eqArmed = false;
-                setTimeout(() => checkPin(next.display), 0);
-              } else {
-                next.eqArmed = true;
-              }
-            } else {
-              next.eqArmed = false;
+              setTimeout(() => checkPin(next.display), 0);
             }
           }
           next.op                = null;
@@ -352,7 +332,7 @@ export default function CalculatorGate({ onAuth }: Props) {
       case "MR":
         if (memory !== null) {
           // A recalled value is not hand-typed — never gate-eligible.
-          setS((prev) => ({ ...prev, display: fmt(memory), justEvaled: true, waitingForOperand: false, error: null, typed: false, eqArmed: false }));
+          setS((prev) => ({ ...prev, display: fmt(memory), justEvaled: true, waitingForOperand: false, error: null, typed: false }));
         }
         break;
       case "MC": setMemory(null); break;
@@ -435,7 +415,7 @@ export default function CalculatorGate({ onAuth }: Props) {
               {history.map((entry, i) => (
                 <li key={i} className="calc-history-entry"
                   onClick={() => {
-                    setS((prev) => ({ ...prev, display: entry.result, justEvaled: true, waitingForOperand: false, error: null, typed: false, eqArmed: false }));
+                    setS((prev) => ({ ...prev, display: entry.result, justEvaled: true, waitingForOperand: false, error: null, typed: false }));
                     setShowHistory(false);
                   }}
                 >

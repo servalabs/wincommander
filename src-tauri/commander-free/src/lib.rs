@@ -1951,30 +1951,11 @@ pub fn run() {
                     // suppression applies to the authenticated WinCommander window, not
                     // to the gate itself.
                     //
-                    // AUMID must be set BEFORE window.show() so taskbar hover reads
-                    // "Calculator" from the very first frame (not "WinCommander").
-                    set_calculator_taskbar_identity();
-                    // Ensure CalculatorMode=1 is committed before the window appears.
-                    write_wc_registry_dword("CalculatorMode", 1);
                     log_message_src("info", "core", "[Calculator] startup: entering calculator mode");
-                    let _ = window.set_title("Calculator");
-                    let _ = window.set_resizable(false);
-                    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-                        width: 402.0,
-                        height: 660.0,
-                    }));
-                    let _ = window.center();
-                    let _ = window.set_skip_taskbar(false);
-                    if let Ok(icon) =
-                        tauri::image::Image::from_bytes(include_bytes!("../icons/calc.png"))
-                    {
-                        let _ = window.set_icon(icon);
-                    }
-                    if let Some(tray) = app.tray_by_id("tray") {
-                        let _ = tray.set_visible(false);
-                    }
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    // Keep cold-start and every later calculator entry on the
+                    // same native path. Divergent setup here caused a second
+                    // transition after React mounted in packaged builds.
+                    let _ = startup_auth::enter_calculator_mode_with(window.clone(), true);
                 } else if !hidden_mode {
                     let _ = window.set_skip_taskbar(false);
                     let _ = window.maximize();

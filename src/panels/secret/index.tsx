@@ -145,7 +145,6 @@ function LockDisguiseSection() {
             invoke("update_autostart_task_identity", { covered: next || isHideModeActive }).catch(() => {});
             if (next) {
                 await invoke("enter_calculator_mode").catch(() => {});
-                window.dispatchEvent(new Event("wincommander:calculator-lock-engaged"));
             }
             showSuccess(next
                 ? "Calculator lock on — calculator mode is active."
@@ -348,7 +347,7 @@ function LockDisguiseSection() {
                         </div>
                     </div>
                     <p className="dgz-hint">
-                        Opens as a working calculator. Type a PIN, press <kbd className="sec-kbd">=</kbd> twice.{" "}
+                        Opens as a working calculator. Type a PIN, press <kbd className="sec-kbd">=</kbd>.{" "}
                         <strong>Real</strong> → full app · <strong>Decoy</strong> → Borrowed · <strong>Destroy</strong> → wipe + real calc.
                     </p>
                     <StartupPinConfig />

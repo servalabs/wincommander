@@ -71,12 +71,6 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
     const [scrambleText, setScrambleText] = useState(() => scrambleWord(branding.companyLabel, 0));
     const [animDone, setAnimDone] = useState(false);
 
-    // React splash owns the frame now — drop the HTML first-paint overlay
-    // so the two never stack.
-    useEffect(() => {
-        document.getElementById("boot-splash")?.setAttribute("hidden", "");
-    }, []);
-
     // Canvas matrix rain — brightness-grid approach.
     // Every cell has a float brightness [0..1] that decays each frame; drops
     // stamp brightness=1 at their head position each frame. This gives:
@@ -274,19 +268,6 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
             onComplete();
         }
     }, [animDone, isAppReady, onComplete]);
-
-    // Hard-cap: dismiss after 20s regardless, so startup errors never hang the splash.
-    useEffect(() => {
-        if (!logoReady) return;
-        const t = setTimeout(() => {
-            if (!calledRef.current) {
-                calledRef.current = true;
-                onComplete();
-            }
-        }, 20_000);
-        return () => clearTimeout(t);
-    }, [logoReady, onComplete]);
-
 
     useEffect(() => {
         const target = branding.companyLabel;

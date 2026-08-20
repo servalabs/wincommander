@@ -23,6 +23,7 @@
         "fullscreen": false,
         "decorations": false,
         "transparent": false,
+        "backgroundColor": "#0a0f12",
         "center": true,
         "visible": false
       }

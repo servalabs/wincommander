@@ -19,7 +19,11 @@
   <script>
     try {
       var t = localStorage.getItem("wc-theme");
-      var isLight = t === "light";
+      var isLight = t === "light" || (
+        t !== "dark" &&
+        window.matchMedia &&
+        window.matchMedia("(prefers-color-scheme: light)").matches
+      );
       document.documentElement.classList.add(isLight ? "light" : "dark");
       document.documentElement.setAttribute("data-theme", isLight ? "daylight" : "anduril");
     } catch (e) {
@@ -39,6 +43,12 @@
       syncPageVisibility();
     } catch (e) {}
   </script>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #0a0f12; }
+    /* Do not reveal a stale cached theme before ThemeProvider reads the
+       authoritative setting. The React splash is the sole startup animation. */
+    html:not([data-theme-ready]) body { background: #0a0f12 !important; }
+  </style>
 </head>
 
 <body>

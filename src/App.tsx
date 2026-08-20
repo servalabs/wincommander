@@ -85,10 +85,6 @@ import DashboardPanel from "./panels/dashboard";
 // Polling resumes on any activity.
 
 const IDLE_PAUSE_MS = 3 * 60 * 1000;
-// Keep a WebView/asset hiccup from permanently hiding the whole app behind the
-// splash. Startup data is progressive, so the shell is safe to show while any
-// slow backend probes continue.
-const SPLASH_ESCAPE_HATCH_MS = 8_000;
 
 function compareVersionStrings(a: string | null | undefined, b: string | null | undefined): number | null {
   const parse = (value: string | null | undefined): number[] | null => {
@@ -216,13 +212,6 @@ function AppContent() {
   const [isShredDialogOpen, setIsShredDialogOpen] = useState(false);
   const { hasPaid, isLoading: entitlementLoading } = useEntitlements();
 
-  // SplashScreen has its own timer, but this parent-level guard still runs if
-  // that component's image or animation lifecycle never settles in WebView2.
-  useEffect(() => {
-    if (splashDone) return;
-    const timer = window.setTimeout(() => setSplashDone(true), SPLASH_ESCAPE_HATCH_MS);
-    return () => window.clearTimeout(timer);
-  }, [splashDone]);
   const canUseDevTools = entitlementLoading || hasPaid;
   // Free-side signal for the combined UpdateFlowDialog auto-trigger below.
   const updaterSnapshot = useUpdater();
@@ -794,7 +783,7 @@ function AppContent() {
     }
   }, [productivityStatus?.running]);
 
-  // isLoading only blocks on splash — data loads progressively in the background
+  // The shell must remain hidden until both the animation and startup data are ready.
   const isLoading = !splashDone;
 
   // Restore last active panel from settings.json — DISABLED
@@ -1155,16 +1144,13 @@ function AppContent() {
 }
 
 function StartupAuthGate({ children }: { children: React.ReactNode }) {
-  const [, setAuthDone]               = useState(false);
   const [showCalc, setShowCalc]       = useState(false);
   const { setMode } = useAuthMode();
 
   useEffect(() => {
+    let mounted = true;
     const handleCalculatorLockEngaged = () => {
-      setAuthDone(false);
-      invoke("enter_calculator_mode")
-        .catch(() => {})
-        .finally(() => setShowCalc(true));
+      setShowCalc(true);
     };
     window.addEventListener("wincommander:calculator-lock-engaged", handleCalculatorLockEngaged);
 
@@ -1174,9 +1160,11 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
     // calc UI so the window is never a calc-sized blank real app.
     let unlistenCalc: (() => void) | undefined;
     listen("calculator-mode-entered", () => {
-      setAuthDone(false);
-      setShowCalc(true);
-    }).then((un) => { unlistenCalc = un; }).catch(() => {});
+      if (mounted) setShowCalc(true);
+    }).then((un) => {
+      if (mounted) unlistenCalc = un;
+      else un();
+    }).catch(() => {});
 
     // Truthful panic: the destruct cascade emits an aggregate summary. If any
     // step failed (notably PRO_NOT_INSTALLED when Pro isn't installed/licensed),
@@ -1200,32 +1188,23 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
       },
     ).then((un) => { unlistenDestruct = un; }).catch(() => {});
 
-    // Fail open if the configured-check never settles. A rejection is already
-    // handled below, but a HANG (stalled IPC / blocked settings read) resolves
-    // neither path. Children still render (splash covers the dashboard), but
-    // mode must flip to "real" so the rest of startup isn't stuck waiting.
-    const failOpenTimer = setTimeout(() => {
-      setMode("real");
-      setAuthDone(true);
-    }, 5000);
-
     invoke<boolean>("startup_pin_is_configured")
       .then((configured) => {
-        clearTimeout(failOpenTimer);
+        if (!mounted) return;
         if (configured) {
-          // Enter calculator window mode, then show the calc UI
-          invoke("enter_calculator_mode")
-            .catch(() => {})
-            .finally(() => setShowCalc(true));
+          // Native setup owns the window transition before its first paint;
+          // React only replaces the webview content with the calculator.
+          setShowCalc(true);
         } else {
           setMode("real");
-          setAuthDone(true);
         }
       })
-      .catch(() => { clearTimeout(failOpenTimer); setMode("real"); setAuthDone(true); });
+      .catch(() => {
+        if (mounted) setMode("real");
+      });
 
     return () => {
-      clearTimeout(failOpenTimer);
+      mounted = false;
       window.removeEventListener("wincommander:calculator-lock-engaged", handleCalculatorLockEngaged);
       unlistenCalc?.();
       unlistenDestruct?.();
@@ -1239,24 +1218,10 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
     // through the same context setter.
     setMode(mode);
     setShowCalc(false);
-    setAuthDone(true);
   }, [setMode]);
 
-  const handleDestroy = useCallback(async () => {
-    try {
-      await invoke("lockdown", { deactivateLicenseFirst: false, shutdownSystem: false });
-    } catch { /* process is exiting */ }
-  }, []);
-
-  // Calculator replaces the whole app; drop the HTML first-paint overlay so
-  // it never sits on top of the lock UI.
-  useEffect(() => {
-    if (!showCalc) return;
-    document.getElementById("boot-splash")?.setAttribute("hidden", "");
-  }, [showCalc]);
-
   if (showCalc) {
-    return <CalculatorGate onAuth={handleAuth} onDestroy={handleDestroy} />;
+    return <CalculatorGate onAuth={handleAuth} />;
   }
   // Always render children while the PIN check runs — AppContent already
   // hides the dashboard behind SplashScreen, so a blank native window is
