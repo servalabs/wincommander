@@ -184,7 +184,9 @@ mod tests {
 
     #[test]
     fn valid_luhn_card_with_separators_detected() {
-        assert!(looks_like_payment_card("card: 4532-0151-1283-0366 exp 12/29"));
+        assert!(looks_like_payment_card(
+            "card: 4532-0151-1283-0366 exp 12/29"
+        ));
     }
 
     #[test]

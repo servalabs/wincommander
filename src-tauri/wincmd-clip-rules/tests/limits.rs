@@ -20,7 +20,10 @@ fn one_hundred_and_one_enabled_rules_is_rejected() {
     let errors = common::expect_errors(compile(&rules, &RuleSetLimits::default()));
     assert_eq!(
         errors,
-        vec![CompileError::TooManyEnabledRules { limit: 100, actual: 101 }]
+        vec![CompileError::TooManyEnabledRules {
+            limit: 100,
+            actual: 101
+        }]
     );
 }
 
@@ -40,7 +43,14 @@ fn disabled_rules_do_not_count_toward_the_limit() {
 fn pattern_at_exactly_the_byte_limit_is_ok() {
     let limits = RuleSetLimits::default();
     let value = "a".repeat(limits.max_pattern_bytes);
-    let rule = common::rule(1, 1, MatchKind::Phrase { value, case_sensitive: true });
+    let rule = common::rule(
+        1,
+        1,
+        MatchKind::Phrase {
+            value,
+            case_sensitive: true,
+        },
+    );
     assert!(compile(&[rule], &limits).is_ok());
 }
 
@@ -48,7 +58,14 @@ fn pattern_at_exactly_the_byte_limit_is_ok() {
 fn pattern_one_byte_over_the_limit_is_rejected() {
     let limits = RuleSetLimits::default();
     let value = "a".repeat(limits.max_pattern_bytes + 1);
-    let rule = common::rule(1, 1, MatchKind::Phrase { value, case_sensitive: true });
+    let rule = common::rule(
+        1,
+        1,
+        MatchKind::Phrase {
+            value,
+            case_sensitive: true,
+        },
+    );
     let errors = common::expect_errors(compile(&[rule], &limits));
     assert_eq!(
         errors,
@@ -66,9 +83,19 @@ fn regex_pattern_over_the_byte_limit_is_rejected_before_compiling() {
     // must apply uniformly to both pattern-bearing MatchKind variants.
     let limits = RuleSetLimits::default();
     let pattern = format!("{}$", "a".repeat(limits.max_pattern_bytes));
-    let rule = common::rule(1, 1, MatchKind::Regex { pattern, case_sensitive: true });
+    let rule = common::rule(
+        1,
+        1,
+        MatchKind::Regex {
+            pattern,
+            case_sensitive: true,
+        },
+    );
     let errors = common::expect_errors(compile(&[rule], &limits));
-    assert!(matches!(errors[0], CompileError::PatternTooLong { index: 0, .. }));
+    assert!(matches!(
+        errors[0],
+        CompileError::PatternTooLong { index: 0, .. }
+    ));
 }
 
 // ── regex_size_limit ──────────────────────────────────────────────────
@@ -86,22 +113,34 @@ fn a_regex_whose_compiled_program_exceeds_the_per_rule_limit_is_rejected() {
     let rule = common::rule(
         1,
         1,
-        MatchKind::Regex { pattern: r"\w".to_string(), case_sensitive: true },
+        MatchKind::Regex {
+            pattern: r"\w".to_string(),
+            case_sensitive: true,
+        },
     );
     let errors = common::expect_errors(compile(&[rule], &limits));
     assert_eq!(
         errors,
-        vec![CompileError::RegexProgramTooLarge { index: 0, limit: 1000 }]
+        vec![CompileError::RegexProgramTooLarge {
+            index: 0,
+            limit: 1000
+        }]
     );
 }
 
 #[test]
 fn a_small_regex_under_the_per_rule_limit_is_ok() {
-    let limits = RuleSetLimits { regex_size_limit: 1000, ..RuleSetLimits::default() };
+    let limits = RuleSetLimits {
+        regex_size_limit: 1000,
+        ..RuleSetLimits::default()
+    };
     let rule = common::rule(
         1,
         1,
-        MatchKind::Regex { pattern: "abc".to_string(), case_sensitive: true },
+        MatchKind::Regex {
+            pattern: "abc".to_string(),
+            case_sensitive: true,
+        },
     );
     assert!(compile(&[rule], &limits).is_ok());
 }
@@ -121,13 +160,31 @@ fn two_small_regexes_whose_charged_total_exceeds_the_ruleset_limit_is_rejected()
         regex_total_size_limit: 3000, // room for one rule's charge (2000), not two (4000)
         ..RuleSetLimits::default()
     };
-    let first = common::rule(1, 1, MatchKind::Regex { pattern: "abc".to_string(), case_sensitive: true });
-    let second = common::rule(2, 1, MatchKind::Regex { pattern: "def".to_string(), case_sensitive: true });
+    let first = common::rule(
+        1,
+        1,
+        MatchKind::Regex {
+            pattern: "abc".to_string(),
+            case_sensitive: true,
+        },
+    );
+    let second = common::rule(
+        2,
+        1,
+        MatchKind::Regex {
+            pattern: "def".to_string(),
+            case_sensitive: true,
+        },
+    );
 
     let errors = common::expect_errors(compile(&[first, second], &limits));
     assert_eq!(
         errors,
-        vec![CompileError::RegexTotalProgramTooLarge { index: 1, limit: 3000, actual: 4000 }]
+        vec![CompileError::RegexTotalProgramTooLarge {
+            index: 1,
+            limit: 3000,
+            actual: 4000
+        }]
     );
 }
 
@@ -138,8 +195,22 @@ fn two_small_regexes_within_the_ruleset_total_is_ok() {
         regex_total_size_limit: 3000, // room for both charges (2000 total)
         ..RuleSetLimits::default()
     };
-    let first = common::rule(1, 1, MatchKind::Regex { pattern: "abc".to_string(), case_sensitive: true });
-    let second = common::rule(2, 1, MatchKind::Regex { pattern: "def".to_string(), case_sensitive: true });
+    let first = common::rule(
+        1,
+        1,
+        MatchKind::Regex {
+            pattern: "abc".to_string(),
+            case_sensitive: true,
+        },
+    );
+    let second = common::rule(
+        2,
+        1,
+        MatchKind::Regex {
+            pattern: "def".to_string(),
+            case_sensitive: true,
+        },
+    );
     assert!(compile(&[first, second], &limits).is_ok());
 }
 
@@ -147,30 +218,70 @@ fn two_small_regexes_within_the_ruleset_total_is_ok() {
 
 #[test]
 fn positive_lookahead_is_rejected() {
-    let rule = common::rule(1, 1, MatchKind::Regex { pattern: "abc(?=def)".to_string(), case_sensitive: true });
+    let rule = common::rule(
+        1,
+        1,
+        MatchKind::Regex {
+            pattern: "abc(?=def)".to_string(),
+            case_sensitive: true,
+        },
+    );
     let errors = common::expect_errors(compile(&[rule], &RuleSetLimits::default()));
-    assert_eq!(errors, vec![CompileError::LookaroundUnsupported { index: 0 }]);
+    assert_eq!(
+        errors,
+        vec![CompileError::LookaroundUnsupported { index: 0 }]
+    );
 }
 
 #[test]
 fn negative_lookahead_is_rejected() {
-    let rule = common::rule(1, 1, MatchKind::Regex { pattern: "abc(?!def)".to_string(), case_sensitive: true });
+    let rule = common::rule(
+        1,
+        1,
+        MatchKind::Regex {
+            pattern: "abc(?!def)".to_string(),
+            case_sensitive: true,
+        },
+    );
     let errors = common::expect_errors(compile(&[rule], &RuleSetLimits::default()));
-    assert_eq!(errors, vec![CompileError::LookaroundUnsupported { index: 0 }]);
+    assert_eq!(
+        errors,
+        vec![CompileError::LookaroundUnsupported { index: 0 }]
+    );
 }
 
 #[test]
 fn positive_lookbehind_is_rejected() {
-    let rule = common::rule(1, 1, MatchKind::Regex { pattern: "(?<=abc)def".to_string(), case_sensitive: true });
+    let rule = common::rule(
+        1,
+        1,
+        MatchKind::Regex {
+            pattern: "(?<=abc)def".to_string(),
+            case_sensitive: true,
+        },
+    );
     let errors = common::expect_errors(compile(&[rule], &RuleSetLimits::default()));
-    assert_eq!(errors, vec![CompileError::LookaroundUnsupported { index: 0 }]);
+    assert_eq!(
+        errors,
+        vec![CompileError::LookaroundUnsupported { index: 0 }]
+    );
 }
 
 #[test]
 fn negative_lookbehind_is_rejected() {
-    let rule = common::rule(1, 1, MatchKind::Regex { pattern: "(?<!abc)def".to_string(), case_sensitive: true });
+    let rule = common::rule(
+        1,
+        1,
+        MatchKind::Regex {
+            pattern: "(?<!abc)def".to_string(),
+            case_sensitive: true,
+        },
+    );
     let errors = common::expect_errors(compile(&[rule], &RuleSetLimits::default()));
-    assert_eq!(errors, vec![CompileError::LookaroundUnsupported { index: 0 }]);
+    assert_eq!(
+        errors,
+        vec![CompileError::LookaroundUnsupported { index: 0 }]
+    );
 }
 
 #[test]
@@ -180,7 +291,10 @@ fn named_capture_group_is_not_mistaken_for_lookbehind() {
     let rule = common::rule(
         1,
         1,
-        MatchKind::Regex { pattern: "(?<year>[0-9]{4})-(?<month>[0-9]{2})".to_string(), case_sensitive: true },
+        MatchKind::Regex {
+            pattern: "(?<year>[0-9]{4})-(?<month>[0-9]{2})".to_string(),
+            case_sensitive: true,
+        },
     );
     assert!(compile(&[rule], &RuleSetLimits::default()).is_ok());
 }
@@ -193,13 +307,32 @@ fn compile_collects_every_error_not_just_the_first() {
     let bad_pattern = common::rule(
         1,
         1,
-        MatchKind::Phrase { value: "a".repeat(limits.max_pattern_bytes + 1), case_sensitive: true },
+        MatchKind::Phrase {
+            value: "a".repeat(limits.max_pattern_bytes + 1),
+            case_sensitive: true,
+        },
     );
-    let bad_lookaround =
-        common::rule(2, 1, MatchKind::Regex { pattern: "a(?=b)".to_string(), case_sensitive: true });
+    let bad_lookaround = common::rule(
+        2,
+        1,
+        MatchKind::Regex {
+            pattern: "a(?=b)".to_string(),
+            case_sensitive: true,
+        },
+    );
 
     let errors = common::expect_errors(compile(&[bad_pattern, bad_lookaround], &limits));
-    assert_eq!(errors.len(), 2, "both independent errors must be reported, not just the first");
-    assert!(matches!(errors[0], CompileError::PatternTooLong { index: 0, .. }));
-    assert!(matches!(errors[1], CompileError::LookaroundUnsupported { index: 1 }));
+    assert_eq!(
+        errors.len(),
+        2,
+        "both independent errors must be reported, not just the first"
+    );
+    assert!(matches!(
+        errors[0],
+        CompileError::PatternTooLong { index: 0, .. }
+    ));
+    assert!(matches!(
+        errors[1],
+        CompileError::LookaroundUnsupported { index: 1 }
+    ));
 }

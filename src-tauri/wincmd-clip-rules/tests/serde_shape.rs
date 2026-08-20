@@ -16,7 +16,14 @@ fn round_trip(rule: Rule) -> Rule {
 
 #[test]
 fn phrase_match_kind_round_trips() {
-    let rule = common::rule(1, 1, MatchKind::Phrase { value: "abc".into(), case_sensitive: false });
+    let rule = common::rule(
+        1,
+        1,
+        MatchKind::Phrase {
+            value: "abc".into(),
+            case_sensitive: false,
+        },
+    );
     let back = round_trip(rule.clone());
     assert!(matches!(
         back.matcher,
@@ -29,7 +36,10 @@ fn regex_match_kind_round_trips() {
     let rule = common::rule(
         1,
         1,
-        MatchKind::Regex { pattern: r"\d+".into(), case_sensitive: true },
+        MatchKind::Regex {
+            pattern: r"\d+".into(),
+            case_sensitive: true,
+        },
     );
     let back = round_trip(rule);
     assert!(matches!(
@@ -42,14 +52,20 @@ fn regex_match_kind_round_trips() {
 fn structured_match_kind_round_trips() {
     let rule = common::rule(1, 1, MatchKind::Structured(StructuredKind::Iban));
     let back = round_trip(rule);
-    assert!(matches!(back.matcher, MatchKind::Structured(StructuredKind::Iban)));
+    assert!(matches!(
+        back.matcher,
+        MatchKind::Structured(StructuredKind::Iban)
+    ));
 }
 
 #[test]
 fn builtin_match_kind_round_trips() {
     let rule = common::rule(1, 1, MatchKind::Builtin(BuiltinPattern::AnthropicApiKey));
     let back = round_trip(rule);
-    assert!(matches!(back.matcher, MatchKind::Builtin(BuiltinPattern::AnthropicApiKey)));
+    assert!(matches!(
+        back.matcher,
+        MatchKind::Builtin(BuiltinPattern::AnthropicApiKey)
+    ));
 }
 
 /// Spot-check the actual JSON shape a console/TS consumer would see for
@@ -60,12 +76,17 @@ fn builtin_match_kind_round_trips() {
 /// comment on `MatchKind` for why adjacent tagging was chosen).
 #[test]
 fn adjacent_tagging_shape_is_kind_and_params() {
-    let phrase = serde_json::to_value(MatchKind::Phrase { value: "x".into(), case_sensitive: true }).unwrap();
+    let phrase = serde_json::to_value(MatchKind::Phrase {
+        value: "x".into(),
+        case_sensitive: true,
+    })
+    .unwrap();
     assert_eq!(phrase["kind"], "phrase");
     assert_eq!(phrase["params"]["value"], "x");
     assert_eq!(phrase["params"]["case_sensitive"], true);
 
-    let structured = serde_json::to_value(MatchKind::Structured(StructuredKind::PaymentCard)).unwrap();
+    let structured =
+        serde_json::to_value(MatchKind::Structured(StructuredKind::PaymentCard)).unwrap();
     assert_eq!(structured["kind"], "structured");
     assert_eq!(structured["params"], "payment_card");
 
@@ -78,13 +99,24 @@ fn adjacent_tagging_shape_is_kind_and_params() {
 fn rule_level_fields_round_trip_including_actions_and_severity() {
     let mut rule = common::rule(0x42, 777, MatchKind::Builtin(BuiltinPattern::Jwt));
     rule.severity = Severity::Critical;
-    rule.actions = vec![Action::ClearClipboard, Action::ReportFleet, Action::AlertAdmin];
+    rule.actions = vec![
+        Action::ClearClipboard,
+        Action::ReportFleet,
+        Action::AlertAdmin,
+    ];
     rule.cooldown_seconds = 120;
 
     let back = round_trip(rule.clone());
     assert_eq!(back.id, rule.id);
     assert_eq!(back.priority, 777);
     assert_eq!(back.severity, Severity::Critical);
-    assert_eq!(back.actions, vec![Action::ClearClipboard, Action::ReportFleet, Action::AlertAdmin]);
+    assert_eq!(
+        back.actions,
+        vec![
+            Action::ClearClipboard,
+            Action::ReportFleet,
+            Action::AlertAdmin
+        ]
+    );
     assert_eq!(back.cooldown_seconds, 120);
 }

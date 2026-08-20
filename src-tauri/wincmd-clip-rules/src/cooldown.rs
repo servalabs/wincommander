@@ -49,7 +49,10 @@ impl CooldownLedger {
     pub fn should_emit(&mut self, rule_id: RuleId, now: Instant, cooldown: Duration) -> Emit {
         match self.entries.entry(rule_id) {
             Entry::Vacant(slot) => {
-                slot.insert(LedgerEntry { last_emit: now, suppressed_since: 0 });
+                slot.insert(LedgerEntry {
+                    last_emit: now,
+                    suppressed_since: 0,
+                });
                 Emit::Now
             }
             Entry::Occupied(mut slot) => {
@@ -65,7 +68,9 @@ impl CooldownLedger {
                     Emit::Now
                 } else {
                     entry.suppressed_since += 1;
-                    Emit::Suppressed { count: entry.suppressed_since }
+                    Emit::Suppressed {
+                        count: entry.suppressed_since,
+                    }
                 }
             }
         }
@@ -85,7 +90,11 @@ mod tests {
         let mut ledger = CooldownLedger::new();
         let now = Instant::now();
         assert_eq!(
-            ledger.should_emit(rid("0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a4b"), now, Duration::from_secs(60)),
+            ledger.should_emit(
+                rid("0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a4b"),
+                now,
+                Duration::from_secs(60)
+            ),
             Emit::Now
         );
     }
@@ -95,7 +104,10 @@ mod tests {
         let mut ledger = CooldownLedger::new();
         let id = rid("0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a4b");
         let t0 = Instant::now();
-        assert_eq!(ledger.should_emit(id.clone(), t0, Duration::from_secs(60)), Emit::Now);
+        assert_eq!(
+            ledger.should_emit(id.clone(), t0, Duration::from_secs(60)),
+            Emit::Now
+        );
 
         let t1 = t0 + Duration::from_secs(10);
         assert_eq!(
@@ -116,7 +128,11 @@ mod tests {
         let id = rid("0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a4b");
         let t0 = Instant::now();
         ledger.should_emit(id.clone(), t0, Duration::from_secs(60));
-        ledger.should_emit(id.clone(), t0 + Duration::from_secs(10), Duration::from_secs(60));
+        ledger.should_emit(
+            id.clone(),
+            t0 + Duration::from_secs(10),
+            Duration::from_secs(60),
+        );
 
         let after_cooldown = t0 + Duration::from_secs(61);
         assert_eq!(
@@ -126,7 +142,11 @@ mod tests {
 
         // Counter reset — the very next suppressed match starts back at 1.
         assert_eq!(
-            ledger.should_emit(id, after_cooldown + Duration::from_secs(1), Duration::from_secs(60)),
+            ledger.should_emit(
+                id,
+                after_cooldown + Duration::from_secs(1),
+                Duration::from_secs(60)
+            ),
             Emit::Suppressed { count: 1 }
         );
     }
@@ -146,9 +166,15 @@ mod tests {
         let a = rid("0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a4b");
         let b = rid("1a2b3c4d5e6f7a8b9c0d1e2f3a4b0e8f");
         let t0 = Instant::now();
-        assert_eq!(ledger.should_emit(a.clone(), t0, Duration::from_secs(60)), Emit::Now);
+        assert_eq!(
+            ledger.should_emit(a.clone(), t0, Duration::from_secs(60)),
+            Emit::Now
+        );
         // A fresh rule id, same instant — its own cooldown hasn't started.
-        assert_eq!(ledger.should_emit(b, t0, Duration::from_secs(60)), Emit::Now);
+        assert_eq!(
+            ledger.should_emit(b, t0, Duration::from_secs(60)),
+            Emit::Now
+        );
         // `a` is still in its own cooldown window.
         assert_eq!(
             ledger.should_emit(a, t0 + Duration::from_secs(1), Duration::from_secs(60)),

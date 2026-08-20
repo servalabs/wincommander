@@ -110,7 +110,9 @@ impl BuiltinPattern {
             StripeLivePublishable => r"\bpk_live_[A-Za-z0-9]{24,}\b",
             SlackToken => r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",
             DiscordBotToken => r"\b[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,38}\b",
-            PrivateKeyPem => r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY( BLOCK)?-----",
+            PrivateKeyPem => {
+                r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY( BLOCK)?-----"
+            }
             SshPrivateKeyHeader => r"-----BEGIN OPENSSH PRIVATE KEY-----",
             Jwt => r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
             BitcoinWifPrivateKey => r"\b[5KL][1-9A-HJ-NP-Za-km-z]{50,51}\b",
@@ -133,9 +135,7 @@ impl BuiltinPattern {
             CurlWgetPipeToShell => {
                 r"(?i)\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n|]+\|\s*(?:sh|bash|zsh|ksh|fish|iex|invoke-expression|cmd|powershell)\b"
             }
-            UnicodeBidiOverride | UnicodeZeroWidthInCode | UnicodeConfusableUrlHost => {
-                return None
-            }
+            UnicodeBidiOverride | UnicodeZeroWidthInCode | UnicodeConfusableUrlHost => return None,
         })
     }
 
@@ -148,11 +148,26 @@ impl BuiltinPattern {
         use crate::Severity;
         use BuiltinPattern::*;
         match self {
-            AwsAccessKey | GoogleApiKey | SendgridApiKey | MailgunApiKey | TwilioAccountSid
-            | DatabaseUrlWithCredentials | OpenAiProjectKey | OpenAiApiKey | AnthropicApiKey
-            | GitHubClassicToken | GitHubFineGrainedToken | NpmToken | StripeLiveSecret
-            | StripeLivePublishable | SlackToken | DiscordBotToken | PrivateKeyPem
-            | SshPrivateKeyHeader | Jwt | BitcoinWifPrivateKey => Severity::Warn,
+            AwsAccessKey
+            | GoogleApiKey
+            | SendgridApiKey
+            | MailgunApiKey
+            | TwilioAccountSid
+            | DatabaseUrlWithCredentials
+            | OpenAiProjectKey
+            | OpenAiApiKey
+            | AnthropicApiKey
+            | GitHubClassicToken
+            | GitHubFineGrainedToken
+            | NpmToken
+            | StripeLiveSecret
+            | StripeLivePublishable
+            | SlackToken
+            | DiscordBotToken
+            | PrivateKeyPem
+            | SshPrivateKeyHeader
+            | Jwt
+            | BitcoinWifPrivateKey => Severity::Warn,
             PowershellEncodedPayload
             | HiddenPowershellWindow
             | PowershellExecutionPolicyBypass
@@ -351,7 +366,10 @@ mod tests {
     fn procedural_variants_have_no_regex_source() {
         assert_eq!(BuiltinPattern::UnicodeBidiOverride.regex_source(), None);
         assert_eq!(BuiltinPattern::UnicodeZeroWidthInCode.regex_source(), None);
-        assert_eq!(BuiltinPattern::UnicodeConfusableUrlHost.regex_source(), None);
+        assert_eq!(
+            BuiltinPattern::UnicodeConfusableUrlHost.regex_source(),
+            None
+        );
     }
 
     #[test]
@@ -368,7 +386,9 @@ mod tests {
 
     #[test]
     fn clean_url_not_confusable() {
-        assert!(!confusable_url_host("Visit https://example.com/path for details"));
+        assert!(!confusable_url_host(
+            "Visit https://example.com/path for details"
+        ));
     }
 
     #[test]
@@ -383,7 +403,9 @@ mod tests {
 
     #[test]
     fn zero_width_in_code_context_detected() {
-        assert!(zero_width_in_code_context("let api\u{200B}Key = 'aws-real-secret'"));
+        assert!(zero_width_in_code_context(
+            "let api\u{200B}Key = 'aws-real-secret'"
+        ));
     }
 
     #[test]

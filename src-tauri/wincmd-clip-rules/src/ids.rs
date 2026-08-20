@@ -23,7 +23,10 @@ use std::fmt;
 /// rule dodge `CooldownLedger`'s per-id cooldown by re-casing its id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts", type = "string"))]
+#[cfg_attr(
+    feature = "ts-codegen",
+    ts(export, export_to = "fleet.ts", type = "string")
+)]
 pub struct RuleId(String);
 
 /// Why a candidate string was rejected as a `RuleId`. Carries no copy of the
@@ -44,7 +47,10 @@ impl fmt::Display for RuleIdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RuleIdError::WrongLength => {
-                write!(f, "rule id must be 32 (hyphenless) or 36 (hyphenated) characters")
+                write!(
+                    f,
+                    "rule id must be 32 (hyphenless) or 36 (hyphenated) characters"
+                )
             }
             RuleIdError::InvalidShape => write!(
                 f,
@@ -82,9 +88,10 @@ impl RuleId {
             36 => {
                 let hyphens_ok =
                     bytes[8] == b'-' && bytes[13] == b'-' && bytes[18] == b'-' && bytes[23] == b'-';
-                let hex_ok = bytes.iter().enumerate().all(|(i, &b)| {
-                    matches!(i, 8 | 13 | 18 | 23) || is_lower_hex(b)
-                });
+                let hex_ok = bytes
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &b)| matches!(i, 8 | 13 | 18 | 23) || is_lower_hex(b));
                 if hyphens_ok && hex_ok {
                     Ok(Self(s))
                 } else {
@@ -172,7 +179,10 @@ mod tests {
         let result: Result<RuleId, _> = serde_json::from_str(&format!("\"{SENTINEL}\""));
         let err = result.expect_err("sentinel is not a valid RuleId");
         let rendered = err.to_string();
-        assert!(!rendered.contains(SENTINEL), "error echoed the rejected text: {rendered}");
+        assert!(
+            !rendered.contains(SENTINEL),
+            "error echoed the rejected text: {rendered}"
+        );
     }
 
     #[test]

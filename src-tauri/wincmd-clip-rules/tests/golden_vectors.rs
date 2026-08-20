@@ -13,7 +13,9 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use wincmd_clip_rules::{compile, Action, CooldownLedger, Emit, MatchKind, RuleId, RuleSetLimits, Severity};
+use wincmd_clip_rules::{
+    compile, Action, CooldownLedger, Emit, MatchKind, RuleId, RuleSetLimits, Severity,
+};
 
 /// FROZEN golden vector — computed 2026-08-17. Three phrase rules all
 /// match the same clipboard text ("leak-me"); the highest-`priority` rule
@@ -26,12 +28,17 @@ fn golden_priority_resolution_highest_wins() {
     let mid = common::phrase_rule(0x03, 200, "leak-me");
 
     let compiled = compile(&[low, high, mid], &RuleSetLimits::default()).expect("all rules valid");
-    let verdict = compiled.evaluate("this text contains leak-me right here").expect("should match");
+    let verdict = compiled
+        .evaluate("this text contains leak-me right here")
+        .expect("should match");
 
     // FROZEN: id seed 0x02 ("...3a02"), revision 1, Warn, [NotifyUser] —
     // see `tests/common/mod.rs::rule` for the fixed defaults these seeds
     // expand to.
-    assert_eq!(verdict.rule_id, RuleId::new("0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a02").unwrap());
+    assert_eq!(
+        verdict.rule_id,
+        RuleId::new("0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a02").unwrap()
+    );
     assert_eq!(verdict.rule_revision, 1);
     assert_eq!(verdict.severity, Severity::Warn);
     assert_eq!(verdict.actions, vec![Action::NotifyUser]);
@@ -49,7 +56,10 @@ fn golden_priority_tie_break_by_rule_id() {
     let compiled = compile(&[a, b], &RuleSetLimits::default()).expect("all rules valid");
     let verdict = compiled.evaluate("tie-break-me").expect("should match");
 
-    assert_eq!(verdict.rule_id, RuleId::new("0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a0b").unwrap());
+    assert_eq!(
+        verdict.rule_id,
+        RuleId::new("0e8f1a2b3c4d5e6f7a8b9c0d1e2f3a0b").unwrap()
+    );
 }
 
 /// FROZEN golden vector — computed 2026-08-17. A fixed sequence of
@@ -107,7 +117,10 @@ fn custom_regex_and_builtin_share_the_same_matching_path() {
     let custom = common::rule(
         0x21,
         10,
-        MatchKind::Regex { pattern: r"\bAKIA[0-9A-Z]{16}\b".to_string(), case_sensitive: true },
+        MatchKind::Regex {
+            pattern: r"\bAKIA[0-9A-Z]{16}\b".to_string(),
+            case_sensitive: true,
+        },
     );
     let builtin = common::rule(0x22, 10, MatchKind::Builtin(BuiltinPattern::AwsAccessKey));
 
@@ -117,8 +130,14 @@ fn custom_regex_and_builtin_share_the_same_matching_path() {
     let custom_compiled = compile(&[custom], &RuleSetLimits::default()).unwrap();
     let builtin_compiled = compile(&[builtin], &RuleSetLimits::default()).unwrap();
 
-    assert!(custom_compiled.evaluate(matching_text).is_some(), "custom regex should match");
-    assert!(builtin_compiled.evaluate(matching_text).is_some(), "builtin should match identically");
+    assert!(
+        custom_compiled.evaluate(matching_text).is_some(),
+        "custom regex should match"
+    );
+    assert!(
+        builtin_compiled.evaluate(matching_text).is_some(),
+        "builtin should match identically"
+    );
     assert!(custom_compiled.evaluate(non_matching_text).is_none());
     assert!(builtin_compiled.evaluate(non_matching_text).is_none());
 }

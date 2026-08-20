@@ -41,7 +41,10 @@ pub fn phrase_rule(seed: u8, priority: u16, value: &str) -> Rule {
     rule(
         seed,
         priority,
-        MatchKind::Phrase { value: value.to_string(), case_sensitive: true },
+        MatchKind::Phrase {
+            value: value.to_string(),
+            case_sensitive: true,
+        },
     )
 }
 

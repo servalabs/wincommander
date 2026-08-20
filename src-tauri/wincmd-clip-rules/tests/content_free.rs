@@ -14,7 +14,12 @@ use wincmd_clip_rules::{compile, RuleSetLimits, Verdict};
 /// plan §8, "Enforcing content-free, structurally" — the type layer.)
 #[allow(dead_code)]
 fn assert_verdict_shape_is_exhaustively_known(v: Verdict) {
-    let Verdict { rule_id: _, rule_revision: _, severity: _, actions: _ } = v;
+    let Verdict {
+        rule_id: _,
+        rule_revision: _,
+        severity: _,
+        actions: _,
+    } = v;
 }
 
 #[test]

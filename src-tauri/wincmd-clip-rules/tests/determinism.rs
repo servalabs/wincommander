@@ -10,14 +10,19 @@ use wincmd_clip_rules::{compile, RuleSetLimits};
 
 #[test]
 fn equal_priority_rules_resolve_identically_across_repeated_evaluations() {
-    let rules: Vec<_> = (0..20u8).map(|i| common::phrase_rule(i, 100, "same-priority-match")).collect();
+    let rules: Vec<_> = (0..20u8)
+        .map(|i| common::phrase_rule(i, 100, "same-priority-match"))
+        .collect();
     let compiled = compile(&rules, &RuleSetLimits::default()).unwrap();
 
     let text = "this text contains same-priority-match somewhere";
     let first = compiled.evaluate(text).unwrap();
     for _ in 0..200 {
         let again = compiled.evaluate(text).unwrap();
-        assert_eq!(again.rule_id, first.rule_id, "tie-break winner must be stable across repeated calls");
+        assert_eq!(
+            again.rule_id, first.rule_id,
+            "tie-break winner must be stable across repeated calls"
+        );
     }
 }
 
@@ -27,7 +32,9 @@ fn equal_priority_rules_resolve_identically_across_independent_compiles() {
     // the fleet console's validation compile and the endpoint's own
     // compile of the same policy. The winner must match.
     let build_rules = || -> Vec<_> {
-        (0..20u8).map(|i| common::phrase_rule(i, 100, "same-priority-match")).collect()
+        (0..20u8)
+            .map(|i| common::phrase_rule(i, 100, "same-priority-match"))
+            .collect()
     };
 
     let compiled_a = compile(&build_rules(), &RuleSetLimits::default()).unwrap();
@@ -40,7 +47,9 @@ fn equal_priority_rules_resolve_identically_across_independent_compiles() {
 
 #[test]
 fn declaration_order_does_not_affect_the_tie_break_winner() {
-    let forward: Vec<_> = (0..10u8).map(|i| common::phrase_rule(i, 50, "order-independent")).collect();
+    let forward: Vec<_> = (0..10u8)
+        .map(|i| common::phrase_rule(i, 50, "order-independent"))
+        .collect();
     let mut reversed = forward.clone();
     reversed.reverse();
 
