@@ -563,6 +563,7 @@ mod tests {
             roots: vec![PathBuf::from("C:\\Users\\test")],
             exclusions: vec!["*.tmp".to_string(), "node_modules".to_string()],
             initialized: true,
+            result_limit: 200,
         };
         // Call the real function; skip if LOCALAPPDATA is unset (no index_dir).
         match build_index_config(&fs) {
@@ -794,6 +795,7 @@ mod tests {
             roots: vec![],
             exclusions: vec![],
             initialized: true,
+            result_limit: 200,
         };
         let json = serde_json::to_string(&fs).expect("serialize");
         assert!(
@@ -807,5 +809,6 @@ mod tests {
         let old = r#"{"roots":[],"exclusions":[]}"#;
         let old_fs: FileSearchSettings = serde_json::from_str(old).expect("old deserialize");
         assert!(!old_fs.initialized, "missing field must default to false");
+        assert_eq!(old_fs.result_limit, 200, "missing limit must retain the shipped default");
     }
 }

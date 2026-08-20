@@ -514,7 +514,7 @@ pub struct AppPreferences {
 
 /// Persisted settings for the file-content search feature (Free tier).
 /// Roots are indexed on demand; exclusions are glob patterns (e.g. "*.tmp").
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileSearchSettings {
     /// Root directories to index.
     pub roots: Vec<std::path::PathBuf>,
@@ -524,6 +524,26 @@ pub struct FileSearchSettings {
     /// Distinguishes "never configured" from "user explicitly cleared all folders".
     #[serde(default)]
     pub initialized: bool,
+    /// Maximum filename rows returned to the Search Files panel. The command
+    /// clamps this again so a malformed settings file cannot create an
+    /// unbounded Everything request.
+    #[serde(default = "default_file_search_result_limit")]
+    pub result_limit: u32,
+}
+
+const fn default_file_search_result_limit() -> u32 {
+    200
+}
+
+impl Default for FileSearchSettings {
+    fn default() -> Self {
+        Self {
+            roots: Vec::new(),
+            exclusions: Vec::new(),
+            initialized: false,
+            result_limit: default_file_search_result_limit(),
+        }
+    }
 }
 
 /// Fleet agent connection config — persisted to settings.json, read at Pro

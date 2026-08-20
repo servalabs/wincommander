@@ -6722,7 +6722,9 @@ pub async fn search_everything(
     sort: Option<String>,
     scope_path: Option<String>,
 ) -> Result<EsResponse, String> {
-    let limit = max_results.unwrap_or(200);
+    // Keep the user/admin-configurable Search Files limit responsive even
+    // when IPC is called directly instead of through the bounded UI control.
+    let limit = max_results.unwrap_or(200).clamp(50, 2_000);
     let query_tokens = resolve_es_tokens(&query, tokens)?;
     let sort = match sort {
         Some(raw) => Some(validate_es_sort(&raw)?),

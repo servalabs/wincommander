@@ -392,6 +392,9 @@ export interface FileSearchSettings {
   exclusions: string[];
   /** False until default search roots have been seeded. */
   initialized: boolean;
+  /** Maximum filename rows returned per search (50–2,000). Text matches use
+   * their independent bounded window so filename volume never hides them. */
+  resultLimit?: number;
 }
 
 /** Fleet agent connection config (paid) — persisted to settings.json, read at

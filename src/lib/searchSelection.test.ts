@@ -4,6 +4,7 @@ import {
   buildSelectionEntries,
   extractHighlightTokens,
   highlightName,
+  normalizeResultLimit,
   nextResultLimit,
   stepSelection,
 } from "./searchSelection";
@@ -146,5 +147,14 @@ describe("nextResultLimit", () => {
   it("snaps an off-ladder value up to the next rung", () => {
     expect(nextResultLimit(100)).toBe(200);
     expect(nextResultLimit(5000)).toBe(null);
+  });
+});
+
+describe("normalizeResultLimit", () => {
+  it("keeps the configured cap within the safe backend range", () => {
+    expect(normalizeResultLimit(undefined)).toBe(200);
+    expect(normalizeResultLimit(12)).toBe(50);
+    expect(normalizeResultLimit(750.9)).toBe(750);
+    expect(normalizeResultLimit(20_001)).toBe(2_000);
   });
 });

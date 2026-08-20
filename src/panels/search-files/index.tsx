@@ -16,14 +16,15 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { motion, AnimatePresence } from "framer-motion";
 import { useFileSearch } from "@/hooks/useFileSearch";
+import { useAppState } from "@/context/AppContext";
 import { fileSearchDiagnostic } from "@/lib/fileSearchDiagnostics";
 import { useContentIndex } from "@/hooks/useContentIndex";
 import { useSearchHotkey } from "@/hooks/useSearchHotkey";
-import { dedupeContentRows } from "@/lib/contentSearch";
+import { isNameOnlyMatch } from "@/lib/contentSearch";
 import { getIndexDisplayError, getTabFilterSuggestion } from "@/lib/searchFilesPanel";
 import { isEngineMissingError } from "@/lib/fileNameSearch";
 import { buildContentFilterTokens } from "@/lib/contentQueryFilters";
-import { areResultsFresh, buildSelectionEntries, stepSelection } from "@/lib/searchSelection";
+import { areResultsFresh, buildSelectionEntries, normalizeResultLimit, stepSelection } from "@/lib/searchSelection";
 import SearchHeader from "./SearchHeader";
 import SearchEmptyState from "./SearchEmptyState";
 import FilterBar from "./FilterBar";
@@ -35,6 +36,7 @@ const SEARCH_FILES_HANDOFF_KEY = "wincommander.search-files-query";
 
 export default function SearchFilesPanel() {
   const search = useFileSearch();
+  const { appSettings, patchAppSettings } = useAppState();
   const setFileSearchQuery = search.setQuery;
   // KT: content search previously ignored the Type/Size/Modified chips
   // entirely — compose them into backend query tokens here so "Inside
@@ -94,17 +96,49 @@ export default function SearchFilesPanel() {
     return () => window.removeEventListener("search-files-query-handoff", onHandoff);
   }, [acceptHandoffQuery]);
 
-  // The same file matched by name AND by content must not list twice —
-  // the filename row wins, the content row is dropped.
-  const dedupedContentRows = useMemo(
-    () => dedupeContentRows(content.contentRows, search.results.map((r) => r.full_path)),
-    [content.contentRows, search.results],
+  // Name and inside-text results are intentionally independent. Removing a
+  // content hit because its filename also matches made actual text matches
+  // invisible whenever the filename result window was full.
+  const textContentRows = useMemo(
+    () => content.contentRows.filter((row) => !isNameOnlyMatch(row)),
+    [content.contentRows],
   );
 
   const entries = useMemo(
-    () => buildSelectionEntries(search.results.length, dedupedContentRows.length),
-    [search.results.length, dedupedContentRows.length],
+    () => buildSelectionEntries(search.results.length, textContentRows.length),
+    [search.results.length, textContentRows.length],
   );
+
+  const savedResultLimit = appSettings?.app?.fileSearch?.resultLimit;
+  const effectiveSavedResultLimit = normalizeResultLimit(savedResultLimit);
+  const resultLimitLocked = (appSettings?.policy?.lockedPaths ?? []).some((path) => {
+    const normalized = path.trim();
+    return normalized.length > 0 && (
+      "app.fileSearch.resultLimit".startsWith(normalized)
+      || "fileSearch.resultLimit".startsWith(normalized)
+    );
+  });
+
+  // Settings arrive after the panel mounts. Apply the saved/admin-provided
+  // value then, rather than leaving this session on the old 200-row default.
+  useEffect(() => {
+    if (typeof savedResultLimit === "number" && effectiveSavedResultLimit !== search.resultLimit) {
+      search.setResultLimit(effectiveSavedResultLimit);
+    }
+  }, [effectiveSavedResultLimit, savedResultLimit, search.resultLimit, search.setResultLimit]);
+
+  const changeResultLimit = useCallback((value: number) => {
+    const next = normalizeResultLimit(value);
+    search.setResultLimit(next);
+    void patchAppSettings({
+      app: {
+        fileSearch: {
+          ...(appSettings?.app?.fileSearch ?? { roots: [], exclusions: [], initialized: false }),
+          resultLimit: next,
+        },
+      },
+    });
+  }, [appSettings?.app?.fileSearch, patchAppSettings, search]);
 
   // New query text = new list; drop the old selection.
   useEffect(() => { setSelected(-1); }, [search.query]);
@@ -149,12 +183,12 @@ export default function SearchFilesPanel() {
       if (folder) openFolder(r.directory);
       else openFile(r.full_path);
     } else {
-      const row = dedupedContentRows[entry.index];
+      const row = textContentRows[entry.index];
       if (!row) return;
       if (folder) openFolder(contentRowDir(row.path));
       else openFile(row.path);
     }
-  }, [entries, search.results, dedupedContentRows, openFile, openFolder]);
+  }, [entries, search.results, textContentRows, openFile, openFolder]);
 
   const clearAll = useCallback(() => {
     search.clear();
@@ -218,7 +252,7 @@ export default function SearchFilesPanel() {
   const showNameSection = search.hasSearched || search.isSearching;
   const showEmptyState = !showNameSection && !trimmed && content.currentRoots.length > 0 && !showIndexSettings;
   const anySearching = search.isSearching || content.contentLoading;
-  const showFooter = (showNameSection || dedupedContentRows.length > 0) && !activeError;
+  const showFooter = (showNameSection || textContentRows.length > 0) && !activeError;
 
   return (
     <div className="search-files-panel">
@@ -340,11 +374,10 @@ export default function SearchFilesPanel() {
             )}
             {showContentSection && (
               <ContentResultsSection
-                rows={dedupedContentRows}
+                rows={textContentRows}
                 query={search.query}
                 contentLoading={content.contentLoading}
-                showNoMatches={!content.contentLoading && content.contentRows.length === 0 && trimmed.length >= 2 && !content.contentError && content.currentRoots.length > 0}
-                allMatchesDeduped={!content.contentLoading && content.contentRows.length > 0 && dedupedContentRows.length === 0}
+                showNoMatches={!content.contentLoading && textContentRows.length === 0 && trimmed.length >= 2 && !content.contentError && content.currentRoots.length > 0}
                 indexStatus={content.indexStatus}
                 indexDisplayError={indexDisplayError}
                 foldersReindexing={content.foldersReindexing}
@@ -385,10 +418,28 @@ export default function SearchFilesPanel() {
                 {search.totalCount > search.resultLimit
                   ? `Showing ${search.results.length.toLocaleString()} of ${search.totalCount.toLocaleString()} name matches`
                   : `${search.results.length.toLocaleString()} name match${search.results.length !== 1 ? "es" : ""}`}
-                {!content.contentLoading && dedupedContentRows.length > 0 &&
-                  ` · ${dedupedContentRows.length.toLocaleString()} inside files`}
+                {!content.contentLoading && textContentRows.length > 0 &&
+                  ` · ${textContentRows.length.toLocaleString()} text matches`}
               </span>
             )}
+            <label className="sfp-result-limit-control">
+              <span>File-name limit</span>
+              <Input
+                type="number"
+                min={50}
+                max={2000}
+                step={50}
+                value={search.resultLimit}
+                disabled={resultLimitLocked}
+                aria-label="Maximum file-name results"
+                title={resultLimitLocked ? "Set by your administrator." : "Choose 50 to 2,000 file-name results."}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  if (Number.isFinite(value)) changeResultLimit(value);
+                }}
+              />
+              {resultLimitLocked && <Icon icon="lock" size={12} title="Set by your administrator." />}
+            </label>
             {search.canShowMore && (
               <Button size="sm" variant="ghost" onClick={search.showMore} disabled={search.isSearching}>
                 Show more

@@ -116,7 +116,17 @@ export function highlightName(name: string, query: string): SnippetSegment[] {
 // "Show more" limit ladder
 // ---------------------------------------------------------------------------
 
-export const RESULT_LIMIT_LADDER = [200, 500, 1000, 2000] as const;
+export const DEFAULT_RESULT_LIMIT = 200;
+export const MIN_RESULT_LIMIT = 50;
+export const MAX_RESULT_LIMIT = 2_000;
+export const RESULT_LIMIT_LADDER = [50, 100, 200, 500, 1000, 2000] as const;
+
+/** Keep a persisted or policy-provided search limit within the backend's
+ * bounded result window. Invalid legacy values retain the shipped default. */
+export function normalizeResultLimit(value: number | null | undefined): number {
+  if (!Number.isFinite(value)) return DEFAULT_RESULT_LIMIT;
+  return Math.min(MAX_RESULT_LIMIT, Math.max(MIN_RESULT_LIMIT, Math.floor(value as number)));
+}
 
 /** Next rung above `current`, or null when already at (or past) the top. */
 export function nextResultLimit(current: number): number | null {

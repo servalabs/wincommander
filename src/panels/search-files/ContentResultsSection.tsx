@@ -26,7 +26,6 @@ interface ContentResultsSectionProps {
   query: string;
   contentLoading: boolean;
   showNoMatches: boolean;
-  allMatchesDeduped: boolean;
   indexStatus: IndexStatus | null;
   indexDisplayError: string | null;
   foldersReindexing: boolean;
@@ -57,7 +56,7 @@ interface ContentResultsSectionProps {
 
 export default function ContentResultsSection(props: ContentResultsSectionProps) {
   const {
-    rows, query, contentLoading, showNoMatches, allMatchesDeduped,
+    rows, query, contentLoading, showNoMatches,
     indexStatus, indexDisplayError, foldersReindexing,
     showIndexSettings, onToggleIndexSettings,
     roots, reindexing, rescanning, onReindex, onRescan, onAddFolders, onRemoveFolder,
@@ -71,7 +70,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
     <div className="sfp-section">
       <div className="sfp-section-bar">
         <span className="sfp-section-label">
-          Text matches (indexed folders)
+          Text inside files
           {!contentLoading && rows.length > 0 && (
             <span className="sfp-section-count">{rows.length.toLocaleString()}</span>
           )}
@@ -262,9 +261,6 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
             Tip: refine with ext:pdf, size:&gt;10mb, after:2026-01, author:name
           </p>
         </div>
-      )}
-      {allMatchesDeduped && (
-        <div className="sfp-loading">All content matches are already listed under File names.</div>
       )}
     </div>
   );

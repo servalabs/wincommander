@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { buildSearchQuery, isSearchTimeoutError, sfAppSortScore } from "@/lib/fileNameSearch";
 import type { DateFilter, SearchResponse, SearchResult, SearchType, SizeFilter } from "@/lib/fileNameSearch";
-import { nextResultLimit, RESULT_LIMIT_LADDER } from "@/lib/searchSelection";
+import { DEFAULT_RESULT_LIMIT, nextResultLimit, normalizeResultLimit } from "@/lib/searchSelection";
 
 export interface FileSearchState {
   query: string;
@@ -29,6 +29,7 @@ export interface FileSearchState {
   setQuery: (value: string) => void;
   rerunNow: () => void;
   clear: () => void;
+  setResultLimit: (limit: number) => void;
   showMore: () => void;
   toggleSearchType: (t: SearchType) => void;
   clearSearchTypes: () => void;
@@ -43,7 +44,7 @@ export function useFileSearch(): FileSearchState {
   const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
-  const [resultLimit, setResultLimit] = useState<number>(RESULT_LIMIT_LADDER[0]);
+  const [resultLimit, setResultLimit] = useState<number>(DEFAULT_RESULT_LIMIT);
   // Multi-select set. Empty = "All". See SearchType for membership semantics.
   const [searchTypes, setSearchTypes] = useState<Set<SearchType>>(() => new Set());
   const [sizeFilter, setSizeFilterState] = useState<SizeFilter>("any");
@@ -156,6 +157,15 @@ export function useFileSearch(): FileSearchState {
     performSearch(query, next);
   }, [performSearch, query, resultLimit]);
 
+  const updateResultLimit = useCallback((value: number) => {
+    const next = normalizeResultLimit(value);
+    setResultLimit(next);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (query.trim() || searchTypes.size > 0 || sizeFilter !== "any" || dateFilter !== "any") {
+      performSearch(query, next);
+    }
+  }, [dateFilter, performSearch, query, searchTypes, sizeFilter]);
+
   const updateFilters = useCallback((next: Partial<{ types: Set<SearchType>; size: SizeFilter; date: DateFilter }>) => {
     const types = next.types ?? searchTypes;
     const size = next.size ?? sizeFilter;
@@ -209,6 +219,7 @@ export function useFileSearch(): FileSearchState {
     setQuery,
     rerunNow,
     clear,
+    setResultLimit: updateResultLimit,
     showMore,
     toggleSearchType,
     clearSearchTypes,
