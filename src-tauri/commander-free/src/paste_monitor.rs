@@ -1519,6 +1519,7 @@ pub async fn get_paste_monitor_categories() -> Result<EnabledCategories, String>
 fn local_actions_are_safe(policy: &ClipboardPolicyResponse) -> bool {
     policy.rules.iter().all(|rule| {
         !rule.locked
+            && !rule.actions.is_empty()
             && rule.actions.iter().all(|action| {
                 matches!(
                     action,
@@ -2771,6 +2772,19 @@ mod tests {
             rules: vec![custom_rule(
                 "11111111111111111111111111111111",
                 vec![Action::NotifyUser, Action::ReportFleet],
+                true,
+            )],
+        };
+        assert!(!local_actions_are_safe(&policy));
+    }
+
+    #[test]
+    fn local_custom_rules_reject_actionless_rules() {
+        let policy = ClipboardPolicyResponse {
+            policy_version: 0,
+            rules: vec![custom_rule(
+                "12121212121212121212121212121212",
+                vec![],
                 true,
             )],
         };

@@ -9,6 +9,7 @@ import {
   LOCAL_RULE_SEVERITIES,
   createLocalClipboardRule,
   editableMatcherValue,
+  ensureLocalActions,
   setLocalAction,
   updateEditableMatcher,
   validateLocalClipboardRule,
@@ -39,7 +40,9 @@ export default function LocalClipboardRulesEditor({
 
   const startEdit = (rule: Rule) => {
     setError(null);
-    setDraft({ ...rule, actions: [...rule.actions], locked: false });
+    // Older saved rules could contain no action. A detection with no response
+    // is meaningless, so repair that legacy draft visibly before it is saved.
+    setDraft({ ...rule, actions: ensureLocalActions(rule.actions), locked: false });
   };
 
   const saveDraft = async () => {

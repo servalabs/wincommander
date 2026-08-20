@@ -3,6 +3,7 @@ import type { Rule } from "../../types/generated/fleet";
 import {
   createLocalClipboardRule,
   editableMatcherValue,
+  ensureLocalActions,
   setLocalAction,
   updateEditableMatcher,
   validateLocalClipboardRule,
@@ -25,6 +26,15 @@ function validRule(): Rule {
 }
 
 describe("local clipboard rule contract", () => {
+  test("repairs an actionless legacy rule to a visible local notification", () => {
+    expect(ensureLocalActions([])).toEqual(["notify_user"]);
+  });
+
+  test("does not allow the last selected local action to be removed", () => {
+    const rule = createLocalClipboardRule(new Set());
+    expect(setLocalAction(rule, "notify_user", false).actions).toEqual(["notify_user"]);
+  });
+
   test("rejects an ID collision with a Fleet rule", () => {
     const rule = validRule();
     const result = validateLocalClipboardRule(rule, new Set([rule.id]));

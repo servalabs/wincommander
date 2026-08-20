@@ -17,6 +17,11 @@ export interface LocalRuleValidation {
 
 const LOCAL_ACTIONS = new Set<Action>(["notify_user", "clear_clipboard", "quarantine_clipboard"]);
 
+export function ensureLocalActions(actions: ReadonlyArray<Action>): LocalClipboardAction[] {
+  const safe = actions.filter((action): action is LocalClipboardAction => LOCAL_ACTIONS.has(action));
+  return safe.length > 0 ? [...new Set(safe)] : ["notify_user"];
+}
+
 export function createLocalClipboardRule(existingIds: ReadonlySet<string>): Rule {
   let id = newUuidV4();
   while (existingIds.has(id)) id = newUuidV4();
@@ -78,7 +83,8 @@ export function editableMatcherValue(matcher: MatchKind): string {
 }
 
 export function setLocalAction(rule: Rule, action: LocalClipboardAction, enabled: boolean): Rule {
-  const actions = rule.actions.filter((item): item is LocalClipboardAction => LOCAL_ACTIONS.has(item));
+  const actions = ensureLocalActions(rule.actions);
+  if (!enabled && actions.length === 1 && actions[0] === action) return rule;
   const next = enabled ? [...new Set([...actions, action])] : actions.filter((item) => item !== action);
   return { ...rule, actions: next };
 }
