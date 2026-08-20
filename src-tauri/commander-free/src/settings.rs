@@ -1475,6 +1475,8 @@ pub struct RdpTweaks {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerTweaks {
+    /// RDP visual effects are reapplied after logon and RemoteConnect
+    pub persistent_rdp_animations: Option<bool>,
     /// Ctrl+Alt+Del no longer required at the logon screen (DisableCAD=1)
     pub ctrl_alt_del_disabled: Option<bool>,
     /// Logon screen does not prefill the previous username
@@ -3421,6 +3423,8 @@ pub fn get_convergence_command(path: &str, desired: bool) -> Option<&'static str
         }
 
         // ── Tweaks: Windows Server ───────────────────────────────────
+        ("tweaks.server.persistentRdpAnimations", true) => Some("Enable-PersistentRdpAnimations"),
+        ("tweaks.server.persistentRdpAnimations", false) => Some("Disable-PersistentRdpAnimations"),
         ("tweaks.server.ctrlAltDelDisabled", true) => Some("Disable-CtrlAltDelLogon"),
         ("tweaks.server.ctrlAltDelDisabled", false) => Some("Enable-CtrlAltDelLogon"),
         ("tweaks.server.lastSignedInUserHidden", true) => Some("Enable-HideLastSignedInUser"),

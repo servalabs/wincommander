@@ -453,6 +453,7 @@ function Get-WCSystemProbe {
             }
             server   = @{
                 isServerSku                  = $false
+                persistentRdpAnimations      = $false
                 ctrlAltDelDisabled           = $false
                 lastSignedInUserHidden       = $false
                 consoleInactivityLock        = $false
@@ -843,6 +844,27 @@ function Get-WCSystemProbe {
     try {
         $pt = (Get-CimInstance -ClassName Win32_OperatingSystem -EA SilentlyContinue).ProductType
         $state.tweaks.server.isServerSku = ($pt -eq 2 -or $pt -eq 3)
+    } catch {}
+    try {
+        $rdpAnimationTask = Get-ScheduledTask -TaskName 'Keep RDP Animation Effects' -EA SilentlyContinue
+        $rdpAnimationPolicy = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DWM' -Name 'DisallowAnimations' -EA SilentlyContinue
+        $rdpVisualEffects = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -EA SilentlyContinue
+        $rdpWindowMetrics = Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -EA SilentlyContinue
+        $rdpExplorer = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarAnimations' -EA SilentlyContinue
+        $rdpAnimationHasLogon = [bool](@($rdpAnimationTask.Triggers) | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' })
+        $rdpAnimationHasRemoteConnect = [bool](@($rdpAnimationTask.Triggers) | Where-Object {
+            $_.CimClass.CimClassName -eq 'MSFT_TaskSessionStateChangeTrigger' -and $_.StateChange -eq 3
+        })
+        $rdpAnimationHasAction = [bool](@($rdpAnimationTask.Actions) | Where-Object { $_.Arguments -like '*Keep-RdpAnimationEffects.ps1*' })
+        $state.tweaks.server.persistentRdpAnimations = [bool](
+            $rdpAnimationTask -and $rdpAnimationTask.State -ne 'Disabled' -and
+            $rdpAnimationHasLogon -and $rdpAnimationHasRemoteConnect -and $rdpAnimationHasAction -and
+            (Test-Path -LiteralPath (Join-Path $env:ProgramData 'WinCommander\Keep-RdpAnimationEffects.ps1')) -and
+            $rdpAnimationPolicy.DisallowAnimations -eq 0 -and
+            $rdpVisualEffects.VisualFXSetting -eq 2 -and
+            $rdpWindowMetrics.MinAnimate -eq '1' -and
+            $rdpExplorer.TaskbarAnimations -eq 1
+        )
     } catch {}
     try {
         $sp = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -EA SilentlyContinue

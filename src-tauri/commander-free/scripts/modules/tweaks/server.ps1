@@ -33,6 +33,215 @@ function Assert-IsServerSku {
     }
 }
 
+# --- PERSISTENT RDP ANIMATIONS ---
+
+$script:RdpAnimationTaskName = 'Keep RDP Animation Effects'
+$script:RdpAnimationDirectory = Join-Path $env:ProgramData 'WinCommander'
+$script:RdpAnimationScriptPath = Join-Path $script:RdpAnimationDirectory 'Keep-RdpAnimationEffects.ps1'
+
+$script:RdpAnimationTaskScript = @'
+$ErrorActionPreference = 'Stop'
+
+function Set-RdpAnimationRegistryValues {
+    $values = @(
+        @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects', 'VisualFXSetting', 2, 'DWord'),
+        @('HKCU:\Control Panel\Desktop\WindowMetrics', 'MinAnimate', '1', 'String'),
+        @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced', 'TaskbarAnimations', 1, 'DWord')
+    )
+    foreach ($value in $values) {
+        if (!(Test-Path $value[0])) { New-Item -Path $value[0] -Force | Out-Null }
+        Set-ItemProperty -Path $value[0] -Name $value[1] -Value $value[2] -Type $value[3] -Force
+    }
+
+    $remoteRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Remote'
+    Get-ChildItem -Path $remoteRoot -ErrorAction SilentlyContinue | ForEach-Object {
+        Set-ItemProperty -Path $_.PSPath -Name 'TaskbarAnimations' -Value 1 -Type DWord -Force
+    }
+}
+
+if (-not ('WinCommander.RdpAnimationApi' -as [type])) {
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+namespace WinCommander {
+    public static class RdpAnimationApi {
+        [StructLayout(LayoutKind.Sequential)]
+        public struct AnimationInfo { public uint cbSize; public int iMinAnimate; }
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool SystemParametersInfo(uint action, uint parameter, ref int value, uint flags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool SystemParametersInfo(uint action, uint parameter, ref AnimationInfo value, uint flags);
+    }
+}
+"@
+}
+
+Set-RdpAnimationRegistryValues
+$animation = New-Object WinCommander.RdpAnimationApi+AnimationInfo
+$animation.cbSize = [Runtime.InteropServices.Marshal]::SizeOf($animation)
+$animation.iMinAnimate = 1
+[WinCommander.RdpAnimationApi]::SystemParametersInfo(0x0049, $animation.cbSize, [ref]$animation, 3) | Out-Null
+foreach ($action in @(0x1043, 0x1003, 0x1013, 0x1017, 0x1019)) {
+    $enabled = 1
+    [WinCommander.RdpAnimationApi]::SystemParametersInfo($action, 0, [ref]$enabled, 3) | Out-Null
+}
+'@
+
+function Set-RdpAnimationValuesForRegistryRoot {
+    param([Parameter(Mandatory = $true)][string]$RegistryRoot)
+
+    $visualEffects = "$RegistryRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
+    $windowMetrics = "$RegistryRoot\Control Panel\Desktop\WindowMetrics"
+    $explorer = "$RegistryRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+    foreach ($path in @($visualEffects, $windowMetrics, $explorer)) {
+        if (!(Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+    }
+    Set-ItemProperty -Path $visualEffects -Name 'VisualFXSetting' -Value 2 -Type DWord -Force
+    Set-ItemProperty -Path $windowMetrics -Name 'MinAnimate' -Value '1' -Type String -Force
+    Set-ItemProperty -Path $explorer -Name 'TaskbarAnimations' -Value 1 -Type DWord -Force
+
+    $remoteRoot = "$RegistryRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\Remote"
+    Get-ChildItem -Path $remoteRoot -ErrorAction SilentlyContinue | ForEach-Object {
+        Set-ItemProperty -Path $_.PSPath -Name 'TaskbarAnimations' -Value 1 -Type DWord -Force
+    }
+}
+
+function Reset-RdpAnimationValuesForRegistryRoot {
+    param([Parameter(Mandatory = $true)][string]$RegistryRoot)
+
+    $visualEffects = "$RegistryRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
+    $windowMetrics = "$RegistryRoot\Control Panel\Desktop\WindowMetrics"
+    $explorer = "$RegistryRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+    if (!(Test-Path $visualEffects)) { New-Item -Path $visualEffects -Force | Out-Null }
+    Set-ItemProperty -Path $visualEffects -Name 'VisualFXSetting' -Value 1 -Type DWord -Force
+    if (Test-Path $windowMetrics) { Remove-ItemProperty -Path $windowMetrics -Name 'MinAnimate' -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $explorer) { Remove-ItemProperty -Path $explorer -Name 'TaskbarAnimations' -Force -ErrorAction SilentlyContinue }
+
+    $remoteRoot = "$RegistryRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\Remote"
+    Get-ChildItem -Path $remoteRoot -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-ItemProperty -Path $_.PSPath -Name 'TaskbarAnimations' -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-ForLoadedRdpUserProfiles {
+    param([Parameter(Mandatory = $true)][scriptblock]$Operation)
+
+    Get-ChildItem -Path 'Registry::HKEY_USERS' -ErrorAction Stop |
+        Where-Object { $_.PSChildName -match '^S-1-5-21-(?:\d+-){3}\d+$' } |
+        ForEach-Object { & $Operation "Registry::HKEY_USERS\$($_.PSChildName)" }
+}
+
+function Invoke-ForDefaultRdpUserProfile {
+    param([Parameter(Mandatory = $true)][scriptblock]$Operation)
+
+    $hivePath = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT'
+    if (!(Test-Path -LiteralPath $hivePath)) { throw 'The Windows Default user profile hive was not found.' }
+    $mountName = 'WinCommanderRdpAnimationsDefault'
+    & reg.exe load "HKU\$mountName" $hivePath | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Could not load the Windows Default user profile hive.' }
+    try {
+        & $Operation "Registry::HKEY_USERS\$mountName"
+    }
+    finally {
+        [gc]::Collect()
+        [gc]::WaitForPendingFinalizers()
+        & reg.exe unload "HKU\$mountName" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not unload the Windows Default user profile hive.' }
+    }
+}
+
+function Enable-PersistentRdpAnimations {
+    Assert-IsAdmin
+    Assert-IsServerSku
+    try {
+        $policyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DWM'
+        if (!(Test-Path $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
+        Set-ItemProperty -Path $policyPath -Name 'DisallowAnimations' -Value 0 -Type DWord -Force
+
+        Invoke-ForLoadedRdpUserProfiles ${function:Set-RdpAnimationValuesForRegistryRoot}
+        Invoke-ForDefaultRdpUserProfile ${function:Set-RdpAnimationValuesForRegistryRoot}
+
+        if (!(Test-Path $script:RdpAnimationDirectory)) {
+            New-Item -Path $script:RdpAnimationDirectory -ItemType Directory -Force | Out-Null
+        }
+        Set-Content -LiteralPath $script:RdpAnimationScriptPath -Value $script:RdpAnimationTaskScript -Encoding UTF8 -Force
+        & icacls.exe $script:RdpAnimationScriptPath /inheritance:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' '*S-1-5-32-545:(RX)' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not secure the RDP animation task helper.' }
+
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script:RdpAnimationScriptPath`""
+        $logonTrigger = New-ScheduledTaskTrigger -AtLogOn
+        $logonTrigger.Delay = 'PT2S'
+        $remoteTriggerClass = Get-CimClass -Namespace 'Root/Microsoft/Windows/TaskScheduler' -ClassName 'MSFT_TaskSessionStateChangeTrigger'
+        $remoteTrigger = New-CimInstance -CimClass $remoteTriggerClass -ClientOnly
+        $remoteTrigger.Enabled = $true
+        $remoteTrigger.StateChange = 3
+        $remoteTrigger.Delay = 'PT2S'
+        $principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+        Register-ScheduledTask -TaskName $script:RdpAnimationTaskName -Action $action -Trigger @($logonTrigger, $remoteTrigger) -Principal $principal -Settings $settings -Force | Out-Null
+
+        & $script:RdpAnimationScriptPath
+        @{ status = 'enabled'; scope = 'server'; taskName = $script:RdpAnimationTaskName }
+    }
+    catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
+function Disable-PersistentRdpAnimations {
+    Assert-IsAdmin
+    Assert-IsServerSku
+    try {
+        Unregister-ScheduledTask -TaskName $script:RdpAnimationTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:RdpAnimationScriptPath -Force -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DWM' -Name 'DisallowAnimations' -Force -ErrorAction SilentlyContinue
+
+        Invoke-ForLoadedRdpUserProfiles ${function:Reset-RdpAnimationValuesForRegistryRoot}
+        Invoke-ForDefaultRdpUserProfile ${function:Reset-RdpAnimationValuesForRegistryRoot}
+        @{ status = 'disabled'; scope = 'windows-managed' }
+    }
+    catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
+function Get-PersistentRdpAnimationsStatus {
+    $task = Get-ScheduledTask -TaskName $script:RdpAnimationTaskName -ErrorAction SilentlyContinue
+    $policy = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DWM' -Name 'DisallowAnimations' -ErrorAction SilentlyContinue
+    $visualEffects = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -ErrorAction SilentlyContinue
+    $windowMetrics = Get-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -ErrorAction SilentlyContinue
+    $explorer = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarAnimations' -ErrorAction SilentlyContinue
+    $hasLogonTrigger = [bool](@($task.Triggers) | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' })
+    $hasRemoteConnectTrigger = [bool](@($task.Triggers) | Where-Object {
+        $_.CimClass.CimClassName -eq 'MSFT_TaskSessionStateChangeTrigger' -and $_.StateChange -eq 3
+    })
+    $hasManagedAction = [bool](@($task.Actions) | Where-Object { $_.Arguments -like '*Keep-RdpAnimationEffects.ps1*' })
+    $usersCanWriteHelper = $false
+    if (Test-Path -LiteralPath $script:RdpAnimationScriptPath) {
+        foreach ($rule in (Get-Acl -LiteralPath $script:RdpAnimationScriptPath).Access) {
+            try { $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }
+            catch { continue }
+            if ($ruleSid -eq 'S-1-5-32-545' -and $rule.AccessControlType -eq 'Allow' -and
+                ($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::Write) -ne 0) {
+                $usersCanWriteHelper = $true
+            }
+        }
+    }
+
+    $remoteOverridesOk = $true
+    Get-ChildItem -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Remote' -ErrorAction SilentlyContinue | ForEach-Object {
+        $override = Get-ItemProperty -Path $_.PSPath -Name 'TaskbarAnimations' -ErrorAction SilentlyContinue
+        if (-not $override -or $override.TaskbarAnimations -ne 1) { $remoteOverridesOk = $false }
+    }
+
+    @{
+        persistentRdpAnimations = [bool](
+            $task -and $task.State -ne 'Disabled' -and $hasLogonTrigger -and $hasRemoteConnectTrigger -and
+            $hasManagedAction -and (Test-Path -LiteralPath $script:RdpAnimationScriptPath) -and -not $usersCanWriteHelper -and
+            $policy.DisallowAnimations -eq 0 -and $visualEffects.VisualFXSetting -eq 2 -and
+            $windowMetrics.MinAnimate -eq '1' -and $explorer.TaskbarAnimations -eq 1 -and $remoteOverridesOk
+        )
+    }
+}
+
 # --- CTRL+ALT+DEL (SECURE ATTENTION SEQUENCE) ---
 #
 # DisableCAD=1 drops the Ctrl+Alt+Del requirement at the logon screen. Server

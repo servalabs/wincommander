@@ -1100,6 +1100,8 @@ export interface ServerTweaks {
   /** True when the OS is a Server SKU (ProductType 2 or 3). Read-only probe
    *  output — the three server-only tweaks below no-op on a client SKU. */
   isServerSku: boolean | null;
+  /** RDP visual effects are reapplied after logon and RemoteConnect */
+  persistentRdpAnimations: boolean | null;
   /** Ctrl+Alt+Del no longer required at the logon screen (DisableCAD=1) */
   ctrlAltDelDisabled: boolean | null;
   /** Logon screen does not prefill the previous username */

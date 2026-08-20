@@ -2182,6 +2182,9 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Invoke-DeepCleanup" => Some("tweaks/maintenance"),
 
         // Tweaks - Windows Server
+        "Enable-PersistentRdpAnimations" => Some("tweaks/server"),
+        "Disable-PersistentRdpAnimations" => Some("tweaks/server"),
+        "Get-PersistentRdpAnimationsStatus" => Some("tweaks/server"),
         "Disable-CtrlAltDelLogon" => Some("tweaks/server"),
         "Enable-CtrlAltDelLogon" => Some("tweaks/server"),
         "Enable-HideLastSignedInUser" => Some("tweaks/server"),
@@ -2528,6 +2531,9 @@ pub fn list_all_commands() -> Vec<String> {
         "Enable-Notifications",
         "Enable-ClassicContextMenu",
         "Disable-ClassicContextMenu",
+        "Enable-PersistentRdpAnimations",
+        "Disable-PersistentRdpAnimations",
+        "Get-PersistentRdpAnimationsStatus",
         "Disable-CtrlAltDelLogon",
         "Enable-CtrlAltDelLogon",
         "Enable-HideLastSignedInUser",
@@ -2896,6 +2902,12 @@ fn get_settings_sync_patch(
         }
 
         // ── Tweaks: Windows Server ───────────────────────────────────
+        "Enable-PersistentRdpAnimations" => {
+            Some(json!({"tweaks":{"server":{"persistentRdpAnimations": true}}}))
+        }
+        "Disable-PersistentRdpAnimations" => {
+            Some(json!({"tweaks":{"server":{"persistentRdpAnimations": false}}}))
+        }
         "Disable-CtrlAltDelLogon" => {
             Some(json!({"tweaks":{"server":{"ctrlAltDelDisabled": true}}}))
         }
