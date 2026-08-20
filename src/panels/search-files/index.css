@@ -965,9 +965,11 @@ html.light .sfp-section-bar {
 }
 
 .sfp-result-limit-control {
+  align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-height: 28px;
   font-size: 12px;
   color: var(--color-text-muted);
 }
@@ -977,6 +979,10 @@ html.light .sfp-section-bar {
   height: 28px;
   padding: 3px 6px;
   font-variant-numeric: tabular-nums;
+}
+
+.sfp-result-limit-suffix {
+  font-size: 11px;
 }
 
 .result-count {

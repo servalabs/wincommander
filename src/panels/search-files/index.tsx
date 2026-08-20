@@ -313,6 +313,25 @@ export default function SearchFilesPanel() {
             ) : null}
           </div>
         </div>
+        <label className="sfp-result-limit-control">
+          <span>File-name results</span>
+          <Input
+            type="number"
+            min={50}
+            max={2000}
+            step={50}
+            value={search.resultLimit}
+            disabled={resultLimitLocked}
+            aria-label="Maximum file-name results"
+            title={resultLimitLocked ? "Set by your administrator." : "Choose 50 to 2,000 file-name results."}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              if (Number.isFinite(value)) changeResultLimit(value);
+            }}
+          />
+          <span className="sfp-result-limit-suffix">maximum</span>
+          {resultLimitLocked && <Icon icon="lock" size={12} title="Set by your administrator." />}
+        </label>
         <div className="search-files-input-hint">
           <span>Matches file names everywhere, and text inside your indexed folders.</span>
           <Tooltip>
@@ -497,24 +516,6 @@ export default function SearchFilesPanel() {
                   ` · ${textContentRows.length.toLocaleString()} text matches`}
               </span>
             )}
-            <label className="sfp-result-limit-control">
-              <span>File-name limit</span>
-              <Input
-                type="number"
-                min={50}
-                max={2000}
-                step={50}
-                value={search.resultLimit}
-                disabled={resultLimitLocked}
-                aria-label="Maximum file-name results"
-                title={resultLimitLocked ? "Set by your administrator." : "Choose 50 to 2,000 file-name results."}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
-                  if (Number.isFinite(value)) changeResultLimit(value);
-                }}
-              />
-              {resultLimitLocked && <Icon icon="lock" size={12} title="Set by your administrator." />}
-            </label>
             {search.canShowMore && (
               <Button size="sm" variant="ghost" onClick={search.showMore} disabled={search.isSearching}>
                 Show more
