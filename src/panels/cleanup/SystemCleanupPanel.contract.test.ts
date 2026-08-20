@@ -325,6 +325,19 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(cleanupScript).toContain("records = @($records | Select-Object -First $previewMax)");
   });
 
+  test("developer-cache viewer aggregates the full scan but bounds its IPC preview", async () => {
+    const backendTypes = await read("src/hooks/useBackend.ts");
+    const cleanupScript = await read("src-tauri/commander-free/scripts/modules/privacy/cleanup.ps1");
+    const dialog = await read("src/components/shared/TraceDetailDialog.tsx");
+
+    expect(cleanupScript).toContain("$previewLimit = 200");
+    expect(cleanupScript).toContain("$total++");
+    expect(cleanupScript).toContain("$files.Count -lt $previewLimit");
+    expect(cleanupScript).toContain("truncated = ($total -gt $files.Count)");
+    expect(backendTypes).toContain("previewLimit: number; truncated: boolean");
+    expect(dialog).toContain("trace-dialog__bounded-preview");
+  });
+
   test("multi-user delegation reads WAL and Recall result collections from their real fields", async () => {
     const cleanupScript = await read("src-tauri/commander-free/scripts/modules/privacy/cleanup.ps1");
     const delegationComment = cleanupScript.indexOf("# For the current user delegate");

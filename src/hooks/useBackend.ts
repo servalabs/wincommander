@@ -1654,7 +1654,7 @@ export function useBackend() {
     getWSLDataInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-WSLDataInfo"),
     getDockerDesktopDataInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-DockerDesktopDataInfo"),
     getVirtualMachineArtifactsInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-VirtualMachineArtifactsInfo"),
-    getDeveloperCachesInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-DeveloperCachesInfo"),
+    getDeveloperCachesInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number; previewLimit: number; truncated: boolean }>("Get-DeveloperCachesInfo"),
     getCredentialManagerInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-CredentialManagerInfo"),
     getNetworkWizardHistoryInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-NetworkWizardHistoryInfo"),
     getWERHistoryInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-WERHistoryInfo"),

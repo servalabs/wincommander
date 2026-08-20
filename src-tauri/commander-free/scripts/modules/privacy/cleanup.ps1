@@ -2459,8 +2459,13 @@ function Get-VirtualMachineArtifactsInfo {
 
 function Get-DeveloperCachesInfo {
     # Configuration files are surfaced by presence only; token contents are never read or returned.
+    # A developer cache can contain millions of files. Keep complete count/size
+    # aggregation while returning only a fixed preview so the IPC payload and
+    # trace-detail dialog cannot allocate one UI row per file.
     try {
-        $files = @()
+        $previewLimit = 200
+        $files = [System.Collections.Generic.List[object]]::new()
+        $total = [int64]0
         $totalBytes = [int64]0
         $cacheDirs = @(
             @{ label = 'npm cache'; path = (Join-Path $env:APPDATA 'npm-cache') },
@@ -2472,7 +2477,10 @@ function Get-DeveloperCachesInfo {
         foreach ($cache in $cacheDirs) {
             if (-not (Test-Path $cache.path -ErrorAction SilentlyContinue)) { continue }
             Get-ChildItem -Path $cache.path -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                $files += @{ name = "$($cache.label): $($_.FullName.Substring($cache.path.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                $total++
+                if ($files.Count -lt $previewLimit) {
+                    [void]$files.Add(@{ name = "$($cache.label): $($_.FullName.Substring($cache.path.Length).TrimStart('\\'))"; sizeKB = [math]::Round($_.Length / 1KB, 1); modified = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                }
                 $totalBytes += $_.Length
             }
         }
@@ -2484,14 +2492,17 @@ function Get-DeveloperCachesInfo {
             if (Test-Path $config.path -PathType Leaf -ErrorAction SilentlyContinue) {
                 $item = Get-Item -LiteralPath $config.path -Force -ErrorAction SilentlyContinue
                 if ($item) {
-                    $files += @{ name = $config.label; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') }
+                    $total++
+                    if ($files.Count -lt $previewLimit) {
+                        [void]$files.Add(@{ name = $config.label; sizeKB = [math]::Round($item.Length / 1KB, 1); modified = $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') })
+                    }
                     $totalBytes += $item.Length
                 }
             }
         }
-        @{ files = @($files); total = @($files).Count; totalSizeMB = [math]::Round($totalBytes / 1MB, 2) }
+        @{ files = @($files); total = $total; totalSizeMB = [math]::Round($totalBytes / 1MB, 2); previewLimit = $previewLimit; truncated = ($total -gt $files.Count) }
     }
-    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0 } }
+    catch { @{ error = $true; message = $_.Exception.Message; files = @(); total = 0; totalSizeMB = 0; previewLimit = 200; truncated = $false } }
 }
 
 function Get-CredentialManagerInfo {
