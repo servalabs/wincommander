@@ -14,20 +14,23 @@
 // as `skip_paths` in every IndexConfig so reading them never updates
 // last-access time and trips tamper detection.
 //
-// Engine lifecycle: module-global OnceCell<Mutex<Option<Arc<SearchEngine>>>>.
+// Engine lifecycle: module-global OnceCell<RwLock<Option<Arc<SearchEngine>>>>.
 // First command call that touches the engine opens it if it isn't already
 // open; content_index_configure, content_rescan, and content_reindex drop it
 // to force re-creation (rescan reopens the same dir; reindex deletes it first).
 //
-// Lock discipline: search/status/get_chunks acquire the lock ONLY to clone
-// the Arc, then drop the guard before calling the (potentially slow) engine
-// method — so a running FTS search never blocks configure/reindex.
+// Lock discipline: every read/replacement first acquires a bounded, session-
+// local Windows named mutex shared by the GUI and headless process. It then takes the
+// in-process RwLock: reads retain its shared guard for the engine call, while
+// configure/rescan/reindex hold the writer guard while they stop or replace
+// the engine and, for a full reindex, remove its directory. A replacement
+// therefore cannot delete files beneath an active reader in either process.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use once_cell::sync::OnceCell;
-use std::sync::Mutex;
+use std::sync::RwLock;
 use wincmd_search::{
     types::{Chunk, ContentHit, ContentQuery, IndexConfig, IndexStatus},
     SearchEngine,
@@ -39,10 +42,125 @@ use crate::settings::{read_settings, write_settings, AppSettings, FileSearchSett
 // Module-level engine singleton
 // ---------------------------------------------------------------------------
 
-static ENGINE: OnceCell<Mutex<Option<Arc<SearchEngine>>>> = OnceCell::new();
+static ENGINE: OnceCell<RwLock<Option<Arc<SearchEngine>>>> = OnceCell::new();
 
-fn engine_cell() -> &'static Mutex<Option<Arc<SearchEngine>>> {
-    ENGINE.get_or_init(|| Mutex::new(None))
+// The index itself is under the current user's LOCALAPPDATA. Match that
+// ownership boundary with an unprefixed/session-local mutex, rather than a
+// Global namespace object that could create cross-user contention or DACL
+// surprises. The GUI and its headless invocation run in the same session.
+const INDEX_PROCESS_LOCK_NAME: &str = "WinCommander_ContentIndex_lock";
+const INDEX_READ_LOCK_TIMEOUT_MS: u32 = 5_000;
+const INDEX_REPLACEMENT_LOCK_TIMEOUT_MS: u32 = 15_000;
+
+#[derive(Clone, Copy)]
+enum IndexLockMode {
+    Read,
+    Replacement,
+}
+
+impl IndexLockMode {
+    fn timeout_ms(self) -> u32 {
+        match self {
+            Self::Read => INDEX_READ_LOCK_TIMEOUT_MS,
+            Self::Replacement => INDEX_REPLACEMENT_LOCK_TIMEOUT_MS,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Replacement => "replacement",
+        }
+    }
+}
+
+fn abandoned_index_lock_error() -> String {
+    "content index lock was abandoned; repair or rescan is required before reading the index"
+        .to_string()
+}
+
+/// Cross-process gate for the session-local index directory. A Windows mutex is
+/// deliberately exclusive (rather than a faux reader/writer protocol): it
+/// gives a crash-safe, fail-closed boundary between GUI and CLI without
+/// introducing an unaudited shared-memory state machine.
+struct IndexProcessLock {
+    #[cfg(windows)]
+    handle: isize,
+}
+
+impl IndexProcessLock {
+    #[cfg(windows)]
+    fn acquire(mode: IndexLockMode) -> Result<Self, String> {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            CreateMutexW, ReleaseMutex, WaitForSingleObject,
+        };
+
+        const WAIT_OBJECT_0: u32 = 0;
+        const WAIT_ABANDONED: u32 = 0x80;
+        const WAIT_TIMEOUT: u32 = 0x102;
+
+        let name: Vec<u16> = format!("{INDEX_PROCESS_LOCK_NAME}\0")
+            .encode_utf16()
+            .collect();
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if handle.is_null() {
+            return Err("content index lock is unavailable; refusing the operation".to_string());
+        }
+        match unsafe { WaitForSingleObject(handle, mode.timeout_ms()) } {
+            WAIT_OBJECT_0 => Ok(Self {
+                handle: handle as isize,
+            }),
+            // WAIT_ABANDONED transfers mutex ownership to this process, but
+            // also proves the prior holder exited mid-operation. Release that
+            // ownership before closing the handle and refuse to read a
+            // potentially half-replaced Tantivy directory.
+            WAIT_ABANDONED => {
+                unsafe {
+                    ReleaseMutex(handle);
+                    CloseHandle(handle);
+                }
+                Err(abandoned_index_lock_error())
+            }
+            WAIT_TIMEOUT => {
+                unsafe { CloseHandle(handle) };
+                Err(format!(
+                    "content index {} lock is busy; refusing after {} ms",
+                    mode.label(),
+                    mode.timeout_ms()
+                ))
+            }
+            _ => {
+                unsafe { CloseHandle(handle) };
+                Err("content index lock wait failed; refusing the operation".to_string())
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn acquire(_mode: IndexLockMode) -> Result<Self, String> {
+        // The Windows-only index directory is only enforced on Windows; this
+        // keeps compile-only non-Windows targets from claiming runtime safety.
+        Ok(Self {})
+    }
+}
+
+impl Drop for IndexProcessLock {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if self.handle != 0 {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::ReleaseMutex;
+            unsafe {
+                ReleaseMutex(self.handle as _);
+                CloseHandle(self.handle as _);
+            }
+        }
+    }
+}
+
+fn engine_cell() -> &'static RwLock<Option<Arc<SearchEngine>>> {
+    ENGINE.get_or_init(|| RwLock::new(None))
 }
 
 /// Restrict the FTS index dir to SYSTEM / Administrators / owner. Called only
@@ -201,8 +319,10 @@ fn resolve_content_roots(
 /// Open the engine if it isn't already open. Idempotent.
 /// Holds the lock only for the duration of open+start_indexing (fast).
 /// The slow background crawl runs in the spawned thread after we release.
-fn open_engine(config: IndexConfig) -> Result<(), String> {
-    let mut guard = engine_cell().lock().map_err(|e| e.to_string())?;
+fn open_engine_locked(
+    guard: &mut Option<Arc<SearchEngine>>,
+    config: IndexConfig,
+) -> Result<(), String> {
     if guard.is_none() {
         // Create + harden the index dir BEFORE opening. harden_dir_acl sets
         // inheritable ACEs but does not recurse, so the dir must be restricted
@@ -219,6 +339,11 @@ fn open_engine(config: IndexConfig) -> Result<(), String> {
         *guard = Some(Arc::new(engine));
     }
     Ok(())
+}
+
+fn open_engine(config: IndexConfig) -> Result<(), String> {
+    let mut guard = engine_cell().write().map_err(|e| e.to_string())?;
+    open_engine_locked(&mut guard, config)
 }
 
 // ---------------------------------------------------------------------------
@@ -245,16 +370,16 @@ pub async fn search_content(
     scope_path: Option<String>,
 ) -> Result<Vec<ContentHit>, String> {
     tokio::task::spawn_blocking(move || {
+        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Read)?;
         let settings = ensure_initialized(read_settings()?)?;
         let fs = settings.app.file_search;
         let config = build_index_config(&fs)?;
         open_engine(config.clone())?;
 
-        let engine = {
-            let guard = engine_cell().lock().map_err(|e| e.to_string())?;
-            guard.as_ref().cloned()
-        };
-        let engine = engine.ok_or_else(|| "search engine not initialized".to_string())?;
+        let guard = engine_cell().read().map_err(|e| e.to_string())?;
+        let engine = guard
+            .as_ref()
+            .ok_or_else(|| "search engine not initialized".to_string())?;
 
         let roots = resolve_content_roots(scope_path, config.roots.clone())?;
         let query = build_content_query(terms, roots, limit, offset, keyword_only);
@@ -268,16 +393,16 @@ pub async fn search_content(
 #[tauri::command]
 pub async fn content_index_status() -> Result<IndexStatus, String> {
     tokio::task::spawn_blocking(move || {
+        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Read)?;
         let settings = ensure_initialized(read_settings()?)?;
         let fs = settings.app.file_search;
         let config = build_index_config(&fs)?;
         open_engine(config)?;
 
-        let engine = {
-            let guard = engine_cell().lock().map_err(|e| e.to_string())?;
-            guard.as_ref().cloned()
-        };
-        let engine = engine.ok_or_else(|| "search engine not initialized".to_string())?;
+        let guard = engine_cell().read().map_err(|e| e.to_string())?;
+        let engine = guard
+            .as_ref()
+            .ok_or_else(|| "search engine not initialized".to_string())?;
         Ok(engine.status())
     })
     .await
@@ -291,6 +416,7 @@ pub async fn content_index_configure(
     exclusions: Vec<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Replacement)?;
         // Persist into the encrypted settings store (app.fileSearch.*).
         let settings = {
             let mut settings = read_settings()?;
@@ -303,13 +429,13 @@ pub async fn content_index_configure(
         // Stop the old engine explicitly before releasing the Arc.  An in-flight
         // search_content call may hold a clone, deferring Drop — stop() joins the
         // worker immediately so there is never a second writer on the index dir.
-        let old = { engine_cell().lock().map_err(|e| e.to_string())?.take() };
-        if let Some(old) = old {
+        let mut guard = engine_cell().write().map_err(|e| e.to_string())?;
+        if let Some(old) = guard.take() {
             old.stop();
         }
         // Build config from the already-written settings — no redundant read.
         let config = build_index_config(&settings.app.file_search)?;
-        open_engine(config)
+        open_engine_locked(&mut guard, config)
     })
     .await
     .map_err(|e| format!("content_index_configure task failed: {e}"))?
@@ -326,18 +452,19 @@ pub async fn content_index_configure(
 #[tauri::command]
 pub async fn content_rescan() -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Replacement)?;
         // Stop + join the old worker so its watcher/writer are released before a
         // new engine opens on the same dir (tantivy permits one writer at a
         // time). The index dir is deliberately left in place — the reopened
         // engine serves all existing docs immediately, so content search never
         // goes blank the way it does during a full reindex.
-        let old = { engine_cell().lock().map_err(|e| e.to_string())?.take() };
-        if let Some(old) = old {
+        let mut guard = engine_cell().write().map_err(|e| e.to_string())?;
+        if let Some(old) = guard.take() {
             old.stop();
         }
         let settings = ensure_initialized(read_settings()?)?;
         let config = build_index_config(&settings.app.file_search)?;
-        open_engine(config)
+        open_engine_locked(&mut guard, config)
     })
     .await
     .map_err(|e| format!("content_rescan task failed: {e}"))?
@@ -347,10 +474,11 @@ pub async fn content_rescan() -> Result<(), String> {
 #[tauri::command]
 pub async fn content_reindex() -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Replacement)?;
         // Stop + join the old worker BEFORE deleting the index dir so the running
         // crawl never hits a directory that was removed under it.
-        let old = { engine_cell().lock().map_err(|e| e.to_string())?.take() };
-        if let Some(old) = old {
+        let mut guard = engine_cell().write().map_err(|e| e.to_string())?;
+        if let Some(old) = guard.take() {
             old.stop();
         }
         // Remove index directory to force a full re-crawl.
@@ -360,7 +488,7 @@ pub async fn content_reindex() -> Result<(), String> {
 
         let settings = ensure_initialized(read_settings()?)?;
         let config = build_index_config(&settings.app.file_search)?;
-        open_engine(config)
+        open_engine_locked(&mut guard, config)
     })
     .await
     .map_err(|e| format!("content_reindex task failed: {e}"))?
@@ -377,13 +505,13 @@ pub async fn content_reindex() -> Result<(), String> {
 #[tauri::command]
 pub async fn content_get_doc(doc_id: String) -> Result<Vec<Chunk>, String> {
     tokio::task::spawn_blocking(move || {
+        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Read)?;
         let id: u64 = doc_id.parse().map_err(|_| "invalid doc_id".to_string())?;
 
-        let engine = {
-            let guard = engine_cell().lock().map_err(|e| e.to_string())?;
-            guard.as_ref().cloned()
-        };
-        let engine = engine.ok_or_else(|| "search engine not initialized".to_string())?;
+        let guard = engine_cell().read().map_err(|e| e.to_string())?;
+        let engine = guard
+            .as_ref()
+            .ok_or_else(|| "search engine not initialized".to_string())?;
         engine.get_chunks(id).map_err(|e| e.to_string())
     })
     .await
@@ -397,6 +525,36 @@ pub async fn content_get_doc(doc_id: String) -> Result<Vec<Chunk>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_content_index_read_and_replacement_uses_the_named_process_lock() {
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/file_search.rs"));
+        for (operation, mode) in [
+            ("search_content", "IndexLockMode::Read"),
+            ("content_index_status", "IndexLockMode::Read"),
+            ("content_get_doc", "IndexLockMode::Read"),
+            ("content_index_configure", "IndexLockMode::Replacement"),
+            ("content_rescan", "IndexLockMode::Replacement"),
+            ("content_reindex", "IndexLockMode::Replacement"),
+        ] {
+            let signature = format!("pub async fn {operation}");
+            let start = source
+                .find(&signature)
+                .unwrap_or_else(|| panic!("missing {operation}"));
+            let body = &source[start..start + 700.min(source.len() - start)];
+            assert!(
+                body.contains(&format!("IndexProcessLock::acquire({mode})")),
+                "{operation} must take the cross-process lock"
+            );
+        }
+        assert_eq!(INDEX_PROCESS_LOCK_NAME, "WinCommander_ContentIndex_lock");
+        assert!(!INDEX_PROCESS_LOCK_NAME.starts_with("Global\\"));
+        assert!(INDEX_READ_LOCK_TIMEOUT_MS > 0);
+        assert!(INDEX_REPLACEMENT_LOCK_TIMEOUT_MS >= INDEX_READ_LOCK_TIMEOUT_MS);
+        assert!(abandoned_index_lock_error().contains("repair or rescan"));
+        assert!(source.contains("WAIT_ABANDONED => {"));
+        assert!(source.contains("ReleaseMutex(handle);"));
+    }
 
     /// build_index_config maps roots + exclusions correctly and hard-codes 50 MB.
     #[test]
