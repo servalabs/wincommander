@@ -528,7 +528,13 @@ pub fn emergency_license_gate() -> EmergencyLicense {
 /// "advanced" feature, which must be explicit in the signed feature vector.
 #[allow(dead_code)]
 pub fn has_entitlement(name: &str) -> bool {
-    let features = current_features();
+    has_entitlement_in_features(&current_features(), name)
+}
+
+/// Feature matching for a verified entitlement vector. Keep specialist
+/// services explicit: ordinary Pro's broad `paid` claim must not become a
+/// download or launch credential for Investigator.
+fn has_entitlement_in_features(features: &[String], name: &str) -> bool {
     let is_term_service = matches!(name, "advanced" | "fleet" | "netwall");
     features
         .iter()
@@ -1368,6 +1374,17 @@ pub async fn deactivate_license() -> Result<(), String> {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    #[test]
+    fn ordinary_pro_cannot_satisfy_investigator_entitlement() {
+        let ordinary_pro = vec!["paid".to_string()];
+        assert!(!has_entitlement_in_features(&ordinary_pro, "advanced"));
+        assert!(has_entitlement_in_features(&ordinary_pro, "paid"));
+        assert!(has_entitlement_in_features(
+            &["paid".to_string(), "advanced".to_string()],
+            "advanced"
+        ));
+    }
     use ed25519_dalek::SigningKey;
     use rand_core::OsRng;
 

@@ -7,12 +7,14 @@ pub const INVESTIGATOR_BINARY_NAME: &str = "wincommander-investigator.exe";
 pub const PRO_SIDECAR_NAME: &str = "wincommander-pro.exe";
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignedManifestEnvelope {
     pub payload: String,
     pub signature: String,
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvestigatorArtifact {
     pub name: String,
     pub url: String,
@@ -21,6 +23,7 @@ pub struct InvestigatorArtifact {
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvestigatorManifest {
     pub version: String,
     pub artifacts: Vec<InvestigatorArtifact>,
@@ -84,6 +87,11 @@ pub fn validate_manifest(manifest: &InvestigatorManifest) -> Result<(), String> 
     if manifest.artifacts.len() != 2 {
         return Err("validation:manifest must contain exactly two artifacts".to_string());
     }
+    if manifest.artifacts[0].name != INVESTIGATOR_BINARY_NAME
+        || manifest.artifacts[1].name != PRO_SIDECAR_NAME
+    {
+        return Err("validation:manifest artifact order is invalid".to_string());
+    }
     for expected_name in [INVESTIGATOR_BINARY_NAME, PRO_SIDECAR_NAME] {
         if manifest
             .artifacts
@@ -106,7 +114,7 @@ pub fn validate_manifest(manifest: &InvestigatorManifest) -> Result<(), String> 
             || !artifact
                 .sha256
                 .chars()
-                .all(|character| character.is_ascii_hexdigit())
+                .all(|character| character.is_ascii_digit() || ('a'..='f').contains(&character))
         {
             return Err(format!(
                 "validation:{} has an invalid sha256",
@@ -189,6 +197,20 @@ mod tests {
             r#"{"version":"1.0.0","artifacts":[{"name":"wincommander-investigator.exe","url":"https://winupdates.servalabs.com/pro/wincommander-investigator.exe","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1},{"name":"wincommander-pro.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-pro.exe","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":1}]}"#,
         )
         .unwrap();
+        assert!(validate_manifest(&manifest).is_err());
+    }
+
+    #[test]
+    fn manifest_rejects_reordered_or_noncanonical_artifacts() {
+        let mut manifest: InvestigatorManifest = serde_json::from_str(
+            r#"{"version":"1.0.0","artifacts":[{"name":"wincommander-investigator.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-investigator.exe","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":1},{"name":"wincommander-pro.exe","url":"https://winupdates.servalabs.com/investigator/wincommander-pro.exe","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":1}]}"#,
+        )
+        .unwrap();
+        manifest.artifacts.swap(0, 1);
+        assert!(validate_manifest(&manifest).is_err());
+
+        manifest.artifacts.swap(0, 1);
+        manifest.artifacts[0].sha256.replace_range(0..1, "A");
         assert!(validate_manifest(&manifest).is_err());
     }
 }
