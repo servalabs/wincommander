@@ -506,6 +506,11 @@ html.light .sfp-section-bar {
   flex-direction: column;
 }
 
+.sfp-virtual-spacer {
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+
 .sr-col {
   overflow: hidden;
   text-overflow: ellipsis;

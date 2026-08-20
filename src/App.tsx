@@ -8,7 +8,6 @@ import {
   type ComponentType,
   type LazyExoticComponent,
 } from "react";
-import { Classes } from "@/components/ui/bp";
 // `emit` was only used by the removed `flow-key-press` bridge.
 // KeySequenceTrigger now consumes events directly from the system-wide
 // keyboard hook in `services::keyboard_hook`.
@@ -16,7 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { motion, MotionConfig } from "framer-motion";
 import { showError, showInfo, showWarning } from "./utils/toast";
-import useMotionPreference from "./hooks/useMotionPreference";
+import useMotionPreference, { MotionPreferenceProvider } from "./hooks/useMotionPreference";
 import useLowPerformanceMode from "./hooks/useLowPerformanceMode";
 import { panelVariants, panelTransition } from "./components/shared/motion";
 import DependencyGate from "./components/DependencyGate";
@@ -57,7 +56,7 @@ import LicenseCelebrationListener from "./components/shared/LicenseCelebrationLi
 import InstallProDialog from "./components/InstallProDialog";
 import useProInstall, { isProVersionCompatible, getCachedFreeVersion } from "./hooks/useProInstall";
 import { AppProvider, useAppState } from "./context/AppContext";
-import { useTheme } from "./context/ThemeContext";
+import { LiveMetricsProvider } from "./context/LiveMetricsContext";
 import { TaskStatusProvider } from "./context/TaskStatusContext";
 import { OperationOverlay } from "./context/OperationContext";
 import { useStartupSound } from "./hooks/useStartupSound";
@@ -242,7 +241,7 @@ function AppContent() {
   // that are used directly in this component. Declared here (before
   // lockHiddenPanels) so the borrowed-panel redirect can read lockedPanelIds.
   const appState = useAppState();
-  const { productivityStatus, appSettings, patchAppSettings, startupComplete } = appState;
+  const { productivityStatus, appSettings, patchAppSettings, startupComplete, startupDataState } = appState;
   const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
   useAutomaticUpdate(automaticUpdatesEnabled, hasPaid);
 
@@ -357,7 +356,6 @@ function AppContent() {
 
   const { data: licenseStatus, isLoading: isLicenseLoading } = useLicenseQuery();
   const licenseChecked = !isLicenseLoading;
-  const { theme } = useTheme();
 
   // Auto-open the combined UpdateFlowDialog at startup, in either of two
   // cases: (1) the Free background scheduler already found/staged an update
@@ -1023,7 +1021,9 @@ function AppContent() {
       {isLoading && <SplashScreen onComplete={handleSplashComplete} isAppReady={startupComplete} />}
 
       <div
-        className={`${theme === 'dark' ? Classes.DARK : ''} app-container`}
+        className="app-container"
+        data-startup-data-state={startupDataState}
+        aria-busy={startupDataState === 'loading' || startupDataState === 'refreshing'}
         style={{ display: isLoading ? 'none' : 'flex', flexDirection: 'column', height: '100vh', width: '100vw', overflow: 'hidden' }}
       >
         <AppShell
@@ -1267,13 +1267,17 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
 function App() {
   return (
     <AuthModeProvider>
-      <AppProvider>
-        <TaskStatusProvider>
-          <StartupAuthGate>
-            <AppContent />
-          </StartupAuthGate>
-        </TaskStatusProvider>
-      </AppProvider>
+      <LiveMetricsProvider>
+        <AppProvider>
+          <MotionPreferenceProvider>
+            <TaskStatusProvider>
+              <StartupAuthGate>
+                <AppContent />
+              </StartupAuthGate>
+            </TaskStatusProvider>
+          </MotionPreferenceProvider>
+        </AppProvider>
+      </LiveMetricsProvider>
     </AuthModeProvider>
   );
 }

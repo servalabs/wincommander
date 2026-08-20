@@ -1,5 +1,5 @@
 import { type PanelId, getSidebarManifests, NAV_GROUP_ORDER, navGroupFor } from "../types/panels";
-import { useEffect, useMemo, useState, useRef, useCallback } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useAuthMode } from "../context/AuthModeContext";
 import { motion } from "framer-motion";
 import { SPRING } from "./shared/motion";
@@ -7,7 +7,6 @@ import { useAppState } from "../context/AppContext";
 import type { DependencyInfo } from "../hooks/useDependencies";
 import { useSovereigntyScore } from "../hooks/useSovereigntyScore";
 import LicenseQuickPanel from "./LicenseQuickPanel";
-import RdpQuickAction from "./RdpQuickAction";
 import ExperienceLevelSwitch from "./ExperienceLevelSwitch";
 import PersonaSwitch from "./PersonaSwitch";
 import { getModuleForPanel, getModuleDef, isModuleEnabled } from "../types/modules";
@@ -21,6 +20,10 @@ import { Icon, type IconName } from "./ui/icon";
 import { Spinner } from "./ui/spinner";
 import { invoke } from "@tauri-apps/api/core";
 import './Sidebar.css';
+
+// RDP management includes a full legacy dialog/form surface. The rail remains
+// responsive while that infrequent control loads on demand.
+const RdpQuickAction = lazy(() => import("./RdpQuickAction"));
 
 // ── Dev build nav entry ────────────────────────────────────────────────
 // Gated on is_dev_build() (Rust cfg!(debug_assertions)) — absent in release.
@@ -373,7 +376,9 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
       </div>
 
       <div className="sidebar-footer">
-        <RdpQuickAction isCollapsed={collapsed} />
+        <Suspense fallback={null}>
+          <RdpQuickAction isCollapsed={collapsed} />
+        </Suspense>
         {!preferencesHidden && (
           <div className="preferences-row" data-tour="persona-density-switches">
             <ExperienceLevelSwitch compact />

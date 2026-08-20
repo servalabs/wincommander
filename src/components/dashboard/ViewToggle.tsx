@@ -1,4 +1,4 @@
-import { Icon } from "@/components/ui/bp";
+import { Icon } from "@/components/ui/icon";
 
 type ViewMode = "dashboard" | "risk" | "products";
 

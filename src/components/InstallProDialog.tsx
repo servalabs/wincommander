@@ -14,7 +14,7 @@
 // + atomic-rename in a single round-trip, so we don't surface granular
 // progress -- just a spinner with the short "Installing..." copy.
 
-import { Dialog, DialogBody, DialogFooter } from "@/components/ui/bp";
+import { CompatDialog as Dialog, CompatDialogBody as DialogBody, CompatDialogFooter as DialogFooter } from "@/components/ui/compat-dialog";
 import { useEffect, useState } from "react";
 import useProInstall from "../hooks/useProInstall";
 import { renderProInstallStep } from "./shared/ProInstallStepBody";

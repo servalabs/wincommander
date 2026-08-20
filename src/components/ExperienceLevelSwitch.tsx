@@ -1,4 +1,4 @@
-import { Icon } from "@/components/ui/bp";
+import { Icon } from "@/components/ui/icon";
 import { useAppState } from "../context/AppContext";
 import { useQueryClient } from "@tanstack/react-query";
 import { settingsKeys } from "../hooks/queries/useSettingsQuery";

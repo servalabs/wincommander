@@ -8,7 +8,7 @@ import type { QuickMountSlot } from "../types/settings";
 import useVisibility from "../hooks/useVisibility";
 import useEntitlements from "../hooks/useEntitlements";
 import useBorrowedActive from "../hooks/useBorrowedActive";
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
@@ -16,8 +16,11 @@ import { showSuccess, showError } from "../utils/toast";
 import { runOperation } from "../context/OperationContext";
 import { DESTRUCT_STEPS, isStepEnabled } from "../types/lockdownSteps";
 import { DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
-import MetadataScrubberDialog from "./MetadataScrubberDialog";
 import './RightSidebar.css';
+
+// This large, occasional dialog carries its own legacy UI bridge; keep it out
+// of the always-visible quick-action rail until the operator requests it.
+const MetadataScrubberDialog = lazy(() => import("./MetadataScrubberDialog"));
 
 // ── Lockdown countdown audio cues (Web Audio — no bundled assets) ──────────
 // A short beep on each tick (3-2-1), a low "destruct" tone at zero, and a soft
@@ -888,14 +891,18 @@ export default function RightSidebar() {
                 )}
             </div>
 
-            <MetadataScrubberDialog
-                isOpen={scrubDialogOpen}
-                onClose={() => {
-                    setScrubDialogOpen(false);
-                    setScrubInitialPaths(undefined);
-                }}
-                initialPaths={scrubInitialPaths}
-            />
+            {scrubDialogOpen && (
+                <Suspense fallback={null}>
+                    <MetadataScrubberDialog
+                        isOpen
+                        onClose={() => {
+                            setScrubDialogOpen(false);
+                            setScrubInitialPaths(undefined);
+                        }}
+                        initialPaths={scrubInitialPaths}
+                    />
+                </Suspense>
+            )}
 
 
             {/* Quick Mount overlay */}

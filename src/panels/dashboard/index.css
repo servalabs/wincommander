@@ -2025,6 +2025,26 @@ html.light .view-toggle-btn.active {
     animation: spin 1.2s linear infinite;
 }
 
+/* Decorative dashboard loops do not need a frame budget when WebView2 is in
+   the background. Pausing, rather than removing them, resumes at the same
+   visual point when the window returns. Low Performance / reduced motion use
+   wc-no-motion and intentionally render these as static indicators. */
+html[data-page-hidden] .dashboard-panel .status-dot.active,
+html[data-page-hidden] .dashboard-panel .pulsing,
+html[data-page-hidden] .dashboard-panel .spin {
+    animation-play-state: paused !important;
+}
+
+html.wc-no-motion .dashboard-panel {
+    transition: none;
+}
+
+html.wc-no-motion .dashboard-panel .status-dot.active,
+html.wc-no-motion .dashboard-panel .pulsing,
+html.wc-no-motion .dashboard-panel .spin {
+    animation: none !important;
+}
+
 html.light .ss-bar {
     opacity: 0.85;
 }

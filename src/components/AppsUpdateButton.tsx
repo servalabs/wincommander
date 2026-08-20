@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Icon } from "@/components/ui/bp";
+import { Icon } from "@/components/ui/icon";
 import { useAppState } from "../context/AppContext";
 import useBackend from "../hooks/useBackend";
 import { runOperation } from "../context/OperationContext";

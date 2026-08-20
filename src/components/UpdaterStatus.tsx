@@ -17,7 +17,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { useRef, useState } from "react";
-import { Icon, Spinner } from "@/components/ui/bp";
+import { Icon } from "@/components/ui/icon";
+import { Spinner } from "@/components/ui/spinner";
 import { useUpdater } from "../hooks/updaterStore";
 
 export default function UpdaterStatus() {

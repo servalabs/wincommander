@@ -445,7 +445,7 @@ The frontend visibility contract lives in `src/lib/visibility.ts` and `src/hooks
 
 ## Integrations & dependencies
 
-- **Frontend libs:** React 19, shadcn/ui (Radix) + `src/components/ui/` kit, TanStack Query 5, Framer Motion, Tailwind 4, lucide-react (via `src/components/ui/icon.tsx`), qrcode.react. `src/components/ui/bp.tsx` is a Blueprint-API-compatible shim for legacy call sites — new code uses shadcn primitives. `@xyflow/react` is still in `package.json` but has zero imports in `src/` since the Flows v2 rewrite deleted the old React-Flow canvas — dead dependency, candidate for removal.
+- **Frontend libs:** React 19, shadcn/ui (Radix) + `src/components/ui/` kit, TanStack Query 5, Framer Motion, Tailwind 4, lucide-react (via `src/components/ui/icon.tsx`), qrcode.react. `src/components/ui/bp.tsx` is a Blueprint-API-compatible shim for legacy call sites — new code uses shadcn primitives.
 - **Tauri plugins:** shell, opener, fs, dialog, process, updater, global-shortcut, notification, autostart (`lib.rs::run`) — the autostart plugin is now **inert**; login autostart is a Scheduled Task (`autostart.rs`).
 - **Rust crates (notable):** `aes-gcm` (module encryption + datastore at-rest encoding), `argon2` (per-install key derivation for datastore, argon2id 64 MiB/2 iter/1 lane), `ed25519-dalek` (licence + flow signing), `hmac`/`sha2`/`subtle` (IPC HMAC), `hickory-resolver` (DoH), `notify` (fs watcher), `sysinfo`/smartctl (metrics), `tokio` named pipes.
 - **External tools (optional, via Dependencies panel):** Everything (file search), WizTree (disk analyzer), ExifTool (metadata scrubber), BleachBit (cleaner), Winget, Python 3.12 + MediaPipe/OpenCV (Privacy Shield), ImDisk (RAM disks).

@@ -14,12 +14,14 @@
 //   3. App is in its low-profile posture (decoy mode) — motion suppressed
 //      by behavior, not by name (DN-07 compliant).
 
-import { useEffect, useState } from "react";
+import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAuthMode } from "../context/AuthModeContext";
 import { useAppState } from "../context/AppContext";
 import { applyMotionClass, shouldReduceMotionForSystem } from "../lib/motionPolicy";
 
 export type MotionPreference = "full" | "reduced";
+
+const MotionPreferenceContext = createContext<MotionPreference | null>(null);
 
 /** True when the OS has prefers-reduced-motion: reduce */
 function osWantsReduced(): boolean {
@@ -50,7 +52,7 @@ function resolvedWantsReduced(): boolean {
  * Re-renders when the OS setting changes OR when the html class changes.
  * Posture (decoy mode) is read from AuthModeContext so it re-renders on mode switch.
  */
-export default function useMotionPreference(): MotionPreference {
+export function MotionPreferenceProvider({ children }: { children: ReactNode }) {
   const { mode } = useAuthMode();
   const { systemInfo } = useAppState();
 
@@ -113,5 +115,16 @@ export default function useMotionPreference(): MotionPreference {
     }
   }, [systemNeedsReducedMotion]);
 
-  return reduced || isLowProfile || systemNeedsReducedMotion ? "reduced" : "full";
+  const preference = reduced || isLowProfile || systemNeedsReducedMotion ? "reduced" : "full";
+  const value = useMemo(() => preference, [preference]);
+
+  return createElement(MotionPreferenceContext.Provider, { value }, children);
+}
+
+export default function useMotionPreference(): MotionPreference {
+  const preference = useContext(MotionPreferenceContext);
+  if (!preference) {
+    throw new Error("useMotionPreference must be used within a MotionPreferenceProvider");
+  }
+  return preference;
 }

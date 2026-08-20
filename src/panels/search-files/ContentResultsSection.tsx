@@ -52,6 +52,7 @@ interface ContentResultsSectionProps {
   onOpenFolder: (dir: string) => void;
   onCopyPath: (path: string) => void;
   copiedPath: string | null;
+  loadNativeIcons: boolean;
 }
 
 export default function ContentResultsSection(props: ContentResultsSectionProps) {
@@ -63,6 +64,7 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
     expandedDocId, expandedText, expandedLoading, expandedError, onToggleExpand,
     flatOffset, selectedIndex, onSelect,
     onOpenFile, onOpenFolder, onCopyPath, copiedPath,
+    loadNativeIcons,
   } = props;
 
   return (
@@ -129,6 +131,10 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
 
       {contentLoading && <div className="sfp-loading">Searching inside files…</div>}
 
+      {/* search_content is backend-windowed at 50 rows, leaving the other half
+          of the 100-row DOM budget for the virtualized filename group. Keep
+          content rows whole so expanded extracted-text previews retain their
+          measured, variable height. */}
       {!contentLoading && rows.length > 0 && (
         <div className="sfp-rows" role="presentation">
           {rows.map((row, ri) => {
@@ -147,7 +153,13 @@ export default function ContentResultsSection(props: ContentResultsSectionProps)
                   onDoubleClick={() => onOpenFile(row.path)}
                 >
                   <div className="sfp-content-line1">
-                    <FileIcon path={row.path} name={row.name} isDir={false} />
+                    <FileIcon
+                      path={row.path}
+                      name={row.name}
+                      isDir={false}
+                      loadNativeIcon={loadNativeIcons}
+                      priority={selected ? 0 : ri + 1}
+                    />
                     <span className="sr-name-text">{row.name}</span>
                     <span className="sfp-content-dir" title={row.path}>{contentRowDir(row.path)}</span>
                     <span className="sfp-content-meta">

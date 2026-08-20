@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useState, useCallback, useMemo } from "react";
 import { trackBackendWork } from "../lib/activityStore";
 import { clearCommand, commandId, invokeCommand } from "../lib/commandIds";
+import { createSearchMaintenanceClient } from "../lib/searchMaintenanceClient";
 
 // Types for backend responses
 export interface BackendResponse<T = unknown> {
@@ -867,6 +868,15 @@ export interface SystemInfo {
   };
 }
 
+export interface LiveMetricsResult {
+  cpuUsage: number;
+  cpuTemp: number | null;
+  ramUsagePercent: number;
+  ramUsedGb: number;
+  ramTotalGb: number;
+  disks: Array<{ name: string; totalGb: number; freeGb: number }>;
+}
+
 export interface DriveSmartHealthEntry {
   driveLetter: string;
   healthPercent: number | null;
@@ -1352,6 +1362,7 @@ export function useBackend() {
 
     // System Info
     getSystemInfo: () => execute<SystemInfo>("Get-SystemInfo"),
+    getLiveMetrics: () => invoke<LiveMetricsResult>("get_live_metrics"),
     getDriveSmartHealth: () => invoke<DriveSmartHealthResult>("get_drive_smart_health"),
     getWipeDriveList: () => invoke<WipeDriveEntry[]>("get_wipe_drive_list"),
     getStorageStats: () => execute<StorageStats>("Get-StorageStats"),
@@ -1615,6 +1626,10 @@ export function useBackend() {
     getShadowCopies: () => execute<{ copies: ShadowCopy[]; total: number; vssRunning: boolean }>("Get-ShadowCopies"),
     getNTFSJournals: () => execute<{ journals: NTFSJournal[]; total: number }>("Get-NTFSJournals"),
 
+    // Search maintenance remains part of this compatibility facade. The
+    // typed command mapping lives in a dependency-free domain client.
+    ...createSearchMaintenanceClient(execute),
+
     // GROUP I-A: Advanced DFIR — viewers
     getAmcacheEntries: () => execute<{ entries: Array<{ category: string; count: number; sample: Array<{ id: string; name: string; path: string }> }>; hveFileSizeMb: number; hveFileExists: boolean; total: number }>("Get-AmcacheEntries"),
     getNTUserTraces: () => execute<{ sections: Array<{ name: string; count: number; entries: Array<{ key: string; value: string }> }>; total: number }>("Get-NTUserTraces"),
@@ -1623,7 +1638,6 @@ export function useBackend() {
     getCrashDumpList: () => execute<{ dumps: Array<{ source: string; name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-CrashDumpList"),
     getSQLiteWALList: () => execute<{ files: Array<{ name: string; sizeKB: number; dir: string; modified: string }>; total: number; totalSizeMB: number }>("Get-SQLiteWALList"),
     getRecallDatabaseInfo: () => execute<{ databases: Array<{ source: string; name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-RecallDatabaseInfo"),
-    getSearchIndexInfo: () => execute<{ files: Array<{ label: string; name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number; wsearchState: string }>("Get-SearchIndexInfo"),
     getPrintSpoolerInfo: () => execute<{ files: Array<{ source: string; name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number; spoolerState: string }>("Get-PrintSpoolerInfo"),
     getRecycleBinInfo: () => execute<{ items: RecycleBinEntry[]; total: number; totalSizeKB: number }>("Get-RecycleBinInfo"),
     getWebCacheInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-WebCacheInfo"),
@@ -1676,8 +1690,6 @@ export function useBackend() {
     getEmbeddedWebCacheInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-EmbeddedWebCacheInfo"),
     getP2PUpdateCacheInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-P2PUpdateCacheInfo"),
     getReliabilityHistoryInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-ReliabilityHistoryInfo"),
-    getExplorerSearchHistoryInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-ExplorerSearchHistoryInfo"),
-    getSearchPersonalizationInfo: () => execute<{ files: Array<{ name: string; sizeKB: number; modified: string }>; total: number; totalSizeMB: number }>("Get-SearchPersonalizationInfo"),
     // GROUP I-A: Advanced DFIR — erases
     clearAmcache: () => execute<{ status: string; clearedKeys: number; bootPurgeScheduled: boolean }>(clearCommand("Amcache")),
     clearRecycleBinMetadata: () => execute<{ ok: boolean; stdout: string }>(clearCommand("RecycleBinMetadata")),
@@ -1688,7 +1700,6 @@ export function useBackend() {
     invokeCrashDumpErase: () => execute<{ status: string; removedItems: number }>(invokeCommand("CrashDumpErase")),
     invokeVirtualMemoryPurge: () => execute<{ status: string; results: Record<string, boolean> }>(invokeCommand("VirtualMemoryPurge")),
     getVirtualMemoryStatus: () => execute<{ hiberEnabled: boolean; hiberFileExists: boolean; swapFileExists: boolean; clearPageFileAtShutdown: boolean }>("Get-VirtualMemoryStatus"),
-    clearSearchIndex: () => execute<{ status: string; removedItems: number }>(clearCommand("SearchIndex")),
     clearPrintSpooler: () => execute<{ status: string; removedItems: number }>(clearCommand("PrintSpooler")),
     invokeSQLiteWALKiller: () => execute<{ status: string; killedFiles: number; skippedLocked: number }>(invokeCommand("SQLiteWALKiller")),
     clearRecallDatabase: () => execute<{ status: string; removedFiles: number }>(clearCommand("RecallDatabase")),
@@ -1742,8 +1753,6 @@ export function useBackend() {
     clearEmbeddedWebCache: () => execute<{ ok: boolean; stdout: string }>(clearCommand("EmbeddedWebCache")),
     clearP2PUpdateCache: () => execute<{ ok: boolean; stdout: string }>(clearCommand("P2PUpdateCache")),
     clearReliabilityHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("ReliabilityHistory")),
-    clearExplorerSearchHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("ExplorerSearchHistory")),
-    clearSearchPersonalizationData: () => execute<{ ok: boolean; stdout: string }>(clearCommand("SearchPersonalizationData")),
     invokeUnallocatedSpaceErase: (driveLetter?: string, mediaType?: string) =>
       execute<{ status: string; pid: number; drive: string; message: string }>(
         invokeCommand("UnallocatedSpaceErase"),

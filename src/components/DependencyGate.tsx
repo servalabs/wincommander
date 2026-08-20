@@ -6,7 +6,8 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Icon, Button } from '@/components/ui/bp';
+import { CompatButton as Button } from '@/components/ui/compat-button';
+import { Icon } from '@/components/ui/icon';
 import { useAppState } from '../context/AppContext';
 import { executeBackendCommand } from '../hooks/useBackend';
 import { runOperation } from '../context/OperationContext';

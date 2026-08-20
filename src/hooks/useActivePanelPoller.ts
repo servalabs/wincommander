@@ -17,6 +17,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import type { PanelId } from '../types/panels';
 import { PANEL_MANIFESTS } from '../types/panels';
 import { useAppState } from '../context/AppContext';
+import { useLiveMetrics } from '../context/LiveMetricsContext';
 import { getModuleForPanel, isModuleEnabled } from '../types/modules';
 
 const LIVE_METRICS_INTERVAL = 2_000;  // 2s — Rust sysinfo, <1ms cost
@@ -72,7 +73,6 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
     const {
         appSettings,
         refreshSystem,
-        refreshLiveMetrics,
         refreshDriveHealth,
         refreshPrivacy,
         refreshNetwork,
@@ -81,6 +81,7 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
         refreshMesh,
         refreshProductivity,
     } = appState;
+    const { refreshLiveMetrics } = useLiveMetrics();
 
     // Track previous panel to fire immediate one-shot on panel change
     const prevPanelRef = useRef<PanelId | null>(null);

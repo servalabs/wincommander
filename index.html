@@ -27,6 +27,18 @@
       document.documentElement.setAttribute("data-theme", "anduril");
     }
   </script>
+  <!-- Pauses decorative CSS loops when WebView2 is backgrounded. This runs
+       before React so every surface receives the same page-visibility signal
+       without a provider update or per-component polling. -->
+  <script>
+    try {
+      var syncPageVisibility = function () {
+        document.documentElement.toggleAttribute("data-page-hidden", document.hidden);
+      };
+      document.addEventListener("visibilitychange", syncPageVisibility);
+      syncPageVisibility();
+    } catch (e) {}
+  </script>
 </head>
 
 <body>

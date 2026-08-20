@@ -1,4 +1,4 @@
-import { InputGroup } from "@/components/ui/bp";
+import { Input } from "@/components/ui/input";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useBackend, { AppLicenseStatus } from "../hooks/useBackend";
 import useInvestigatorInstall from "../hooks/useInvestigatorInstall";
@@ -340,7 +340,7 @@ export default function LicenseQuickPanel() {
               still wires the activate fn for any future inline use. */}
           {false && (
             <div className="license-input-row" aria-hidden>
-              <InputGroup
+              <Input
                 placeholder="XXXX-XXXX-XXXX"
                 value={licenseKey}
                 onChange={(e) => setLicenseKey(e.target.value)}

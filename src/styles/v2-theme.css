@@ -316,8 +316,10 @@ html:not(.search-overlay-window) .app-content::before {
 }
 
 @keyframes wc-scan {
-  0% { margin-left: -40%; }
-  100% { margin-left: 100%; }
+  /* The bar is 40% wide. -100% → 250% covers the same -40% → 100%
+     parent distance as the old margin animation, without layout work. */
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
 }
 
 @keyframes wc-app-pop {
@@ -352,6 +354,7 @@ html:not(.search-overlay-window) .app-content::before {
   width: 40%;
   border-radius: var(--r-pill, 999px);
   background: var(--accent-2, var(--accent));
+  will-change: transform;
   animation: wc-scan calc(1.4s / var(--motion, 1)) var(--ease) infinite;
 }
 
@@ -427,6 +430,26 @@ html.wc-no-motion .wc-anim-essential,
 html.wc-no-motion .wc-anim-essential * {
   animation-duration: revert !important;
   transition-duration: revert !important;
+}
+
+/* Page visibility is independent of the user's motion preference. Pausing
+   preserves the visible frame for an instant resume while removing needless
+   compositor work in a hidden WebView. */
+html[data-page-hidden] .wc-blink,
+html[data-page-hidden] .wc-scan-bar > i,
+html[data-page-hidden] .wc-cpu-breathe,
+html[data-page-hidden] .wc-status-ping::after {
+  animation-play-state: paused !important;
+}
+
+html[data-page-hidden] .wc-scan-bar > i {
+  will-change: auto;
+}
+
+/* Low Performance Mode resolves to wc-no-motion. A backdrop blur forces a
+   separate sampling pass, so use the existing opaque surface instead. */
+html.wc-no-motion .floating-glass {
+  backdrop-filter: none;
 }
 
 /* ── Duration tokens ─────────────────────────────────────────────────────────

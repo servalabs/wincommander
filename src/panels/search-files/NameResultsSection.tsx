@@ -5,9 +5,9 @@
 // double-click opens, and the matched query tokens are highlighted in the
 // file name so it's obvious why a row is here. Pure renderer.
 
-import { motion, AnimatePresence } from "framer-motion";
 import { Icon } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
+import { useSearchResultWindow } from "@/hooks/useSearchResultWindow";
 import FileIcon from "./FileIcon";
 import { formatResultSize, isDirectoryResult } from "@/lib/fileNameSearch";
 import type { SearchResult } from "@/lib/fileNameSearch";
@@ -25,6 +25,8 @@ interface NameResultsSectionProps {
   onOpenFolder: (dir: string) => void;
   onCopyPath: (path: string) => void;
   copiedPath: string | null;
+  scrollContainer: HTMLElement | null;
+  loadNativeIcons: boolean;
 }
 
 export default function NameResultsSection({
@@ -39,7 +41,17 @@ export default function NameResultsSection({
   onOpenFolder,
   onCopyPath,
   copiedPath,
+  scrollContainer,
+  loadNativeIcons,
 }: NameResultsSectionProps) {
+  const resultWindow = useSearchResultWindow({
+    itemCount: results.length,
+    rowHeight: 36,
+    scrollContainer,
+    pinnedIndex: selectedIndex >= 0 && selectedIndex < results.length ? selectedIndex : null,
+  });
+  const visibleResults = results.slice(resultWindow.window.start, resultWindow.window.end);
+
   return (
     <div className="sfp-section">
       <div className="sfp-section-bar">
@@ -61,26 +73,33 @@ export default function NameResultsSection({
         </div>
       )}
       {results.length > 0 && (
-        <div className="sfp-rows" role="presentation">
-          <AnimatePresence initial={false}>
-            {results.map((r, i) => {
+        <div ref={resultWindow.listRef} className="sfp-rows" role="presentation">
+          {resultWindow.beforeHeight > 0 && (
+            <div className="sfp-virtual-spacer" style={{ height: resultWindow.beforeHeight }} aria-hidden="true" />
+          )}
+          {visibleResults.map((r, windowIndex) => {
+              const i = resultWindow.window.start + windowIndex;
               const selected = selectedIndex === i;
               return (
-                <motion.div
+                <div
                   key={r.full_path}
                   id={`sfp-opt-${i}`}
                   role="option"
                   aria-selected={selected}
                   className="search-result-row"
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: Math.min(i * 0.012, 0.3) }}
                   onClick={() => onSelect(i)}
                   onDoubleClick={() => onOpenFile(r.full_path)}
                   title={`${r.full_path} — double-click or press Enter to open`}
                 >
                   <div className="sr-col sr-name">
-                    <FileIcon path={r.full_path} name={r.name} isDir={isDirectoryResult(r)} iconData={r.icon_data} />
+                    <FileIcon
+                      path={r.full_path}
+                      name={r.name}
+                      isDir={isDirectoryResult(r)}
+                      iconData={r.icon_data}
+                      loadNativeIcon={loadNativeIcons}
+                      priority={selected ? 0 : Math.abs(i - resultWindow.window.viewportCenter) + 1}
+                    />
                     <span className="sr-name-text">
                       {/* segments are purely positional; index keys are correct here */}
                       {highlightName(r.name, query).map((seg, si) =>
@@ -127,10 +146,12 @@ export default function NameResultsSection({
                       <Icon icon={copiedPath === r.full_path ? "tick" : "clipboard"} size={14} />
                     </Button>
                   </div>
-                </motion.div>
+                </div>
               );
             })}
-          </AnimatePresence>
+          {resultWindow.afterHeight > 0 && (
+            <div className="sfp-virtual-spacer" style={{ height: resultWindow.afterHeight }} aria-hidden="true" />
+          )}
         </div>
       )}
     </div>

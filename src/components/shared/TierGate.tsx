@@ -24,7 +24,8 @@
 // button), pass it via the `fallback` prop.
 
 import { type ReactNode } from "react";
-import { Button, Icon } from "@/components/ui/bp";
+import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
 import type { Tier } from "../../types/toggles";
 import useEntitlements from "../../hooks/useEntitlements";
 
@@ -61,8 +62,8 @@ export default function TierGate({ tier, children, featureLabel, fallback }: Tie
 
   return (
     <Button
-      minimal
-      small
+      variant="ghost"
+      size="sm"
       onClick={openLicenseGate}
       className="tier-gate-locked"
       style={{

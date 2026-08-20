@@ -25,7 +25,10 @@
 // dialog so the experience is identical either way.
 
 import { useEffect, useState } from "react";
-import { Button, Dialog, DialogBody, DialogFooter, Icon, Spinner } from "@/components/ui/bp";
+import { CompatButton as Button } from "@/components/ui/compat-button";
+import { CompatDialog as Dialog, CompatDialogBody as DialogBody, CompatDialogFooter as DialogFooter } from "@/components/ui/compat-dialog";
+import { Icon } from "@/components/ui/icon";
+import { Spinner } from "@/components/ui/spinner";
 import { useUpdateFlow } from "../hooks/useUpdateFlow";
 import { renderProInstallStep } from "./shared/ProInstallStepBody";
 

@@ -7,7 +7,7 @@
 // (cleanup/flows/vault) via modulesForPersona — other modules the user set
 // are left alone. Gated behind a confirm dialog since it changes state.
 
-import { Icon } from "@/components/ui/bp";
+import { Icon } from "@/components/ui/icon";
 import {
   AlertDialog,
   AlertDialogAction,

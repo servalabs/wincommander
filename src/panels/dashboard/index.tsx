@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppState } from "../../context/AppContext";
+import { useLiveMetrics } from "../../context/LiveMetricsContext";
 import useVisibility from "../../hooks/useVisibility";
 import { executeBackendCommand, useBackend } from "../../hooks/useBackend";
 import { runOperation } from "../../context/OperationContext";
@@ -35,7 +36,7 @@ import { getToggleDrift } from "../../lib/toggleDrift";
 import { isModuleEnabled } from "../../types/modules";
 import { getDisplayBranding } from "../../lib/branding";
 import { useTaskStatus } from "../../context/TaskStatusContext";
-import { Icon } from "../../components/ui/bp";
+import { Icon } from "../../components/ui/icon";
 import { showWarning } from "../../utils/toast";
 // Motion SSOT — never hardcode durations or curves directly in JSX.
 import { DURATION_S, EASE } from "../../components/shared/motion";
@@ -84,6 +85,25 @@ export default function DashboardPanel() {
     patchAppSettings,
     dependencyStatus,
   } = useAppState();
+  const { metrics: liveMetrics, status: liveMetricsStatus } = useLiveMetrics();
+  const dashboardSystemInfo = useMemo(() => {
+    if (!liveMetrics) return systemInfo;
+    const staticInfo = systemInfo ?? {
+      osName: '', osVersion: '', buildNumber: '', hostname: '',
+      isAdmin: false, cpu: '', cpuUsage: 0, cpuTemp: 0, ram: `${liveMetrics.ramTotalGb} GB`,
+      ramUsage: 0, gpu: '', disks: [], uptime: { days: 0, hours: 0, minutes: 0 },
+    };
+    const healthByDisk = new Map(staticInfo.disks.map((disk) => [disk.id, disk.healthPercent]));
+    return {
+      ...staticInfo,
+      ...liveMetrics,
+      cpuTemp: liveMetrics.cpuTemp ?? staticInfo.cpuTemp,
+      disks: liveMetrics.disks.map((disk) => ({
+        ...disk,
+        healthPercent: healthByDisk.get(disk.id) ?? null,
+      })),
+    };
+  }, [systemInfo, liveMetrics]);
 
   const {
     toggleContextMenu,
@@ -937,7 +957,8 @@ export default function DashboardPanel() {
           <div data-tour="dashboard-hardware-specs">
             <HardwareSpecsCard
               isLoading={isLoading}
-              systemInfo={systemInfo}
+              systemInfo={dashboardSystemInfo}
+              metricsStatus={liveMetricsStatus}
               expanded={isCardOpen("system")}
               onToggle={() => toggleCard("system")}
             />
@@ -945,7 +966,7 @@ export default function DashboardPanel() {
           {isExpert && (
             <StorageOverviewCard
               isLoading={isLoading}
-              systemInfo={systemInfo}
+              systemInfo={dashboardSystemInfo}
               expanded={isCardOpen("storage")}
               onToggle={() => toggleCard("storage")}
             />

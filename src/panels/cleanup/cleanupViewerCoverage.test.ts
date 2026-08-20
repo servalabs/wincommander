@@ -22,7 +22,10 @@ function source(path: string) {
 
 describe("complete cleanup forensic viewer coverage", () => {
   test("keeps every scannable artifact connected to a real backend reader", async () => {
-    const backendSource = source("hooks/useBackend.ts");
+    const backendSource = [
+      source("hooks/useBackend.ts"),
+      source("lib/searchMaintenanceClient.ts"),
+    ].join("\n");
     const scannable = ALL_CATEGORIES.filter((category) => category.getDataKey);
 
     expect(ALL_CATEGORIES).toHaveLength(84);

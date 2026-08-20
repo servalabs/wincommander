@@ -252,7 +252,7 @@ describe("redesign surface copy guardrails", () => {
     expect(cleanupGrid).toContain("const cleanCardPacks = packCleanCards(");
     expect(cleanupGrid).toContain("cleanCardPacks.map((pack, index) => (");
     expect(cleanupGrid).toContain('className="grid h-[168px] grid-cols-1 grid-rows-4 gap-1"');
-    expect(cleanupGrid).toContain('className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"');
+    expect(cleanupGrid).toContain('className="cleanup-category-grid"');
     expect(cleanupGrid).not.toContain("cleanCardsOpen");
   });
 

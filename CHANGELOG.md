@@ -82,6 +82,35 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Changed
 
+- **Desktop search now has bounded render and native-icon work** (2026-08-20).
+  Filename results render through a 48-row window; content results remain
+  backend-limited to 50, keeping the covered 2,000-result fixture below the
+  100-row DOM budget. Native file-icon work is shared, prioritizes selected and
+  nearby rows, allows at most eight active requests, and discards obsolete
+  queued work. Per-row entrance animation was removed while keyboard selection,
+  screen-reader semantics, and reduced-motion behavior remain covered. No live
+  latency or device measurement is claimed.
+
+- **Startup, live dashboard data, and occasional shell controls are now more
+  isolated** (2026-08-20). Persisted settings hydrate before background probes;
+  the shell exposes cached, refreshing, ready, and stale states rather than
+  blocking on those probes. Two-second CPU/RAM/disk samples and motion
+  preference have narrow providers, so their updates do not redraw the global
+  application state. The RDP quick action and metadata-scrubber dialog load on
+  demand. This is structural work, not a measured startup-latency result.
+
+- **The first typed seams now sit beside the legacy backend facade**
+  (2026-08-20). Search-maintenance commands moved into a dependency-free typed
+  client, and cleanup-category adapters centralize typed preview handling.
+  `useBackend` remains the compatibility facade and its wider extraction, along
+  with existing oversized-file debt, remains open.
+
+- **Changed-file quality controls now run in CI** (2026-08-20). `lint:quality`
+  checks added TypeScript/Rust/PowerShell/CSS lines for new explicit `any` and
+  flags excessive new source-file growth while allowing pre-existing debt to be
+  addressed incrementally. It complements existing lint/type checks; it does
+  not certify a full repository cleanup.
+
 - Corrected stale Fleet/monitoring documentation that described retired
   consent handlers and a nonexistent 403 disclosure-version gate, and marked
   the now-complete cross-device content-search path as shipped.
@@ -120,6 +149,10 @@ commit timestamps). Shipped capabilities (not fixes) live in
   the panel had advertised installing for a long time without ever reading.
 
 ### Removed
+
+- **Unused frontend dependencies** (2026-08-20). `@xyflow/react` and
+  `thinking-orbs` had no source imports and were removed from `package.json` and
+  the Bun lockfile.
 
 - **ReFS encrypted-volume creation option** (2026-08-12). The VeraCrypt
   creation wizard now offers NTFS, FAT32, and exFAT only; ReFS availability is

@@ -1,5 +1,6 @@
 import { Component, ErrorInfo, ReactNode } from "react";
-import { NonIdealState, Button } from "@/components/ui/bp";
+import { CompatButton as Button } from "@/components/ui/compat-button";
+import { EmptyState as NonIdealState } from "@/components/ui/empty-state";
 import { logRecord } from "../lib/logger";
 import { isStalePanelLoadError } from "../lib/panelLoading";
 

@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Switch } from "./switch";
 import { AppProvider } from "../../context/AppContext";
 import { AuthModeProvider } from "../../context/AuthModeContext";
+import { LiveMetricsProvider } from "../../context/LiveMetricsContext";
+import { MotionPreferenceProvider } from "../../hooks/useMotionPreference";
 
 // Switch reads useMotionPreference(), which in turn reads useAppState() (and
 // useAuthMode()) — so a static render needs the real provider stack, mirroring
@@ -14,7 +16,11 @@ function renderWithProviders(ui: ReactElement): string {
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>
       <AuthModeProvider>
-        <AppProvider>{ui}</AppProvider>
+        <LiveMetricsProvider>
+          <AppProvider>
+            <MotionPreferenceProvider>{ui}</MotionPreferenceProvider>
+          </AppProvider>
+        </LiveMetricsProvider>
       </AuthModeProvider>
     </QueryClientProvider>
   );

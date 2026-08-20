@@ -1,4 +1,6 @@
-import { Button, Dialog, Icon } from "@/components/ui/bp";
+import { CompatButton as Button } from "@/components/ui/compat-button";
+import { CompatDialog as Dialog } from "@/components/ui/compat-dialog";
+import { Icon } from "@/components/ui/icon";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { useEffect, useRef, useState } from "react";

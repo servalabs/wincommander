@@ -53,6 +53,7 @@ export default function SearchFilesPanel() {
   // Focus never leaves the input — rows are aria options, not tab stops.
   const [selected, setSelected] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(null);
   const tabFilter = useMemo(
     () => getTabFilterSuggestion(search.query, search.searchTypes, search.sizeFilter, search.dateFilter),
     [search.query, search.searchTypes, search.sizeFilter, search.dateFilter],
@@ -312,6 +313,7 @@ export default function SearchFilesPanel() {
       {!showEmptyState && (showNameSection || showContentSection) && (
         <div className="sfp-results-card">
           <div
+            ref={setScrollContainer}
             className="sfp-results-scroll"
             id="sfp-results-listbox"
             role="listbox"
@@ -330,6 +332,8 @@ export default function SearchFilesPanel() {
                 onOpenFolder={openFolder}
                 onCopyPath={copyPath}
                 copiedPath={copiedPath}
+                scrollContainer={scrollContainer}
+                loadNativeIcons={!search.isSearching && search.resultsQuery === search.query}
               />
             )}
             {showContentSection && (
@@ -363,6 +367,7 @@ export default function SearchFilesPanel() {
                 onOpenFolder={openFolder}
                 onCopyPath={copyPath}
                 copiedPath={copiedPath}
+                loadNativeIcons={!content.contentLoading && content.contentQuery === search.query}
               />
             )}
           </div>

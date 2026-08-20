@@ -8,6 +8,7 @@ import { useMetricAlerts } from "../../hooks/useMetricAlerts";
 interface HardwareSpecsCardProps {
     systemInfo: SystemInfo | null;
     isLoading: boolean;
+    metricsStatus?: "loading" | "live" | "stale";
     expanded?: boolean;
     onToggle?: () => void;
 }
@@ -53,7 +54,7 @@ function isValidCpuTemp(temp: number | null | undefined): temp is number {
  *   beneath each metric (model/temp, GB usage, battery health) — both
  *   the visual and the context in one tight block per metric.
  */
-export default function HardwareSpecsCard({ systemInfo, isLoading, expanded = true, onToggle }: HardwareSpecsCardProps) {
+export default function HardwareSpecsCard({ systemInfo, isLoading, metricsStatus = "loading", expanded = true, onToggle }: HardwareSpecsCardProps) {
     const { getBatteryHealth } = useBackend();
     const { config: alerts } = useMetricAlerts();
     const cpuAlertOn = !!alerts?.cpu.enabled;
@@ -111,6 +112,13 @@ export default function HardwareSpecsCard({ systemInfo, isLoading, expanded = tr
     return (
         <div className="hardware-specs-card">
             <div className="card-header hw-card-header">
+                <span className="sr-only" role="status">
+                    {metricsStatus === "loading"
+                        ? "System metrics are loading."
+                        : metricsStatus === "stale"
+                            ? "System metrics are showing the last available reading."
+                            : "System metrics are current."}
+                </span>
                 <button
                     type="button"
                     className="hardware-card-toggle"

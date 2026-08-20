@@ -72,6 +72,8 @@ interface AppState {
     };
 
     startupComplete: boolean;
+    /** Whether startup surfaces cached settings, a fresh probe, or stale data. */
+    startupDataState: 'loading' | 'cached' | 'refreshing' | 'ready' | 'stale';
 
     // Actions
     refreshAll: () => Promise<void>;
@@ -97,9 +99,6 @@ interface AppState {
     runAppInventoryScan: (silent?: boolean) => Promise<void>;
     /** Refresh dependency status (Get-DependencyStatus). Called on startup. */
     refreshDependencies: (silent?: boolean) => Promise<void>;
-    /** Rust-native live metrics (CPU/RAM/Disk) — replaces PowerShell Get-SystemInfo for volatile data.
-     * Costs <1ms per call via Tauri IPC, zero process spawns. */
-    refreshLiveMetrics: () => Promise<void>;
     /** Refresh SMART health for visible logical drives using smartctl CLI. */
     refreshDriveHealth: () => Promise<void>;
 }
@@ -210,6 +209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const [startupComplete, setStartupComplete] = useState(false);
+    const [startupDataState, setStartupDataState] = useState<'loading' | 'cached' | 'refreshing' | 'ready' | 'stale'>('loading');
 
     const normalizeModulesConfig = useCallback((
         modules: ModuleConfig | undefined,
@@ -264,85 +264,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (!silent) setLoading(prev => ({ ...prev, system: false }));
         }
     }, [getSystemInfo, mergeDiskHealth, normalizeDriveLetter]);
-
-    // ────────────────────────────────────────────────────────────────────
-    // refreshLiveMetrics — Rust-native CPU / RAM / Disk via sysinfo crate
-    // ────────────────────────────────────────────────────────────────────
-    // KT: Replaces the old 3-second PowerShell Get-SystemInfo poll that was
-    // spawning a new powershell.exe process every 3 seconds (the #1 CPU offender).
-    // This Rust IPC call costs <1ms and reads kernel counters directly.
-    // Only updates volatile fields (cpuUsage, ramUsage, disks) — static hardware
-    // info (hostname, cpu model, gpu, etc.) is still populated by initializeApp().
-    // ────────────────────────────────────────────────────────────────────
-    const refreshLiveMetrics = useCallback(async () => {
-        try {
-            const metrics = await invoke<{
-                cpuUsage: number;
-                cpuTemp: number | null;
-                ramUsagePercent: number;
-                ramUsedGb: number;
-                ramTotalGb: number;
-                disks: Array<{ name: string; totalGb: number; freeGb: number }>;
-            }>('get_live_metrics');
-
-            const round1 = (n: number) => Math.round(n * 10) / 10;
-
-            // Filter out virtual/zero-byte drives (Docker loop, WSL, etc.)
-            const validDisks = metrics.disks.filter(d => d.totalGb > 0.1);
-
-            const mappedDisks = validDisks.map(d => {
-                const totalGb = round1(d.totalGb);
-                const freeGb = round1(d.freeGb);
-                const usedGb = round1(totalGb - freeGb);
-                const percent = totalGb > 0 ? Math.round((usedGb / totalGb) * 100) : 0;
-                return { id: d.name, label: d.name, totalGb, usedGb, freeGb, percent };
-            });
-
-            setSystemInfo(prev => {
-                const healthByDrive: Record<string, number | null> = {};
-                const disksArray = Array.isArray(prev?.disks) ? prev.disks : (prev?.disks ? [prev.disks] : []);
-                disksArray.forEach((disk: any) => {
-                    const letter = normalizeDriveLetter(disk.label) ?? normalizeDriveLetter(disk.id);
-                    if (!letter) return;
-                    healthByDrive[letter] = disk.healthPercent ?? null;
-                });
-
-                const disksWithHealth = mergeDiskHealth(mappedDisks, healthByDrive);
-
-                if (!prev) {
-                    // systemInfo not yet populated by PS probe — create a minimal stub
-                    // from Rust data so CPU/RAM/Disk show immediately.
-                    // Static fields (cpu model, hostname, gpu, etc.) will fill in when
-                    // initializeApp() completes (2s startup delay).
-                    return {
-                        osName: '', osVersion: '', buildNumber: '', hostname: '',
-                        isAdmin: false, cpu: '', cpuTemp: 0,
-                        ram: `${round1(metrics.ramTotalGb)} GB`,
-                        gpu: '',
-                        cpuUsage: Math.round(metrics.cpuUsage),
-                        ramUsage: Math.round(metrics.ramUsagePercent),
-                        ramUsedGb: round1(metrics.ramUsedGb),
-                        ramTotalGb: round1(metrics.ramTotalGb),
-                        disks: disksWithHealth,
-                        uptime: { days: 0, hours: 0, minutes: 0 },
-                    };
-                }
-                return {
-                    ...prev,
-                    cpuUsage: Math.round(metrics.cpuUsage),
-                    ...(metrics.cpuTemp != null && metrics.cpuTemp > 0
-                        ? { cpuTemp: Math.round(metrics.cpuTemp) }
-                        : {}),
-                    ramUsage: Math.round(metrics.ramUsagePercent),
-                    ramUsedGb: round1(metrics.ramUsedGb),
-                    ramTotalGb: round1(metrics.ramTotalGb),
-                    disks: disksWithHealth,
-                };
-            });
-        } catch {
-            // Rust sysinfo failed — non-critical, dashboard shows stale data
-        }
-    }, [mergeDiskHealth, normalizeDriveLetter]);
 
     const refreshDriveHealth = useCallback(async () => {
         try {
@@ -675,9 +596,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }));
     }, []);
 
-    const initializeApp = useCallback(async () => {
+    const initializeApp = useCallback(async (): Promise<boolean> => {
         // Consolidated startup call - fetches System, Hardening, Privacy, and Essential Apps in one go
-        setLoading(prev => ({ ...prev, system: true, hardening: true, privacy: true, apps: true }));
+        // A warm settings cache is usable. Keep it on screen while probes refresh
+        // rather than replacing it with skeletons a second time.
+        if (!appSettingsRef.current) {
+            setLoading(prev => ({ ...prev, system: true, hardening: true, privacy: true, apps: true }));
+        } else {
+            setLoading(prev => ({ ...prev, apps: true }));
+        }
         try {
             const res = await getStartupStatus();
             if (res.success && res.data) {
@@ -702,6 +629,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 // Individual React state vars are gone — UI reads appSettings directly.
                 await persistProbeToSettings(res.data);
             }
+            return res.success && Boolean(res.data);
+        } catch {
+            return false;
         } finally {
             setLoading(prev => ({ ...prev, system: false, hardening: false, privacy: false, apps: false }));
         }
@@ -994,53 +924,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
 
             setAppSettings(settings);
+            appSettingsRef.current = settings;
             seedFromCachedSettings(settings);
+            setStartupDataState('cached');
 
-            // Phase 2: System probe — populates ideal+current on first run (blocking),
-            // refreshes current only on subsequent runs (fire-and-forget, non-blocking).
+            // Phase 2: System probe runs after the cache hydration so startup is
+            // responsive on both first and subsequent launches.
             // Guard: skip if already running (React strict mode / dep-change re-fire)
             if (!probeRanRef.current) {
                 probeRanRef.current = true;
 
                 if (!settings.app.firstRunComplete) {
                     // First launch: the Dashboard and the auto-started first-run tour
-                    // both need ideal.*/current.* populated before they render.
-                    let probeRes: any = null;
-                    try {
-                        probeRes = await invoke<any>('run_backend_script', {
-                            command: 'Get-WCSystemProbe',
-                            params: {},
-                        });
-                    } catch {
-                        // Probe is best-effort
-                    }
-
-                    if (probeRes && typeof probeRes === 'object') {
-                        // First run: probe populates BOTH ideal and current
-                        const updated = await invoke<AppSettings>('patch_settings_cmd', {
-                            patch: { ideal: probeRes, current: probeRes },
-                        });
-                        settings = updated;
-                        setAppSettings(updated);
-                        seedFromCachedSettings(updated);
-
-                        // Overlay migration data on ideal (catches branding, etc.)
+                    // data asynchronously. The shell is safe with its explicit
+                    // loading state while this slow PowerShell work completes.
+                    void (async () => {
+                        let probeRes: unknown = null;
                         try {
-                            const migrationRes = await invoke<any>('run_backend_script', {
-                                command: 'Get-WCMigrationData',
+                            probeRes = await invoke<unknown>('run_backend_script', {
+                                command: 'Get-WCSystemProbe',
                                 params: {},
                             });
-                            if (migrationRes && typeof migrationRes === 'object') {
-                                const merged = await invoke<AppSettings>('patch_settings_cmd', {
-                                    patch: { ideal: migrationRes },
-                                });
-                                setAppSettings(merged);
-                                seedFromCachedSettings(merged);
-                            }
                         } catch {
-                            // Migration is best-effort
+                            return;
                         }
-                    }
+
+                        if (probeRes && typeof probeRes === 'object') {
+                            // First run: probe populates BOTH ideal and current.
+                            const updated = await invoke<AppSettings>('patch_settings_cmd', {
+                                patch: { ideal: probeRes, current: probeRes },
+                            });
+                            setAppSettings(updated);
+                            appSettingsRef.current = updated;
+                            seedFromCachedSettings(updated);
+
+                            // Overlay migration data on ideal (catches branding, etc.)
+                            try {
+                                const migrationRes = await invoke<unknown>('run_backend_script', {
+                                    command: 'Get-WCMigrationData',
+                                    params: {},
+                                });
+                                if (migrationRes && typeof migrationRes === 'object') {
+                                    const merged = await invoke<AppSettings>('patch_settings_cmd', {
+                                        patch: { ideal: migrationRes },
+                                    });
+                                    setAppSettings(merged);
+                                    appSettingsRef.current = merged;
+                                    seedFromCachedSettings(merged);
+                                }
+                            } catch {
+                                // Migration is best-effort
+                            }
+                        }
+                    })();
                 } else {
                     // Subsequent runs: fire-and-forget — UI renders from cached current.* immediately
                     void invoke<any>('run_backend_script', {
@@ -1053,6 +989,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                                     probe: probeRes,
                                 });
                                 setAppSettings(updated);
+                                appSettingsRef.current = updated;
                                 seedFromCachedSettings(updated);
                                 // Mirror into React Query so useAdoptCurrentState
                                 // fires immediately after the probe completes.
@@ -1064,6 +1001,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
         } catch {
             // Settings engine not available
+            setStartupDataState('stale');
         }
     }, [seedFromCachedSettings, normalizeModulesConfig, queryClient]);
 
@@ -1172,12 +1110,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             await initSettings();
             if (cancelled) return;
 
-            emitProgress(45, 'loading system data');
-            await initializeApp();
-            if (cancelled) return;
-
-            emitProgress(95, 'arming defences');
+            // Settings are the immediate, persisted source of truth. Let the
+            // user enter the shell now; slow PowerShell/native probes refresh
+            // it progressively in the background instead of holding splash.
+            emitProgress(70, 'showing saved settings');
             setStartupComplete(true);
+            setStartupDataState('refreshing');
+            void initializeApp().then((fresh) => {
+                if (!cancelled) setStartupDataState(fresh ? 'ready' : 'stale');
+            });
+
+            emitProgress(95, 'refreshing system data');
 
             const dependencyStep = getStartupStaggerStep("dependencies");
             scheduleAfter(dependencyStep.delayMs, () => {
@@ -1272,6 +1215,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         forceRefreshDeps,
         loading,
         startupComplete,
+        startupDataState,
         refreshAll,
         refreshSystem,
         refreshHardening,
@@ -1285,7 +1229,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshProductivity,
         runAppInventoryScan,
         refreshDependencies,
-        refreshLiveMetrics,
         refreshDriveHealth,
     }), [
         systemInfo,
@@ -1307,6 +1250,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         forceRefreshDeps,
         loading,
         startupComplete,
+        startupDataState,
         refreshAll,
         refreshSystem,
         refreshHardening,
@@ -1320,7 +1264,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshProductivity,
         runAppInventoryScan,
         refreshDependencies,
-        refreshLiveMetrics,
         refreshDriveHealth,
     ]);
 

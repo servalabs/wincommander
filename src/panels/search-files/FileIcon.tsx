@@ -26,11 +26,23 @@ interface FileIconProps {
   isDir: boolean;
   /** Icon already delivered with the search result, if any. */
   iconData?: string | null;
+  /** Stale search rows keep their fallback until their current query lands. */
+  loadNativeIcon?: boolean;
+  /** Lower values run first inside the shared native-icon queue. */
+  priority?: number;
   size?: number;
 }
 
-export default function FileIcon({ path, name, isDir, iconData: initial, size = 16 }: FileIconProps) {
-  const iconData = useFileIconData(path, isDir, initial);
+export default function FileIcon({
+  path,
+  name,
+  isDir,
+  iconData: initial,
+  loadNativeIcon = true,
+  priority = 0,
+  size = 16,
+}: FileIconProps) {
+  const iconData = useFileIconData(path, isDir, initial, loadNativeIcon, priority);
   const fallback = getFallbackFileIcon(name, isDir);
 
   if (iconData) return <img src={iconData} alt="" className="sr-native-icon" style={{ width: size, height: size }} />;

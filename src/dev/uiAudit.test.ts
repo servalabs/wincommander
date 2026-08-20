@@ -77,14 +77,18 @@ describe("UI audit fixture", () => {
   });
 
   test("gives every scannable cleanup category a focused rendered fixture", () => {
-    const backendUrl = new URL("../hooks/useBackend.ts", import.meta.url);
-    const backendPath = decodeURIComponent(backendUrl.pathname).replace(/^\/([A-Za-z]:)/, "$1");
-    const backendSource = readFileSync(backendPath, "utf8");
-    const backendLines = backendSource.split(/\r?\n/);
-
+    const backendUrls = [
+      new URL("../hooks/useBackend.ts", import.meta.url),
+      new URL("../lib/searchMaintenanceClient.ts", import.meta.url),
+    ];
+    const backendSource = backendUrls
+      .map((url) => readFileSync(decodeURIComponent(url.pathname).replace(/^\/([A-Za-z]:)/, "$1"), "utf8"))
+      .join("\n");
     for (const category of ALL_CATEGORIES.filter((entry) => entry.getDataKey)) {
-      const mappingLine = backendLines.find((line) => line.includes(`${category.getDataKey}:`));
-      const command = mappingLine?.match(/"(Get-[^"]+)"/)?.[1];
+      const mappingIndex = backendSource.indexOf(`${category.getDataKey}:`);
+      const command = mappingIndex >= 0
+        ? backendSource.slice(mappingIndex, mappingIndex + 320).match(/"(Get-[^"]+)"/)?.[1]
+        : undefined;
       expect(command).toBeTruthy();
 
       const view = buildTraceView(uiAuditBackendResponse(command!), []);

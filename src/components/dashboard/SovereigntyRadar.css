@@ -436,3 +436,17 @@ html.wc-no-motion .sov-radar__svg .ring.spin {
     animation: none !important;
     opacity: 0;
 }
+
+/* Keep the radar's current visible frame but stop its compositor loops while
+   the app window is backgrounded. The visibility marker is installed in
+   index.html before React mounts, so this has no state-update cost. */
+html[data-page-hidden] .sov-radar__sweep,
+html[data-page-hidden] .sov-radar__svg .ring.spin,
+html[data-page-hidden] .sov-radar__node,
+html[data-page-hidden] .sov-radar__node .ping {
+    animation-play-state: paused !important;
+}
+
+html[data-page-hidden] .sov-radar__sweep-wrap {
+    will-change: auto;
+}

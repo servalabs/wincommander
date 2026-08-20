@@ -1,6 +1,72 @@
 // Category definitions for the cleanup inline card grid.
 // Each entry defines how to fetch, preview, and clear a cleanup trace category.
 
+export type CleanupPreview = { count: number; items: string[] };
+type PreviewRecord = Record<string, unknown>;
+type PreviewAdapter = (data: unknown) => CleanupPreview;
+// The remaining bespoke adapters are migrated incrementally. Their backend
+// payloads have not yet been published as stable IPC types; do not pretend an
+// unverified shape is safe. quality-guard: allow-explicit-any — legacy adapter boundary
+type LegacyPreviewInput = Record<string, any>;
+/** Public adapters accept an unknown response; legacy callbacks are narrowed
+ * at the one documented compatibility boundary until their IPC contracts are
+ * published. */
+type LegacyCleanupCategory = Omit<CleanupCategory, 'extractPreview'> & {
+  extractPreview: (data: LegacyPreviewInput) => CleanupPreview;
+};
+
+function exposeCleanupCategories(categories: LegacyCleanupCategory[]): CleanupCategory[] {
+  return categories.map(({ extractPreview, ...category }) => ({
+    ...category,
+    extractPreview: (data: unknown) => extractPreview(data as LegacyPreviewInput),
+  }));
+}
+
+const isPreviewRecord = (value: unknown): value is PreviewRecord =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Decode only the small, display-safe part of an untrusted backend response.
+ * This keeps category cards from depending on the much larger IPC response
+ * shapes, while ensuring malformed rows degrade to the same placeholders. */
+function previewRecords(data: unknown, ...keys: string[]): PreviewRecord[] {
+  if (!isPreviewRecord(data)) return [];
+  for (const key of keys) {
+    const candidate = data[key];
+    if (Array.isArray(candidate)) return candidate.filter(isPreviewRecord);
+  }
+  return [];
+}
+
+function previewCount(data: unknown, fallback: number): number {
+  if (!isPreviewRecord(data)) return fallback;
+  return typeof data.total === 'number' ? data.total : fallback;
+}
+
+function previewLabel(row: PreviewRecord, keys: string[], fallback = '—'): string {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === 'string' && value) return value;
+  }
+  return fallback;
+}
+
+/** Common `files[]` cleaner response: total plus a name for each artifact. */
+const fileNamePreview: PreviewAdapter = (data) => {
+  const files = previewRecords(data, 'files');
+  return { count: previewCount(data, 0), items: files.map((file) => previewLabel(file, ['name'])) };
+};
+
+/** Some older reader commands return `entries[]` instead of `files[]`. */
+const fileOrEntryNamePreview: PreviewAdapter = (data) => {
+  const files = previewRecords(data, 'files', 'entries');
+  return { count: previewCount(data, 0), items: files.map((file) => previewLabel(file, ['name'])) };
+};
+
+const fileOrEntryPathPreview: PreviewAdapter = (data) => {
+  const files = previewRecords(data, 'files', 'entries');
+  return { count: previewCount(data, 0), items: files.map((file) => previewLabel(file, ['name', 'path'])) };
+};
+
 export interface CleanupCategory {
   id: string;
   label: string;
@@ -15,7 +81,7 @@ export interface CleanupCategory {
   clearDataKey: string;
   /** Extract count + normalized item labels from raw backend response.
    * Cards slice this list for preview; TraceDetailDialog shows the full list. */
-  extractPreview: (data: any) => { count: number; items: string[] };
+  extractPreview: PreviewAdapter;
   /** If true, this is a "run" action with no viewable data */
   actionOnly?: boolean;
   /** Confirm message before clearing (null = no confirm) */
@@ -82,7 +148,7 @@ export const CLEANUP_USABILITY_TIERS: ReadonlyArray<{
 
 // ── Standard Trace Auditing Categories ────────────────────────────────
 
-export const STANDARD_CATEGORIES: CleanupCategory[] = [
+const legacyStandardCategories: LegacyCleanupCategory[] = [
   {
     id: 'shellBags',
     label: 'ShellBags',
@@ -492,9 +558,11 @@ export const STANDARD_CATEGORIES: CleanupCategory[] = [
   },
 ];
 
+export const STANDARD_CATEGORIES = exposeCleanupCategories(legacyStandardCategories);
+
 // ── Deep Cleanup Categories ───────────────────────────────────────────
 
-export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
+const legacyDeepDfirCategories: LegacyCleanupCategory[] = [
   {
     id: 'amcache',
     label: 'App Launch Cache',
@@ -545,10 +613,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     scopeAware: true,
     getDataKey: 'getNotepadStateFiles',
     clearDataKey: 'clearNotepadState',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'pcaDatabase',
@@ -562,10 +627,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'PcaSvc recreates compatibility records as programs are launched.',
     getDataKey: 'getPCAInfo',
     clearDataKey: 'clearPCADatabase',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'crashDumps',
@@ -612,10 +674,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     systemWide: true,
     getDataKey: 'getPrintSpoolerInfo',
     clearDataKey: 'clearPrintSpooler',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'srumData',
@@ -657,10 +716,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     scopeAware: true,
     getDataKey: 'getSQLiteWALList',
     clearDataKey: 'invokeSQLiteWALKiller',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'recallDb',
@@ -691,10 +747,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'Windows and Edge rebuild this store as you browse.',
     getDataKey: 'getWebCacheInfo',
     clearDataKey: 'clearWebCache',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'thumbnailDb',
@@ -708,10 +761,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'Explorer rebuilds thumbnails and icons as you browse folders.',
     getDataKey: 'getThumbnailCacheInfo',
     clearDataKey: 'clearThumbnailCache',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileOrEntryNamePreview,
   },
   {
     id: 'notificationDb',
@@ -725,10 +775,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'New notifications repopulate the store immediately.',
     getDataKey: 'getNotificationDbInfo',
     clearDataKey: 'clearNotificationDb',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileOrEntryNamePreview,
   },
   {
     id: 'branchCache',
@@ -742,10 +789,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'Repopulates when BranchCache-enabled downloads occur.',
     getDataKey: 'getBranchCacheInfo',
     clearDataKey: 'clearBranchCache',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileOrEntryNamePreview,
   },
   {
     id: 'eventTranscript',
@@ -759,10 +803,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'The diagnostic data / telemetry service repopulates EventTranscript.db continuously while diagnostic data collection is enabled.',
     getDataKey: 'getEventTranscriptInfo',
     clearDataKey: 'clearEventTranscript',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'activitiesTimeline',
@@ -776,10 +817,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'The Windows Timeline / Activity Feed service repopulates ActivitiesCache.db continuously while enabled.',
     getDataKey: 'getActivitiesTimelineInfo',
     clearDataKey: 'clearActivitiesTimeline',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'rdpBitmapCache',
@@ -793,10 +831,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'Windows rebuilds the bitmap cache from scratch the next time an RDP session connects.',
     getDataKey: 'getRdpBitmapCacheInfo',
     clearDataKey: 'clearRdpBitmapCache',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'servicingLogs',
@@ -810,10 +845,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'CBS/DISM logs are rewritten on every subsequent servicing operation (Windows Update, DISM, component install).',
     getDataKey: 'getServicingLogsInfo',
     clearDataKey: 'clearServicingLogs',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'deviceInstallLogs',
@@ -827,10 +859,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'setupapi logs are recreated the next time a PnP or USB device is installed or reconnected.',
     getDataKey: 'getDeviceInstallLogsInfo',
     clearDataKey: 'clearDeviceInstallLogs',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'usageTraceLogs',
@@ -844,10 +873,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'SleepStudy/WDI/WMI ETW traces are regenerated automatically by the diagnostic tracing services on their normal schedule.',
     getDataKey: 'getUsageTraceLogsInfo',
     clearDataKey: 'clearUsageTraceLogs',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'defenderHistory',
@@ -861,10 +887,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'Microsoft Defender writes new entries to Protection History on every scheduled or manual scan.',
     getDataKey: 'getDefenderHistoryInfo',
     clearDataKey: 'clearDefenderHistory',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'wslData',
@@ -879,10 +902,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getWSLDataInfo',
     clearDataKey: 'clearWSLData',
     confirmMessage: 'Clear WSL data? This can remove Linux distribution storage and local files. WSL distributions may need to be restored or recreated. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'dockerDesktopData',
@@ -897,10 +917,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getDockerDesktopDataInfo',
     clearDataKey: 'clearDockerDesktopData',
     confirmMessage: 'Clear Docker Desktop data? This can remove local images, containers, volumes, logs, and cache files. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'virtualMachineArtifacts',
@@ -915,10 +932,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getVirtualMachineArtifactsInfo',
     clearDataKey: 'clearVirtualMachineArtifacts',
     confirmMessage: 'Clear virtual machine artifacts? This can remove VM snapshots, logs, and local configuration files. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'developerCaches',
@@ -933,10 +947,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getDeveloperCachesInfo',
     clearDataKey: 'clearDeveloperCaches',
     confirmMessage: 'Clear developer tool caches? This can remove package caches and local credential or configuration files used by developer tools. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'credentialManager',
@@ -951,10 +962,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getCredentialManagerInfo',
     clearDataKey: 'clearCredentialManager',
     confirmMessage: 'Clear saved credentials? This removes stored sign-in credentials for Windows, network resources, and applications. You may need to sign in again. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'networkWizardHistory',
@@ -969,10 +977,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getNetworkWizardHistoryInfo',
     clearDataKey: 'clearNetworkWizardHistory',
     confirmMessage: 'Clear Network Connection Wizard history? This removes recorded network setup entries. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'werHistory',
@@ -987,10 +992,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getWERHistoryInfo',
     clearDataKey: 'clearWERHistory',
     confirmMessage: 'Clear Windows Error Reporting history? This removes saved consent and exclusion entries. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'inactiveUserProtectionMetadata',
@@ -1005,10 +1007,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getInactiveUserProtectionMetadataInfo',
     clearDataKey: 'clearInactiveUserProtectionMetadata',
     confirmMessage: 'Clear protection metadata for OTHER/INACTIVE user profiles only? Deletion permanently breaks decryption for data protected by those profiles. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'stickyNotes',
@@ -1023,10 +1022,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getStickyNotesInfo',
     clearDataKey: 'clearStickyNotes',
     confirmMessage: 'Clear Sticky Notes data? This deletes the local note database and unsynced notes may be lost. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'oneDriveMetadata',
@@ -1041,10 +1037,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getOneDriveMetadataInfo',
     clearDataKey: 'clearOneDriveMetadata',
     confirmMessage: 'Clear OneDrive sync metadata? This removes local sync state and may require OneDrive to rebuild or sign in again. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'spotlightCache',
@@ -1059,10 +1052,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getSpotlightCacheInfo',
     clearDataKey: 'clearSpotlightCache',
     confirmMessage: 'Clear the Windows Spotlight cache? This removes cached lock-screen images. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'fontCache',
@@ -1077,10 +1067,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getFontCacheInfo',
     clearDataKey: 'clearFontCache',
     confirmMessage: 'Clear the font cache? This removes Windows and user font cache files; fonts may rebuild and some applications may need to restart. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'legacyIconCache',
@@ -1095,10 +1082,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getLegacyIconCacheInfo',
     clearDataKey: 'clearLegacyIconCache',
     confirmMessage: 'Clear the legacy icon cache? This removes the legacy IconCache.db file and Explorer rebuilds it. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'gameCaptures',
@@ -1113,10 +1097,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getGameCapturesInfo',
     clearDataKey: 'clearGameCaptures',
     confirmMessage: 'Clear game captures? This permanently deletes recorded game clips and screenshots from local capture folders. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'photosCache',
@@ -1131,10 +1112,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getPhotosCacheInfo',
     clearDataKey: 'clearPhotosCache',
     confirmMessage: 'Clear the Photos cache? This removes local Windows Photos cached data and thumbnails. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'xboxCache',
@@ -1149,10 +1127,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getXboxCacheInfo',
     clearDataKey: 'clearXboxCache',
     confirmMessage: 'Clear the Xbox cache? This removes local Xbox app and Gaming Services cache data. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'communicationCaches',
@@ -1167,10 +1142,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getCommunicationCachesInfo',
     clearDataKey: 'clearCommunicationCaches',
     confirmMessage: 'Clear communication app caches? This removes locally stored chat, meeting, and attachment cache files. Apps may need to download content again. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'editorHistory',
@@ -1185,10 +1157,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getEditorHistoryInfo',
     clearDataKey: 'clearEditorHistory',
     confirmMessage: 'Clear editor history? This removes recent workspace records and local editor history. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'gitActivity',
@@ -1203,10 +1172,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getGitActivityInfo',
     clearDataKey: 'clearGitActivity',
     confirmMessage: 'Clear Git activity data? This removes cached Git credentials and repository activity records. You may need to authenticate again. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'sshState',
@@ -1221,10 +1187,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getSSHStateInfo',
     clearDataKey: 'clearSSHState',
     confirmMessage: 'Clear SSH state? This removes known-host records and loaded agent identities. You may need to verify hosts or reload keys again. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'remoteAccessLogs',
@@ -1239,10 +1202,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getRemoteAccessLogsInfo',
     clearDataKey: 'clearRemoteAccessLogs',
     confirmMessage: 'Clear remote-access logs? This permanently removes connection and session log files. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'passwordManagerCaches',
@@ -1257,10 +1217,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getPasswordManagerCachesInfo',
     clearDataKey: 'clearPasswordManagerCaches',
     confirmMessage: 'Clear password-manager caches? This removes local cached and session data. You may need to sign in and unlock password-manager apps again. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'gameLauncherLogs',
@@ -1275,10 +1232,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getGameLauncherLogsInfo',
     clearDataKey: 'clearGameLauncherLogs',
     confirmMessage: 'Clear game launcher logs? This permanently removes local activity and diagnostic log files. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'adobeRecent',
@@ -1293,10 +1247,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getAdobeRecentInfo',
     clearDataKey: 'clearAdobeRecent',
     confirmMessage: 'Clear Adobe recent-file records? This removes recent document and signature-history entries. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'officeTempFiles',
@@ -1311,10 +1262,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getOfficeTempFilesInfo',
     clearDataKey: 'clearOfficeTempFiles',
     confirmMessage: 'Clear Office temporary files? This permanently deletes temporary document, lock, and autosave files. Unsaved work may be lost. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'firewallLog',
@@ -1329,10 +1277,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getFirewallLogInfo',
     clearDataKey: 'clearFirewallLog',
     confirmMessage: 'Clear the Windows Firewall log? This deletes recorded firewall packet log entries. Logging will resume afterward. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'neighborCache',
@@ -1347,10 +1292,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getNeighborCacheInfo',
     clearDataKey: 'clearNeighborCache',
     confirmMessage: 'Clear the network neighbor cache? Active connections may briefly need to rediscover nearby network devices. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'netbiosCache',
@@ -1365,10 +1307,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getNetBIOSCacheInfo',
     clearDataKey: 'clearNetBIOSCache',
     confirmMessage: 'Clear the NetBIOS cache? Network name mappings will need to be resolved again. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'geolocationCache',
@@ -1383,10 +1322,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getGeolocationCacheInfo',
     clearDataKey: 'clearGeolocationCache',
     confirmMessage: 'Clear the geolocation cache? This removes cached network-based location data. Location services may rebuild it. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'vpnPhonebooks',
@@ -1401,10 +1337,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getVPNPhonebooksInfo',
     clearDataKey: 'clearVPNPhonebooks',
     confirmMessage: 'Clear VPN phonebooks? This removes saved VPN connection profiles and phonebook files. You may need to recreate those profiles. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'proxyCache',
@@ -1419,10 +1352,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getProxyCacheInfo',
     clearDataKey: 'clearProxyCache',
     confirmMessage: 'Clear the proxy cache? This removes cached proxy and PAC configuration data. Connection settings will need to refresh. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'cloudPlaceholders',
@@ -1437,10 +1367,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getCloudPlaceholdersInfo',
     clearDataKey: 'clearCloudPlaceholders',
     confirmMessage: 'Clear cloud-sync placeholders? This permanently deletes leftover cloud placeholder and reparse-point files from previously synchronized folders. Files may no longer be accessible locally. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'bitsQueue',
@@ -1455,10 +1382,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getBITSQueueInfo',
     clearDataKey: 'clearBITSQueue',
     confirmMessage: 'Clear the BITS transfer queue? This cancels pending background transfer jobs and removes queue history. Downloads or uploads may be interrupted. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'cellularHistory',
@@ -1473,10 +1397,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     getDataKey: 'getCellularHistoryInfo',
     clearDataKey: 'clearCellularHistory',
     confirmMessage: 'Clear cellular connection history? This removes saved cellular and mobile-hotspot history. Active connections may need to reconnect. This cannot be undone.',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || []).map((f: any) => f.name || '—'),
-    }),
+    extractPreview: fileNamePreview,
   },
   {
     id: 'appLaunchHistory',
@@ -1490,10 +1411,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'The BAM service (bam.sys) writes a fresh launch timestamp every time a program runs — normal use repopulates this within seconds.',
     getDataKey: 'getAppLaunchHistoryInfo',
     clearDataKey: 'clearAppLaunchHistory',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'officeMru',
@@ -1507,10 +1425,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'Office rewrites its MRU and macro-trust records every time a document is opened or a macro is run.',
     getDataKey: 'getOfficeMruInfo',
     clearDataKey: 'clearOfficeMru',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'embeddedWebCache',
@@ -1524,10 +1439,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'Any app embedding WebView2 rebuilds its cookies, history and cache the next time it runs.',
     getDataKey: 'getEmbeddedWebCacheInfo',
     clearDataKey: 'clearEmbeddedWebCache',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'p2pUpdateCache',
@@ -1541,10 +1453,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'Delivery Optimization repopulates its cache as Windows Update and Store apps download new content.',
     getDataKey: 'getP2PUpdateCacheInfo',
     clearDataKey: 'clearP2PUpdateCache',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'reliabilityHistory',
@@ -1558,10 +1467,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'RACAgent logs a new stability entry roughly once a day and after every app install, crash, or hang.',
     getDataKey: 'getReliabilityHistoryInfo',
     clearDataKey: 'clearReliabilityHistory',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'explorerSearchHistory',
@@ -1575,10 +1481,7 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'New entries appear the next time you type a term into File Explorer search or the address bar.',
     getDataKey: 'getExplorerSearchHistoryInfo',
     clearDataKey: 'clearExplorerSearchHistory',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
   {
     id: 'searchPersonalization',
@@ -1592,15 +1495,14 @@ export const DEEP_DFIR_CATEGORIES: CleanupCategory[] = [
     regeneratesNote: 'Windows rebuilds per-app search jumplist entries as you use apps and rebuilds inking personalization data as you type.',
     getDataKey: 'getSearchPersonalizationInfo',
     clearDataKey: 'clearSearchPersonalizationData',
-    extractPreview: (data) => ({
-      count: data?.total ?? 0,
-      items: (data?.files || data?.entries || []).map((f: any) => f.name || f.path || '—'),
-    }),
+    extractPreview: fileOrEntryPathPreview,
   },
 ];
 
+export const DEEP_DFIR_CATEGORIES = exposeCleanupCategories(legacyDeepDfirCategories);
+
 // Action-only categories (no viewer data)
-export const ACTION_CATEGORIES: CleanupCategory[] = [
+const legacyActionCategories: LegacyCleanupCategory[] = [
   {
     id: 'virtualMemory',
     label: 'Virtual Memory',
@@ -1647,11 +1549,13 @@ export const ACTION_CATEGORIES: CleanupCategory[] = [
   },
 ];
 
+export const ACTION_CATEGORIES = exposeCleanupCategories(legacyActionCategories);
+
 // ── View-Only Categories (monitoring, no destructive clear) ──────────────
 // These are read-only tools rather than cleanup tools. They show runtime
 // system state and belong in a separate read-only section of the panel.
 
-export const VIEW_ONLY_CATEGORIES: CleanupCategory[] = [
+const legacyViewOnlyCategories: LegacyCleanupCategory[] = [
   {
     id: 'processIntel',
     label: 'Process Review',
@@ -1671,6 +1575,8 @@ export const VIEW_ONLY_CATEGORIES: CleanupCategory[] = [
     },
   },
 ];
+
+export const VIEW_ONLY_CATEGORIES = exposeCleanupCategories(legacyViewOnlyCategories);
 
 // ── Schedulable-clearer overlay ──────────────────────────────────────
 // Every standard + DFIR card with a clearDataKey gets a per-card auto-erase
