@@ -14,6 +14,7 @@ pub mod extract;
 pub mod filters;
 pub mod index;
 pub mod query;
+pub mod semantic_model;
 pub mod tokenize;
 pub mod types;
 pub mod watch;
@@ -440,6 +441,12 @@ mod tests {
     use tempfile::TempDir;
     use types::{ContentQuery, IndexConfig};
 
+    // `notify` registrations are process-global on some Windows backends.
+    // These two lifecycle tests both create a watcher and wait for its crawler;
+    // run them one at a time so a busy suite cannot turn their five-second
+    // readiness assertion into a false content-search failure.
+    static INDEXING_LIFECYCLE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     fn make_config(index_dir: std::path::PathBuf, roots: Vec<std::path::PathBuf>) -> IndexConfig {
         IndexConfig {
             roots,
@@ -532,6 +539,7 @@ mod tests {
     /// avoid cross-test interference.
     #[test]
     fn start_indexing_smoke_search_after_crawl() {
+        let _serial = INDEXING_LIFECYCLE_TEST_LOCK.lock().unwrap();
         let data_dir = TempDir::new().unwrap();
         let index_dir = TempDir::new().unwrap();
 
@@ -634,6 +642,7 @@ mod tests {
     /// - calling stop() a second time does not panic
     #[test]
     fn engine_stop_releases_worker_and_index() {
+        let _serial = INDEXING_LIFECYCLE_TEST_LOCK.lock().unwrap();
         let data_dir = TempDir::new().unwrap();
         let index_dir = TempDir::new().unwrap();
 

@@ -1,9 +1,13 @@
+mod epub;
+mod legacy_office;
 mod odf;
 mod office;
 mod pdf;
 mod plain;
 mod rtf;
 
+pub use epub::extract_epub;
+pub use legacy_office::extract_legacy_office;
 pub use odf::extract_odf;
 pub use office::{extract_office, extract_xlsx};
 pub use pdf::extract_pdf;
@@ -35,9 +39,13 @@ pub fn extract_text(meta: FileMeta) -> Result<ExtractedDoc> {
         }
         "docx" | "pptx" => extract_office(&meta.path)?,
         "xlsx" => extract_xlsx(&meta.path)?,
+        // Bounded legacy Compound File extraction. Encrypted files remain an
+        // explicit unsupported input rather than being represented as indexed.
+        "doc" | "xls" | "ppt" => (extract_legacy_office(&meta.path)?, DocProps::default()),
         "pdf" => extract_pdf(&meta.path)?,
         // OpenDocument Format — zip-of-XML like OOXML, see extract/odf.rs.
         "odt" | "ods" | "odp" => extract_odf(&meta.path)?,
+        "epub" => (extract_epub(&meta.path)?, DocProps::default()),
         // Rich Text Format — control-word markup, see extract/rtf.rs. No
         // document-internal properties extracted (see that module's docs).
         "rtf" => (extract_rtf(&meta.path)?, DocProps::default()),

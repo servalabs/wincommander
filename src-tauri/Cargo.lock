@@ -1825,6 +1825,7 @@ dependencies = [
  "ed25519-dalek",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "ts-rs",
  "wincmd-clip-rules",
 ]
@@ -7223,6 +7224,7 @@ dependencies = [
  "quick-xml",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tantivy",
  "tempfile",
  "thiserror 2.0.20",
