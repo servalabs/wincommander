@@ -178,25 +178,62 @@ function RuleForm({ rule, error, onChange, onSave, onCancel }: {
         </select>
         <Input aria-label="Cooldown seconds" type="number" min={0} max={86400} value={String(rule.cooldownSeconds)} onChange={(event) => onChange({ ...rule, cooldownSeconds: Number(event.currentTarget.value) })} />
       </div>
-      <div className="flex flex-wrap gap-4 text-[10px] text-[var(--shield-text-subtle)]">
-        <label className="flex items-center gap-2">
-          <CheckboxControl checked={rule.actions.includes("notify_user")} onChange={(event) => onChange(setLocalAction(rule, "notify_user", event.currentTarget.checked))} ariaLabel="Notify me" />
-          Notify me
-        </label>
-        <label className="flex items-center gap-2">
-          <CheckboxControl checked={rule.actions.includes("clear_clipboard")} onChange={(event) => onChange(setLocalAction(rule, "clear_clipboard", event.currentTarget.checked))} ariaLabel="Clear clipboard" />
-          Clear clipboard
-        </label>
-        <label className="flex items-center gap-2">
-          <CheckboxControl checked={rule.actions.includes("quarantine_clipboard")} onChange={(event) => onChange(setLocalAction(rule, "quarantine_clipboard", event.currentTarget.checked))} ariaLabel="Replace clipboard content" />
-          Replace with a warning
-        </label>
+      <div className="flex flex-wrap gap-2 text-[10px] text-[var(--shield-text-subtle)]">
+        <LocalActionOption
+          checked={rule.actions.includes("notify_user")}
+          label="Notify me"
+          onCheckedChange={(checked) => onChange(setLocalAction(rule, "notify_user", checked))}
+        />
+        <LocalActionOption
+          checked={rule.actions.includes("clear_clipboard")}
+          label="Clear clipboard"
+          onCheckedChange={(checked) => onChange(setLocalAction(rule, "clear_clipboard", checked))}
+        />
+        <LocalActionOption
+          checked={rule.actions.includes("quarantine_clipboard")}
+          label="Replace with a warning"
+          onCheckedChange={(checked) => onChange(setLocalAction(rule, "quarantine_clipboard", checked))}
+        />
       </div>
       {error && <p role="alert" className="text-[10px] text-[var(--color-danger)]">{error}</p>}
       <div className="flex justify-end gap-2">
         <Button size="sm" onClick={onCancel}>Cancel</Button>
         <Button size="sm" variant="primary" onClick={onSave}>Save local rule</Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * CheckboxControl is a Radix button, not a native input. A HTML label does
+ * not activate a nested button, which made the action text look clickable
+ * while only its small checkbox target actually worked. Treat each option as
+ * one click target and stop the checkbox click from toggling it twice.
+ */
+function LocalActionOption({
+  checked,
+  label,
+  onCheckedChange,
+}: {
+  checked: boolean;
+  label: string;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <div
+      className="flex cursor-pointer items-center gap-2 rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-primary)] px-2 py-1.5 transition-colors hover:border-[var(--color-accent)]/45"
+      onClick={() => onCheckedChange(!checked)}
+    >
+      <CheckboxControl
+        checked={checked}
+        onChange={(event) => onCheckedChange(event.currentTarget.checked)}
+        onClick={(event) => event.stopPropagation()}
+        ariaLabel={label}
+      />
+      <span className="font-medium">{label}</span>
+      <span className="font-mono text-[9px] text-[var(--color-accent)]" aria-hidden="true">
+        {checked ? "ON" : "OFF"}
+      </span>
     </div>
   );
 }
