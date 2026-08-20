@@ -9,7 +9,7 @@ import { useAppState } from "../../context/AppContext";
 import { showSuccess, showError } from "../../utils/toast";
 import type { RamDisk, RamDiskStatus, SystemRamInfo } from "../../hooks/useBackend";
 import type { RamDiskAutostartSettings } from "../../types/settings";
-import { MIN_RAM_DISK_SIZE_MB, normalizeRamDiskSizeMB } from "../../lib/ramDisk";
+import { MIN_RAM_DISK_SIZE_MB, normalizeRamDiskSizeMB, savedRamDiskMountRequest } from "../../lib/ramDisk";
 import CreateRamDiskDialog from "./CreateRamDiskDialog";
 
 function fmtMB(mb: number): string {
@@ -72,8 +72,12 @@ function RamDisksSection() {
   ]);
 
   const mountSavedAutostartSpec = useCallback(async (spec: RamDiskAutostartSettings) => {
-    const letter = (spec.driveLetter ?? "R").toUpperCase();
-    const sizeMB = normalizeRamDiskSizeMB(spec.sizeMB);
+    const mountRequest = savedRamDiskMountRequest(spec);
+    if (!mountRequest) {
+      showError("Startup RAM disk needs a saved size before it can be mounted.");
+      return;
+    }
+    const { DriveLetter: letter, SizeMB: sizeMB } = mountRequest;
     const available = await getAvailableDriveLetters();
     const isAvailable = available.success && available.data?.letters?.some((value) => value.toUpperCase() === letter);
 
@@ -88,14 +92,7 @@ function RamDisksSection() {
       return;
     }
 
-    const result = await createRamDisk({
-      SizeMB: sizeMB,
-      DriveLetter: letter,
-      Filesystem: spec.filesystem ?? "NTFS",
-      Label: spec.label || "TEMP",
-      ReadOnly: spec.readOnly ?? false,
-      Quick: true,
-    });
+    const result = await createRamDisk(mountRequest);
     if (!result.success) {
       showError(result.error || "Startup RAM disk was saved, but could not be mounted.");
       return;
