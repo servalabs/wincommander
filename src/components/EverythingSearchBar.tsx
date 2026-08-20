@@ -23,11 +23,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Icon, Spinner } from "@/components/ui/bp";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { AnimatePresence, motion } from "framer-motion";
 import type { AppSettings } from "../types/settings";
 import { dedupeContentRows, isNameOnlyMatch } from "@/lib/contentSearch";
 import { formatResultSize, isDirectoryResult, isEngineMissingError, sfExtOf } from "@/lib/fileNameSearch";
+import { fileSearchDiagnostic } from "@/lib/fileSearchDiagnostics";
 import type { SearchResult } from "@/lib/fileNameSearch";
 import { recordOpen, topPaths } from "@/lib/frecency";
 import { describeQuery, isDriveRootPath, splitScopePaths } from "@/lib/searchQueryPlan";
@@ -64,7 +65,7 @@ const CYCLE_TYPE_FILTERS: readonly { kind: ChipKind; label: string }[] = [
   { kind: "folders", label: "Folders" },
   { kind: "pdf", label: "PDF" },
   { kind: "excel", label: "Excel" },
-  { kind: "word", label: "Word" },
+  { kind: "images", label: "Images" },
 ];
 const ALL_TYPE_FILTERS: readonly { kind: ChipKind; label: string }[] = [
   ...CYCLE_TYPE_FILTERS,
@@ -169,16 +170,14 @@ function ChipGlyph({ chip }: { chip: Chip }) {
 function TypeFilterIcon({
   kind,
   selected,
-  next,
   onToggle,
 }: {
   kind: ChipKind;
   selected: boolean;
-  next: boolean;
   onToggle: (kind: ChipKind) => void;
 }) {
   return (
-    <span className={`esb-type-icon${selected ? " is-selected" : ""}${next && !selected ? " is-next" : ""}`}>
+    <span className={`esb-type-icon${selected ? " is-selected" : ""}`}>
       {selected && (
         <button
           type="button"
@@ -716,7 +715,6 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
 
   const activeTypeChips = query.chips.filter((chip) => isTypeFilterKind(chip.kind));
   const activeTypeKinds = activeTypeChips.map((chip) => chip.kind);
-  const nextTypeKind = nextAppendType(activeTypeKinds);
   const { visible: visibleSelectedKinds, overflow: overflowSelectedKinds } = visibleSelectedTypes(activeTypeKinds);
   const barTypeKinds = activeTypeKinds.length === 0 ? [...TAB_TYPE_CYCLE] : visibleSelectedKinds;
   const dropdownTypeFilters = activeTypeKinds.length === 0
@@ -890,7 +888,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         setTypeMenuOpen(true);
         return;
       }
-      // First Enter on a name applies Folders, then PDF / Excel / Word via Tab.
+      // First Enter on a name applies Folders, then PDF / Excel / Images via Tab.
       // Opening a mixed all-types hit is the old path and hid the type cycle.
       if (query.text.trim() && !query.chips.some((chip) => isTypeFilterKind(chip.kind))) {
         e.preventDefault();
@@ -1056,7 +1054,6 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
               key={kind}
               kind={kind}
               selected={activeTypeKinds.includes(kind)}
-              next={activeTypeKinds.length === 0 && nextTypeKind === kind}
               onToggle={toggleType}
             />
           ))}
@@ -1075,14 +1072,12 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
             <DropdownMenuContent align="end" className="esb-filter-menu">
               <DropdownMenuLabel>{overflowSelectedKinds.length > 0 ? "Selected and more types" : "More types"}</DropdownMenuLabel>
               {dropdownTypeFilters.map((type) => (
-                <DropdownMenuCheckboxItem
+                <DropdownMenuItem
                   key={type.kind}
-                  checked={overflowSelectedKinds.includes(type.kind)}
-                  onCheckedChange={() => toggleType(type.kind)}
-                  onSelect={(event) => event.preventDefault()}
+                  onSelect={() => toggleType(type.kind)}
                 >
                   <span className="esb-filter-type-item"><FileTypeIcon kind={type.kind} />{type.label}</span>
-                </DropdownMenuCheckboxItem>
+                </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1178,7 +1173,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
           <Icon icon="warning-sign" size={12} />
           <span>
             {isEngineMissingError(search.error)
-              ? "Search engine not available. Install it from the Packages panel to enable file search."
+              ? fileSearchDiagnostic("service_unavailable").message
               : search.error}
           </span>
         </div>

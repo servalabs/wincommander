@@ -449,9 +449,6 @@
   border-color: var(--accent-line);
   background: var(--accent-soft);
 }
-.esb-type-icon.is-next .esb-type-icon-hit {
-  border-color: var(--accent);
-}
 .esb-type-icon-x {
   position: absolute;
   top: -5px;

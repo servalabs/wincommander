@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { motion, AnimatePresence } from "framer-motion";
 import { useFileSearch } from "@/hooks/useFileSearch";
+import { fileSearchDiagnostic } from "@/lib/fileSearchDiagnostics";
 import { useContentIndex } from "@/hooks/useContentIndex";
 import { useSearchHotkey } from "@/hooks/useSearchHotkey";
 import { dedupeContentRows } from "@/lib/contentSearch";
@@ -271,6 +272,7 @@ export default function SearchFilesPanel() {
             </TooltipContent>
           </Tooltip>
         </div>
+        {search.error && <p className="sfp-indexing-note" aria-live="polite">{fileSearchDiagnostic("service_unavailable").message}</p>}
         {tabFilter && (
           <button type="button" className="sfp-tab-filter" onClick={acceptTabFilter}>
             <Icon icon="filter" size={13} />

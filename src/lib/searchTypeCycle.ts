@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // src/lib/searchTypeCycle.ts
 //
-// Tab-cycle kinds (folders, pdf, excel, word) are selected from Type-filter
+// Tab-cycle kinds (folders, pdf, excel, images) are selected from Type-filter
 // icons, not the Type dropdown. Tab APPENDS unused cycle kinds folders → pdf →
-// excel → word, then "menu" without dropping already-selected types; after all
+// excel → images, then "menu" without dropping already-selected types; after all
 // four are present it returns "menu" so the overlay can arm the Type dropdown.
 // TYPE_DROPDOWN_ORDER lists only the extra types. "menu" is a sentinel, not a
 // ChipKind.
 
 import type { ChipKind } from "./searchTokens";
 
-export const TAB_TYPE_CYCLE = ["folders", "pdf", "excel", "word"] as const satisfies readonly ChipKind[];
+export const TAB_TYPE_CYCLE = ["folders", "pdf", "excel", "images"] as const satisfies readonly ChipKind[];
 
 export type TabTypeCycleKind = (typeof TAB_TYPE_CYCLE)[number];
 export type TabTypeCycleResult = ChipKind | "menu";
 
 export const TYPE_DROPDOWN_ORDER = [
+  "word",
   "videos",
-  "images",
   "slides",
   "text",
   "audio",
