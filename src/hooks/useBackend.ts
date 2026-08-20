@@ -1768,6 +1768,12 @@ export function useBackend() {
     // Encrypted volumes
     getEncryptionStatus: () => execute<EncryptionStatus>("Get-EncryptionStatus"),
     getEncryptedVolumeStatus: () => execute<EncryptionStatus>("Get-EncryptedVolumeStatus"),
+    getEncryptedBackupTargetStatus: () =>
+      execute<{ ok: boolean; bound: boolean; version: number | null }>("Get-EncryptedBackupTargetStatus"),
+    provisionEncryptedBackupTarget: () =>
+      execute<{ ok: boolean; bound: boolean; version: number }>("Provision-EncryptedBackupTarget"),
+    clearEncryptedBackupTarget: () =>
+      execute<{ ok: boolean; cleared: boolean }>("Clear-EncryptedBackupTarget"),
     mountVolume: (params: MountVolumeParams) =>
       execute("Mount-EncryptionVolume", {
         VolumePath: params.volumePath,

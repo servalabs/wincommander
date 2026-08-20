@@ -28,6 +28,13 @@ commit timestamps). Shipped capabilities (not fixes) live in
   This does not install a partition or erase a disk; WIM packaging, one-shot
   boot integration and destructive acceptance remain release gates.
 
+- **No-path encrypted backup registration** (2026-08-20) — Secure Storage now
+  exposes paid status, register, and clear controls for the pre-Lockdown backup
+  binding. The WebView sends an empty object only; Pro derives the single
+  mounted encrypted file-container identity, returns no path/hash, rejects raw
+  or ambiguous targets, and clear removes no files. Focused UI, TypeScript,
+  lint, tier, and Pro backup tests pass; signed/live acceptance remains open.
+
 - **Windows Server tweak section** (2026-08-15) — twelve Server-SKU settings in
   a new `tweaks/server` module: no Ctrl+Alt+Del at logon, hide last signed-in
   user, console inactivity lock, no Shutdown Event Tracker, no Server Manager

@@ -1038,6 +1038,25 @@ mod tests {
             .unwrap();
         assert_eq!(classify_risk(cleanup_summary), Risk::ReadOnly);
 
+        let backup_status = catalog
+            .commands
+            .iter()
+            .find(|entry| entry.id == "backend:Get-EncryptedBackupTargetStatus")
+            .unwrap();
+        let backup_provision = catalog
+            .commands
+            .iter()
+            .find(|entry| entry.id == "backend:Provision-EncryptedBackupTarget")
+            .unwrap();
+        let backup_clear = catalog
+            .commands
+            .iter()
+            .find(|entry| entry.id == "backend:Clear-EncryptedBackupTarget")
+            .unwrap();
+        assert_eq!(classify_risk(backup_status), Risk::ReadOnly);
+        assert_eq!(classify_risk(backup_provision), Risk::Mutating);
+        assert_eq!(classify_risk(backup_clear), Risk::Destructive);
+
         let scan_and_clean = GeneratedCommand {
             id: "tauri:scan_and_clean".to_string(),
             name: "scan_and_clean".to_string(),
