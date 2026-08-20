@@ -98,9 +98,8 @@ export default function ScreenCaptureSection({
       {/* ── Header ─────────────────────────────────────────────── */}
       <div className="screencap-head">
         <p className="screencap-sub">
-          Best-effort detection of running screen-recording tools, plus a strong
-          guarantee that <em>this</em> window renders black in screenshots and
-          screen-share.
+          Best-effort detection of running screen-recording tools, plus supported
+          protection for the designated WinCommander window where Windows allows it.
         </p>
       </div>
 
@@ -134,8 +133,9 @@ export default function ScreenCaptureSection({
         <div className="screencap-row-text">
           <span className="screencap-row-label">Protect this window from capture</span>
           <span className="screencap-row-help">
-            WinCommander's window appears black in screenshots, recordings, and
-            screen-share. Other apps are unaffected. Requires Windows 10 2004+.
+            Uses Windows&apos; supported exclusion setting for this window only. It may
+            render black in compatible capture tools; privileged capture, Remote
+            Desktop, cameras, and older Windows paths can bypass it. Requires Windows 10 2004+.
           </span>
         </div>
       </div>

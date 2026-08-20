@@ -76,6 +76,7 @@ mod ransomware_monitor;
 #[cfg(windows)]
 mod rdp_session_watch;
 mod reboot_usb;
+pub mod recovery_wipe_plan;
 mod registry_hygiene;
 mod remote_sessions;
 mod routine_cleaner;
@@ -98,6 +99,7 @@ mod sidecar;
 mod startup_auth;
 mod startup_maintenance;
 mod storage_probe;
+mod sanitize_plan;
 mod system_metrics;
 mod uninstall_leftovers;
 mod updater;
@@ -734,21 +736,30 @@ fn set_app_display_label(label: String) -> Result<(), String> {
     }
 }
 
-/// #5 (Pattern A — Free in-process, paid): apply WDA_EXCLUDEFROMCAPTURE to
-/// WinCommander's own main window so it renders black in screenshots /
-/// screen recordings / screen-share. Runs in the Free process because it
-/// needs the app's own HWND (obtained exactly like force_window_foreground
-/// via window.hwnd()). Gated by require_paid. Non-fatal on pre-19041
-/// (Windows 10 2004+) — the affinity call simply fails and we surface a
-/// clear error; startup never blocks (the FE swallows it).
+/// Explicitly scoped Privacy Shield extension for the designated main window.
+/// Windows does not provide a general, enforceable screenshot block: supported
+/// capture APIs may render this HWND black, but privileged capture, remote
+/// desktop, cameras, and older Windows versions can still bypass it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CaptureProtectionStatus {
+    enabled: bool,
+    scope: &'static str,
+    mode: &'static str,
+    limitation: &'static str,
+}
+
 #[tauri::command]
-fn set_capture_protection(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+fn set_capture_protection(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<CaptureProtectionStatus, String> {
     crate::license::require_paid("capture protection")?;
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::HWND;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
+            GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
         };
         let window = app
             .get_webview_window("main")
@@ -764,7 +775,16 @@ fn set_capture_protection(app: tauri::AppHandle, enabled: bool) -> Result<(), St
         if ok == 0 {
             return Err("SetWindowDisplayAffinity failed (needs Windows 10 2004+)".into());
         }
-        Ok(())
+        let mut observed = 0;
+        if unsafe { GetWindowDisplayAffinity(hwnd, &mut observed) } == 0 || observed != affinity {
+            return Err("Windows did not retain the requested capture-protection state".into());
+        }
+        Ok(CaptureProtectionStatus {
+            enabled,
+            scope: "wincommander-main-window",
+            mode: if enabled { "exclude-from-capture" } else { "none" },
+            limitation: "Best effort only: privileged capture, remote desktop, cameras, and unsupported Windows capture paths can bypass this setting.",
+        })
     }
     #[cfg(not(windows))]
     {

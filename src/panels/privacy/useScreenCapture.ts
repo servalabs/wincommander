@@ -34,6 +34,13 @@ export interface ScreenCaptureStatus {
   lastTick: string | null;
 }
 
+export interface CaptureProtectionStatus {
+  enabled: boolean;
+  scope: "wincommander-main-window";
+  mode: "exclude-from-capture" | "none";
+  limitation: string;
+}
+
 const RECENT_CAP = 30;
 
 export interface UseScreenCapture {
@@ -123,7 +130,7 @@ export default function useScreenCapture(
       setBusy(true);
       setError(null);
       try {
-        await invoke("set_capture_protection", { enabled: next });
+        await invoke<CaptureProtectionStatus>("set_capture_protection", { enabled: next });
         onPersist({ protectWindow: next });
       } catch (err) {
         // Pre-19041 builds / unlicensed: report, leave the window visible.
