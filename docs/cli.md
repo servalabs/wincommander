@@ -44,7 +44,7 @@ Native Tauri commands require Microsoft Edge WebView2. If it is unavailable, CLI
 - Mutating commands require `--confirm RUN:<command-id>`.
 - Destructive commands require `--confirm DESTROY:<command-id>`.
 - `--dry-run` never invokes a dispatcher and reports what would execute.
-- `--timeout-ms` is enforced for every read-only command, native or backend-script, and sets a wait deadline from 100 ms to 60 minutes; the default deadline is 300,000 ms (5 minutes). It is a wait limit, not transactional cancellation: the CLI stops waiting, reports `error: "timeout"`, and exits `10`, but already-started work continues in whatever it started.
+- `--timeout-ms` is enforced for every read-only command, native or backend-script, and sets a wait deadline from 100 ms to 60 minutes; the default deadline is 300,000 ms (5 minutes). The backend timer starts before Tauri runtime initialization, so a wedged startup is bounded too. It is a wait limit, not transactional cancellation: the CLI stops waiting, reports `error: "timeout"`, and exits `10`, but already-started work continues in whatever it started.
 - Mutating and destructive CLI commands do not accept `--timeout-ms`; they run to completion and are serialized across CLI processes in the current Windows session.
 
 Risk is assigned in a fail-closed priority order rather than by name alone:

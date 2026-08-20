@@ -108,10 +108,22 @@ static TAURI_RUN_BRIDGE_READY: AtomicBool = AtomicBool::new(false);
 static TAURI_RUN_EXIT_CODE: AtomicI32 = AtomicI32::new(9);
 /// Claimed by whichever of the backend dispatcher and its wait deadline
 /// finishes first, so exactly one JSON document reaches stdout.
-static BACKEND_RUN_SETTLED: AtomicBool = AtomicBool::new(false);
 /// The same guarantee for the native path, where a terminal command's
 /// acknowledgement is emitted up front and both watchdogs can still fire.
 static TAURI_RESULT_EMITTED: AtomicBool = AtomicBool::new(false);
+
+fn spawn_backend_deadline(
+    timeout_ms: u64,
+    settled: Arc<AtomicBool>,
+    on_timeout: impl FnOnce() + Send + 'static,
+) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(timeout_ms));
+        if !settled.swap(true, Ordering::SeqCst) {
+            on_timeout();
+        }
+    });
+}
 
 struct CliExecutionLock {
     #[cfg(windows)]
@@ -708,9 +720,27 @@ fn run_command(request: RunRequest) -> i32 {
 fn run_backend(command: String, params: HashMap<String, String>, timeout_ms: Option<u64>) -> i32 {
     let command_id = format!("backend:{command}");
     let output_id = command_id.clone();
-    let timeout_id = command_id.clone();
     let execution_code = Arc::new(AtomicI32::new(9));
     let result_code = execution_code.clone();
+    let settled = Arc::new(AtomicBool::new(false));
+    if let Some(timeout_ms) = timeout_ms {
+        let timeout_id = command_id.clone();
+        let timeout_settled = settled.clone();
+        // Tauri's async runtime does not exist until setup begins. A failed or
+        // wedged runtime startup therefore needs an ordinary process thread;
+        // starting the timer inside setup leaves automation hung indefinitely.
+        spawn_backend_deadline(timeout_ms, timeout_settled, move || {
+            print_json(&json!({
+                "ok": false,
+                "command": timeout_id,
+                "error": "timeout",
+                "message": format!("read-only command exceeded {timeout_ms} ms; this is a wait limit, not transactional cancellation")
+            }));
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+            std::process::exit(10);
+        });
+    }
     let mut context = tauri::generate_context!();
     context.config_mut().app.windows.clear();
     context.config_mut().build.dev_url = None;
@@ -724,30 +754,10 @@ fn run_backend(command: String, params: HashMap<String, String>, timeout_ms: Opt
             let command = command.clone();
             let command_id = output_id.clone();
             let execution_code = execution_code.clone();
-            // The backend transport cannot cancel work in flight, so this is a
-            // wait deadline only — identical in meaning to the native one. It
-            // exists because without it a wedged dispatcher hangs the calling
-            // automation forever with no output at all.
-            if let Some(timeout_ms) = timeout_ms {
-                let timeout_id = timeout_id.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
-                    if !BACKEND_RUN_SETTLED.swap(true, Ordering::SeqCst) {
-                        print_json(&json!({
-                            "ok": false,
-                            "command": timeout_id,
-                            "error": "timeout",
-                            "message": format!("read-only command exceeded {timeout_ms} ms; this is a wait limit, not transactional cancellation")
-                        }));
-                        use std::io::Write;
-                        let _ = std::io::stdout().flush();
-                        std::process::exit(10);
-                    }
-                });
-            }
+            let settled = settled.clone();
             tauri::async_runtime::spawn(async move {
                 let response = crate::backend::run_backend_script(result_handle.clone(), command, params).await;
-                if BACKEND_RUN_SETTLED.swap(true, Ordering::SeqCst) {
+                if settled.swap(true, Ordering::SeqCst) {
                     return;
                 }
                 match response {
@@ -998,6 +1008,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn backend_deadline_does_not_depend_on_tauri_runtime_startup() {
+        let settled = Arc::new(AtomicBool::new(false));
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        spawn_backend_deadline(1, settled.clone(), move || {
+            sender.send(()).expect("test receiver remains available");
+        });
+
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("ordinary process thread must fire without a Tauri runtime");
+        assert!(settled.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn embedded_catalog_is_valid_and_unique() {
         let catalog = catalog().expect("catalog parses");
         assert!(catalog.commands.len() > 400);
@@ -1232,7 +1257,7 @@ mod tests {
         // Keep this snapshot count intentional: the generated catalog is the
         // authority, but a count change must be reviewed with the handler
         // registrations rather than silently widening the CLI surface.
-        assert_eq!(tauri_commands.len(), 429);
+        assert_eq!(tauri_commands.len(), 437);
         assert!(tauri_commands.iter().all(|entry| entry.registered));
         for name in [
             "decoy_read_audit_status",
@@ -1270,7 +1295,7 @@ mod tests {
                 .iter()
                 .filter(|entry| available_in_this_build(entry))
                 .count(),
-            if cfg!(debug_assertions) { 429 } else { 425 }
+            if cfg!(debug_assertions) { 437 } else { 433 }
         );
     }
 

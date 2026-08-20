@@ -69,6 +69,13 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Fixed
 
+- **Backend CLI deadlines now cover runtime startup** (2026-08-20) — a live
+  `3.2.17` read-only probe remained alive beyond its explicit 10-second limit
+  because the timer was created only after Tauri setup began. The deadline now
+  runs on an independent process thread before runtime initialization, so a
+  wedged startup also emits the bounded timeout result and exits `10`. This is
+  source-level remediation; a source-matched release still needs VM acceptance.
+
 - **Investigator release-shell fail-closed validation** (2026-08-19) — signed
   two-artifact manifests now reject unknown fields, reordered app/sidecar
   entries, and noncanonical uppercase SHA-256 values. Entitlement matching has
