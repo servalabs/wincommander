@@ -1,4 +1,4 @@
-use super::{CANCELLED, CachedUpdate, Manager, PackageUpdateResult};
+use super::{CachedUpdate, Manager, PackageUpdateResult, CANCELLED};
 use std::process::Command;
 use std::sync::atomic::Ordering;
 

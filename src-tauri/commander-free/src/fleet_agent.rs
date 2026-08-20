@@ -752,7 +752,10 @@ pub async fn fleet_sync_shield_state() -> Result<serde_json::Value, String> {
     let resp =
         crate::sidecar::dispatch_paid_command("fleet_agent_shield_state", serde_json::Value::Null)
             .await?;
-    let state = resp.get("shieldState").cloned().unwrap_or(serde_json::Value::Null);
+    let state = resp
+        .get("shieldState")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     crate::settings::patch_settings(serde_json::json!({
         "app": { "fleet": { "shieldDesiredState": state } }
     }))?;

@@ -55,8 +55,8 @@ use windows_sys::Win32::System::RemoteDesktop::{
     WTSRegisterSessionNotification, NOTIFY_FOR_THIS_SESSION,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GWLP_WNDPROC, HWND_MESSAGE,
-    MSG, SetWindowLongPtrW, TranslateMessage, WM_WTSSESSION_CHANGE, WTS_REMOTE_DISCONNECT,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, SetWindowLongPtrW,
+    TranslateMessage, GWLP_WNDPROC, HWND_MESSAGE, MSG, WM_WTSSESSION_CHANGE, WTS_REMOTE_DISCONNECT,
     WTS_SESSION_LOGOFF,
 };
 
@@ -157,7 +157,12 @@ fn run_watch_thread() {
     }
 }
 
-unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     if msg == WM_WTSSESSION_CHANGE {
         let reason = wparam as u32;
         if reason == WTS_SESSION_LOGOFF || reason == WTS_REMOTE_DISCONNECT {
@@ -263,12 +268,19 @@ async fn maybe_dismount_on_session_end(app: AppHandle, label: &str) {
             crate::log_message_src(
                 "warn",
                 "core",
-                &format!("[SessionWatch] Dismount-LocalVaults reported failure: {:?}", v),
+                &format!(
+                    "[SessionWatch] Dismount-LocalVaults reported failure: {:?}",
+                    v
+                ),
             );
         }
         Ok(_) => {}
         Err(e) => {
-            crate::log_message_src("warn", "core", &format!("[SessionWatch] dismount failed: {}", e));
+            crate::log_message_src(
+                "warn",
+                "core",
+                &format!("[SessionWatch] dismount failed: {}", e),
+            );
         }
     }
 }

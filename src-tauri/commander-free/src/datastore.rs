@@ -654,7 +654,10 @@ mod tests {
         let material = [9u8; 32];
         let protected = user_dpapi_protect(&material).expect("current-user protect");
         assert!(protected.len() > material.len());
-        assert_eq!(user_dpapi_unprotect(&protected).expect("current-user unprotect"), material);
+        assert_eq!(
+            user_dpapi_unprotect(&protected).expect("current-user unprotect"),
+            material
+        );
     }
 
     #[test]

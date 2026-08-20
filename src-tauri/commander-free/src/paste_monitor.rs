@@ -84,9 +84,9 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
 use clipboard_guard_helper::actions::{ActionOutcome, ClipboardWriter, Win32Writer};
-use clipboard_guard_helper::engine::{CombinedMatchOutcome, CombinedVerdict, MatchEngine};
 #[cfg(test)]
 use clipboard_guard_helper::engine::MatchOutcome;
+use clipboard_guard_helper::engine::{CombinedMatchOutcome, CombinedVerdict, MatchEngine};
 use clipboard_guard_helper::health::HelperHealth;
 use clipboard_guard_helper::ipc::SvcClient;
 use clipboard_guard_helper::listener::{self, ClipboardChangeSource};
@@ -866,8 +866,8 @@ fn clear_health_after_attempt(cleared_ok: bool) -> bool {
 fn workstation_is_locked() -> Option<bool> {
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::System::RemoteDesktop::{
-        WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTS_SESSIONSTATE_LOCK, WTSFreeMemory,
-        WTSINFOEXW, WTSQuerySessionInformationW, WTSSessionInfoEx,
+        WTSFreeMemory, WTSQuerySessionInformationW, WTSSessionInfoEx, WTSINFOEXW,
+        WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTS_SESSIONSTATE_LOCK,
     };
 
     let mut pp_buffer: *mut u16 = std::ptr::null_mut();
@@ -1167,13 +1167,9 @@ fn handle_combined_emit(
 
     // A local match never enters this loop. Fleet rules are the sole
     // authority allowed to create a content-free Fleet event.
-    for matched in combined
-        .matches
-        .iter()
-        .filter(|matched| {
-            should_submit_organisation_match(matched.source, &matched.verdict.actions)
-        })
-    {
+    for matched in combined.matches.iter().filter(|matched| {
+        should_submit_organisation_match(matched.source, &matched.verdict.actions)
+    }) {
         let fleet_outcome = fleet_action_outcome(&outcome, &matched.verdict);
         let report = build_pending_report_with_outcome(
             fleet_policy_version,
@@ -1758,7 +1754,7 @@ pub async fn get_paste_monitor_auto_clear_on_lock() -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wincmd_clip_rules::{CompiledRuleSet, RuleSetLimits, compile};
+    use wincmd_clip_rules::{compile, CompiledRuleSet, RuleSetLimits};
 
     // ── Test helpers ──────────────────────────────────────────────────
 

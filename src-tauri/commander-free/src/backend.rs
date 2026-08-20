@@ -2932,15 +2932,9 @@ fn get_settings_sync_patch(
         "Enable-IEEnhancedSecurity" => {
             Some(json!({"tweaks":{"server":{"ieEnhancedSecurityDisabled": false}}}))
         }
-        "Block-WDigestCredentials" => {
-            Some(json!({"tweaks":{"server":{"wdigestBlocked": true}}}))
-        }
-        "Allow-WDigestCredentials" => {
-            Some(json!({"tweaks":{"server":{"wdigestBlocked": false}}}))
-        }
-        "Enable-LsaProtection" => {
-            Some(json!({"tweaks":{"server":{"lsaProtectionEnabled": true}}}))
-        }
+        "Block-WDigestCredentials" => Some(json!({"tweaks":{"server":{"wdigestBlocked": true}}})),
+        "Allow-WDigestCredentials" => Some(json!({"tweaks":{"server":{"wdigestBlocked": false}}})),
+        "Enable-LsaProtection" => Some(json!({"tweaks":{"server":{"lsaProtectionEnabled": true}}})),
         "Disable-LsaProtection" => {
             Some(json!({"tweaks":{"server":{"lsaProtectionEnabled": false}}}))
         }
