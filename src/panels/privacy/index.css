@@ -146,7 +146,7 @@
 }
 
 .privacy-monitor-cell .section-card .section-content [class*="bg-[var(--color-bg-secondary)]"],
-.privacy-monitor-cell .section-card .section-content [class*="bg-[var(--surface-2)]"] {
+.privacy-monitor-cell .section-card .section-content [class*="bg-[var(--surface-2)]"]:not([role="checkbox"]) {
     background: var(--shield-inner-bg) !important;
 }
 

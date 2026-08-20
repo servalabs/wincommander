@@ -5,6 +5,17 @@ declare const Bun: {
 };
 
 describe("Privacy Monitor control accessibility", () => {
+  test("monitor surface theming does not override checked checkbox colors", async () => {
+    const css = await Bun.file("src/panels/privacy/index.css").text();
+
+    expect(css).toContain(
+      '[class*="bg-[var(--surface-2)]"]:not([role="checkbox"])',
+    );
+    expect(css).not.toContain(
+      '[class*="bg-[var(--surface-2)]"] {',
+    );
+  });
+
   test("labels monitor switches, disclosure buttons, and clear actions", async () => {
     const [ransomware, decoy, rdp, usb, canary, shield, screenCapture, remoteAccess, paste, bp, slider, printAudit, dlp, printUsb, tamper, lockdown, rightSidebar] = await Promise.all([
       Bun.file("src/panels/privacy/RansomwareMonitorSection.tsx").text(),
