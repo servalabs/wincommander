@@ -54,6 +54,17 @@ struct StagedUpdate {
     bytes: Vec<u8>,
 }
 
+/// Consume staged installer bytes only when the newly checked, signed manifest
+/// still names the exact same release. A manifest can advance while the app is
+/// running; installing older staged bytes through the newer `Update` handle
+/// would make the displayed release metadata diverge from the installer.
+fn take_staged_for_version(staged: &mut Option<StagedUpdate>, version: &str) -> Option<Vec<u8>> {
+    match staged.take() {
+        Some(candidate) if candidate.version == version => Some(candidate.bytes),
+        Some(_) | None => None,
+    }
+}
+
 #[derive(serde::Serialize, Clone)]
 pub struct StatePayload {
     phase: &'static str,
@@ -370,13 +381,10 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
         }
     }
 
-    // Take staged bytes out of the Mutex before await points.
-    let staged = app
-        .try_state::<StagedState>()
-        .and_then(|s| s.inner.lock().ok().and_then(|mut g| g.take()));
-
-    // A fresh Update handle is needed to drive install(); reusing already-
-    // verified staged bytes avoids a re-download while staying correct.
+    // A fresh Update handle is needed to drive install. Keep any staged bytes
+    // until this re-check completes: they are reusable only if its manifest
+    // names the same version, and retaining them lets a transient re-check
+    // failure be retried without a needless re-download.
     let updater = build_updater(&app);
     let update = match updater {
         Ok(u) => match u.check().await {
@@ -408,9 +416,16 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
     let target_current = update.current_version.clone();
     let target_body = update.body.clone();
 
+    let staged = app.try_state::<StagedState>().and_then(|s| {
+        s.inner
+            .lock()
+            .ok()
+            .and_then(|mut state| take_staged_for_version(&mut state, &target_version))
+    });
+
     let result = match staged {
-        Some(st) => update
-            .install(st.bytes)
+        Some(bytes) => update
+            .install(bytes)
             .map_err(|e| format!("Install failed: {}", e)),
         None => update
             .download_and_install(|_, _| {}, || {})
@@ -431,4 +446,29 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
         s.installing.store(false, Ordering::Release);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{take_staged_for_version, StagedUpdate};
+
+    #[test]
+    fn staged_installer_is_reused_only_for_the_manifested_version() {
+        let mut matching = Some(StagedUpdate {
+            version: "4.2.0".into(),
+            bytes: vec![1, 2, 3],
+        });
+        assert_eq!(
+            take_staged_for_version(&mut matching, "4.2.0"),
+            Some(vec![1, 2, 3])
+        );
+        assert!(matching.is_none());
+
+        let mut stale = Some(StagedUpdate {
+            version: "4.2.0".into(),
+            bytes: vec![4, 5, 6],
+        });
+        assert_eq!(take_staged_for_version(&mut stale, "4.3.0"), None);
+        assert!(stale.is_none());
+    }
 }

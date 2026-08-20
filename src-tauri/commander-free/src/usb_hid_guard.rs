@@ -11,10 +11,10 @@
 //   2. usb_monitor::subscribe()             — U-A's broadcast channel
 //
 // Detection logic:
-//   Fire iff (A) a HID device attached within ATTACH_CORRELATION_WINDOW_MS
+//   Fire iff (A) an unallowlisted HID device remains connected
 //         AND (B) a sustained keystroke burst whose median inter-key gap is
-//                 < HUMAN_FLOOR_MS over >= MIN_BURST_KEYS distinct keys
-//   Timing alone never fires; attach alone never fires.
+//                 < HUMAN_FLOOR_MS over >= MIN_BURST_KEYS intervals
+//   Timing alone never fires; attachment alone never fires.
 //
 // Privacy invariant (HARD PROJECT RULE):
 //   Only keystroke TIMING is consumed — vk / key_name / normalized_char
@@ -35,21 +35,13 @@ use crate::usb_monitor::{self, UsbEvent};
 
 // ── Detection thresholds (named consts — the only edit needed for re-tuning) ──
 
-/// How soon after a HID device attaches a fast-keystroke burst is attributed
-/// to it. After this window closes, timing alone cannot fire.
-const ATTACH_CORRELATION_WINDOW_MS: u64 = 1_500;
-
 /// Median inter-key gap (ms) below which the burst is "superhumanly fast".
 /// 30 ms = ~400 WPM sustained, which no human achieves.
 const HUMAN_FLOOR_MS: u64 = 30;
 
-/// Minimum number of *distinct* (repeat-de-duped) keystrokes in the burst
-/// window before the timing signal can fire.
+/// Minimum number of observed inter-key intervals in the burst before the
+/// timing signal can fire.
 const MIN_BURST_KEYS: usize = 12;
-
-/// Consecutive inter-key gaps strictly below this value (ms) are treated as
-/// key-repeat (OS auto-repeat), not distinct keystrokes, and are discarded.
-const REPEAT_FLOOR_MS: u64 = 8;
 
 /// Percentage (0–100) of gaps in the burst that must be below the active
 /// floor for the timing signal to fire. Requires a sustained majority.
@@ -105,17 +97,21 @@ fn effective_thresholds(s: Sensitivity) -> EffectiveThresholds {
     }
 }
 
-/// Snapshot of the arming state (set when a HID device attaches and the
-/// correlation window is open).
+/// Snapshot of the arming state for a connected, unallowlisted HID.
 #[derive(Debug, Clone)]
 struct ArmState {
     device_key: String,
     friendly_name: String,
     is_mass_storage: bool,
-    armed_at: Instant,
-    expires_at: Instant,
-    /// Other HID devices that armed in the same window (candidates).
-    candidate_keys: Vec<String>,
+    /// Other attached HID devices that may also be candidates.
+    candidates: Vec<HidCandidate>,
+}
+
+#[derive(Debug, Clone)]
+struct HidCandidate {
+    device_key: String,
+    friendly_name: String,
+    is_mass_storage: bool,
 }
 
 /// The event emitted when an injection burst is detected.
@@ -128,11 +124,11 @@ pub struct HidInjectionAlert {
     pub friendly_name: String,
     /// RFC-3339 UTC timestamp of detection.
     pub detected_at: String,
-    /// Number of distinct (repeat-de-duped) keys counted in the burst.
+    /// Number of observed inter-key intervals counted in the burst.
     pub gaps_sampled: usize,
     /// Median inter-key interval (ms) over the burst.
     pub median_gap_ms: u64,
-    /// Whether this alert was triggered with a recently-attached HID device.
+    /// Connected HID device that was present when the burst was detected.
     pub recent_hid_device: Option<String>,
     /// "hidOnly" | "composite" | "unknown"
     pub red_flag: String,
@@ -151,7 +147,7 @@ static CONSUMER_TASK: Lazy<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>> 
 
 static SENSITIVITY: Lazy<Mutex<Sensitivity>> = Lazy::new(|| Mutex::new(Sensitivity::Balanced));
 
-/// Currently-open arming state (Some while within the correlation window).
+/// Currently-open arming state (Some while an unallowlisted HID remains attached).
 static ARM: Lazy<Mutex<Option<ArmState>>> = Lazy::new(|| Mutex::new(None));
 
 /// Rolling window of KeyEvent ARRIVAL INSTANTS — timing only, never content.
@@ -167,6 +163,9 @@ static LAST_FIRE: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
 /// Recent detection ring (capped at RECENT_CAP). No keystroke content.
 static RECENT: Lazy<Mutex<VecDeque<HidInjectionAlert>>> = Lazy::new(|| Mutex::new(VecDeque::new()));
 
+#[cfg(test)]
+static HID_GUARD_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
 // ── Pure detector (unit-testable, no Instant creation inside) ──────────────────
 //
 // Caller stamps arrival time; this function receives a slice of already-computed
@@ -179,8 +178,8 @@ static RECENT: Lazy<Mutex<VecDeque<HidInjectionAlert>>> = Lazy::new(|| Mutex::ne
 /// - At least `FAST_GAP_PCT`% of gaps must be strictly below `floor_ms`.
 /// - If `recent_hid_attach` is true, use `floor_ms`; otherwise use a stricter
 ///   sub-threshold (floor_ms - 4, min 5) to avoid false-positives when no HID
-///   device is freshly attached (belt-and-suspenders — the arm window already
-///   gates this, but the pure fn is testable standalone).
+///   device is attached (belt-and-suspenders — runtime execution always requires
+///   an attached device, but the pure fn is testable standalone).
 // Retained for its standalone unit tests (below): it documents/validates the
 // injection-timing heuristic. The consumer task now applies the sensitivity-
 // scoped thresholds inline rather than via this fixed-Balanced helper, so it is
@@ -221,45 +220,68 @@ fn try_arm(identity: &crate::usb_monitor::DeviceIdentity) {
         );
         return;
     }
-    let now = Instant::now();
-    let expires = now + std::time::Duration::from_millis(ATTACH_CORRELATION_WINDOW_MS);
-    let mut arm = ARM.lock().unwrap();
-    match arm.as_mut() {
-        Some(existing) => {
-            // Extend with the newest device; push old primary to candidates.
-            existing.candidate_keys.push(existing.device_key.clone());
-            existing.device_key = identity.key.clone();
-            existing.friendly_name = identity.friendly_name.clone();
-            existing.is_mass_storage = identity.is_mass_storage;
-            existing.armed_at = now;
-            existing.expires_at = expires;
-        }
-        None => {
-            *arm = Some(ArmState {
-                device_key: identity.key.clone(),
-                friendly_name: identity.friendly_name.clone(),
-                is_mass_storage: identity.is_mass_storage,
-                armed_at: now,
-                expires_at: expires,
-                candidate_keys: Vec::new(),
-            });
+    {
+        let mut arm = ARM.lock().unwrap();
+        match arm.as_mut() {
+            Some(existing) => {
+                // The newest HID is the primary suspect; retain the previous
+                // candidate because a composite device can enumerate functions
+                // independently.
+                if existing.device_key != identity.key {
+                    existing
+                        .candidates
+                        .retain(|candidate| candidate.device_key != identity.key);
+                    existing.candidates.push(HidCandidate {
+                        device_key: existing.device_key.clone(),
+                        friendly_name: existing.friendly_name.clone(),
+                        is_mass_storage: existing.is_mass_storage,
+                    });
+                }
+                existing.device_key = identity.key.clone();
+                existing.friendly_name = identity.friendly_name.clone();
+                existing.is_mass_storage = identity.is_mass_storage;
+            }
+            None => {
+                *arm = Some(ArmState {
+                    device_key: identity.key.clone(),
+                    friendly_name: identity.friendly_name.clone(),
+                    is_mass_storage: identity.is_mass_storage,
+                    candidates: Vec::new(),
+                });
+            }
         }
     }
+    // Timing collected before this device existed must never dilute its burst.
+    KEY_TIMES.lock().unwrap().clear();
     crate::log_message(
         "info",
         &format!(
-            "[UsbHidGuard] armed for device '{}' (window {}ms)",
-            identity.key, ATTACH_CORRELATION_WINDOW_MS
+            "[UsbHidGuard] armed for connected device '{}'",
+            identity.key
         ),
     );
 }
 
 fn try_disarm(device_key: &str) {
     let mut arm = ARM.lock().unwrap();
-    if let Some(a) = arm.as_ref() {
-        if a.device_key == device_key {
-            crate::log_message("debug", "[UsbHidGuard] disarmed (device detached)");
-            *arm = None;
+    if let Some(current) = arm.as_mut() {
+        if current.device_key == device_key {
+            if let Some(replacement) = current.candidates.pop() {
+                current.device_key = replacement.device_key;
+                current.friendly_name = replacement.friendly_name;
+                current.is_mass_storage = replacement.is_mass_storage;
+                crate::log_message(
+                    "debug",
+                    "[UsbHidGuard] primary detached; restored another connected HID candidate",
+                );
+            } else {
+                crate::log_message("debug", "[UsbHidGuard] disarmed (device detached)");
+                *arm = None;
+            }
+        } else {
+            current
+                .candidates
+                .retain(|candidate| candidate.device_key != device_key);
         }
     }
 }
@@ -274,13 +296,10 @@ fn record_key_arrival(arrival: Instant) -> Option<u64> {
     let gap = times
         .back()
         .map(|prev| arrival.saturating_duration_since(*prev).as_millis() as u64);
-    // Repeat de-dup: consecutive gaps below REPEAT_FLOOR_MS are key-repeat.
-    // Discard the repeat by NOT pushing.
-    if let Some(g) = gap {
-        if g < REPEAT_FLOOR_MS {
-            return None; // treated as key-repeat, dropped
-        }
-    }
+    // Do not infer auto-repeat from timing alone: sub-8ms intervals are a
+    // common injection cadence, and the privacy contract forbids inspecting
+    // key identity to distinguish them. The burst threshold below filters
+    // normal typing without discarding the strongest attack signal.
     times.push_back(arrival);
     while times.len() > KEY_TIMES_CAP {
         times.pop_front();
@@ -325,14 +344,19 @@ fn fire(app: &AppHandle, arm: ArmState, gaps_ms: &[u64]) {
         let last = LAST_FIRE.lock().unwrap();
         if let Some(t) = *last {
             if (now.saturating_duration_since(t).as_millis() as u64) < DEBOUNCE_MS {
+                // A debounced burst must not remain in the rolling window. If
+                // it did, one later key after the debounce interval could make
+                // old injection timing look like a fresh burst.
+                KEY_TIMES.lock().unwrap().clear();
                 return;
             }
         }
     }
     *LAST_FIRE.lock().unwrap() = Some(now);
 
-    // Clear the arm and the key-times ring so the same burst cannot re-fire.
-    *ARM.lock().unwrap() = None;
+    // Preserve the arm while the HID remains attached: an attacker can issue
+    // multiple delayed bursts. Reset timing so the next burst is measured from
+    // its own first key; LAST_FIRE still bounds repeated notifications.
     KEY_TIMES.lock().unwrap().clear();
 
     let mut sorted = gaps_ms.to_vec();
@@ -478,21 +502,7 @@ async fn consumer_task(app: AppHandle) {
                             continue;
                         }
 
-                        // Check if arming window is still open.
-                        let arm_snapshot: Option<ArmState> = {
-                            let mut arm = ARM.lock().unwrap();
-                            if let Some(a) = arm.as_ref() {
-                                if Instant::now() > a.expires_at {
-                                    // Window expired — disarm.
-                                    *arm = None;
-                                    None
-                                } else {
-                                    Some(a.clone())
-                                }
-                            } else {
-                                None
-                            }
-                        };
+                        let arm_snapshot = ARM.lock().unwrap().clone();
 
                         let Some(arm_state) = arm_snapshot else { continue };
 
@@ -873,6 +883,7 @@ mod tests {
 
     #[test]
     fn allow_listed_device_is_exempt_and_never_arms() {
+        let _guard = HID_GUARD_TEST_LOCK.lock().unwrap();
         let key = "USB:TEST:ALLOWLIST:UNIT".to_string();
 
         // Insert directly into the static (mirrors what usb_hid_guard_allow_device does).
@@ -905,23 +916,72 @@ mod tests {
         assert!(!is_exempt(&key), "removal must clear exemption");
     }
 
-    // ── KEY_TIMES repeat de-dup logic ─────────────────────────────────────────
+    // ── Runtime-path timing state ─────────────────────────────────────────────
 
     #[test]
-    fn repeat_events_are_discarded() {
-        // Feed two Instants very close together (< REPEAT_FLOOR_MS apart).
-        // The second should be dropped (returns None gap).
+    fn sub_eight_ms_intervals_are_preserved_for_injection_detection() {
+        let _guard = HID_GUARD_TEST_LOCK.lock().unwrap();
+        KEY_TIMES.lock().unwrap().clear();
         let t0 = Instant::now();
-        let t1 = t0 + std::time::Duration::from_millis(REPEAT_FLOOR_MS - 1);
-        // Use fresh state by operating on a local VecDeque (not the static).
-        // We replicate the logic inline to avoid polluting the static in tests.
-        let mut times: VecDeque<Instant> = VecDeque::new();
-        times.push_back(t0);
-        let gap = t1.saturating_duration_since(t0).as_millis() as u64;
-        let is_repeat = gap < REPEAT_FLOOR_MS;
-        assert!(
-            is_repeat,
-            "gap < REPEAT_FLOOR_MS should be treated as repeat"
+        assert_eq!(record_key_arrival(t0), None);
+        assert_eq!(
+            record_key_arrival(t0 + std::time::Duration::from_millis(1)),
+            Some(1)
         );
+        assert_eq!(KEY_TIMES.lock().unwrap().len(), 2);
+        KEY_TIMES.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn arming_a_connected_hid_clears_stale_keyboard_timing() {
+        let _guard = HID_GUARD_TEST_LOCK.lock().unwrap();
+        KEY_TIMES.lock().unwrap().clear();
+        *ARM.lock().unwrap() = None;
+        let t0 = Instant::now();
+        let _ = record_key_arrival(t0);
+        let _ = record_key_arrival(t0 + std::time::Duration::from_millis(120));
+
+        try_arm(&crate::usb_monitor::DeviceIdentity {
+            key: "USB:1D50:60FC:NOSERIAL".to_string(),
+            vid: "1D50".to_string(),
+            pid: "60FC".to_string(),
+            serial: "NOSERIAL".to_string(),
+            serial_stable: false,
+            friendly_name: "Composite HID test device".to_string(),
+            manufacturer: "Test".to_string(),
+            class: "HIDClass".to_string(),
+            is_hid: true,
+            is_mass_storage: false,
+            instance_id: r"HID\VID_1D50&PID_60FC\7&1234&0&0000".to_string(),
+        });
+
+        assert!(ARM.lock().unwrap().is_some());
+        assert!(KEY_TIMES.lock().unwrap().is_empty());
+        *ARM.lock().unwrap() = None;
+    }
+
+    #[test]
+    fn detaching_primary_hid_restores_another_connected_candidate() {
+        let _guard = HID_GUARD_TEST_LOCK.lock().unwrap();
+        *ARM.lock().unwrap() = Some(ArmState {
+            device_key: "USB:1111:AAAA:PRIMARY".to_string(),
+            friendly_name: "Primary HID".to_string(),
+            is_mass_storage: false,
+            candidates: vec![HidCandidate {
+                device_key: "USB:2222:BBBB:CANDIDATE".to_string(),
+                friendly_name: "Candidate HID".to_string(),
+                is_mass_storage: true,
+            }],
+        });
+
+        try_disarm("USB:1111:AAAA:PRIMARY");
+
+        let restored = ARM.lock().unwrap().clone().expect("candidate stays armed");
+        assert_eq!(restored.device_key, "USB:2222:BBBB:CANDIDATE");
+        assert_eq!(restored.friendly_name, "Candidate HID");
+        assert!(restored.is_mass_storage);
+
+        try_disarm("USB:2222:BBBB:CANDIDATE");
+        assert!(ARM.lock().unwrap().is_none());
     }
 }

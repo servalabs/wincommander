@@ -186,20 +186,28 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// Parse a Win32_PnPEntity InstanceId into a DeviceIdentity.
-/// Format: "USB\VID_xxxx&PID_yyyy\<serial>"
-/// Returns None only if this is not a USB device at all (no "USB" prefix).
+/// Parse a USB physical node or its HID function into a DeviceIdentity.
+/// Formats: "USB\VID_xxxx&PID_yyyy\<serial>" and
+/// "HID\VID_xxxx&PID_yyyy\<serial>". Windows exposes a composite device's
+/// HID function separately, so accepting only the USB parent misses a keyboard
+/// function that can inject input.
+/// Returns None for non-USB buses and non-HID PnP nodes.
 pub fn derive_device_key(instance_id: &str) -> Option<DeviceIdentity> {
     // Normalise backslash variants — WMI sometimes uses forward slash.
     let id = instance_id.replace('/', "\\");
 
-    // Must start with "USB\" (case-insensitive).
-    if !id.to_ascii_uppercase().starts_with("USB\\") {
+    // USB composite devices enumerate their keyboard function under HID\,
+    // while the physical parent is USB\. Both carry VID/PID and need the same
+    // device-key namespace so allow-lists and alerts can reason about either.
+    let prefix = id
+        .split_once('\\')
+        .map(|(prefix, _)| prefix.to_ascii_uppercase())?;
+    if prefix != "USB" && prefix != "HID" {
         return None;
     }
 
     let mut parts = id.splitn(3, '\\');
-    let _bus = parts.next()?; // "USB"
+    let _bus = parts.next()?; // "USB" or "HID"
     let vpid_seg = parts.next().unwrap_or(""); // "VID_xxxx&PID_yyyy[&...]"
     let serial_seg = parts.next().unwrap_or(""); // "<serial>" or ""
 
@@ -521,7 +529,7 @@ while ($true) {{
         $evt = $watcher.WaitForNextEvent()
         $dev = $evt.TargetInstance
         $devId = $dev.DeviceID
-        if ($devId -like 'USB*') {{
+        if ($devId -like 'USB\*' -or $devId -like 'HID\*') {{
             $devName = $dev.Name
             Write-Output ("USB_EVT|" + $devId + "|" + $devName)
             [Console]::Out.Flush()
@@ -702,7 +710,7 @@ async fn handle_detach(app: AppHandle, instance_id: String) {
 fn cold_start_enumerate() {
     let script = r#"
 Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
-  Where-Object { $_.InstanceId -like 'USB*' } |
+  Where-Object { $_.InstanceId -like 'USB\*' -or $_.InstanceId -like 'HID\*' } |
   ForEach-Object {
     Write-Output ("DEV|" + $_.InstanceId + "|" + $_.FriendlyName + "|" + $_.Manufacturer + "|" + $_.Class + "|" + $_.Service)
   }
@@ -1232,6 +1240,15 @@ mod tests {
     }
 
     #[test]
+    fn classify_usb_network_and_serial_functions_are_not_hid_or_storage() {
+        // Composite USB devices may expose CDC serial or NCM/MBIM networking
+        // alongside another function. They are recorded as attached hardware,
+        // but must not enter HID injection or mass-storage quarantine paths.
+        assert_eq!(classify_usb("Ports", "UsbSer"), (false, false));
+        assert_eq!(classify_usb("Net", "UsbNcm"), (false, false));
+    }
+
+    #[test]
     fn stale_open_sessions_are_closed_on_load_and_credited() {
         let mut s = UsbTimelineStore::default();
         let key = "USB:1111:2222:STALE".to_string();
@@ -1343,8 +1360,17 @@ mod tests {
     }
 
     #[test]
+    fn composite_hid_function_is_tracked_with_the_usb_device_namespace() {
+        let id = derive_device_key(r"HID\VID_1D50&PID_60FC\7&1234&0&0000").unwrap();
+        assert_eq!(id.vid, "1D50");
+        assert_eq!(id.pid, "60FC");
+        assert_eq!(id.key, "USB:1D50:60FC:NOSERIAL");
+        assert!(!id.serial_stable);
+    }
+
+    #[test]
     fn non_usb_device_returns_none() {
-        assert!(derive_device_key(r"HID\VID_1234&PID_5678\DEVICE").is_none());
+        assert!(derive_device_key(r"BTHENUM\DEV_1234").is_none());
         assert!(derive_device_key("").is_none());
     }
 

@@ -12,6 +12,19 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **USB HID and device-control hardening** (2026-08-20) — composite HID
+  functions now reach the USB monitor and injection guard; the guard remains
+  armed for an attached unallowlisted HID, preserves sub-8 ms intervals, and
+  clears pre-attach timing. USB serial/network functions remain outside HID and
+  storage enforcement. Pro device control now rejects non-USB/HID PnP targets
+  before PowerShell. Source tests pass; physical BadUSB, Flipper Zero, Hak5
+  Rubber Ducky, O.MG cable, and composite-device verification remain open.
+
+- **Signed-updater version binding** (2026-08-20) — staged installer bytes are
+  reused only when a fresh signed manifest still names the same version. If the
+  channel advances while WinCommander is open, installation downloads and
+  verifies the new artifact instead of feeding stale bytes to the new update.
+
 - **Routine cleaner safety and coverage refresh** (2026-08-20) — imported the
   compatible Kudu v2.1 cleaner improvements into WinCommander's native Rust
   cleaner: per-rule retention ages, bounded named-cache discovery below an
