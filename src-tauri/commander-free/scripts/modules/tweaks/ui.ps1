@@ -58,16 +58,15 @@ function Disable-ClassicContextMenu {
 # --- TASKBAR ---
 
 function Enable-EndTaskOnTaskbar {
-    $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings"
-    if (!(Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
-    Set-ItemProperty -Path $path -Name "TaskbarEndTask" -Value 1 -Type DWord -Force
-    @{ status = 'enabled' }
+    $updated = Set-AllUserExplorerDword -SubKey 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings' -Name 'TaskbarEndTask' -Value 1
+    $restart = Restart-Explorer -AllUsers
+    @{ status = 'enabled'; profilesUpdated = $updated; explorerRestart = $restart }
 }
 
 function Disable-EndTaskOnTaskbar {
-    $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings"
-    if (Test-Path $path) { Invoke-7Erase -Path $path -Type RegistryProperty -Name "TaskbarEndTask" }
-    @{ status = 'disabled' }
+    $updated = Set-AllUserExplorerDword -SubKey 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings' -Name 'TaskbarEndTask' -Value 0 -Remove
+    $restart = Restart-Explorer -AllUsers
+    @{ status = 'disabled'; profilesUpdated = $updated; explorerRestart = $restart }
 }
 
 # --- SEARCH ---
@@ -91,14 +90,14 @@ function Enable-BingSearch {
 function Show-FileExtensions {
     $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
     Set-ItemProperty -Path $path -Name "HideFileExt" -Value 0 -Type DWord -Force
-    Restart-Explorer | Out-Null
+    Restart-Explorer -AllUsers | Out-Null
     @{ status = 'shown' }
 }
 
 function Hide-FileExtensions {
     $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
     Set-ItemProperty -Path $path -Name "HideFileExt" -Value 1 -Type DWord -Force
-    Restart-Explorer | Out-Null
+    Restart-Explorer -AllUsers | Out-Null
     @{ status = 'hidden' }
 }
 
@@ -356,7 +355,7 @@ function Set-TaskbarDebloated {
         if (!(Test-Path $polExplorerCU)) { New-Item -Path $polExplorerCU -Force | Out-Null }
         Set-ItemProperty -Path $polExplorerCU -Name "HideSCAMeetNow" -Value 1 -Type DWord -Force
 
-        Restart-Explorer | Out-Null
+        Restart-Explorer -AllUsers | Out-Null
         @{ status = "debloated" }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
@@ -372,7 +371,7 @@ function Reset-TaskbarDebloated {
         Set-ItemProperty -Path $adv -Name "TaskbarAl" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
         Remove-ItemSecure -Path "HKCU:\Software\Policies\Microsoft\Windows\Explorer" -Name "HidePeopleBar" -ErrorAction SilentlyContinue
         Remove-ItemSecure -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Name "HideSCAMeetNow" -ErrorAction SilentlyContinue
-        Restart-Explorer | Out-Null
+        Restart-Explorer -AllUsers | Out-Null
         @{ status = "reset" }
     }
     catch { @{ error = $true; message = $_.Exception.Message } }

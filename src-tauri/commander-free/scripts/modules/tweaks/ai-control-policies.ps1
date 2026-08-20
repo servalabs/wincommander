@@ -127,7 +127,7 @@ function Set-AIControlPolicies {
             & reg.exe unload 'HKU\WinCommanderDefault' | Out-Null
         }
     }
-    Restart-Explorer | Out-Null
+    Restart-Explorer -AllUsers | Out-Null
     [pscustomobject]@{ status = if ($Mode -eq 'apply') { 'disabled' } else { 'restored' }; operation = 'policies'; changed = $entries.Count; requiresReboot = $false }
 }
 

@@ -288,10 +288,44 @@ function Resolve-DataPath {
 
 
 function Restart-Explorer {
-    # KT: Explorer is a per-user desktop shell. Killing it by image name also
-    # kills every RDS user's taskbar, while a process started by an updater or
-    # service cannot restore those other sessions. Refresh shell associations
-    # instead; changes that require a new shell apply on the user's next logon.
+    param([switch]$AllUsers)
+
+    if ($AllUsers) {
+        Assert-IsAdmin
+        $targets = @(Get-Process -Name explorer -ErrorAction SilentlyContinue)
+        if ($targets.Count -eq 0) {
+            return @{ status = 'no_explorer_sessions'; restartedSessions = @() }
+        }
+
+        $sessionIds = @($targets | ForEach-Object { $_.SessionId } | Sort-Object -Unique)
+        $targets | Stop-Process -Force -ErrorAction SilentlyContinue
+
+        # Windows restores explorer.exe as each interactive user's configured
+        # shell. Wait briefly so callers can report whether every session came
+        # back instead of pretending a current-user refresh was global.
+        $remaining = @()
+        for ($attempt = 0; $attempt -lt 12; $attempt++) {
+            Start-Sleep -Milliseconds 250
+            $remaining = @(Get-Process -Name explorer -ErrorAction SilentlyContinue |
+                Where-Object { $_.SessionId -in $sessionIds })
+            if ((@($remaining | ForEach-Object { $_.SessionId } | Sort-Object -Unique).Count) -eq $sessionIds.Count) {
+                break
+            }
+        }
+
+        $restartedSessions = @($remaining | ForEach-Object { $_.SessionId } | Sort-Object -Unique)
+        $missingSessions = @($sessionIds | Where-Object { $_ -notin $restartedSessions })
+        return @{
+            status = if ($missingSessions.Count -eq 0) { 'all_users_restarted' } else { 'restart_incomplete' }
+            restartedSessions = $restartedSessions
+            missingSessions = $missingSessions
+            warning = if ($missingSessions.Count -gt 0) { 'Explorer did not restart in every session; affected users should sign out and back in.' } else { $null }
+        }
+    }
+
+    # Per-user settings only need a shell association refresh for the current
+    # desktop. Do not interrupt other users for a preference that was not
+    # applied to their profile.
     try {
         Add-Type -TypeDefinition @'
 using System;
@@ -307,6 +341,59 @@ public static class WinCommanderShellRefresh {
     catch {
         return @{ status = 'refresh_deferred'; requiresSignOut = $true; warning = $_.Exception.Message }
     }
+}
+
+function Set-AllUserExplorerDword {
+    param(
+        [Parameter(Mandatory = $true)][string]$SubKey,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][int]$Value,
+        [switch]$Remove
+    )
+
+    Assert-IsAdmin
+    $profileList = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction Stop |
+        ForEach-Object {
+            $sid = $_.PSChildName
+            $profile = Get-ItemProperty -LiteralPath $_.PSPath -Name ProfileImagePath -ErrorAction SilentlyContinue
+            if ($sid -notin @('S-1-5-18', 'S-1-5-19', 'S-1-5-20') -and $profile.ProfileImagePath) {
+                [pscustomobject]@{ Sid = $sid; Path = [Environment]::ExpandEnvironmentVariables($profile.ProfileImagePath) }
+            }
+        }
+    $profilesDirectory = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -Name ProfilesDirectory -ErrorAction SilentlyContinue).ProfilesDirectory
+    if ($profilesDirectory) {
+        $defaultProfile = Join-Path ([Environment]::ExpandEnvironmentVariables($profilesDirectory)) 'Default'
+        $profileList = @($profileList) + [pscustomobject]@{ Sid = 'DefaultUser'; Path = $defaultProfile }
+    }
+
+    $updated = 0
+    foreach ($profile in $profileList) {
+        $root = "Registry::HKEY_USERS\$($profile.Sid)"
+        $temporaryHive = $false
+        if (-not (Test-Path -LiteralPath $root)) {
+            $ntUser = Join-Path $profile.Path 'NTUSER.DAT'
+            if (-not (Test-Path -LiteralPath $ntUser)) { continue }
+            & reg.exe load "HKU\WinCommander-$($profile.Sid)" $ntUser 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) { continue }
+            $root = "Registry::HKEY_USERS\WinCommander-$($profile.Sid)"
+            $temporaryHive = $true
+        }
+
+        try {
+            $path = Join-Path $root $SubKey
+            if ($Remove) {
+                Remove-ItemProperty -LiteralPath $path -Name $Name -ErrorAction SilentlyContinue
+            } else {
+                if (-not (Test-Path -LiteralPath $path)) { New-Item -Path $path -Force | Out-Null }
+                Set-ItemProperty -LiteralPath $path -Name $Name -Value $Value -Type DWord -Force
+            }
+            $updated++
+        }
+        finally {
+            if ($temporaryHive) { & reg.exe unload "HKU\WinCommander-$($profile.Sid)" 2>$null | Out-Null }
+        }
+    }
+    return $updated
 }
 
 function Schedule-SSDOptimization {

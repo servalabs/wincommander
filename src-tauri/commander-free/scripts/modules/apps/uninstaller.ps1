@@ -68,11 +68,11 @@ function Invoke-RemoveOneDrive {
             icacls $Env:OneDrive /grant "Administrators:(D,DC)" | Out-Null
         }
 
-        Restart-Explorer | Out-Null
+        Restart-Explorer -AllUsers | Out-Null
         @{ status = 'removed' }
     }
     catch {
-        Restart-Explorer | Out-Null
+        Restart-Explorer -AllUsers | Out-Null
         @{ error = $true; message = "Failed to remove OneDrive: $($_.Exception.Message)" }
     }
 }
