@@ -1023,7 +1023,7 @@ export interface MeshVPNPeer {
   Online: boolean;
   Active: boolean;
   Relay: string;
-  LastSeen: string;
+  LastSeen?: string | null;
   IPs: string[];
   RxBytes: number;
   TxBytes: number;
@@ -1056,6 +1056,8 @@ export interface MeshVPNStatus {
     AcceptDNS: boolean;
   };
   MagicDNSSuffix?: string;
+  /** The exit node currently in use, distinct from a saved preference. */
+  activeExitNodeIP?: string;
   peers?: MeshVPNPeer[];
   error?: string;
 }

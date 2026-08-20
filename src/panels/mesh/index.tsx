@@ -43,6 +43,7 @@ import SectionCard from "../../components/shared/SectionCard";
 import UniversalToggle from "../../components/shared/UniversalToggle";
 import EmbeddedWebView from "../../components/shared/EmbeddedWebView";
 import MeshGrid, { OsLogo } from "./MeshGrid";
+import { isMeshPeerOnline, isMeshPeerStale } from "./meshPresence";
 import VpnKillSwitchSection from "./VpnKillSwitchSection";
 import HowItWorks from "./HowItWorks";
 import PanelHeader from "../../components/shared/PanelHeader";
@@ -433,8 +434,8 @@ function PrivateMeshPanel() {
 
         // Helper to get category score
         const getCategoryScore = (p: MeshVPNPeer) => {
-            if (p.Online) return 0; // Active
-            if (!p.LastSeen || (now.getTime() - new Date(p.LastSeen).getTime() < STALE_THRESHOLD_MS)) return 1; // Idle
+            if (isMeshPeerOnline(p)) return 0; // Online
+            if (!isMeshPeerStale(p, STALE_THRESHOLD_MS, now.getTime())) return 1; // Offline recently
             return 2; // Stale
         };
 
@@ -1213,7 +1214,7 @@ function PrivateMeshPanel() {
                         title="Mesh Devices"
                         peers={sortedPeers}
                         onSendFile={(p) => { setSendFileTarget(p); setIsSendDialogOpen(true); }}
-                        activeExitNodeIP={meshStatus?.prefs?.ExitNodeIP}
+                        activeExitNodeIP={meshStatus?.activeExitNodeIP}
                         staleThresholdMs={STALE_THRESHOLD_MS}
                     />
                 </div>
@@ -1249,7 +1250,7 @@ function PrivateMeshPanel() {
                             options={[
                                 { value: "", label: "— Select a device —" },
                                 ...(meshStatus?.peers || [])
-                                    .filter((peer) => peer.Online)
+                                    .filter(isMeshPeerOnline)
                                     .map((peer) => ({
                                         value: peer.ID,
                                         label: peer.Hostname,

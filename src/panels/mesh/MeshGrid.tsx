@@ -2,6 +2,7 @@ import { Card, Tooltip } from "@/components/ui/bp";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { MeshVPNPeer } from "../../hooks/useBackend";
+import { isMeshPeerOnline, isMeshPeerStale, parseMeshLastSeen } from "./meshPresence";
 import { panelVariants, panelTransition, DURATION_S, EASE } from "../../components/shared/motion";
 import { staggerDelay } from "../../components/shared/AnimatedList";
 import './MeshGrid.css';
@@ -25,13 +26,13 @@ export default function MeshGrid({
     if (peers.length === 0) return null;
     const now = new Date();
 
-    const onlinePeers  = peers.filter(p => p.Online);
-    const offlinePeers = peers.filter(p => !p.Online);
+    const onlinePeers  = peers.filter(isMeshPeerOnline);
+    const offlinePeers = peers.filter(p => !isMeshPeerOnline(p));
 
     const renderPeer = (peer: MeshVPNPeer) => {
         const isActiveGateway = activeExitNodeIP && peer.IPs?.some(ip => ip.split('/')[0] === activeExitNodeIP.split('/')[0]);
-        const isStale = !peer.Online && peer.LastSeen && (now.getTime() - new Date(peer.LastSeen).getTime() >= staleThresholdMs);
-        const online  = !!peer.Online;
+        const online  = isMeshPeerOnline(peer);
+        const isStale = isMeshPeerStale(peer, staleThresholdMs, now.getTime());
         const timeAgo = !online ? longLastSeen(peer.LastSeen) : null;
 
         return (
@@ -44,7 +45,7 @@ export default function MeshGrid({
                         <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${online ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]' : 'bg-[var(--color-text-muted)] opacity-30'}`} />
                         {online && (
                             <span className="text-[10px] font-mono tracking-[0.2em] text-[var(--color-text-muted)] uppercase truncate">
-                                {isActiveGateway ? 'ACTIVE GATEWAY' : 'ACTIVE'}
+                                {isActiveGateway ? 'USING GATEWAY' : 'ONLINE'}
                             </span>
                         )}
                     </div>
@@ -317,10 +318,11 @@ function UnknownOsLogo({ size }: { size: number }) {
 /** Full relative time text shown above offline node names.
  *  < 60s → "X sec ago"  |  < 60m → "X min ago"  |  < 24h → "X hr ago"
  *  < 31d → "X days ago" |  < 12mo → "X months ago" | else → "X years ago" */
-export function longLastSeen(lastSeen: string | undefined): string {
-    if (!lastSeen) return "";
+export function longLastSeen(lastSeen: string | null | undefined): string {
+    const seenAtMs = parseMeshLastSeen(lastSeen);
+    if (seenAtMs === null || seenAtMs > Date.now()) return "";
     try {
-        const diffMs = Date.now() - new Date(lastSeen).getTime();
+        const diffMs = Date.now() - seenAtMs;
         const secs   = Math.floor(diffMs / 1000);
         if (secs < 60)  return `${secs} sec ago`;
         const mins   = Math.floor(secs / 60);
