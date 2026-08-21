@@ -576,7 +576,11 @@ fn caller_sid_for_pid(pid: u32) -> Option<String> {
 }
 
 fn mounted_root_acl_sddl(grants: &[ResolvedGrant]) -> MountedRootAclSddl {
-    let mut sddl = String::from("D:P(A;;FA;;;SY)(A;;FA;;;BA)");
+    // OI+CI makes the proven root policy flow to files and directories
+    // created after mount. Without it, a Partner-created file receives the
+    // creator's default DACL and another authorized writer can be denied even
+    // though both callers can open the volume root.
+    let mut sddl = String::from("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)");
     for grant in grants {
         if grant.sid.starts_with("S-")
             && grant
@@ -589,7 +593,7 @@ fn mounted_root_acl_sddl(grants: &[ResolvedGrant]) -> MountedRootAclSddl {
             } else {
                 "0x001200A9"
             };
-            sddl.push_str("(A;;");
+            sddl.push_str("(A;OICI;");
             sddl.push_str(mask);
             sddl.push_str(";;;");
             sddl.push_str(&grant.sid);
@@ -648,6 +652,7 @@ mod tests {
         }]);
         assert!(sddl.0.starts_with("D:P"));
         assert!(sddl.0.contains("S-1-5-21-7"));
+        assert_eq!(sddl.0.matches(";OICI;").count(), 3);
     }
     #[test]
     fn broker_drive_reply_is_bounded() {
