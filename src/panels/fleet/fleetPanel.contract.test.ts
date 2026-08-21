@@ -74,4 +74,19 @@ describe("Fleet access-control panel contracts", () => {
     expect(panel).not.toContain("loadVaultPolicy");
     expect(panel).not.toContain("saveVaultPolicy");
   });
+
+  test("gives non-admin users a caller-filtered Vault mount surface", () => {
+    expect(vaultHook).toContain('invoke<VaultAuthorizedEntry[]>("vault_list_authorized_entries")');
+    expect(vaultHook).toContain('invoke<VaultMountEntryResult>("vault_mount_entry", { entryId, password })');
+    expect(vaultHook).toContain('invoke<VaultMountEntryResult>("vault_unmount_entry", { entryId })');
+    expect(vaultHook).not.toContain("volumePath");
+    expect(vault).toContain("My vaults");
+    expect(vault).toContain("Only Vaults that the service has authorized");
+    expect(vault).toContain("{isAdmin && <>");
+    expect(vault).toContain("passwordInputRef");
+    expect(vault).toContain('if (input) input.value = ""');
+    expect(vault).toContain('password = ""');
+    expect(vault).not.toContain("setMountPassword");
+    expect(vault).toContain("vaultPresentationLabel(entry.presentation)");
+  });
 });

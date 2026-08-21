@@ -183,9 +183,13 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         "svc.ink_receipt.report_receipt" => CapabilityClass::SessionHelper,
         "svc.ink_receipt.status" => CapabilityClass::ReadOnly,
 
-        // Vault authorization is transport-read-only, but the service still
-        // derives the named-pipe caller's token before making its decision.
-        "svc.vault.authorize_mount" => CapabilityClass::ReadOnly,
+        // Vault mount/unmount is user-initiated rather than administrator-
+        // initiated.  It is safe here only because the service derives the
+        // connected process token and re-checks policy membership itself; the
+        // client cannot provide a path, SID, ACL, or presentation decision.
+        "svc.vault.authorize_mount" | "svc.vault.mount" | "svc.vault.unmount" => {
+            CapabilityClass::ReadOnly
+        }
 
         // All other verbs — including mutations, dispatches, fleet toggles,
         // and any future verb not yet added above — are Privileged.

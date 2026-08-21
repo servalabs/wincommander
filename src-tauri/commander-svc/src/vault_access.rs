@@ -168,6 +168,58 @@ impl VaultAccessStore {
             .map(|p| p.policy.clone())
     }
 
+    /// Return service-only mount facts after the pipe caller has already been
+    /// authorized. These paths and resolved SIDs must never be serialized onto
+    /// the UI wire.
+    pub fn mount_plan(
+        &self,
+        entry_id: &str,
+    ) -> Option<(VaultAclPlan, VaultPresentation, Option<String>)> {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let active = state.active.as_ref()?;
+        if state.status.validation_state != VaultValidationState::Current {
+            return None;
+        }
+        let entry = active.policy.entries.iter().find(|entry| entry.id == entry_id)?;
+        let resolved = active.resolved.iter().find(|resolved| resolved.id == entry_id)?;
+        let container = PathBuf::from(&entry.container_path);
+        Some((
+            VaultAclPlan {
+                parent: container.parent()?.to_path_buf(),
+                container,
+                grants: resolved
+                    .grants
+                    .iter()
+                    .map(|grant| ResolvedGrant {
+                        sid: grant.sid.clone(),
+                        access: grant.access,
+                    })
+                    .collect(),
+            },
+            entry.mount.presentation,
+            entry.mount.preferred_letter.clone(),
+        ))
+    }
+
+    /// Protect a mount root with an exact DACL and verify its read-back. A
+    /// broker must dismount if this fails; therefore this has no response type
+    /// that could be mistaken for a successful presentation.
+    pub fn protect_mounted_root(
+        &self,
+        mounted_root: PathBuf,
+        grants: Vec<ResolvedGrant>,
+    ) -> Result<(), VaultError> {
+        let plan = VaultAclPlan {
+            parent: mounted_root.clone(),
+            container: mounted_root,
+            grants,
+        };
+        self.acls.apply_and_verify(&plan)
+    }
+
     pub fn apply(
         &self,
         policy: VaultAccessPolicy,

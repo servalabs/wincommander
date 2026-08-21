@@ -37,6 +37,9 @@ mod policy_store;
 mod vault_access;
 
 #[cfg(windows)]
+mod vault_mount;
+
+#[cfg(windows)]
 mod pipe;
 
 #[cfg(windows)]
@@ -191,6 +194,11 @@ async fn run() {
         policy_store::default_policy_dir(),
     ));
     vault_access.load_at_startup();
+    let vault_mount = Arc::new(vault_mount::VaultMountBroker::new());
+    // Service restarts must not leave an untracked broker-owned mount behind.
+    // The fixed broker performs this best-effort cleanup without receiving a
+    // path or password from this process.
+    vault_mount.dismount_all();
 
     // ── SessionHelper peer gate (D-2) ────────────────────────────────────
     //
@@ -218,7 +226,7 @@ async fn run() {
     tokio::spawn(fleet_conn_loop());
 
     // ── Named-pipe server ────────────────────────────────────────────────
-    if let Err(e) = pipe::serve(policy_store, session_helper_gate, clipboard_state, vault_access).await {
+    if let Err(e) = pipe::serve(policy_store, session_helper_gate, clipboard_state, vault_access, vault_mount).await {
         eprintln!("[wincommander-svc] pipe server exited with error: {:#}", e);
     }
 }

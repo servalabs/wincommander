@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { newVaultPolicy, validateVaultAccessIntent } from "./vaultAccessTypes";
+import {
+  newVaultPolicy,
+  validateVaultAccessIntent,
+  vaultMountResultLabel,
+  vaultPresentationLabel,
+} from "./vaultAccessTypes";
 
 describe("Vault Access service intent", () => {
   test("starts with the shared plus two private file-container shape", () => {
@@ -32,5 +37,24 @@ describe("Vault Access service intent", () => {
     expect(validateVaultAccessIntent(policy)).toBe(
       "Each managed container needs its own dedicated parent folder; vaults cannot share a parent.",
     );
+  });
+
+  test("renders bounded mount lifecycle information without container details", () => {
+    expect(vaultPresentationLabel("per-user")).toBe("Private or decoy Vault — only this signed-in user");
+    expect(vaultPresentationLabel("machine")).toBe("Shared Vault — available to authorized users");
+    expect(vaultMountResultLabel({
+      entry_id: "opaque-entry",
+      state: "mounted",
+      presentation: "per-user",
+      drive_letter: "V:",
+      reason: null,
+    })).toBe("Mounted at V:");
+    expect(vaultMountResultLabel({
+      entry_id: "opaque-entry",
+      state: "denied",
+      presentation: null,
+      drive_letter: null,
+      reason: "not_authorized",
+    })).toBe("Mount denied by the secure service");
   });
 });

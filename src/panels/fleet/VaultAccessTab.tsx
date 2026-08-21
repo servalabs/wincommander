@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useAppState } from "@/context/AppContext";
 import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
 import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
 import {
-  newVaultEntry, newVaultPolicy, validateVaultAccessIntent,
+  newVaultEntry, newVaultPolicy, validateVaultAccessIntent, vaultMountResultLabel, vaultPresentationLabel,
+  type VaultAuthorizedEntry,
+  type VaultMountEntryResult,
   type VaultAccessEntry, type VaultAccessPolicy, type VaultEntryStatus, type VaultPolicyStatus,
 } from "./vaultAccessTypes";
 
@@ -22,33 +26,55 @@ function appliedAt(timestamp: number | null) {
 }
 
 export default function VaultAccessTab() {
+  const { systemInfo } = useAppState();
+  const isAdmin = systemInfo?.isAdmin === true;
   const [policy, setPolicy] = useState<VaultAccessPolicy | null>(null);
   const [status, setStatus] = useState<VaultPolicyStatus | null>(null);
+  const [authorizedEntries, setAuthorizedEntries] = useState<VaultAuthorizedEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [legacyNotice, setLegacyNotice] = useState<string | null>(null);
-  const { getPolicy, getStatus, applyPolicy } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
+  const [mountTargetId, setMountTargetId] = useState<string | null>(null);
+  const [mountingEntryId, setMountingEntryId] = useState<string | null>(null);
+  const [unmountingEntryId, setUnmountingEntryId] = useState<string | null>(null);
+  const [mountResults, setMountResults] = useState<Record<string, VaultMountEntryResult>>({});
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+  const { getPolicy, getStatus, applyPolicy, mountEntry, unmountEntry, listAuthorizedEntries } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
   const error = useMemo(() => policy ? validateVaultAccessIntent(policy) : null, [policy]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [loadedPolicy, loadedStatus] = await Promise.all([
-        getPolicy(),
-        getStatus(),
-      ]);
-      setPolicy(loadedPolicy);
-      setStatus(loadedStatus);
-    } catch (cause) {
+      const entries = await listAuthorizedEntries();
+      setAuthorizedEntries(entries);
+      if (isAdmin) {
+        const [loadedPolicy, loadedStatus] = await Promise.all([
+          getPolicy(),
+          getStatus(),
+        ]);
+        setPolicy(loadedPolicy);
+        setStatus(loadedStatus);
+      } else {
+        setPolicy(null);
+        setStatus(null);
+      }
+    } catch {
       setPolicy(null);
       setStatus(null);
-      showError(cause instanceof Error ? cause.message : "Vault policy service is unavailable.");
+      setAuthorizedEntries([]);
+      showError("Your Vault list is unavailable.");
     } finally {
       setLoading(false);
     }
-  }, [getPolicy, getStatus]);
+  }, [getPolicy, getStatus, isAdmin, listAuthorizedEntries]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  useEffect(() => {
+    const refreshOnFocus = () => { void refresh(); };
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
+  }, [refresh]);
 
   const updateEntry = (id: string, patch: Partial<VaultAccessEntry>) => setPolicy(current => {
     const source = current ?? newVaultPolicy();
@@ -83,12 +109,108 @@ export default function VaultAccessTab() {
     setLegacyNotice("Imported as an untrusted draft. Review container paths and grants before applying.");
   };
 
-  if (loading) return <div className="fleet-admin-stack">Loading service-owned Vault policy…</div>;
+  const recordMountResult = (result: VaultMountEntryResult) => {
+    setMountResults(current => ({ ...current, [result.entry_id]: result }));
+  };
+
+  const closeMountPrompt = () => {
+    if (passwordInputRef.current) passwordInputRef.current.value = "";
+    setMountTargetId(null);
+  };
+
+  const mountSelectedEntry = async () => {
+    const entryId = mountTargetId;
+    const input = passwordInputRef.current;
+    let password = input?.value ?? "";
+    if (!entryId || !password) return void showError("Enter the vault password to mount it.");
+
+    // Clear the DOM field before awaiting IPC. The local stays only for this request.
+    if (input) input.value = "";
+    setMountTargetId(null);
+    setMountingEntryId(entryId);
+    try {
+      const mountRequest = mountEntry(entryId, password);
+      password = "";
+      const result = await mountRequest;
+      recordMountResult(result);
+      if (result.state === "mounted") showSuccess(vaultMountResultLabel(result));
+      else showError(vaultMountResultLabel(result));
+      await refresh();
+    } catch {
+      showError("The Vault mount request could not be completed.");
+    } finally {
+      password = "";
+      setMountingEntryId(null);
+    }
+  };
+
+  const unmountSelectedEntry = async (entryId: string) => {
+    setUnmountingEntryId(entryId);
+    try {
+      const result = await unmountEntry(entryId);
+      recordMountResult(result);
+      if (result.state === "unmounted") showSuccess(vaultMountResultLabel(result));
+      else showError(vaultMountResultLabel(result));
+      await refresh();
+    } catch {
+      showError("The Vault unmount request could not be completed.");
+    } finally {
+      setUnmountingEntryId(null);
+    }
+  };
+
+  if (loading) return <div className="fleet-admin-stack">Loading your Vault access…</div>;
   const activePolicy = policy;
   const statusById = new Map(status?.entries.map(entry => [entry.id, entry]));
+  const mountTarget = authorizedEntries.find(entry => entry.entry_id === mountTargetId)
+    ?? activePolicy?.entries.find(entry => entry.id === mountTargetId);
 
   return (
     <div className="fleet-admin-stack">
+      <Card>
+        <CardHeader>
+          <CardTitle>My vaults</CardTitle>
+          <CardDescription>
+            Only Vaults that the service has authorized for this Windows account appear here.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="fleet-admin-stack">
+          {authorizedEntries.length === 0 && (
+            <p className="fleet-field-hint">No Vault access is currently assigned to this Windows account.</p>
+          )}
+          {authorizedEntries.map(entry => {
+            const mountResult = mountResults[entry.entry_id];
+            const isMounted = mountResult?.state === "mounted" || entry.mount_state === "mounted";
+            return <div className="fleet-vault-lifecycle" key={entry.entry_id}>
+              <div>
+                <strong>{entry.label}</strong>
+                <span className="fleet-vault-access-label">{vaultPresentationLabel(entry.presentation)} · {entry.access === "write" ? "Read & write" : "Read only"}</span>
+                <p className="fleet-field-hint">
+                  {mountResult
+                    ? vaultMountResultLabel(mountResult)
+                    : entry.drive_letter
+                      ? `Mounted at ${entry.drive_letter}`
+                      : entry.mount_state === "mounted"
+                        ? "Mounted for this Windows session"
+                        : "Ready to mount when needed"}
+                </p>
+              </div>
+              {isMounted ? (
+                <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.entry_id} onClick={() => void unmountSelectedEntry(entry.entry_id)}>
+                  {unmountingEntryId === entry.entry_id ? "Unmounting…" : "Unmount"}
+                </Button>
+              ) : (
+                <Button variant="primary" size="sm" disabled={mountingEntryId === entry.entry_id} onClick={() => setMountTargetId(entry.entry_id)}>
+                  {mountingEntryId === entry.entry_id ? "Mounting…" : "Mount"}
+                </Button>
+              )}
+            </div>;
+          })}
+          <Button variant="outline" size="sm" onClick={() => void refresh()}>Refresh Vault access</Button>
+        </CardContent>
+      </Card>
+
+      {isAdmin && <>
       <Card>
         <CardHeader>
           <CardTitle>Vault access</CardTitle>
@@ -113,6 +235,8 @@ export default function VaultAccessTab() {
           {!activePolicy && <p className="fleet-field-hint">No service policy exists yet. Create the three-vault starter or import a retired planner as a draft.</p>}
           {activePolicy?.entries.map((entry, entryIndex) => {
             const observed = statusById.get(entry.id);
+            const mountResult = mountResults[entry.id];
+            const isMounted = mountResult?.state === "mounted" || observed?.mount_state === "mounted";
             return <div className="fleet-vault-workspace" key={entry.id}>
               <div className="fleet-vault-workspace-header">
                 <strong>Vault {entryIndex + 1}</strong>
@@ -134,7 +258,27 @@ export default function VaultAccessTab() {
                 </div>)}
                 <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: [...entry.grants, { principal_name: "", access: "write" }] })}>Add grant</Button>
               </div>
-              <p className="fleet-field-hint">Observed: {observedResult(observed)}. Mount launch is intentionally unavailable until the service owns secure mount → ACL → read-back → presentation.</p>
+              <div className="fleet-vault-lifecycle">
+                <div>
+                  <strong>{vaultPresentationLabel(entry.mount.presentation)}</strong>
+                  <p className="fleet-field-hint">
+                    {mountResult
+                      ? vaultMountResultLabel(mountResult)
+                      : observed?.mount_state
+                        ? `Service state: ${observed.mount_state}`
+                        : observedResult(observed)}
+                  </p>
+                </div>
+                {isMounted ? (
+                  <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id} onClick={() => void unmountSelectedEntry(entry.id)}>
+                    {unmountingEntryId === entry.id ? "Unmounting…" : "Unmount"}
+                  </Button>
+                ) : (
+                  <Button variant="primary" size="sm" disabled={mountingEntryId === entry.id} onClick={() => setMountTargetId(entry.id)}>
+                    {mountingEntryId === entry.id ? "Mounting…" : "Mount"}
+                  </Button>
+                )}
+              </div>
             </div>;
           })}
           <div className="fleet-action-row">
@@ -157,10 +301,35 @@ export default function VaultAccessTab() {
         <CardContent>
           <p>Policy: {status?.policy_id ?? "none"} · Version {status?.version ?? 0} · Validation: {status?.validation_state ?? "never_applied"} · Applied: {appliedAt(status?.applied_at ?? null)}</p>
           <ul className="fleet-validation-errors">
-            {status?.entries.map(entry => <li key={entry.id}>{entry.id}: {observedResult(entry)}</li>)}
+            {status?.entries.map((entry, index) => <li key={entry.id}>Vault {index + 1}: {observedResult(entry)}</li>)}
           </ul>
         </CardContent>
       </Card>
+      </>}
+
+      <Dialog open={mountTargetId !== null} onOpenChange={open => { if (!open) closeMountPrompt(); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mount {mountTarget?.label ?? "Vault"}</DialogTitle>
+            <DialogDescription>
+              Enter the password for this mount only. It is cleared before the mount request finishes and is never saved.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            ref={passwordInputRef}
+            aria-label="Vault password"
+            type="password"
+            autoComplete="off"
+            onKeyDown={event => {
+              if (event.key === "Enter") void mountSelectedEntry();
+            }}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={closeMountPrompt}>Cancel</Button>
+            <Button variant="primary" onClick={() => void mountSelectedEntry()}>Mount Vault</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

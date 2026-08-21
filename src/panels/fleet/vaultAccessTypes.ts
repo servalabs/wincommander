@@ -15,6 +15,9 @@ export type VaultEntryResult =
   | "acl_apply_failed"
   | "acl_readback_failed";
 
+/** Bounded renderer-facing lifecycle reported by the secure mount broker. */
+export type VaultMountState = "mounted" | "unmounted" | "denied" | "failed";
+
 export interface VaultGrantInput {
   principal_name: string;
   access: VaultAccess;
@@ -46,6 +49,7 @@ export interface VaultAccessPolicy {
 export interface VaultEntryStatus {
   id: string;
   result: VaultEntryResult;
+  mount_state?: VaultMountState;
 }
 
 export interface VaultPolicyStatus {
@@ -54,6 +58,45 @@ export interface VaultPolicyStatus {
   validation_state: "never_applied" | "current" | "degraded";
   applied_at: number | null;
   entries: VaultEntryStatus[];
+}
+
+/**
+ * The desktop bridge intentionally returns no container location, identity,
+ * SID, or ACL information. The service remains the authorization boundary.
+ */
+export interface VaultMountEntryResult {
+  entry_id: string;
+  state: VaultMountState;
+  presentation: VaultPresentation | null;
+  drive_letter: string | null;
+  reason: string | null;
+}
+
+/** Caller-filtered mount view. It intentionally omits policy and filesystem data. */
+export interface VaultAuthorizedEntry {
+  entry_id: string;
+  label: string;
+  access: VaultAccess;
+  presentation: VaultPresentation;
+  mount_state: VaultMountState;
+  drive_letter: string | null;
+}
+
+export function vaultPresentationLabel(presentation: VaultPresentation | null | undefined): string {
+  return presentation === "machine"
+    ? "Shared Vault — available to authorized users"
+    : "Private or decoy Vault — only this signed-in user";
+}
+
+export function vaultMountResultLabel(result: VaultMountEntryResult): string {
+  if (result.state === "mounted") {
+    return result.drive_letter
+      ? `Mounted at ${result.drive_letter}`
+      : "Mounted for this Windows session";
+  }
+  if (result.state === "unmounted") return "Unmounted";
+  if (result.state === "denied") return "Mount denied by the secure service";
+  return "Mount request could not be completed";
 }
 
 export function newVaultEntry(kind: "shared" | "private" = "private"): VaultAccessEntry {
