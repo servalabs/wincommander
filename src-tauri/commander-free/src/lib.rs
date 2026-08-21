@@ -109,6 +109,7 @@ mod uninstall_leftovers;
 mod updater;
 mod usb_guard;
 mod vault_access;
+mod vault_mount_verification;
 mod vm_sandbox;
 mod vpn_kill_switch;
 mod wifi_check;
@@ -2482,6 +2483,7 @@ pub fn run() {
             update_tray_shield_label,
             set_app_display_label,
             backend::run_backend_script,
+            vault_mount_verification::verify_vault_drive,
             activity_watch_autostart::activity_watch_request,
             backend::toggle_context_menu,
             backend::get_context_menu_status,

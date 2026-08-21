@@ -585,6 +585,16 @@ export interface MountVolumeParams {
   hardenAcl?: boolean;
 }
 
+export interface MountVolumeResult {
+  status: "mounted";
+  drive: string;
+  scope: "per-user";
+  internalDrive?: number;
+  readOnly: boolean;
+  removable: boolean;
+  hiddenProtection: boolean;
+}
+
 export interface CreateStegoMp4Params {
   /** Carrier MP4 the container is appended to. */
   carrierMp4: string;
@@ -1782,7 +1792,7 @@ export function useBackend() {
     clearEncryptedBackupTarget: () =>
       execute<{ ok: boolean; cleared: boolean }>("Clear-EncryptedBackupTarget"),
     mountVolume: (params: MountVolumeParams) =>
-      execute("Mount-EncryptionVolume", {
+      execute<MountVolumeResult>("Mount-EncryptionVolume", {
         VolumePath: params.volumePath,
         ...(params.driveLetter ? { DriveLetter: params.driveLetter } : {}),
         Password: params.password,
@@ -1797,6 +1807,8 @@ export function useBackend() {
         ...(params.scope ? { Scope: params.scope } : {}),
         HardenAcl: params.hardenAcl ?? true,
       }),
+    verifyVaultDrive: (drive: string) =>
+      invoke<{ drive: string; accessible: boolean }>("verify_vault_drive", { drive }),
     dismountVolume: (letter: string, force = false, internalDrive?: number) =>
       execute("Dismount-EncryptionVolume", {
         DriveLetter: letter,

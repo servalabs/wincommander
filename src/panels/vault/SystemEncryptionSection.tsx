@@ -1,5 +1,5 @@
 import { Icon, Spinner } from "@/components/ui/bp";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import useBackend from "../../hooks/useBackend";
 import type { SystemEncryptionStatus } from "../../hooks/useBackend";
 import './SystemEncryptionSection.css';
@@ -36,6 +36,12 @@ function SystemEncryptionSection({ compact = false }: SystemEncryptionSectionPro
   const isEncrypted = status?.encrypted === true;
   const inProgress = typeof status?.progress === "number" && status.progress < 100 && status.progress > 0;
 
+  // Checking this card when Secure Storage opens makes the protection state a
+  // real part of the dashboard rather than a hidden detail behind a tiny icon.
+  useEffect(() => {
+    void fetchStatus();
+  }, [fetchStatus]);
+
   // Compact single-line status row for embedding inside the Encrypted
   // Volumes card. Reuses the same backend hook so it stays in sync.
   if (compact) {
@@ -51,12 +57,12 @@ function SystemEncryptionSection({ compact = false }: SystemEncryptionSectionPro
           {loading
             ? "Checking…"
             : errMsg
-              ? errMsg
+              ? "Couldn’t verify"
               : !hasStatus
                 ? "Not checked"
               : isEncrypted
-                ? "Encrypted"
-                : "Not encrypted"}
+                ? "Protected"
+                : "Not protected"}
         </span>
         <button
           type="button"
@@ -67,6 +73,7 @@ function SystemEncryptionSection({ compact = false }: SystemEncryptionSectionPro
           aria-label="Refresh system drive encryption status"
         >
           <Icon icon="refresh" size={10} />
+          <span>Refresh</span>
         </button>
       </div>
     );

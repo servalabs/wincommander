@@ -5,6 +5,8 @@ const vaultSource = readFileSync("src/panels/vault/index.tsx", "utf8");
 const ramDiskSource = readFileSync("src/panels/vault/CreateRamDiskDialog.tsx", "utf8");
 const propertiesSource = readFileSync("src/panels/vault/VolumePropertiesDialog.tsx", "utf8");
 const backendSource = readFileSync("src/hooks/useBackend.ts", "utf8");
+const sidebarSource = readFileSync("src/components/RightSidebar.tsx", "utf8");
+const appContextSource = readFileSync("src/context/AppContext.tsx", "utf8");
 
 describe("secure storage deep-state contracts", () => {
   test("distinguishes initial loading from a confirmed empty volume list", () => {
@@ -38,5 +40,18 @@ describe("secure storage deep-state contracts", () => {
     expect(backendSource).toContain(
       'execute<{ ok: boolean; cleared: boolean }>("Clear-EncryptedBackupTarget")',
     );
+  });
+
+  test("every interactive mount is private and verifies the Explorer-facing drive", () => {
+    expect(vaultSource).toContain('scope: "per-user"');
+    expect(vaultSource).toContain("hardenAcl: true");
+    expect(vaultSource).toContain("await verifyVaultDrive(result.data.drive)");
+    expect(vaultSource).toContain("setMountedVolume(result.data)");
+    expect(vaultSource).toContain('icon="warning-sign"');
+    expect(sidebarSource).toContain('scope: "per-user"');
+    expect(sidebarSource).toContain("hardenAcl: true");
+    expect(sidebarSource).toContain("await verifyVaultDrive(r.data.drive)");
+    expect(backendSource).toContain('invoke<{ drive: string; accessible: boolean }>("verify_vault_drive"');
+    expect(appContextSource).toContain("setEncryptionStatus(null);");
   });
 });

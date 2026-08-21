@@ -112,6 +112,7 @@ export default function RightSidebar() {
         getAutoEraseSchedules,
         removeAutoEraseSchedule,
         mountVolume,
+        verifyVaultDrive,
         getEncryptionPartitions,
         safePastePrepare,
         scrubMetadataPaths,
@@ -245,10 +246,20 @@ export default function RightSidebar() {
               volumePath: slot.filePath,
               driveLetter: slot.driveLetter,
               password: qmPassword,
+              scope: "per-user",
+              hardenAcl: true,
             });
-            if (r?.success) {
-                showSuccess(`Volume mounted as ${slot.driveLetter}:`);
-                refreshVault(true);
+            if (r?.success && r.data?.scope === "per-user") {
+                await verifyVaultDrive(r.data.drive);
+                const refreshed = await refreshVault(true);
+                const isVisibleInThisSession = refreshed?.volumes?.some((volume) =>
+                    volume.letter === r.data?.drive
+                    && volume.internalDrive === r.data?.internalDrive,
+                );
+                if (!isVisibleInThisSession) {
+                    throw new Error("The encrypted volume was not available in this signed-in Windows session.");
+                }
+                showSuccess(`Volume mounted as ${r.data.drive}`);
                 setQmOpen(false);
                 setQmPassword('');
             } else {
@@ -260,7 +271,7 @@ export default function RightSidebar() {
         } finally {
             setQmMountingIdx(null);
         }
-    }, [quickMountSlots, qmSelectedIdx, qmPassword, mountVolume, refreshVault]);
+    }, [quickMountSlots, qmSelectedIdx, qmPassword, mountVolume, refreshVault, verifyVaultDrive]);
 
     // Listen for `scrub-requested` events from the single-instance handler.
     // Fires when Explorer's right-click "Scrub metadata with WinCommander"

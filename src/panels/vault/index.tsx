@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { DURATION_S, EASE } from "../../components/shared/motion";
 import { staggerDelay } from "../../components/shared/AnimatedList";
 import useBackend from "../../hooks/useBackend";
-import type { EncryptionStatus } from "../../hooks/useBackend";
+import type { EncryptionStatus, MountVolumeResult } from "../../hooks/useBackend";
 import { useAppState } from "../../context/AppContext";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTheme } from "../../context/ThemeContext";
@@ -21,8 +21,6 @@ import SectionCard from "../../components/shared/SectionCard";
 import useEntitlements from "../../hooks/useEntitlements";
 import './index.css';
 import DriveLetterPicker from "./DriveLetterPicker";
-import MountScopeSelector from "./MountScopeSelector";
-import { resolveEffectiveMountScope, type MountScopePreference } from "./mountScope";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
 
@@ -58,7 +56,7 @@ function VaultPanel() {
 
 interface EncryptedVolumesTabProps {
   volumes: VaultVolume[];
-  refreshVault: (silent?: boolean) => Promise<void>;
+  refreshVault: (silent?: boolean) => Promise<EncryptionStatus | null>;
   initialLoading: boolean;
 }
 
@@ -68,18 +66,6 @@ interface EncryptedVolumesTabProps {
 // owns them.
 function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: EncryptedVolumesTabProps) {
   const { theme } = useTheme();
-  const { appSettings, systemInfo } = useAppState();
-  const [mountScope, setMountScope] = useState<MountScopePreference>(
-    appSettings?.app?.vault?.mountScope ?? "auto",
-  );
-  // A Fleet pin overrides the locally selected scope. The choice otherwise
-  // applies only to this mount, so creating a container never changes it.
-  const requestedMountScope = appSettings?.policy?.pinnedMountScope ?? mountScope;
-  const effectiveMountScope = resolveEffectiveMountScope(
-    requestedMountScope,
-    systemInfo?.osName,
-  );
-
   const [mountDialogOpen, setMountDialogOpen] = useState(false);
   const [mountPath, setMountPath] = useState("");
   const [mountLetter, setMountLetter] = useState("Y");
@@ -88,7 +74,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [mountPim, setMountPim] = useState("");
   const [mountReadOnly, setMountReadOnly] = useState(false);
   const [mountRemovable, setMountRemovable] = useState(false);
-  const [mountHardenAcl, setMountHardenAcl] = useState(true);
   const [protectHidden, setProtectHidden] = useState(false);
   const [hiddenPassword, setHiddenPassword] = useState("");
   const [hiddenKeyfile, setHiddenKeyfile] = useState("");
@@ -101,9 +86,13 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [mountDetailsLoading, setMountDetailsLoading] = useState(false);
   const [backupTargetBound, setBackupTargetBound] = useState<boolean | null>(null);
   const [backupTargetBusy, setBackupTargetBusy] = useState(false);
+  const [mountedVolume, setMountedVolume] = useState<MountVolumeResult | null>(null);
+  const [openingMountedVolume, setOpeningMountedVolume] = useState(false);
 
   const {
     mountVolume,
+    verifyVaultDrive,
+    openEncryptionVolume,
     getAvailableDriveLetters,
     getEncryptionPartitions,
     getEncryptedBackupTargetStatus,
@@ -131,15 +120,13 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     setMountPim("");
     setMountReadOnly(false);
     setMountRemovable(false);
-    setMountHardenAcl(true);
     setProtectHidden(false);
     setHiddenPassword("");
     setHiddenKeyfile("");
     setHiddenPim("");
     setMountLetter("Y");
     setMountType('file');
-    setMountScope(appSettings?.app?.vault?.mountScope ?? "auto");
-  }, [appSettings?.app?.vault?.mountScope]);
+  }, []);
 
   // Fetch available (unused) drive letters when the mount dialog opens
   const openMountDialog = useCallback(async () => {
@@ -236,14 +223,25 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         hiddenPassword: protectHidden ? hiddenPassword : undefined,
         hiddenKeyfiles: protectHidden && hiddenKeyfile ? [hiddenKeyfile] : [],
         hiddenPim: protectHidden ? hiddenPim || undefined : undefined,
-        scope: effectiveMountScope,
-        hardenAcl: mountHardenAcl,
+        scope: "per-user",
+        hardenAcl: true,
       });
-      if (!result.success) throw new Error(result.error || "Failed to mount volume");
+      if (!result.success || !result.data) throw new Error(result.error || "Failed to mount volume");
+      if (result.data.scope !== "per-user") {
+        throw new Error("The encrypted volume was not mounted privately for this Windows account.");
+      }
+      await verifyVaultDrive(result.data.drive);
+      const refreshed = await refreshVault(true);
+      const isVisibleInThisSession = refreshed?.volumes?.some((volume) =>
+        volume.letter === result.data?.drive
+        && volume.internalDrive === result.data?.internalDrive,
+      );
+      if (!isVisibleInThisSession) {
+        throw new Error("The encrypted volume was not available in this signed-in Windows session.");
+      }
       setMountDialogOpen(false);
       resetMountForm();
-      await refreshVault(true);
-      showSuccess(`Volume mounted at ${mountLetter}:.`);
+      setMountedVolume(result.data);
     } catch (e) {
       // Operational volume result → Notifications tab, not System Alerts.
       showError(e instanceof Error ? e.message : "Failed to mount volume.", undefined, { kind: "notification" });
@@ -251,7 +249,20 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     } finally {
       setMounting(false);
     }
-  }, [effectiveMountScope, hiddenKeyfile, hiddenPassword, hiddenPim, mountHardenAcl, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, protectHidden, refreshVault, resetMountForm]);
+  }, [hiddenKeyfile, hiddenPassword, hiddenPim, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, protectHidden, refreshVault, resetMountForm, verifyVaultDrive]);
+
+  const handleOpenMountedVolume = useCallback(async () => {
+    if (!mountedVolume) return;
+    setOpeningMountedVolume(true);
+    try {
+      const result = await openEncryptionVolume(mountedVolume.drive);
+      if (!result.success) throw new Error(result.error || "Could not open the encrypted volume.");
+    } catch (error) {
+      showError(error instanceof Error ? error.message : "Could not open the encrypted volume.");
+    } finally {
+      setOpeningMountedVolume(false);
+    }
+  }, [mountedVolume, openEncryptionVolume]);
 
   const handleMountDialogKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Enter" || event.shiftKey || event.defaultPrevented) return;
@@ -620,13 +631,13 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             />
           </FormGroup>
 
-          <FormGroup label="Mount visibility" labelFor="mount-scope">
-            <MountScopeSelector
-              id="mount-scope"
-              value={mountScope}
-              onChange={setMountScope}
-            />
-          </FormGroup>
+          <div className="mount-privacy-note" role="status">
+            <Icon icon="lock" size={14} />
+            <div>
+              <strong>Only this Windows account</strong>
+              <span>The drive will not appear in other users’ File Explorer sessions.</span>
+            </div>
+          </div>
 
           <FormGroup
             label="Password"
@@ -712,15 +723,11 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               <span>Protect hidden volume</span>
               <span className="quick-desc">Required for safe writes to an outer decoy volume.</span>
             </label>
-            <label className="quick-toggle">
-              <CheckboxControl
-                checked={mountHardenAcl}
-                ariaLabel="Restrict mounted content to this Windows account"
-                onChange={event => setMountHardenAcl(event.currentTarget.checked)}
-              />
+            <div className="quick-toggle quick-toggle--locked" aria-label="Private NTFS permissions enabled">
+              <Icon icon="lock" size={14} />
               <span>Private NTFS permissions</span>
-              <span className="quick-desc">Recommended. Disable only to preserve deliberate Sales/Accounting group ACLs.</span>
-            </label>
+              <span className="quick-desc">Always enabled for this user-only encrypted drive.</span>
+            </div>
           </div>
 
           {protectHidden && (
@@ -775,6 +782,32 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             onClick={handleMountVolume}
             loading={mounting}
             disabled={!canMount}
+            className="modal-primary-btn"
+          />
+        </div>
+      </Dialog>
+
+      <Dialog
+        isOpen={mountedVolume !== null}
+        onClose={() => setMountedVolume(null)}
+        title="Encrypted volume mounted"
+        className={`mount-result-dialog ${theme === 'light' ? 'light' : ''}`}
+      >
+        <div className="mount-result-dialog__body">
+          <Icon icon="warning-sign" size={28} className="mount-result-dialog__icon" />
+          <div>
+            <strong>{mountedVolume?.drive} is ready in File Explorer</strong>
+            <p>It is visible only to this signed-in Windows account and has private NTFS permissions.</p>
+            <p className="mount-result-dialog__note">Dismount it when you are finished. Windows administrators can still manage this computer.</p>
+          </div>
+        </div>
+        <div className="mount-dialog-footer">
+          <Button minimal text="DONE" onClick={() => setMountedVolume(null)} className="modal-cancel-btn" />
+          <Button
+            icon="folder-open"
+            text="OPEN IN FILE EXPLORER"
+            onClick={() => void handleOpenMountedVolume()}
+            loading={openingMountedVolume}
             className="modal-primary-btn"
           />
         </div>

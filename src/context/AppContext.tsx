@@ -91,7 +91,7 @@ interface AppState {
      *  exact moment the task popup says "INSTALLED". */
     markMeshInstalled: (installed: boolean) => void;
     refreshBranding: () => Promise<void>;
-    refreshVault: (silent?: boolean) => Promise<void>;
+    refreshVault: (silent?: boolean) => Promise<EncryptionStatus | null>;
     refreshProductivity: (silent?: boolean) => Promise<void>;
     /** Run the unified app inventory scan (Get-AppInventory).
      * Auto-persists to settings.json → current.apps.inventory.
@@ -820,14 +820,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setMeshInstalled(installed);
     }, []);
 
-    const refreshVault = useCallback(async (silent: boolean = false) => {
+    const refreshVault = useCallback(async (silent: boolean = false): Promise<EncryptionStatus | null> => {
         if (!silent) setLoading(prev => ({ ...prev, vault: true }));
         try {
             // This Pro-native endpoint returns only drive links in the current
             // logon session. The legacy VeraCrypt/PowerShell probe is machine-
             // scoped and must not be used as a fallback on multi-user hosts.
             const res = await getEncryptedVolumeStatus();
-            if (res.success && res.data) setEncryptionStatus(res.data);
+            if (res.success && res.data) {
+                setEncryptionStatus(res.data);
+                return res.data;
+            }
+            // Do not leave an old mount list on-screen after a failed probe.
+            // A stale badge can otherwise claim a drive exists when Explorer cannot see it.
+            setEncryptionStatus(null);
+            return null;
         } finally {
             if (!silent) setLoading(prev => ({ ...prev, vault: false }));
         }

@@ -258,6 +258,9 @@
 
 .vault-sys-enc-row .vault-sys-enc-refresh {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: transparent;
   border: 0;
   color: var(--color-text-muted);
@@ -581,6 +584,72 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+.mount-privacy-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.mount-privacy-note > svg {
+  flex: 0 0 auto;
+  color: var(--color-success);
+  margin-top: 2px;
+}
+
+.mount-privacy-note strong,
+.mount-privacy-note span {
+  display: block;
+}
+
+.mount-privacy-note strong {
+  color: var(--color-text-primary);
+  margin-bottom: 2px;
+}
+
+.quick-toggle--locked {
+  cursor: default;
+}
+
+.quick-toggle--locked > svg {
+  color: var(--color-success);
+}
+
+.mount-result-dialog {
+  max-width: 520px;
+}
+
+.mount-result-dialog__body {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 24px;
+}
+
+.mount-result-dialog__icon {
+  flex: 0 0 auto;
+  color: var(--color-warning);
+}
+
+.mount-result-dialog__body strong {
+  color: var(--color-text-primary);
+}
+
+.mount-result-dialog__body p {
+  margin: 8px 0 0;
+  color: var(--color-text-secondary);
+}
+
+.mount-result-dialog__note {
+  font-size: 12px;
 }
 
 .mount-dialog {
