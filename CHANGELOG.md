@@ -12,6 +12,19 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **Reactive unknown-keyboard approval** (2026-08-21) — Pro can hold a newly
+  observed, unallowlisted keyboard disabled and surface a global approval dialog
+  only after Windows containment read-back succeeds. Allow once is protected by
+  one backend-bound randomized six-click human-presence challenge; permanent
+  trust requires a stable serial identity and two independent challenges.
+  Detach/replug observed by the poll, expiry, wrong responses, and ambiguous
+  composite identities cancel or fail closed. Because the current three-second
+  poll can miss a very fast detach/replug that reuses every Windows identifier,
+  attachment-generation binding remains best-effort until native PnP
+  notifications replace polling. The UI explicitly states that pointer input does not
+  authenticate a separate trusted mouse and that user-level polling cannot
+  guarantee first-keystroke or preboot prevention.
+
 - **Commercial boundary for organisation-grade attack defenses** (2026-08-21)
   — the Free executable now retains the everyday safety baseline: a simple
   machine-wide USB attach/detach timeline and the local mass-file-change

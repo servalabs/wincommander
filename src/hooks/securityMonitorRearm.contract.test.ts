@@ -43,6 +43,10 @@ describe("security monitor startup contracts", () => {
     expect(block).toContain('await invoke("stop_usb_autosandbox")');
     expect(block).toContain('await invoke("stop_usb_metering")');
     expect(block).toContain('await invoke("stop_usb_hid_guard")');
+    expect(block).toContain('await invoke("stop_usb_hid_approval_gate")');
+    expect(block).toContain("hidApprovalGateEnabled: usbHidApprovalGateEnabled");
+    expect(block).toContain("hidApprovalTtlSecs: usbHidApprovalTtlSecs");
+    expect(block).toContain("if (!usbSecurityConfigured && (entitlementLoading || hasPaid)) return");
   });
 
   test("expired paid settings cannot re-arm the decoy watcher", async () => {

@@ -31,5 +31,17 @@ describe("USB Free/Pro security boundary", () => {
     expect(source).toContain('dispatch_cleanup("stop_usb_metering")');
     expect(source).toContain('dispatch_cleanup("stop_usb_hid_guard")');
     expect(source).toContain('dispatch_cleanup("stop_usb_autosandbox")');
+    expect(source).toContain('dispatch_paid(\n        "begin_usb_hid_visual_challenge"');
+    expect(source).toContain('dispatch_paid(\n        "submit_usb_hid_visual_challenge_digit"');
+    expect(source).toContain('dispatch_cleanup("stop_usb_hid_approval_gate")');
+  });
+
+  test("Free only transports the Pro-owned visual challenge", () => {
+    const approvalSlice = source.slice(source.indexOf("begin_usb_hid_visual_challenge"));
+    expect(approvalSlice).toContain('"challengeId": challenge_id');
+    expect(approvalSlice).toContain('"step": step, "digit": digit');
+    expect(approvalSlice).not.toContain('"response": response');
+    expect(approvalSlice).not.toContain('"instanceId": instance_id');
+    expect(approvalSlice).not.toContain("SetWindowsHookEx");
   });
 });

@@ -700,6 +700,103 @@ pub async fn usb_hid_guard_allow_list() -> Result<Value, String> {
     dispatch_paid("usb_hid_guard_allow_list", "USB Guard", Value::Null).await
 }
 
+// The approval gate is Pro-owned. It reacts after the keyboard arrives and
+// deliberately makes no pre-boot or first-keystroke prevention claim. Positive
+// trust actions require a challenge generated and verified by Pro; Free only
+// carries neutral transport fields and never owns approval logic.
+#[tauri::command]
+pub async fn start_usb_hid_approval_gate(approval_ttl_secs: Option<u64>) -> Result<Value, String> {
+    dispatch_paid(
+        "start_usb_hid_approval_gate",
+        "USB Guard",
+        json!({ "approvalTtlSecs": approval_ttl_secs }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn stop_usb_hid_approval_gate() -> Result<Value, String> {
+    dispatch_cleanup("stop_usb_hid_approval_gate").await
+}
+
+#[tauri::command]
+pub async fn usb_hid_approval_gate_status() -> Result<Value, String> {
+    dispatch_paid("usb_hid_approval_gate_status", "USB Guard", Value::Null).await
+}
+
+#[tauri::command]
+pub async fn get_usb_hid_pending_approvals() -> Result<Value, String> {
+    dispatch_paid("get_usb_hid_pending_approvals", "USB Guard", Value::Null).await
+}
+
+#[tauri::command]
+pub async fn begin_usb_hid_visual_challenge(
+    device_key: String,
+    action: String,
+) -> Result<Value, String> {
+    dispatch_paid(
+        "begin_usb_hid_visual_challenge",
+        "USB Guard",
+        json!({ "deviceKey": device_key, "action": action }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn submit_usb_hid_visual_challenge_digit(
+    device_key: String,
+    challenge_id: String,
+    step: u8,
+    digit: String,
+) -> Result<Value, String> {
+    dispatch_paid(
+        "submit_usb_hid_visual_challenge_digit",
+        "USB Guard",
+        json!({ "deviceKey": device_key, "challengeId": challenge_id, "step": step, "digit": digit }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn approve_usb_hid_once(
+    device_key: String,
+    challenge_id: String,
+    step: u8,
+    digit: String,
+) -> Result<Value, String> {
+    dispatch_paid(
+        "approve_usb_hid_once",
+        "USB Guard",
+        json!({ "deviceKey": device_key, "challengeId": challenge_id, "step": step, "digit": digit }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn trust_usb_hid_always(
+    device_key: String,
+    challenge_id: String,
+    step: u8,
+    digit: String,
+) -> Result<Value, String> {
+    dispatch_paid(
+        "trust_usb_hid_always",
+        "USB Guard",
+        json!({ "deviceKey": device_key, "challengeId": challenge_id, "step": step, "digit": digit }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn block_usb_hid_pending(device_key: String) -> Result<Value, String> {
+    dispatch_paid(
+        "block_usb_hid_pending",
+        "USB Guard",
+        json!({ "deviceKey": device_key }),
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn usb_device_trust_score(device_key: String) -> Result<Value, String> {
     dispatch_paid(

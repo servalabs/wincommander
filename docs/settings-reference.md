@@ -106,6 +106,21 @@ bounded global Windows mutexes plus atomic replacement so concurrent RDS
 sessions do not overwrite one another. Valid legacy current-user files are
 imported once and removed only after their ProgramData replacement is durable.
 
+`privacy.usbSecurity.hidApprovalGateEnabled` requests Pro's reactive
+unknown-keyboard approval gate. `hidApprovalTtlSecs` controls how long a
+contained keyboard remains eligible for a decision before it expires blocked.
+The Pro ProgramData record is canonical after first import; per-user/RDS UI
+settings do not overwrite an existing machine policy. The click challenge is a
+human-presence check, not physical-mouse attribution, and does not replace
+Windows Device Installation Restrictions for an organisation default-deny
+policy.
+
+On Windows Server/RDS, configure and run this policy using the designated
+managed administrator or service identity. The hardened store deliberately
+does not grant every local user mutation rights, so a different non-admin RDS
+session cannot become the USB-policy writer. Pooled multi-user approval is not
+supported until the signed machine-service broker is delivered.
+
 ### Caching and writes
 
 The engine keeps a `Mutex`-guarded in-memory cache. All writers funnel through a

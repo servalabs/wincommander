@@ -35,6 +35,9 @@ import { useAppState } from '../../context/AppContext';
 import PrivacyEventTable from './PrivacyEventTable';
 import TierGate from '../../components/shared/TierGate';
 import useEntitlements from '../../hooks/useEntitlements';
+import { useUsbHidApproval } from '../../context/UsbHidApprovalContext';
+import { DEFAULT_USB_HID_APPROVAL_TTL_SECS } from '../../lib/usbHidApproval';
+import UsbHidApprovalGateSettings from './UsbHidApprovalGateSettings';
 
 // U-C: shape returned by get_usb_hid_alerts (timing + device identity — no keystroke content).
 interface HidInjectionAlert {
@@ -260,7 +263,8 @@ interface AutoActionRecord {
 export default function UsbDevicesSection() {
   const { hasPaid, isLoading: entitlementLoading } = useEntitlements();
   const advancedAvailable = hasPaid && !entitlementLoading;
-  const { patchAppSettings } = useAppState();
+  const { appSettings, patchAppSettings } = useAppState();
+  const { status: hidApprovalStatus, start: startHidApprovalGate, stop: stopHidApprovalGate } = useUsbHidApproval();
   const requestConfirm = useAppConfirm();
   const [running, setRunning] = useState(false);
   const [notifyEnabled, setNotifyEnabled] = useState(false);
@@ -294,6 +298,10 @@ export default function UsbDevicesSection() {
   const [autoSandboxConfig, setAutoSandboxConfig] = useState({ allowKeys: [] as string[], allowVids: [] as string[], actOnHid: false });
   const [autoActions, setAutoActions] = useState<AutoActionRecord[]>([]);
   const [autoSandboxBusy, setAutoSandboxBusy] = useState(false);
+  const [hidApprovalBusy, setHidApprovalBusy] = useState(false);
+  const hidApprovalGateEnabled = appSettings?.ideal?.privacy?.usbSecurity?.hidApprovalGateEnabled === true;
+  const hidApprovalTtlSecs = appSettings?.ideal?.privacy?.usbSecurity?.hidApprovalTtlSecs
+    ?? DEFAULT_USB_HID_APPROVAL_TTL_SECS;
 
   // Fetch mounted USB volumes (Explorer-style names + drive letters). Isolated
   // from refresh() because it shells out to a potentially-slow PowerShell query;
@@ -636,6 +644,40 @@ export default function UsbDevicesSection() {
     [patchAppSettings, refresh],
   );
 
+  const setHidApprovalGateEnabled = useCallback(async (enabled: boolean) => {
+    setHidApprovalBusy(true);
+    setError(null);
+    try {
+      if (enabled) {
+        await startHidApprovalGate(hidApprovalTtlSecs);
+      } else {
+        await stopHidApprovalGate();
+      }
+      await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidApprovalGateEnabled: enabled } } } });
+    } catch (reason) {
+      const message = humanizeUsbError(reason);
+      setError(message);
+      void showError(`Keyboard approval setting failed: ${message}`);
+    } finally {
+      setHidApprovalBusy(false);
+    }
+  }, [hidApprovalTtlSecs, patchAppSettings, startHidApprovalGate, stopHidApprovalGate]);
+
+  const setHidApprovalTtlSecs = useCallback(async (approvalTtlSecs: number) => {
+    setHidApprovalBusy(true);
+    setError(null);
+    try {
+      await startHidApprovalGate(approvalTtlSecs);
+      await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidApprovalTtlSecs: approvalTtlSecs } } } });
+    } catch (reason) {
+      const message = humanizeUsbError(reason);
+      setError(message);
+      void showError(`Keyboard approval window failed to update: ${message}`);
+    } finally {
+      setHidApprovalBusy(false);
+    }
+  }, [patchAppSettings, startHidApprovalGate]);
+
   // U-D: block / allow a device by its raw Windows InstanceId. U-A now exposes
   // `instanceId` on each timeline entry; we fall back to the device key only for
   // records that predate that field.
@@ -669,6 +711,10 @@ export default function UsbDevicesSection() {
   const allowDevice = useCallback(
     async (entry: UsbTimelineEntry) => {
       const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
+      if (hidApprovalGateEnabled && entry.deviceClass === 'HID') {
+        void showError(`Use the New keyboard approval dialog for "${name}". Generic Allow is disabled while the approval gate is active.`);
+        return;
+      }
       setBusy(true);
       setError(null);
       try {
@@ -688,7 +734,7 @@ export default function UsbDevicesSection() {
         setBusy(false);
       }
     },
-    [refresh, volumes],
+    [hidApprovalGateEnabled, refresh, volumes],
   );
 
   // U-E: set a mounted storage volume read-only via diskpart.
@@ -1008,6 +1054,7 @@ export default function UsbDevicesSection() {
                 const name = displayNameForEntry(entry, vol);
                 const resolvedLetter = vol?.driveLetter ?? entry.driveLetter;
                 const isBlocked = blockedKeys.has(entry.key);
+                const approvalControlledHid = hidApprovalGateEnabled && entry.deviceClass === 'HID';
                 return (
                 <div
                   key={`${entry.key}-${i}`}
@@ -1096,10 +1143,12 @@ export default function UsbDevicesSection() {
                         minimal
                         small
                         aria-label={`Allow ${name}`}
-                        disabled={busy || !proInstalled || !advancedAvailable}
+                        disabled={busy || !proInstalled || !advancedAvailable || approvalControlledHid}
                         onClick={() => void allowDevice(entry)}
                         title={
-                          !advancedAvailable
+                          approvalControlledHid
+                            ? 'Use the New keyboard approval dialog. Generic Allow cannot bypass its human-presence challenge.'
+                            : !advancedAvailable
                             ? 'WinCommander Pro is required to disable or re-enable USB devices.'
                             : proInstalled
                             ? 'Re-enable this device in Windows if it was blocked/disabled. Needs admin.'
@@ -1223,6 +1272,15 @@ export default function UsbDevicesSection() {
             <div className="text-xs opacity-50">No USB HID timing anomalies detected.</div>
           )}
         </div>
+
+        <UsbHidApprovalGateSettings
+          enabled={hidApprovalGateEnabled}
+          ttlSecs={hidApprovalTtlSecs}
+          status={hidApprovalStatus}
+          busy={hidApprovalBusy || !advancedAvailable || !proInstalled}
+          onEnabledChange={(enabled) => void setHidApprovalGateEnabled(enabled)}
+          onTtlChange={(ttlSecs) => void setHidApprovalTtlSecs(ttlSecs)}
+        />
 
         {/* U-F: Auto-isolate subsection */}
         <div className="border-t border-white/10 pt-3 flex flex-col gap-2">

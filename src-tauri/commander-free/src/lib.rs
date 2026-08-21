@@ -949,6 +949,15 @@ fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// Reuse the tray-safe reveal path when a security decision in this desktop
+/// session needs attention. The caller still gets the native notification if
+/// Windows refuses foreground activation; this does not reach another RDS
+/// session.
+#[tauri::command]
+fn reveal_main_window_for_security_alert(app: tauri::AppHandle) {
+    reveal_main_window(&app);
+}
+
 /// No-op stub kept for backwards compatibility (ErrorBoundary calls this).
 /// Log viewing is now in-app only; logs are encrypted on disk.
 #[tauri::command]
@@ -2441,6 +2450,7 @@ pub fn run() {
             cli::mark_tauri_cli_ready,
             cli::complete_tauri_cli,
             exit_app,
+            reveal_main_window_for_security_alert,
             open_log_file,
             // ── Destructive-action capability (mints a token for catastrophic ops) ──
             authz::request_destructive_confirmation,
@@ -2701,6 +2711,16 @@ pub fn run() {
             usb_guard::usb_hid_guard_allow_device,
             usb_guard::usb_hid_guard_disallow_device,
             usb_guard::usb_hid_guard_allow_list,
+            // ── USB U-C2: Pro-owned visual approval challenge for new HIDs ──
+            usb_guard::start_usb_hid_approval_gate,
+            usb_guard::stop_usb_hid_approval_gate,
+            usb_guard::usb_hid_approval_gate_status,
+            usb_guard::get_usb_hid_pending_approvals,
+            usb_guard::begin_usb_hid_visual_challenge,
+            usb_guard::submit_usb_hid_visual_challenge_digit,
+            usb_guard::approve_usb_hid_once,
+            usb_guard::trust_usb_hid_always,
+            usb_guard::block_usb_hid_pending,
             // ── USB U-D trust policy + U-E per-volume read-only (paid · Pro enforcement) ──
             usb_guard::block_usb_device,
             usb_guard::allow_usb_device,

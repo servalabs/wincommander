@@ -7223,6 +7223,14 @@
       ]
     },
     {
+      "id": "tauri:approve_usb_hid_once",
+      "name": "approve_usb_hid_once",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "tauri:argus_app_usage_recent",
       "name": "argus_app_usage_recent",
       "transport": "tauri",
@@ -7413,6 +7421,16 @@
       ]
     },
     {
+      "id": "tauri:begin_usb_hid_visual_challenge",
+      "name": "begin_usb_hid_visual_challenge",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/usbHidApprovalIpc.ts"
+      ]
+    },
+    {
       "id": "tauri:block_usb_device",
       "name": "block_usb_device",
       "transport": "tauri",
@@ -7420,6 +7438,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/panels/privacy/UsbDevicesSection.tsx"
+      ]
+    },
+    {
+      "id": "tauri:block_usb_hid_pending",
+      "name": "block_usb_hid_pending",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/usbHidApprovalIpc.ts"
       ]
     },
     {
@@ -9131,6 +9159,16 @@
       ]
     },
     {
+      "id": "tauri:get_usb_hid_pending_approvals",
+      "name": "get_usb_hid_pending_approvals",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/usbHidApprovalIpc.ts"
+      ]
+    },
+    {
       "id": "tauri:get_usb_storage_volumes",
       "name": "get_usb_storage_volumes",
       "transport": "tauri",
@@ -9978,6 +10016,16 @@
       ]
     },
     {
+      "id": "tauri:reveal_main_window_for_security_alert",
+      "name": "reveal_main_window_for_security_alert",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/usbHidApprovalIpc.ts"
+      ]
+    },
+    {
       "id": "tauri:routine_cleaner_cancel",
       "name": "routine_cleaner_cancel",
       "transport": "tauri",
@@ -10778,6 +10826,16 @@
       "frontendReferences": []
     },
     {
+      "id": "tauri:start_usb_hid_approval_gate",
+      "name": "start_usb_hid_approval_gate",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/usbHidApprovalIpc.ts"
+      ]
+    },
+    {
       "id": "tauri:start_usb_hid_guard",
       "name": "start_usb_hid_guard",
       "transport": "tauri",
@@ -10965,6 +11023,17 @@
       ]
     },
     {
+      "id": "tauri:stop_usb_hid_approval_gate",
+      "name": "stop_usb_hid_approval_gate",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/App.tsx",
+        "src/hooks/usbHidApprovalIpc.ts"
+      ]
+    },
+    {
       "id": "tauri:stop_usb_hid_guard",
       "name": "stop_usb_hid_guard",
       "transport": "tauri",
@@ -11001,6 +11070,16 @@
       "frontendReferences": [
         "src/hooks/useWifiGuardMonitor.ts",
         "src/panels/network/WifiGuardSection.tsx"
+      ]
+    },
+    {
+      "id": "tauri:submit_usb_hid_visual_challenge_digit",
+      "name": "submit_usb_hid_visual_challenge_digit",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/usbHidApprovalIpc.ts"
       ]
     },
     {
@@ -11068,6 +11147,14 @@
       "frontendReferences": [
         "src/hooks/useBackend.ts"
       ]
+    },
+    {
+      "id": "tauri:trust_usb_hid_always",
+      "name": "trust_usb_hid_always",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
     },
     {
       "id": "tauri:uninstall_leftovers_cancel",
@@ -11190,6 +11277,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/panels/privacy/UsbDevicesSection.tsx"
+      ]
+    },
+    {
+      "id": "tauri:usb_hid_approval_gate_status",
+      "name": "usb_hid_approval_gate_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/usbHidApprovalIpc.ts"
       ]
     },
     {

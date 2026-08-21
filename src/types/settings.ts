@@ -928,6 +928,11 @@ export interface UsbSecurityMonitorSettings {
   meteringEnabled?: boolean | null;
   /** Observe/enforce new-device auto-isolation according to its saved mode. */
   autoSandboxEnabled?: boolean | null;
+  /** Pro reactive keyboard approval boundary. Pending devices remain blocked
+   *  unless an operator chooses Allow once or Always trust. */
+  hidApprovalGateEnabled?: boolean | null;
+  /** Seconds before an unresolved keyboard approval defaults to blocked. */
+  hidApprovalTtlSecs?: number | null;
 }
 
 /** #5: screen-capture detection + own-window capture protection. Paid. */

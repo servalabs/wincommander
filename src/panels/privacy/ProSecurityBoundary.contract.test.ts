@@ -12,6 +12,8 @@ describe("Pro security boundary", () => {
     expect(usb).toContain('featureLabel="USB transfer metering"');
     expect(usb).toContain('featureLabel="USB HID anomaly alerts and auto-isolate"');
     expect(usb).toContain("low-confidence");
+    expect(usb).toContain("approvalControlledHid");
+    expect(usb).toContain("Generic Allow cannot bypass its human-presence challenge");
   });
 
   test("decoy monitor cannot issue filesystem watch calls without Pro", () => {

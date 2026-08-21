@@ -19,6 +19,7 @@ event. Neither word implies immunity from an attack.
 | Threat or control | Pro behavior | Main operator settings |
 |---|---|---|
 | USB HID timing anomaly | Records arrival timing only and alerts on sustained super-human bursts after a recent unallowlisted HID attach. Correlation is low-confidence because the Windows low-level hook does not identify the source keyboard. Timing never directly enforces. | Lenient/Balanced/Strict; device allow-list; saved arm state. |
+| Unknown-keyboard approval | Reactively disables every unambiguous candidate HID function, verifies Windows reports containment, then asks the operator to complete a backend-bound randomized click challenge before Allow once. Always trust requires a stable serial identity and two independent challenges. It is human-presence friction, not proof that a separate trusted mouse clicked. | Gate on/off; approval expiry; Allow once; Always trust when eligible; Keep blocked. |
 | Unknown USB storage/HID | Observe or reactively quarantine a newly observed, unapproved device after the PnP poll. HID action is separately confirmed. | Off/Observe/Enforce; allow device/vendor; Include HID. |
 | USB data movement | Per-device removable-volume read/write totals and large-transfer signals. | Arm state, sample cadence, threshold, alert switch. |
 | USB trust and device control | Combines identity, vendor, timing, transfer, and containment history; validates USB/HID PnP targets before Block/Allow/Read-only/Quarantine. Failed Windows commands are reported as failures. | Allow/default policy; block/allow; volume read-only. |
@@ -58,6 +59,15 @@ These remain entitlement-gated but are not physically moved in this release:
 - USB isolation is reactive post-attach containment, not a kernel/pre-mount
   block. It cannot guarantee protection before the first injected key or first
   device access.
+- The unknown-keyboard dialog is shown only after containment read-back. Its
+  randomized pointer challenge can frustrate a blind click macro, but browser
+  pointer events do not identify the physical mouse. A composite or screen-aware
+  device may still drive it. Managed deployments should use Windows Device
+  Installation Restrictions/GPO or MDM as the machine-wide pre-install control.
+- Approval is bound to the Windows identities and attachment generation seen by
+  the poll. An observed detach/replug cancels it, but a very fast replug that
+  reuses all identifiers can be missed; native PnP notification acceptance is
+  required before claiming exact physical-attachment proof.
 - HID timing does not authenticate a Flipper, Rubber Ducky, O.MG cable, or any
   other device. Delayed/jittered scripts, mouse-only attacks, spoofed identity,
   network-capable cables, DMA/Thunderbolt, and preboot input remain outside it.
@@ -65,6 +75,10 @@ These remain entitlement-gated but are not physically moved in this release:
   11 host with composite HID+storage, Flipper Zero, Rubber Ducky, and O.MG.
 - Windows Server 2019/2022/2025 Desktop Experience is the GUI target. Server
   Core has no Explorer/taskbar and is not a full WinCommander GUI target.
+- The current Pro USB policy writer is the managed principal that created its
+  hardened ProgramData store. A different non-admin RDS user cannot take over
+  that machine policy; pooled multi-user USB approval remains unsupported until
+  the signed machine-service broker is implemented and accepted.
 - Static/build tests do not replace live Server/RDS, elevated ETW, Wi-Fi, RDP,
   malware-quarantine, or physical-device tests.
 

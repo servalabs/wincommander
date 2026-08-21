@@ -28,6 +28,7 @@ import BackgroundPollers from "./components/BackgroundPollers";
 import CalculatorGate from "./components/startup/CalculatorGate";
 import { AuthModeProvider, useAuthMode, type AuthMode } from "./context/AuthModeContext";
 import ShredConfirmationDialog from "./components/ShredConfirmationDialog";
+import UsbHidApprovalDialog from "./components/shared/UsbHidApprovalDialog";
 import RdpIdleWarningDialog from "./components/RdpIdleWarningDialog";
 import useRdpIdleDisconnect from "./hooks/useRdpIdleDisconnect";
 import useRdpIncomingDismount from "./hooks/useRdpIncomingDismount";
@@ -674,14 +675,22 @@ function AppContent() {
   const usbHidGuardEnabled = usbSecurity?.hidGuardEnabled === true;
   const usbMeteringEnabled = usbSecurity?.meteringEnabled === true;
   const usbAutoSandboxEnabled = usbSecurity?.autoSandboxEnabled === true;
+  const usbHidApprovalGateEnabled = usbSecurity?.hidApprovalGateEnabled === true;
+  const usbHidApprovalTtlSecs = usbSecurity?.hidApprovalTtlSecs;
   const usbSecurityConfigured = usbSecurity !== undefined;
   const usbRearmFailureRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!usbSecurityConfigured) return;
+    // A missing legacy setting must not leave a previously armed Pro monitor
+    // alive after entitlement expiry. Wait while entitlement is unresolved, but
+    // otherwise run the deactivation path even on an untouched settings file.
+    if (!usbSecurityConfigured && (entitlementLoading || hasPaid)) return;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
-    const paidMonitorDesired = usbHidGuardEnabled || usbMeteringEnabled || usbAutoSandboxEnabled;
+    const paidMonitorDesired = usbHidGuardEnabled
+      || usbMeteringEnabled
+      || usbAutoSandboxEnabled
+      || usbHidApprovalGateEnabled;
     const basicMonitorDesired = usbMonitorEnabled || (hasPaid && paidMonitorDesired);
     const reconcile = async () => {
       try {
@@ -701,6 +710,8 @@ function AppContent() {
               hidGuardEnabled: usbHidGuardEnabled,
               meteringEnabled: usbMeteringEnabled,
               autoSandboxEnabled: usbAutoSandboxEnabled,
+              hidApprovalGateEnabled: usbHidApprovalGateEnabled,
+              hidApprovalTtlSecs: usbHidApprovalTtlSecs,
             },
           });
         } else {
@@ -712,6 +723,7 @@ function AppContent() {
             await invoke("stop_usb_autosandbox");
             await invoke("stop_usb_metering");
             await invoke("stop_usb_hid_guard");
+            await invoke("stop_usb_hid_approval_gate");
           }
         }
         usbRearmFailureRef.current = null;
@@ -741,6 +753,8 @@ function AppContent() {
     usbHidGuardEnabled,
     usbMeteringEnabled,
     usbAutoSandboxEnabled,
+    usbHidApprovalGateEnabled,
+    usbHidApprovalTtlSecs,
   ]);
 
   // Wi-Fi Guard retains trusted SSID/BSSID observations in the local settings
@@ -1267,6 +1281,7 @@ function AppContent() {
         onShredRequest={handleShredRequest}
         onPanelChange={handlePanelChange}
       />
+      <UsbHidApprovalDialog />
 
       <RdpIdleWarningDialog
         isOpen={rdpIdle.warningActive}

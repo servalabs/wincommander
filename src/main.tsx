@@ -25,6 +25,7 @@ import { initUniversalLogging } from "./lib/logger";
 import { applyMotionClass } from "./lib/motionPolicy";
 import GlobalErrorBoundary from "./components/ErrorBoundary";
 import { AppConfirmProvider } from "./components/shared/AppConfirmDialog";
+import { UsbHidApprovalProvider } from "./context/UsbHidApprovalContext";
 import { logo as brandLogo } from "./assets";
 
 const hasNativeBackend = Boolean((window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
@@ -142,8 +143,10 @@ if (!hasNativeBackend) {
         <QueryClientProvider client={queryClient}>
           <ThemeProvider>
             <AppConfirmProvider>
-              <ExternalNotificationBridge />
-              <App />
+              <UsbHidApprovalProvider>
+                <ExternalNotificationBridge />
+                <App />
+              </UsbHidApprovalProvider>
             </AppConfirmProvider>
           </ThemeProvider>
         </QueryClientProvider>
