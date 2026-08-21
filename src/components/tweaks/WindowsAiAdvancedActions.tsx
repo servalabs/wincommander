@@ -5,7 +5,7 @@ import {
 } from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Icon, type IconName } from "../ui/icon";
-import { Switch } from "../ui/switch";
+import UniversalToggle from "../shared/UniversalToggle";
 import { useAppState } from "../../context/AppContext";
 import { type AiComponentCleanupOperation } from "../../types/settings";
 import { useAIControlOperations } from "../../hooks/useAIControlOperations";
@@ -80,29 +80,23 @@ export default function WindowsAiAdvancedActions() {
         {tools.status && <Badge tone={tools.status.isAdmin ? "success" : "warning"}>{tools.status.isAdmin ? "administrator" : "admin required"}</Badge>}
       </div>
 
-      <div className="grid gap-2 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-3">
         {ADVANCED_ACTIONS.map((action) => {
           const enabled = desiredState[action.operation] === true;
           const busy = tools.busyOperation === action.operation;
           return (
-            <div key={action.operation} className="flex items-start justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Icon icon={action.icon} size={16} className="shrink-0 text-[var(--color-danger)]" aria-hidden="true" />
-                  <p className="text-[13px] font-bold text-[var(--text)]">{action.label}</p>
-                  <span className={`text-[11px] font-medium ${busy ? "text-[var(--text-dim)]" : enabled ? "text-[var(--success)]" : "text-[var(--text-dim)]"}`}>
-                    {busy ? "Applying…" : enabled ? "Enabled" : "Off"}
-                  </span>
-                </div>
-                <p className="mt-1 text-[12.5px] leading-relaxed text-[var(--text-dim)]">{action.description}</p>
-              </div>
-              <Switch
-                checked={enabled}
-                disabled={Boolean(tools.busyOperation)}
-                aria-label={`${enabled ? "Disable" : "Enable"} ${action.label}`}
-                onCheckedChange={(next) => requestChange(action, next)}
-              />
-            </div>
+            <UniversalToggle
+              key={action.operation}
+              label={action.label}
+              description={action.description}
+              icon={action.icon}
+              domain="tweaks"
+              size="compact"
+              checked={enabled}
+              loading={busy}
+              disabled={Boolean(tools.busyOperation)}
+              onChange={(next) => requestChange(action, next)}
+            />
           );
         })}
       </div>

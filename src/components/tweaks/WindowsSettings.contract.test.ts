@@ -7,11 +7,14 @@ declare const Bun: {
 const read = (path: string) => Bun.file(path).text();
 
 describe("Windows Settings layout contracts", () => {
-  test("advanced AI cleanup keeps every operation as a persisted toggle", async () => {
+  test("advanced AI cleanup keeps every operation as a persisted universal toggle", async () => {
     const component = await read("src/components/tweaks/WindowsAiAdvancedActions.tsx");
 
     expect(component).toContain("aiComponentCleanup");
-    expect(component).toContain("onCheckedChange");
+    expect(component).toContain("<UniversalToggle");
+    expect(component).toContain('size="compact"');
+    expect(component).toContain("onChange");
+    expect(component).not.toContain("<Switch");
     expect(component).not.toContain("Manual cleanup checks");
     expect(component).not.toContain("Run once");
   });
