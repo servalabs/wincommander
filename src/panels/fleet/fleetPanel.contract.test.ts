@@ -24,11 +24,21 @@ describe("Fleet access-control panel contracts", () => {
     expect(panel).toContain("getCapabilities()");
     expect(panel).toContain("capabilities.can_manage_policy");
     expect(panel).not.toContain("systemInfo?.isAdmin");
-    expect(panel).toContain('defaultValue={isAdmin ? "enrollment" : "vault"}');
+    expect(panel).toContain('value={activeTab} onValueChange={setActiveTab}');
     expect(panel).toContain('{isAdmin && <TabsTrigger value="enrollment">Enrollment</TabsTrigger>}');
     expect(panel).toContain('{isAdmin && <TabsTrigger value="access-control">Access control</TabsTrigger>}');
     expect(panel).toContain('{isAdmin ? "Vault permissions" : "My vaults"}');
     expect(panel).toContain('<VaultAccessTab isAdmin={isAdmin} />');
+  });
+
+  test("retries transient service failures instead of permanently demoting an administrator", () => {
+    expect(panel).toContain("retriesRemaining > 0");
+    expect(panel).toContain("setTimeout(() => { void probe(retriesRemaining - 1); }, 750)");
+    expect(panel).toContain('window.addEventListener("focus", refreshOnFocus)');
+    expect(panel).toContain('setActiveTab("vault")');
+    expect(panel).toContain('setCapabilityState("unavailable")');
+    expect(panel).toContain("Retry permission check");
+    expect(panel).toContain('if (canManage && lastCapability.current !== true) setActiveTab("enrollment")');
   });
 
   test("uses one checkbox directory and sorts selected users first", () => {

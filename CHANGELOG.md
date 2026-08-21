@@ -148,6 +148,13 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Fixed
 
+- **Fleet administrator tabs recover from transient service startup failures**
+  (2026-08-21) — the Fleet panel now retries its service-derived permission
+  check, refreshes it when the window regains focus, and exposes a manual retry
+  instead of permanently presenting an Administrator as a Vault-only member.
+  Administrative tabs remain hidden when the service positively identifies the
+  caller as a non-admin account.
+
 - **Backend CLI deadlines now cover runtime startup** (2026-08-20) — a live
   `3.2.17` read-only probe remained alive beyond its explicit 10-second limit
   because the timer was created only after Tauri setup began. The deadline now
