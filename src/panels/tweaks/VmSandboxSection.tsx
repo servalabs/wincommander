@@ -13,12 +13,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Button, Spinner, Tag } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
-
-interface VmCapabilities {
-  hyperv: boolean;
-  sandbox: boolean;
-  hypervFeature: string;
-}
+import { supportsWindowsSandbox, type VmCapabilities } from './vmSandboxCapabilities';
 
 type IsolationFeature = "hyperv" | "sandbox";
 
@@ -110,11 +105,14 @@ export default function VmSandboxSection() {
       setMessage(result.message);
     });
 
+  const canUseSandbox = supportsWindowsSandbox(caps);
+  const hasAvailableIsolation = caps?.hyperv || (canUseSandbox && caps?.sandbox);
+
   const headerRight = caps ? (
-    <Tag minimal intent={caps.hyperv || caps.sandbox ? 'success' : undefined} className="font-mono">
-      {!caps.hyperv && !caps.sandbox
+    <Tag minimal intent={hasAvailableIsolation ? 'success' : undefined} className="font-mono">
+      {!hasAvailableIsolation
         ? 'UNAVAILABLE'
-        : [caps.hyperv ? 'HYPER-V' : null, caps.sandbox ? 'SANDBOX' : null]
+        : [caps.hyperv ? 'HYPER-V' : null, canUseSandbox && caps.sandbox ? 'SANDBOX' : null]
             .filter(Boolean)
             .join(' · ')}
     </Tag>
@@ -125,8 +123,8 @@ export default function VmSandboxSection() {
       <div className="flex flex-col gap-3">
         <div className="text-sm opacity-80">
           Create and destroy throwaway execution environments — Hyper-V virtual machines
-          (persistent) and Windows Sandbox (ephemeral; discards everything on close). Use them to
-          open untrusted files or isolate risky work.
+          (persistent){canUseSandbox && ' and Windows Sandbox (ephemeral; discards everything on close)'}.
+          {' '}Use them to open untrusted files or isolate risky work.
         </div>
 
         <div className="flex items-center gap-2">
@@ -139,7 +137,7 @@ export default function VmSandboxSection() {
         {error && <div className="font-mono text-sm text-red-400" role="alert">{error}</div>}
         {!error && message && <div className="font-mono text-sm text-green-400" role="status">{message}</div>}
 
-        {caps && (!caps.hyperv || !caps.sandbox) && (
+        {caps && (!caps.hyperv || (canUseSandbox && !caps.sandbox)) && (
           <div className="flex flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-3 text-sm">
             <div className="opacity-80">
               Enable only the isolation method you need. Windows applies the feature first; restart
@@ -151,7 +149,7 @@ export default function VmSandboxSection() {
                   Enable Hyper-V
                 </Button>
               )}
-              {!caps.sandbox && (
+              {canUseSandbox && !caps.sandbox && (
                 <Button icon="application" small onClick={() => enableFeature('sandbox')} disabled={busy}>
                   Enable Windows Sandbox
                 </Button>
@@ -161,7 +159,7 @@ export default function VmSandboxSection() {
           </div>
         )}
 
-        {caps?.sandbox && (
+        {canUseSandbox && caps?.sandbox && (
           <div className="flex items-center gap-2">
             <span className="font-mono text-xs opacity-70">WINDOWS SANDBOX</span>
             <Button icon="play" small onClick={launchSandbox} disabled={busy}>
