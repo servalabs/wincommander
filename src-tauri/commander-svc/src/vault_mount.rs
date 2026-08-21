@@ -27,6 +27,9 @@ struct ActiveMount {
     caller_sid: String,
     policy_id: String,
     policy_version: u64,
+    container_identity: String,
+    access: wincmd_shared::vault_access::VaultAccess,
+    mounted_at: u64,
 }
 
 /// Protected, crash-recovery-only state. It contains no password, path, ACL,
@@ -141,7 +144,7 @@ impl VaultMountBroker {
             password.zeroize();
             return failed(entry_id, None, VaultMountReason::DismountFailed);
         }
-        let Some((plan, presentation, preferred_letter)) = store.mount_plan(entry_id) else {
+        let Some((plan, presentation, preferred_letter, container_identity)) = store.mount_plan(entry_id) else {
             password.zeroize();
             return denied(entry_id, VaultMountReason::NotAuthorized);
         };
@@ -149,11 +152,21 @@ impl VaultMountBroker {
             password.zeroize();
             return failed(entry_id, Some(presentation), VaultMountReason::SessionUnavailable);
         };
-        if self.active.lock().ok().and_then(|active| active.get(entry_id).cloned()).is_some()
-            && self.dismount_entry(store, entry_id).state != VaultMountState::Unmounted
-        {
+        let Some(caller_sid) = caller_sid_for_pid(client_pid) else {
             password.zeroize();
-            return failed(entry_id, Some(presentation), VaultMountReason::DismountFailed);
+            return denied(entry_id, VaultMountReason::NotAuthorized);
+        };
+        if let Some(existing) = self.active.lock().ok().and_then(|active| active.get(entry_id).cloned()) {
+            // A second authorized session must never evict a per-user mount.
+            // Only the same authenticated user in the same session may remount.
+            if existing.session_id != session_id || existing.caller_sid != caller_sid {
+                password.zeroize();
+                return denied(entry_id, VaultMountReason::NotAuthorized);
+            }
+            if self.dismount_entry(store, entry_id).state != VaultMountState::Unmounted {
+                password.zeroize();
+                return failed(entry_id, Some(presentation), VaultMountReason::DismountFailed);
+            }
         }
         let mut request = InternalMountRequest {
             container_path: plan.container.to_string_lossy().into_owned(),
@@ -183,12 +196,9 @@ impl VaultMountBroker {
             let _ = self.broker.dismount(reply.internal_drive, presentation, session_id);
             return failed(entry_id, Some(presentation), VaultMountReason::NotAuthorized);
         };
-        let Some(caller_sid) = caller_sid_for_pid(client_pid) else {
-            let _ = self.broker.dismount(reply.internal_drive, presentation, session_id);
-            return failed(entry_id, Some(presentation), VaultMountReason::NotAuthorized);
-        };
         if let Ok(mut active) = self.active.lock() {
-            active.insert(entry_id.to_owned(), ActiveMount { drive_letter: reply.drive_letter.clone(), internal_drive: reply.internal_drive, presentation, session_id, caller_sid, policy_id, policy_version });
+            let mounted_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_secs()).unwrap_or(0);
+            active.insert(entry_id.to_owned(), ActiveMount { drive_letter: reply.drive_letter.clone(), internal_drive: reply.internal_drive, presentation, session_id, caller_sid, policy_id, policy_version, container_identity, access: effective_access, mounted_at });
             if self.persist_active(store, &active).is_err() {
                 let mount = active.remove(entry_id);
                 drop(active);
@@ -215,6 +225,7 @@ impl VaultMountBroker {
             if self.persist_active(store, &mounts).is_err() {
                 // The volume is already closed; keep the durable old record
                 // for conservative cleanup on a later service start.
+                self.recovery_failed.store(true, std::sync::atomic::Ordering::Release);
                 return failed(entry_id, Some(active.presentation), VaultMountReason::DismountFailed);
             }
         }
@@ -270,7 +281,10 @@ impl VaultMountBroker {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(_) => { self.recovery_failed.store(true, std::sync::atomic::Ordering::Release); return Err(VaultMountReason::DismountFailed); }
         };
-        let registry: DurableMountRegistry = serde_json::from_slice(&bytes).map_err(|_| VaultMountReason::DismountFailed)?;
+        let registry: DurableMountRegistry = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(_) => { self.recovery_failed.store(true, std::sync::atomic::Ordering::Release); return Err(VaultMountReason::DismountFailed); }
+        };
         if registry.mounts.len() > MAX_DURABLE_MOUNTS || registry.mounts.iter().any(|(entry, mount)| !valid_durable_mount(entry, mount)) {
             self.recovery_failed.store(true, std::sync::atomic::Ordering::Release);
             return Err(VaultMountReason::DismountFailed);
@@ -281,7 +295,11 @@ impl VaultMountBroker {
                 return Err(VaultMountReason::DismountFailed);
             }
         }
-        store.write_active_mounts(br#"{\"mounts\":{}}"#).map_err(|_| VaultMountReason::DismountFailed)?;
+        let empty = serde_json::to_vec(&DurableMountRegistry { mounts: HashMap::new() }).map_err(|_| VaultMountReason::DismountFailed)?;
+        if store.write_active_mounts(&empty).is_err() {
+            self.recovery_failed.store(true, std::sync::atomic::Ordering::Release);
+            return Err(VaultMountReason::DismountFailed);
+        }
         Ok(())
     }
 
@@ -298,6 +316,8 @@ fn valid_durable_mount(entry_id: &str, mount: &ActiveMount) -> bool {
         && valid_drive_letter(&mount.drive_letter) && mount.internal_drive <= 25
         && mount.caller_sid.starts_with("S-") && mount.caller_sid.len() <= 184
         && !mount.policy_id.is_empty() && mount.policy_id.len() <= 64 && mount.policy_version > 0
+        && !mount.container_identity.is_empty() && mount.container_identity.len() <= 256
+        && mount.mounted_at > 0
 }
 
 fn caller_sid_for_pid(pid: u32) -> Option<String> {

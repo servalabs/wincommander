@@ -25,6 +25,7 @@
 
 use std::collections::VecDeque;
 use std::io;
+use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -57,6 +58,7 @@ use windows_sys::Win32::{
     Security::{
         AllocateAndInitializeSid, CheckTokenMembership, EqualSid, FreeSid, GetTokenInformation,
         TokenUser, PSECURITY_DESCRIPTOR, PSID, SECURITY_NT_AUTHORITY, TOKEN_QUERY, TOKEN_USER,
+        LookupAccountNameW, SID_NAME_USE,
     },
     System::{
         Pipes::GetNamedPipeClientProcessId,
@@ -75,6 +77,11 @@ use windows_sys::Win32::{
 //            FILE_READ_ATTRIBUTES — enough for named-pipe I/O, not file ops.
 
 const PIPE_SDDL: &str = "D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x12019b;;;IU)";
+const VAULT_POLICY_ADMIN_GROUP: &str = "WinCommander Vault Policy Administrators";
+
+fn is_vault_management_verb(verb: &str) -> bool {
+    matches!(verb, "svc.vault.get_policy" | "svc.vault.get_status" | "svc.vault.apply_policy" | "svc.vault.capabilities")
+}
 
 /// Run the named-pipe accept loop forever.  Each accepted connection is
 /// handled in a fresh tokio task.  `policy_store`, `session_helper_gate`,
@@ -127,6 +134,7 @@ pub async fn serve(
         let raw_handle = conn.as_raw_handle() as HANDLE;
         let (caller_privileged, client_pid) =
             caller_is_privileged(raw_handle).unwrap_or((false, 0));
+        let vault_policy_manager = caller_has_vault_policy_capability(client_pid).unwrap_or(false);
 
         let policy_store = Arc::clone(&policy_store);
         let session_helper_gate = Arc::clone(&session_helper_gate);
@@ -138,6 +146,7 @@ pub async fn serve(
             if let Err(e) = handle_connection(
                 conn,
                 caller_privileged,
+                vault_policy_manager,
                 client_pid,
                 policy_store,
                 session_helper_gate,
@@ -159,6 +168,7 @@ pub async fn serve(
 pub(crate) async fn handle_connection(
     mut conn: tokio::net::windows::named_pipe::NamedPipeServer,
     caller_privileged: bool,
+    vault_policy_manager: bool,
     client_pid: u32,
     policy_store: Arc<PolicyStore>,
     session_helper_gate: Arc<SessionHelperGate>,
@@ -241,7 +251,7 @@ pub(crate) async fn handle_connection(
         let request_id = req.request_id;
         match authorize(
             &req.feature_id,
-            caller_privileged,
+            caller_privileged || (vault_policy_manager && is_vault_management_verb(&req.feature_id)),
             client_pid,
             &session_helper_gate,
         )
@@ -256,8 +266,13 @@ pub(crate) async fn handle_connection(
                 write_envelope(&mut conn, &reply).await?;
             }
             Ok(trust_origin) => {
+                if is_vault_management_verb(&req.feature_id) && !caller_privileged && !vault_policy_manager {
+                    let reply = Envelope::Error(ErrorReply { request_id, kind: "forbidden".to_string(), message: "vault policy operation requires Vault Policy Administrator".to_string() });
+                    write_envelope(&mut conn, &reply).await?;
+                    continue;
+                }
                 let reply =
-                    dispatch_verb(&req, trust_origin, &policy_store, &clipboard_state, &vault_access, &vault_mount, client_pid, caller_privileged).await;
+                    dispatch_verb(req, trust_origin, &policy_store, &clipboard_state, &vault_access, &vault_mount, client_pid, caller_privileged || vault_policy_manager).await;
                 write_envelope(&mut conn, &reply).await?;
             }
         }
@@ -361,7 +376,7 @@ impl VerbError {
 /// `Some` only for `SessionHelper`-class verbs (see [`authorize`]);
 /// `ReadOnly`/`Privileged` verbs always see `None`.
 async fn dispatch_verb(
-    req: &Request,
+    req: Request,
     trust_origin: Option<TrustOrigin>,
     policy_store: &PolicyStore,
     clipboard_state: &ClipboardGuardState,
@@ -370,9 +385,9 @@ async fn dispatch_verb(
     client_pid: u32,
     caller_privileged: bool,
 ) -> Envelope {
-    let request_id = req.request_id;
+    let Request { request_id, feature_id, args } = req;
 
-    let outcome: Result<serde_json::Value, VerbError> = match req.feature_id.as_str() {
+    let outcome: Result<serde_json::Value, VerbError> = match feature_id.as_str() {
         "svc.status" => Ok(serde_json::to_value(settings_host::status())
             .unwrap_or_else(|_| serde_json::json!({"ok": true}))),
         "svc.get_settings" => Ok(settings_host::get_settings()),
@@ -381,10 +396,10 @@ async fn dispatch_verb(
 
         "svc.clipboard.get_policy" => Ok(clipboard_policy_response(policy_store)),
 
-        "svc.policy.install_epoch" => handle_install_epoch(policy_store, req.args.clone()),
+        "svc.policy.install_epoch" => handle_install_epoch(policy_store, args),
 
         "svc.clipboard.report_event" => match trust_origin {
-            Some(origin) => handle_report_event(clipboard_state, req.args.clone(), origin),
+            Some(origin) => handle_report_event(clipboard_state, args, origin),
             // `authorize()` only ever returns `Some` for the `SessionHelper`
             // class, and this verb IS classified `SessionHelper` — reaching
             // `None` here would mean that contract broke. Fail closed
@@ -395,21 +410,21 @@ async fn dispatch_verb(
             )),
         },
 
-        "svc.clipboard.set_enabled" => handle_set_enabled(clipboard_state, req.args.clone()),
+        "svc.clipboard.set_enabled" => handle_set_enabled(clipboard_state, args),
 
         "svc.vault.get_policy" => Ok(serde_json::to_value(vault_access.policy()).unwrap_or_else(|_| serde_json::Value::Null)),
         "svc.vault.get_status" => Ok(serde_json::to_value(vault_access.status()).unwrap_or_else(|_| serde_json::Value::Null)),
-        "svc.vault.apply_policy" => handle_vault_apply_and_cleanup(vault_access, vault_mount, req.args.clone()),
-        "svc.vault.authorize_mount" => handle_vault_authorize(vault_access, req.args.clone(), client_pid),
-        "svc.vault.mount" => handle_vault_mount(vault_access, vault_mount, req.args.clone(), client_pid),
-        "svc.vault.unmount" => handle_vault_unmount(vault_access, vault_mount, req.args.clone(), client_pid),
+        "svc.vault.apply_policy" => handle_vault_apply_and_cleanup(vault_access, vault_mount, args),
+        "svc.vault.authorize_mount" => handle_vault_authorize(vault_access, args, client_pid),
+        "svc.vault.mount" => handle_vault_mount(vault_access, vault_mount, args, client_pid),
+        "svc.vault.unmount" => handle_vault_unmount(vault_access, vault_mount, args, client_pid),
         "svc.vault.list_authorized" => handle_vault_list_authorized(vault_access, vault_mount, client_pid),
         "svc.vault.capabilities" => Ok(serde_json::json!({ "can_manage_policy": caller_privileged })),
 
         // Every other verb (ink_receipt.* and anything privileged/unknown)
         // is still a stub — out of this task's scope. `authorize()` above
         // has already gated it correctly by CapabilityClass regardless.
-        _ => Ok(serde_json::json!({ "ok": true, "verb": req.feature_id })),
+        _ => Ok(serde_json::json!({ "ok": true, "verb": feature_id })),
     };
 
     match outcome {
@@ -498,10 +513,10 @@ fn handle_vault_authorize(
 fn handle_vault_mount(
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
-    args: serde_json::Value,
+    mut args: serde_json::Value,
     client_pid: u32,
 ) -> Result<serde_json::Value, VerbError> {
-    let mut request: wincmd_shared::vault_access::VaultMountRequest = serde_json::from_value(args)
+    let mut request = take_vault_mount_request(&mut args)
         .map_err(|_| VerbError::new("vault_validation_failed", "mount request is invalid"))?;
     // This must happen before a broker attempt: PID/token membership is
     // derived from the named-pipe peer, never from a renderer identity.
@@ -531,6 +546,28 @@ fn handle_vault_mount(
     };
     serde_json::to_value(result)
         .map_err(|_| VerbError::new("vault_internal_error", "mount result could not be created"))
+}
+
+/// Move the sole secret string out of its JSON object instead of cloning the
+/// public payload. Every remaining string is overwritten before it drops.
+fn take_vault_mount_request(args: &mut serde_json::Value) -> Result<wincmd_shared::vault_access::VaultMountRequest, ()> {
+    use zeroize::Zeroize;
+    let object = args.as_object_mut().ok_or(())?;
+    if object.len() != 2 { zeroize_json(args); return Err(()); }
+    let mut entry_id = match object.remove("entry_id") { Some(serde_json::Value::String(value)) => value, _ => { zeroize_json(args); return Err(()); } };
+    let password = match object.remove("password") { Some(serde_json::Value::String(value)) => value, _ => { entry_id.zeroize(); zeroize_json(args); return Err(()); } };
+    zeroize_json(args);
+    Ok(wincmd_shared::vault_access::VaultMountRequest { entry_id, password })
+}
+
+fn zeroize_json(value: &mut serde_json::Value) {
+    use zeroize::Zeroize;
+    match value {
+        serde_json::Value::String(text) => text.zeroize(),
+        serde_json::Value::Array(values) => for value in values { zeroize_json(value); },
+        serde_json::Value::Object(values) => for value in values.values_mut() { zeroize_json(value); },
+        _ => {}
+    }
 }
 
 fn handle_vault_unmount(
@@ -1028,6 +1065,29 @@ pub fn caller_is_privileged(pipe_handle: HANDLE) -> Result<(bool, u32)> {
         // 5. Check LocalSystem (S-1-5-18).
         let is_system = is_local_system_token(token)?;
         Ok((is_system, client_pid))
+    }
+}
+
+/// A deliberately narrow delegation: this local group can administer Vault
+/// policy only. It is never folded into `caller_privileged`, so it cannot
+/// operate Fleet, clipboard, or any future generic privileged verb.
+fn caller_has_vault_policy_capability(pid: u32) -> Result<bool> {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() { anyhow::bail!("OpenProcess failed"); }
+        let _process = HandleGuard(process);
+        let mut token = std::ptr::null_mut();
+        if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 { anyhow::bail!("OpenProcessToken failed"); }
+        let _token = HandleGuard(token);
+        let name = std::ffi::OsStr::new(VAULT_POLICY_ADMIN_GROUP).encode_wide().chain(std::iter::once(0)).collect::<Vec<_>>();
+        let mut sid_len = 0u32; let mut domain_len = 0u32; let mut use_type = 0i32 as SID_NAME_USE;
+        LookupAccountNameW(std::ptr::null(), name.as_ptr(), std::ptr::null_mut(), &mut sid_len, std::ptr::null_mut(), &mut domain_len, &mut use_type);
+        if sid_len == 0 { return Ok(false); }
+        let mut sid = vec![0u8; sid_len as usize]; let mut domain = vec![0u16; domain_len as usize + 1];
+        if LookupAccountNameW(std::ptr::null(), name.as_ptr(), sid.as_mut_ptr() as PSID, &mut sid_len, domain.as_mut_ptr(), &mut domain_len, &mut use_type) == 0 { return Ok(false); }
+        let mut member = 0;
+        if CheckTokenMembership(token, sid.as_mut_ptr() as PSID, &mut member) == 0 { return Ok(false); }
+        Ok(member != 0)
     }
 }
 
@@ -1746,6 +1806,15 @@ mod tests {
         let _ = caller_is_privileged(pseudo);
     }
 
+    #[test]
+    fn mount_secret_parser_moves_only_the_password_and_clears_the_json_shell() {
+        let mut args = serde_json::json!({"entry_id":"shared","password":"canary-secret"});
+        let request = take_vault_mount_request(&mut args).unwrap();
+        assert_eq!(request.entry_id, "shared");
+        assert_eq!(request.password, "canary-secret");
+        assert!(args.as_object().unwrap().is_empty());
+    }
+
     // ── SVC_PROTOCOL_VERSION is exported and non-empty ───────────────────
 
     #[test]
@@ -1797,6 +1866,7 @@ mod integration {
             handle_connection(
                 s,
                 forced_privilege,
+                false,
                 999,
                 policy_store,
                 session_helper_gate,
@@ -1911,6 +1981,7 @@ mod integration {
             handle_connection(
                 s,
                 false,
+                false,
                 4242,
                 policy_store,
                 session_helper_gate,
@@ -1980,6 +2051,7 @@ mod integration {
             s.connect().await.expect("pipe connect");
             handle_connection(
                 s,
+                false,
                 false,
                 4242,
                 policy_store,

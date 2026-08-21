@@ -53,12 +53,21 @@ pub struct ResolvedPrincipal { pub sid: String, pub kind: PrincipalKind }
 /// policy group principals are kept as ACL principals and are never nested.
 pub trait LocalGroupReconciler: Send + Sync {
     fn reconcile_exact_members(&self, group: &str, member_sids: &[String]) -> Result<(), VaultError>;
+    fn snapshot(&self, plans: &[GroupMembershipPlan]) -> Result<Vec<GroupMembershipSnapshot>, VaultError>;
+    fn restore(&self, snapshots: &[GroupMembershipSnapshot]) -> Result<(), VaultError>;
 }
 
 struct NoopLocalGroupReconciler;
 impl LocalGroupReconciler for NoopLocalGroupReconciler {
     fn reconcile_exact_members(&self, _: &str, _: &[String]) -> Result<(), VaultError> { Ok(()) }
+    fn snapshot(&self, plans: &[GroupMembershipPlan]) -> Result<Vec<GroupMembershipSnapshot>, VaultError> { Ok(plans.iter().map(|plan| GroupMembershipSnapshot { group: plan.group.clone(), members: plan.members.clone(), existed: true }).collect()) }
+    fn restore(&self, _: &[GroupMembershipSnapshot]) -> Result<(), VaultError> { Ok(()) }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupMembershipPlan { pub group: String, pub members: Vec<String>, pub access: VaultAccess }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupMembershipSnapshot { pub group: String, pub members: Vec<String>, pub existed: bool }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedGrant {
@@ -71,6 +80,7 @@ pub struct VaultAclPlan {
     pub parent: PathBuf,
     pub container: PathBuf,
     pub grants: Vec<ResolvedGrant>,
+    pub managed_groups: Vec<GroupMembershipPlan>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +97,11 @@ pub trait AclApplier: Send + Sync {
     fn apply_and_verify(&self, plan: &VaultAclPlan) -> Result<(), VaultError>;
     fn snapshot(&self, plan: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError>;
     fn restore(&self, snapshots: &[AclSnapshot]) -> Result<(), VaultError>;
+    /// Production implementations must compare protected DACL ACE identity,
+    /// mask, order and count; a protected bit alone is not evidence.
+    fn verify_exact(&self, plan: &VaultAclPlan) -> Result<(), VaultError> {
+        if self.snapshot(plan)?.iter().any(|snapshot| !snapshot.dacl_protected) { Err(VaultError::AclReadback) } else { Ok(()) }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,18 +207,22 @@ impl VaultAccessStore {
         validate_policy(&persisted.policy)?;
         let plans = self.resolve_and_plan(&persisted.policy)?;
         if plans.len() != persisted.resolved.len() { return Err(VaultError::Validation); }
-        for (entry, plan) in plans {
+        for (entry, mut plan) in plans {
             let stored = persisted.resolved.iter().find(|stored| stored.id == entry.id).ok_or(VaultError::Validation)?;
             let identity = self.fs.stable_file_identity(Path::new(&entry.container_path))?;
             if identity != stored.identity { return Err(VaultError::ContainerIdentity); }
+            let group_snapshots = self.groups.snapshot(&plan.managed_groups)?;
+            if group_snapshots.len() != plan.managed_groups.len() || group_snapshots.iter().any(|snapshot| {
+                plan.managed_groups.iter().find(|plan| plan.group == snapshot.group)
+                    .map(|plan| plan.members.as_slice() == snapshot.members.as_slice()) != Some(true)
+            }) { return Err(VaultError::PrincipalResolution); }
+            self.hydrate_managed_group_sids(&mut plan)?;
             let mut derived = plan.grants.iter().map(|grant| (&grant.sid, grant.access)).collect::<Vec<_>>();
             let mut stored_grants = stored.grants.iter().map(|grant| (&grant.sid, grant.access)).collect::<Vec<_>>();
             derived.sort_by(|left, right| left.0.cmp(right.0));
             stored_grants.sort_by(|left, right| left.0.cmp(right.0));
             if derived != stored_grants { return Err(VaultError::PrincipalResolution); }
-            if self.acls.snapshot(&plan)?.iter().any(|snapshot| !snapshot.dacl_protected) {
-                return Err(VaultError::AclReadback);
-            }
+            self.acls.verify_exact(&plan)?;
         }
         Ok(())
     }
@@ -231,7 +250,7 @@ impl VaultAccessStore {
     pub fn mount_plan(
         &self,
         entry_id: &str,
-    ) -> Option<(VaultAclPlan, VaultPresentation, Option<String>)> {
+    ) -> Option<(VaultAclPlan, VaultPresentation, Option<String>, String)> {
         let state = self
             .state
             .lock()
@@ -255,9 +274,11 @@ impl VaultAccessStore {
                         access: grant.access,
                     })
                     .collect(),
+                managed_groups: Vec::new(),
             },
             entry.mount.presentation,
             entry.mount.preferred_letter.clone(),
+            resolved.identity.clone(),
         ))
     }
 
@@ -309,6 +330,7 @@ impl VaultAccessStore {
             parent: mounted_root.clone(),
             container: mounted_root,
             grants,
+            managed_groups: Vec::new(),
         };
         self.acls.apply_and_verify(&plan)
     }
@@ -326,16 +348,33 @@ impl VaultAccessStore {
             return Err(VaultError::VersionConflict);
         }
         validate_policy(&policy)?;
-        let resolved = self.resolve_and_plan(&policy)?;
+        let mut resolved = self.resolve_and_plan(&policy)?;
         let mut snapshots = Vec::new();
         for (_, plan) in &resolved {
             snapshots.extend(self.acls.snapshot(plan)?);
+        }
+        let group_plans = resolved.iter().flat_map(|(_, plan)| plan.managed_groups.clone()).collect::<Vec<_>>();
+        let group_snapshots = self.groups.snapshot(&group_plans)?;
+        for group in &group_plans {
+            if let Err(error) = self.groups.reconcile_exact_members(&group.group, &group.members) {
+                self.rollback_after_apply(&mut state, &snapshots);
+                let _ = self.groups.restore(&group_snapshots);
+                return Err(error);
+            }
+        }
+        for (_, plan) in &mut resolved {
+            if let Err(error) = self.hydrate_managed_group_sids(plan) {
+                self.rollback_after_apply(&mut state, &snapshots);
+                let _ = self.groups.restore(&group_snapshots);
+                return Err(error);
+            }
         }
         for (_, plan) in &resolved {
             if let Err(error) = self.acls.apply_and_verify(plan) {
                 // JSON replacement has not happened.  Restore every target
                 // already touched before returning the bounded failure.
                 self.rollback_after_apply(&mut state, &snapshots);
+                let _ = self.groups.restore(&group_snapshots);
                 return Err(error);
             }
         }
@@ -362,11 +401,13 @@ impl VaultAccessStore {
             Ok(bytes) => bytes,
             Err(_) => {
                 self.rollback_after_apply(&mut state, &snapshots);
+                let _ = self.groups.restore(&group_snapshots);
                 return Err(VaultError::Persistence);
             }
         };
         if self.fs.atomic_write(&self.path, &bytes).is_err() {
             self.rollback_after_apply(&mut state, &snapshots);
+            let _ = self.groups.restore(&group_snapshots);
             return Err(VaultError::Persistence);
         }
         // Host/container ACLs are proven here.  Mounted-root enforcement is
@@ -462,6 +503,7 @@ impl VaultAccessStore {
                 let mut grants = Vec::new();
                 let mut read_members = Vec::new();
                 let mut write_members = Vec::new();
+                let mut managed_groups = Vec::new();
                 let owner = self.principals.resolve_principal(&entry.owner_account)?;
                 match owner.kind {
                     PrincipalKind::User => write_members.push(owner.sid),
@@ -489,11 +531,7 @@ impl VaultAccessStore {
                     members.sort(); members.dedup();
                     if members.is_empty() { continue; }
                     let group = managed_group_name(&entry.id, access);
-                    self.groups.reconcile_exact_members(&group, members)?;
-                    let sid = self.principals.resolve_sid(&group)?;
-                    if let Some(existing) = grants.iter_mut().find(|existing| existing.sid == sid) {
-                        if access == VaultAccess::Write { existing.access = VaultAccess::Write; }
-                    } else { grants.push(ResolvedGrant { sid, access }); }
+                    managed_groups.push(GroupMembershipPlan { group, members: members.clone(), access });
                 }
                 let mut entry = entry.clone();
                 entry.container_identity = Some(identity);
@@ -508,10 +546,21 @@ impl VaultAccessStore {
                         parent,
                         container,
                         grants,
+                        managed_groups,
                     },
                 ))
             })
             .collect()
+    }
+
+    fn hydrate_managed_group_sids(&self, plan: &mut VaultAclPlan) -> Result<(), VaultError> {
+        for group in &plan.managed_groups {
+            let sid = self.principals.resolve_sid(&group.group)?;
+            if let Some(existing) = plan.grants.iter_mut().find(|existing| existing.sid == sid) {
+                if group.access == VaultAccess::Write { existing.access = VaultAccess::Write; }
+            } else { plan.grants.push(ResolvedGrant { sid, access: group.access }); }
+        }
+        Ok(())
     }
 
     fn rollback_after_apply(&self, state: &mut State, snapshots: &[AclSnapshot]) {
@@ -543,13 +592,23 @@ impl VaultFs for WindowsVaultFs {
         std::fs::read(path)
     }
     fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH};
+        static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
         let parent = path
             .parent()
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
         std::fs::create_dir_all(parent)?;
-        let temp = parent.join(format!(".{}-{}.tmp", POLICY_FILE, std::process::id()));
+        let name = path.file_name().and_then(|value| value.to_str()).ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let temp = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), NEXT_TEMP.fetch_add(1, Ordering::Relaxed)));
         std::fs::write(&temp, bytes)?;
-        std::fs::rename(temp, path)
+        let moved = unsafe { MoveFileExW(wide(temp.as_os_str()).as_ptr(), wide(path.as_os_str()).as_ptr(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) };
+        if moved == 0 {
+            let error = std::io::Error::last_os_error();
+            let _ = std::fs::remove_file(&temp);
+            return Err(error);
+        }
+        Ok(())
     }
     fn stable_file_identity(&self, path: &Path) -> Result<String, VaultError> {
         use std::os::windows::io::AsRawHandle;
@@ -664,13 +723,29 @@ pub struct WindowsLocalGroupReconciler;
 impl LocalGroupReconciler for WindowsLocalGroupReconciler {
     fn reconcile_exact_members(&self, group: &str, member_sids: &[String]) -> Result<(), VaultError> {
         ensure_local_group(group)?;
-        let current = local_group_members(group)?;
+        let current = local_group_members(group)?.ok_or(VaultError::PrincipalResolution)?;
         let desired: std::collections::HashSet<_> = member_sids.iter().cloned().collect();
         let remove = current.difference(&desired).cloned().collect::<Vec<_>>();
         let add = desired.difference(&current).cloned().collect::<Vec<_>>();
         if !remove.is_empty() { set_local_group_members(group, &remove, false)?; }
         if !add.is_empty() { set_local_group_members(group, &add, true)?; }
-        if local_group_members(group)? != desired { return Err(VaultError::PrincipalResolution); }
+        if local_group_members(group)? != Some(desired) { return Err(VaultError::PrincipalResolution); }
+        Ok(())
+    }
+    fn snapshot(&self, plans: &[GroupMembershipPlan]) -> Result<Vec<GroupMembershipSnapshot>, VaultError> {
+        let mut seen = std::collections::HashSet::new();
+        plans.iter().filter(|plan| seen.insert(plan.group.clone())).map(|plan| {
+            let Some(current) = local_group_members(&plan.group)? else { return Ok(GroupMembershipSnapshot { group: plan.group.clone(), members: vec![], existed: false }); };
+            let mut members = current.into_iter().collect::<Vec<_>>();
+            members.sort();
+            Ok(GroupMembershipSnapshot { group: plan.group.clone(), members, existed: true })
+        }).collect()
+    }
+    fn restore(&self, snapshots: &[GroupMembershipSnapshot]) -> Result<(), VaultError> {
+        for snapshot in snapshots {
+            if snapshot.existed { self.reconcile_exact_members(&snapshot.group, &snapshot.members)?; }
+            else { delete_local_group(&snapshot.group)?; }
+        }
         Ok(())
     }
 }
@@ -687,12 +762,15 @@ fn ensure_local_group(group: &str) -> Result<(), VaultError> {
 }
 
 #[cfg(windows)]
-fn local_group_members(group: &str) -> Result<std::collections::HashSet<String>, VaultError> {
+fn local_group_members(group: &str) -> Result<Option<std::collections::HashSet<String>>, VaultError> {
     use windows_sys::Win32::NetworkManagement::NetManagement::{NetApiBufferFree, NetLocalGroupGetMembers, LOCALGROUP_MEMBERS_INFO_0, MAX_PREFERRED_LENGTH};
     let name = wide(std::ffi::OsStr::new(group));
     let mut buffer: *mut u8 = std::ptr::null_mut();
     let mut read = 0u32; let mut total = 0u32;
     let status = unsafe { NetLocalGroupGetMembers(std::ptr::null(), name.as_ptr(), 0, &mut buffer, MAX_PREFERRED_LENGTH, &mut read, &mut total, std::ptr::null_mut()) };
+    // NERR_GroupNotFound: caller may be taking a pre-create transaction
+    // snapshot; this is represented explicitly so rollback can delete it.
+    if status == 2220 { return Ok(None); }
     if status != 0 || (read != 0 && buffer.is_null()) { return Err(VaultError::PrincipalResolution); }
     let mut members = std::collections::HashSet::new();
     if !buffer.is_null() {
@@ -700,7 +778,15 @@ fn local_group_members(group: &str) -> Result<std::collections::HashSet<String>,
         for row in rows { members.insert(sid_to_string(row.lgrmi0_sid).ok_or(VaultError::PrincipalResolution)?); }
         unsafe { NetApiBufferFree(buffer as _); }
     }
-    Ok(members)
+    Ok(Some(members))
+}
+
+#[cfg(windows)]
+fn delete_local_group(group: &str) -> Result<(), VaultError> {
+    use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupDel;
+    let name = wide(std::ffi::OsStr::new(group));
+    let status = unsafe { NetLocalGroupDel(std::ptr::null(), name.as_ptr()) };
+    if status == 0 || status == 2220 { Ok(()) } else { Err(VaultError::PrincipalResolution) }
 }
 
 #[cfg(windows)]
@@ -760,6 +846,34 @@ impl AclApplier for WindowsAclApplier {
             restore_one_acl(snapshot)?;
         }
         Ok(())
+    }
+    fn verify_exact(&self, plan: &VaultAclPlan) -> Result<(), VaultError> {
+        verify_one_acl(&plan.parent, &plan.grants)?;
+        verify_one_acl(&plan.container, &plan.grants)
+    }
+}
+
+#[cfg(windows)]
+fn verify_one_acl(path: &Path, grants: &[ResolvedGrant]) -> Result<(), VaultError> {
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+    use windows_sys::Win32::Security::Authorization::{ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT};
+    use windows_sys::Win32::Security::{AllocateAndInitializeSid, EqualSid, GetAce, GetSecurityDescriptorControl, PSID, SECURITY_NT_AUTHORITY, DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED};
+    use windows_sys::Win32::System::SystemServices::{DOMAIN_ALIAS_RID_ADMINS, SECURITY_BUILTIN_DOMAIN_RID};
+    const FULL: u32 = 0x001F_01FF; const MODIFY: u32 = 0x0013_01BF; const READ_EXECUTE: u32 = 0x0012_00A9;
+    unsafe {
+        let mut system: PSID = std::ptr::null_mut(); let mut admin: PSID = std::ptr::null_mut();
+        let authority = SECURITY_NT_AUTHORITY;
+        if AllocateAndInitializeSid(&authority, 1, 18, 0, 0, 0, 0, 0, 0, 0, &mut system) == 0 || AllocateAndInitializeSid(&authority, 2, SECURITY_BUILTIN_DOMAIN_RID as u32, DOMAIN_ALIAS_RID_ADMINS as u32, 0, 0, 0, 0, 0, 0, &mut admin) == 0 { return Err(VaultError::AclReadback); }
+        let mut allocated = vec![system, admin];
+        for grant in grants { let text = wide(std::ffi::OsStr::new(&grant.sid)); let mut sid = std::ptr::null_mut(); if ConvertStringSidToSidW(text.as_ptr(), &mut sid) == 0 { release_acl_sids(&allocated); return Err(VaultError::AclReadback); } allocated.push(sid); }
+        let mut acl = std::ptr::null_mut(); let mut descriptor = std::ptr::null_mut(); let name = wide(path.as_os_str());
+        let outcome = GetNamedSecurityInfoW(name.as_ptr(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, std::ptr::null_mut(), std::ptr::null_mut(), &mut acl, std::ptr::null_mut(), &mut descriptor);
+        let expected = std::iter::once((system, FULL)).chain(std::iter::once((admin, FULL))).chain(grants.iter().zip(allocated.iter().skip(2)).map(|(grant, sid)| (*sid, if grant.access == VaultAccess::Write { MODIFY } else { READ_EXECUTE }))).collect::<Vec<_>>();
+        let mut control = 0u16; let mut revision = 0u32;
+        let matches = outcome == ERROR_SUCCESS && !acl.is_null() && !descriptor.is_null() && (*acl).AceCount as usize == expected.len() && GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) != 0 && (control & SE_DACL_PROTECTED) != 0 && expected.iter().enumerate().all(|(index, (wanted_sid, wanted_mask))| { let mut ace = std::ptr::null_mut(); GetAce(acl, index as u32, &mut ace) != 0 && *(ace as *const u8) == 0 && *((ace as *const u8).add(4) as *const u32) == *wanted_mask && EqualSid((ace as *const u8).add(8) as PSID, *wanted_sid) != 0 });
+        if !descriptor.is_null() { LocalFree(descriptor as _); }
+        release_acl_sids(&allocated);
+        if matches { Ok(()) } else { Err(VaultError::AclReadback) }
     }
 }
 
@@ -1191,6 +1305,25 @@ mod tests {
             Ok(format!("S-1-test-{name}"))
         }
     }
+    #[derive(Default)]
+    struct Groups(Arc<Mutex<HashMap<String, Vec<String>>>>);
+    impl LocalGroupReconciler for Groups {
+        fn reconcile_exact_members(&self, group: &str, members: &[String]) -> Result<(), VaultError> {
+            self.0.lock().unwrap().insert(group.to_owned(), members.to_vec()); Ok(())
+        }
+        fn snapshot(&self, plans: &[GroupMembershipPlan]) -> Result<Vec<GroupMembershipSnapshot>, VaultError> {
+            let current = self.0.lock().unwrap();
+            Ok(plans.iter().map(|plan| match current.get(&plan.group) {
+                Some(members) => GroupMembershipSnapshot { group: plan.group.clone(), members: members.clone(), existed: true },
+                None => GroupMembershipSnapshot { group: plan.group.clone(), members: vec![], existed: false },
+            }).collect())
+        }
+        fn restore(&self, snapshots: &[GroupMembershipSnapshot]) -> Result<(), VaultError> {
+            let mut current = self.0.lock().unwrap();
+            for snapshot in snapshots { if snapshot.existed { current.insert(snapshot.group.clone(), snapshot.members.clone()); } else { current.remove(&snapshot.group); } }
+            Ok(())
+        }
+    }
     struct Acl;
     impl AclApplier for Acl {
         fn apply_and_verify(&self, plan: &VaultAclPlan) -> Result<(), VaultError> {
@@ -1248,6 +1381,9 @@ mod tests {
             PathBuf::from("/policy"),
         )
     }
+    fn store_with_groups(files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>, groups: Groups) -> VaultAccessStore {
+        VaultAccessStore::open_with_groups(Box::new(Fs(files)), Box::new(Resolver), Box::new(Acl), Box::new(groups), PathBuf::from("/policy"))
+    }
     #[test]
     fn applies_atomically_after_acl_verification() {
         let files = Arc::new(Mutex::new(HashMap::new()));
@@ -1296,18 +1432,18 @@ mod tests {
         assert_eq!(
             resolved[0]
                 .1
-                .grants
+                .managed_groups
                 .iter()
-                .filter(|g| g.sid == format!("S-1-test-{}", managed_group_name("shared", VaultAccess::Write)))
+                .filter(|g| g.group == managed_group_name("shared", VaultAccess::Write))
                 .count(),
             1
         );
         assert_eq!(
             resolved[0]
                 .1
-                .grants
+                .managed_groups
                 .iter()
-                .find(|g| g.sid == format!("S-1-test-{}", managed_group_name("shared", VaultAccess::Write)))
+                .find(|g| g.group == managed_group_name("shared", VaultAccess::Write))
                 .unwrap()
                 .access,
             VaultAccess::Write
@@ -1369,6 +1505,57 @@ mod tests {
             store.status().validation_state,
             VaultValidationState::Degraded
         );
+    }
+
+    #[test]
+    fn startup_rejects_a_protected_but_wrong_acl() {
+        struct WrongProtectedAcl;
+        impl AclApplier for WrongProtectedAcl {
+            fn apply_and_verify(&self, _: &VaultAclPlan) -> Result<(), VaultError> { Ok(()) }
+            fn snapshot(&self, plan: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError> { Ok(vec![AclSnapshot { path: plan.container.clone(), descriptor: vec![], dacl_protected: true }]) }
+            fn restore(&self, _: &[AclSnapshot]) -> Result<(), VaultError> { Ok(()) }
+            // Models an inherited/extra ACE or wrong access mask despite the
+            // protected control bit: startup must reject it.
+            fn verify_exact(&self, _: &VaultAclPlan) -> Result<(), VaultError> { Err(VaultError::AclReadback) }
+        }
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let installed = VaultAccessStore::open(Box::new(Fs(files.clone())), Box::new(Resolver), Box::new(Acl), PathBuf::from("/policy"));
+        installed.apply(policy(1, 0), 7).unwrap();
+        let restarted = VaultAccessStore::open(Box::new(Fs(files)), Box::new(Resolver), Box::new(WrongProtectedAcl), PathBuf::from("/policy"));
+        restarted.load_at_startup();
+        assert_eq!(restarted.status().validation_state, VaultValidationState::Degraded);
+    }
+
+    #[test]
+    fn first_apply_creates_exact_groups_and_restart_detects_membership_drift() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let groups = Groups::default(); let membership = Arc::clone(&groups.0);
+        let store = store_with_groups(files.clone(), groups);
+        store.apply(policy(1, 0), 7).unwrap();
+        let write = managed_group_name("shared", VaultAccess::Write);
+        assert_eq!(membership.lock().unwrap().get(&write).unwrap(), &vec!["S-1-test-Admin".to_string(), "S-1-test-Partner".to_string()]);
+        // Re-applying a successive policy produces the same deterministic
+        // membership, not a new/nested group.
+        store.apply(policy(2, 1), 8).unwrap();
+        assert_eq!(membership.lock().unwrap().len(), 1);
+        membership.lock().unwrap().get_mut(&write).unwrap().clear();
+        let restarted = store_with_groups(files, Groups(membership));
+        restarted.load_at_startup();
+        assert_eq!(restarted.status().validation_state, VaultValidationState::Degraded);
+    }
+
+    #[test]
+    fn acl_failure_rolls_back_new_managed_group() {
+        struct Fails;
+        impl AclApplier for Fails {
+            fn apply_and_verify(&self, _: &VaultAclPlan) -> Result<(), VaultError> { Err(VaultError::AclApply) }
+            fn snapshot(&self, plan: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError> { Ok(vec![AclSnapshot { path: plan.container.clone(), descriptor: vec![], dacl_protected: true }]) }
+            fn restore(&self, _: &[AclSnapshot]) -> Result<(), VaultError> { Ok(()) }
+        }
+        let files = Arc::new(Mutex::new(HashMap::new())); let groups = Groups::default(); let membership = Arc::clone(&groups.0);
+        let store = VaultAccessStore::open_with_groups(Box::new(Fs(files)), Box::new(Resolver), Box::new(Fails), Box::new(groups), PathBuf::from("/policy"));
+        assert_eq!(store.apply(policy(1, 0), 7), Err(VaultError::AclApply));
+        assert!(membership.lock().unwrap().is_empty());
     }
 }
 

@@ -5,6 +5,7 @@
 //! SYSTEM service, which derives the peer identity from the pipe client.
 
 use serde_json::Value;
+use zeroize::Zeroize;
 
 const SVC_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const VAULT_MOUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(130);
@@ -67,19 +68,23 @@ async fn call_via_with_timeout(
         return Err("service returned an invalid Hello acknowledgement".to_string());
     }
 
-    let request = wincmd_shared::Envelope::Request(wincmd_shared::Request {
+    let mut request = wincmd_shared::Envelope::Request(wincmd_shared::Request {
         request_id: 1,
         feature_id: feature_id.to_string(),
         args,
     })
     .sign(&session_token);
-    timeout(
+    let write_result = timeout(
         request_timeout,
         wincmd_shared::write_envelope(&mut client, &request),
     )
-    .await
-    .map_err(|_| "service request write timed out".to_string())?
-    .map_err(|e| format!("service request write failed: {e}"))?;
+    .await;
+    // `SignedEnvelope::inner` is a second serialized copy of the password.
+    // Clear it immediately after the pipe write, including timeout/error.
+    zeroize_envelope(&mut request);
+    write_result
+        .map_err(|_| "service request write timed out".to_string())?
+        .map_err(|e| format!("service request write failed: {e}"))?;
     let reply = timeout(
         request_timeout,
         wincmd_shared::read_envelope(&mut client),
@@ -107,6 +112,23 @@ async fn call_via_with_timeout(
             Err(format!("service rejected request: {}", error.kind))
         }
         _ => Err("service returned an unexpected reply".to_string()),
+    }
+}
+
+fn zeroize_envelope(envelope: &mut wincmd_shared::Envelope) {
+    match envelope {
+        wincmd_shared::Envelope::Request(request) => zeroize_json(&mut request.args),
+        wincmd_shared::Envelope::Signed(signed) => { signed.inner.zeroize(); signed.tag.zeroize(); }
+        _ => {}
+    }
+}
+
+fn zeroize_json(value: &mut Value) {
+    match value {
+        Value::String(text) => text.zeroize(),
+        Value::Array(values) => for value in values { zeroize_json(value); },
+        Value::Object(values) => for value in values.values_mut() { zeroize_json(value); },
+        _ => {}
     }
 }
 

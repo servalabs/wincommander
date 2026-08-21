@@ -307,6 +307,7 @@ pub fn hello_from_free(session_token: impl Into<String>) -> Hello {
 
 use std::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use zeroize::Zeroizing;
 
 /// Hard cap on a single inbound frame's payload (16 MiB). Larger frames
 /// are refused with InvalidData. Tunable per-deployment if a future
@@ -348,12 +349,12 @@ pub async fn write_envelope<W>(writer: &mut W, env: &Envelope) -> io::Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let body = serde_json::to_vec(env).map_err(|e| {
+    let body = Zeroizing::new(serde_json::to_vec(env).map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("IPC envelope JSON encode failed: {}", e),
         )
-    })?;
+    })?);
     let len = u32::try_from(body.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,

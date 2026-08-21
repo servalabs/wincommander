@@ -22,12 +22,25 @@ describe("public service release packaging", () => {
   });
 
   test("uses a fixed quoted Program Files service path with checked lifecycle commands", () => {
+    // `sc.exe` needs an argument whose value is the quoted executable path.
+    // The outer quote pair is consumed by CreateProcess; the inner pair is
+    // retained in SCM's ImagePath so Program Files stays a single executable.
+    const scmImagePathArgument = '""""${WC_SERVICE_EXE}""""';
+    const expectedImagePath = '"${WC_SERVICE_EXE}"';
+    const imagePathPassedToSc = scmImagePathArgument.slice(3, -3);
+
     expect(hooks).toContain('!define WC_SERVICE_EXE "${WC_INSTALL_DIR}\\wincommander-svc.exe"');
     expect(hooks).toContain('StrCpy $INSTDIR "${WC_INSTALL_DIR}"');
     expect(hooks).toContain("WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped");
+    expect(hooks).toContain('reg.exe export "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WinCommanderSvc" "${WC_SERVICE_CONFIG_BACKUP}" /y');
+    expect(hooks).toContain('reg.exe import "${WC_SERVICE_CONFIG_BACKUP}"');
+    expect(hooks).toContain('!define WC_SERVICE_BACKUP "${WC_INSTALL_DIR}\\wincommander-svc.exe.wc-backup"');
+    expect(hooks).toContain('StrCpy $R4 "WinCommander service payload is missing; the installation was not completed."');
+    expect(hooks).toContain('StrCpy $R4 "WinCommander service executable could not be backed up."');
     expect(hooks).toContain('CopyFiles /SILENT "${WC_BUNDLED_SERVICE}" "${WC_INSTALL_DIR}"');
-    expect(hooks).toContain('sc create WinCommanderSvc binPath= ""${WC_SERVICE_EXE}"" start= auto obj= LocalSystem');
-    expect(hooks).toContain('sc config WinCommanderSvc binPath= ""${WC_SERVICE_EXE}"" start= auto obj= LocalSystem');
+    expect(imagePathPassedToSc).toBe(expectedImagePath);
+    expect(hooks).toContain(`sc create WinCommanderSvc binPath= ${scmImagePathArgument} start= auto obj= LocalSystem`);
+    expect(hooks).toContain(`sc config WinCommanderSvc binPath= ${scmImagePathArgument} start= auto obj= LocalSystem`);
     expect(hooks).toContain("sc failure WinCommanderSvc reset= 86400 actions= restart/5000/restart/5000/none/0");
     expect(hooks).toContain("sc start WinCommanderSvc");
     expect(hooks).toContain("sc delete WinCommanderSvc");

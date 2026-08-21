@@ -13,12 +13,33 @@
 !define WC_INSTALL_DIR "$PROGRAMFILES64\WinCommander"
 !define WC_SERVICE_EXE "${WC_INSTALL_DIR}\wincommander-svc.exe"
 !define WC_BUNDLED_SERVICE "$INSTDIR\resources\wincommander-svc.exe"
+!define WC_SERVICE_BACKUP "${WC_INSTALL_DIR}\wincommander-svc.exe.wc-backup"
+!define WC_SERVICE_CONFIG_BACKUP "$PLUGINSDIR\WinCommanderSvc-before.reg"
 
 !macro NSIS_HOOK_PREINSTALL
   ; Releases use one non-customizable machine location.  The service's SCM
   ; ImagePath is therefore stable across fresh install, repair, and update.
   StrCpy $INSTDIR "${WC_INSTALL_DIR}"
   SetOutPath "$INSTDIR"
+
+  ; Preserve the release-managed service configuration before an update.  The
+  ; post-install hook imports this exact registry backup if replacement fails,
+  ; so a failed update does not strand the previous service configuration.
+  InitPluginsDir
+  StrCpy $R6 "0"
+  Delete "${WC_SERVICE_CONFIG_BACKUP}"
+  nsExec::ExecToStack 'sc query WinCommanderSvc'
+  Pop $R8
+  Pop $R9
+  ${If} $R8 == 0
+    StrCpy $R6 "1"
+    nsExec::ExecToStack 'reg.exe export "HKLM\SYSTEM\CurrentControlSet\Services\WinCommanderSvc" "${WC_SERVICE_CONFIG_BACKUP}" /y'
+    Pop $R8
+    Pop $R9
+    ${If} $R8 != 0
+      Abort "WinCommander service configuration could not be backed up."
+    ${EndIf}
+  ${EndIf}
 
   ; An in-use service executable cannot be replaced safely. Stop the prior
   ; instance and wait for SCM to confirm SERVICE_STOPPED; a timeout aborts the
@@ -118,44 +139,123 @@
   ; fixed root before configuring SCM, so ImagePath is always the quoted
   ; Program Files executable rather than a bundler implementation detail.
   IfFileExists "${WC_BUNDLED_SERVICE}" +2 0
-    DetailPrint "The bundled WinCommander service executable is missing."
-    Abort "WinCommander service payload is missing; the installation was not completed."
+    StrCpy $R4 "WinCommander service payload is missing; the installation was not completed."
+    Goto wc_service_rollback
+
+  ; Keep a rollback copy of the previous service executable until the new
+  ; configuration has started.  Copy rather than rename keeps the working
+  ; image in place until the replacement write succeeds.
+  StrCpy $R7 "0"
+  Delete "${WC_SERVICE_BACKUP}"
+  ${If} $R6 == 1
+    IfFileExists "${WC_SERVICE_EXE}" 0 wc_service_missing_previous_exe
+    ClearErrors
+    CopyFiles /SILENT "${WC_SERVICE_EXE}" "${WC_SERVICE_BACKUP}"
+    ${If} ${Errors}
+      StrCpy $R4 "WinCommander service executable could not be backed up."
+      Goto wc_service_rollback
+    ${EndIf}
+    StrCpy $R7 "1"
+  ${EndIf}
+  Goto wc_service_copy_new_exe
+
+  wc_service_missing_previous_exe:
+    Abort "WinCommander service configuration exists but its executable is missing."
+
+  wc_service_copy_new_exe:
   ClearErrors
   CopyFiles /SILENT "${WC_BUNDLED_SERVICE}" "${WC_INSTALL_DIR}"
   ${If} ${Errors}
-    Abort "WinCommander service executable could not be installed."
+    StrCpy $R4 "WinCommander service executable could not be installed."
+    Goto wc_service_rollback
   ${EndIf}
 
   ; No certificate is required: LocalSystem is the SCM identity and the
   ; service independently authenticates every named-pipe peer/broker request.
   ; ERROR_SERVICE_EXISTS (1073) is expected during an update; every other SCM
   ; failure is shown to the installer user rather than silently ignored.
-  nsExec::ExecToStack 'sc create WinCommanderSvc binPath= ""${WC_SERVICE_EXE}"" start= auto obj= LocalSystem'
+  ; `sc.exe` must receive the ImagePath as one argument containing the inner
+  ; quotes. Four quotes on each side survive CreateProcess parsing as exactly
+  ; `"C:\Program Files\WinCommander\wincommander-svc.exe"` in SCM.
+  nsExec::ExecToStack 'sc create WinCommanderSvc binPath= """"${WC_SERVICE_EXE}"""" start= auto obj= LocalSystem'
   Pop $R8
   Pop $R9
   ${If} $R8 != 0
   ${AndIf} $R8 != 1073
-    Abort "WinCommander service could not be created."
+    StrCpy $R4 "WinCommander service could not be created."
+    Goto wc_service_rollback
   ${EndIf}
-  nsExec::ExecToStack 'sc config WinCommanderSvc binPath= ""${WC_SERVICE_EXE}"" start= auto obj= LocalSystem'
+  ${If} $R8 == 1073
+  ${AndIf} $R6 == 0
+    Abort "WinCommander service appeared during installation; run the installer again."
+  ${EndIf}
+  nsExec::ExecToStack 'sc config WinCommanderSvc binPath= """"${WC_SERVICE_EXE}"""" start= auto obj= LocalSystem'
   Pop $R8
   Pop $R9
   ${If} $R8 != 0
-    Abort "WinCommander service could not be configured."
+    StrCpy $R4 "WinCommander service could not be configured."
+    Goto wc_service_rollback
   ${EndIf}
   nsExec::ExecToStack 'sc failure WinCommanderSvc reset= 86400 actions= restart/5000/restart/5000/none/0'
   Pop $R8
   Pop $R9
   ${If} $R8 != 0
-    Abort "WinCommander service recovery could not be configured."
+    StrCpy $R4 "WinCommander service recovery could not be configured."
+    Goto wc_service_rollback
   ${EndIf}
   nsExec::ExecToStack 'sc start WinCommanderSvc'
   Pop $R8
   Pop $R9
   ${If} $R8 != 0
   ${AndIf} $R8 != 1056
-    Abort "WinCommander service could not be started."
+    StrCpy $R4 "WinCommander service could not be started."
+    Goto wc_service_rollback
   ${EndIf}
+  Delete "${WC_SERVICE_BACKUP}"
+  Delete "${WC_SERVICE_CONFIG_BACKUP}"
+  Goto wc_service_ready
+
+  ; A service update is all-or-restore: replace the previous executable and
+  ; import the exact service registry configuration captured before stopping
+  ; it.  A fresh-install failure removes the newly-created service instead.
+  wc_service_rollback:
+    ${If} $R6 == 1
+      ${If} $R7 == 1
+        ClearErrors
+        CopyFiles /SILENT "${WC_SERVICE_BACKUP}" "${WC_INSTALL_DIR}"
+        ${If} ${Errors}
+          Abort "$R4 The previous WinCommander service executable could not be restored."
+        ${EndIf}
+      ${EndIf}
+      nsExec::ExecToStack 'reg.exe import "${WC_SERVICE_CONFIG_BACKUP}"'
+      Pop $R8
+      Pop $R9
+      ${If} $R8 != 0
+        Abort "$R4 The previous WinCommander service configuration could not be restored."
+      ${EndIf}
+      nsExec::ExecToStack 'sc start WinCommanderSvc'
+      Pop $R8
+      Pop $R9
+      ${If} $R8 != 0
+      ${AndIf} $R8 != 1056
+        Abort "$R4 The previous WinCommander service could not be restarted."
+      ${EndIf}
+      Delete "${WC_SERVICE_BACKUP}"
+      Delete "${WC_SERVICE_CONFIG_BACKUP}"
+      Abort "$R4 The previous WinCommander service was restored."
+    ${Else}
+      nsExec::ExecToStack 'sc delete WinCommanderSvc'
+      Pop $R8
+      Pop $R9
+      ${If} $R8 != 0
+      ${AndIf} $R8 != 1060
+        Abort "$R4 The incomplete WinCommander service could not be removed."
+      ${EndIf}
+      Delete "${WC_SERVICE_EXE}"
+      Abort "$R4 The incomplete WinCommander service was removed."
+    ${EndIf}
+
+  wc_service_ready:
   ; --- 1. Unblock EXE (remove Zone.Identifier alternate data stream) ----------
   nsExec::ExecToLog 'powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
     -Command "Get-ChildItem -Path ''$INSTDIR'' -Recurse -Include *.exe,*.dll | \

@@ -87,7 +87,7 @@ pub async fn vault_call(
 ) -> Result<serde_json::Value, String> {
     use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
     use tokio::time::{timeout, Duration};
-    use wincmd_shared::{read_envelope, write_envelope, Envelope, Hello, Request};
+    use wincmd_shared::{read_envelope, write_envelope, Envelope, Hello, Request, PROTOCOL_VERSION};
 
     const BROKER_TIMEOUT: Duration = Duration::from_secs(120);
     let pipe_name = random_pipe_name();
@@ -103,7 +103,7 @@ pub async fn vault_call(
     let result = async {
         timeout(BROKER_TIMEOUT, pipe.connect()).await.map_err(|_| "broker_timeout")?.map_err(|_| "broker_io")?;
         let hello = Envelope::Hello(Hello {
-            protocol_version: "wincmd-protocol-v1".into(),
+            protocol_version: PROTOCOL_VERSION.into(),
             session_token: session_token.clone(),
             binary_hash: None,
             free_version: None,
@@ -112,7 +112,7 @@ pub async fn vault_call(
         timeout(BROKER_TIMEOUT, write_envelope(&mut pipe, &hello)).await.map_err(|_| "broker_timeout")?.map_err(|_| "broker_io")?;
         let ack = timeout(BROKER_TIMEOUT, read_envelope(&mut pipe)).await.map_err(|_| "broker_timeout")?.map_err(|_| "broker_io")?;
         let Envelope::Hello(Hello { protocol_version, session_token: echoed, binary_hash: Some(hash), .. }) = ack else { return Err("broker_handshake"); };
-        if protocol_version != "wincmd-protocol-v1" || echoed != session_token || !hash_matches_fixed_pro(&hash) { return Err("broker_handshake"); }
+        if protocol_version != PROTOCOL_VERSION || echoed != session_token || !hash_matches_fixed_pro(&hash) { return Err("broker_handshake"); }
         let request = Envelope::Request(Request { request_id: 1, feature_id: feature_id.into(), args }).sign(&session_token);
         timeout(BROKER_TIMEOUT, write_envelope(&mut pipe, &request)).await.map_err(|_| "broker_timeout")?.map_err(|_| "broker_io")?;
         let reply = timeout(BROKER_TIMEOUT, read_envelope(&mut pipe)).await.map_err(|_| "broker_timeout")?.map_err(|_| "broker_io")?;
