@@ -253,6 +253,7 @@ All Paid, dispatched to Pro's `vm_sandbox.rs`.
 | `start_usb_autosandbox` … `clear_usb_autosandbox_recent` (U-F) | Paid / Pro | Reactive post-attach isolation — start/stop/status, config, recent. Observe is default; HID action is separately confirmed. |
 | `start_usb_hid_approval_gate` / `stop_usb_hid_approval_gate` / `usb_hid_approval_gate_status` / `get_usb_hid_pending_approvals` / `block_usb_hid_pending` (U-G) | Paid / Pro | Reactive new-HID containment and operator decision state. Pending devices default to blocked; stop is allowed as entitlement-expiry cleanup. This is not first-keystroke or pre-boot prevention. |
 | `begin_usb_hid_visual_challenge` / `submit_usb_hid_visual_challenge_digit` (U-G) | Paid / Pro | Backend-bound, per-click visual human-presence challenge for Allow once or, for a stable-serial device, Always trust. Pro owns digit progression, keypad rotation, expiry, and rate limits; the UI never treats browser pointer input as physical-mouse attribution. Block/Retry remains a direct containment action. |
+| `approve_usb_hid_once` / `trust_usb_hid_always` (U-G compatibility) | Paid / Pro | Action-bound aliases for the same **single-digit** backend challenge submission. Despite their historical names, neither command directly enables or trusts a device; both still require the active challenge ID, step, one digit, attachment binding, and final containment/topology checks. New UI code uses `submit_usb_hid_visual_challenge_digit`. |
 
 ### Session Assurance (insider-risk / attention)
 

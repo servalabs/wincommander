@@ -65,6 +65,10 @@ flowchart TB
 - **Fleet agent ↔ fleet server (HTTP).** Devices are untrusted callers (per-device HMAC auth); the server is equally untrusted by devices (all config and commands must verify against a key pinned at enrollment).
 - **Network responses.** Updater manifests/artifacts, licence-worker responses, the Pro download, and DoH answers — hostile until verified.
 - **Filesystem / clipboard input** consumed by the monitors, the search indexer, and the metadata scrubber.
+- **Physical USB/HID input.** Device identity, topology, timing, and browser
+  pointer events are attacker-controlled signals. Pro's unknown-keyboard gate
+  treats them as a reactive containment workflow, never as cable authentication,
+  trusted-mouse attestation, or first-keystroke/preboot prevention.
 - **Future recovery-partition executor.** A recovery WIM is not trusted merely
   because Windows booted it. The pre-execution gate verifies the device-bound
   wipe token and canonical signed plan, hashes the staged WIM/tools, rechecks
@@ -97,6 +101,13 @@ flowchart TB
   a regular non-reparse file container, stores a machine-DPAPI-bound stable
   identity, returns no identity/path, and re-verifies it before backup. Clear
   deletes only the binding and is also refused in Investigator mode.
+- Unknown-keyboard approval is backend-owned: Pro contains and reads back the
+  complete verified HID group before publishing positive actions; validates one
+  visual-challenge digit per request; owns challenge rotation, expiry, and
+  rate-limiting; and permits permanent trust only through a separate
+  challenge-provenanced stable-serial set. Generic device Allow cannot bypass a
+  pending or expired approval. The randomized click challenge is human-presence
+  friction only because browser pointer events do not identify a physical mouse.
 
 **Data handling**
 
