@@ -557,6 +557,7 @@ export function Dialog({
   style,
   children,
   isCloseButtonShown = true,
+  hideHeader = false,
   onOpened,
 }: {
   isOpen?: boolean;
@@ -569,6 +570,8 @@ export function Dialog({
   style?: React.CSSProperties;
   children?: React.ReactNode;
   isCloseButtonShown?: boolean;
+  /** Retains an accessible dialog title without consuming layout space. */
+  hideHeader?: boolean;
   portalClassName?: string;
   enforceFocus?: boolean;
   onOpened?: () => void;
@@ -619,7 +622,7 @@ export function Dialog({
             animationTimingFunction: "var(--ease)",
           }}
         >
-          {title != null ? (
+          {title != null && !hideHeader ? (
             <div className="flex items-center gap-2 px-5 py-3.5 border-b border-[var(--border)]">
               {icon != null && (
                 <Icon icon={icon} size={16} className="text-[var(--text-dim)]" />
@@ -637,8 +640,9 @@ export function Dialog({
               )}
             </div>
           ) : (
-            // Radix requires a Title for a11y; provide a hidden one.
-            <RDialog.Title className="sr-only">Dialog</RDialog.Title>
+            // Radix requires a Title for a11y. Some full-height dialogs own
+            // their header and need this semantic title without a second row.
+            <RDialog.Title className="sr-only">{title ?? "Dialog"}</RDialog.Title>
           )}
           {children}
         </RDialog.Content>

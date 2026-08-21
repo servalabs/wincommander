@@ -32,10 +32,10 @@ interface MountScopeSelectorProps {
   disabled?: boolean;
 }
 
-const OPTIONS: { value: MountScopePreference; label: string; description: string }[] = [
-  { value: "auto", label: "Auto (recommended)", description: "Per-user on shared or server PCs, per-machine on a personal PC." },
-  { value: "machine", label: "Per machine", description: "Anyone signed into this PC can see the mounted drive." },
-  { value: "per-user", label: "Per user", description: "Only you can see it, even if someone else is signed in at the same time." },
+const OPTIONS: { value: MountScopePreference; label: string; title: string }[] = [
+  { value: "auto", label: "Auto", title: "Uses the safest choice for this PC." },
+  { value: "machine", label: "This PC", title: "Every signed-in Windows user can see the drive." },
+  { value: "per-user", label: "This session", title: "Only this signed-in Windows user can see the drive." },
 ];
 
 export default function MountScopeSelector({ id, value, onChange, locked, disabled }: MountScopeSelectorProps) {
@@ -60,20 +60,23 @@ export default function MountScopeSelector({ id, value, onChange, locked, disabl
 
   return (
     <div id={id} className="mount-scope-selector">
-      <div className="mount-scope-options" role="radiogroup" aria-label="Mount scope">
+      <div className="mount-scope-options" role="radiogroup" aria-label="Mount visibility">
         {OPTIONS.map((opt) => (
-          <button
+          <label
             key={opt.value}
-            type="button"
-            role="radio"
-            aria-checked={effectiveValue === opt.value}
-            disabled={isDisabled}
             className={`mount-scope-option${effectiveValue === opt.value ? " is-selected" : ""}`}
-            onClick={() => !isDisabled && onChange(opt.value)}
+            title={opt.title}
           >
-            <span className="mount-scope-option-label">{opt.label}</span>
-            <span className="mount-scope-option-desc">{opt.description}</span>
-          </button>
+            <input
+              type="radio"
+              name={id ?? "mount-scope"}
+              value={opt.value}
+              checked={effectiveValue === opt.value}
+              disabled={isDisabled}
+              onChange={() => onChange(opt.value)}
+            />
+            <span>{opt.label}</span>
+          </label>
         ))}
       </div>
       {showLockedNote && (

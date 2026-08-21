@@ -5,12 +5,15 @@
             box-shadow: 0 16px 60px rgba(0,0,0,0.6) !important;
             width: min(720px, calc(100vw - 32px)) !important;
             max-width: calc(100vw - 32px) !important;
-            height: min(480px, calc(100vh - 32px));
+            /* The original 480px cap left the action row below the visible
+               area on ordinary laptop/RDP displays once a wizard step had a
+               little more content.  The dialog owns a real viewport budget;
+               only .wizard-body may scroll. */
+            height: min(44rem, calc(100dvh - 32px));
             max-height: calc(100vh - 32px);
             padding: 0 !important;
             overflow: hidden !important;
             }
-            .wizard-dialog .wc-dialog-header { display: none !important; }
 
             .wizard-layout {
             display: grid;
@@ -98,6 +101,7 @@
             flex: 1;
             min-height: 0;
             overflow-y: auto;
+            overscroll-behavior: contain;
             }
 
             .wizard-step-content {
@@ -114,6 +118,8 @@
             .wizard-footer {
             display: flex;
             flex: 0 0 auto;
+            position: relative;
+            z-index: 1;
             gap: 8px;
             flex-wrap: wrap;
             justify-content: space-between;
@@ -123,11 +129,61 @@
             border-top: 1px solid var(--color-border);
             }
 
-            .wizard-footer > div:last-child {
+            .wizard-footer-actions {
             display: flex;
-            flex-wrap: wrap;
+            flex: 0 0 auto;
+            flex-wrap: nowrap;
             gap: 8px;
             justify-content: flex-end;
+            }
+
+            .wizard-footer-actions .bp6-button {
+            min-width: 92px;
+            }
+
+            /* On a short RDP window, reserve every available pixel for the
+               wizard while retaining a persistent action row. */
+            @media (max-height: 48rem) {
+            .wizard-dialog {
+            height: calc(100dvh - 16px);
+            max-height: calc(100vh - 16px);
+            }
+
+            .wizard-nav { padding: 12px 0; }
+            .wizard-step-title { padding: 12px 16px 10px; }
+            .wizard-step-content { padding: 16px; }
+            .wizard-footer { padding: 12px 16px; }
+            }
+
+            /* The desktop sidebar otherwise leaves too little width for the
+               Cancel / Back / Next actions on narrow windows. */
+            @media (max-width: 40rem) {
+            .wizard-dialog {
+            width: calc(100vw - 16px) !important;
+            max-width: calc(100vw - 16px) !important;
+            }
+
+            .wizard-layout {
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows: auto minmax(0, 1fr);
+            }
+
+            .wizard-nav {
+            flex-direction: row;
+            align-items: center;
+            gap: 4px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding: 8px;
+            border-right: 0;
+            border-bottom: 1px solid var(--color-border);
+            }
+
+            .wizard-nav-title { display: none; }
+            .wizard-nav-item { flex: 0 0 auto; padding: 7px 9px; }
+            .wizard-footer { align-items: stretch; flex-direction: column; }
+            .wizard-footer-actions { justify-content: stretch; }
+            .wizard-footer-actions .bp6-button { flex: 1 1 auto; }
             }
 
             /* Type cards */

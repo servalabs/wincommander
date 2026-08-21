@@ -5,9 +5,6 @@ import useBackend from "../../hooks/useBackend";
 import type { EncryptionPartition } from "../../hooks/useBackend";
 import useVisibility from "../../hooks/useVisibility";
 import { useTheme } from "../../context/ThemeContext";
-import { useAppState } from "../../context/AppContext";
-import MountScopeSelector from "./MountScopeSelector";
-import { resolveEffectiveMountScope, type MountScopePreference } from "./mountScope";
 import './CreateVolumeWizard.css';
 
 type FSType = "None" | "NTFS" | "FAT" | "ExFAT";
@@ -104,25 +101,6 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
     const isAdvanced = visibility.isVisible({ minDensity: "expert", capability: ["safeguards"] });
 
     const { createVolume, createDualVolume, getEncryptionPartitions } = useBackend();
-
-    // Mount scope is a device-wide preference (VaultSettings.mountScope), not
-    // a per-volume attribute — it governs every future mount, not just the
-    // one being created here. Surfaced in this wizard so a new user sets it
-    // once, up front, instead of discovering it later in Settings.
-    const { appSettings, patchAppSettings, systemInfo } = useAppState();
-    const mountScope: MountScopePreference = appSettings?.app?.vault?.mountScope ?? "auto";
-    const effectiveMountScope = resolveEffectiveMountScope(mountScope, systemInfo?.osName);
-    // Tolerates both the bare fleet dot-path convention ("vault.mountScope")
-    // and this app's "app."-prefixed convention, matching the dual-check
-    // used elsewhere (see MetricAlertRow.tsx) for whichever the connected
-    // Fleet server actually publishes.
-    const mountScopeLockedPaths = appSettings?.policy?.lockedPaths ?? [];
-    const mountScopeLocked = mountScopeLockedPaths.some(
-        (p) => p.trim().length > 0 && ("vault.mountScope".startsWith(p) || "app.vault.mountScope".startsWith(p))
-    );
-    const handleMountScopeChange = useCallback((next: MountScopePreference) => {
-        void patchAppSettings({ app: { vault: { mountScope: next } } });
-    }, [patchAppSettings]);
 
     // Step tracking
     const [stepIndex, setStepIndex] = useState(0);
@@ -418,16 +396,6 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                 <strong>Partition / drive</strong><span>Erase and encrypt a whole partition</span>
                             </button>
                         </div>
-                        <FormGroup
-                            label="Mount Scope"
-                            labelFor="mount-scope"
-                            style={{ marginBottom: 16 }}
-                            helperText={mountScope === "auto"
-                                ? `Applies to every future mount of this vault, not just this one — currently resolves to "${effectiveMountScope === "per-user" ? "Per user" : "Per machine"}" on this PC.`
-                                : "Applies to every future mount of this vault, not just this one."}
-                        >
-                            <MountScopeSelector id="mount-scope" value={mountScope} onChange={handleMountScopeChange} locked={mountScopeLocked} />
-                        </FormGroup>
                         {targetKind === "file" ? (<>
                             <p className="step-description">Choose where to save the container file. You can use any extension, or none at all.</p>
                             <FormGroup label="Container Folder" labelFor="vol-folder">
@@ -807,6 +775,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
             canOutsideClickClose={!applying || hasError}
             canEscapeKeyClose={!applying || hasError}
             className={`wizard-dialog ${theme === "light" ? "light" : ""}`}
+            hideHeader
             backdropProps={{
                 style: {
                     backgroundColor: theme === "light" ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.75)",
@@ -844,15 +813,16 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                             disabled={applying && !hasError}
                             onClick={handleClose}
                         />
-                        <div style={{ display: "flex", gap: 8 }}>
-                            {stepIndex > 0 && !done && (
+                        <div className="wizard-footer-actions">
+                            {!done && (
                                 <Button
                                     icon="arrow-left"
                                     text="BACK"
                                     minimal
                                     className="modal-cancel-btn"
-                                    disabled={applying && !hasError}
-                                    onClick={() => { if (hasError) { setApplyLog([]); setApplying(false); } setStepIndex(i => i - 1); }}
+                                    aria-label="Go back one wizard step"
+                                    disabled={stepIndex === 0 || (applying && !hasError)}
+                                    onClick={() => { if (hasError) { setApplyLog([]); setApplying(false); } setStepIndex(i => Math.max(0, i - 1)); }}
                                 />
                             )}
                             {!isSummary && (
@@ -860,6 +830,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                     rightIcon="arrow-right"
                                     text="NEXT"
                                     className="modal-primary-btn"
+                                    aria-label="Go to the next wizard step"
                                     disabled={!canNext}
                                     onClick={() => setStepIndex(i => i + 1)}
                                 />

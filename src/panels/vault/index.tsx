@@ -21,7 +21,8 @@ import SectionCard from "../../components/shared/SectionCard";
 import useEntitlements from "../../hooks/useEntitlements";
 import './index.css';
 import DriveLetterPicker from "./DriveLetterPicker";
-import { resolveEffectiveMountScope } from "./mountScope";
+import MountScopeSelector from "./MountScopeSelector";
+import { resolveEffectiveMountScope, type MountScopePreference } from "./mountScope";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
 
@@ -68,8 +69,14 @@ interface EncryptedVolumesTabProps {
 function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: EncryptedVolumesTabProps) {
   const { theme } = useTheme();
   const { appSettings, systemInfo } = useAppState();
+  const [mountScope, setMountScope] = useState<MountScopePreference>(
+    appSettings?.app?.vault?.mountScope ?? "auto",
+  );
+  // A Fleet pin overrides the locally selected scope. The choice otherwise
+  // applies only to this mount, so creating a container never changes it.
+  const requestedMountScope = appSettings?.policy?.pinnedMountScope ?? mountScope;
   const effectiveMountScope = resolveEffectiveMountScope(
-    appSettings?.app?.vault?.mountScope,
+    requestedMountScope,
     systemInfo?.osName,
   );
 
@@ -131,7 +138,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     setHiddenPim("");
     setMountLetter("Y");
     setMountType('file');
-  }, []);
+    setMountScope(appSettings?.app?.vault?.mountScope ?? "auto");
+  }, [appSettings?.app?.vault?.mountScope]);
 
   // Fetch available (unused) drive letters when the mount dialog opens
   const openMountDialog = useCallback(async () => {
@@ -609,6 +617,14 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               onChange={setMountLetter}
               onKeyDown={handleMountFieldEnter}
               letters={availableLetters}
+            />
+          </FormGroup>
+
+          <FormGroup label="Mount visibility" labelFor="mount-scope">
+            <MountScopeSelector
+              id="mount-scope"
+              value={mountScope}
+              onChange={setMountScope}
             />
           </FormGroup>
 
