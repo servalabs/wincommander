@@ -1674,6 +1674,8 @@ pub struct OsTweaks {
     pub memory_compression_disabled: Option<bool>,
     /// Foreground process priority boost (Win32PrioritySeparation=38)
     pub win32_priority_separation: Option<bool>,
+    /// Desktop shell processes run at high CPU and I/O priority for every logon.
+    pub desktop_shell_priority_enabled: Option<bool>,
     /// Service kill/hung app timeouts optimized for speed
     pub service_timeouts_optimized: Option<bool>,
     /// Reserved storage disabled (ShippedWithReserves=0)
@@ -3630,6 +3632,8 @@ pub fn get_convergence_command(path: &str, desired: bool) -> Option<&'static str
         ("tweaks.os.memoryCompressionDisabled", false) => Some("Enable-MemoryCompression"),
         ("tweaks.os.win32PrioritySeparation", true) => Some("Set-Win32PrioritySeparation"),
         ("tweaks.os.win32PrioritySeparation", false) => Some("Reset-Win32PrioritySeparation"),
+        ("tweaks.os.desktopShellPriorityEnabled", true) => Some("Set-DesktopShellPriority"),
+        ("tweaks.os.desktopShellPriorityEnabled", false) => Some("Reset-DesktopShellPriority"),
         ("tweaks.os.serviceTimeoutsOptimized", true) => Some("Set-OptimizedTimeouts"),
         ("tweaks.os.serviceTimeoutsOptimized", false) => Some("Reset-OptimizedTimeouts"),
         ("tweaks.os.reservedStorageDisabled", true) => Some("Disable-ReservedStorage"),

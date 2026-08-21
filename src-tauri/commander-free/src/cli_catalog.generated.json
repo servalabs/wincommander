@@ -6413,6 +6413,16 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Reset\u002dDesktopShellPriority",
+      "name": "Reset\u002dDesktopShellPriority",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
       "id": "backend:Reset\u002dFeedbackFrequency",
       "name": "Reset\u002dFeedbackFrequency",
       "transport": "backend\u002dscript",
@@ -6612,6 +6622,16 @@
     {
       "id": "backend:Set\u002dBitLockerTpmPin",
       "name": "Set\u002dBitLockerTpmPin",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/registry/tweaks.toggles.ts"
+      ]
+    },
+    {
+      "id": "backend:Set\u002dDesktopShellPriority",
+      "name": "Set\u002dDesktopShellPriority",
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,

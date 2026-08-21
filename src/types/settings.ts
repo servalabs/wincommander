@@ -1312,6 +1312,8 @@ export interface OsTweaks {
   memoryCompressionDisabled: boolean | null;
   /** Foreground process priority boost (Win32PrioritySeparation=38) */
   win32PrioritySeparation: boolean | null;
+  /** Desktop shell processes use high CPU and I/O priority at every user logon. */
+  desktopShellPriorityEnabled: boolean | null;
   /** Service kill/hung app timeouts optimized for speed */
   serviceTimeoutsOptimized: boolean | null;
   /** Reserved storage disabled (ShippedWithReserves=0) */

@@ -2139,6 +2139,8 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Enable-MemoryCompression" => Some("tweaks/system"),
         "Set-Win32PrioritySeparation" => Some("tweaks/system"),
         "Reset-Win32PrioritySeparation" => Some("tweaks/system"),
+        "Set-DesktopShellPriority" => Some("tweaks/system"),
+        "Reset-DesktopShellPriority" => Some("tweaks/system"),
         "Set-OptimizedTimeouts" => Some("tweaks/system"),
         "Reset-OptimizedTimeouts" => Some("tweaks/system"),
         "Disable-ReservedStorage" => Some("tweaks/system"),
@@ -3123,6 +3125,12 @@ fn get_settings_sync_patch(
         }
         "Reset-Win32PrioritySeparation" => {
             Some(json!({"tweaks":{"os":{"win32PrioritySeparation": false}}}))
+        }
+        "Set-DesktopShellPriority" => {
+            Some(json!({"tweaks":{"os":{"desktopShellPriorityEnabled": true}}}))
+        }
+        "Reset-DesktopShellPriority" => {
+            Some(json!({"tweaks":{"os":{"desktopShellPriorityEnabled": false}}}))
         }
         "Set-OptimizedTimeouts" => {
             Some(json!({"tweaks":{"os":{"serviceTimeoutsOptimized": true}}}))

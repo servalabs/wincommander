@@ -538,6 +538,7 @@ Persisted under `ideal.tweaks.os`.
 | Detailed BSOD                        | `Enable-DetailedBSOD`        | `Disable-DetailedBSOD`        | —  |
 | Memory Compression                   | `Enable-MemoryCompression`   | `Disable-MemoryCompression`   | —  |
 | Foreground Priority (Win32PrioritySeparation) | `Set-Win32PrioritySeparation`| `Reset-Win32PrioritySeparation` | — |
+| Desktop Shell Priority (all users) | `Set-DesktopShellPriority` | `Reset-DesktopShellPriority` | Explorer, desktop, Start, Settings, Search, and Task Manager start at High CPU + High I/O priority; `WinCommanderShellPriorityLogon` reapplies the live priority at every logon. |
 | Service Timeouts                     | `Set-OptimizedTimeouts`      | `Reset-OptimizedTimeouts`     | —  |
 | Reserved Storage                     | `Enable-ReservedStorage`     | `Disable-ReservedStorage`     | —  |
 | Automatic Maintenance                | `Enable-AutomaticMaintenance`| `Disable-AutomaticMaintenance`| —  |

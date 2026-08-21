@@ -618,6 +618,143 @@ function Reset-Win32PrioritySeparation {
 }
 
 # ============================================================================
+# Desktop shell priority (all interactive users, including Windows Server/RDS)
+# ============================================================================
+
+$script:ShellPriorityTaskName = 'WinCommanderShellPriorityLogon'
+$script:ShellPriorityDirectory = Join-Path $env:ProgramData 'WinCommander\ShellPriority'
+$script:ShellPriorityScriptPath = Join-Path $script:ShellPriorityDirectory 'Apply-ShellPriority.ps1'
+$script:ShellPriorityBackupPath = 'HKLM:\SOFTWARE\WinCommander\ShellPriorityBackup'
+$script:ShellPriorityTargets = @(
+    'explorer.exe', 'dwm.exe', 'sihost.exe', 'StartMenuExperienceHost.exe',
+    'ShellExperienceHost.exe', 'SystemSettings.exe', 'Taskmgr.exe',
+    'SearchHost.exe', 'SearchApp.exe'
+)
+
+$script:ShellPriorityTaskScript = @'
+param([switch]$AtLogon)
+
+$ErrorActionPreference = 'SilentlyContinue'
+if ($AtLogon) { Start-Sleep -Seconds 5 }
+
+if (-not ('WinCommander.ShellPriorityNative' -as [type])) {
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+namespace WinCommander {
+    public static class ShellPriorityNative {
+        [DllImport("ntdll.dll")]
+        public static extern int NtSetInformationProcess(
+            IntPtr processHandle, int processInformationClass,
+            ref int processInformation, int processInformationLength);
+    }
+}
+"@
+}
+
+$targets = @(
+    'explorer', 'dwm', 'sihost', 'StartMenuExperienceHost',
+    'ShellExperienceHost', 'SystemSettings', 'Taskmgr', 'SearchHost', 'SearchApp'
+)
+foreach ($process in @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $targets -contains "$($_.ProcessName)"
+})) {
+    try { $process.PriorityClass = [Diagnostics.ProcessPriorityClass]::High } catch {}
+    try {
+        $ioPriority = 3 # IoPriorityHigh
+        [WinCommander.ShellPriorityNative]::NtSetInformationProcess(
+            $process.Handle, 33, [ref]$ioPriority, [Runtime.InteropServices.Marshal]::SizeOf([int])
+        ) | Out-Null
+    }
+    catch {}
+}
+'@
+
+function Save-ShellPriorityValue {
+    param([Parameter(Mandatory = $true)][string]$Target, [Parameter(Mandatory = $true)][string]$Name)
+
+    $backupName = "$Target.$Name"
+    if (Get-ItemProperty -Path $script:ShellPriorityBackupPath -Name $backupName -ErrorAction SilentlyContinue) { return }
+    $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$Target\PerfOptions"
+    $value = (Get-ItemProperty -Path $path -Name $Name -ErrorAction SilentlyContinue).$Name
+    $saved = if ($null -eq $value) { 0 } else { [int]$value }
+    New-ItemProperty -Path $script:ShellPriorityBackupPath -Name $backupName -Value $saved -PropertyType DWord -Force | Out-Null
+    New-ItemProperty -Path $script:ShellPriorityBackupPath -Name "$backupName.Present" -Value $([int]($null -ne $value)) -PropertyType DWord -Force | Out-Null
+}
+
+function Restore-ShellPriorityValue {
+    param([Parameter(Mandatory = $true)][string]$Target, [Parameter(Mandatory = $true)][string]$Name)
+
+    $backupName = "$Target.$Name"
+    $value = (Get-ItemProperty -Path $script:ShellPriorityBackupPath -Name $backupName -ErrorAction SilentlyContinue).$backupName
+    $wasPresent = (Get-ItemProperty -Path $script:ShellPriorityBackupPath -Name "$backupName.Present" -ErrorAction SilentlyContinue)."$backupName.Present"
+    $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$Target\PerfOptions"
+    if ($null -eq $value -or $null -eq $wasPresent) { return }
+    if ($wasPresent -eq 0) {
+        Remove-ItemProperty -Path $path -Name $Name -Force -ErrorAction SilentlyContinue
+    }
+    else {
+        if (!(Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+        Set-ItemProperty -Path $path -Name $Name -Value $value -Type DWord -Force
+    }
+}
+
+function Set-DesktopShellPriority {
+    Assert-IsAdmin
+    try {
+        if (!(Test-Path $script:ShellPriorityDirectory)) {
+            New-Item -Path $script:ShellPriorityDirectory -ItemType Directory -Force | Out-Null
+        }
+        & icacls.exe $script:ShellPriorityDirectory /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not secure the shell-priority helper directory.' }
+
+        if (!(Test-Path $script:ShellPriorityBackupPath)) { New-Item -Path $script:ShellPriorityBackupPath -Force | Out-Null }
+        foreach ($target in $script:ShellPriorityTargets) {
+            $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$target\PerfOptions"
+            Save-ShellPriorityValue -Target $target -Name 'CpuPriorityClass'
+            Save-ShellPriorityValue -Target $target -Name 'IoPriority'
+            if (!(Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+            Set-ItemProperty -Path $path -Name 'CpuPriorityClass' -Value 3 -Type DWord -Force
+            Set-ItemProperty -Path $path -Name 'IoPriority' -Value 3 -Type DWord -Force
+        }
+
+        Set-Content -LiteralPath $script:ShellPriorityScriptPath -Value $script:ShellPriorityTaskScript -Encoding UTF8 -Force
+        & icacls.exe $script:ShellPriorityScriptPath /inheritance:r /grant:r '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not secure the shell-priority helper.' }
+
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script:ShellPriorityScriptPath`" -AtLogon"
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        $trigger.Delay = 'PT5S'
+        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+        Register-ScheduledTask -TaskName $script:ShellPriorityTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+
+        & $script:ShellPriorityScriptPath
+        @{ status = 'enabled'; scope = 'all-users'; taskName = $script:ShellPriorityTaskName }
+    }
+    catch {
+        $message = $_.Exception.Message
+        Reset-DesktopShellPriority | Out-Null
+        @{ error = $true; message = $message }
+    }
+}
+
+function Reset-DesktopShellPriority {
+    Assert-IsAdmin
+    try {
+        Unregister-ScheduledTask -TaskName $script:ShellPriorityTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        foreach ($target in $script:ShellPriorityTargets) {
+            Restore-ShellPriorityValue -Target $target -Name 'CpuPriorityClass'
+            Restore-ShellPriorityValue -Target $target -Name 'IoPriority'
+        }
+        Remove-Item -Path $script:ShellPriorityBackupPath -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:ShellPriorityScriptPath -Force -ErrorAction SilentlyContinue
+        @{ status = 'disabled'; scope = 'windows-managed' }
+    }
+    catch { @{ error = $true; message = $_.Exception.Message } }
+}
+
+# ============================================================================
 # NEW: Service Timeouts (from ReviOS explorer.yml WaitToKillServiceTimeout)
 # ============================================================================
 

@@ -439,6 +439,7 @@ function Get-WCSystemProbe {
                 automaticMaintenanceDisabled = $false
                 win32LongPathsEnabled    = $false
                 smbBandwidthThrottlingDisabled = $false
+                desktopShellPriorityEnabled = $false
                 powerPlan                = $null
             }
             ui       = @{
@@ -832,6 +833,31 @@ function Get-WCSystemProbe {
     try {
         $wp = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl" -Name "Win32PrioritySeparation" -EA SilentlyContinue
         if ($wp -and $wp.Win32PrioritySeparation -eq 38) { $state.tweaks.os.win32PrioritySeparation = $true }
+    } catch {}
+    try {
+        $shellPriorityTask = Get-ScheduledTask -TaskName 'WinCommanderShellPriorityLogon' -ErrorAction SilentlyContinue
+        $shellPriorityHelper = Join-Path $env:ProgramData 'WinCommander\ShellPriority\Apply-ShellPriority.ps1'
+        $shellPriorityTargets = @('explorer.exe', 'dwm.exe', 'sihost.exe', 'StartMenuExperienceHost.exe', 'ShellExperienceHost.exe', 'SystemSettings.exe', 'Taskmgr.exe', 'SearchHost.exe', 'SearchApp.exe')
+        $shellPriorityRegistryOk = [bool](($shellPriorityTargets | Where-Object {
+            $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$_\PerfOptions"
+            $options = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
+            $options -and $options.CpuPriorityClass -eq 3 -and $options.IoPriority -eq 3
+        } | Measure-Object).Count -eq $shellPriorityTargets.Count)
+        $shellPriorityTaskOk = [bool](($shellPriorityTask.Actions | Where-Object { $_.Arguments -like '*Apply-ShellPriority.ps1*' }) -and
+            ($shellPriorityTask.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }) -and
+            $shellPriorityTask.Principal.UserId -in @('SYSTEM', 'S-1-5-18') -and $shellPriorityTask.State -ne 'Disabled')
+        $usersCanWriteShellPriorityHelper = $false
+        if (Test-Path -LiteralPath $shellPriorityHelper) {
+            foreach ($rule in (Get-Acl -LiteralPath $shellPriorityHelper).Access) {
+                try { $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { continue }
+                if ($ruleSid -eq 'S-1-5-32-545' -and $rule.AccessControlType -eq 'Allow' -and
+                    ($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::Write) -ne 0) {
+                    $usersCanWriteShellPriorityHelper = $true
+                }
+            }
+        }
+        $state.tweaks.os.desktopShellPriorityEnabled = [bool]($shellPriorityRegistryOk -and $shellPriorityTaskOk -and
+            (Test-Path -LiteralPath $shellPriorityHelper) -and -not $usersCanWriteShellPriorityHelper)
     } catch {}
     try {
         $wkt = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control" -Name "WaitToKillServiceTimeout" -EA SilentlyContinue
