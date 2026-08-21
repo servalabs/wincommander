@@ -30,7 +30,7 @@ WinCommander is the third option: a single, open-source command console that sho
 - **Block trackers network-wide** — one-click blocklists for ads, telemetry, and known bad hosts.
 - **Find any file instantly** — press `Ctrl+Space` anywhere for fast search across file names *and* file contents. The index never leaves your machine.
 - **Erase your trail** — clear the histories, caches, and junk Windows quietly keeps about what you do.
-- **Stand guard 24/7** — Free includes ransomware/USB attach alerts, clipboard watch, and a VPN kill-switch; Pro adds attack attribution, device intelligence, and reactive containment.
+- **Stand guard 24/7** — Free includes ransomware/USB attach alerts, clipboard watch, and a VPN kill-switch; Pro adds attack attribution, device intelligence, reactive containment, and a human-presence approval challenge for newly detected keyboards.
 - **Emergency lockdown** — an opt-in panic sequence you can fire with a single hotkey (`Ctrl+Shift+Q`) when it matters most.
 
 **No accounts. No cloud. Zero telemetry.** The app's only network calls are the update check and (if you buy Pro) license activation.
@@ -77,6 +77,7 @@ on the GitHub Release:
 | :--------------------------------- | :------------------------------------------------------------ |
 | [FEATURES.md](FEATURES.md)         | Every feature, exhaustively — Free and Pro                    |
 | [docs/security-defense-matrix.md](docs/security-defense-matrix.md) | Attack defenses, tier boundary, settings, and honest limits |
+| [docs/usb-keyboard-approval.md](docs/usb-keyboard-approval.md) | Configure and operate reactive unknown-keyboard approval safely |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How it's built: two binaries, encrypted modules, IPC          |
 | [SECURITY.md](SECURITY.md)         | Threat model, security posture, how to report a vulnerability |
 | [docs/cli.md](docs/cli.md)         | Automate the same Free executable with JSON and safety gates   |

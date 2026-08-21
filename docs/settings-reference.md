@@ -109,17 +109,25 @@ imported once and removed only after their ProgramData replacement is durable.
 `privacy.usbSecurity.hidApprovalGateEnabled` requests Pro's reactive
 unknown-keyboard approval gate. `hidApprovalTtlSecs` controls how long a
 contained keyboard remains eligible for a decision before it expires blocked.
+The UI offers 30-second, 60-second, and 5-minute windows; Pro validates the
+machine policy to 30–3,600 seconds. This timeout limits decision availability—it
+does not claim that an unsuccessfully contained device becomes safe at expiry.
 The Pro ProgramData record is canonical after first import; per-user/RDS UI
 settings do not overwrite an existing machine policy. The click challenge is a
 human-presence check, not physical-mouse attribution, and does not replace
 Windows Device Installation Restrictions for an organisation default-deny
-policy.
+policy. Permanent HID trust is recorded separately from the legacy/manual USB
+allow-list, so turning on Ask mode does not grandfather an old allow entry as if
+it had completed the two-challenge flow.
 
 On Windows Server/RDS, configure and run this policy using the designated
 managed administrator or service identity. The hardened store deliberately
 does not grant every local user mutation rights, so a different non-admin RDS
 session cannot become the USB-policy writer. Pooled multi-user approval is not
 supported until the signed machine-service broker is delivered.
+
+Operational steps and recovery guidance are in
+[`usb-keyboard-approval.md`](usb-keyboard-approval.md).
 
 ### Caching and writes
 

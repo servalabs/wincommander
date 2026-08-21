@@ -23,7 +23,9 @@ commit timestamps). Shipped capabilities (not fixes) live in
   attachment-generation binding remains best-effort until native PnP
   notifications replace polling. The UI explicitly states that pointer input does not
   authenticate a separate trusted mouse and that user-level polling cannot
-  guarantee first-keystroke or preboot prevention.
+  guarantee first-keystroke or preboot prevention. Setup, recovery, managed
+  device policy, Windows Server/RDS limits, and physical acceptance tests are
+  documented in [the operator guide](docs/usb-keyboard-approval.md).
 
 - **Commercial boundary for organisation-grade attack defenses** (2026-08-21)
   — the Free executable now retains the everyday safety baseline: a simple
