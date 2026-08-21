@@ -12,14 +12,21 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
-- **Vault service source-hardening checkpoint** (2026-08-21) — the public
+- **Vault service hardening and developer-host multi-user validation**
+  (2026-08-21) — the public
   service now has rollback-aware deterministic NetAPI group reconciliation,
   exact startup ACL/membership revalidation, durable mount-recovery records,
   and a cross-session collision guard. The installer source now preserves a
   correctly quoted Program Files service image path and restores the previous
-  executable/configuration if replacement fails. These are source-contract
-  checks, not a packaged NSIS/SCM, real Partner-session, mount/revocation, or
-  clean-machine acceptance claim.
+  executable/configuration if replacement fails. Windows token membership now
+  uses an explicit impersonation token, every local-only pipe instance receives
+  the same ordinary-user DACL, and mounted-root grants inherit to new files and
+  folders. With released Pro 3.2.19, the reusable SSH harness passed the exact
+  three-entry developer-host matrix: Administrator saw three Vaults, Partner1
+  saw and wrote only the shared Vault, both private decoys denied Partner1,
+  Administrator wrote both decoys, and all mounts dismounted and cleaned up.
+  This is not a packaged NSIS, separate interactive-desktop, unrelated-user,
+  revocation/restart, or clean-machine acceptance claim.
 
 - **Reactive unknown-keyboard approval** (2026-08-21) — Pro can hold a newly
   observed, unallowlisted keyboard disabled and surface a global approval dialog
