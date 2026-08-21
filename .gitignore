@@ -1,6 +1,6 @@
 # Brainstorming session files (visual companion)
 .superpowers/
-
+.cargo-target-wizard-ui/
 # Agent scratch files + the bundled CLI binary (claude.exe is ~242MB — GitHub
 # rejects >100MB, so an accidental `git add -A` push fails for everyone sharing
 # this tree). Keep them untracked.
