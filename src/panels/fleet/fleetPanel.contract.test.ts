@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 const panel = readFileSync("src/panels/fleet/index.tsx", "utf8");
 const access = readFileSync("src/panels/fleet/AccessControlTab.tsx", "utf8");
 const vault = readFileSync("src/panels/fleet/VaultAccessTab.tsx", "utf8");
+const vaultHook = readFileSync("src/hooks/useVaultAccess.ts", "utf8");
 const volumeEditor = readFileSync("src/panels/fleet/VaultVolumesEditor.tsx", "utf8");
 const infoPopover = readFileSync("src/panels/fleet/FleetInfoPopover.tsx", "utf8");
 const css = readFileSync("src/panels/fleet/index.css", "utf8");
@@ -60,7 +61,17 @@ describe("Fleet access-control panel contracts", () => {
     expect(volumeEditor).toContain("How Vault access is decided");
   });
 
-  test("copies a non-secret local Vault manifest", () => {
-    expect(vault).toContain("contains no plaintext passwords");
+  test("uses the service-owned Vault policy and makes old planner data opt-in only", () => {
+    expect(vault).toContain("useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>()");
+    expect(vault).not.toContain("invoke(");
+    expect(vaultHook).toContain('invoke<Policy>("get_vault_access_policy")');
+    expect(vaultHook).toContain('invoke<Status>("apply_vault_access_policy"');
+    expect(vault).toContain("version: policy.version + 1");
+    expect(vault).toContain("Requested access is intent");
+    expect(vault).toContain("secure mount broker pending");
+    expect(vault).toContain("own dedicated parent folder");
+    expect(vault).not.toContain("localStorage");
+    expect(panel).not.toContain("loadVaultPolicy");
+    expect(panel).not.toContain("saveVaultPolicy");
   });
 });

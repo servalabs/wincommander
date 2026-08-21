@@ -1,136 +1,164 @@
-import { useEffect, useMemo, useState } from "react";
-import ToggleTile from "@/components/shared/ToggleTile";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import useBackend, { type EncryptionPartition } from "@/hooks/useBackend";
+import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
-import FleetField from "./FleetField";
-import VaultMatrixPreview from "./VaultMatrixPreview";
-import VaultVolumesEditor from "./VaultVolumesEditor";
-import type { FleetAccessDirectory } from "./accessControlTypes";
-import type { VaultFleetPolicy } from "./vaultFleetTypes";
+import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
 import {
-  buildVaultMatrix, validateVaultPolicy,
-} from "./vaultFleetPolicy";
+  newVaultEntry, newVaultPolicy, validateVaultAccessIntent,
+  type VaultAccessEntry, type VaultAccessPolicy, type VaultEntryStatus, type VaultPolicyStatus,
+} from "./vaultAccessTypes";
 
-function partitionLabel(partition: EncryptionPartition) {
-  return `${partition.model || "Disk"} · Disk ${partition.diskNumber}, partition ${partition.partitionNumber} · ${partition.size}`;
+function observedResult(status: VaultEntryStatus | undefined) {
+  if (!status) return "Not observed by the service";
+  return status.result === "pending_mount_broker"
+    ? "Host policy applied; secure mount broker pending"
+    : status.result.replaceAll("_", " ");
 }
 
-interface VaultAccessTabProps {
-  directory: FleetAccessDirectory;
-  policy: VaultFleetPolicy;
-  onChange: (policy: VaultFleetPolicy) => void;
-  onSave: () => void;
+function appliedAt(timestamp: number | null) {
+  return timestamp == null ? "Never" : new Date(timestamp * 1000).toLocaleString();
 }
 
-export default function VaultAccessTab({ directory, policy, onChange, onSave }: VaultAccessTabProps) {
-  const [partitions, setPartitions] = useState<EncryptionPartition[]>([]);
-  const [discovering, setDiscovering] = useState(false);
-  const [showMatrix, setShowMatrix] = useState(false);
-  const { getEncryptionPartitions, getUserProfiles } = useBackend();
-  const errors = useMemo(() => validateVaultPolicy(policy, directory.groups), [directory.groups, policy]);
+export default function VaultAccessTab() {
+  const [policy, setPolicy] = useState<VaultAccessPolicy | null>(null);
+  const [status, setStatus] = useState<VaultPolicyStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [legacyNotice, setLegacyNotice] = useState<string | null>(null);
+  const { getPolicy, getStatus, applyPolicy } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
+  const error = useMemo(() => policy ? validateVaultAccessIntent(policy) : null, [policy]);
 
-  useEffect(() => {
-    if (policy.ownerPrincipal) return;
-    void getUserProfiles().then(result => {
-      if (result.success && result.data?.currentUser) {
-        if (!policy.ownerPrincipal) onChange({ ...policy, ownerPrincipal: result.data!.currentUser });
-      }
-    });
-  }, [getUserProfiles, onChange, policy]);
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [loadedPolicy, loadedStatus] = await Promise.all([
+        getPolicy(),
+        getStatus(),
+      ]);
+      setPolicy(loadedPolicy);
+      setStatus(loadedStatus);
+    } catch (cause) {
+      setPolicy(null);
+      setStatus(null);
+      showError(cause instanceof Error ? cause.message : "Vault policy service is unavailable.");
+    } finally {
+      setLoading(false);
+    }
+  }, [getPolicy, getStatus]);
 
-  const update = (patch: Partial<VaultFleetPolicy>) => onChange({ ...policy, ...patch });
-  const discover = async () => {
-    setDiscovering(true);
-    const result = await getEncryptionPartitions();
-    setDiscovering(false);
-    if (!result.success) return void showError(result.error || "Disk discovery failed.");
-    setPartitions(result.data?.partitions ?? []);
-    void showSuccess(`Found ${result.data?.partitions.length ?? 0} eligible partitions.`);
-  };
+  useEffect(() => { void refresh(); }, [refresh]);
 
-  const selectPartition = (partition: EncryptionPartition) => update({
-    diskNumber: partition.diskNumber,
-    diskUniqueId: partition.diskUniqueId,
-    confirmationText: partition.confirmationToken,
+  const updateEntry = (id: string, patch: Partial<VaultAccessEntry>) => setPolicy(current => {
+    const source = current ?? newVaultPolicy();
+    return { ...source, entries: source.entries.map(entry => entry.id === id ? { ...entry, ...patch } : entry) };
   });
 
-  const save = () => {
-    if (errors.length) return void showError(errors[0]);
-    onSave();
-    void showSuccess("Vault deployment policy saved on this administrator workstation.");
+  const apply = async () => {
+    if (!policy) return;
+    if (error) return void showError(error);
+    setSaving(true);
+    try {
+      await applyPolicy({
+        // The service's optimistic lock accepts only the next revision. The
+        // displayed version remains the last observed policy until refresh.
+        ...policy,
+        expected_previous_version: policy.version,
+        version: policy.version + 1,
+      });
+      await refresh();
+      showSuccess("Vault access intent was submitted and Windows ACL read-back was refreshed.");
+    } catch (cause) {
+      showError(cause instanceof Error ? cause.message : "Vault policy was not applied.");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const copyManifest = async () => {
-    if (errors.length) return void showError(errors[0]);
-    await navigator.clipboard.writeText(JSON.stringify(policy, null, 2));
-    void showSuccess("Deployment manifest copied. It contains no plaintext passwords.");
+  const importLegacyDraft = () => {
+    const entries = readUntrustedLegacyVaultDraft();
+    if (!entries) return void setLegacyNotice("No retired local planner draft was found.");
+    setPolicy(current => ({ ...(current ?? newVaultPolicy()), entries }));
+    setLegacyNotice("Imported as an untrusted draft. Review container paths and grants before applying.");
   };
+
+  if (loading) return <div className="fleet-admin-stack">Loading service-owned Vault policy…</div>;
+  const activePolicy = policy;
+  const statusById = new Map(status?.entries.map(entry => [entry.id, entry]));
 
   return (
     <div className="fleet-admin-stack">
       <Card>
-        <CardHeader><CardTitle>Owner and disk boundary</CardTitle><CardDescription>Pin the existing administrator and the exact test disk before generating a deployment manifest.</CardDescription></CardHeader>
-        <CardContent className="fleet-owner-stack">
-          <div className="fleet-owner-inputs">
-            <FleetField compact label="Owner principal" hint="This account remains an administrator and receives every volume credential.">
-              <Input value={policy.ownerPrincipal} onChange={event => update({ ownerPrincipal: event.target.value })} />
-            </FleetField>
-            <FleetField compact label="Mount scope"><Input value="Per-user session isolation" disabled /></FleetField>
-            <FleetField compact label="Protected engine directory">
-              <Input value={policy.installDirectory} onChange={event => update({ installDirectory: event.target.value })} />
-            </FleetField>
-            <FleetField compact label="Unallocated reserve (MiB)" hint="Leave this amount unused after planned raw-volume allocations.">
-              <Input type="number" min={0} value={policy.unallocatedReserveMb} onChange={event => update({ unallocatedReserveMb: Number(event.target.value) })} disabled={!policy.allowUnallocatedSpace} />
-            </FleetField>
-          </div>
-          <div className="fleet-owner-tools">
-            <div className="fleet-policy-toggle-grid">
-              <ToggleTile
-                label="Protected SYSTEM driver preload"
-                description="Standard users never receive service-control or driver-load privilege."
-                checked={policy.preloadDriverAtStartup}
-                onChange={checked => update({ preloadDriverAtStartup: checked })}
-                domain="security"
-                icon="shield"
-              />
-              <ToggleTile
-                label="Allow selected-disk unallocated space"
-                description="Raw-volume entries may allocate only on the pinned disk, never C: or D:."
-                checked={policy.allowUnallocatedSpace}
-                onChange={checked => update({ allowUnallocatedSpace: checked })}
-                domain="tweaks"
-                icon="hard-drive"
-              />
-            </div>
-            <div className="fleet-discovery-row">
-              <Button onClick={discover} disabled={discovering}>{discovering ? "Discovering…" : "Discover test partitions"}</Button>
-              {policy.diskNumber != null && <span>Selected Disk {policy.diskNumber} · <code>{policy.diskUniqueId}</code></span>}
-            </div>
-          </div>
-          {partitions.length > 0 && <div className="fleet-partition-list">
-            {partitions.map(partition => <button key={partition.devicePath} disabled={!partition.safeForCreation} onClick={() => selectPartition(partition)} className={policy.diskUniqueId === partition.diskUniqueId ? "is-selected" : ""}>
-              <span>{partitionLabel(partition)}</span><small>{partition.devicePath} · {partition.safeForCreation ? "eligible" : "mount only"}</small>
-            </button>)}
-          </div>}
+        <CardHeader>
+          <CardTitle>Vault access</CardTitle>
+          <CardDescription>
+            Requested access is intent. The SYSTEM service resolves Windows accounts, applies ACLs, and reports what it observed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="fleet-action-row">
+          <Button onClick={() => setPolicy(current => current ?? newVaultPolicy())}>Create three-vault starter</Button>
+          <Button variant="outline" onClick={importLegacyDraft}>Import retired planner as draft</Button>
+          <Button variant="outline" onClick={() => void refresh()}>Refresh observed status</Button>
+          {legacyNotice && <span className="fleet-field-hint">{legacyNotice}</span>}
         </CardContent>
       </Card>
 
-      <VaultVolumesEditor volumes={policy.volumes} groups={directory.groups} onChange={volumes => update({ volumes })} />
+      <Card>
+        <CardHeader>
+          <CardTitle>Requested policy</CardTitle>
+          <CardDescription>File containers only. Each managed container needs its own dedicated parent folder, so Windows can apply one unambiguous folder ACL. Account and group names are requests for the service to resolve; this screen never stores SIDs or ACLs.</CardDescription>
+        </CardHeader>
+        <CardContent className="fleet-admin-stack">
+          {!activePolicy && <p className="fleet-field-hint">No service policy exists yet. Create the three-vault starter or import a retired planner as a draft.</p>}
+          {activePolicy?.entries.map((entry, entryIndex) => {
+            const observed = statusById.get(entry.id);
+            return <div className="fleet-vault-workspace" key={entry.id}>
+              <div className="fleet-vault-workspace-header">
+                <strong>Vault {entryIndex + 1}</strong>
+                <Button variant="outline" size="sm" onClick={() => setPolicy(current => current && ({ ...current, entries: current.entries.filter(item => item.id !== entry.id) }))}>Remove</Button>
+              </div>
+              <div className="fleet-owner-inputs">
+                <Input aria-label={`Vault ${entryIndex + 1} label`} value={entry.label} placeholder="Vault label" onChange={event => updateEntry(entry.id, { label: event.target.value })} />
+                <Input aria-label={`Vault ${entryIndex + 1} container path`} value={entry.container_path} placeholder="C:\\Vaults\\shared.hc" onChange={event => updateEntry(entry.id, { container_path: event.target.value })} />
+                <Input aria-label={`Vault ${entryIndex + 1} owner`} value={entry.owner_account} placeholder="Administrator account" onChange={event => updateEntry(entry.id, { owner_account: event.target.value })} />
+                <label className="fleet-field"><span>Presentation</span><select value={entry.mount.presentation} onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, presentation: event.target.value as VaultAccessEntry["mount"]["presentation"] } })}><option value="machine">Machine (shared)</option><option value="per-user">Per-user (private)</option></select></label>
+                <Input aria-label={`Vault ${entryIndex + 1} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="Preferred letter" onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} />
+              </div>
+              <div className="fleet-vault-matrix">
+                <strong>Named grants (intent)</strong>
+                {entry.grants.map((grant, grantIndex) => <div className="fleet-action-row" key={`${entry.id}-${grantIndex}`}>
+                  <Input aria-label={`Grant ${grantIndex + 1} principal`} value={grant.principal_name} placeholder="Windows account or group" onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, principal_name: event.target.value } : current) })} />
+                  <select aria-label={`Grant ${grantIndex + 1} access`} value={grant.access} onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, access: event.target.value as "read" | "write" } : current) })}><option value="write">Read & write</option><option value="read">Read only</option></select>
+                  <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: entry.grants.filter((_, index) => index !== grantIndex) })}>Remove grant</Button>
+                </div>)}
+                <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: [...entry.grants, { principal_name: "", access: "write" }] })}>Add grant</Button>
+              </div>
+              <p className="fleet-field-hint">Observed: {observedResult(observed)}. Mount launch is intentionally unavailable until the service owns secure mount → ACL → read-back → presentation.</p>
+            </div>;
+          })}
+          <div className="fleet-action-row">
+            <Button variant="outline" onClick={() => setPolicy(current => {
+              const source = current ?? newVaultPolicy();
+              return { ...source, entries: [...source.entries, newVaultEntry()] };
+            })}>Add private vault</Button>
+            <Button variant="outline" onClick={() => setPolicy(current => {
+              const source = current ?? newVaultPolicy();
+              return { ...source, entries: [...source.entries, newVaultEntry("shared")] };
+            })}>Add shared vault</Button>
+            <Button variant="primary" disabled={saving || !!error} onClick={() => void apply()}>{saving ? "Applying…" : "Apply requested policy"}</Button>
+          </div>
+          {error && <p className="fleet-validation-errors">{error}</p>}
+        </CardContent>
+      </Card>
 
       <Card>
-        <CardHeader><CardTitle>Validation matrix</CardTitle><CardDescription>Preview the expected distinction between backing visibility, mount/decrypt authorization, content ACLs, and another session’s mounted drive.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Observed service status</CardTitle><CardDescription>Windows-confirmed ACL state, not a forecast. Secure mount enforcement remains pending in this one-day slice.</CardDescription></CardHeader>
         <CardContent>
-          {errors.length > 0 && <ul className="fleet-validation-errors">{errors.map(error => <li key={error}>{error}</li>)}</ul>}
-          <div className="fleet-action-row">
-            <Button onClick={() => setShowMatrix(value => !value)}>{showMatrix ? "Hide matrix" : "Preview matrix"}</Button>
-            <Button onClick={copyManifest}>Copy deployment manifest</Button>
-            <Button variant="primary" onClick={save}>Save policy</Button>
-          </div>
-          {showMatrix && <VaultMatrixPreview rows={buildVaultMatrix(policy, directory)} />}
-          <p className="fleet-field-hint">This preview validates policy intent. Live per-user probes and reboot validation remain a separate deployment step and must not be inferred from this table.</p>
+          <p>Policy: {status?.policy_id ?? "none"} · Version {status?.version ?? 0} · Validation: {status?.validation_state ?? "never_applied"} · Applied: {appliedAt(status?.applied_at ?? null)}</p>
+          <ul className="fleet-validation-errors">
+            {status?.entries.map(entry => <li key={entry.id}>{entry.id}: {observedResult(entry)}</li>)}
+          </ul>
         </CardContent>
       </Card>
     </div>

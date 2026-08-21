@@ -37,9 +37,10 @@
 //!   rights).  This module only *classifies* a verb into this bucket; it is
 //!   the service's responsibility — not this crate's — to additionally
 //!   confirm the connected peer is (a) a process in the current interactive
-//!   session and (b) the exact hash- and Authenticode-publisher-pinned helper
-//!   binary (mirroring the hash-pinning `pro_broker.rs` already implements
-//!   for the Pro sidecar), and to apply service-side rate limiting on top.
+//!   session and (b) an approved helper filename directly inside the
+//!   administrator/SYSTEM-protected service installation directory, and to
+//!   apply service-side rate limiting on top. Authenticode is deliberately
+//!   not required, so unsigned and self-signed Free builds remain functional.
 //!   Anything the service persists on behalf of a `SessionHelper` caller
 //!   should carry a trust-origin marker so a forged-submission investigation
 //!   is possible later.
@@ -72,7 +73,7 @@ pub const SVC_PROTOCOL_VERSION: &str = "wincmd-svc-v1";
 ///
 /// The service enforces this at the pipe connection layer after establishing
 /// the peer's identity (Windows SID via `GetNamedPipeClientProcessId` + token
-/// query for `Privileged`; session membership + binary/publisher pinning for
+/// query for `Privileged`; session membership + protected-path pinning for
 /// `SessionHelper`).  The UI can call [`classify_verb`] before sending to
 /// decide whether to show a UAC/admin prompt, but the service always
 /// re-checks regardless.
@@ -181,6 +182,10 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         "svc.ink_receipt.reserve_ticket" => CapabilityClass::SessionHelper,
         "svc.ink_receipt.report_receipt" => CapabilityClass::SessionHelper,
         "svc.ink_receipt.status" => CapabilityClass::ReadOnly,
+
+        // Vault authorization is transport-read-only, but the service still
+        // derives the named-pipe caller's token before making its decision.
+        "svc.vault.authorize_mount" => CapabilityClass::ReadOnly,
 
         // All other verbs — including mutations, dispatches, fleet toggles,
         // and any future verb not yet added above — are Privileged.

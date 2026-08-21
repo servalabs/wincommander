@@ -48,6 +48,7 @@ use crate::peer_auth::{SessionHelperGate, TrustOrigin};
 use crate::peer_auth::PeerAuthError;
 use crate::policy_store::{EpochInstallInput, PolicyStore};
 use crate::settings_host;
+use crate::vault_access::VaultAccessStore;
 
 use windows_sys::Win32::{
     Foundation::{CloseHandle, LocalFree, HANDLE},
@@ -84,6 +85,7 @@ pub async fn serve(
     policy_store: Arc<PolicyStore>,
     session_helper_gate: Arc<SessionHelperGate>,
     clipboard_state: Arc<ClipboardGuardState>,
+    vault_access: Arc<VaultAccessStore>,
 ) -> Result<()> {
     // Build the SECURITY_ATTRIBUTES so the kernel creates the pipe object
     // with our explicit DACL rather than the default service-process DACL.
@@ -127,6 +129,7 @@ pub async fn serve(
         let policy_store = Arc::clone(&policy_store);
         let session_helper_gate = Arc::clone(&session_helper_gate);
         let clipboard_state = Arc::clone(&clipboard_state);
+        let vault_access = Arc::clone(&vault_access);
 
         tokio::spawn(async move {
             if let Err(e) = handle_connection(
@@ -136,6 +139,7 @@ pub async fn serve(
                 policy_store,
                 session_helper_gate,
                 clipboard_state,
+                vault_access,
             )
             .await
             {
@@ -155,6 +159,7 @@ pub(crate) async fn handle_connection(
     policy_store: Arc<PolicyStore>,
     session_helper_gate: Arc<SessionHelperGate>,
     clipboard_state: Arc<ClipboardGuardState>,
+    vault_access: Arc<VaultAccessStore>,
 ) -> Result<()> {
     // (a) Require a valid Hello frame. Capture the peer's session token —
     // every frame after the handshake that arrives as `Envelope::Signed`
@@ -247,7 +252,7 @@ pub(crate) async fn handle_connection(
             }
             Ok(trust_origin) => {
                 let reply =
-                    dispatch_verb(&req, trust_origin, &policy_store, &clipboard_state).await;
+                    dispatch_verb(&req, trust_origin, &policy_store, &clipboard_state, &vault_access, client_pid).await;
                 write_envelope(&mut conn, &reply).await?;
             }
         }
@@ -306,7 +311,7 @@ pub async fn authorize(
 
         // D-2: no admin/SYSTEM bypass here — a SessionHelper verb is
         // granted ONLY on interactive-session membership + binary-path
-        // pinning + Authenticode-publisher pinning + the per-(session,
+        // pinning + the per-(session,
         // path, verb) rate limit, all enforced by `SessionHelperGate`.
         // Fail closed on every `PeerAuthError` — its `Display` is a fixed,
         // path-free string (see that type's own doc/tests), safe to hand
@@ -355,6 +360,8 @@ async fn dispatch_verb(
     trust_origin: Option<TrustOrigin>,
     policy_store: &PolicyStore,
     clipboard_state: &ClipboardGuardState,
+    vault_access: &VaultAccessStore,
+    client_pid: u32,
 ) -> Envelope {
     let request_id = req.request_id;
 
@@ -382,6 +389,11 @@ async fn dispatch_verb(
         },
 
         "svc.clipboard.set_enabled" => handle_set_enabled(clipboard_state, req.args.clone()),
+
+        "svc.vault.get_policy" => Ok(serde_json::to_value(vault_access.policy()).unwrap_or_else(|_| serde_json::Value::Null)),
+        "svc.vault.get_status" => Ok(serde_json::to_value(vault_access.status()).unwrap_or_else(|_| serde_json::Value::Null)),
+        "svc.vault.apply_policy" => handle_vault_apply(vault_access, req.args.clone()),
+        "svc.vault.authorize_mount" => handle_vault_authorize(vault_access, req.args.clone(), client_pid),
 
         // Every other verb (ink_receipt.* and anything privileged/unknown)
         // is still a stub — out of this task's scope. `authorize()` above
@@ -423,6 +435,49 @@ fn clipboard_policy_response(policy_store: &PolicyStore) -> serde_json::Value {
             "policy_version": 0,
             "rules": Vec::<wincmd_clip_rules::Rule>::new(),
         }),
+    }
+}
+
+fn handle_vault_apply(
+    vault_access: &VaultAccessStore,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, VerbError> {
+    let mut policy: wincmd_shared::vault_access::VaultAccessPolicy = serde_json::from_value(args)
+        .map_err(|_| VerbError::new("vault_validation_failed", "vault policy request is invalid"))?;
+    // The renderer echoes the version it edited.  The service alone advances
+    // it, so an initial draft's zero and a current-version echo cannot cause
+    // a same-version rewrite.
+    if policy.version <= policy.expected_previous_version {
+        policy.version = policy.expected_previous_version.saturating_add(1);
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64).unwrap_or(0);
+    vault_access.apply(policy, now)
+        .and_then(|status| serde_json::to_value(status).map_err(|_| crate::vault_access::VaultError::Persistence))
+        .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))
+}
+
+fn handle_vault_authorize(
+    vault_access: &VaultAccessStore,
+    args: serde_json::Value,
+    client_pid: u32,
+) -> Result<serde_json::Value, VerbError> {
+    let request: wincmd_shared::vault_access::VaultAuthorizeMountRequest = serde_json::from_value(args)
+        .map_err(|_| VerbError::new("vault_validation_failed", "mount authorization request is invalid"))?;
+    // The SID/group decision comes from this connection's named-pipe client
+    // token.  The renderer supplies only an opaque registered entry id.
+    Ok(serde_json::to_value(crate::vault_access::authorize_mount_for_process(vault_access, &request.entry_id, client_pid))
+        .unwrap_or_else(|_| serde_json::json!({"allowed":false,"launch_ready":false,"denial_reason":"not_authorized","mode":null,"presentation":null,"preferred_letter":null})))
+}
+
+fn vault_error_message(error: crate::vault_access::VaultError) -> &'static str {
+    match error {
+        crate::vault_access::VaultError::Validation | crate::vault_access::VaultError::VersionConflict => "vault policy validation failed",
+        crate::vault_access::VaultError::PrincipalResolution => "vault principal resolution failed",
+        crate::vault_access::VaultError::ContainerIdentity => "vault container identity validation failed",
+        crate::vault_access::VaultError::AclApply => "vault access plan could not be applied",
+        crate::vault_access::VaultError::AclReadback => "vault access plan read-back failed",
+        crate::vault_access::VaultError::Persistence => "vault policy could not be persisted",
     }
 }
 
@@ -1009,7 +1064,7 @@ impl Drop for SidGuard {
 #[cfg(test)]
 mod test_support {
     use super::*;
-    use crate::peer_auth::{AuthenticodeVerdict, PeerAuthProbe, PeerIdentitySnapshot};
+    use crate::peer_auth::{PeerAuthProbe, PeerIdentitySnapshot};
     use crate::policy_store::{PolicyFs, PolicyStoreError, SystemClock};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -1144,7 +1199,6 @@ mod test_support {
     pub struct FakePeerProbe {
         pub identity: Result<PeerIdentitySnapshot, PeerAuthError>,
         pub active_session: Result<u32, PeerAuthError>,
-        pub verdict: AuthenticodeVerdict,
     }
 
     impl PeerAuthProbe for FakePeerProbe {
@@ -1153,9 +1207,6 @@ mod test_support {
         }
         fn active_interactive_session(&self) -> Result<u32, PeerAuthError> {
             self.active_session
-        }
-        fn verify_authenticode(&self, _canonical_path: &Path) -> AuthenticodeVerdict {
-            self.verdict.clone()
         }
     }
 
@@ -1166,13 +1217,6 @@ mod test_support {
         }
     }
 
-    pub fn ok_verdict() -> AuthenticodeVerdict {
-        AuthenticodeVerdict {
-            valid: true,
-            publisher_cn: Some(crate::peer_auth::EXPECTED_PUBLISHER_CN.to_string()),
-        }
-    }
-
     /// A gate whose fake probe passes every check — used for "peer is
     /// pinned" test scenarios.
     pub fn passing_gate() -> Arc<SessionHelperGate> {
@@ -1180,7 +1224,6 @@ mod test_support {
             Arc::new(FakePeerProbe {
                 identity: Ok(ok_identity()),
                 active_session: Ok(7),
-                verdict: ok_verdict(),
             }),
             Some(PathBuf::from(TEST_ROOT)),
         ))
@@ -1196,7 +1239,6 @@ mod test_support {
                 Arc::new(FakePeerProbe {
                     identity: Err(PeerAuthError::IdentityUnavailable),
                     active_session: Ok(7),
-                    verdict: ok_verdict(),
                 }),
                 root,
             )),
@@ -1204,7 +1246,6 @@ mod test_support {
                 Arc::new(FakePeerProbe {
                     identity: Ok(ok_identity()),
                     active_session: Err(PeerAuthError::NoInteractiveSession),
-                    verdict: ok_verdict(),
                 }),
                 root,
             )),
@@ -1212,7 +1253,6 @@ mod test_support {
                 Arc::new(FakePeerProbe {
                     identity: Ok(ok_identity()),
                     active_session: Ok(99),
-                    verdict: ok_verdict(),
                 }),
                 root,
             )),
@@ -1223,33 +1263,10 @@ mod test_support {
                     Arc::new(FakePeerProbe {
                         identity: Ok(identity),
                         active_session: Ok(7),
-                        verdict: ok_verdict(),
                     }),
                     root,
                 ))
             }
-            PeerAuthError::SignatureInvalid => Arc::new(SessionHelperGate::with_allowed_root(
-                Arc::new(FakePeerProbe {
-                    identity: Ok(ok_identity()),
-                    active_session: Ok(7),
-                    verdict: AuthenticodeVerdict {
-                        valid: false,
-                        publisher_cn: None,
-                    },
-                }),
-                root,
-            )),
-            PeerAuthError::PublisherMismatch => Arc::new(SessionHelperGate::with_allowed_root(
-                Arc::new(FakePeerProbe {
-                    identity: Ok(ok_identity()),
-                    active_session: Ok(7),
-                    verdict: AuthenticodeVerdict {
-                        valid: true,
-                        publisher_cn: Some("Not ServaLabs".to_string()),
-                    },
-                }),
-                root,
-            )),
             // Not exercised via this helper — rate limiting is tested
             // separately by hammering a `passing_gate()` past its quota.
             PeerAuthError::RateLimited => passing_gate(),
@@ -1311,10 +1328,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_helper_verb_is_allowed_when_peer_auth_passes() {
+    async fn all_session_helper_verbs_allow_unsigned_path_pinned_peer() {
         let gate = passing_gate();
-        let result = authorize("svc.clipboard.report_event", false, 1234, &gate).await;
-        assert_eq!(result, Ok(Some(TrustOrigin::SessionHelperPinned)));
+        for verb in [
+            "svc.clipboard.report_event",
+            "svc.policy.install_epoch",
+            "svc.ink_receipt.reserve_ticket",
+            "svc.ink_receipt.report_receipt",
+        ] {
+            let result = authorize(verb, false, 1234, &gate).await;
+            assert_eq!(
+                result,
+                Ok(Some(TrustOrigin::SessionHelperPinned)),
+                "unsigned path-pinned helper should be allowed for {verb}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1334,8 +1362,6 @@ mod tests {
             PeerAuthError::NoInteractiveSession,
             PeerAuthError::WrongSession,
             PeerAuthError::PathNotAllowed,
-            PeerAuthError::SignatureInvalid,
-            PeerAuthError::PublisherMismatch,
         ] {
             let gate = gate_denying_with(reason);
             let result = authorize("svc.clipboard.report_event", false, 1234, &gate).await;
@@ -1376,8 +1402,6 @@ mod tests {
             PeerAuthError::IdentityUnavailable,
             PeerAuthError::WrongSession,
             PeerAuthError::PathNotAllowed,
-            PeerAuthError::SignatureInvalid,
-            PeerAuthError::PublisherMismatch,
         ] {
             let gate = gate_denying_with(reason);
             let err = authorize("svc.clipboard.report_event", false, 1, &gate)
@@ -1646,6 +1670,7 @@ mod integration {
         let policy_store = test_support::test_policy_store();
         let session_helper_gate = test_support::passing_gate();
         let clipboard_state = Arc::new(ClipboardGuardState::new());
+        let vault_access = crate::vault_access::test_store();
 
         let server_task = tokio::spawn(async move {
             let s = server;
@@ -1657,6 +1682,7 @@ mod integration {
                 policy_store,
                 session_helper_gate,
                 clipboard_state,
+                vault_access,
             )
             .await
             .expect("handle_connection");
@@ -1756,6 +1782,7 @@ mod integration {
         let policy_store = test_support::test_policy_store();
         let session_helper_gate = test_support::passing_gate();
         let clipboard_state = Arc::new(ClipboardGuardState::new());
+        let vault_access = crate::vault_access::test_store();
 
         let server_task = tokio::spawn(async move {
             let s = server;
@@ -1767,6 +1794,7 @@ mod integration {
                 policy_store,
                 session_helper_gate,
                 clipboard_state,
+                vault_access,
             )
             .await
             .expect("handle_connection");
@@ -1822,6 +1850,7 @@ mod integration {
         let policy_store = test_support::test_policy_store();
         let session_helper_gate = test_support::passing_gate();
         let clipboard_state = Arc::new(ClipboardGuardState::new());
+        let vault_access = crate::vault_access::test_store();
 
         let server_task = tokio::spawn(async move {
             let s = server;
@@ -1833,6 +1862,7 @@ mod integration {
                 policy_store,
                 session_helper_gate,
                 clipboard_state,
+                vault_access,
             )
             .await
             .expect("handle_connection");

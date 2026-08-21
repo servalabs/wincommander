@@ -34,6 +34,7 @@ mod settings_host;
 // only its internal `WindowsPolicyFs`/`windows_acl` submodule is
 // `#[cfg(windows)]`-gated. See `policy_store.rs`'s module doc.
 mod policy_store;
+mod vault_access;
 
 #[cfg(windows)]
 mod pipe;
@@ -41,9 +42,9 @@ mod pipe;
 #[cfg(windows)]
 mod pro_broker;
 
-// `SessionHelper` peer authentication (D-2). Windows-only: every syscall
-// and the `Get-AuthenticodeSignature` shell-out it performs are Win32/
-// PowerShell-specific, matching `pipe.rs`'s own windows-only stance.
+// `SessionHelper` peer authentication (D-2). Windows-only because it derives
+// process/session identity and canonical image paths with Win32 APIs, matching
+// `pipe.rs`'s own Windows-only stance. No Authenticode certificate is required.
 #[cfg(windows)]
 mod peer_auth;
 
@@ -181,6 +182,16 @@ async fn run() {
         startup_report.clipboard, startup_report.ink_receipt
     );
 
+    // Vault access is a separate, service-owned last-valid policy under the
+    // already SYSTEM/Administrators-protected policy directory.
+    let vault_access = Arc::new(vault_access::VaultAccessStore::open(
+        Box::new(vault_access::WindowsVaultFs),
+        Box::new(vault_access::WindowsPrincipalResolver),
+        Box::new(vault_access::WindowsAclApplier),
+        policy_store::default_policy_dir(),
+    ));
+    vault_access.load_at_startup();
+
     // ── SessionHelper peer gate (D-2) ────────────────────────────────────
     //
     // ONE gate for the service's lifetime — its rate limiter's state must
@@ -207,7 +218,7 @@ async fn run() {
     tokio::spawn(fleet_conn_loop());
 
     // ── Named-pipe server ────────────────────────────────────────────────
-    if let Err(e) = pipe::serve(policy_store, session_helper_gate, clipboard_state).await {
+    if let Err(e) = pipe::serve(policy_store, session_helper_gate, clipboard_state, vault_access).await {
         eprintln!("[wincommander-svc] pipe server exited with error: {:#}", e);
     }
 }

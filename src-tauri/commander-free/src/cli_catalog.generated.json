@@ -4803,6 +4803,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Get\u002dFleetAccessUsers",
+      "name": "Get\u002dFleetAccessUsers",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Get\u002dFontCacheInfo",
       "name": "Get\u002dFontCacheInfo",
       "transport": "backend\u002dscript",
@@ -7233,6 +7241,16 @@
       ]
     },
     {
+      "id": "tauri:apply_vault_access_policy",
+      "name": "apply_vault_access_policy",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
       "id": "tauri:apply_wincommander_hide_mode",
       "name": "apply_wincommander_hide_mode",
       "transport": "tauri",
@@ -9216,6 +9234,26 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/panels/privacy/UsbDevicesSection.tsx"
+      ]
+    },
+    {
+      "id": "tauri:get_vault_access_policy",
+      "name": "get_vault_access_policy",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
+      "id": "tauri:get_vault_access_status",
+      "name": "get_vault_access_status",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
       ]
     },
     {

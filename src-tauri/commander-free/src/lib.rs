@@ -98,6 +98,7 @@ mod sidecar;
 mod startup_auth;
 mod startup_maintenance;
 mod storage_probe;
+mod svc_client;
 // This is an executable-free admission contract, covered by its unit tests.
 // It is intentionally excluded from the shipped binary until the signed
 // recovery-environment handoff that consumes it is wired in.
@@ -107,6 +108,7 @@ mod system_metrics;
 mod uninstall_leftovers;
 mod updater;
 mod usb_guard;
+mod vault_access;
 mod vm_sandbox;
 mod vpn_kill_switch;
 mod wifi_check;
@@ -2786,6 +2788,9 @@ pub fn run() {
             settings::import_settings_cmd,
             settings::write_settings_export_file,
             settings::read_settings_import_file,
+            vault_access::get_vault_access_policy,
+            vault_access::apply_vault_access_policy,
+            vault_access::get_vault_access_status,
             // ── Convergence Engine ──
             settings::get_drift_report,
             settings::update_current_state,

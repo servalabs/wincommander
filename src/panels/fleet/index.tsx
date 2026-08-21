@@ -9,37 +9,20 @@ import FleetConnectView from "./FleetConnectView";
 import VaultAccessTab from "./VaultAccessTab";
 import { loadAccessDirectory, saveAccessDirectory } from "./accessControlPolicy";
 import type { FleetAccessDirectory } from "./accessControlTypes";
-import type { VaultFleetPolicy } from "./vaultFleetTypes";
-import { loadVaultPolicy, saveVaultPolicy } from "./vaultFleetPolicy";
 import "./index.css";
 
 export default function FleetPanel() {
   const [directory, setDirectory] = useState<FleetAccessDirectory>(loadAccessDirectory);
-  const [vaultPolicy, setVaultPolicy] = useState<VaultFleetPolicy>(loadVaultPolicy);
 
   const updateDirectory = useCallback((action: SetStateAction<FleetAccessDirectory>) => {
     setDirectory(current => {
       const next = typeof action === "function" ? action(current) : action;
-      const nextIds = new Set(next.groups.map(group => group.id));
-      const removedIds = new Set(current.groups.filter(group => !nextIds.has(group.id)).map(group => group.id));
-      if (removedIds.size > 0) {
-        setVaultPolicy(policy => ({
-          ...policy,
-          volumes: policy.volumes.map(volume => ({
-            ...volume,
-            groupPermissions: Object.fromEntries(
-              Object.entries(volume.groupPermissions).filter(([groupId]) => !removedIds.has(groupId)),
-            ),
-          })),
-        }));
-      }
       return next;
     });
   }, []);
 
   const saveDirectory = () => {
     saveAccessDirectory(directory);
-    saveVaultPolicy(vaultPolicy);
   };
 
   return (
@@ -63,12 +46,7 @@ export default function FleetPanel() {
           <AccessControlTab directory={directory} onChange={updateDirectory} onSave={saveDirectory} />
         </TabsContent>
         <TabsContent value="vault" className="fleet-tab-content">
-          <VaultAccessTab
-            directory={directory}
-            policy={vaultPolicy}
-            onChange={setVaultPolicy}
-            onSave={() => saveVaultPolicy(vaultPolicy)}
-          />
+          <VaultAccessTab />
         </TabsContent>
       </Tabs>
     </div>

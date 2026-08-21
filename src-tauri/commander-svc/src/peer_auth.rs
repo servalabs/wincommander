@@ -25,12 +25,7 @@
 //! 2. **Binary-path pinning** -- the peer's fully canonicalized image path
 //!    sits directly under the resolved install directory and its filename
 //!    is on [`ALLOWED_SESSION_HELPER_FILENAMES`].
-//! 3. **Authenticode publisher pinning** -- the binary at that path carries
-//!    a *valid* Authenticode signature whose subject CN equals
-//!    [`EXPECTED_PUBLISHER_CN`]. This is what makes (2) meaningful: a path
-//!    can be overwritten by anyone with write access to the directory, but
-//!    not re-signed by the real publisher's key.
-//! 4. **Rate limiting** -- a fixed-window counter keyed on
+//! 3. **Rate limiting** -- a fixed-window counter keyed on
 //!    `(session id, canonical path, verb)` bounds how often even a fully
 //!    pinned peer may call in (see [`RATE_LIMIT_MAX_CALLS`] /
 //!    [`RATE_LIMIT_WINDOW`]), so a compromised-but-pinned helper cannot
@@ -39,8 +34,8 @@
 //!    never silently dropped.
 //!
 //! Every one of these is fail-closed: a probe that cannot determine a fact
-//! (can't open the process, can't resolve the path, can't run the
-//! signature check, can't tell which session is active) denies exactly like
+//! (can't open the process, can't resolve the path, can't tell which session
+//! is active) denies exactly like
 //! a fact that was determined and failed. [`SessionHelperGate::authorize_at`]
 //! is written so the **only** `Ok` return is the single line at the very
 //! end, after every check has run via `?` or an explicit early `return Err`
@@ -58,16 +53,11 @@
 //! **not** eliminate the window before that first `OpenProcess` call (the
 //! caller must pass a PID that was *just* derived from the live pipe, which
 //! is `pipe.rs`'s responsibility, not this module's), and it does not cover
-//! the gap between resolving the canonical path and
-//! [`WinPeerAuthProbe::verify_authenticode`] reading that same path off
-//! disk a moment later -- an attacker who can swap the file on disk in that
-//! window, and who already has write access to the pinned install
-//! directory, could in principle present a different binary to the
-//! signature check than the one that was actually running. Closing that
-//! last gap would require verifying the signature against the running
-//! image directly (e.g. hashing the mapped sections) rather than the path,
-//! which is out of scope here; the existing `pro_broker.rs` hash-pinning
-//! mechanism has the same limitation today.
+//! the risk that a process able to replace an executable inside the protected
+//! install directory can inherit that filename's authorization. Packaging
+//! must therefore keep the service directory administrator/SYSTEM-writable
+//! only. This gate deliberately does not require Authenticode so unsigned and
+//! self-signed Free builds remain functional on managed client machines.
 //!
 //! # Wiring (for the caller that connects this to `pipe.rs`)
 //!
@@ -84,9 +74,8 @@
 //!   obtained from `GetNamedPipeClientProcessId` for the existing
 //!   `caller_is_privileged` check -- do not re-derive it from the pipe
 //!   handle a second time here.
-//! * [`WinPeerAuthProbe`]'s methods do blocking Win32 calls and (for
-//!   `verify_authenticode`) spawn and wait on a `powershell.exe` child
-//!   process. Call `gate.authorize(..)` from inside
+//! * [`WinPeerAuthProbe`]'s methods do blocking Win32 calls. Call
+//!   `gate.authorize(..)` from inside
 //!   `tokio::task::spawn_blocking`, exactly as `print_usb_monitor.rs`'s
 //!   `PrintProbe` contract requires for its own blocking probes.
 //! * On the `Ok(trust_origin)` path, whatever handler persists the
@@ -115,11 +104,8 @@
 //! module uses (`OpenProcess`, `OpenProcessToken`, `GetTokenInformation`,
 //! `QueryFullProcessImageNameW`) is already covered by features that crate
 //! already enables. Path canonicalization uses `std::fs::canonicalize`
-//! (stdlib, no windows-sys feature) and Authenticode verification shells
-//! out to `Get-AuthenticodeSignature` (mirrors
-//! `commander-free/src/startup_maintenance.rs::read_signatures`), so
-//! neither needs `Win32_Storage_FileSystem` nor
-//! `Win32_Security_Cryptography`/`Win32_Security_WinTrust`.
+//! (stdlib, no windows-sys feature), so it does not need
+//! `Win32_Storage_FileSystem`.
 
 #![cfg(windows)]
 // Not wired into `main.rs`/`pipe.rs` yet (see the "Wiring" section above) --
@@ -141,12 +127,6 @@ use windows_sys::Win32::System::Threading::{
 };
 
 // ── Policy constants ─────────────────────────────────────────────────────
-
-/// Authenticode Subject CN every SessionHelper peer binary must carry.
-/// Must match the certificate ServaLabs actually signs release builds
-/// with; confirm against the real cert before shipping (packaging/release
-/// concern, not something this module can verify at compile time).
-pub const EXPECTED_PUBLISHER_CN: &str = "ServaLabs Pvt Ltd";
 
 /// Leaf filenames allowed to call in as a `SessionHelper`, all expected
 /// directly under the resolved install directory (no subdirectories --
@@ -181,7 +161,9 @@ pub const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(10);
 #[serde(rename_all = "snake_case")]
 pub enum TrustOrigin {
     /// Passed interactive-session membership, canonical binary-path
-    /// pinning, and Authenticode publisher pinning, all at once.
+    /// pinning, and rate limiting. The serialized label is retained for
+    /// compatibility with existing receipts even though no certificate is
+    /// required.
     SessionHelperPinned,
 }
 
@@ -208,10 +190,6 @@ pub enum PeerAuthError {
     WrongSession,
     /// The peer's canonical image path is not on the binary-path allow-list.
     PathNotAllowed,
-    /// The peer binary's Authenticode signature did not verify as valid.
-    SignatureInvalid,
-    /// The peer binary verified, but not against the expected publisher.
-    PublisherMismatch,
     /// The per-(session, path, verb) rate limit was exceeded.
     RateLimited,
 }
@@ -228,10 +206,6 @@ impl std::fmt::Display for PeerAuthError {
             }
             PeerAuthError::PathNotAllowed => {
                 "session-helper peer binary path is not on the allow-list"
-            }
-            PeerAuthError::SignatureInvalid => "session-helper peer binary signature is not valid",
-            PeerAuthError::PublisherMismatch => {
-                "session-helper peer binary is not signed by the expected publisher"
             }
             PeerAuthError::RateLimited => "session-helper call rate limit exceeded",
         };
@@ -255,21 +229,11 @@ pub struct PeerIdentitySnapshot {
     pub canonical_image_path: PathBuf,
 }
 
-/// Result of an Authenticode signature check against a specific file path.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuthenticodeVerdict {
-    /// `true` only if the signature verified as valid (Windows'
-    /// `Get-AuthenticodeSignature` reports `Status -eq 'Valid'`).
-    pub valid: bool,
-    /// The signer certificate's Subject CN, present only when `valid`.
-    pub publisher_cn: Option<String>,
-}
-
 /// Abstraction over every Win32/OS fact [`SessionHelperGate`] needs about a
 /// peer. The real implementation ([`WinPeerAuthProbe`]) makes the actual
-/// syscalls and shells out for the Authenticode check; tests inject a fake
-/// so the decision logic in [`SessionHelperGate::authorize_at`] is fully
-/// exercised without any Win32 or subprocess dependency.
+/// syscalls; tests inject a fake so the decision logic in
+/// [`SessionHelperGate::authorize_at`] is fully exercised without any Win32
+/// dependency.
 pub trait PeerAuthProbe: Send + Sync {
     /// Resolve session id + canonical image path for `pid`. Implementations
     /// MUST open the process once and answer both facts from that same
@@ -279,15 +243,6 @@ pub trait PeerAuthProbe: Send + Sync {
     /// The session id Windows currently treats as "the" interactive
     /// session -- the physical console, not a disconnected/other session.
     fn active_interactive_session(&self) -> Result<u32, PeerAuthError>;
-
-    /// Verify the Authenticode signature of the binary at `canonical_path`.
-    /// Infallible by design: any failure to complete the check (spawn
-    /// failure, unparseable output) collapses to `valid: false` rather than
-    /// a separate error, because an unconfirmed signature is not proof of a
-    /// valid one. Only ever called after `canonical_path` has already
-    /// passed the binary-path allow-list, so an unpinned peer never
-    /// triggers this (comparatively expensive) check.
-    fn verify_authenticode(&self, canonical_path: &Path) -> AuthenticodeVerdict;
 }
 
 // ── Path canonicalization ────────────────────────────────────────────────
@@ -342,7 +297,7 @@ struct WindowState {
 }
 
 /// Enforces the `CapabilityClass::SessionHelper` peer gate (D-2): session
-/// membership, binary-path pinning, Authenticode publisher pinning, and
+/// membership, binary-path pinning, and
 /// per-(session, path, verb) rate limiting. See the module doc for the
 /// full design and wiring notes.
 pub struct SessionHelperGate {
@@ -402,17 +357,6 @@ impl SessionHelperGate {
 
         if !self.is_allowed_helper_path(&identity.canonical_image_path) {
             return Err(PeerAuthError::PathNotAllowed);
-        }
-
-        let verdict = self
-            .probe
-            .verify_authenticode(&identity.canonical_image_path);
-        if !verdict.valid {
-            return Err(PeerAuthError::SignatureInvalid);
-        }
-        match verdict.publisher_cn.as_deref() {
-            Some(cn) if cn == EXPECTED_PUBLISHER_CN => {}
-            _ => return Err(PeerAuthError::PublisherMismatch),
         }
 
         self.check_rate_limit(&identity, verb, now)?;
@@ -483,10 +427,9 @@ impl SessionHelperGate {
     }
 }
 
-// ── Production probe (real Win32 + PowerShell) ──────────────────────────
+// ── Production probe (real Win32) ──────────────────────────────────────
 
-/// Real [`PeerAuthProbe`] backed by Win32 syscalls and a
-/// `Get-AuthenticodeSignature` shell-out.
+/// Real [`PeerAuthProbe`] backed by Win32 syscalls.
 ///
 /// # Blocking
 /// Every method does synchronous, blocking I/O. See the module doc's
@@ -564,90 +507,6 @@ impl PeerAuthProbe for WinPeerAuthProbe {
         }
         Ok(session_id)
     }
-
-    fn verify_authenticode(&self, canonical_path: &Path) -> AuthenticodeVerdict {
-        run_authenticode_check(canonical_path)
-    }
-}
-
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-/// Shell out to `Get-AuthenticodeSignature`, mirroring the established
-/// pattern in `commander-free/src/startup_maintenance.rs::read_signatures`
-/// (same env-var-not-command-line path passing -- avoids any shell
-/// quoting/injection concern -- same `CREATE_NO_WINDOW`, same
-/// `ConvertTo-Json -Compress` shape). Any failure to spawn, a non-zero
-/// exit, or unparseable output all collapse to `valid: false`: an
-/// Authenticode check that could not be completed is not proof of a valid
-/// signature, so treating it as invalid is the fail-closed default, not a
-/// missing case.
-fn run_authenticode_check(canonical_path: &Path) -> AuthenticodeVerdict {
-    use std::os::windows::process::CommandExt;
-
-    const INVALID: AuthenticodeVerdict = AuthenticodeVerdict {
-        valid: false,
-        publisher_cn: None,
-    };
-    const SCRIPT: &str = "$ErrorActionPreference='Stop';\
-$s=Get-AuthenticodeSignature -LiteralPath $env:WINCMD_PEER_AUTH_PATH;\
-[pscustomobject]@{status=$s.Status.ToString();\
-signer=if($s.SignerCertificate){$s.SignerCertificate.Subject}else{$null}}\
-|ConvertTo-Json -Compress";
-
-    // `canonicalize_peer_path` returns a `\\?\`-prefixed extended path.
-    // Strip the prefix before handing it to PowerShell -- `Get-
-    // AuthenticodeSignature` on Windows PowerShell 5.1 does not reliably
-    // accept the extended form. This does not weaken the check: the
-    // allow-list comparison already ran against the full canonical
-    // (junction/8.3-defeated) path upstream; this string only names the
-    // file for the signature query.
-    let path_for_shell = canonical_path
-        .to_string_lossy()
-        .trim_start_matches(r"\\?\")
-        .to_string();
-
-    let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
-        .env("WINCMD_PEER_AUTH_PATH", &path_for_shell)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
-
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => return INVALID,
-    };
-
-    parse_authenticode_json(&output.stdout).unwrap_or(INVALID)
-}
-
-fn parse_authenticode_json(bytes: &[u8]) -> Option<AuthenticodeVerdict> {
-    #[derive(serde::Deserialize)]
-    struct Raw {
-        status: String,
-        signer: Option<String>,
-    }
-    let raw: Raw = serde_json::from_slice(bytes).ok()?;
-    Some(AuthenticodeVerdict {
-        valid: raw.status == "Valid",
-        publisher_cn: raw.signer.as_deref().and_then(extract_cn),
-    })
-}
-
-/// Extract the `CN=` attribute from an X.500 Subject distinguished name,
-/// e.g. `CN=ServaLabs Pvt Ltd, O=..., C=IN` -> `Some("ServaLabs Pvt Ltd")`.
-/// Deliberately a narrow parser, not a full RFC 2253 implementation -- this
-/// module only ever needs the one attribute it pins against. A CN value
-/// containing an escaped/quoted comma is not correctly unescaped; no known
-/// legitimate ServaLabs certificate uses one.
-fn extract_cn(subject: &str) -> Option<String> {
-    let after = subject.split_once("CN=")?.1;
-    let end = after.find(',').unwrap_or(after.len());
-    let cn = after[..end].trim().trim_matches('"');
-    if cn.is_empty() {
-        None
-    } else {
-        Some(cn.to_string())
-    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -661,7 +520,6 @@ mod tests {
     struct FakeProbe {
         identity_fn: Box<dyn Fn(u32) -> Result<PeerIdentitySnapshot, PeerAuthError> + Send + Sync>,
         active_session: Result<u32, PeerAuthError>,
-        verdict: AuthenticodeVerdict,
     }
 
     impl PeerAuthProbe for FakeProbe {
@@ -670,9 +528,6 @@ mod tests {
         }
         fn active_interactive_session(&self) -> Result<u32, PeerAuthError> {
             self.active_session
-        }
-        fn verify_authenticode(&self, _canonical_path: &Path) -> AuthenticodeVerdict {
-            self.verdict.clone()
         }
     }
 
@@ -686,22 +541,13 @@ mod tests {
         }
     }
 
-    fn ok_verdict() -> AuthenticodeVerdict {
-        AuthenticodeVerdict {
-            valid: true,
-            publisher_cn: Some(EXPECTED_PUBLISHER_CN.to_string()),
-        }
-    }
-
     fn fixed_probe(
         identity: Result<PeerIdentitySnapshot, PeerAuthError>,
         active_session: Result<u32, PeerAuthError>,
-        verdict: AuthenticodeVerdict,
     ) -> FakeProbe {
         FakeProbe {
             identity_fn: Box::new(move |_pid| identity.clone()),
             active_session,
-            verdict,
         }
     }
 
@@ -712,8 +558,8 @@ mod tests {
     // ── Happy path ────────────────────────────────────────────────────
 
     #[test]
-    fn allow_when_session_path_and_publisher_all_pass() {
-        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(7), ok_verdict()));
+    fn allow_unsigned_peer_when_session_and_path_pass() {
+        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(7)));
         assert_eq!(
             gate.authorize_at(4242, TEST_VERB, Instant::now()),
             Ok(TrustOrigin::SessionHelperPinned)
@@ -724,7 +570,7 @@ mod tests {
 
     #[test]
     fn deny_on_session_mismatch() {
-        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(99), ok_verdict()));
+        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(99)));
         assert_eq!(
             gate.authorize_at(1, TEST_VERB, Instant::now()),
             Err(PeerAuthError::WrongSession)
@@ -735,7 +581,7 @@ mod tests {
     fn deny_on_path_not_under_install_root() {
         let mut identity = ok_identity();
         identity.canonical_image_path = PathBuf::from(r"C:\Users\attacker\evil.exe");
-        let gate = gate_with(fixed_probe(Ok(identity), Ok(7), ok_verdict()));
+        let gate = gate_with(fixed_probe(Ok(identity), Ok(7)));
         assert_eq!(
             gate.authorize_at(1, TEST_VERB, Instant::now()),
             Err(PeerAuthError::PathNotAllowed)
@@ -746,7 +592,7 @@ mod tests {
     fn deny_on_filename_not_on_allow_list_even_under_correct_root() {
         let mut identity = ok_identity();
         identity.canonical_image_path = PathBuf::from(TEST_ROOT).join("cmd.exe");
-        let gate = gate_with(fixed_probe(Ok(identity), Ok(7), ok_verdict()));
+        let gate = gate_with(fixed_probe(Ok(identity), Ok(7)));
         assert_eq!(
             gate.authorize_at(1, TEST_VERB, Instant::now()),
             Err(PeerAuthError::PathNotAllowed)
@@ -757,7 +603,7 @@ mod tests {
     fn deny_when_allowed_root_is_unresolved() {
         // Fail-closed default: if the install root can't be determined,
         // NOTHING is allowed, even a peer that would otherwise pass.
-        let probe = fixed_probe(Ok(ok_identity()), Ok(7), ok_verdict());
+        let probe = fixed_probe(Ok(ok_identity()), Ok(7));
         let gate = SessionHelperGate::with_allowed_root(Arc::new(probe), None);
         assert_eq!(
             gate.authorize_at(1, TEST_VERB, Instant::now()),
@@ -765,54 +611,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn deny_on_invalid_signature() {
-        let verdict = AuthenticodeVerdict {
-            valid: false,
-            publisher_cn: Some(EXPECTED_PUBLISHER_CN.to_string()),
-        };
-        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(7), verdict));
-        assert_eq!(
-            gate.authorize_at(1, TEST_VERB, Instant::now()),
-            Err(PeerAuthError::SignatureInvalid)
-        );
-    }
-
-    #[test]
-    fn deny_on_publisher_mismatch() {
-        let verdict = AuthenticodeVerdict {
-            valid: true,
-            publisher_cn: Some("Totally Not ServaLabs".to_string()),
-        };
-        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(7), verdict));
-        assert_eq!(
-            gate.authorize_at(1, TEST_VERB, Instant::now()),
-            Err(PeerAuthError::PublisherMismatch)
-        );
-    }
-
-    #[test]
-    fn deny_when_valid_signature_has_no_publisher_name() {
-        let verdict = AuthenticodeVerdict {
-            valid: true,
-            publisher_cn: None,
-        };
-        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(7), verdict));
-        assert_eq!(
-            gate.authorize_at(1, TEST_VERB, Instant::now()),
-            Err(PeerAuthError::PublisherMismatch)
-        );
-    }
-
     // ── Deny when any probe errors (fail-closed) ────────────────────────
 
     #[test]
     fn deny_when_identity_probe_errors() {
-        let gate = gate_with(fixed_probe(
-            Err(PeerAuthError::IdentityUnavailable),
-            Ok(7),
-            ok_verdict(),
-        ));
+        let gate = gate_with(fixed_probe(Err(PeerAuthError::IdentityUnavailable), Ok(7)));
         assert_eq!(
             gate.authorize_at(1, TEST_VERB, Instant::now()),
             Err(PeerAuthError::IdentityUnavailable)
@@ -824,7 +627,6 @@ mod tests {
         let gate = gate_with(fixed_probe(
             Ok(ok_identity()),
             Err(PeerAuthError::NoInteractiveSession),
-            ok_verdict(),
         ));
         assert_eq!(
             gate.authorize_at(1, TEST_VERB, Instant::now()),
@@ -836,7 +638,7 @@ mod tests {
 
     #[test]
     fn rate_limiter_permits_up_to_limit_then_denies() {
-        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(7), ok_verdict()));
+        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(7)));
         let now = Instant::now();
         for i in 0..RATE_LIMIT_MAX_CALLS {
             assert_eq!(
@@ -859,7 +661,7 @@ mod tests {
 
     #[test]
     fn rate_limiter_resets_after_window_elapses() {
-        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(7), ok_verdict()));
+        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(7)));
         let start = Instant::now();
         for _ in 0..RATE_LIMIT_MAX_CALLS {
             gate.authorize_at(1, TEST_VERB, start).unwrap();
@@ -878,7 +680,7 @@ mod tests {
 
     #[test]
     fn rate_limiter_is_scoped_per_verb() {
-        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(7), ok_verdict()));
+        let gate = gate_with(fixed_probe(Ok(ok_identity()), Ok(7)));
         let now = Instant::now();
         for _ in 0..RATE_LIMIT_MAX_CALLS {
             gate.authorize_at(1, "svc.clipboard.report_event", now)
@@ -941,8 +743,6 @@ mod tests {
             PeerAuthError::NoInteractiveSession,
             PeerAuthError::WrongSession,
             PeerAuthError::PathNotAllowed,
-            PeerAuthError::SignatureInvalid,
-            PeerAuthError::PublisherMismatch,
             PeerAuthError::RateLimited,
         ] {
             let text = err.to_string();
@@ -951,61 +751,6 @@ mod tests {
                 "error text must never look like it embeds a path: {text:?}"
             );
         }
-    }
-
-    // ── extract_cn ───────────────────────────────────────────────────
-
-    #[test]
-    fn extract_cn_from_multi_attribute_subject() {
-        assert_eq!(
-            extract_cn("CN=ServaLabs Pvt Ltd, O=ServaLabs Pvt Ltd, C=IN"),
-            Some("ServaLabs Pvt Ltd".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_cn_from_cn_only_subject() {
-        assert_eq!(
-            extract_cn("CN=Example Corp"),
-            Some("Example Corp".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_cn_returns_none_when_absent() {
-        assert_eq!(extract_cn("O=Example Corp, C=US"), None);
-    }
-
-    #[test]
-    fn extract_cn_trims_surrounding_whitespace() {
-        assert_eq!(
-            extract_cn("CN=  ServaLabs Pvt Ltd  ,O=x"),
-            Some("ServaLabs Pvt Ltd".to_string())
-        );
-    }
-
-    // ── parse_authenticode_json ───────────────────────────────────────
-
-    #[test]
-    fn parse_authenticode_json_valid_signature() {
-        let json =
-            br#"{"status":"Valid","signer":"CN=ServaLabs Pvt Ltd, O=ServaLabs Pvt Ltd, C=IN"}"#;
-        let verdict = parse_authenticode_json(json).unwrap();
-        assert!(verdict.valid);
-        assert_eq!(verdict.publisher_cn.as_deref(), Some("ServaLabs Pvt Ltd"));
-    }
-
-    #[test]
-    fn parse_authenticode_json_not_signed() {
-        let json = br#"{"status":"NotSigned","signer":null}"#;
-        let verdict = parse_authenticode_json(json).unwrap();
-        assert!(!verdict.valid);
-        assert_eq!(verdict.publisher_cn, None);
-    }
-
-    #[test]
-    fn parse_authenticode_json_malformed_is_none() {
-        assert!(parse_authenticode_json(b"not json").is_none());
     }
 
     // ── canonicalize_peer_path: real-filesystem defeat tests ─────────

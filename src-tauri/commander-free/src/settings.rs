@@ -3072,13 +3072,6 @@ pub fn clipboard_guard_epoch_health() -> ClipboardGuardEpochHealth {
 /// re-verify the signature before trusting anything in the payload.
 const INSTALL_EPOCH_VERB: &str = "svc.policy.install_epoch";
 
-/// How long Free will wait for the whole `svc.policy.install_epoch` round
-/// trip (connect + Hello + Request + Response) before giving up. Unlike
-/// `sidecar.rs`'s Pro-sidecar handshake, `commander-svc` is a local SYSTEM
-/// service with no AV-scanned spawn tail to absorb — a few seconds is
-/// generous for a same-machine named pipe.
-const SVC_RELAY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
 /// Wire payload for [`INSTALL_EPOCH_VERB`]. Every field is exactly what
 /// `wincmd_shared::fleet::EpochSigningInput` binds into the epoch
 /// preimage, plus the signature and the pinned signer key Free just
@@ -3239,82 +3232,11 @@ async fn handle_clipboard_guard_epoch_subtrees_via(pipe_name: &str, args: Instal
 /// failures, or svc's own `error_kind`) — never rule names, patterns, or
 /// clipboard text, so it is safe to log verbatim.
 async fn relay_epoch_to_svc(pipe_name: &str, args: &InstallEpochArgs) -> Result<(), String> {
-    use tokio::net::windows::named_pipe::{ClientOptions, PipeMode};
-    use tokio::time::timeout;
-
-    let mut client = ClientOptions::new()
-        .pipe_mode(PipeMode::Byte)
-        .open(pipe_name)
-        .map_err(|e| format!("connect failed: {e}"))?;
-
-    // Fresh per-connection token. svc's authorization for this verb rests
-    // on peer session-membership + binary/publisher pinning (plan §4.3),
-    // not on this token being pre-shared or secret — it only proves that
-    // frames within THIS connection came from whoever established it,
-    // the same Phase-9 HMAC contract every other `Envelope::Signed` use in
-    // this repo relies on.
-    let session_token = Uuid::new_v4().to_string();
-
-    let hello = wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(&session_token));
-    timeout(
-        SVC_RELAY_TIMEOUT,
-        wincmd_shared::write_envelope(&mut client, &hello),
-    )
-    .await
-    .map_err(|_| "Hello write timed out".to_string())?
-    .map_err(|e| format!("Hello write failed: {e}"))?;
-
-    let ack = timeout(SVC_RELAY_TIMEOUT, wincmd_shared::read_envelope(&mut client))
-        .await
-        .map_err(|_| "Hello ack timed out".to_string())?
-        .map_err(|e| format!("Hello ack read failed: {e}"))?;
-    if !matches!(ack, wincmd_shared::Envelope::Hello(_)) {
-        return Err("expected a Hello ack, got a different frame".to_string());
-    }
-
     let args_json =
         serde_json::to_value(args).map_err(|e| format!("args serialize failed: {e}"))?;
-    let request = wincmd_shared::Envelope::Request(wincmd_shared::Request {
-        request_id: 1,
-        feature_id: INSTALL_EPOCH_VERB.to_string(),
-        args: args_json,
-    })
-    .sign(&session_token);
-
-    timeout(
-        SVC_RELAY_TIMEOUT,
-        wincmd_shared::write_envelope(&mut client, &request),
-    )
-    .await
-    .map_err(|_| "request write timed out".to_string())?
-    .map_err(|e| format!("request write failed: {e}"))?;
-
-    let reply = timeout(SVC_RELAY_TIMEOUT, wincmd_shared::read_envelope(&mut client))
+    crate::svc_client::call_via(pipe_name, INSTALL_EPOCH_VERB, args_json)
         .await
-        .map_err(|_| "reply timed out".to_string())?
-        .map_err(|e| format!("reply read failed: {e}"))?;
-
-    // Lenient on signing: today's svc replies unsigned (see
-    // `commander-svc/src/pipe.rs::handle_connection`), but
-    // `wincmd_shared::svc`'s module doc specifies every post-handshake
-    // frame is `Signed` — accept either shape so this client keeps
-    // working once svc's reply path is updated to match its own
-    // documented contract.
-    let reply = if matches!(reply, wincmd_shared::Envelope::Signed(_)) {
-        reply
-            .verify_and_unwrap(&session_token)
-            .map_err(|e| format!("reply signature check failed: {e}"))?
-    } else {
-        reply
-    };
-
-    let _ = wincmd_shared::write_envelope(&mut client, &wincmd_shared::Envelope::Bye).await;
-
-    match reply {
-        wincmd_shared::Envelope::Response(_) => Ok(()),
-        wincmd_shared::Envelope::Error(e) => Err(format!("svc rejected the epoch: {}", e.kind)),
-        _ => Err("unexpected reply frame".to_string()),
-    }
+        .map(|_| ())
 }
 
 /// Check if a setting is locked by admin.
