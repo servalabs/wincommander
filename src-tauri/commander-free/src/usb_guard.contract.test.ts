@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 const root = decodeURIComponent(new URL("../../../", import.meta.url).pathname)
   .replace(/^\/([A-Za-z]:)/, "$1");
 const sourcePath = `${root}/src-tauri/commander-free/src/usb_guard.rs`;
-const source = readFileSync(sourcePath, "utf8");
+const source = readFileSync(sourcePath, "utf8").replace(/\r\n/g, "\n");
 
 describe("USB Free/Pro security boundary", () => {
   test("Free retains only the neutral consumer timeline implementation", () => {

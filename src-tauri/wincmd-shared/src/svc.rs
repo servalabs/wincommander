@@ -187,7 +187,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // initiated.  It is safe here only because the service derives the
         // connected process token and re-checks policy membership itself; the
         // client cannot provide a path, SID, ACL, or presentation decision.
-        "svc.vault.authorize_mount" | "svc.vault.mount" | "svc.vault.unmount" => {
+        "svc.vault.authorize_mount" | "svc.vault.mount" | "svc.vault.unmount" | "svc.vault.list_authorized" | "svc.vault.capabilities" => {
             CapabilityClass::ReadOnly
         }
 
@@ -217,7 +217,14 @@ mod tests {
 
     #[test]
     fn read_only_verbs_are_classified_read_only() {
-        for verb in &["svc.status", "svc.get_settings", "svc.ping", "svc.health"] {
+        for verb in &[
+            "svc.status",
+            "svc.get_settings",
+            "svc.ping",
+            "svc.health",
+            "svc.vault.capabilities",
+            "svc.vault.list_authorized",
+        ] {
             assert_eq!(
                 classify_verb(verb),
                 CapabilityClass::ReadOnly,

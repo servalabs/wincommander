@@ -2793,6 +2793,10 @@ pub fn run() {
             vault_access::get_vault_access_policy,
             vault_access::apply_vault_access_policy,
             vault_access::get_vault_access_status,
+            vault_access::vault_mount_entry,
+            vault_access::vault_unmount_entry,
+            vault_access::vault_list_authorized_entries,
+            vault_access::get_vault_access_capabilities,
             // ── Convergence Engine ──
             settings::get_drift_report,
             settings::update_current_state,

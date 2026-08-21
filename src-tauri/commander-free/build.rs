@@ -51,17 +51,16 @@ fn main() {
         }
     }
 
-    // Production builds must always request elevation because many WinCommander
-    // operations mutate machine-wide state. Development builds run as the
-    // invoking user so `bun x tauri dev` and the built-in CLI remain launchable
-    // from a normal developer terminal. Privileged commands still fail at their
-    // existing administrator checks; this only removes the Windows launch-time
-    // integrity boundary for the debug profile.
+    // Production builds use highestAvailable: standard users keep their own
+    // medium-integrity token while administrators can elevate when needed.
+    // Development builds remain asInvoker so `tauri dev` and the CLI never
+    // prompt solely because they were launched from a developer terminal.
+    // Privileged commands still enforce their existing administrator checks.
     let release_manifest = include_str!("app.manifest");
-    const ELEVATED_LEVEL: &str = r#"level="requireAdministrator""#;
+    const HIGHEST_AVAILABLE_LEVEL: &str = r#"level="highestAvailable""#;
     assert!(
-        release_manifest.contains(ELEVATED_LEVEL),
-        "the release manifest must retain requestedExecutionLevel=requireAdministrator"
+        release_manifest.contains(HIGHEST_AVAILABLE_LEVEL),
+        "the release manifest must retain requestedExecutionLevel=highestAvailable"
     );
     let is_development_profile = std::env::var("PROFILE").as_deref() == Ok("debug");
     println!("cargo:rustc-check-cfg=cfg(wincommander_dev_profile)");
@@ -70,7 +69,7 @@ fn main() {
     }
     let development_manifest;
     let app_manifest = if is_development_profile {
-        development_manifest = release_manifest.replacen(ELEVATED_LEVEL, r#"level="asInvoker""#, 1);
+        development_manifest = release_manifest.replacen(HIGHEST_AVAILABLE_LEVEL, r#"level="asInvoker""#, 1);
         development_manifest.as_str()
     } else {
         release_manifest

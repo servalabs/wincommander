@@ -36,6 +36,7 @@ serde_json = "1"
 anyhow = "1"
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 zeroize = { version = "1", features = ["alloc"] }
+sha2 = "0.11"
 
 [target.'cfg(windows)'.dependencies]
 # Windows service registration / dispatcher (SCM integration).
@@ -51,5 +52,6 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Memory",
   "Win32_System_SystemServices",
   "Win32_System_RemoteDesktop",
+  "Win32_NetworkManagement_NetManagement",
   "Win32_Storage_FileSystem",
 ] }

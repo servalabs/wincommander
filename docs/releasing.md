@@ -85,3 +85,15 @@ The Free desktop build imports only its explicit runtime asset allowlist from
 The release workflow rejects bundled installers, archives, Theron media, and
 media payloads larger than 64 MiB. Add a genuinely required desktop asset to
 the allowlist and release verification patterns in the same change.
+
+## Service payload
+
+`bun run build:tauri:release` builds `commander-svc` before it creates a
+temporary release-only Tauri configuration that bundles `wincommander-svc.exe`.
+The installer copies it to `%ProgramFiles%\WinCommander\wincommander-svc.exe`,
+registers the automatic LocalSystem `WinCommanderSvc`, and starts it. Updates
+wait for the old service to stop before replacement; uninstall stops, deletes,
+and removes it. The desktop manifest is `highestAvailable`, so a standard user
+keeps their own Windows token while an administrator may elevate. The app and
+service installation do not require a separate Authenticode certificate; this
+does not change the release workflow's existing installer/updater signing.

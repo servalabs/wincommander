@@ -7,10 +7,18 @@
 use serde_json::Value;
 
 const SVC_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const VAULT_MOUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(130);
 
 /// Call a service verb through the production pipe.
 pub async fn call(feature_id: &str, args: Value) -> Result<Value, String> {
-    call_via(wincmd_shared::svc::SVC_PIPE_NAME, feature_id, args).await
+    call_via_with_timeout(wincmd_shared::svc::SVC_PIPE_NAME, feature_id, args, SVC_REQUEST_TIMEOUT).await
+}
+
+/// Vault mounting may take up to two minutes in the engine.  Keep its UI pipe
+/// open long enough to receive the final bounded result; all ordinary service
+/// RPCs retain the short five-second deadline.
+pub async fn call_vault_mount(args: Value) -> Result<Value, String> {
+    call_via_with_timeout(wincmd_shared::svc::SVC_PIPE_NAME, "svc.vault.mount", args, VAULT_MOUNT_TIMEOUT).await
 }
 
 /// Same as [`call`], with an injectable pipe solely for focused protocol tests.
@@ -20,6 +28,16 @@ pub async fn call(feature_id: &str, args: Value) -> Result<Value, String> {
 /// named-pipe peer and apply its own capability gate.
 #[cfg(windows)]
 pub async fn call_via(pipe_name: &str, feature_id: &str, args: Value) -> Result<Value, String> {
+    call_via_with_timeout(pipe_name, feature_id, args, SVC_REQUEST_TIMEOUT).await
+}
+
+#[cfg(windows)]
+async fn call_via_with_timeout(
+    pipe_name: &str,
+    feature_id: &str,
+    args: Value,
+    request_timeout: std::time::Duration,
+) -> Result<Value, String> {
     use tokio::net::windows::named_pipe::{ClientOptions, PipeMode};
     use tokio::time::timeout;
     use uuid::Uuid;
@@ -32,14 +50,14 @@ pub async fn call_via(pipe_name: &str, feature_id: &str, args: Value) -> Result<
     let hello = wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(&session_token));
 
     timeout(
-        SVC_REQUEST_TIMEOUT,
+        request_timeout,
         wincmd_shared::write_envelope(&mut client, &hello),
     )
     .await
     .map_err(|_| "service Hello write timed out".to_string())?
     .map_err(|e| format!("service Hello write failed: {e}"))?;
     let ack = timeout(
-        SVC_REQUEST_TIMEOUT,
+        request_timeout,
         wincmd_shared::read_envelope(&mut client),
     )
     .await
@@ -56,14 +74,14 @@ pub async fn call_via(pipe_name: &str, feature_id: &str, args: Value) -> Result<
     })
     .sign(&session_token);
     timeout(
-        SVC_REQUEST_TIMEOUT,
+        request_timeout,
         wincmd_shared::write_envelope(&mut client, &request),
     )
     .await
     .map_err(|_| "service request write timed out".to_string())?
     .map_err(|e| format!("service request write failed: {e}"))?;
     let reply = timeout(
-        SVC_REQUEST_TIMEOUT,
+        request_timeout,
         wincmd_shared::read_envelope(&mut client),
     )
     .await
@@ -96,5 +114,15 @@ pub async fn call_via(pipe_name: &str, feature_id: &str, args: Value) -> Result<
 /// must not pretend it queried or applied a vault policy.
 #[cfg(not(windows))]
 pub async fn call_via(_pipe_name: &str, _feature_id: &str, _args: Value) -> Result<Value, String> {
+    Err("Vault access service is available only on Windows".to_string())
+}
+
+#[cfg(not(windows))]
+async fn call_via_with_timeout(
+    _pipe_name: &str,
+    _feature_id: &str,
+    _args: Value,
+    _request_timeout: std::time::Duration,
+) -> Result<Value, String> {
     Err("Vault access service is available only on Windows".to_string())
 }

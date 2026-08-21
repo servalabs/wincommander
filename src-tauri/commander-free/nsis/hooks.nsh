@@ -10,19 +10,31 @@
 ;      and the active output path to %ProgramFiles%\WinCommander before any
 ;      files are written.
 ; ──────────────────────────────────────────────────────────────────────────────
+!define WC_INSTALL_DIR "$PROGRAMFILES64\WinCommander"
+!define WC_SERVICE_EXE "${WC_INSTALL_DIR}\wincommander-svc.exe"
+!define WC_BUNDLED_SERVICE "$INSTDIR\resources\wincommander-svc.exe"
+
 !macro NSIS_HOOK_PREINSTALL
+  ; Releases use one non-customizable machine location.  The service's SCM
+  ; ImagePath is therefore stable across fresh install, repair, and update.
+  StrCpy $INSTDIR "${WC_INSTALL_DIR}"
+  SetOutPath "$INSTDIR"
+
+  ; An in-use service executable cannot be replaced safely. Stop the prior
+  ; instance and wait for SCM to confirm SERVICE_STOPPED; a timeout aborts the
+  ; update instead of leaving an old process with new files beside it.
+  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "$svc = Get-Service -Name ''WinCommanderSvc'' -ErrorAction SilentlyContinue; if ($null -ne $svc -and $svc.Status -ne ''Stopped'') { Stop-Service -Name ''WinCommanderSvc'' -ErrorAction Stop; $svc.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30)) }"'
+  Pop $R8
+  Pop $R9
+  ${If} $R8 != 0
+    Abort "WinCommander service could not stop. Close dependent sessions and run the installer again."
+  ${EndIf}
   ; --- 1. Remove stale per-user install location from old currentUser builds --
   DeleteRegValue HKCU "Software\servalabs.com\WinCommander" ""
   DeleteRegKey /ifempty HKCU "Software\servalabs.com\WinCommander"
   DeleteRegKey /ifempty HKCU "Software\servalabs.com"
 
-  ; --- 2. Redirect if $INSTDIR resolved to AppData ----------------------------
-  ${If} $INSTDIR == "$LOCALAPPDATA\WinCommander"
-    StrCpy $INSTDIR "$PROGRAMFILES64\WinCommander"
-    SetOutPath $INSTDIR
-  ${EndIf}
-
-  ; --- 3. Migrate users from a prior per-user (AppData) install ----------------
+  ; --- 2. Migrate users from a prior per-user (AppData) install ----------------
   ; Pre-perMachine builds installed to %LOCALAPPDATA%\WinCommander, leaving a
   ; duplicate Apps & Features entry, a per-user Start-Menu shortcut, a per-user
   ; Run-key autostart, and the old binaries behind once we move to Program
@@ -46,7 +58,7 @@
     RMDir /r "$LOCALAPPDATA\WinCommander\resources"
   ${EndIf}
 
-  ; --- 4. Record pre-update desktop-shortcut state ----------------------------
+  ; --- 3. Record pre-update desktop-shortcut state ----------------------------
   ; Tauri recreates the desktop shortcut on every install/update. Record whether
   ; it existed BEFORE so POSTINSTALL can remove it when absent — prevents the
   ; app being revealed on the desktop in hidden or decoy mode after an update.
@@ -102,6 +114,48 @@
 ;      RunOnce (step 3) remains as a belt-and-suspenders fallback.
 ; ──────────────────────────────────────────────────────────────────────────────
 !macro NSIS_HOOK_POSTINSTALL
+  ; Tauri stages resources below $INSTDIR\resources. Copy the service to the
+  ; fixed root before configuring SCM, so ImagePath is always the quoted
+  ; Program Files executable rather than a bundler implementation detail.
+  IfFileExists "${WC_BUNDLED_SERVICE}" +2 0
+    DetailPrint "The bundled WinCommander service executable is missing."
+    Abort "WinCommander service payload is missing; the installation was not completed."
+  ClearErrors
+  CopyFiles /SILENT "${WC_BUNDLED_SERVICE}" "${WC_INSTALL_DIR}"
+  ${If} ${Errors}
+    Abort "WinCommander service executable could not be installed."
+  ${EndIf}
+
+  ; No certificate is required: LocalSystem is the SCM identity and the
+  ; service independently authenticates every named-pipe peer/broker request.
+  ; ERROR_SERVICE_EXISTS (1073) is expected during an update; every other SCM
+  ; failure is shown to the installer user rather than silently ignored.
+  nsExec::ExecToStack 'sc create WinCommanderSvc binPath= ""${WC_SERVICE_EXE}"" start= auto obj= LocalSystem'
+  Pop $R8
+  Pop $R9
+  ${If} $R8 != 0
+  ${AndIf} $R8 != 1073
+    Abort "WinCommander service could not be created."
+  ${EndIf}
+  nsExec::ExecToStack 'sc config WinCommanderSvc binPath= ""${WC_SERVICE_EXE}"" start= auto obj= LocalSystem'
+  Pop $R8
+  Pop $R9
+  ${If} $R8 != 0
+    Abort "WinCommander service could not be configured."
+  ${EndIf}
+  nsExec::ExecToStack 'sc failure WinCommanderSvc reset= 86400 actions= restart/5000/restart/5000/none/0'
+  Pop $R8
+  Pop $R9
+  ${If} $R8 != 0
+    Abort "WinCommander service recovery could not be configured."
+  ${EndIf}
+  nsExec::ExecToStack 'sc start WinCommanderSvc'
+  Pop $R8
+  Pop $R9
+  ${If} $R8 != 0
+  ${AndIf} $R8 != 1056
+    Abort "WinCommander service could not be started."
+  ${EndIf}
   ; --- 1. Unblock EXE (remove Zone.Identifier alternate data stream) ----------
   nsExec::ExecToLog 'powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
     -Command "Get-ChildItem -Path ''$INSTDIR'' -Recurse -Include *.exe,*.dll | \
@@ -134,17 +188,13 @@
   ; leaves a GUI process outside the desktop user's interactive session. Pass
   ; the bare exe path to -Execute (no embedded quotes; Task Scheduler handles
   ; spaces) — embedding quotes made the task target a non-existent quoted path.
-  ; KT: -RunLevel MUST be Highest. The app's manifest is requireAdministrator,
-  ; so launching it from a *Limited* (non-elevated) task fails with
-  ; ERROR_ELEVATION_REQUIRED — the task fires but no window ever appears (the
-  ; exact "selected Launch WinCommander, nothing starts" symptom on 24H2 /
-  ; Server 2025 where the WMIC-based RunAsUser finish-page launch also no-ops).
-  ; Highest + an admin principal runs the app elevated in the interactive
-  ; session with no UAC prompt — same as the app's own logon autostart task.
+  ; Keep this task Limited. The highestAvailable app manifest lets a standard
+  ; Partner retain their own Windows token; forcing Highest here would either
+  ; require an administrator or make the service authorize the wrong session.
   nsExec::ExecToLog 'powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
     -Command "$a = New-ScheduledTaskAction -Execute ''$INSTDIR\${MAINBINARYNAME}.exe''; \
     $t = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds(5)); \
-    $p = New-ScheduledTaskPrincipal -GroupId ''S-1-5-32-545'' -RunLevel Highest; \
+    $p = New-ScheduledTaskPrincipal -GroupId ''S-1-5-32-545'' -RunLevel Limited; \
     $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero); \
     Register-ScheduledTask -TaskName ''WinCommanderLaunchOnce'' \
       -Action $a -Trigger $t -Principal $p -Settings $s -Force -ErrorAction SilentlyContinue | Out-Null; \
@@ -214,6 +264,22 @@
 ;      entries left behind when WinCommander was hidden at uninstall time.
 ; ──────────────────────────────────────────────────────────────────────────────
 !macro NSIS_HOOK_PREUNINSTALL
+  ; Stop first and wait for SERVICE_STOPPED before deletion, otherwise SCM can
+  ; retain a live process or a marked-for-delete record after uninstall.
+  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "$svc = Get-Service -Name ''WinCommanderSvc'' -ErrorAction SilentlyContinue; if ($null -ne $svc -and $svc.Status -ne ''Stopped'') { Stop-Service -Name ''WinCommanderSvc'' -ErrorAction Stop; $svc.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30)) }"'
+  Pop $R8
+  Pop $R9
+  ${If} $R8 != 0
+    Abort "WinCommander service could not stop. Close dependent sessions and run the uninstaller again."
+  ${EndIf}
+  nsExec::ExecToStack 'sc delete WinCommanderSvc'
+  Pop $R8
+  Pop $R9
+  ${If} $R8 != 0
+  ${AndIf} $R8 != 1060
+    Abort "WinCommander service could not be removed."
+  ${EndIf}
+  Delete "${WC_SERVICE_EXE}"
   ; --- 1. Remove RunOnce safety-net entry -------------------------------------
   DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\RunOnce" \
     "WinCommanderFirstLaunch"

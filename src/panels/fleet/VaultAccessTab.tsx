@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { useAppState } from "@/context/AppContext";
 import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
 import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
@@ -16,8 +15,10 @@ import {
 
 function observedResult(status: VaultEntryStatus | undefined) {
   if (!status) return "Not observed by the service";
+  // Older persisted policy status can still carry this result. Current mount
+  // state is supplied separately by the concrete service mount lifecycle.
   return status.result === "pending_mount_broker"
-    ? "Host policy applied; secure mount broker pending"
+    ? "Host policy applied; awaiting service mount-state refresh"
     : status.result.replaceAll("_", " ");
 }
 
@@ -25,9 +26,7 @@ function appliedAt(timestamp: number | null) {
   return timestamp == null ? "Never" : new Date(timestamp * 1000).toLocaleString();
 }
 
-export default function VaultAccessTab() {
-  const { systemInfo } = useAppState();
-  const isAdmin = systemInfo?.isAdmin === true;
+export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
   const [policy, setPolicy] = useState<VaultAccessPolicy | null>(null);
   const [status, setStatus] = useState<VaultPolicyStatus | null>(null);
   const [authorizedEntries, setAuthorizedEntries] = useState<VaultAuthorizedEntry[]>([]);
@@ -297,7 +296,7 @@ export default function VaultAccessTab() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>Observed service status</CardTitle><CardDescription>Windows-confirmed ACL state, not a forecast. Secure mount enforcement remains pending in this one-day slice.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Observed service status</CardTitle><CardDescription>Service-reported policy validation and mount state, not a forecast. This source view does not establish live mount acceptance.</CardDescription></CardHeader>
         <CardContent>
           <p>Policy: {status?.policy_id ?? "none"} · Version {status?.version ?? 0} · Validation: {status?.validation_state ?? "never_applied"} · Applied: {appliedAt(status?.applied_at ?? null)}</p>
           <ul className="fleet-validation-errors">

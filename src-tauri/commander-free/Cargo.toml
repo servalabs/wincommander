@@ -21,11 +21,9 @@ crate-type = ["rlib"]
 [[bin]]
 name = "wincommander-free"
 path = "src/main.rs"
-# Release builds embed app.manifest with
-# requestedExecutionLevel=requireAdministrator. Debug builds use
-# an asInvoker transform of that canonical manifest so the same binary can be
-# exercised through `tauri dev` and its CLI without crossing a Windows
-# integrity boundary.
+# Release builds embed app.manifest with highestAvailable so standard users run
+# with their own token while administrators can elevate when required. Debug
+# builds use an asInvoker transform so `tauri dev` and the CLI remain prompt-free.
 # All tests live in the lib, so keep the empty bin harness disabled.
 test = false
 

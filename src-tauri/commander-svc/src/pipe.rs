@@ -49,6 +49,7 @@ use crate::peer_auth::PeerAuthError;
 use crate::policy_store::{EpochInstallInput, PolicyStore};
 use crate::settings_host;
 use crate::vault_access::VaultAccessStore;
+use crate::vault_mount::VaultMountBroker;
 
 use windows_sys::Win32::{
     Foundation::{CloseHandle, LocalFree, HANDLE},
@@ -86,6 +87,7 @@ pub async fn serve(
     session_helper_gate: Arc<SessionHelperGate>,
     clipboard_state: Arc<ClipboardGuardState>,
     vault_access: Arc<VaultAccessStore>,
+    vault_mount: Arc<VaultMountBroker>,
 ) -> Result<()> {
     // Build the SECURITY_ATTRIBUTES so the kernel creates the pipe object
     // with our explicit DACL rather than the default service-process DACL.
@@ -130,6 +132,7 @@ pub async fn serve(
         let session_helper_gate = Arc::clone(&session_helper_gate);
         let clipboard_state = Arc::clone(&clipboard_state);
         let vault_access = Arc::clone(&vault_access);
+        let vault_mount = Arc::clone(&vault_mount);
 
         tokio::spawn(async move {
             if let Err(e) = handle_connection(
@@ -140,6 +143,7 @@ pub async fn serve(
                 session_helper_gate,
                 clipboard_state,
                 vault_access,
+                vault_mount,
             )
             .await
             {
@@ -160,6 +164,7 @@ pub(crate) async fn handle_connection(
     session_helper_gate: Arc<SessionHelperGate>,
     clipboard_state: Arc<ClipboardGuardState>,
     vault_access: Arc<VaultAccessStore>,
+    vault_mount: Arc<VaultMountBroker>,
 ) -> Result<()> {
     // (a) Require a valid Hello frame. Capture the peer's session token —
     // every frame after the handshake that arrives as `Envelope::Signed`
@@ -252,7 +257,7 @@ pub(crate) async fn handle_connection(
             }
             Ok(trust_origin) => {
                 let reply =
-                    dispatch_verb(&req, trust_origin, &policy_store, &clipboard_state, &vault_access, client_pid).await;
+                    dispatch_verb(&req, trust_origin, &policy_store, &clipboard_state, &vault_access, &vault_mount, client_pid, caller_privileged).await;
                 write_envelope(&mut conn, &reply).await?;
             }
         }
@@ -361,7 +366,9 @@ async fn dispatch_verb(
     policy_store: &PolicyStore,
     clipboard_state: &ClipboardGuardState,
     vault_access: &VaultAccessStore,
+    vault_mount: &VaultMountBroker,
     client_pid: u32,
+    caller_privileged: bool,
 ) -> Envelope {
     let request_id = req.request_id;
 
@@ -392,8 +399,12 @@ async fn dispatch_verb(
 
         "svc.vault.get_policy" => Ok(serde_json::to_value(vault_access.policy()).unwrap_or_else(|_| serde_json::Value::Null)),
         "svc.vault.get_status" => Ok(serde_json::to_value(vault_access.status()).unwrap_or_else(|_| serde_json::Value::Null)),
-        "svc.vault.apply_policy" => handle_vault_apply(vault_access, req.args.clone()),
+        "svc.vault.apply_policy" => handle_vault_apply_and_cleanup(vault_access, vault_mount, req.args.clone()),
         "svc.vault.authorize_mount" => handle_vault_authorize(vault_access, req.args.clone(), client_pid),
+        "svc.vault.mount" => handle_vault_mount(vault_access, vault_mount, req.args.clone(), client_pid),
+        "svc.vault.unmount" => handle_vault_unmount(vault_access, vault_mount, req.args.clone(), client_pid),
+        "svc.vault.list_authorized" => handle_vault_list_authorized(vault_access, vault_mount, client_pid),
+        "svc.vault.capabilities" => Ok(serde_json::json!({ "can_manage_policy": caller_privileged })),
 
         // Every other verb (ink_receipt.* and anything privileged/unknown)
         // is still a stub — out of this task's scope. `authorize()` above
@@ -457,6 +468,20 @@ fn handle_vault_apply(
         .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))
 }
 
+/// A policy swap can remove a caller or narrow a grant. Dismount every active
+/// entry *before* accepting the new policy; failure leaves the prior policy
+/// intact and reports no false success to an administrator.
+fn handle_vault_apply_and_cleanup(
+    vault_access: &VaultAccessStore,
+    vault_mount: &VaultMountBroker,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, VerbError> {
+    vault_mount
+        .dismount_all(vault_access)
+        .map_err(|_| VerbError::new("vault_dismount_failed", "active vaults could not be dismounted"))?;
+    handle_vault_apply(vault_access, args)
+}
+
 fn handle_vault_authorize(
     vault_access: &VaultAccessStore,
     args: serde_json::Value,
@@ -468,6 +493,99 @@ fn handle_vault_authorize(
     // token.  The renderer supplies only an opaque registered entry id.
     Ok(serde_json::to_value(crate::vault_access::authorize_mount_for_process(vault_access, &request.entry_id, client_pid))
         .unwrap_or_else(|_| serde_json::json!({"allowed":false,"launch_ready":false,"denial_reason":"not_authorized","mode":null,"presentation":null,"preferred_letter":null})))
+}
+
+fn handle_vault_mount(
+    vault_access: &VaultAccessStore,
+    vault_mount: &VaultMountBroker,
+    args: serde_json::Value,
+    client_pid: u32,
+) -> Result<serde_json::Value, VerbError> {
+    let mut request: wincmd_shared::vault_access::VaultMountRequest = serde_json::from_value(args)
+        .map_err(|_| VerbError::new("vault_validation_failed", "mount request is invalid"))?;
+    // This must happen before a broker attempt: PID/token membership is
+    // derived from the named-pipe peer, never from a renderer identity.
+    let authorization = crate::vault_access::authorize_mount_for_process(
+        vault_access,
+        &request.entry_id,
+        client_pid,
+    );
+    let result = if authorization.allowed {
+        vault_mount.mount_authorized(
+            vault_access,
+            &request.entry_id,
+            &mut request.password,
+            client_pid,
+            authorization.mode.unwrap_or(wincmd_shared::vault_access::VaultAccess::Read),
+        )
+    } else {
+        use zeroize::Zeroize;
+        request.password.zeroize();
+        wincmd_shared::vault_access::VaultMountResult {
+            entry_id: request.entry_id,
+            state: wincmd_shared::vault_access::VaultMountState::Denied,
+            presentation: None,
+            drive_letter: None,
+            reason: Some(wincmd_shared::vault_access::VaultMountReason::NotAuthorized),
+        }
+    };
+    serde_json::to_value(result)
+        .map_err(|_| VerbError::new("vault_internal_error", "mount result could not be created"))
+}
+
+fn handle_vault_unmount(
+    vault_access: &VaultAccessStore,
+    vault_mount: &VaultMountBroker,
+    args: serde_json::Value,
+    client_pid: u32,
+) -> Result<serde_json::Value, VerbError> {
+    let request: wincmd_shared::vault_access::VaultUnmountRequest = serde_json::from_value(args)
+        .map_err(|_| VerbError::new("vault_validation_failed", "unmount request is invalid"))?;
+    let authorization = crate::vault_access::authorize_mount_for_process(vault_access, &request.entry_id, client_pid);
+    let result = if authorization.allowed {
+        vault_mount.dismount_authorized(
+            vault_access,
+            &request.entry_id,
+            client_pid,
+            authorization.presentation.unwrap_or(wincmd_shared::vault_access::VaultPresentation::PerUser),
+        )
+    } else {
+        wincmd_shared::vault_access::VaultMountResult {
+            entry_id: request.entry_id,
+            state: wincmd_shared::vault_access::VaultMountState::Denied,
+            presentation: None,
+            drive_letter: None,
+            reason: Some(wincmd_shared::vault_access::VaultMountReason::NotAuthorized),
+        }
+    };
+    serde_json::to_value(result)
+        .map_err(|_| VerbError::new("vault_internal_error", "unmount result could not be created"))
+}
+
+fn handle_vault_list_authorized(
+    vault_access: &VaultAccessStore,
+    vault_mount: &VaultMountBroker,
+    client_pid: u32,
+) -> Result<serde_json::Value, VerbError> {
+    let entries: Vec<wincmd_shared::vault_access::VaultAuthorizedEntry> = vault_access
+        .entry_summaries()
+        .into_iter()
+        .filter_map(|(entry_id, label)| {
+            let authorization = crate::vault_access::authorize_mount_for_process(vault_access, &entry_id, client_pid);
+            if !authorization.allowed { return None; }
+            let (mount_state, drive_letter) = vault_mount.projection(&entry_id);
+            Some(wincmd_shared::vault_access::VaultAuthorizedEntry {
+                entry_id,
+                label,
+                access: authorization.mode?,
+                presentation: authorization.presentation?,
+                mount_state,
+                drive_letter,
+            })
+        })
+        .collect();
+    serde_json::to_value(entries)
+        .map_err(|_| VerbError::new("vault_internal_error", "authorized vault list could not be created"))
 }
 
 fn vault_error_message(error: crate::vault_access::VaultError) -> &'static str {
@@ -1671,6 +1789,7 @@ mod integration {
         let session_helper_gate = test_support::passing_gate();
         let clipboard_state = Arc::new(ClipboardGuardState::new());
         let vault_access = crate::vault_access::test_store();
+        let vault_mount = Arc::new(crate::vault_mount::VaultMountBroker::new());
 
         let server_task = tokio::spawn(async move {
             let s = server;
@@ -1683,6 +1802,7 @@ mod integration {
                 session_helper_gate,
                 clipboard_state,
                 vault_access,
+                vault_mount,
             )
             .await
             .expect("handle_connection");
@@ -1783,6 +1903,7 @@ mod integration {
         let session_helper_gate = test_support::passing_gate();
         let clipboard_state = Arc::new(ClipboardGuardState::new());
         let vault_access = crate::vault_access::test_store();
+        let vault_mount = Arc::new(crate::vault_mount::VaultMountBroker::new());
 
         let server_task = tokio::spawn(async move {
             let s = server;
@@ -1795,6 +1916,7 @@ mod integration {
                 session_helper_gate,
                 clipboard_state,
                 vault_access,
+                vault_mount,
             )
             .await
             .expect("handle_connection");
@@ -1851,6 +1973,7 @@ mod integration {
         let session_helper_gate = test_support::passing_gate();
         let clipboard_state = Arc::new(ClipboardGuardState::new());
         let vault_access = crate::vault_access::test_store();
+        let vault_mount = Arc::new(crate::vault_mount::VaultMountBroker::new());
 
         let server_task = tokio::spawn(async move {
             let s = server;
@@ -1863,6 +1986,7 @@ mod integration {
                 session_helper_gate,
                 clipboard_state,
                 vault_access,
+                vault_mount,
             )
             .await
             .expect("handle_connection");

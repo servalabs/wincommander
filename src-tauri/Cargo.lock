@@ -930,11 +930,13 @@ dependencies = [
  "rand 0.8.7",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tokio",
  "wincmd-clip-rules",
  "wincmd-shared",
  "windows-service",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]

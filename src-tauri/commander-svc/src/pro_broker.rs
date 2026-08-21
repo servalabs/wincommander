@@ -77,6 +77,108 @@ fn accepted_hash_matches(expected: &Option<String>, actual: &str) -> bool {
         .unwrap_or(false)
 }
 
+// The vault engine is intentionally reached only through a service-created,
+// one-shot Envelope pipe.  There is no public `--vault-broker-stdin` mode.
+#[cfg(windows)]
+pub async fn vault_call(
+    target_session_id: u32,
+    feature_id: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
+    use tokio::time::{timeout, Duration};
+    use wincmd_shared::{read_envelope, write_envelope, Envelope, Hello, Request};
+
+    const BROKER_TIMEOUT: Duration = Duration::from_secs(120);
+    let pipe_name = random_pipe_name();
+    let session_token = random_session_token();
+    let mut pipe = unsafe {
+        ServerOptions::new()
+            .pipe_mode(PipeMode::Byte)
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .map_err(|_| "broker_unavailable")?
+    };
+    let process = spawn_pro_in_target_session(target_session_id, &pipe_name, &session_token)?;
+    let result = async {
+        timeout(BROKER_TIMEOUT, pipe.connect()).await.map_err(|_| "broker_timeout")?.map_err(|_| "broker_io")?;
+        let hello = Envelope::Hello(Hello {
+            protocol_version: "wincmd-protocol-v1".into(),
+            session_token: session_token.clone(),
+            binary_hash: None,
+            free_version: None,
+            pro_version: None,
+        });
+        timeout(BROKER_TIMEOUT, write_envelope(&mut pipe, &hello)).await.map_err(|_| "broker_timeout")?.map_err(|_| "broker_io")?;
+        let ack = timeout(BROKER_TIMEOUT, read_envelope(&mut pipe)).await.map_err(|_| "broker_timeout")?.map_err(|_| "broker_io")?;
+        let Envelope::Hello(Hello { protocol_version, session_token: echoed, binary_hash: Some(hash), .. }) = ack else { return Err("broker_handshake"); };
+        if protocol_version != "wincmd-protocol-v1" || echoed != session_token || !hash_matches_fixed_pro(&hash) { return Err("broker_handshake"); }
+        let request = Envelope::Request(Request { request_id: 1, feature_id: feature_id.into(), args }).sign(&session_token);
+        timeout(BROKER_TIMEOUT, write_envelope(&mut pipe, &request)).await.map_err(|_| "broker_timeout")?.map_err(|_| "broker_io")?;
+        let reply = timeout(BROKER_TIMEOUT, read_envelope(&mut pipe)).await.map_err(|_| "broker_timeout")?.map_err(|_| "broker_io")?;
+        let result = match reply.verify_and_unwrap(&session_token).map_err(|_| "broker_hmac")? {
+            Envelope::Response(response) if response.request_id == 1 => Ok(response.result),
+            Envelope::Error(error) if error.kind == "vault_acl_readback_failed" => Err("vault_acl_readback_failed"),
+            Envelope::Error(error) if error.kind == "vault_acl_apply_failed" => Err("vault_acl_apply_failed"),
+            _ => Err("broker_rejected"),
+        };
+        let _ = write_envelope(&mut pipe, &Envelope::Bye).await;
+        result
+    }.await;
+    use windows_sys::Win32::System::Threading::{TerminateProcess, WaitForSingleObject};
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    let waited = unsafe { WaitForSingleObject(process, 5_000) };
+    if result.is_err() || waited != WAIT_OBJECT_0 { unsafe { TerminateProcess(process, 1); } }
+    unsafe { windows_sys::Win32::Foundation::CloseHandle(process); }
+    result.map_err(str::to_string)
+}
+
+#[cfg(windows)]
+fn fixed_pro_path() -> std::path::PathBuf {
+    std::env::var_os("ProgramData").map(std::path::PathBuf::from).unwrap_or_else(|| r"C:\ProgramData".into()).join("WinCommander").join("bin").join("wincommander-pro.exe")
+}
+
+#[cfg(windows)]
+fn hash_matches_fixed_pro(reported: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(fixed_pro_path()) else { return false; };
+    let mut hash = Sha256::new(); let mut buf = [0u8; 65536];
+    loop { match file.read(&mut buf) { Ok(0) => break, Ok(count) => hash.update(&buf[..count]), Err(_) => return false } }
+    bytes_to_hex(&hash.finalize()).eq_ignore_ascii_case(reported)
+}
+
+#[cfg(windows)]
+fn spawn_pro_in_target_session(session_id: u32, pipe: &str, token: &str) -> Result<windows_sys::Win32::Foundation::HANDLE, &'static str> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{DuplicateTokenEx, SetTokenInformation, SecurityImpersonation, TokenPrimary, TokenSessionId, TOKEN_ADJUST_SESSIONID, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY};
+    use windows_sys::Win32::System::Threading::{CreateProcessAsUserW, GetCurrentProcess, OpenProcessToken, PROCESS_INFORMATION, STARTUPINFOW, CREATE_NO_WINDOW};
+    let exe = fixed_pro_path();
+    if !exe.is_file() { return Err("broker_unavailable"); }
+    let command = format!("\"{}\" --core-pipe={} --session-token={}", exe.display(), pipe, token);
+    let mut command_wide: Vec<u16> = command.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        if session_id == 0 {
+            let child = std::process::Command::new(&exe).arg(format!("--core-pipe={pipe}")).arg(format!("--session-token={token}")).spawn().map_err(|_| "broker_unavailable")?;
+            use std::os::windows::io::IntoRawHandle;
+            return Ok(child.into_raw_handle() as HANDLE);
+        }
+        let mut service_token: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_SESSIONID, &mut service_token) == 0 { return Err("broker_unavailable"); }
+        let mut session_token: HANDLE = std::ptr::null_mut();
+        if DuplicateTokenEx(service_token, TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_SESSIONID, std::ptr::null_mut(), SecurityImpersonation, TokenPrimary, &mut session_token) == 0 { CloseHandle(service_token); return Err("broker_unavailable"); }
+        CloseHandle(service_token);
+        if SetTokenInformation(session_token, TokenSessionId, &session_id as *const _ as *const _, std::mem::size_of::<u32>() as u32) == 0 { CloseHandle(session_token); return Err("session_unavailable"); }
+        let startup = STARTUPINFOW { cb: std::mem::size_of::<STARTUPINFOW>() as u32, ..std::mem::zeroed() };
+        let mut process = PROCESS_INFORMATION::default();
+        let ok = CreateProcessAsUserW(session_token, std::ptr::null(), command_wide.as_mut_ptr(), std::ptr::null_mut(), std::ptr::null_mut(), 0, CREATE_NO_WINDOW, std::ptr::null_mut(), std::ptr::null(), &startup, &mut process);
+        CloseHandle(session_token);
+        if ok == 0 { return Err("broker_unavailable"); }
+        CloseHandle(process.hThread);
+        Ok(process.hProcess)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

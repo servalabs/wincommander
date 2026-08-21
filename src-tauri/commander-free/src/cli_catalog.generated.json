@@ -9237,6 +9237,16 @@
       ]
     },
     {
+      "id": "tauri:get_vault_access_capabilities",
+      "name": "get_vault_access_capabilities",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
       "id": "tauri:get_vault_access_policy",
       "name": "get_vault_access_policy",
       "transport": "tauri",
@@ -11400,6 +11410,36 @@
       ]
     },
     {
+      "id": "tauri:vault_list_authorized_entries",
+      "name": "vault_list_authorized_entries",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
+      "id": "tauri:vault_mount_entry",
+      "name": "vault_mount_entry",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
+      "id": "tauri:vault_unmount_entry",
+      "name": "vault_unmount_entry",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
       "id": "tauri:verify_evidence_vault",
       "name": "verify_evidence_vault",
       "transport": "tauri",
@@ -11424,6 +11464,14 @@
       "frontendReferences": [
         "src/components/startup/CalculatorGate.tsx"
       ]
+    },
+    {
+      "id": "tauri:verify_vault_drive",
+      "name": "verify_vault_drive",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
     },
     {
       "id": "tauri:vm_capabilities",

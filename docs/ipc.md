@@ -330,6 +330,21 @@ All Argus collectors enforce the privacy invariant: window titles, exe paths, UR
 | `fleet_update_posture_snapshot` | Push a posture snapshot. |
 | `fleet_request_unenroll` | Request device unenrollment. |
 
+### Service-owned Fleet Vault access
+
+| Command | Purpose |
+|---------|---------|
+| `get_vault_access_capabilities` | Returns the current named-pipe client's bounded policy-management capability. The Fleet UI fails closed if it cannot obtain this response. |
+| `vault_list_authorized_entries` | Returns only entries authorized for the caller, with a safe label, access/presentation, mount state, and drive letter. It does not return container paths, Windows identities, or ACLs. |
+| `vault_mount_entry` | Requests a mount with `{ entryId, password }`. The UI prompts on every request, retains the password only in component/request memory, and clears it immediately after dispatch. Results are bounded to entry ID, lifecycle state, presentation, drive letter, and reason. |
+| `vault_unmount_entry` | Requests an authorized unmount by `{ entryId }`; the service rechecks authorization. |
+| `verify_vault_drive` | Checks whether a supplied drive letter is available to the signed-in Windows session; it returns only the letter and an accessibility result. |
+
+The service, not a cached desktop administrator probe, decides whether the
+caller may edit policy. Non-administrators use the caller-filtered **My
+vaults** view and do not invoke privileged policy or status commands. This is
+a source-level interface contract; live mount acceptance is not claimed here.
+
 ### AI Security Advisor & appearance
 
 | Command | Purpose |

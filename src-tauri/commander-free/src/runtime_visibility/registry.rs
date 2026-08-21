@@ -335,7 +335,7 @@ pub fn read_uninstall_entries() -> Vec<UninstallEntry> {
 }
 
 /// Set or clear SystemComponent DWORD on an HKLM Uninstall entry. The app
-/// manifest declares requireAdministrator so this works without a UAC prompt.
+/// operation requires an elevated administrator token.
 #[cfg(windows)]
 pub fn hklm_set_system_component(subkey: &str, value: Option<u32>) -> Result<(), String> {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
@@ -396,7 +396,7 @@ pub fn hklm_set_system_component(_subkey: &str, _value: Option<u32>) -> Result<(
 }
 
 /// Atomically rename a Run value in HKLM. Requires administrator privileges
-/// (the app manifest declares requireAdministrator).
+/// (the caller must be elevated).
 #[cfg(windows)]
 pub fn hklm_rename_run_value(subkey: &str, from_name: &str, to_name: &str) -> Result<(), String> {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;

@@ -20,6 +20,17 @@ describe("Fleet access-control panel contracts", () => {
     expect(panel).not.toContain("InkReceiptTab");
   });
 
+  test("keeps non-admin users on My vaults without administrative Fleet tabs", () => {
+    expect(panel).toContain("getCapabilities()");
+    expect(panel).toContain("capabilities.can_manage_policy");
+    expect(panel).not.toContain("systemInfo?.isAdmin");
+    expect(panel).toContain('defaultValue={isAdmin ? "enrollment" : "vault"}');
+    expect(panel).toContain('{isAdmin && <TabsTrigger value="enrollment">Enrollment</TabsTrigger>}');
+    expect(panel).toContain('{isAdmin && <TabsTrigger value="access-control">Access control</TabsTrigger>}');
+    expect(panel).toContain('{isAdmin ? "Vault permissions" : "My vaults"}');
+    expect(panel).toContain('<VaultAccessTab isAdmin={isAdmin} />');
+  });
+
   test("uses one checkbox directory and sorts selected users first", () => {
     expect(access).toContain('type="checkbox"');
     expect(access).toContain("membershipOrder");
@@ -68,7 +79,9 @@ describe("Fleet access-control panel contracts", () => {
     expect(vaultHook).toContain('invoke<Status>("apply_vault_access_policy"');
     expect(vault).toContain("version: policy.version + 1");
     expect(vault).toContain("Requested access is intent");
-    expect(vault).toContain("secure mount broker pending");
+    expect(vault).toContain("awaiting service mount-state refresh");
+    expect(vault).toContain("pending_mount_broker");
+    expect(vault).toContain("does not establish live mount acceptance");
     expect(vault).toContain("own dedicated parent folder");
     expect(vault).not.toContain("localStorage");
     expect(panel).not.toContain("loadVaultPolicy");

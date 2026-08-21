@@ -53,13 +53,20 @@ mod peer_auth;
 
 #[cfg(windows)]
 use std::sync::Arc;
+#[cfg(windows)]
+use std::sync::OnceLock;
+
+#[cfg(windows)]
+static VAULT_MOUNT_FOR_STOP: OnceLock<Arc<vault_mount::VaultMountBroker>> = OnceLock::new();
+#[cfg(windows)]
+static VAULT_ACCESS_FOR_STOP: OnceLock<Arc<vault_access::VaultAccessStore>> = OnceLock::new();
 
 #[cfg(windows)]
 use windows_service::{
     define_windows_service,
     service::{
         ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
-        ServiceType,
+        ServiceType, SessionChangeReason,
     },
     service_control_handler::{self, ServiceControlHandlerResult},
     service_dispatcher,
@@ -74,7 +81,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--console") {
         // Dev mode: run directly without SCM.
-        run_runtime();
+        run_runtime(None);
     } else {
         // Production: hand off to the SCM dispatcher.
         // If this fails (e.g. not run as a service), fall back to console mode
@@ -100,14 +107,45 @@ define_windows_service!(ffi_service_main, service_main);
 /// Called by the SCM dispatcher on service start.
 #[cfg(windows)]
 fn service_main(_arguments: Vec<std::ffi::OsString>) {
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     // Register a minimal SCM control handler (Phase 0 — just accepts Stop).
     let status_handle = match service_control_handler::register(
         SERVICE_NAME,
-        |control| -> ServiceControlHandlerResult {
+        move |control| -> ServiceControlHandlerResult {
             match control {
-                ServiceControl::Stop | ServiceControl::Interrogate => {
+                ServiceControl::Stop => {
+                    // The runtime observes this channel, closes its pipe and
+                    // tasks, then invokes broker cleanup before SCM sees a
+                    // stopped process. Never leave an update holding the exe.
+                    let _ = stop_tx.send(true);
                     ServiceControlHandlerResult::NoError
                 }
+                ServiceControl::Interrogate => {
+                    ServiceControlHandlerResult::NoError
+                }
+                ServiceControl::SessionChange(change)
+                    if matches!(
+                        change.reason,
+                        SessionChangeReason::SessionLogoff
+                            | SessionChangeReason::ConsoleDisconnect
+                            | SessionChangeReason::RemoteDisconnect
+                            | SessionChangeReason::SessionTerminate
+                    ) => {
+                        if let Some(broker) = VAULT_MOUNT_FOR_STOP.get().cloned() {
+                            let session_id = change.notification.session_id;
+                            // SCM control callbacks must return promptly. Run
+                            // the bounded signed broker dismount on a runtime
+                            // worker instead of blocking the dispatcher.
+                            std::thread::spawn(move || {
+                                if let Ok(runtime) = tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+                            if let Some(store) = VAULT_ACCESS_FOR_STOP.get().cloned() {
+                                runtime.block_on(async move { broker.dismount_session(&store, session_id); });
+                            }
+                                }
+                            });
+                        }
+                        ServiceControlHandlerResult::NoError
+                    }
                 _ => ServiceControlHandlerResult::NotImplemented,
             }
         },
@@ -123,7 +161,7 @@ fn service_main(_arguments: Vec<std::ffi::OsString>) {
     let _ = status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
         current_state: ServiceState::Running,
-        controls_accepted: ServiceControlAccept::STOP,
+        controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SESSION_CHANGE,
         exit_code: ServiceExitCode::Win32(0),
         checkpoint: 0,
         wait_hint: std::time::Duration::default(),
@@ -131,22 +169,32 @@ fn service_main(_arguments: Vec<std::ffi::OsString>) {
     });
 
     // Run the actual service body.
-    run_runtime();
+    run_runtime(Some(stop_rx));
+
+    let _ = status_handle.set_service_status(ServiceStatus {
+        service_type: ServiceType::OWN_PROCESS,
+        current_state: ServiceState::Stopped,
+        controls_accepted: ServiceControlAccept::empty(),
+        exit_code: ServiceExitCode::Win32(0),
+        checkpoint: 0,
+        wait_hint: std::time::Duration::default(),
+        process_id: None,
+    });
 }
 
 /// Spawn a tokio multi-thread runtime and launch all service loops.
 #[cfg(windows)]
-fn run_runtime() {
+fn run_runtime(stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("build tokio runtime");
-    rt.block_on(run());
+    rt.block_on(run(stop_rx));
 }
 
 /// Async service body — starts the four background loops and the pipe server.
 #[cfg(windows)]
-async fn run() {
+async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
     // ── Durable policy store (plan §3: "the SYSTEM service owns durable
     // state") ────────────────────────────────────────────────────────────
     //
@@ -187,18 +235,23 @@ async fn run() {
 
     // Vault access is a separate, service-owned last-valid policy under the
     // already SYSTEM/Administrators-protected policy directory.
-    let vault_access = Arc::new(vault_access::VaultAccessStore::open(
+    let vault_access = Arc::new(vault_access::VaultAccessStore::open_with_groups(
         Box::new(vault_access::WindowsVaultFs),
         Box::new(vault_access::WindowsPrincipalResolver),
         Box::new(vault_access::WindowsAclApplier),
+        Box::new(vault_access::WindowsLocalGroupReconciler),
         policy_store::default_policy_dir(),
     ));
     vault_access.load_at_startup();
     let vault_mount = Arc::new(vault_mount::VaultMountBroker::new());
+    let _ = VAULT_ACCESS_FOR_STOP.set(Arc::clone(&vault_access));
+    let _ = VAULT_MOUNT_FOR_STOP.set(Arc::clone(&vault_mount));
     // Service restarts must not leave an untracked broker-owned mount behind.
     // The fixed broker performs this best-effort cleanup without receiving a
     // path or password from this process.
-    vault_mount.dismount_all();
+    if vault_mount.load_and_cleanup(&vault_access).is_err() {
+        eprintln!("[wincommander-svc] vault mount recovery requires administrator repair");
+    }
 
     // ── SessionHelper peer gate (D-2) ────────────────────────────────────
     //
@@ -226,7 +279,17 @@ async fn run() {
     tokio::spawn(fleet_conn_loop());
 
     // ── Named-pipe server ────────────────────────────────────────────────
-    if let Err(e) = pipe::serve(policy_store, session_helper_gate, clipboard_state, vault_access, vault_mount).await {
+    let pipe_server = pipe::serve(policy_store, session_helper_gate, clipboard_state, Arc::clone(&vault_access), Arc::clone(&vault_mount));
+    if let Some(receiver) = stop_rx.as_mut() {
+        tokio::select! {
+            result = pipe_server => {
+                if let Err(e) = result { eprintln!("[wincommander-svc] pipe server exited with error: {:#}", e); }
+            }
+            changed = receiver.changed() => {
+                if changed.is_ok() && *receiver.borrow() { let _ = vault_mount.dismount_all(&vault_access); }
+            }
+        }
+    } else if let Err(e) = pipe_server.await {
         eprintln!("[wincommander-svc] pipe server exited with error: {:#}", e);
     }
 }

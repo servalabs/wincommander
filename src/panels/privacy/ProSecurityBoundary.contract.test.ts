@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const root = decodeURIComponent(new URL("../../../", import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1");
-const source = (path: string) => readFileSync(`${root}/${path}`, "utf8");
+const source = (path: string) => readFileSync(`${root}/${path}`, "utf8").replace(/\r\n/g, "\n");
 
 describe("Pro security boundary", () => {
   test("advanced USB collectors and controls are entitlement-gated", () => {

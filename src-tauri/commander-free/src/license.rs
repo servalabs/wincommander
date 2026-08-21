@@ -702,8 +702,8 @@ async fn trial_available_from_worker(api_base: &str, device_hash: &str) -> Optio
 
 fn license_file_path() -> Result<PathBuf, String> {
     // Per-MACHINE cache (%ProgramData%\WinCommander) so ONE activation covers
-    // every Windows account on the device. The app runs elevated
-    // (requireAdministrator), so every session can read+write this shared file.
+    // every Windows account on the device. Writes still require the existing
+    // machine-data ACL; standard-user sessions are not elevated by default.
     // Was per-user %APPDATA% — that gave each account its own (un)licensed state.
     let mut path = crate::paths::machine_data_dir()?;
     path.push("license_cache.json");

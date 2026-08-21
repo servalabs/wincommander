@@ -46,10 +46,9 @@ impl Manager {
         &["--version"]
     }
     /// Absolute fallback locations, tried when a PATH lookup for
-    /// `executable()` comes up empty. Elevated processes (this app runs
-    /// `requireAdministrator`) don't reliably resolve App Execution Aliases
-    /// under `%LOCALAPPDATA%\Microsoft\WindowsApps` — the same limitation the
-    /// PowerShell side works around in `Resolve-WingetPath` /
+    /// `executable()` comes up empty. Elevated sessions do not reliably resolve
+    /// App Execution Aliases under `%LOCALAPPDATA%\Microsoft\WindowsApps` — the
+    /// same limitation the PowerShell side works around in `Resolve-WingetPath` /
     /// `Get-LocalWingetPath` — so winget needs explicit candidates even though
     /// it's genuinely installed.
     fn fallback_paths(self) -> Vec<String> {

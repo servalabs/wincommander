@@ -14,6 +14,7 @@ use wincmd_shared::vault_access::{
 };
 
 const POLICY_FILE: &str = "vault-access-v1.json";
+const ACTIVE_MOUNTS_FILE: &str = "vault-active-mounts-v1.json";
 const MAX_ENTRIES: usize = 64;
 const MAX_GRANTS: usize = 32;
 
@@ -37,6 +38,26 @@ pub trait VaultFs: Send + Sync {
 
 pub trait PrincipalResolver: Send + Sync {
     fn resolve_sid(&self, name: &str) -> Result<String, VaultError>;
+    fn resolve_principal(&self, name: &str) -> Result<ResolvedPrincipal, VaultError> {
+        Ok(ResolvedPrincipal { sid: self.resolve_sid(name)?, kind: PrincipalKind::User })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrincipalKind { User, Group }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPrincipal { pub sid: String, pub kind: PrincipalKind }
+
+/// Reconciles only deterministic service-owned per-entry groups. Existing
+/// policy group principals are kept as ACL principals and are never nested.
+pub trait LocalGroupReconciler: Send + Sync {
+    fn reconcile_exact_members(&self, group: &str, member_sids: &[String]) -> Result<(), VaultError>;
+}
+
+struct NoopLocalGroupReconciler;
+impl LocalGroupReconciler for NoopLocalGroupReconciler {
+    fn reconcile_exact_members(&self, _: &str, _: &[String]) -> Result<(), VaultError> { Ok(()) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +121,7 @@ pub struct VaultAccessStore {
     fs: Box<dyn VaultFs>,
     principals: Box<dyn PrincipalResolver>,
     acls: Box<dyn AclApplier>,
+    groups: Box<dyn LocalGroupReconciler>,
     path: PathBuf,
     state: Mutex<State>,
 }
@@ -111,10 +133,21 @@ impl VaultAccessStore {
         acls: Box<dyn AclApplier>,
         dir: PathBuf,
     ) -> Self {
+        Self::open_with_groups(fs, principals, acls, Box::new(NoopLocalGroupReconciler), dir)
+    }
+
+    pub fn open_with_groups(
+        fs: Box<dyn VaultFs>,
+        principals: Box<dyn PrincipalResolver>,
+        acls: Box<dyn AclApplier>,
+        groups: Box<dyn LocalGroupReconciler>,
+        dir: PathBuf,
+    ) -> Self {
         Self {
             fs,
             principals,
             acls,
+            groups,
             path: dir.join(POLICY_FILE),
             state: Mutex::new(State {
                 active: None,
@@ -129,26 +162,50 @@ impl VaultAccessStore {
             .read(&self.path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let revalidated = loaded
+            .as_ref()
+            .filter(|policy| policy.policy.schema_version == VAULT_ACCESS_SCHEMA_VERSION)
+            .map(|policy| self.revalidate_persisted_policy(policy))
+            .transpose();
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         match loaded {
-            Some(policy) if policy.policy.schema_version == VAULT_ACCESS_SCHEMA_VERSION => {
-                // A restart has no proof that a third party did not alter the
-                // host/container DACL while svc was down.  Keep the durable
-                // policy for inspection, but deny mount eligibility until an
-                // admin performs a fresh apply/read-back.
-                state.status = status_for(
-                    &policy,
-                    VaultValidationState::Degraded,
-                    VaultEntryResult::AclReadbackFailed,
-                );
+            Some(policy) if revalidated == Ok(Some(())) => {
+                state.status = status_for(&policy, VaultValidationState::Current, VaultEntryResult::Applied);
                 state.active = Some(policy);
             }
-            Some(_) => state.status.validation_state = VaultValidationState::Degraded,
+            Some(policy) => {
+                state.status = status_for(&policy, VaultValidationState::Degraded, VaultEntryResult::AclReadbackFailed);
+                state.active = Some(policy);
+            }
             None => {}
         }
+    }
+
+    /// Re-derive every durable identity and principal mapping on boot.  ACL
+    /// snapshots must at least remain protected; the broker makes the mounted
+    /// root exact before it is presented. Any failed check leaves policy
+    /// degraded and denies mounts rather than trusting stale on-disk state.
+    fn revalidate_persisted_policy(&self, persisted: &PersistedPolicy) -> Result<(), VaultError> {
+        validate_policy(&persisted.policy)?;
+        let plans = self.resolve_and_plan(&persisted.policy)?;
+        if plans.len() != persisted.resolved.len() { return Err(VaultError::Validation); }
+        for (entry, plan) in plans {
+            let stored = persisted.resolved.iter().find(|stored| stored.id == entry.id).ok_or(VaultError::Validation)?;
+            let identity = self.fs.stable_file_identity(Path::new(&entry.container_path))?;
+            if identity != stored.identity { return Err(VaultError::ContainerIdentity); }
+            let mut derived = plan.grants.iter().map(|grant| (&grant.sid, grant.access)).collect::<Vec<_>>();
+            let mut stored_grants = stored.grants.iter().map(|grant| (&grant.sid, grant.access)).collect::<Vec<_>>();
+            derived.sort_by(|left, right| left.0.cmp(right.0));
+            stored_grants.sort_by(|left, right| left.0.cmp(right.0));
+            if derived != stored_grants { return Err(VaultError::PrincipalResolution); }
+            if self.acls.snapshot(&plan)?.iter().any(|snapshot| !snapshot.dacl_protected) {
+                return Err(VaultError::AclReadback);
+            }
+        }
+        Ok(())
     }
 
     pub fn status(&self) -> VaultPolicyStatus {
@@ -202,6 +259,42 @@ impl VaultAccessStore {
             entry.mount.presentation,
             entry.mount.preferred_letter.clone(),
         ))
+    }
+
+    /// Bounded internal lookup used to construct a caller-specific projection.
+    /// It intentionally returns no container, grants, SID, or ACL detail.
+    pub fn entry_summaries(&self) -> Vec<(String, String)> {
+        self.state
+            .lock()
+            .ok()
+            .and_then(|state| {
+                (state.status.validation_state == VaultValidationState::Current)
+                    .then(|| state.active.as_ref().map(|active| {
+                        active.policy.entries.iter().map(|entry| (entry.id.clone(), entry.label.clone())).collect()
+                    }))
+                    .flatten()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The policy directory is already created and ACL-verified by the
+    /// SYSTEM policy store. Active-mount state therefore uses the same atomic
+    /// filesystem seam rather than an ad-hoc user-writable registry.
+    pub fn read_active_mounts(&self) -> std::io::Result<Vec<u8>> {
+        self.fs.read(&self.path.with_file_name(ACTIVE_MOUNTS_FILE))
+    }
+
+    pub fn write_active_mounts(&self, bytes: &[u8]) -> std::io::Result<()> {
+        self.fs.atomic_write(&self.path.with_file_name(ACTIVE_MOUNTS_FILE), bytes)
+    }
+
+    /// Service-only policy identity copied into protected active-mount state.
+    /// It is deliberately not part of any renderer/status projection.
+    pub fn active_policy_identity(&self) -> Option<(String, u64)> {
+        let state = self.state.lock().ok()?;
+        let active = state.active.as_ref()?;
+        (state.status.validation_state == VaultValidationState::Current)
+            .then(|| (active.policy.policy_id.clone(), active.policy.version))
     }
 
     /// Protect a mount root with an exact DACL and verify its read-back. A
@@ -281,7 +374,7 @@ impl VaultAccessStore {
         let status = status_for(
             &persisted,
             VaultValidationState::Current,
-            VaultEntryResult::PendingMountBroker,
+            VaultEntryResult::Applied,
         );
         state.active = Some(persisted);
         state.status = status.clone();
@@ -338,8 +431,8 @@ impl VaultAccessStore {
         match allowed {
             Some(access) => VaultAuthorizeMountResponse {
                 allowed: true,
-                launch_ready: false,
-                denial_reason: Some(VaultMountDenial::MountBrokerUnavailable),
+                launch_ready: true,
+                denial_reason: None,
                 mode: Some(access),
                 presentation: Some(entry.mount.presentation),
                 preferred_letter: entry.mount.preferred_letter.clone(),
@@ -363,15 +456,24 @@ impl VaultAccessStore {
                         return Err(VaultError::ContainerIdentity);
                     }
                 }
-                // The owner is always an explicit Modify principal.  This avoids
-                // relying on incidental Builtin Administrators membership and
-                // preserves correct behaviour when the owner is a non-admin.
-                let mut grants = vec![ResolvedGrant {
-                    sid: self.principals.resolve_sid(&entry.owner_account)?,
-                    access: VaultAccess::Write,
-                }];
+                // Direct user grants are materialized as exact membership of
+                // deterministic local groups. Existing group grants remain
+                // direct ACL principals; we never infer or create nesting.
+                let mut grants = Vec::new();
+                let mut read_members = Vec::new();
+                let mut write_members = Vec::new();
+                let owner = self.principals.resolve_principal(&entry.owner_account)?;
+                match owner.kind {
+                    PrincipalKind::User => write_members.push(owner.sid),
+                    PrincipalKind::Group => grants.push(ResolvedGrant { sid: owner.sid, access: VaultAccess::Write }),
+                }
                 for grant in &entry.grants {
-                    let sid = self.principals.resolve_sid(&grant.principal_name)?;
+                    let principal = self.principals.resolve_principal(&grant.principal_name)?;
+                    if principal.kind == PrincipalKind::User {
+                        match grant.access { VaultAccess::Read => read_members.push(principal.sid), VaultAccess::Write => write_members.push(principal.sid) }
+                        continue;
+                    }
+                    let sid = principal.sid;
                     if let Some(existing) = grants.iter_mut().find(|existing| existing.sid == sid) {
                         if grant.access == VaultAccess::Write {
                             existing.access = VaultAccess::Write;
@@ -382,6 +484,16 @@ impl VaultAccessStore {
                             access: grant.access,
                         });
                     }
+                }
+                for (access, members) in [(VaultAccess::Read, &mut read_members), (VaultAccess::Write, &mut write_members)] {
+                    members.sort(); members.dedup();
+                    if members.is_empty() { continue; }
+                    let group = managed_group_name(&entry.id, access);
+                    self.groups.reconcile_exact_members(&group, members)?;
+                    let sid = self.principals.resolve_sid(&group)?;
+                    if let Some(existing) = grants.iter_mut().find(|existing| existing.sid == sid) {
+                        if access == VaultAccess::Write { existing.access = VaultAccess::Write; }
+                    } else { grants.push(ResolvedGrant { sid, access }); }
                 }
                 let mut entry = entry.clone();
                 entry.container_identity = Some(identity);
@@ -485,6 +597,13 @@ impl PrincipalResolver for WindowsPrincipalResolver {
     fn resolve_sid(&self, name: &str) -> Result<String, VaultError> {
         lookup_account_sid(name)
     }
+    fn resolve_principal(&self, name: &str) -> Result<ResolvedPrincipal, VaultError> {
+        let (sid, use_type) = lookup_account(name)?;
+        // Users (including computer/service accounts) are safe managed-group
+        // members. Groups/aliases/well-known groups stay direct ACL grants.
+        let kind = if use_type == 1 || use_type == 9 { PrincipalKind::User } else { PrincipalKind::Group };
+        Ok(ResolvedPrincipal { sid, kind })
+    }
 }
 
 #[cfg(windows)]
@@ -495,6 +614,11 @@ fn wide(value: &std::ffi::OsStr) -> Vec<u16> {
 
 #[cfg(windows)]
 fn lookup_account_sid(name: &str) -> Result<String, VaultError> {
+    lookup_account(name).map(|(sid, _)| sid)
+}
+
+#[cfg(windows)]
+fn lookup_account(name: &str) -> Result<(String, windows_sys::Win32::Security::SID_NAME_USE), VaultError> {
     use windows_sys::Win32::Security::{LookupAccountNameW, PSID, SID_NAME_USE};
     let name = wide(std::ffi::OsStr::new(name));
     let mut sid_len = 0u32;
@@ -530,11 +654,76 @@ fn lookup_account_sid(name: &str) -> Result<String, VaultError> {
     {
         return Err(VaultError::PrincipalResolution);
     }
-    sid_to_string(sid.as_mut_ptr() as PSID).ok_or(VaultError::PrincipalResolution)
+    sid_to_string(sid.as_mut_ptr() as PSID).map(|sid| (sid, use_type)).ok_or(VaultError::PrincipalResolution)
 }
 
 #[cfg(windows)]
-fn sid_to_string(sid: windows_sys::Win32::Security::PSID) -> Option<String> {
+pub struct WindowsLocalGroupReconciler;
+
+#[cfg(windows)]
+impl LocalGroupReconciler for WindowsLocalGroupReconciler {
+    fn reconcile_exact_members(&self, group: &str, member_sids: &[String]) -> Result<(), VaultError> {
+        ensure_local_group(group)?;
+        let current = local_group_members(group)?;
+        let desired: std::collections::HashSet<_> = member_sids.iter().cloned().collect();
+        let remove = current.difference(&desired).cloned().collect::<Vec<_>>();
+        let add = desired.difference(&current).cloned().collect::<Vec<_>>();
+        if !remove.is_empty() { set_local_group_members(group, &remove, false)?; }
+        if !add.is_empty() { set_local_group_members(group, &add, true)?; }
+        if local_group_members(group)? != desired { return Err(VaultError::PrincipalResolution); }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn ensure_local_group(group: &str) -> Result<(), VaultError> {
+    use windows_sys::Win32::NetworkManagement::NetManagement::{NetLocalGroupAdd, LOCALGROUP_INFO_1};
+    let mut name = wide(std::ffi::OsStr::new(group));
+    let info = LOCALGROUP_INFO_1 { lgrpi1_name: name.as_mut_ptr(), lgrpi1_comment: std::ptr::null_mut() };
+    let status = unsafe { NetLocalGroupAdd(std::ptr::null(), 1, &info as *const _ as *const u8, std::ptr::null_mut()) };
+    // NERR_GroupExists is deliberately accepted: the group is service-owned
+    // by its opaque deterministic name and will be exactly reconciled below.
+    if status == 0 || status == 2223 { Ok(()) } else { Err(VaultError::PrincipalResolution) }
+}
+
+#[cfg(windows)]
+fn local_group_members(group: &str) -> Result<std::collections::HashSet<String>, VaultError> {
+    use windows_sys::Win32::NetworkManagement::NetManagement::{NetApiBufferFree, NetLocalGroupGetMembers, LOCALGROUP_MEMBERS_INFO_0, MAX_PREFERRED_LENGTH};
+    let name = wide(std::ffi::OsStr::new(group));
+    let mut buffer: *mut u8 = std::ptr::null_mut();
+    let mut read = 0u32; let mut total = 0u32;
+    let status = unsafe { NetLocalGroupGetMembers(std::ptr::null(), name.as_ptr(), 0, &mut buffer, MAX_PREFERRED_LENGTH, &mut read, &mut total, std::ptr::null_mut()) };
+    if status != 0 || (read != 0 && buffer.is_null()) { return Err(VaultError::PrincipalResolution); }
+    let mut members = std::collections::HashSet::new();
+    if !buffer.is_null() {
+        let rows = unsafe { std::slice::from_raw_parts(buffer as *const LOCALGROUP_MEMBERS_INFO_0, read as usize) };
+        for row in rows { members.insert(sid_to_string(row.lgrmi0_sid).ok_or(VaultError::PrincipalResolution)?); }
+        unsafe { NetApiBufferFree(buffer as _); }
+    }
+    Ok(members)
+}
+
+#[cfg(windows)]
+fn set_local_group_members(group: &str, sids: &[String], add: bool) -> Result<(), VaultError> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::NetworkManagement::NetManagement::{NetLocalGroupAddMembers, NetLocalGroupDelMembers, LOCALGROUP_MEMBERS_INFO_0};
+    use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+    let name = wide(std::ffi::OsStr::new(group));
+    let mut allocated = Vec::with_capacity(sids.len());
+    for value in sids {
+        let text = wide(std::ffi::OsStr::new(value));
+        let mut sid = std::ptr::null_mut();
+        if unsafe { ConvertStringSidToSidW(text.as_ptr(), &mut sid) } == 0 { return Err(VaultError::PrincipalResolution); }
+        allocated.push(sid);
+    }
+    let rows = allocated.iter().map(|sid| LOCALGROUP_MEMBERS_INFO_0 { lgrmi0_sid: *sid }).collect::<Vec<_>>();
+    let status = unsafe { if add { NetLocalGroupAddMembers(std::ptr::null(), name.as_ptr(), 0, rows.as_ptr() as *const u8, rows.len() as u32) } else { NetLocalGroupDelMembers(std::ptr::null(), name.as_ptr(), 0, rows.as_ptr() as *const u8, rows.len() as u32) } };
+    for sid in allocated { unsafe { LocalFree(sid as _); } }
+    if status == 0 { Ok(()) } else { Err(VaultError::PrincipalResolution) }
+}
+
+#[cfg(windows)]
+pub(crate) fn sid_to_string(sid: windows_sys::Win32::Security::PSID) -> Option<String> {
     use windows_sys::Win32::{
         Foundation::LocalFree, Security::Authorization::ConvertSidToStringSidW,
     };
@@ -917,6 +1106,16 @@ fn valid_id(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+/// Stable, opaque, NetBIOS-safe service group name. The entry ID never
+/// becomes a group name directly, which avoids account-name injection and
+/// makes rename/reapply idempotent.
+fn managed_group_name(entry_id: &str, access: VaultAccess) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(entry_id.as_bytes());
+    let suffix = if access == VaultAccess::Write { "W" } else { "R" };
+    format!("WC-Vault-{}-{suffix}", digest[..8].iter().map(|byte| format!("{byte:02x}")).collect::<String>())
+}
+
 fn empty_status() -> VaultPolicyStatus {
     VaultPolicyStatus {
         policy_id: None,
@@ -1067,16 +1266,13 @@ mod tests {
         assert_eq!(s.policy().unwrap().version, 1);
     }
     #[test]
-    fn caller_sid_controls_eligibility_but_cannot_launch() {
+    fn managed_group_sid_controls_eligibility_and_is_launch_ready() {
         let s = store(Arc::new(Mutex::new(HashMap::new())));
         s.apply(policy(1, 0), 7).unwrap();
-        let r = s.authorize_mount("shared", &["S-1-test-Partner".into()]);
+        let r = s.authorize_mount("shared", &[format!("S-1-test-{}", managed_group_name("shared", VaultAccess::Write))]);
         assert!(r.allowed);
-        assert!(!r.launch_ready);
-        assert_eq!(
-            r.denial_reason,
-            Some(VaultMountDenial::MountBrokerUnavailable)
-        );
+        assert!(r.launch_ready);
+        assert_eq!(r.denial_reason, None);
         assert!(
             !s.authorize_mount("shared", &["S-1-test-Other".into()])
                 .allowed
@@ -1102,7 +1298,7 @@ mod tests {
                 .1
                 .grants
                 .iter()
-                .filter(|g| g.sid == "S-1-test-Admin")
+                .filter(|g| g.sid == format!("S-1-test-{}", managed_group_name("shared", VaultAccess::Write)))
                 .count(),
             1
         );
@@ -1111,7 +1307,7 @@ mod tests {
                 .1
                 .grants
                 .iter()
-                .find(|g| g.sid == "S-1-test-Admin")
+                .find(|g| g.sid == format!("S-1-test-{}", managed_group_name("shared", VaultAccess::Write)))
                 .unwrap()
                 .access,
             VaultAccess::Write

@@ -17,6 +17,15 @@ export type VaultEntryResult =
 
 /** Bounded renderer-facing lifecycle reported by the secure mount broker. */
 export type VaultMountState = "mounted" | "unmounted" | "denied" | "failed";
+export type VaultMountReason =
+  | "not_authorized"
+  | "invalid_request"
+  | "broker_unavailable"
+  | "broker_rejected"
+  | "session_unavailable"
+  | "acl_apply_failed"
+  | "acl_readback_failed"
+  | "dismount_failed";
 
 export interface VaultGrantInput {
   principal_name: string;
@@ -69,7 +78,7 @@ export interface VaultMountEntryResult {
   state: VaultMountState;
   presentation: VaultPresentation | null;
   drive_letter: string | null;
-  reason: string | null;
+  reason: VaultMountReason | null;
 }
 
 /** Caller-filtered mount view. It intentionally omits policy and filesystem data. */
@@ -80,6 +89,11 @@ export interface VaultAuthorizedEntry {
   presentation: VaultPresentation;
   mount_state: VaultMountState;
   drive_letter: string | null;
+}
+
+/** Service-derived caller capability; never infer this from cached machine state. */
+export interface VaultAccessCapabilities {
+  can_manage_policy: boolean;
 }
 
 export function vaultPresentationLabel(presentation: VaultPresentation | null | undefined): string {

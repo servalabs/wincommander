@@ -30,7 +30,7 @@ exit $process.ExitCode
 
 ## Catalog and runtime
 
-The generated catalog contains 1,262 entries: 806 backend-script commands and 456 Tauri handlers. Four Tauri handlers are debug-only, so the shipped release binary executes 1,258 commands; it retains the four debug-only entries for catalog-drift auditing and refuses them at runtime.
+The generated catalog contains 1,267 entries: 806 backend-script commands and 461 Tauri handlers. Four Tauri handlers are debug-only, so the shipped release binary executes 1,263 commands; it retains the four debug-only entries for catalog-drift auditing and refuses them at runtime.
 
 Backend commands run in a windowless Tauri context. Native commands run through a real, invisible `cli-runtime.html` Tauri WebView that invokes the same production handler as the GUI. CLI mode never mounts the React dashboard or creates a tray icon, taskbar window, hotkeys, ambient monitors, autostart state, or updater polling.
 

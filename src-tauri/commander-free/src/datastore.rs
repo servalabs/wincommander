@@ -13,7 +13,7 @@
 //   save_profile(passphrase, &Value) → Ok(())
 //
 // Sections are stored as individual files under (machine-wide so every
-// Windows account shares one config — the app runs elevated):
+// Windows account shares one config — writes are guarded by the machine-data ACL):
 //   %ProgramData%\<APP>\store\<section>.dat
 //
 // Each file contains: "enc:v1:" + base64(nonce[12] || ciphertext_with_gcm_tag)
@@ -61,7 +61,7 @@ fn store_dir() -> Result<PathBuf, String> {
     // Machine-wide (%ProgramData%) so the settings blob — which holds the
     // startup_pin real/decoy/destroy hashes — is shared across every Windows
     // account. Per-user (%LOCALAPPDATA%) meant a 2nd account had no PINs and
-    // bypassed the calculator front door entirely. App runs elevated.
+    // bypassed the calculator front door entirely. The machine-data ACL guards writes.
     let dir = crate::paths::machine_data_dir()?.join(STORE_SUBDIR);
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create store dir: {e}"))?;
     Ok(dir)
