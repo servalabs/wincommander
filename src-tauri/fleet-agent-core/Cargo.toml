@@ -19,7 +19,7 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std", "s
 hmac = "0.13"
 sha2 = "0.11"
 hex = "0.4"
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng"] }
 anyhow = "1"
 tracing = "0.1"
 

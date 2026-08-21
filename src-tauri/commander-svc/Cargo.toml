@@ -34,7 +34,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-uti
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng"] }
 zeroize = { version = "1", features = ["alloc"] }
 sha2 = "0.11"
 

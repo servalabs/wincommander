@@ -124,7 +124,7 @@ wincmd-clip-rules = { path = "../wincmd-clip-rules" }
 # why it exists as a reusable lib+thin-bin).
 clipboard-guard-helper = { path = "../clipboard-guard-helper" }
 hex = "0.4"
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng"] }
 # KT: sysinfo for Rust-native CPU/RAM/Disk metrics — replaces 3s PowerShell spawn poll.
 # once_cell for lazy-init System singleton (sysinfo needs persistent state for accurate CPU deltas).
 sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "component", "network"] }

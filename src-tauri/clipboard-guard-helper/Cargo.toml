@@ -54,7 +54,7 @@ uuid = { version = "1", features = ["v7"] }
 # codebase (paste_monitor.rs's chrono::Utc::now().to_rfc3339(),
 # InkReceiptReport's doc). commander-free already depends on chrono.
 chrono = "0.4"
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng"] }
 # Windows clipboard read/write AND the `monitor` feature's message-only-
 # window + AddClipboardFormatListener/WM_CLIPBOARDUPDATE wrapper
 # (`clipboard_win::Monitor`) — this is what makes the event-driven listener
