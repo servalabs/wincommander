@@ -29,7 +29,7 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
   const [pendingDelete, setPendingDelete] = useState<FleetAccessGroup>();
   const [discovering, setDiscovering] = useState(false);
   const discoveredOnce = useRef(false);
-  const { getUserProfiles } = useBackend();
+  const { getFleetAccessUsers } = useBackend();
   const errors = useMemo(() => validateAccessDirectory(directory), [directory]);
   const selectedGroup = directory.groups.find(group => group.id === selectedGroupId);
 
@@ -40,18 +40,18 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
 
   const discoverUsers = async (quiet = false) => {
     setDiscovering(true);
-    const result = await getUserProfiles();
+    const result = await getFleetAccessUsers();
     setDiscovering(false);
     if (!result.success) {
       if (!quiet) void showError(result.error || "Windows user discovery failed.");
       return;
     }
-    const discovered = (result.data?.profiles ?? []).map(profile => ({
-      id: profile.name.toLocaleLowerCase(),
-      username: profile.name,
-      displayName: profile.displayName,
-      sid: profile.sid,
-      isCurrent: profile.isCurrent,
+    const discovered = (result.data?.users ?? []).map(user => ({
+      id: user.name.toLocaleLowerCase(),
+      username: user.name,
+      displayName: user.displayName,
+      sid: user.sid,
+      isCurrent: user.isCurrent,
     }));
     onChange(current => {
       const users = mergeAccessUsers(current.users, discovered);

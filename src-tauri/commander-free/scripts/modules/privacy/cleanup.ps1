@@ -3736,6 +3736,23 @@ function Get-UserProfiles {
     @{ profiles = @($profiles); total = @($profiles).Count; currentUser = $myLeaf; currentSid = $mySid; isAdmin = [bool](Test-IsAdmin) }
 }
 
+# Fleet access groups target Windows accounts, including newly-created users
+# that do not have a C:\Users profile folder until their first sign-in.
+function Get-FleetAccessUsers {
+    $mySid = ''
+    try { $mySid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value } catch {}
+
+    $users = Get-CimInstance -ClassName Win32_UserAccount -Filter 'LocalAccount = True' -ErrorAction Stop |
+        Where-Object { $_.Name -and -not $_.Disabled } |
+        Sort-Object Name |
+        ForEach-Object {
+            $display = if ([string]::IsNullOrWhiteSpace([string]$_.FullName)) { [string]$_.Name } else { [string]$_.FullName }
+            @{ name = [string]$_.Name; displayName = $display; sid = [string]$_.SID; isCurrent = ([string]$_.SID -eq $mySid) }
+        }
+
+    @{ users = @($users); total = @($users).Count }
+}
+
 # Returns usernames of accounts with Active or Disconnected RDP/console sessions.
 # These users have live registry hives — reg load would fail or corrupt data.
 function Get-LoggedInUsers {

@@ -7,6 +7,7 @@ const vault = readFileSync("src/panels/fleet/VaultAccessTab.tsx", "utf8");
 const volumeEditor = readFileSync("src/panels/fleet/VaultVolumesEditor.tsx", "utf8");
 const infoPopover = readFileSync("src/panels/fleet/FleetInfoPopover.tsx", "utf8");
 const css = readFileSync("src/panels/fleet/index.css", "utf8");
+const cleanupBackend = readFileSync("src-tauri/commander-free/scripts/modules/privacy/cleanup.ps1", "utf8");
 
 describe("Fleet access-control panel contracts", () => {
   test("keeps only enrollment, universal access control, and Vault permissions", () => {
@@ -22,6 +23,17 @@ describe("Fleet access-control panel contracts", () => {
     expect(access).toContain('type="checkbox"');
     expect(access).toContain("membershipOrder");
     expect(access).toContain("createAccessGroup");
+  });
+
+  test("discovers new Windows accounts before their first sign-in", () => {
+    expect(access).toContain("getFleetAccessUsers");
+    expect(access).not.toContain("getUserProfiles");
+    const fleetDiscovery = cleanupBackend.slice(
+      cleanupBackend.indexOf("function Get-FleetAccessUsers"),
+      cleanupBackend.indexOf("function Get-LoggedInUsers"),
+    );
+    expect(fleetDiscovery).toContain("Win32_UserAccount");
+    expect(fleetDiscovery).not.toContain("Win32_UserProfile");
   });
 
   test("keeps a 30/70 layout without nested Access Control scrolling", () => {

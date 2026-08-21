@@ -1516,6 +1516,11 @@ export function useBackend() {
         currentSid?: string;
         isAdmin: boolean;
       }>("Get-UserProfiles"),
+    getFleetAccessUsers: () =>
+      execute<{
+        users: Array<{ name: string; displayName?: string; sid?: string; isCurrent?: boolean }>;
+        total: number;
+      }>("Get-FleetAccessUsers"),
     // Scan cleanup traces for users. The UI views one user at a time, so it
     // passes a single targetUsers entry; omit it to scan every account.
     getCleanupSummaryAllUsers: (categoryIds?: string[], targetUsers?: string[]) =>

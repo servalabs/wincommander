@@ -1810,6 +1810,9 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Invoke-AutoEraseMigration" => Some("privacy/cleanup"),
         // Multi-user scope
         "Get-UserProfiles" => Some("privacy/cleanup"),
+        // Fleet targets local accounts, not profile folders. Keep this read-only
+        // discovery command independent of the Privacy Clean frontend toggle.
+        "Get-FleetAccessUsers" => Some("privacy/cleanup"),
         "Get-LoggedInUsers" => Some("privacy/cleanup"),
         "Invoke-CleanupClearAllUsers" => Some("privacy/cleanup"),
         "Get-CleanupSummaryAllUsers" => Some("privacy/cleanup"),
