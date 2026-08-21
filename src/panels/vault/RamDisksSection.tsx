@@ -243,6 +243,7 @@ function RamDisksSection() {
             isAction
             severity="primary"
             loading={installing}
+            icon="hard-drive"
           />
         </div>
       </SectionCard>

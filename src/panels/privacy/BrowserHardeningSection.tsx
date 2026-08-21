@@ -271,6 +271,7 @@ export default function BrowserHardeningSection({ isAdvanced, searchQuery }: Bro
                 description={selectedBrowser.Engine === "Gecko" ? "Telemetry off, tracking blocked, extensions" : "Telemetry off, sync/ads disabled, extensions"}
                 checked={Boolean(browserStatus[selectedBrowser.Name])}
                 iconImage={resolveBrowserIconUrl(selectedBrowser.Name, browserLogos)}
+                icon="globe"
                 onChange={(checked) => handleBrowserToggle(selectedBrowser, checked)}
                 loading={allBrowsersLoading || localLoadingMap[`browser_${selectedBrowser.Name}`]}
                 disabled={allBrowsersLoading || localLoadingMap[`browser_${selectedBrowser.Name}`]}

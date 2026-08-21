@@ -173,6 +173,7 @@ export default function IdentityPanel() {
                             patchAppSettings({ app: { loggingEnabled: !current } });
                         }}
                         severity="none"
+                        icon="document"
                     />
                 </SectionCard>
 
@@ -193,6 +194,7 @@ export default function IdentityPanel() {
                                 patchAppSettings({ app: { disableUpdates: !current } });
                             }}
                             severity="none"
+                            icon="cloud-off"
                         />
                         <UniversalToggle
                             label="Auto-heal drift"
@@ -227,7 +229,7 @@ export default function IdentityPanel() {
                         checked={motionDisabled}
                         onChange={handleMotionToggle}
                         severity="none"
-                        icon="walk"
+                        icon="snowflake"
                     />
                 </SectionCard>
 

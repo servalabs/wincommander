@@ -1,6 +1,6 @@
 import { Icon, Spinner } from "@/components/ui/bp";
 import type { IconName } from "@/components/ui/bp";
-import { memo, useCallback } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { playSound } from "../../utils/sound";
 import { showInfo } from "../../utils/toast";
 import WCSwitch from "./WCSwitch";
@@ -80,6 +80,12 @@ function ToggleTile({
   const iconColor = domain
     ? (DOMAIN_COLOR[domain] ?? "var(--color-accent)")
     : "var(--color-accent)";
+  const resolvedIcon = icon ?? (isAction ? "play" : "settings");
+  const [isIconImageAvailable, setIsIconImageAvailable] = useState(Boolean(iconImage));
+
+  useEffect(() => {
+    setIsIconImageAvailable(Boolean(iconImage));
+  }, [iconImage]);
 
   const isHardDisabled = disabled && !managedByOrg;
   // Single gate for every click/keyboard entry point: action tiles don't
@@ -168,7 +174,7 @@ function ToggleTile({
       {/* Top row: icon + label on the left, switch/badge on the right */}
       <div className="tile-top">
         <div className="tile-icon-label">
-          {iconImage ? (
+          {iconImage && isIconImageAvailable ? (
             <img
               src={iconImage}
               alt=""
@@ -176,15 +182,15 @@ function ToggleTile({
               height={iconSize}
               style={{ flexShrink: 0, objectFit: "contain" }}
               loading="eager"
-              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+              onError={() => setIsIconImageAvailable(false)}
             />
-          ) : icon ? (
+          ) : (
             <Icon
-              icon={icon}
+              icon={resolvedIcon}
               size={iconSize}
               style={{ color: iconColor, flexShrink: 0 }}
             />
-          ) : null}
+          )}
           <span className="tile-label">
             {label}
             {managedByOrg && (

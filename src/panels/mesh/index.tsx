@@ -1085,6 +1085,7 @@ function PrivateMeshPanel() {
                                     checked={staging.shieldsUp}
                                     onChange={(val) => setStaging(s => ({ ...s, shieldsUp: val }))}
                                     disabled={actionLoading || isLoggedOut}
+                                    icon="shield"
                                 />
                                 <UniversalToggle
                                     label="Stay Connected"
@@ -1092,6 +1093,7 @@ function PrivateMeshPanel() {
                                     checked={staging.unattended}
                                     onChange={(val) => setStaging(s => ({ ...s, unattended: val }))}
                                     disabled={actionLoading || isLoggedOut}
+                                    icon="power"
                                 />
                                 <UniversalToggle
                                     label="Share Local Network"
@@ -1100,6 +1102,7 @@ function PrivateMeshPanel() {
                                     onChange={(val) => setStaging(s => ({ ...s, acceptRoutes: val }))}
                                     disabled={actionLoading || isLoggedOut}
                                     className="mesh-toggle-share-lan"
+                                    icon="share"
                                 />
                                 <UniversalToggle
                                     label="Use Private DNS"
@@ -1107,6 +1110,7 @@ function PrivateMeshPanel() {
                                     checked={staging.acceptDNS}
                                     onChange={(val) => setStaging(s => ({ ...s, acceptDNS: val }))}
                                     disabled={actionLoading || isLoggedOut}
+                                    icon="globe-network"
                                 />
                             </div>
                         </SectionCard>

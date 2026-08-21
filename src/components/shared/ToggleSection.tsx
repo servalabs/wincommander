@@ -13,6 +13,7 @@ import useVisibility from "../../hooks/useVisibility";
 import useEntitlements from "../../hooks/useEntitlements";
 import { resolveToggleText } from "../../types/toggles";
 import { ALL_TOGGLES } from "../../registry";
+import { resolveToggleIcon } from "../../registry/toggleIcons";
 import { useManagedPolicy, isToggleLocked } from "../../hooks/useManagedPolicy";
 import type { ExperienceLevel } from "../../types/settings";
 import type { ToggleDef, SectionDef } from "../../types/toggles";
@@ -332,7 +333,7 @@ export default function ToggleSection({
               key={toggle.id}
               label={wording.label}
               description={wording.description}
-              icon={toggle.icon}
+              icon={resolveToggleIcon(toggle)}
               domain={toggle.domain}
               size="compact"
             />
@@ -361,7 +362,7 @@ export default function ToggleSection({
                 : "low"
             }
             requiresRestart={toggle.requiresRestart}
-            icon={toggle.icon}
+            icon={resolveToggleIcon(toggle)}
             severity={toggle.severity}
             domain={toggle.domain as any}
             size="compact"

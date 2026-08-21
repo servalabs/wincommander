@@ -213,6 +213,7 @@ function BlocklistItem({ name, description, entryCount, isApplied, onToggle, loa
             loading={loading}
             disabled={disabled}
             severity={isApplied ? "success" : "none"}
+            icon="globe-network"
         />
     );
 }
