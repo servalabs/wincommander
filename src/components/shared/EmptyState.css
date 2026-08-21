@@ -1,0 +1,44 @@
+/* EmptyState — universal empty treatment. Tokens only. */
+.wc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 22px 12px;
+  color: var(--color-text-muted);
+  gap: 4px;
+}
+
+.wc-empty__icon {
+  color: var(--color-text-muted);
+  opacity: 0.5;
+  margin-bottom: 4px;
+}
+
+.wc-empty__title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.wc-empty__hint {
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 280px;
+}
+
+.wc-empty__action {
+  margin-top: 10px;
+}
+
+/* Minimal single-line variant */
+.wc-empty--compact {
+  display: block;
+  padding: 14px 12px;
+  font-size: 12px;
+  font-style: italic;
+  text-align: center;
+}

@@ -1,0 +1,465 @@
+name: invariants
+
+# Tier-split CI invariants. Runs on PRs to main and on manual dispatch.
+# Does not run on every push to main — that was burning Actions minutes
+# on direct commits; cut a release or dispatch this workflow when you want it.
+# of the rules in ref/architecture.md (Open-Core Architecture — CI invariants) before they
+# merge. Three jobs:
+#
+#   ts-schema       — TypeScript compiles (proves every ToggleDef has the
+#                     5 required tier+risk fields)
+#   tier-invariants — Registry-shape lint (irreversible⇒needsAdmin etc.)
+#   cargo-check     — Rust compiles (license::has_paid_entitlement +
+#                     has_entitlement, run_backend_script tier gate)
+#
+# Phase 5 of the rollout adds two more jobs once Phase 6 lands:
+#   strings-grep-free     — scans wincommander-free.exe for forbidden
+#                           tokens (vssadmin, cipher /w, etc.) — proves
+#                           paid code never tainted the AV-clean build
+#   reproducible-build    — builds each binary twice on a clean runner;
+#                           SHA-256 must match across runs
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+jobs:
+  ts-schema:
+    name: TypeScript schema check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout required Risk Matrix source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: servalabs/assets
+          ref: ff5e7829981b5ace5e9de0658b9ad9404d808064
+          path: assets
+          sparse-checkout: |
+            components/risk-matrix
+            entities
+            editorial
+            softwares
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun x tsc --noEmit
+
+  tier-invariants:
+    name: Tier + risk-axis invariants (incl. TS↔Rust tier-drift check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run lint:tiers
+
+  code-quality-guards:
+    name: Changed-file quality guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run lint:quality
+        env:
+          QUALITY_GUARD_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+
+  # Security guardrails (BLOCKING): a destructive command must be registered in
+  # DESTRUCTIVE_COMMANDS, and no PowerShell -Command string may interpolate an
+  # untrusted value without ps_single_quote. See tools/ci/ and SECURITY.md.
+  security-guardrails:
+    name: Security guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: bash tools/ci/check-destructive-authz.sh
+      - run: bash tools/ci/check-ps-command-quoting.sh
+
+  # CMP-2 — run the bun:test frontend unit suite (panel IA, visibility
+  # resolver, content-search helpers, webhook HMAC, etc.) that previously
+  # existed but never ran in CI. Blocking: the suite is green as of this change.
+  bun-test:
+    name: Frontend unit tests (bun test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout required Risk Matrix source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: servalabs/assets
+          ref: ff5e7829981b5ace5e9de0658b9ad9404d808064
+          path: assets
+          sparse-checkout: |
+            components/risk-matrix
+            entities
+            editorial
+            softwares
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      # This one test inspects the private commander-pro sibling repository,
+      # which is deliberately unavailable to public GitHub-hosted runners.
+      - run: bun test --path-ignore-patterns "src/panels/cleanup/cleanupLockdownCoverage.test.ts"
+
+  # SSOT codegen drift — the wire types in wincmd-shared (fleet.rs + the IPC
+  # envelope in lib.rs) are derived into TypeScript via ts-rs and committed
+  # under src/types/generated/. This job regenerates them with the same tool
+  # the dev uses and fails if the committed copy drifted — i.e. a Rust
+  # wire-type change landed without `bun run gen:types`. Catches the exact bug
+  # that left PolicyIntent/PolicyLayer/ResolvedPolicy missing from the TS.
+  codegen-drift:
+    name: Generated TS types in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
+        with:
+          workspaces: src-tauri
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run gen:types:check
+
+  cargo-check:
+    name: Rust cargo check
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
+        with:
+          workspaces: src-tauri
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Generate encrypted backend modules
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile
+          bun run encrypt-backend
+      - run: cargo check --all-targets
+
+  # F-18 — exercise the in-repo #[cfg(test)] units (webhook HMAC verification,
+  # flow_bundle Ed25519, etc.). Compile-only checks miss test-only assertions
+  # like "this string round-trips through PowerShell parameter escaping".
+  # Runs on Windows because some tests touch Windows-only APIs (named pipes,
+  # WMI device hash); a single matrix entry keeps CI minutes bounded.
+  cargo-test:
+    name: Rust cargo test
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
+        with:
+          workspaces: src-tauri
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Generate encrypted backend modules
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile
+          bun run encrypt-backend
+      - run: cargo test --workspace --no-fail-fast
+
+  # NOTE (L2): the Cloudflare licence worker lives in the commander-pro repo, so
+  # its TypeScript check + dependency audit run in THAT repo's CI, not here. A
+  # public clone of `commander` does not contain cloudflare-license-worker/, so
+  # those worker-only jobs were removed to keep this workflow green on the public
+  # repo.
+
+  # F-9 — scan full git history (fetch-depth: 0) for accidentally committed
+  # secrets (private keys, .env contents, wrangler secrets). Allow-list any
+  # intentional decoy strings via .gitleaks.toml when false positives surface.
+  gitleaks:
+    name: Gitleaks secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # CMP-2 — ESLint, BLOCKING.
+  #
+  # Promoted from report-only (2026-06-27): the prior rules-of-hooks errors
+  # and the exhaustive-deps warnings are cleared, so `bun run lint`
+  # (eslint --max-warnings=0) is green and now gates merges — any new error
+  # OR warning fails the build. The security-critical rule (`react/no-danger`)
+  # is also enforced as `error` in eslint.config.js.
+  eslint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+
+  # CMP-2 — cargo clippy, BLOCKING.
+  #
+  # Promoted from report-only (2026-06-27): the workspace is clippy-clean, so
+  # `-D warnings` now gates merges — any new lint fails the build. The repo's
+  # rust-toolchain.toml pins 1.97.1, so CI's lint set matches what was cleared
+  # locally (warnings are toolchain-version-sensitive). Narrow #[allow]s cover
+  # the handful of intentional cases (wire-shape dead_code, too_many_arguments).
+  cargo-clippy:
+    name: cargo clippy
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.97.1
+          components: clippy
+      - uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
+        with:
+          workspaces: src-tauri
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Generate encrypted backend modules
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile
+          bun run encrypt-backend
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # F-11 — dependency-CVE audit for both Rust workspaces and npm. This blocks
+  # known vulnerabilities; cargo-audit's unmaintained-crate notices remain
+  # visible in logs but do not fail the release gate because several come from
+  # the platform stack selected by Tauri, not a safe direct replacement.
+  audit:
+    name: Dependency audit (cargo + bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
+        with:
+          workspaces: src-tauri
+      - run: cargo install cargo-audit --locked
+      - name: cargo audit (commander-free)
+        working-directory: src-tauri
+        run: cargo audit
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: bun audit (frontend)
+        run: bun audit
+
+  # Supply-chain policy gate (REPORT-ONLY). Surfaces licence-allow-list,
+  # banned/duplicate-crate, and advisory violations from src-tauri/deny.toml
+  # but does NOT gate merges yet: `cargo deny check` currently fails on
+  # pre-existing items (known rustls-webpki RUSTSEC advisories; BSL-1.0 /
+  # bzip2 deps; and commander-free's own AGPL-3.0 self-declaration not being
+  # on deny.toml's allow-list). Reconcile deny.toml, then promote to blocking.
+  # The BLOCKING supply-chain gate today is `cargo audit --deny warnings` in
+  # the `audit` job above.
+  cargo-deny:
+    name: cargo-deny (report-only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.97.1
+      - run: cargo install cargo-deny --locked
+      - run: cargo deny check
+
+  # A-5 — Free binary AV-clean strings check (open-source.md Part 1 §4.3).
+  # Activated after A-2 stripped paid PowerShell from Free's encrypted
+  # modules. Build the Free binary (--release for realistic strings
+  # layout), then run tools/strings-grep-free.ps1 which scans for the
+  # spec'd 15-token forbidden list + the additional privacy-clean
+  # markers the script already tracked. Fails the CI run with
+  # GitHub-actions ::error:: annotations on any hit.
+  #
+  # BLOCKING as of 2026-06-25 (L5). The Free release binary passes the scan
+  # after the paid PowerShell/Rust split removed destructive logic AND the last
+  # residual command-name string literals (USBSTOR, Dismount-AllEncryptionVolumes)
+  # were fragmented via wincmd-shared::command_strings (the `~`-embedded
+  # join_parts/matches_parts helpers — separate adjacent literals are NOT enough
+  # because the linker can place them contiguously in .rodata). A fresh frontend
+  # build is done first so the scan covers the embedded Vite bundle too. Any new
+  # contiguous forbidden token in the Free binary now FAILS the merge.
+  strings-grep-free:
+    name: Free binary AV-clean strings check
+    runs-on: windows-latest
+    needs: cargo-check
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout required Risk Matrix source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: servalabs/assets
+          ref: ff5e7829981b5ace5e9de0658b9ad9404d808064
+          path: assets
+          sparse-checkout: |
+            components/risk-matrix
+            entities
+            editorial
+            softwares
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.97.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
+        with:
+          workspaces: src-tauri
+      - name: Install deps, build frontend, encrypt modules
+        run: |
+          bun install --frozen-lockfile
+          bun run encrypt-backend
+          bun x vite build
+      - name: Build Free binary (release)
+        working-directory: src-tauri
+        env:
+          # Same workaround as local dev — rustc on Windows occasionally
+          # blows its default 8 MB thread stack compiling tauri proc-macros.
+          RUST_MIN_STACK: "16777216"
+        run: cargo build --release -p commander-free
+      - name: Strings-grep Free binary (hard gate)
+        shell: pwsh
+        run: |
+          pwsh -ExecutionPolicy Bypass -File tools/strings-grep-free.ps1 `
+            -Binary src-tauri/target/release/wincommander-free.exe `
+            -HardGate
+  #
+  # reproducible-build:
+  #   name: Reproducible build (Free + Pro)
+  #   runs-on: windows-latest
+  #   needs: cargo-check
+  #   steps:
+  #     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+  #     - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+  #       with:
+  #         toolchain: 1.97.1
+  #     - name: First build
+  #       working-directory: src-tauri
+  #       run: cargo build --release --workspace
+  #     - name: Hash artifacts
+  #       run: |
+  #         pwsh -Command "Get-FileHash -Algorithm SHA256
+  #           src-tauri/target/release/wincommander-free.exe,
+  #           src-tauri/target/release/wincommander-pro.exe |
+  #           ConvertTo-Json | Out-File hashes-1.json"
+  #     - name: Clean
+  #       working-directory: src-tauri
+  #       run: cargo clean
+  #     - name: Second build
+  #       working-directory: src-tauri
+  #       run: cargo build --release --workspace
+  #     - name: Hash artifacts (again) and compare
+  #       run: |
+  #         pwsh -Command "Get-FileHash -Algorithm SHA256
+  #           src-tauri/target/release/wincommander-free.exe,
+  #           src-tauri/target/release/wincommander-pro.exe |
+  #           ConvertTo-Json | Out-File hashes-2.json;
+  #           if ((Get-Content hashes-1.json -Raw) -ne (Get-Content hashes-2.json -Raw)) {
+  #             throw 'Hashes differ — build is not reproducible.'
+  #           }"
+
+  # A-8 — Rust coverage via cargo-llvm-cov, VISIBILITY ONLY. Report-only:
+  # continue-on-error: true and no threshold gate, so this can never block a
+  # merge. Summary is echoed to the job log for humans to eyeball; nothing
+  # here parses or enforces a number.
+  coverage:
+    name: Rust coverage (report-only)
+    runs-on: windows-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.97.1
+          components: llvm-tools
+      - uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
+        with:
+          workspaces: src-tauri
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Generate encrypted backend modules
+        working-directory: .
+        run: |
+          bun install --frozen-lockfile
+          bun run encrypt-backend
+      - run: cargo install cargo-llvm-cov --locked
+      - name: cargo llvm-cov (summary only)
+        env:
+          RUST_MIN_STACK: "16777216"
+        run: |
+          cargo llvm-cov --workspace --summary-only
+
+  # A-8 — mutation testing scoped to the frozen wire crate (wincmd-shared)
+  # only, via cargo-mutants. Manual/scheduled ONLY — never on pull_request or
+  # push — so it can never slow down a PR. Report-only: continue-on-error:
+  # true, no threshold gate.
+  mutants-wincmd-shared:
+    name: Mutation testing (wincmd-shared, report-only)
+    runs-on: windows-latest
+    continue-on-error: true
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.97.1
+      - uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
+        with:
+          workspaces: src-tauri
+      - run: cargo install cargo-mutants --locked
+      - name: cargo mutants (wincmd-shared only)
+        env:
+          RUST_MIN_STACK: "16777216"
+        run: |
+          cargo mutants -p wincmd-shared --no-shuffle
+

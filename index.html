@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WinCommander</title>
+  <!-- Synchronously mark the overlay window transparent BEFORE first paint to prevent white flash -->
+  <script>
+    try {
+      if (window.__TAURI_INTERNALS__?.metadata?.currentWindow?.label === "search-overlay") {
+        document.documentElement.classList.add("search-overlay-window");
+      }
+    } catch (e) {}
+  </script>
+  <!-- Apply persisted theme synchronously so the user-chosen theme paints on the
+       very first frame. settings.json is still the source of truth (loaded async
+       in ThemeContext), but localStorage acts as a fast cache to avoid the flash. -->
+  <script>
+    try {
+      var t = localStorage.getItem("wc-theme");
+      var isLight = t === "light" || (
+        t !== "dark" &&
+        window.matchMedia &&
+        window.matchMedia("(prefers-color-scheme: light)").matches
+      );
+      document.documentElement.classList.add(isLight ? "light" : "dark");
+      document.documentElement.setAttribute("data-theme", isLight ? "daylight" : "anduril");
+    } catch (e) {
+      document.documentElement.classList.add("dark");
+      document.documentElement.setAttribute("data-theme", "anduril");
+    }
+  </script>
+  <!-- Pauses decorative CSS loops when WebView2 is backgrounded. This runs
+       before React so every surface receives the same page-visibility signal
+       without a provider update or per-component polling. -->
+  <script>
+    try {
+      var syncPageVisibility = function () {
+        document.documentElement.toggleAttribute("data-page-hidden", document.hidden);
+      };
+      document.addEventListener("visibilitychange", syncPageVisibility);
+      syncPageVisibility();
+    } catch (e) {}
+  </script>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #0a0f12; }
+    /* Do not reveal a stale cached theme before ThemeProvider reads the
+       authoritative setting. The React splash is the sole startup animation. */
+    html:not([data-theme-ready]) body { background: #0a0f12 !important; }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>

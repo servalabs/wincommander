@@ -1,0 +1,41 @@
+[package]
+name = "fleet-proto"
+version = "3.0.7"
+description = "Fleet wire protocol SSOT — canonical signing preimages + wire types shared by fleet-server, WinCommander, TuxCommander, and secureOS"
+authors = ["ServaLabs"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+
+# Pure data + crypto crate — no side effects, no platform deps, no transport.
+# This is the SSOT for the fleet signing byte layout (golden vectors pin it).
+# `signature` + `rand_core` features are needed by the golden-vector tests
+# (SigningKey::sign) and by consumers that provision/sign keys — not verify-only.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "signature", "rand_core"] }
+sha2 = "0.10"
+
+# Clipboard-guard policy types (plan §4.1) — Severity/Action/Rule/MatchKind/
+# etc. are NOT redefined here (NON-GOALS.md forbids duplicating a shared wire
+# type); this crate re-exports them so fleet-server and the console have ONE
+# import path. Not optional: it's a normal, always-present dependency edge,
+# same as ed25519-dalek above.
+wincmd-clip-rules = { path = "../wincmd-clip-rules" }
+
+# WI-2 SSOT codegen: derive TypeScript types from these Rust types. Optional +
+# build-only — gated behind the `ts-codegen` feature so it is NEVER in a
+# production binary's dependency closure.
+ts-rs = { version = "10", optional = true, features = ["serde-json-impl"] }
+
+[features]
+# Activate ONLY for the Rust->TS codegen step (build.rs / emit binaries).
+# Also turns on wincmd-clip-rules' own ts-codegen so the re-exported policy
+# types (Rule, MatchKind, Severity, ...) emit TS bindings alongside this
+# crate's own types, into the same fleet.ts file.
+ts-codegen = ["dep:ts-rs", "wincmd-clip-rules/ts-codegen"]
+# Pure cfg gate (no deps) for COMMAND_METADATA — keeps the catalog metadata
+# table out of the AV-scanned Free binary's dependency closure. Enable only in
+# consumers that need catalog discovery (fleet-server, commander-pro).
+command-metadata = []

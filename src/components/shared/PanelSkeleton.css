@@ -1,0 +1,100 @@
+/* PanelSkeleton — shimmer loading placeholder ─────────────────────────────── */
+
+@keyframes ps-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.panel-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  width: 100%;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Base shimmer element */
+.ps-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-secondary) 25%,
+    var(--color-bg-tertiary) 50%,
+    var(--color-bg-secondary) 75%
+  );
+  background-size: 800px 100%;
+  animation: ps-shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* Header */
+.ps-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.ps-title {
+  height: 18px;
+  width: 220px;
+}
+
+.ps-badge {
+  height: 16px;
+  width: 56px;
+}
+
+/* Cards */
+.ps-card {
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.ps-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.ps-card-title {
+  height: 12px;
+  width: 140px;
+}
+
+.ps-card-count {
+  height: 12px;
+  width: 32px;
+}
+
+.ps-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Rows */
+.ps-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.ps-row:last-child {
+  border-bottom: none;
+}
+
+.ps-row-label {
+  height: 11px;
+  width: 180px;
+}
+
+.ps-row-toggle {
+  height: 18px;
+  width: 36px;
+}

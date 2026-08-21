@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# commander-svc — WinCommander SYSTEM service binary
+#
+# Serves the UI ↔ service named pipe (wincmd-svc), enforces the
+# CapabilityClass split (TM-7), and hosts the four background loops
+# (enforcement, reconciler, command-worker, fleet-conn) that Phase 2/3
+# will fill in.
+#
+# Build: cargo build -p commander-svc
+# Test:  cargo test  -p commander-svc
+
+[package]
+name = "commander-svc"
+version = "0.1.0"
+description = "WinCommander SYSTEM service — endpoint enforcement and fleet coordination"
+authors = ["ServaLabs"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+rust-version = "1.77"
+
+[[bin]]
+name = "wincommander-svc"
+path = "src/main.rs"
+
+[dependencies]
+wincmd-shared = { path = "../wincmd-shared" }
+# Clipboard Guard's rule engine (plan §4.1): pure matcher/compiler shared with
+# Fleet and commander-pro, so the per-user helper's on-device matching
+# (Phase 2) behaves identically to what validated in the fleet-server
+# console. Lives in this public repo on purpose — no proprietary enforcement
+# logic — per NON-GOALS.md's ban on re-vendoring shared types privately.
+wincmd-clip-rules = { path = "../wincmd-clip-rules" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+zeroize = { version = "1", features = ["alloc"] }
+sha2 = "0.11"
+
+[target.'cfg(windows)'.dependencies]
+# Windows service registration / dispatcher (SCM integration).
+windows-service = "0.7"
+# Low-level Windows APIs: security, pipes, tokens.
+# Match the MAJOR version already in Cargo.lock (0.61.x) so no duplicate.
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+  "Win32_System_Memory",
+  "Win32_System_SystemServices",
+  "Win32_System_RemoteDesktop",
+  "Win32_NetworkManagement_NetManagement",
+  "Win32_Storage_FileSystem",
+] }

@@ -1,0 +1,147 @@
+/* Extra top/bottom padding so the section-rule-line never visually touches
+ * the SectionCards above or below it. */
+.mesh-section {
+    padding-top: 12px;
+    padding-bottom: 8px;
+}
+
+/* Send-file button on mesh node cards — always visible (no hover gate) so
+   users see the share affordance without having to discover it. */
+.mesh-send-btn {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--color-success) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-success) 35%, transparent);
+    color: var(--color-success);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.mesh-send-btn:hover {
+    background: color-mix(in srgb, var(--color-success) 28%, transparent);
+    border-color: var(--color-success);
+}
+
+.mesh-send-btn:focus-visible {
+    outline: 2px solid var(--color-success);
+    outline-offset: 1px;
+}
+
+.mesh-section + .mesh-section {
+    margin-top: 8px;
+    padding-top: 16px;
+}
+
+.mesh-node-card {
+                    background: var(--color-bg-card) !important;
+                    backdrop-filter: blur(24px) contrast(1.1);
+                    border: 1px solid var(--color-border) !important;
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+                    padding: 14px 16px !important;
+                    border-radius: 8px !important;
+                    /* hover changes: border-color, background, box-shadow, transform */
+                    transition: border-color 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+                                background-color 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+                                box-shadow 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+                                transform 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;
+                    position: relative;
+                    overflow: hidden;
+                }
+                /* Stronger hover highlight — accent-tinted border, subtle wash
+                   and a soft accent glow so the focused peer is unmistakable
+                   before clicking Send. */
+                .mesh-node-card:hover {
+                    border-color: var(--color-accent) !important;
+                    background: color-mix(in srgb, var(--color-accent) 7%, var(--color-bg-card)) !important;
+                    box-shadow: 0 8px 28px rgba(0,0,0,0.32),
+                                0 0 22px color-mix(in srgb, var(--color-accent) 28%, transparent) !important;
+                    transform: translateY(-2px) scale(1.025);
+                }
+                .mesh-node-card.idle { opacity: 0.6; }
+                .mesh-node-card.stale { opacity: 0.4; filter: grayscale(1); }
+
+/* Mesh IP row — sits clearly below the hostname with its own micro-label
+   so the two never visually crowd in the narrow xl:grid-cols-4 card. */
+.mesh-node-ip {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+    margin-top: 6px;
+}
+
+.mesh-node-ip__label {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+    opacity: 0.6;
+}
+
+.mesh-node-ip__value {
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-secondary);
+}
+
+.mesh-node-meta {
+    display: grid;
+    grid-template-columns: minmax(82px, auto) minmax(0, 1fr);
+    align-items: start;
+    column-gap: 14px;
+    row-gap: 4px;
+    padding: 5px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
+}
+
+.mesh-node-meta:last-child {
+    border-bottom: none;
+}
+
+.mesh-node-meta__label {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    line-height: 1.4;
+    color: var(--color-text-muted);
+    opacity: 0.65;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.mesh-node-meta__value {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 7px;
+    min-width: 0;
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.4;
+    color: var(--color-text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.mesh-node-meta__icon {
+    color: var(--color-text-muted);
+    opacity: 0.65;
+    flex-shrink: 0;
+}
+
+html.light .mesh-node-card {
+    background: #ffffff !important;
+    border-color: rgba(15, 23, 42, 0.14) !important;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+}
+
+html.light .mesh-node-meta {
+    border-bottom-color: rgba(15, 23, 42, 0.08);
+}

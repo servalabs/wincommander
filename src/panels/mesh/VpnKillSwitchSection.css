@@ -1,0 +1,139 @@
+/* Compact VPN kill-switch card — small footprint so it can sit near/inside
+   the title area of the Private Network panel instead of a full SectionCard. */
+.vpn-ks-card {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-bg-card);
+    min-width: 0;
+    max-width: 550px;
+}
+
+.vpn-ks-card--armed {
+    border-color: var(--color-accent);
+    background: var(--color-accent-subtle);
+}
+
+.vpn-ks-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+}
+
+.vpn-ks-toggle-cluster {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-shrink: 0;
+}
+
+.vpn-ks-armed-label {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.9px;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+    transition: color 0.15s ease;
+}
+
+.vpn-ks-armed-label--on {
+    color: var(--color-accent);
+}
+
+.vpn-ks-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.vpn-ks-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.vpn-ks-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+}
+
+.vpn-ks-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    line-height: 1.25;
+    white-space: normal;
+}
+
+.vpn-ks-info-icon {
+    color: var(--color-text-muted);
+    opacity: 0.7;
+    cursor: help;
+}
+
+.vpn-ks-select {
+    min-width: 104px;
+    max-width: 130px;
+    height: 26px !important;
+}
+
+.vpn-ks-state-chip {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    padding: 1px 6px;
+    border-radius: var(--radius-full, 999px);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
+}
+
+.vpn-ks-state-chip--up {
+    background: var(--color-success-dim);
+    color: var(--color-success);
+    border-color: color-mix(in srgb, var(--color-success) 25%, transparent);
+}
+
+.vpn-ks-state-chip--down {
+    color: var(--color-danger);
+    border-color: color-mix(in srgb, var(--color-danger) 25%, transparent);
+}
+
+.vpn-ks-fired {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-danger);
+    white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+    .vpn-ks-header {
+        align-items: flex-start;
+    }
+
+    .vpn-ks-toggle-cluster {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+}

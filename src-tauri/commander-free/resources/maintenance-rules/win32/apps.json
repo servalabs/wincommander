@@ -1,0 +1,598 @@
+{
+  "$schema": "../schema/rules.schema.json",
+  "type": "apps",
+  "apps": [
+    {
+      "id": "discord",
+      "name": "Discord",
+      "paths": [
+        "${APPDATA}/discord/Cache/Cache_Data",
+        "${APPDATA}/discord/Code Cache",
+        "${APPDATA}/discord/GPUCache",
+        "${APPDATA}/discord/logs"
+      ],
+      "minAgeDays": 1,
+      "description": "Discord Electron app cache, compiled code cache, GPU cache, and logs"
+    },
+    {
+      "id": "teams",
+      "name": "Microsoft Teams",
+      "paths": ["${APPDATA}/Microsoft/Teams/Cache"],
+      "description": "Microsoft Teams cached web content"
+    },
+    {
+      "id": "slack",
+      "name": "Slack",
+      "paths": [
+        "${APPDATA}/Slack/Cache/Cache_Data",
+        "${APPDATA}/Slack/Code Cache",
+        "${APPDATA}/Slack/GPUCache",
+        "${APPDATA}/Slack/logs"
+      ],
+      "minAgeDays": 1,
+      "description": "Slack Electron app cache, compiled code cache, GPU cache, and logs"
+    },
+    {
+      "id": "zoom",
+      "name": "Zoom",
+      "paths": [
+        "${APPDATA}/Zoom/data/Cache",
+        "${APPDATA}/Zoom/data/GPUCache",
+        "${APPDATA}/Zoom/data/logs",
+        "${APPDATA}/Zoom/logs"
+      ],
+      "description": "Zoom cached data, GPU cache, and log files"
+    },
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "paths": [
+        "${APPDATA}/Telegram Desktop/tdata/user_data",
+        "${APPDATA}/Telegram Desktop/tdata/emoji"
+      ],
+      "description": "Telegram cached user data and emoji assets"
+    },
+    {
+      "id": "vscode",
+      "name": "VS Code",
+      "paths": [
+        "${APPDATA}/Code/Cache/Cache_Data",
+        "${APPDATA}/Code/Code Cache",
+        "${APPDATA}/Code/GPUCache",
+        "${APPDATA}/Code/CachedData",
+        "${APPDATA}/Code/CachedExtensions",
+        "${APPDATA}/Code/logs"
+      ],
+      "description": "VS Code web, compiled code, GPU, extension, and log caches"
+    },
+    {
+      "id": "jetbrains",
+      "name": "JetBrains IDEs",
+      "paths": ["${LOCALAPPDATA}/JetBrains"],
+      "childSubdir": "caches",
+      "description": "JetBrains IDE caches (IntelliJ, PyCharm, WebStorm, etc.); rebuilt on restart"
+    },
+    {
+      "id": "spotify",
+      "name": "Spotify",
+      "paths": [
+        "${LOCALAPPDATA}/Spotify/Storage",
+        "${LOCALAPPDATA}/Spotify/Data"
+      ],
+      "description": "Spotify offline storage and cached streaming data"
+    },
+    {
+      "id": "obs",
+      "name": "OBS Studio",
+      "paths": [
+        "${APPDATA}/obs-studio/logs",
+        "${APPDATA}/obs-studio/profiler_data"
+      ],
+      "description": "OBS Studio log files and performance profiler data"
+    },
+    {
+      "id": "adobe",
+      "name": "Adobe Creative Cloud",
+      "paths": [
+        "${LOCALAPPDATA}/Adobe/AcroCef/Cache",
+        "${APPDATA}/Adobe/Common/Media Cache Files",
+        "${APPDATA}/Adobe/Common/Media Cache"
+      ],
+      "description": "Adobe Acrobat CEF cache and shared media cache used by Premiere, After Effects, etc."
+    },
+    {
+      "id": "npm",
+      "name": "npm Cache",
+      "paths": ["${LOCALAPPDATA}/npm-cache", "${APPDATA}/npm-cache"],
+      "description": "npm downloaded package tarballs and metadata cache in current and legacy Windows locations"
+    },
+    {
+      "id": "yarn",
+      "name": "Yarn Cache",
+      "paths": ["${LOCALAPPDATA}/Yarn/Cache"],
+      "description": "Yarn downloaded package cache (yarn cache clean clears this)"
+    },
+    {
+      "id": "pnpm",
+      "name": "pnpm Store",
+      "paths": ["${LOCALAPPDATA}/pnpm/store", "${LOCALAPPDATA}/pnpm-cache", "${LOCALAPPDATA}/pnpm-store", "${HOME}/.pnpm-store"],
+      "description": "pnpm content-addressable package stores and downloaded-package caches"
+    },
+    {
+      "id": "bun",
+      "name": "Bun Cache",
+      "paths": ["${LOCALAPPDATA}/.bun/install/cache"],
+      "description": "Bun downloaded package cache"
+    },
+    {
+      "id": "pip",
+      "name": "pip Cache",
+      "paths": ["${LOCALAPPDATA}/pip/Cache"],
+      "description": "pip downloaded wheel and source distribution cache"
+    },
+    {
+      "id": "nuget",
+      "name": "NuGet Cache",
+      "paths": [
+        "${LOCALAPPDATA}/NuGet/v3-cache",
+        "${LOCALAPPDATA}/NuGet/plugins-cache"
+      ],
+      "description": "NuGet HTTP response cache and plugins cache for .NET package management"
+    },
+    {
+      "id": "cargo",
+      "name": "Cargo/Rust Cache",
+      "paths": ["${HOME}/.cargo/registry/cache", "${HOME}/.cargo/registry/src"],
+      "description": "Cargo downloaded crate archives and extracted source files"
+    },
+    {
+      "id": "go",
+      "name": "Go Module Cache",
+      "paths": ["${HOME}/go/pkg/mod/cache"],
+      "description": "Go module download cache (go clean -modcache clears this)"
+    },
+    {
+      "id": "gradle",
+      "name": "Gradle Cache",
+      "paths": ["${HOME}/.gradle/caches", "${HOME}/.gradle/daemon"],
+      "description": "Gradle build caches and daemon log files"
+    },
+    {
+      "id": "maven",
+      "name": "Maven Cache",
+      "paths": ["${HOME}/.m2/repository"],
+      "description": "Maven local repository of downloaded artifacts and dependencies"
+    },
+    {
+      "id": "composer",
+      "name": "Composer Cache",
+      "paths": ["${LOCALAPPDATA}/Composer/cache"],
+      "description": "Composer downloaded PHP package cache"
+    },
+    {
+      "id": "docker",
+      "name": "Docker Desktop",
+      "paths": [
+        "${APPDATA}/Docker Desktop/cache",
+        "${APPDATA}/Docker Desktop/Code Cache",
+        "${APPDATA}/Docker Desktop/GPUCache",
+        "${LOCALAPPDATA}/Docker/log/host",
+        "${LOCALAPPDATA}/Docker/log/vm"
+      ],
+      "minAgeDays": 1,
+      "description": "Docker Desktop Electron caches and settled host and VM logs"
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor IDE",
+      "paths": [
+        "${APPDATA}/Cursor/Cache/Cache_Data",
+        "${APPDATA}/Cursor/Code Cache",
+        "${APPDATA}/Cursor/GPUCache",
+        "${APPDATA}/Cursor/CachedData",
+        "${APPDATA}/Cursor/CachedExtensions",
+        "${APPDATA}/Cursor/logs"
+      ],
+      "minAgeDays": 1,
+      "description": "Cursor IDE web, compiled code, GPU, extension, and settled log caches"
+    },
+    {
+      "id": "signal",
+      "name": "Signal Desktop",
+      "paths": [
+        "${APPDATA}/Signal/Cache/Cache_Data",
+        "${APPDATA}/Signal/GPUCache"
+      ],
+      "description": "Signal Desktop Electron app cache and GPU cache"
+    },
+    {
+      "id": "postman",
+      "name": "Postman",
+      "paths": [
+        "${APPDATA}/Postman/Cache/Cache_Data",
+        "${APPDATA}/Postman/GPUCache"
+      ],
+      "description": "Postman Electron app cache and GPU cache"
+    },
+    {
+      "id": "figma",
+      "name": "Figma",
+      "paths": [
+        "${APPDATA}/Figma/Cache/Cache_Data",
+        "${APPDATA}/Figma/GPUCache"
+      ],
+      "description": "Figma Desktop Electron app cache and GPU cache"
+    },
+    {
+      "id": "github-desktop",
+      "name": "GitHub Desktop",
+      "paths": [
+        "${APPDATA}/GitHub Desktop/Cache/Cache_Data",
+        "${APPDATA}/GitHub Desktop/GPUCache"
+      ],
+      "description": "GitHub Desktop Electron app cache and GPU cache"
+    },
+    {
+      "id": "vlc",
+      "name": "VLC",
+      "paths": ["${APPDATA}/vlc/art_cache"],
+      "description": "VLC cached album art and media thumbnails"
+    },
+    {
+      "id": "thunderbird",
+      "name": "Thunderbird",
+      "paths": ["${LOCALAPPDATA}/Thunderbird/Profiles"],
+      "childSubdir": "cache2",
+      "description": "Thunderbird per-profile web content cache"
+    },
+    {
+      "id": "gimp",
+      "name": "GIMP",
+      "paths": ["${APPDATA}/GIMP"],
+      "childSubdir": "tmp",
+      "description": "GIMP temporary swap and working files"
+    },
+    {
+      "id": "blender",
+      "name": "Blender",
+      "paths": ["${APPDATA}/Blender Foundation/Blender"],
+      "childSubdir": "cache",
+      "description": "Blender thumbnail and script cache per version"
+    },
+    {
+      "id": "libreoffice",
+      "name": "LibreOffice",
+      "paths": ["${APPDATA}/LibreOffice"],
+      "childSubdir": "cache",
+      "description": "LibreOffice cached data including extension thumbnails"
+    },
+    {
+      "id": "teamviewer",
+      "name": "TeamViewer",
+      "paths": ["${APPDATA}/TeamViewer/Logs"],
+      "description": "TeamViewer session log files"
+    },
+    {
+      "id": "google-earth",
+      "name": "Google Earth",
+      "paths": ["${LOCALAPPDATA}/Google/GoogleEarth/Cache"],
+      "description": "Google Earth cached satellite imagery tiles"
+    },
+    {
+      "id": "inkscape",
+      "name": "Inkscape",
+      "paths": ["${LOCALAPPDATA}/inkscape/cache"],
+      "description": "Inkscape font and rendering cache"
+    },
+    {
+      "id": "krita",
+      "name": "Krita",
+      "paths": ["${LOCALAPPDATA}/krita/cache"],
+      "description": "Krita resource and rendering cache"
+    },
+    {
+      "id": "filezilla",
+      "name": "FileZilla",
+      "paths": ["${APPDATA}/FileZilla/cache"],
+      "description": "FileZilla directory listing cache"
+    },
+    {
+      "id": "pidgin",
+      "name": "Pidgin",
+      "paths": ["${APPDATA}/.purple/icons"],
+      "description": "Pidgin cached buddy icons"
+    },
+    {
+      "id": "transmission",
+      "name": "Transmission",
+      "paths": ["${LOCALAPPDATA}/Transmission/cache"],
+      "description": "Transmission BitTorrent client cache"
+    },
+    {
+      "id": "android-studio",
+      "name": "Android Studio",
+      "paths": ["${LOCALAPPDATA}/Google"],
+      "childSubdir": "caches",
+      "description": "Google application caches including Android Studio and other Google products"
+    },
+    {
+      "id": "conda",
+      "name": "Conda Package Cache",
+      "paths": [
+        "${HOME}/anaconda3/pkgs",
+        "${HOME}/miniconda3/pkgs",
+        "${HOME}/.conda/pkgs"
+      ],
+      "description": "Conda downloaded package cache (conda clean --packages clears this)"
+    },
+    {
+      "id": "unity",
+      "name": "Unity Editor",
+      "paths": ["${LOCALAPPDATA}/Unity/cache"],
+      "description": "Unity global shader and GI cache (regenerated when projects are opened)"
+    },
+    {
+      "id": "visual-studio",
+      "name": "Visual Studio",
+      "paths": ["${LOCALAPPDATA}/Microsoft/VisualStudio"],
+      "childSubdir": "ComponentModelCache",
+      "description": "Visual Studio MEF component model cache (regenerated on restart)"
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "paths": [
+        "${APPDATA}/Notion/Cache/Cache_Data",
+        "${APPDATA}/Notion/Code Cache",
+        "${APPDATA}/Notion/GPUCache",
+        "${APPDATA}/Notion/logs",
+        "${APPDATA}/Notion/Partitions/notion/Cache/Cache_Data",
+        "${APPDATA}/Notion/Partitions/notion/Code Cache",
+        "${APPDATA}/Notion/Partitions/notion/GPUCache",
+        "${APPDATA}/Notion/Partitions/notion/DawnCache",
+        "${APPDATA}/Notion/Partitions/notion/DawnGraphiteCache",
+        "${APPDATA}/Notion/Partitions/notion/DawnWebGPUCache",
+        "${APPDATA}/Notion/Partitions/notion/Shared Dictionary/cache"
+      ],
+      "description": "Notion web, compiled code, GPU, shader, dictionary, and log caches while preserving sessions and offline data"
+    },
+    {
+      "id": "obsidian",
+      "name": "Obsidian",
+      "paths": [
+        "${APPDATA}/obsidian/Cache/Cache_Data",
+        "${APPDATA}/obsidian/Code Cache",
+        "${APPDATA}/obsidian/GPUCache"
+      ],
+      "description": "Obsidian Electron app cache, compiled code cache, and GPU cache"
+    },
+    {
+      "id": "whatsapp",
+      "name": "WhatsApp Desktop",
+      "paths": [
+        "${APPDATA}/WhatsApp/Cache/Cache_Data",
+        "${APPDATA}/WhatsApp/Code Cache",
+        "${APPDATA}/WhatsApp/GPUCache"
+      ],
+      "description": "WhatsApp Desktop Electron app cache and GPU cache"
+    },
+    {
+      "id": "bitwarden",
+      "name": "Bitwarden",
+      "paths": [
+        "${APPDATA}/Bitwarden/Cache/Cache_Data",
+        "${APPDATA}/Bitwarden/Code Cache",
+        "${APPDATA}/Bitwarden/GPUCache"
+      ],
+      "description": "Bitwarden Electron app cache and GPU cache"
+    },
+    {
+      "id": "1password",
+      "name": "1Password",
+      "paths": [
+        "${APPDATA}/1Password/Cache/Cache_Data",
+        "${APPDATA}/1Password/Code Cache",
+        "${APPDATA}/1Password/GPUCache"
+      ],
+      "description": "1Password Electron app cache and GPU cache"
+    },
+    {
+      "id": "ruby-gems",
+      "name": "Ruby Gem Cache",
+      "paths": ["${HOME}/.gem"],
+      "childSubdir": "cache",
+      "description": "Downloaded .gem file cache (reinstall regenerates as needed)"
+    },
+    {
+      "id": "deno",
+      "name": "Deno Cache",
+      "paths": ["${LOCALAPPDATA}/deno"],
+      "description": "Deno module cache (re-downloaded on demand)"
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "paths": [
+        "${APPDATA}/Claude/Cache/Cache_Data",
+        "${APPDATA}/Claude/Code Cache",
+        "${APPDATA}/Claude/GPUCache",
+        "${APPDATA}/Claude/logs"
+      ],
+      "description": "Claude Desktop Electron app cache, GPU cache, and log files"
+    },
+    {
+      "id": "sublime-text",
+      "name": "Sublime Text",
+      "paths": ["${LOCALAPPDATA}/Sublime Text/Cache"],
+      "description": "Sublime Text index and asset cache"
+    },
+    {
+      "id": "termius",
+      "name": "Termius",
+      "paths": [
+        "${APPDATA}/Termius/Cache/Cache_Data",
+        "${APPDATA}/Termius/Code Cache",
+        "${APPDATA}/Termius/GPUCache"
+      ],
+      "description": "Termius Electron app cache and GPU cache"
+    },
+    {
+      "id": "ledger-live",
+      "name": "Ledger Live",
+      "paths": [
+        "${APPDATA}/Ledger Live/Cache/Cache_Data",
+        "${APPDATA}/Ledger Live/Code Cache",
+        "${APPDATA}/Ledger Live/GPUCache"
+      ],
+      "description": "Ledger Live Electron app cache and GPU cache"
+    },
+    {
+      "id": "node-gyp",
+      "name": "node-gyp Cache",
+      "paths": ["${LOCALAPPDATA}/node-gyp/Cache"],
+      "description": "Node.js native addon build header cache (re-downloaded on demand)"
+    },
+    {
+      "id": "electron-builder",
+      "name": "electron-builder Cache",
+      "paths": ["${LOCALAPPDATA}/electron-builder/Cache"],
+      "description": "Electron builder download cache (re-downloaded on demand)"
+    },
+    {
+      "id": "curseforge",
+      "name": "CurseForge",
+      "paths": [
+        "${APPDATA}/CurseForge/Cache/Cache_Data",
+        "${APPDATA}/CurseForge/Code Cache",
+        "${APPDATA}/CurseForge/GPUCache",
+        "${APPDATA}/CurseForge/logs"
+      ],
+      "description": "CurseForge mod manager Electron app cache, GPU cache, and log files"
+    },
+    {
+      "id": "logitech-ghub",
+      "name": "Logitech G HUB",
+      "paths": [
+        "${APPDATA}/G HUB/Cache/Cache_Data",
+        "${APPDATA}/G HUB/Code Cache",
+        "${APPDATA}/G HUB/GPUCache",
+        "${PROGRAMDATA}/LGHUB/cache"
+      ],
+      "minAgeDays": 7,
+      "description": "Logitech G HUB Electron caches and settled downloaded packages"
+    },
+    {
+      "id": "zen-browser",
+      "name": "Zen Browser",
+      "paths": ["${LOCALAPPDATA}/Zen/Profiles"],
+      "childSubdir": "cache2",
+      "description": "Zen Browser per-profile web content cache"
+    },
+    {
+      "id": "kodi",
+      "name": "Kodi",
+      "paths": ["${APPDATA}/Kodi/cache", "${APPDATA}/Kodi/userdata/Thumbnails"],
+      "description": "Kodi media center cache and thumbnail images (can be several GB; rebuilt on demand)"
+    },
+    {
+      "id": "qbittorrent",
+      "name": "qBittorrent",
+      "paths": ["${LOCALAPPDATA}/qBittorrent/logs"],
+      "description": "qBittorrent log files"
+    },
+    {
+      "id": "handbrake",
+      "name": "HandBrake",
+      "paths": ["${APPDATA}/HandBrake/logs"],
+      "description": "HandBrake video encoder log files from past encoding jobs"
+    },
+    {
+      "id": "java-cache",
+      "name": "Java Runtime Cache",
+      "paths": ["${HOME}/AppData/LocalLow/Sun/Java/Deployment/cache"],
+      "description": "Java Web Start and applet download cache (deprecated technology; safe to remove)"
+    },
+    {
+      "id": "windsurf",
+      "name": "Windsurf IDE",
+      "paths": [
+        "${APPDATA}/Windsurf/Cache/Cache_Data",
+        "${APPDATA}/Windsurf/CachedData",
+        "${APPDATA}/Windsurf/CachedExtensions",
+        "${APPDATA}/Windsurf/logs"
+      ],
+      "description": "Windsurf IDE cached data, extensions, and log files"
+    },
+    {
+      "id": "hyper",
+      "name": "Hyper Terminal",
+      "paths": [
+        "${APPDATA}/Hyper/Cache/Cache_Data",
+        "${APPDATA}/Hyper/Code Cache",
+        "${APPDATA}/Hyper/GPUCache"
+      ],
+      "description": "Hyper terminal Electron app cache and GPU cache"
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "paths": [
+        "${APPDATA}/Linear/Cache/Cache_Data",
+        "${APPDATA}/Linear/Code Cache",
+        "${APPDATA}/Linear/GPUCache"
+      ],
+      "description": "Linear project management Electron app cache and GPU cache"
+    },
+    {
+      "id": "todoist",
+      "name": "Todoist",
+      "paths": [
+        "${APPDATA}/Todoist/Cache/Cache_Data",
+        "${APPDATA}/Todoist/Code Cache",
+        "${APPDATA}/Todoist/GPUCache"
+      ],
+      "description": "Todoist Electron app cache and GPU cache"
+    },
+    {
+      "id": "loom",
+      "name": "Loom",
+      "paths": [
+        "${APPDATA}/Loom/Cache/Cache_Data",
+        "${APPDATA}/Loom/Code Cache",
+        "${APPDATA}/Loom/GPUCache"
+      ],
+      "description": "Loom screen recorder Electron app cache and GPU cache"
+    },
+    {
+      "id": "scoop",
+      "name": "Scoop Cache",
+      "paths": ["${HOME}/scoop/cache"],
+      "description": "Scoop package manager downloaded installer cache (re-downloaded on demand)"
+    },
+    {
+      "id": "aws-cli",
+      "name": "AWS CLI Cache",
+      "paths": ["${HOME}/.aws/cli/cache"],
+      "description": "AWS CLI cached API responses and temporary credentials (re-fetched automatically)"
+    },
+    {
+      "id": "gcloud",
+      "name": "Google Cloud CLI Cache",
+      "paths": ["${APPDATA}/gcloud/logs", "${APPDATA}/gcloud/cache"],
+      "description": "Google Cloud CLI log files and cached API data"
+    },
+    {
+      "id": "cursor-partitions",
+      "name": "Cursor IDE Partitions",
+      "paths": ["${APPDATA}/Cursor/Partitions"],
+      "minAgeDays": 1,
+      "recursiveMatch": {
+        "anchor": "Partitions",
+        "targets": ["Cache", "Code Cache", "GPUCache", "DawnCache", "DawnGraphiteCache", "DawnWebGPUCache"],
+        "excludedAncestors": ["File System", "IndexedDB", "Local Storage", "Network", "Service Worker", "Session Storage", "Sessions", "WebStorage", "blob_storage", "databases"],
+        "maxDepth": 8
+      },
+      "description": "Cursor browser-partition caches while preserving sessions, storage, and workspace data"
+    }
+  ]
+}

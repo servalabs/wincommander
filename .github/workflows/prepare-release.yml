@@ -1,0 +1,128 @@
+name: prepare release
+
+# A maintainer chooses the next exact version. This workflow creates a normal,
+# reviewable PR; merging that PR creates the tag and starts the installer release.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Next SemVer version, for example 3.2.16 or 3.2.16-rc.1. Merging its PR starts the release."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare-release-pr:
+    name: Prepare exact version release PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require owner, admin, or allowlisted releaser
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          RELEASE_AUTO_APPROVERS: ${{ vars.RELEASE_AUTO_APPROVERS }}
+        run: |
+          set -euo pipefail
+          perm="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" --jq .permission)"
+          actor_lc="$(printf '%s' "${ACTOR}" | tr '[:upper:]' '[:lower:]')"
+          listed=false
+          allow="$(printf '%s' "${RELEASE_AUTO_APPROVERS:-}" | tr ',;' ' ')"
+          for name in ${allow}; do
+            name_lc="$(printf '%s' "${name}" | tr '[:upper:]' '[:lower:]')"
+            if [[ "${actor_lc}" == "${name_lc}" ]]; then
+              listed=true
+            fi
+          done
+          echo "Prepare-release requested by ${ACTOR} (${perm}, allowlisted=${listed})"
+          if [[ "${perm}" != "admin" && "${listed}" != "true" ]]; then
+            echo "Only repository owners/admins or people in RELEASE_AUTO_APPROVERS can prepare a release." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          token: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+
+      - name: Validate and set the release version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const version = process.env.RELEASE_VERSION;
+          if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+            throw new Error(`Invalid release version: ${version}`);
+          }
+
+          const packagePath = 'package.json';
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          if (packageJson.version === version) {
+            console.log(`Version ${version} is already prepared on main; no release PR is needed.`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'already_prepared=true\n');
+            process.exit(0);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'already_prepared=false\n');
+          packageJson.version = version;
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+          const tauriPath = 'src-tauri/commander-free/tauri.conf.json';
+          const tauriConfig = JSON.parse(fs.readFileSync(tauriPath, 'utf8'));
+          tauriConfig.version = version;
+          fs.writeFileSync(tauriPath, `${JSON.stringify(tauriConfig, null, 2)}\n`);
+
+          const cargoPath = 'src-tauri/commander-free/Cargo.toml';
+          const cargo = fs.readFileSync(cargoPath, 'utf8');
+          if (!/^version = ".*"$/m.test(cargo)) {
+            throw new Error('Free Cargo package version was not found.');
+          }
+          const updatedCargo = cargo.replace(/^version = ".*"$/m, `version = "${version}"`);
+          fs.writeFileSync(cargoPath, updatedCargo);
+
+          const lockPath = 'src-tauri/Cargo.lock';
+          const lock = fs.readFileSync(lockPath, 'utf8');
+          const updatedLock = lock.replace(
+            /(\[\[package\]\]\nname = "commander-free"\nversion = ")[^"]+(")/,
+            `$1${version}$2`,
+          );
+          if (updatedLock === lock) throw new Error('Free Cargo.lock package version was not found.');
+          fs.writeFileSync(lockPath, updatedLock);
+          NODE
+
+      - name: Create release pull request
+        if: steps.version.outputs.already_prepared != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          branch="release/v${RELEASE_VERSION}"
+          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
+            echo "Release branch already exists: ${branch}" >&2
+            exit 1
+          fi
+
+          git switch -c "${branch}"
+          git config user.name "WinCommander release automation"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json src-tauri/commander-free/tauri.conf.json src-tauri/commander-free/Cargo.toml src-tauri/Cargo.lock
+          git commit -m "release: v${RELEASE_VERSION}"
+          git push origin "${branch}"
+          gh pr create \
+            --base main \
+            --head "${branch}" \
+            --title "release: v${RELEASE_VERSION}" \
+            --body "Exact version-release PR generated by GitHub Actions. Merging it automatically creates protected tag \`v${RELEASE_VERSION}\` and starts the signed Free MSI workflow."
+          # Owner/admin (or RELEASE_AUTO_APPROVERS) initiated this; skip the
+          # CODEOWNERS wait on tauri.conf.json so prepare → tag → MSI is one run.
+          gh pr merge --merge --admin "${branch}"
+
+      - name: Confirm already prepared version
+        if: steps.version.outputs.already_prepared == 'true'
+        run: echo "Version is already prepared. Run the release workflow directly with v${{ inputs.version }}."

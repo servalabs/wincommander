@@ -1,0 +1,2013 @@
+/* ══════════════════════════════════════════════════════════════════════
+   Fleet panel — Anduril-themed admin console.
+   All colors/radii via V2 tokens (see src/styles/v2-theme.css). No raw hex.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.fleet-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  height: 100%;
+  min-height: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Commercial notice banner ─────────────────────────────────────── */
+.fleet-commercial-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent-line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.fleet-commercial-notice > svg,
+.fleet-commercial-notice > [data-icon] {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+.fleet-commercial-notice > span {
+  flex: 1 1 auto;
+}
+.fleet-commercial-notice strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.fleet-commercial-notice__cta {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.fleet-commercial-notice__cta:hover {
+  background: var(--accent);
+  color: var(--surface);
+}
+
+/* ── Status dot ───────────────────────────────────────────────────── */
+.fleet-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex: 0 0 auto;
+  background: var(--text-mute);
+}
+.fleet-dot.is-online {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent);
+}
+.fleet-dot.is-offline {
+  background: var(--text-mute);
+}
+.fleet-dot.is-dark {
+  background: var(--danger);
+  animation: fleet-pulse 2s ease-in-out infinite;
+}
+.fleet-dot.is-pending {
+  background: var(--warn);
+  animation: fleet-pulse 1.4s ease-in-out infinite;
+}
+@keyframes fleet-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* ── Header ───────────────────────────────────────────────────────── */
+.fleet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.fleet-header-id {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.fleet-header-mark,
+.fleet-login-mark {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-lg);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+}
+.fleet-header-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin: 0;
+  color: var(--text);
+}
+.fleet-header-server {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.fleet-server-state {
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+.fleet-header-account {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.fleet-account-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fleet-account-email {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+/* ── Tabs ─────────────────────────────────────────────────────────── */
+.fleet-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.fleet-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-mute);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.fleet-tab:hover {
+  color: var(--text-dim);
+}
+.fleet-tab.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ── Body / views ─────────────────────────────────────────────────── */
+.fleet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.fleet-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+.fleet-view-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--gap);
+}
+.fleet-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+.fleet-section-sub {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin: 4px 0 0;
+  max-width: 60ch;
+  line-height: 1.5;
+}
+.fleet-empty {
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--text-mute);
+  font-size: 13px;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-xl);
+}
+.fleet-empty code {
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+
+/* ── Stat tiles ───────────────────────────────────────────────────── */
+.fleet-stat-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.fleet-stat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  min-width: 120px;
+}
+.fleet-stat-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-lg);
+  color: var(--text-dim);
+  background: var(--surface-2);
+}
+.fleet-stat-icon.tone-ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+.fleet-stat-icon.tone-mute {
+  color: var(--text-mute);
+}
+.fleet-stat-icon.tone-danger {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.fleet-stat-value {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+}
+.fleet-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-mute);
+  margin-top: 3px;
+}
+
+/* ── Device grid ──────────────────────────────────────────────────── */
+.fleet-device-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+.fleet-device-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 16px 18px;
+  transition: border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+}
+.fleet-device-card:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+.fleet-device-card.is-dark {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 4%, var(--surface));
+}
+.fleet-device-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.fleet-device-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-device-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 14px;
+  margin: 0;
+}
+.fleet-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.fleet-meta dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-mute);
+}
+.fleet-meta dd {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.fleet-meta dd.mono {
+  font-size: 11px;
+}
+
+/* ── Policy editor ────────────────────────────────────────────────── */
+.fleet-policy {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 16px;
+  align-items: start;
+}
+.fleet-policy-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fleet-editor-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.fleet-editor-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-mute);
+}
+.fleet-textarea {
+  width: 100%;
+  min-height: 280px;
+  resize: vertical;
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  outline: none;
+  transition: border-color var(--t-fast) var(--ease);
+}
+.fleet-textarea:focus {
+  border-color: var(--accent-line);
+}
+.fleet-json-error {
+  font-size: 12px;
+  color: var(--danger);
+  font-family: var(--font-mono);
+  margin: 0;
+}
+.fleet-policy-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.fleet-policy-side {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 16px;
+}
+.fleet-side-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-mute);
+  margin: 0 0 12px;
+}
+.fleet-side-empty {
+  font-size: 12.5px;
+  color: var(--text-mute);
+  margin: 0;
+}
+.fleet-epoch-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+}
+.fleet-epoch-version {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ok);
+  margin-bottom: 12px;
+}
+
+/* ── Command console ──────────────────────────────────────────────── */
+.fleet-cmd-compose {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.fleet-compose-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.fleet-select {
+  height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+}
+.fleet-select:focus {
+  border-color: var(--accent-line);
+}
+.fleet-class-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.fleet-class {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.fleet-class:hover {
+  border-color: var(--border-strong);
+}
+.fleet-class.is-active.cls-safe {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.fleet-class.is-active.cls-destructive {
+  border-color: color-mix(in srgb, var(--warn) 50%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.fleet-class.is-active.cls-irreversible {
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.fleet-class-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.fleet-class-hint {
+  font-size: 11px;
+  color: var(--text-mute);
+}
+.fleet-warn-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--warn);
+  margin: 0;
+}
+
+.fleet-cmd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.fleet-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.fleet-table th {
+  text-align: left;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-mute);
+  font-weight: 600;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.fleet-table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.fleet-table tr:hover td {
+  background: var(--surface-2);
+}
+.fleet-cell-actions {
+  text-align: right;
+}
+.fleet-class-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text-dim);
+}
+.fleet-class-tag.cls-destructive {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.fleet-class-tag.cls-irreversible {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+/* ── Shared table alias classes (used by DriftView + any plain <table>) ── */
+/* th/td elements addressed via .fleet-table th/td; these .fleet-th/.fleet-td
+   classes satisfy DriftView's class= attrs and are identical in appearance. */
+.fleet-th {
+  text-align: left;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-mute);
+  font-weight: 600;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.fleet-td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.fleet-tr:hover .fleet-td {
+  background: var(--surface-2);
+}
+
+/* ── Shared fleet input ────────────────────────────────────────────── */
+.fleet-input {
+  height: 36px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--t-fast) var(--ease);
+}
+.fleet-input:focus {
+  border-color: var(--accent-line);
+}
+.fleet-input::placeholder {
+  color: var(--text-mute);
+}
+
+/* ── Confirm label (shown in DevicesView inline confirm row) ───────── */
+.fleet-confirm-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--warn);
+  margin-right: 6px;
+}
+
+/* ── Section heading inside a fleet view ──────────────────────────── */
+.fleet-section-head {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text);
+}
+
+/* ── Error inline banner ──────────────────────────────────────────── */
+.fleet-error-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--danger);
+  margin: 0 0 8px;
+}
+
+/* ── Productivity ─────────────────────────────────────────────────── */
+.fleet-range {
+  display: flex;
+  gap: 4px;
+}
+.fleet-prod-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.fleet-prod-row {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 14px 18px;
+}
+.fleet-prod-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.fleet-prod-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--text);
+  flex: 1 1 auto;
+}
+.fleet-prod-focus {
+  font-size: 12px;
+  color: var(--accent);
+}
+.fleet-bar {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.fleet-bar-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width var(--t) var(--ease);
+}
+.fleet-prod-meta {
+  display: flex;
+  gap: 18px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-mute);
+}
+.fleet-prod-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* ── Audit timeline ───────────────────────────────────────────────── */
+.fleet-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fleet-tl-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.fleet-tl-dot {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  flex: 0 0 auto;
+}
+.fleet-tl-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.fleet-tl-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fleet-tl-action {
+  font-size: 13px;
+  color: var(--text);
+}
+.fleet-tl-outcome {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-mute);
+}
+.fleet-tl-outcome.outcome-ok { color: var(--ok); }
+.fleet-tl-outcome.outcome-denied,
+.fleet-tl-outcome.outcome-error { color: var(--danger); }
+.fleet-tl-sub {
+  display: flex;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--text-mute);
+  margin-top: 2px;
+}
+.fleet-tl-time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-mute);
+  flex: 0 0 auto;
+}
+
+/* ── Login ────────────────────────────────────────────────────────── */
+.fleet-login {
+  display: grid;
+  place-items: center;
+  height: 100%;
+}
+.fleet-login-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 380px;
+  max-width: 100%;
+  padding: 32px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow);
+}
+.fleet-login-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 4px;
+}
+.fleet-login-title {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text);
+}
+.fleet-login-sub {
+  font-size: 12.5px;
+  color: var(--text-mute);
+  margin: 2px 0 0;
+}
+.fleet-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fleet-field-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-mute);
+}
+.fleet-field-row {
+  display: flex;
+  gap: 8px;
+}
+.fleet-field-row > :first-child {
+  flex: 1 1 auto;
+}
+.fleet-field-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.fleet-field-hint.fleet-ok {
+  color: var(--ok);
+}
+.fleet-login-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--danger);
+  margin: 0;
+}
+.fleet-login-foot {
+  font-size: 11px;
+  color: var(--text-mute);
+  text-align: center;
+  margin: 4px 0 0;
+}
+
+/* ── Device enrollment card ───────────────────────────────────────── */
+.fleet-connect-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.fleet-connect-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fleet-connect-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fleet-connect-icon {
+  color: var(--text-mute);
+}
+.fleet-connect-title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+.fleet-connect-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+}
+.fleet-connect-badge--ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.fleet-connect-badge--off {
+  color: var(--text-mute);
+  background: var(--surface-2);
+}
+.fleet-connect-badge--pending {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.fleet-connect-status {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.fleet-connect-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px 20px;
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.fleet-connect-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.fleet-connect-toggle {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.fleet-connect-toggle-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  display: block;
+  margin-bottom: 3px;
+}
+.fleet-connect-toggle-sub {
+  font-size: 12px;
+  color: var(--text-mute);
+  margin: 0;
+  max-width: 44ch;
+  line-height: 1.5;
+}
+.fleet-connect-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--danger);
+  margin: 0;
+}
+.fleet-connect-enrolling {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-mute);
+  margin: 0;
+}
+
+/* ── Device enrollment card — loading skeleton ────────────────────── */
+/* Same shimmer technique as PanelSkeleton.css (gradient sweep via
+   background-position), reskinned with this file's V2 tokens and shaped
+   like this card's own meta rows instead of the generic row/toggle shape. */
+@keyframes fleet-shimmer-sweep {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.fleet-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--surface-3) 50%,
+    var(--surface-2) 75%
+  );
+  background-size: 800px 100%;
+  animation: fleet-shimmer-sweep 1.4s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+.fleet-shimmer-label {
+  height: 9px;
+  width: 64px;
+  margin-bottom: 6px;
+}
+.fleet-shimmer-value {
+  height: 13px;
+  width: 72%;
+}
+
+/* ── Device card — remove action ─────────────────────────────────── */
+.fleet-device-actions {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ── Drift alerts (P3 notifications) ──────────────────────────────── */
+.fleet-alerts {
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fleet-alert {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+.fleet-alert.sev-critical {
+  border-left-color: var(--danger);
+}
+.fleet-alert-main {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.fleet-alert-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fleet-alert-summary {
+  font-size: 13px;
+  color: var(--text);
+}
+.fleet-alert-toggles {
+  margin: 0;
+  padding-left: 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.fleet-alert-actual {
+  color: var(--danger);
+}
+.fleet-alert-desired {
+  color: var(--ok);
+}
+.fleet-alert-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.fleet-tab-badge {
+  margin-left: 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: var(--warn);
+  color: #1a1205;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  font-family: var(--font-mono);
+}
+.fleet-tab-badge--danger {
+  background: var(--danger);
+  color: var(--surface);
+}
+/* "managed" chip on device cards */
+.fleet-managed-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Policy — toggle settings ────────────────────────────────────── */
+.fleet-setting-group {
+  margin-bottom: 4px;
+}
+.fleet-setting-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-mute);
+  margin: 12px 0 4px;
+  padding: 0 2px;
+}
+.fleet-setting-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.fleet-setting-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--surface);
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: background 0.1s;
+}
+.fleet-setting-section-head:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.fleet-setting-section-label {
+  flex: 1;
+}
+.fleet-setting-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--surface);
+}
+.fleet-setting-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+  transition: background 0.1s;
+}
+.fleet-setting-row:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+.fleet-setting-row.is-set {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.fleet-setting-label {
+  flex: 1;
+  line-height: 1.4;
+}
+.fleet-setting-hint {
+  color: var(--text-mute);
+  font-style: italic;
+  font-size: 11px;
+}
+.fleet-setting-lock {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-sm);
+  border: none;
+  background: transparent;
+  color: var(--text-mute);
+  cursor: pointer;
+  flex: 0 0 auto;
+  opacity: 0.5;
+  transition: opacity 0.1s, color 0.1s;
+}
+.fleet-setting-lock:hover:not(:disabled) {
+  opacity: 1;
+  color: var(--accent);
+}
+.fleet-setting-lock.is-locked {
+  opacity: 1;
+  color: var(--accent);
+}
+.fleet-setting-lock:disabled {
+  cursor: default;
+  opacity: 0.2;
+}
+/* ── 3-state toggle (Off / — / On) ── */
+.fleet-setting-tristate {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.fleet-ts-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-mute);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  line-height: 1.6;
+}
+.fleet-ts-btn:last-child {
+  border-right: none;
+}
+.fleet-ts-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.fleet-ts-btn.fleet-ts-dash {
+  min-width: 24px;
+  text-align: center;
+  opacity: 0.6;
+}
+.fleet-ts-btn.is-unset {
+  background: var(--surface);
+  color: var(--text-dim);
+}
+.fleet-ts-btn.is-on {
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+  color: var(--ok);
+}
+.fleet-ts-btn.is-off {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+/* ── Policy JSON preview ── */
+.fleet-policy-preview {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 320px;
+  white-space: pre;
+  margin: 0;
+}
+.fleet-locked-list {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  color: var(--text-dim);
+}
+
+/* ── Policy — per-tile lock/unset controls ────────────────────────── */
+.fleet-policy-tile-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.fleet-policy-tile-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 0.5px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  background: var(--surface-2);
+}
+
+/* ── Policy — lock checkbox row ───────────────────────────────────── */
+.fleet-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.fleet-check-row input {
+  accent-color: var(--accent);
+}
+
+/* ── Control tab — capability / toggle grid ───────────────────────── */
+.fleet-control-device {
+  max-width: 420px;
+  margin-bottom: 16px;
+}
+/* ToggleTile grid inside a SectionCard — 4 columns auto-fill */
+.fleet-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+/* Legacy: arm/disarm card grid (tripwires + bespoke action tiles) */
+.fleet-cap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.fleet-tripwire-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+.fleet-cap-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.fleet-cap-label {
+  flex: 1;
+}
+.fleet-cap-actions {
+  display: flex;
+  gap: 8px;
+}
+.fleet-cap-actions > * {
+  flex: 1;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────── */
+@media (max-width: 880px) {
+  .fleet-policy {
+    grid-template-columns: 1fr;
+  }
+  .fleet-compose-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.fleet-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.fleet-panel-heading h2 {
+  margin: 0;
+  color: var(--text);
+  font: 650 22px/1.2 var(--font-display);
+}
+
+.fleet-panel-heading p {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.fleet-tabs-list {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.fleet-tab-content,
+.fleet-admin-stack {
+  min-width: 0;
+}
+
+.fleet-admin-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.fleet-subcard h4 {
+  margin: 0;
+  color: var(--text);
+}
+
+.fleet-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.fleet-form-grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.fleet-field {
+  display: grid;
+  align-content: start;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fleet-field.is-compact {
+  grid-template-rows: 16px 34px;
+  gap: 5px;
+}
+
+.fleet-field.is-compact > span,
+.fleet-field.is-compact [data-slot="label"] {
+  overflow: hidden;
+  min-height: 16px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-field.is-compact input,
+.fleet-field.is-compact [data-slot="input"],
+.fleet-field.is-compact [data-slot="select-trigger"] {
+  box-sizing: border-box;
+  width: 100%;
+  height: 34px;
+  min-height: 34px;
+  max-height: 34px;
+}
+
+.fleet-field.is-compact [data-slot="select-trigger"] {
+  display: flex;
+}
+
+.fleet-field-hint,
+.fleet-switch-field small,
+.fleet-partition-list small {
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.fleet-switch-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+
+.fleet-switch-field span {
+  display: grid;
+  gap: 2px;
+}
+
+.fleet-group-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.fleet-volume-stack {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.fleet-subcard {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+
+.fleet-subcard-heading,
+.fleet-action-row,
+.fleet-discovery-row,
+.fleet-policy-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.fleet-subcard-heading {
+  justify-content: space-between;
+}
+
+.fleet-subcard-heading > input {
+  max-width: 360px;
+  font-weight: 650;
+}
+
+.fleet-policy-row {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.fleet-policy-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fleet-policy-row .is-disabled {
+  opacity: .45;
+}
+
+.fleet-callout {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fleet-callout-warning {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+}
+
+.fleet-partition-list {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 6px;
+}
+
+.fleet-partition-list button {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  text-align: left;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+
+.fleet-partition-list button.is-selected {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.fleet-partition-list button:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.fleet-action-row {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.fleet-table-wrap {
+  max-width: 100%;
+  margin-top: 14px;
+  overflow: auto;
+}
+
+.fleet-policy-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.fleet-policy-table th,
+.fleet-policy-table td {
+  padding: 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.fleet-validation-errors {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.fleet-access-layout {
+  display: grid;
+  grid-template-columns: minmax(250px, 3fr) minmax(0, 7fr);
+  align-items: start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.fleet-access-pane {
+  min-width: 0;
+}
+
+.fleet-access-pane-content {
+  display: block;
+}
+
+.fleet-access-title-row,
+.fleet-access-user-tools,
+.fleet-access-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fleet-access-title-row { justify-content: space-between; }
+
+.fleet-info-trigger {
+  width: 32px;
+  height: 32px;
+}
+
+.fleet-info-popover {
+  width: min(360px, calc(100vw - 32px));
+  padding: 14px;
+}
+
+.fleet-info-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.fleet-info-heading svg {
+  color: var(--accent);
+}
+
+.fleet-info-popover p,
+.fleet-info-popover ul {
+  margin: 10px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.fleet-info-popover ul {
+  display: grid;
+  gap: 6px;
+  padding-left: 18px;
+}
+
+.fleet-access-group-list {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.fleet-access-user-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  align-content: start;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.fleet-access-group-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  text-align: left;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface-2);
+  transition: border-color 150ms var(--ease), background 150ms var(--ease);
+}
+
+.fleet-access-group-row:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+}
+
+.fleet-access-group-row.is-selected {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.fleet-access-group-row > span:first-child,
+.fleet-access-user-copy {
+  display: grid;
+  grid-template-rows: 16px 14px;
+  min-width: 0;
+  gap: 2px;
+}
+
+.fleet-access-group-row strong,
+.fleet-access-user-row strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-access-group-row small,
+.fleet-access-user-row small {
+  overflow: hidden;
+  color: var(--text-mute);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-access-empty small {
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.fleet-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.fleet-access-details {
+  display: grid;
+  gap: 12px;
+}
+
+.fleet-access-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.fleet-access-user-tools > input {
+  min-width: 0;
+  flex: 1;
+}
+
+.fleet-access-user-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface-2);
+}
+
+.fleet-access-user-list { padding: 8px; }
+
+.fleet-access-user-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  height: 56px;
+  min-height: 56px;
+  max-height: 56px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  background: var(--surface);
+}
+
+.fleet-access-user-row.is-checked {
+  border-color: color-mix(in srgb, var(--accent-line) 65%, var(--border));
+  background: var(--accent-soft);
+}
+
+.fleet-access-user-row input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--accent);
+}
+
+.fleet-access-empty {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  min-height: 180px;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.fleet-access-empty-main { flex: 1; }
+.fleet-access-actions { justify-content: space-between; }
+.fleet-inline-error { color: var(--danger); font-size: 12px; }
+
+.fleet-vault-workspace { min-width: 0; }
+
+.fleet-vault-workspace-header {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.fleet-vault-workspace-content { display: grid; }
+
+.fleet-vault-empty-inline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 76px;
+  padding: 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r);
+  color: var(--text-dim);
+  text-align: left;
+}
+
+.fleet-vault-empty-inline > div,
+.fleet-vault-matrix-volume,
+.fleet-vault-permission-head > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.fleet-vault-empty-inline small,
+.fleet-vault-matrix-volume small,
+.fleet-vault-permission-head small,
+.fleet-vault-matrix-hint {
+  overflow: hidden;
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+}
+
+.fleet-vault-matrix-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+
+.fleet-vault-matrix {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.fleet-vault-matrix th,
+.fleet-vault-matrix td {
+  padding: 10px 12px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.fleet-vault-matrix th:last-child,
+.fleet-vault-matrix td:last-child { border-right: 0; }
+.fleet-vault-matrix tbody tr:last-child td { border-bottom: 0; }
+
+.fleet-vault-matrix th {
+  color: var(--text-mute);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.fleet-vault-matrix th:not(:first-child),
+.fleet-vault-matrix td:not(:first-child) { text-align: center; }
+.fleet-vault-matrix tr.is-selected { background: var(--accent-soft); }
+
+.fleet-vault-matrix-volume {
+  width: 100%;
+  min-width: 210px;
+  color: var(--text);
+  text-align: left;
+}
+
+.fleet-vault-matrix-volume strong,
+.fleet-vault-permission-head strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-vault-matrix td [data-slot="select-trigger"] { min-width: 118px; }
+
+.fleet-vault-owner-lock {
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.fleet-vault-matrix-hint { margin: 10px 0 0; }
+
+.fleet-vault-editor {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.fleet-vault-editor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.fleet-vault-editor-header > div { display: grid; gap: 3px; }
+.fleet-vault-editor-header span { color: var(--text-mute); font-family: var(--font-mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
+.fleet-vault-editor-header strong { font-size: 14px; }
+
+.fleet-owner-stack {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fleet-owner-inputs,
+.fleet-vault-fields {
+  display: grid;
+  grid-template-rows: auto;
+  grid-auto-flow: column;
+  align-items: start;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.fleet-owner-inputs {
+  grid-template-columns: minmax(140px, 1.1fr) minmax(160px, 1.1fr) minmax(220px, 1.6fr) minmax(120px, 0.8fr);
+}
+
+.fleet-owner-tools {
+  display: grid;
+  gap: 10px;
+}
+
+.fleet-policy-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.fleet-vault-fields {
+  grid-template-columns: minmax(120px, 1.2fr) minmax(110px, 1fr) minmax(160px, 1.4fr) minmax(88px, 0.7fr) minmax(72px, 0.55fr) minmax(140px, 1.1fr);
+  grid-auto-columns: minmax(110px, 1fr);
+}
+
+.fleet-vault-fields.is-dual {
+  grid-template-columns: minmax(110px, 1.1fr) minmax(100px, 0.95fr) minmax(140px, 1.3fr) minmax(80px, 0.65fr) minmax(68px, 0.5fr) minmax(120px, 1fr) minmax(90px, 0.7fr) minmax(120px, 1fr);
+}
+
+.fleet-vault-permission-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.fleet-vault-permission-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fleet-vault-permission-title > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.fleet-vault-owner-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.fleet-vault-empty-groups { justify-content: flex-start; min-height: 64px; padding: 12px; }
+
+.fleet-vault-lifecycle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+}
+
+.fleet-vault-lifecycle > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.fleet-vault-lifecycle strong {
+  font-size: 12px;
+}
+
+.fleet-vault-access-label {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+@media (max-width: 1100px) {
+  .fleet-form-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fleet-group-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 900px) {
+  .fleet-access-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .fleet-form-grid,
+  .fleet-form-grid-4 { grid-template-columns: 1fr; }
+  .fleet-access-fields { grid-template-columns: 1fr; }
+  .fleet-owner-tools { grid-template-columns: 1fr; }
+  .fleet-policy-toggle-grid { grid-template-columns: 1fr; }
+  .fleet-vault-workspace-header { align-items: stretch; flex-direction: column; }
+  .fleet-vault-workspace-header > button { align-self: flex-start; }
+  .fleet-vault-permission-head { align-items: flex-start; flex-direction: column; }
+  .fleet-vault-lifecycle { align-items: flex-start; flex-direction: column; }
+}

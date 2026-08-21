@@ -1,0 +1,68 @@
+.mount-scope-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mount-scope-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mount-scope-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.mount-scope-option:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
+}
+
+.mount-scope-option.is-selected {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+.mount-scope-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mount-scope-option input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+
+.mount-scope-option:focus-within {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.mount-scope-option span {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.mount-scope-locked-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--color-text-muted);
+}

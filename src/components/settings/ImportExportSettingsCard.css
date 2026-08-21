@@ -1,0 +1,86 @@
+.import-export-settings-card .section-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.import-export-buttons {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.import-export-info-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-full);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: color 120ms ease, border-color 120ms ease;
+}
+
+.import-export-info-trigger:hover {
+    color: var(--color-text-primary);
+    border-color: var(--color-text-muted);
+}
+
+.import-export-info-trigger:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-border);
+}
+
+.import-export-info {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--color-text-muted);
+}
+
+.import-export-info__item strong {
+    color: var(--color-text-primary);
+}
+
+.import-export-warning {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    min-width: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--color-warning);
+    cursor: default;
+}
+
+.import-export-warning:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-warning-dim);
+    border-radius: var(--radius-sm);
+}
+
+.import-export-warning__icon {
+    flex-shrink: 0;
+}
+
+.import-export-warning__text {
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.import-export-warning-tooltip {
+    max-width: 260px;
+    line-height: 1.4;
+}

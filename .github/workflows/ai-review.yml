@@ -1,0 +1,65 @@
+name: ai-review
+
+# Independent AI code + security review on every PR — the "different reviewer than the
+# author" gate (BESTPRACTICES 2.7 / 2.8.12). The coding agent writes with Claude; this
+# reviews with DeepSeek, so the reviewer is a genuinely DIFFERENT model. Advisory by
+# design: it posts (edits) one review comment and never blocks the merge — the hard
+# gates stay in invariants.yml. Promote to a required check later if you want it blocking.
+#
+# REQUIRES one repo secret before it runs:
+#   DEEPSEEK_API_KEY   — Settings → Secrets and variables → Actions → New repository secret
+#
+# Model is set per-run below (DEEPSEEK_MODEL). deepseek-reasoner is the sharpest bug
+# finder; switch to deepseek-chat for faster/cheaper, or your account's v4 model id.
+
+# TEMPORARY: disabled while the release flow is being tested (repo is still
+# private, so PR runs consume real Actions minutes). This workflow reads the
+# PR number from the trigger event, so it isn't meaningful to run manually —
+# just uncomment `pull_request` below once testing is done.
+on:
+  workflow_dispatch:
+  # pull_request:
+  #   types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write # post/edit the review comment
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: AI code + security review
+    runs-on: ubuntu-latest
+    # Skip drafts and Dependabot's own PRs (audited separately by the invariants suite).
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Collect PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr diff ${{ github.event.pull_request.number }} > pr.diff
+
+      - name: DeepSeek review
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DEEPSEEK_MODEL: deepseek-reasoner
+        run: python3 .github/scripts/deepseek_review.py pr.diff review.md
+
+      # Edit the existing review comment in place (no spam on every push); create it on
+      # the first run. --create-if-none needs a recent gh; the || is the fallback.
+      - name: Post review comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body-file review.md --edit-last --create-if-none \
+          || gh pr comment "${{ github.event.pull_request.number }}" \
+            --body-file review.md

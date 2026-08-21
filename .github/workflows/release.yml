@@ -1,0 +1,526 @@
+name: release
+
+# A vX.Y.Z tag starts the release. Pushing the tag (locally or after a
+# prepare-release PR merges) aligns Cargo/package versions, then the MSI
+# job uses the protected `release` environment (signing key + R2).
+# Owners/admins and usernames in RELEASE_AUTO_APPROVERS skip the manual
+# Review deployments click; anyone else cannot start the workflow.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing vX.Y.Z tag to build and publish
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Existing vX.Y.Z tag to build and publish
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+
+concurrency:
+  group: public-release-${{ inputs.release_tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # version-file commit + GitHub Release archive
+  id-token: write # keyless Sigstore provenance
+  attestations: write # persist build provenance
+
+jobs:
+  align-version:
+    name: Align Cargo and version files
+    runs-on: ubuntu-latest
+    outputs:
+      release_sha: ${{ steps.align.outputs.release_sha }}
+    steps:
+      - name: Require owner, admin, or allowlisted releaser
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          RELEASE_AUTO_APPROVERS: ${{ vars.RELEASE_AUTO_APPROVERS }}
+        run: |
+          set -euo pipefail
+          perm="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" --jq .permission)"
+          actor_lc="$(printf '%s' "${ACTOR}" | tr '[:upper:]' '[:lower:]')"
+          listed=false
+          allow="$(printf '%s' "${RELEASE_AUTO_APPROVERS:-}" | tr ',;' ' ')"
+          for name in ${allow}; do
+            name_lc="$(printf '%s' "${name}" | tr '[:upper:]' '[:lower:]')"
+            if [[ "${actor_lc}" == "${name_lc}" ]]; then
+              listed=true
+            fi
+          done
+          echo "Release requested by ${ACTOR} (${perm}, allowlisted=${listed})"
+          if [[ "${perm}" != "admin" && "${listed}" != "true" ]]; then
+            echo "Only repository owners/admins or people in RELEASE_AUTO_APPROVERS can start a release." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+
+      - name: Align version files with the tag
+        id: align
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tags must look like vX.Y.Z or vX.Y.Z-prerelease: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+
+          version="${RELEASE_TAG#v}"
+          git fetch origin main --quiet
+          tag_sha="$(git rev-parse HEAD)"
+          main_sha="$(git rev-parse origin/main)"
+
+          node <<'NODE'
+          const fs = require('fs');
+          const version = process.env.RELEASE_TAG.slice(1);
+          const packagePath = 'package.json';
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          const current = packageJson.version;
+          const parse = (value) => {
+            const match = /^(\d+)\.(\d+)\.(\d+)(?:-.*)?$/.exec(value);
+            if (!match) throw new Error(`Invalid version: ${value}`);
+            return match.slice(1, 4).map(Number);
+          };
+          const [requestedMajor, requestedMinor, requestedPatch] = parse(version);
+          const [currentMajor, currentMinor, currentPatch] = parse(current);
+          const requestedBase = requestedMajor * 1_000_000 + requestedMinor * 1_000 + requestedPatch;
+          const currentBase = currentMajor * 1_000_000 + currentMinor * 1_000 + currentPatch;
+          if (requestedBase < currentBase) {
+            throw new Error(`Tag v${version} is older than the current version ${current}.`);
+          }
+
+          const tauriPath = 'src-tauri/commander-free/tauri.conf.json';
+          const cargoPath = 'src-tauri/commander-free/Cargo.toml';
+          const lockPath = 'src-tauri/Cargo.lock';
+          const tauriConfig = JSON.parse(fs.readFileSync(tauriPath, 'utf8'));
+          const cargo = fs.readFileSync(cargoPath, 'utf8');
+          const lock = fs.readFileSync(lockPath, 'utf8');
+          const cargoVersion = (cargo.match(/^version = "([^"]+)"/m) || [])[1];
+          const lockVersion = (lock.match(/\[\[package\]\]\nname = "commander-free"\nversion = "([^"]+)"/) || [])[1];
+          const aligned =
+            current === version &&
+            tauriConfig.version === version &&
+            cargoVersion === version &&
+            lockVersion === version;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `already_aligned=${aligned}\n`);
+          if (aligned) {
+            console.log(`Version files already match ${version}.`);
+            process.exit(0);
+          }
+
+          packageJson.version = version;
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+          tauriConfig.version = version;
+          fs.writeFileSync(tauriPath, `${JSON.stringify(tauriConfig, null, 2)}\n`);
+          if (!/^version = ".*"$/m.test(cargo)) {
+            throw new Error('Free Cargo package version was not found.');
+          }
+          fs.writeFileSync(cargoPath, cargo.replace(/^version = ".*"$/m, `version = "${version}"`));
+          const updatedLock = lock.replace(
+            /(\[\[package\]\]\nname = "commander-free"\nversion = ")[^"]+(")/,
+            `$1${version}$2`,
+          );
+          if (updatedLock === lock) throw new Error('Free Cargo.lock package version was not found.');
+          fs.writeFileSync(lockPath, updatedLock);
+          console.log(`Updated version files ${current} -> ${version}.`);
+          NODE
+
+          if [[ "$(git rev-parse HEAD)" != "$tag_sha" ]]; then
+            echo "Checkout moved while aligning versions." >&2
+            exit 1
+          fi
+
+          git config user.name "WinCommander release automation"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- package.json \
+              src-tauri/commander-free/tauri.conf.json \
+              src-tauri/commander-free/Cargo.toml \
+              src-tauri/Cargo.lock; then
+            echo "release_sha=${tag_sha}" >> "$GITHUB_OUTPUT"
+            echo "Version files already match ${version} at ${tag_sha}."
+            exit 0
+          fi
+
+          if [[ "${tag_sha}" != "${main_sha}" ]]; then
+            echo "Tag ${RELEASE_TAG} is not origin/main HEAD, so the workflow cannot commit version files on top of it." >&2
+            echo "Merge the intended commits to main, then retag, or run prepare release first." >&2
+            exit 1
+          fi
+
+          git add package.json \
+            src-tauri/commander-free/tauri.conf.json \
+            src-tauri/commander-free/Cargo.toml \
+            src-tauri/Cargo.lock
+          git commit -m "release: v${version}"
+          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:main
+          echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  auto-approve-release:
+    name: Auto-approve release environment
+    needs: align-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Approve pending release deployment
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          # GITHUB_TOKEN cannot approve its own deployment. The automation
+          # PAT must belong to a required reviewer on the `release`
+          # environment, and "Prevent self-review" must be off if that
+          # person also pushed the tag.
+          for _ in $(seq 1 40); do
+            pending="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/pending_deployments")"
+            count="$(printf '%s' "${pending}" | jq 'length')"
+            if [[ "${count}" != "0" ]]; then
+              ids="$(printf '%s' "${pending}" | jq -c '[.[].environment.id]')"
+              printf '%s' "${pending}" | jq -r '.[] | "Pending environment: \(.environment.name) (\(.environment.id))"'
+              if jq -n \
+                --argjson ids "${ids}" \
+                --arg comment "Auto-approved: ${ACTOR} is a repository owner/admin or RELEASE_AUTO_APPROVERS entry." \
+                '{environment_ids: $ids, state: "approved", comment: $comment}' \
+                | gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/pending_deployments" --input -; then
+                echo "Approved the release environment for ${ACTOR}."
+                exit 0
+              fi
+              echo "Auto-approve was rejected (often Prevent self-review, or the PAT is not a required reviewer). Approve Review deployments in the Actions UI."
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "No pending deployment appeared. If the MSI job is waiting, approve the release environment in the Actions UI. If Prevent self-review is enabled, turn it off for owner-triggered releases."
+
+  build-free-release:
+    name: Build, sign, publish to R2 and GitHub, and attest Free MSI
+    needs: align-version
+    runs-on: windows-latest
+    environment:
+      name: release
+      url: https://winupdates.servalabs.com/free/latest.json
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.align-version.outputs.release_sha }}
+          # Build from the aligned release commit (the tag itself when
+          # versions already match, or the follow-up Cargo bump on main).
+          # A hard-coded assets ref can drift from local development and ship
+          # a release with missing runtime logos despite a passing dev build.
+          submodules: recursive
+
+      - name: Validate pinned shared build assets
+        shell: pwsh
+        run: |
+          $checkedOutAssets = Join-Path $env:GITHUB_WORKSPACE "assets"
+          $required = @(
+            "apps/adguard-home.svg",
+            "apps/android.png",
+            "components/risk-matrix/index.ts",
+            "entities/rsa-logo.svg",
+            "editorial/nsa-prism-slide.png",
+            "products/contingency/usb-decoy-hub.png",
+            "products/private-server/pro-nobg.png",
+            "products/private-server/max-nobg.png",
+            "products/private-server/contingency/panic-button.webm",
+            "products/private-server/contingency/panic-button.mp4",
+            "products/private-server/contingency/watering-plant.webm",
+            "products/private-server/contingency/watering-plant.mp4",
+            "products/private-server/contingency/phone-click.webm",
+            "products/private-server/contingency/phone-click.mp4",
+            "products/wincommander/logo.png",
+            "products/wincommander/Scrub.gif",
+            "products/wincommander/Extention.png",
+            "products/wincommander/videos/wc-lockdown.mp4",
+            "softwares/firefox.svg",
+            "softwares/glasswire.png",
+            "softwares/lightburn.png",
+            "softwares/coreldraw.png",
+            "softwares/autodesk.png"
+          )
+
+          foreach ($relativePath in $required) {
+            $path = Join-Path $checkedOutAssets $relativePath
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Pinned shared asset is missing: $relativePath"
+            }
+          }
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.97.1
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install locked JavaScript dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Normalize and validate updater signing key
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          $key = $env:TAURI_SIGNING_PRIVATE_KEY.Trim()
+          if ([string]::IsNullOrWhiteSpace($key)) {
+            throw "The release environment does not provide TAURI_SIGNING_PRIVATE_KEY."
+          }
+
+          try {
+            $decodedKey = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($key))
+          } catch [FormatException] {
+            if ($key -notmatch '^untrusted comment:') {
+              throw "TAURI_SIGNING_PRIVATE_KEY must be an outer Base64 signing key or a raw signing-key file."
+            }
+            $key = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($key))
+            $decodedKey = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($key))
+          }
+
+          if ($decodedKey -notmatch '^untrusted comment:') {
+            throw "TAURI_SIGNING_PRIVATE_KEY is not an outer Base64 updater signing key. Do not use the public key from tauri.conf.json."
+          }
+
+          "TAURI_SIGNING_PRIVATE_KEY=$key" | Add-Content -Path $env:GITHUB_ENV
+
+      - name: Build signed Free MSI
+        env:
+          RUST_MIN_STACK: "16777216"
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bun tauri build --config src-tauri/commander-free/tauri.conf.json
+
+      - name: Verify bundled shared media
+        shell: pwsh
+        run: |
+          $bundleAssets = "dist/assets"
+          $requiredPatterns = @(
+            "synology-chat-*.png",
+            "rsa-logo-*.svg",
+            "nsa-prism-slide-*.png",
+            "usb-decoy-hub-*.png",
+            "pro-nobg-*.png",
+            "max-nobg-*.png",
+            "panic-button-*.webm",
+            "panic-button-*.mp4",
+            "watering-plant-*.webm",
+            "watering-plant-*.mp4",
+            "phone-click-*.webm",
+            "phone-click-*.mp4",
+            "logo-*.png",
+            "Scrub-*.gif",
+            "Extention-*.png",
+            "wc-lockdown-*.mp4",
+            "firefox-*.svg",
+            "android-*.png",
+            "lightburn-*.png",
+            "coreldraw-*.png",
+            "autodesk-*.png"
+          )
+
+          foreach ($pattern in $requiredPatterns) {
+            if (-not (Get-ChildItem -Path $bundleAssets -Filter $pattern -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+              throw "The production bundle is missing expected shared media: $pattern"
+            }
+          }
+
+      - name: Reject unexpected Free bundle media
+        shell: pwsh
+        run: |
+          $bundleAssets = "dist/assets"
+          $forbidden = @(Get-ChildItem -Path $bundleAssets -Recurse -File |
+            Where-Object { $_.Extension -in @(".exe", ".zip") -or $_.Name -match "theron" })
+          if ($forbidden.Count -gt 0) {
+            $paths = $forbidden.FullName -join ", "
+            throw "The Free bundle contains forbidden media: $paths"
+          }
+
+          $mediaExtensions = @(".avif", ".gif", ".ico", ".jpeg", ".jpg", ".mp4", ".png", ".svg", ".webm", ".webp")
+          $mediaBytes = (Get-ChildItem -Path $bundleAssets -Recurse -File |
+            Where-Object { $_.Extension -in $mediaExtensions } |
+            Measure-Object -Property Length -Sum).Sum
+          if ($mediaBytes -gt 64MB) {
+            throw "Free bundle media is $([math]::Round($mediaBytes / 1MB, 2)) MiB; limit is 64 MiB."
+          }
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: wincommander-free.sbom.cdx.json
+
+      - name: Prepare signed release assets
+        id: assets
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          UPDATE_DOMAIN: ${{ secrets.CF_UPDATE_DOMAIN }}
+        run: |
+          if (-not $env:RELEASE_TAG.StartsWith("v")) {
+            throw "Release tags must start with 'v': $env:RELEASE_TAG"
+          }
+
+          $version = $env:RELEASE_TAG.Substring(1)
+          $config = Get-Content "src-tauri/commander-free/tauri.conf.json" -Raw | ConvertFrom-Json
+          if ($config.version -ne $version) {
+            throw "Tag $env:RELEASE_TAG does not match Tauri version $($config.version)."
+          }
+
+          $msis = @(Get-ChildItem "src-tauri/target/release/bundle" -Filter "WinCommander*${version}*_x64_en-US.msi" -Recurse | Where-Object { $_.Name -notlike "*.sig*" })
+          if ($msis.Count -ne 1) {
+            throw "Expected exactly one MSI for v$version; found $($msis.Count)."
+          }
+          $msi = $msis[0]
+          $signaturePath = "$($msi.FullName).sig"
+          if (-not (Test-Path $signaturePath)) {
+            throw "Tauri updater signature not found: $signaturePath"
+          }
+
+          $signature = (Get-Content $signaturePath -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($signature)) {
+            throw "Tauri updater signature is empty."
+          }
+          $signatureText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($signature))
+          if ($signatureText -notmatch [Regex]::Escape($msi.Name)) {
+            throw "The updater signature does not name $($msi.Name)."
+          }
+
+          $assetDirectory = Join-Path $env:RUNNER_TEMP "wincommander-release-assets"
+          New-Item -ItemType Directory -Path $assetDirectory -Force | Out-Null
+          $manifestPath = Join-Path $assetDirectory "latest.json"
+          $checksumPath = Join-Path $assetDirectory "SHA256SUMS.txt"
+          $assetName = [Uri]::EscapeDataString($msi.Name)
+          $updateDomain = $env:UPDATE_DOMAIN.Trim().TrimEnd('/')
+          if ([string]::IsNullOrWhiteSpace($updateDomain)) {
+            throw "The release environment does not provide CF_UPDATE_DOMAIN."
+          }
+          if ($updateDomain -notmatch '^https?://') {
+            $updateDomain = "https://$updateDomain"
+          }
+          $manifest = @{
+            version = $version
+            notes = "WinCommander Free v$version"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $signature
+                url = "$updateDomain/free/v$version/$assetName"
+              }
+            }
+          } | ConvertTo-Json -Depth 6
+          [IO.File]::WriteAllText($manifestPath, $manifest, [Text.UTF8Encoding]::new($false))
+
+          $sha256 = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText($checksumPath, "$sha256 *$($msi.Name)`n", [Text.UTF8Encoding]::new($false))
+
+          "MSI_PATH=$($msi.FullName)" | Add-Content -Path $env:GITHUB_ENV
+          "MSI_SIGNATURE_PATH=$signaturePath" | Add-Content -Path $env:GITHUB_ENV
+          "LATEST_JSON_PATH=$manifestPath" | Add-Content -Path $env:GITHUB_ENV
+          "CHECKSUM_PATH=$checksumPath" | Add-Content -Path $env:GITHUB_ENV
+
+      - name: Attest signed MSI provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ env.MSI_PATH }}
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wincommander-free-${{ env.RELEASE_TAG }}
+          path: |
+            ${{ env.MSI_PATH }}
+            ${{ env.MSI_SIGNATURE_PATH }}
+            ${{ env.LATEST_JSON_PATH }}
+            ${{ env.CHECKSUM_PATH }}
+            wincommander-free.sbom.cdx.json
+          if-no-files-found: error
+
+      # Upload immutable artifacts before the mutable latest.json pointer. A
+      # client that sees a new manifest can therefore always fetch its MSI and
+      # minisign sidecar from the same R2 release.
+      - name: Publish signed Free release to R2
+        shell: pwsh
+        env:
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.CF_R2_API }}
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_KEY }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET }}
+          RCLONE_CONFIG_R2_REGION: auto
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rcloneZip = Join-Path $env:RUNNER_TEMP "rclone.zip"
+          $rcloneDir = Join-Path $env:RUNNER_TEMP "rclone"
+          Invoke-WebRequest "https://downloads.rclone.org/rclone-current-windows-amd64.zip" -OutFile $rcloneZip
+          Expand-Archive -Path $rcloneZip -DestinationPath $rcloneDir -Force
+          $rclone = (Get-ChildItem $rcloneDir -Filter "rclone.exe" -Recurse | Select-Object -First 1).FullName
+          if (-not $rclone) { throw "rclone.exe was not found after download." }
+
+          $remote = "r2:windows"
+          $version = $env:RELEASE_TAG.Substring(1)
+          $msiName = Split-Path -Leaf $env:MSI_PATH
+          & $rclone copyto $env:MSI_PATH "$remote/free/v$version/$msiName" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned MSI to R2." }
+          & $rclone copyto $env:MSI_SIGNATURE_PATH "$remote/free/v$version/$msiName.sig" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned MSI signature to R2." }
+          & $rclone copyto $env:CHECKSUM_PATH "$remote/free/v$version/SHA256SUMS.txt" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned checksum to R2." }
+          & $rclone copyto "wincommander-free.sbom.cdx.json" "$remote/free/v$version/wincommander-free.sbom.cdx.json" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned SBOM to R2." }
+          & $rclone copyto $env:MSI_PATH "$remote/free/latest.msi" "--ignore-times" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not promote the latest MSI to R2." }
+          & $rclone copyto $env:LATEST_JSON_PATH "$remote/free/latest.json" "--ignore-times" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish free/latest.json to R2." }
+
+      # GitHub Releases remain the public release archive. The installed app
+      # does not read this release or download its updater from GitHub.
+      - name: Publish GitHub Release archive
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          $releaseAssets = @(
+            $env:MSI_PATH,
+            $env:MSI_SIGNATURE_PATH,
+            $env:LATEST_JSON_PATH,
+            $env:CHECKSUM_PATH,
+            "wincommander-free.sbom.cdx.json"
+          )
+          $notes = "Automated Free MSI release. Verify provenance with: gh attestation verify `"<installer>.msi`" -R ${{ github.repository }}"
+
+          gh release view $env:RELEASE_TAG 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG @releaseAssets --clobber
+            exit $LASTEXITCODE
+          }
+
+          $releaseArgs = @("release", "create", $env:RELEASE_TAG, "--title", $env:RELEASE_TAG, "--notes", $notes)
+          if ($env:RELEASE_TAG.Contains("-")) {
+            $releaseArgs += "--prerelease"
+          }
+          $releaseArgs += $releaseAssets
+          gh @releaseArgs

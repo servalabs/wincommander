@@ -1,0 +1,452 @@
+/* Reference-style SVG sonar for the dashboard. See SovereigntyRadar.tsx. */
+
+.sov-radar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    width: 100%;
+}
+
+.sov-radar__scope {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1;
+    /* Bumped from 360px (owner 2026-06-11): legend strip below the disc is
+       gone, so the disc itself claims the freed vertical space.
+       Bumped from 460px (owner 2026-06-14): radar was too small in compact
+       mode; ~17% increase to 540px. */
+    max-width: 540px;
+    margin: 0 auto;
+    container-type: inline-size;
+    transition: filter 0.5s var(--ease, ease);
+}
+
+/* All-clear (after Fix All / clean scan): a soft green halo around the whole
+   scope reinforces "secure". The accent token is already switched to the
+   success colour in the component, so the sweep + core turn green too. */
+.sov-radar.is-optimal .sov-radar__scope {
+    filter: drop-shadow(0 0 20px color-mix(in srgb, var(--color-success) 32%, transparent));
+}
+
+.sov-radar__svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.sov-radar__svg .ring {
+    fill: none;
+    stroke: var(--border-strong);
+    stroke-width: 1;
+}
+
+.sov-radar__svg .ring.faint {
+    stroke: var(--border);
+}
+
+/* Slowly counter-rotating dashed ring. */
+.sov-radar__svg .ring.spin {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: sov-ringspin calc(18s / var(--motion, 1)) linear infinite;
+    stroke-dasharray: 30 14;
+}
+
+@keyframes sov-ringspin {
+    to {
+        transform: rotate(-360deg);
+    }
+}
+
+.sov-radar__svg .cross {
+    stroke: var(--border);
+    stroke-width: 1;
+}
+
+.sov-radar__svg .tick {
+    stroke: var(--border-strong);
+    stroke-width: 1.5;
+}
+
+/* ── Sweep ── */
+.sov-radar__sweep-wrap {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    overflow: hidden;
+    pointer-events: none;
+    /* KT: The dashboard scaler applies transform: scale() which forces a GPU
+       compositing layer on the whole dashboard. CSS animations on children of a
+       composited layer can stall under WebKit when the parent layer is also being
+       recomposed (Tauri WebView2 / Chromium edge case).
+       `isolation: isolate` creates a new stacking context for the sweep wrap,
+       and `will-change: transform` lifts it onto its own GPU sublayer — isolating
+       its animation budget from the parent scale transform. */
+    isolation: isolate;
+    will-change: transform;
+}
+
+.sov-radar__sweep {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg,
+            transparent 0deg,
+            transparent 230deg,
+            color-mix(in srgb, var(--sov-accent, var(--accent)) 12%, transparent) 290deg,
+            color-mix(in srgb, var(--sov-accent, var(--accent)) 40%, transparent) 340deg,
+            color-mix(in srgb, var(--sov-accent, var(--accent)) 75%, transparent) 359deg,
+            transparent 360deg);
+    animation: sov-sweep calc(5s / var(--motion, 1)) linear infinite;
+    transform-origin: 50% 50%;
+    z-index: 2;
+}
+
+/* Bright leading edge of the sweep so the motion reads clearly. */
+.sov-radar__sweep::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 50%;
+    height: 1.5px;
+    transform-origin: 0 50%;
+    /* The conic gradient's bright "comet head" sits at the TOP (its 359deg
+       stop, since conic starts at 12 o'clock). The needle extends rightward
+       from centre by default, so it must rotate to point UP to ride that head
+       — otherwise it trails ~90deg behind and reads as out of sync. */
+    transform: translateY(-50%) rotate(-90deg);
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--sov-accent, var(--accent)));
+    box-shadow: 0 0 6px color-mix(in srgb, var(--sov-accent, var(--accent)) 60%, transparent);
+}
+
+.sov-radar.is-scanning .sov-radar__sweep {
+    animation-duration: calc(2.2s / var(--motion, 1));
+}
+
+@keyframes sov-sweep {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ── Centre read-out ── */
+.sov-radar__core {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    z-index: 4;
+    pointer-events: none;
+}
+
+.sov-radar__core .score {
+    font-family: var(--font-display);
+    font-size: clamp(40px, 16cqw, 58px);
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    transition: color 0.5s ease;
+}
+
+.sov-radar__core .score sup {
+    font-size: 0.36em;
+    color: var(--text-mute);
+    font-weight: 500;
+    top: -1.3em;
+    margin-left: 1px;
+}
+
+.sov-radar__core .core-lbl {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-top: 7px;
+}
+
+/* ── Domain nodes ── */
+.sov-radar__node {
+    position: absolute;
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+    background: var(--ok);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 18%, transparent),
+        0 0 14px color-mix(in srgb, var(--ok) 40%, transparent);
+    /* Staggered entrance on mount; --d set per-node inline. */
+    animation: sov-node-pop calc(500ms * var(--motion)) var(--ease) backwards;
+    animation-delay: var(--d, 0s);
+}
+
+.sov-radar__node.is-clickable {
+    cursor: pointer;
+    border: none;
+    padding: 0;
+    outline: none;
+}
+
+.sov-radar__node.is-clickable:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+}
+
+@keyframes sov-node-pop {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0);
+    }
+
+    to {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+}
+
+.sov-radar__node.warn {
+    background: var(--warn);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 18%, transparent),
+        0 0 14px color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+.sov-radar__node.danger {
+    background: var(--danger);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 18%, transparent),
+        0 0 14px color-mix(in srgb, var(--danger) 45%, transparent);
+    /* Keep the staggered entrance AND the danger box-shadow pulse. */
+    animation: sov-node-pop calc(500ms * var(--motion)) var(--ease) backwards,
+        sov-pulse-node calc(1600ms * var(--motion, 1)) infinite;
+    animation-delay: var(--d, 0s), 0s;
+}
+
+@keyframes sov-pulse-node {
+
+    0%,
+    100% {
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 18%, transparent),
+            0 0 14px color-mix(in srgb, var(--danger) 45%, transparent);
+    }
+
+    50% {
+        box-shadow: 0 0 0 8px color-mix(in srgb, var(--danger) 8%, transparent),
+            0 0 20px color-mix(in srgb, var(--danger) 55%, transparent);
+    }
+}
+
+/* ── Ping rings (warn/danger only) ── */
+/* Hidden by default; an expanding/fading ring tinted by the node state. */
+.sov-radar__node .ping {
+    display: none;
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 1.5px solid currentColor;
+    pointer-events: none;
+}
+
+.sov-radar__node.warn .ping,
+.sov-radar__node.danger .ping {
+    display: block;
+    animation: sov-ping calc(2.4s / var(--motion, 1)) var(--ease) infinite;
+    animation-delay: var(--d, 0s);
+}
+
+.sov-radar__node.warn .ping {
+    color: var(--warn);
+}
+
+.sov-radar__node.danger .ping {
+    color: var(--danger);
+}
+
+@keyframes sov-ping {
+    0% {
+        transform: scale(1);
+        opacity: 0.9;
+    }
+
+    70%,
+    100% {
+        transform: scale(4.5);
+        opacity: 0;
+    }
+}
+
+/* ── Fixed pop (warn/danger → ok) ── */
+.sov-radar__node.fixed-pulse {
+    animation: sov-fixed-pop calc(650ms * var(--motion)) var(--ease);
+}
+
+@keyframes sov-fixed-pop {
+    0% {
+        transform: translate(-50%, -50%) scale(1);
+    }
+
+    40% {
+        transform: translate(-50%, -50%) scale(1.9);
+    }
+
+    100% {
+        transform: translate(-50%, -50%) scale(1);
+    }
+}
+
+.sov-radar__node .nlbl {
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 7px);
+    transform: translateX(-50%);
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    background: var(--surface);
+    padding: 2px 6px;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+}
+
+.sov-radar__node .nlbl::before {
+    content: "✓ ";
+    color: var(--ok);
+    font-weight: 700;
+}
+
+.sov-radar__node.warn .nlbl::before {
+    content: "! ";
+    color: var(--warn);
+    font-weight: 700;
+}
+
+.sov-radar__node.danger .nlbl::before {
+    content: "! ";
+    color: var(--danger);
+    font-weight: 700;
+}
+
+/* ── Legend ── */
+.sov-radar__legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    justify-content: center;
+}
+
+.sov-leg {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+}
+
+.sov-leg .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ok);
+}
+
+.sov-leg.warn .dot {
+    background: var(--warn);
+}
+
+.sov-leg.danger .dot {
+    background: var(--danger);
+}
+
+.sov-leg b {
+    color: var(--text-dim);
+    font-weight: 700;
+}
+
+/* Respect reduced-motion for the added radar animations. */
+@media (prefers-reduced-motion: reduce) {
+
+    html:not(.wc-motion-enabled) .sov-radar,
+    html:not(.wc-motion-enabled) .sov-radar__scope,
+    html:not(.wc-motion-enabled) .sov-radar__svg,
+    html:not(.wc-motion-enabled) .sov-radar__core,
+    html:not(.wc-motion-enabled) .sov-radar__node {
+        opacity: 1 !important;
+    }
+
+    html:not(.wc-motion-enabled) .sov-radar__node,
+    html:not(.wc-motion-enabled) .sov-radar__node.danger,
+    html:not(.wc-motion-enabled) .sov-radar__node.fixed-pulse,
+    html:not(.wc-motion-enabled) .sov-radar__node.warn .ping,
+    html:not(.wc-motion-enabled) .sov-radar__node.danger .ping,
+    html:not(.wc-motion-enabled) .sov-radar__svg .ring.spin,
+    html:not(.wc-motion-enabled) .sov-radar__sweep {
+        animation: none !important;
+    }
+
+    html:not(.wc-motion-enabled) .sov-radar__node,
+    html:not(.wc-motion-enabled) .sov-radar__node.danger,
+    html:not(.wc-motion-enabled) .sov-radar__node.fixed-pulse {
+        transform: translate(-50%, -50%) scale(1);
+    }
+
+    html:not(.wc-motion-enabled) .sov-radar__node.warn .ping,
+    html:not(.wc-motion-enabled) .sov-radar__node.danger .ping {
+        display: none !important;
+        opacity: 0;
+    }
+}
+
+/* Ambient motion off keeps --motion non-zero globally and uses
+   html.wc-no-motion as the off switch. These rules stop looped motion while
+   keeping the radar visible as a static instrument. */
+html.wc-no-motion .sov-radar,
+html.wc-no-motion .sov-radar__scope,
+html.wc-no-motion .sov-radar__svg,
+html.wc-no-motion .sov-radar__core,
+html.wc-no-motion .sov-radar__node {
+    opacity: 1 !important;
+}
+
+html.wc-no-motion .sov-radar__node,
+html.wc-no-motion .sov-radar__node.danger,
+html.wc-no-motion .sov-radar__node.fixed-pulse {
+    animation: none !important;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+html.wc-no-motion .sov-radar__node.warn .ping,
+html.wc-no-motion .sov-radar__node.danger .ping {
+    display: none !important;
+    animation: none !important;
+    opacity: 0;
+}
+
+html.wc-no-motion .sov-radar__sweep,
+html.wc-no-motion .sov-radar__svg .ring.spin {
+    animation: none !important;
+    opacity: 0;
+}
+
+/* Keep the radar's current visible frame but stop its compositor loops while
+   the app window is backgrounded. The visibility marker is installed in
+   index.html before React mounts, so this has no state-update cost. */
+html[data-page-hidden] .sov-radar__sweep,
+html[data-page-hidden] .sov-radar__svg .ring.spin,
+html[data-page-hidden] .sov-radar__node,
+html[data-page-hidden] .sov-radar__node .ping {
+    animation-play-state: paused !important;
+}
+
+html[data-page-hidden] .sov-radar__sweep-wrap {
+    will-change: auto;
+}

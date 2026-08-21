@@ -1,0 +1,88 @@
+/* Mount-target picker additions (Letter/Folder toggle + folder path row).
+   The base .drive-letter-picker / .drive-letter-picker__option rules stay in
+   panels/vault/index.css unchanged — this file only styles the new parts so
+   the original letter-only call sites (RAM disks) are untouched visually. */
+
+.mount-target-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Mirrors the Mount Volume dialog's File Container / Partition segmented
+   control (.mount-type-selector / .mount-type-btn in index.css) so the two
+   "pick one of two modes" controls in this panel read as the same pattern. */
+.mount-target-toggle {
+  display: flex;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+}
+
+.mount-target-toggle-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.mount-target-toggle-btn:hover:not(.is-active):not(:disabled) {
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+}
+
+.mount-target-toggle-btn.is-active {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-bg-card));
+  box-shadow: 0 0 0 1px var(--color-accent) inset;
+}
+
+.mount-target-toggle-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mount-target-folder-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.mount-target-folder-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.mount-target-folder-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
+}
+
+.mount-target-hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}

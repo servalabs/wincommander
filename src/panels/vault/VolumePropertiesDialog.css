@@ -1,0 +1,105 @@
+.props-dialog {
+          background: var(--color-bg-secondary) !important;
+          border: 1px solid var(--color-border) !important;
+          border-radius: var(--radius-xl) !important;
+          box-shadow: 0 10px 40px rgba(0,0,0,0.5) !important;
+          width: 420px !important;
+          padding: 0 !important;
+        }
+
+        .props-dialog .wc-dialog-header { display: none !important; }
+
+        .props-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 12px 20px;
+          background: var(--color-bg-tertiary);
+          border-bottom: 1px solid var(--color-border);
+        }
+
+        .props-title {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 2px;
+          color: var(--color-accent);
+        }
+
+        .props-drive {
+          font-family: var(--font-mono);
+          font-size: 14px;
+          font-weight: 700;
+          color: var(--color-text-primary);
+        }
+
+        .props-body {
+          padding: 16px 20px;
+          min-height: 120px;
+        }
+
+        .props-loading, .props-error {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 16px 0;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          color: var(--color-text-muted);
+        }
+
+        .props-error { color: var(--color-danger); }
+
+        .props-table {
+          display: flex;
+          flex-direction: column;
+          border: 1px solid var(--color-border);
+        }
+
+        .props-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 7px 12px;
+          border-bottom: 1px solid var(--color-border);
+          gap: 12px;
+        }
+
+        .props-row:last-child { border-bottom: none; }
+
+        .props-key {
+          font-family: var(--font-mono);
+          font-size: 9px;
+          font-weight: 700;
+          color: var(--color-text-muted);
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          flex-shrink: 0;
+        }
+
+        .props-val {
+          font-family: var(--font-mono);
+          font-size: 11px;
+          color: var(--color-text-primary);
+          text-align: right;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 220px;
+        }
+
+        .props-footer {
+          display: flex;
+          justify-content: flex-end;
+          padding: 12px 20px;
+          background: var(--color-bg-tertiary);
+          border-top: 1px solid var(--color-border);
+        }
+
+        .modal-cancel-btn {
+          font-family: var(--font-mono) !important;
+          font-size: 10px !important;
+          font-weight: 600 !important;
+          color: var(--color-text-muted) !important;
+          letter-spacing: 1px !important;
+        }

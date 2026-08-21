@@ -1,0 +1,586 @@
+.wizard-dialog {
+            background: var(--color-bg-secondary) !important;
+            border: 1px solid var(--color-border) !important;
+            border-radius: var(--radius-xl) !important;
+            box-shadow: 0 16px 60px rgba(0,0,0,0.6) !important;
+            width: min(720px, calc(100vw - 32px)) !important;
+            max-width: calc(100vw - 32px) !important;
+            /* The original 480px cap left the action row below the visible
+               area on ordinary laptop/RDP displays once a wizard step had a
+               little more content.  The dialog owns a real viewport budget;
+               only .wizard-body may scroll. */
+            height: min(44rem, calc(100dvh - 32px));
+            max-height: calc(100vh - 32px);
+            padding: 0 !important;
+            overflow: hidden !important;
+            }
+
+            .wizard-layout {
+            display: grid;
+            grid-template-columns: 180px 1fr;
+            grid-template-rows: minmax(0, 1fr);
+            height: 100%;
+            min-height: 0;
+            }
+
+            .wizard-nav {
+            background: var(--color-bg-tertiary);
+            border-right: 1px solid var(--color-border);
+            padding: 20px 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow-y: auto;
+            }
+
+            .wizard-nav-title {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: var(--color-accent);
+            padding: 0 16px 16px;
+            border-bottom: 1px solid var(--color-border);
+            margin-bottom: 8px;
+            }
+
+            .wizard-nav-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--color-text-muted);
+            cursor: default;
+            transition: background 0.15s;
+            letter-spacing: 0.5px;
+            }
+
+            .wizard-nav-item.active {
+            color: var(--color-accent);
+            background: color-mix(in srgb, var(--accent) 6%, transparent);
+            border-left: 2px solid var(--color-accent);
+            }
+
+            .wizard-nav-item.done {
+            color: var(--color-text-secondary);
+            cursor: pointer;
+            }
+
+            .wizard-nav-item.done:hover {
+            background: rgba(255,255,255,0.04);
+            }
+
+            .wizard-nav-num {
+            font-size: 9px;
+            opacity: 0.6;
+            min-width: 16px;
+            }
+
+            .wizard-main {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+            }
+
+            .wizard-step-title {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: var(--color-accent);
+            padding: 18px 24px 14px;
+            border-bottom: 1px solid var(--color-border);
+            background: var(--color-bg-tertiary);
+            text-transform: uppercase;
+            }
+
+            .wizard-body {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            }
+
+            .wizard-step-content {
+            padding: 20px 24px;
+            }
+
+            .step-description {
+            font-size: 12px;
+            color: var(--color-text-secondary);
+            margin-bottom: 20px;
+            line-height: 1.6;
+            }
+
+            .wizard-footer {
+            display: flex;
+            flex: 0 0 auto;
+            position: relative;
+            z-index: 1;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 24px;
+            background: var(--color-bg-tertiary);
+            border-top: 1px solid var(--color-border);
+            }
+
+            .wizard-footer-actions {
+            display: flex;
+            flex: 0 0 auto;
+            flex-wrap: nowrap;
+            gap: 8px;
+            justify-content: flex-end;
+            }
+
+            .wizard-footer-actions .bp6-button {
+            min-width: 92px;
+            }
+
+            /* On a short RDP window, reserve every available pixel for the
+               wizard while retaining a persistent action row. */
+            @media (max-height: 48rem) {
+            .wizard-dialog {
+            height: calc(100dvh - 16px);
+            max-height: calc(100vh - 16px);
+            }
+
+            .wizard-nav { padding: 12px 0; }
+            .wizard-step-title { padding: 12px 16px 10px; }
+            .wizard-step-content { padding: 16px; }
+            .wizard-footer { padding: 12px 16px; }
+            }
+
+            /* The desktop sidebar otherwise leaves too little width for the
+               Cancel / Back / Next actions on narrow windows. */
+            @media (max-width: 40rem) {
+            .wizard-dialog {
+            width: calc(100vw - 16px) !important;
+            max-width: calc(100vw - 16px) !important;
+            }
+
+            .wizard-layout {
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows: auto minmax(0, 1fr);
+            }
+
+            .wizard-nav {
+            flex-direction: row;
+            align-items: center;
+            gap: 4px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding: 8px;
+            border-right: 0;
+            border-bottom: 1px solid var(--color-border);
+            }
+
+            .wizard-nav-title { display: none; }
+            .wizard-nav-item { flex: 0 0 auto; padding: 7px 9px; }
+            .wizard-footer { align-items: stretch; flex-direction: column; }
+            .wizard-footer-actions { justify-content: stretch; }
+            .wizard-footer-actions .bp6-button { flex: 1 1 auto; }
+            }
+
+            /* Type cards */
+            .type-cards {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            }
+
+            .type-card {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            padding: 14px 16px;
+            border: 1px solid var(--color-border);
+            cursor: pointer;
+            /* hover/selected changes: border-color, background */
+            transition: border-color var(--dur-fast, 150ms) var(--ease),
+                        background-color var(--dur-fast, 150ms) var(--ease);
+            background: var(--color-bg-tertiary);
+            }
+
+            .type-card:hover {
+            border-color: var(--color-accent);
+            background: color-mix(in srgb, var(--accent) 4%, transparent);
+            }
+
+            .type-card.selected {
+            border-color: var(--color-accent);
+            background: color-mix(in srgb, var(--accent) 8%, transparent);
+            }
+
+            .type-card .bp6-icon { color: var(--color-accent); margin-top: 2px; }
+
+            .type-card-text {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            }
+
+            .type-card-text strong {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--color-text-primary);
+            letter-spacing: 0.5px;
+            }
+
+            .type-card-text span {
+            font-size: 11px;
+            color: var(--color-text-muted);
+            line-height: 1.5;
+            }
+
+            /* Size row */
+            .size-row {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+            }
+
+            /* FS grid */
+            .fs-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            }
+
+            .fs-card {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 12px 14px;
+            border: 1px solid var(--color-border);
+            cursor: pointer;
+            text-align: left;
+            color: inherit;
+            font: inherit;
+            border-radius: var(--radius-lg);
+            /* hover/selected changes: border-color, background */
+            transition: border-color var(--dur-fast, 150ms) var(--ease),
+                        background-color var(--dur-fast, 150ms) var(--ease);
+            background: var(--color-bg-tertiary);
+            }
+
+            .fs-card:hover {
+            border-color: var(--color-accent);
+            background: color-mix(in srgb, var(--accent) 4%, transparent);
+            }
+
+            .fs-card.selected {
+            border-color: var(--color-accent);
+            background: color-mix(in srgb, var(--accent) 8%, transparent);
+            }
+
+            .fs-card strong {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--color-text-primary);
+            }
+
+            .fs-card span {
+            font-size: 10px;
+            color: var(--color-text-muted);
+            }
+
+            /* Password strength */
+            .pw-strength {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 6px;
+            }
+
+            .pw-strength-bar {
+            display: flex;
+            gap: 3px;
+            }
+
+            .pw-bar-segment {
+            width: 24px;
+            height: 3px;
+            border-radius: 2px;
+            transition: background 0.2s;
+            }
+
+            .pw-strength span {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            }
+
+            .pw-mismatch {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--color-danger);
+            margin-top: 4px;
+            letter-spacing: 0.3px;
+            }
+
+            /* Info callout */
+            .info-callout {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            background: color-mix(in srgb, var(--accent) 5%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+            padding: 10px 14px;
+            margin-bottom: 16px;
+            font-size: 11px;
+            color: var(--color-text-secondary);
+            line-height: 1.6;
+            }
+
+            .info-callout .bp6-icon { color: var(--color-accent); margin-top: 2px; flex-shrink: 0; }
+
+            /* Summary */
+            .summary-table {
+            display: flex;
+            flex-direction: column;
+            border: 1px solid var(--color-border);
+            }
+
+            .summary-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 14px;
+            border-bottom: 1px solid var(--color-border);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            }
+
+            .summary-row:last-child { border-bottom: none; }
+
+            .summary-row span:first-child {
+            color: var(--color-text-muted);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            }
+
+            .summary-row span:last-child {
+            color: var(--color-text-primary);
+            }
+
+            .summary-path {
+            font-size: 10px !important;
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--color-accent) !important;
+            }
+
+            /* Apply log */
+            .apply-log {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            }
+
+            .apply-log-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px 12px;
+            background: var(--color-bg-tertiary);
+            border: 1px solid var(--color-border);
+            }
+
+            .apply-log-item.ok { border-color: rgba(67,160,71,0.3); }
+            .apply-log-item.error { border-color: rgba(229,57,53,0.4); }
+            .apply-log-item.running { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+
+            .apply-log-text {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            }
+
+            .apply-log-label {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--color-text-primary);
+            }
+
+            .apply-log-detail {
+            font-size: 10px;
+            color: var(--color-text-muted);
+            line-height: 1.5;
+            }
+
+            .apply-done-msg {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--color-accent);
+            padding: 12px 0 0;
+            }
+
+            .manual-required-msg {
+            margin-top: 14px;
+            padding: 14px;
+            border: 1px solid rgba(255,201,64,0.35);
+            background: rgba(255,201,64,0.05);
+            font-size: 11px;
+            line-height: 1.65;
+            color: var(--color-text-secondary);
+            }
+
+            .manual-required-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--color-warning, #ffc940);
+            margin-bottom: 10px;
+            }
+
+            .manual-steps {
+            margin: 8px 0 12px 18px;
+            padding: 0;
+            }
+
+            .manual-steps li {
+            margin-bottom: 5px;
+            font-size: 11px;
+            color: var(--color-text-secondary);
+            }
+
+            .apply-error-msg {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--color-warning, #ffc940);
+            padding: 12px 0 0;
+            line-height: 1.5;
+            }
+
+            .apply-error-msg .bp6-icon { margin-top: 2px; flex-shrink: 0; }
+
+            .quick-format-row {
+            margin-top: 12px;
+            }
+
+            .quick-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--color-text-secondary);
+            cursor: pointer;
+            }
+
+            .quick-desc {
+            font-size: 10px;
+            color: var(--color-text-muted);
+            }
+
+            /* Spinner */
+            @keyframes spin { to { transform: rotate(360deg); } }
+            .spinner-sm {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid var(--color-border);
+            border-top-color: var(--color-accent);
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            }
+
+            /* Blueprint overrides inside wizard */
+            .wizard-dialog .bp6-input {
+            background: var(--color-bg-tertiary) !important;
+            border: 1px solid var(--color-border) !important;
+            color: var(--color-text-primary) !important;
+            border-radius: var(--radius-md) !important;
+            font-family: var(--font-mono) !important;
+            font-size: 11px !important;
+            box-shadow: none !important;
+            }
+
+            .wizard-dialog .bp6-input:focus {
+            border-color: var(--color-accent) !important;
+            background: color-mix(in srgb, var(--accent) 4%, transparent) !important;
+            }
+
+            .wizard-dialog .bp6-label {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--color-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+            }
+
+            .wizard-dialog .bp6-html-select select {
+            background: var(--color-bg-tertiary) !important;
+            border: 1px solid var(--color-border) !important;
+            color: var(--color-text-primary) !important;
+            border-radius: var(--radius-md) !important;
+            font-family: var(--font-mono) !important;
+            font-size: 11px !important;
+            box-shadow: none !important;
+            }
+
+            .wizard-dialog code {
+            background: var(--color-bg-tertiary);
+            padding: 1px 5px;
+            font-size: 10px;
+            border: 1px solid var(--color-border);
+            color: var(--color-accent);
+            }
+
+            .modal-cancel-btn {
+            font-family: var(--font-mono) !important;
+            font-size: 10px !important;
+            font-weight: 600 !important;
+            color: var(--color-text-muted) !important;
+            letter-spacing: 1px !important;
+            }
+
+            .modal-primary-btn {
+            background: color-mix(in srgb, var(--accent) 5%, transparent) !important;
+            border: 1px solid var(--color-accent) !important;
+            color: var(--color-accent) !important;
+            font-family: var(--font-mono) !important;
+            font-size: 11px !important;
+            font-weight: 700 !important;
+            letter-spacing: 1px !important;
+            padding: 8px 20px !important;
+            border-radius: var(--radius-lg) !important;
+            /* hover changes: background, box-shadow */
+            transition: background-color var(--dur-normal, 200ms) var(--ease),
+                        box-shadow var(--dur-normal, 200ms) var(--ease) !important;
+            }
+
+            .modal-primary-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent) 15%, transparent) !important;
+            box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 25%, transparent) !important;
+            }
+
+            .modal-primary-btn:disabled {
+            opacity: 0.3;
+            filter: grayscale(1);
+            border-color: var(--color-border) !important;
+            }
+
+            /* Hide browser password controls */
+            input::-ms-reveal, input::-ms-clear { display: none; }

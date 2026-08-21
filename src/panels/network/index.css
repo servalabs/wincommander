@@ -1,0 +1,2160 @@
+.firewall-content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.add-rule-container {
+    background: var(--color-bg-secondary);
+    padding: 16px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+}
+
+.presets-container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.preset-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.preset-category {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-text-muted);
+    width: 100px;
+    text-align: right;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.preset-chips {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    flex: 1;
+}
+
+.chip {
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 10px;
+    background: var(--color-bg-tertiary);
+    border-radius: 4px;
+    cursor: pointer;
+    /* hover changes: background, color */
+    transition: background-color var(--dur-normal, 200ms) var(--ease),
+                color var(--dur-normal, 200ms) var(--ease);
+    border: 1px solid transparent;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-family: var(--font-mono);
+}
+
+.chip:hover {
+    background: var(--color-accent);
+    color: var(--accent-contrast);
+}
+
+.chip-port {
+    opacity: 0.6;
+    font-weight: 400;
+    font-size: 10px;
+}
+
+.chip:hover .chip-port {
+    opacity: 0.8;
+}
+
+.add-rule-form {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.rules-header {
+    display: grid;
+    grid-template-columns: 1fr 120px 80px 40px;
+    padding: 0 12px 8px 12px;
+    border-bottom: 1px solid var(--color-border);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-text-muted);
+    font-weight: 600;
+}
+
+.rules-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.rule-item {
+    display: grid;
+    grid-template-columns: 1fr 120px 80px 40px;
+    align-items: center;
+    padding: 12px;
+    border-bottom: 1px solid var(--color-border);
+    transition: background 0.2s;
+}
+
+.rule-item:last-child {
+    border-bottom: none;
+}
+
+.rule-item:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.rule-name {
+    font-weight: 500;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--color-text-primary);
+}
+
+.rule-details {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.rule-protocol {
+    font-size: 11px;
+    font-weight: bold;
+    color: var(--color-accent);
+    background: var(--color-accent-dim);
+    padding: 2px 6px;
+    border-radius: 2px;
+}
+
+.rule-port {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--color-text-secondary);
+}
+
+.direction-badge {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.direction-badge.inbound {
+    background: var(--color-danger-dim);
+    color: var(--color-danger);
+}
+
+.direction-badge.outbound {
+    background: var(--color-success-dim);
+    color: var(--color-success);
+}
+
+.direction-badge.both {
+    background: var(--color-info-dim);
+    color: var(--color-info);
+}
+
+.empty-state {
+    padding: 30px;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    font-style: italic;
+}
+
+/* Brand Blocklist Card */
+.blocklist-brand-card {
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    overflow: hidden;
+    /* state changes: border-color, background, box-shadow */
+    transition: border-color var(--dur-normal, 200ms) cubic-bezier(0.4, 0, 0.2, 1),
+                background-color var(--dur-normal, 200ms) cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow var(--dur-normal, 200ms) cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg-card);
+}
+
+button.blocklist-brand-card {
+    width: 100%;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+}
+
+button.blocklist-brand-card:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+.blocklist-brand-card.bbc-applied {
+    border-color: var(--color-success);
+    /* Calmer dark green fill for dark mode */
+    background: linear-gradient(135deg, #112d1e 0%, #0c1a12 100%);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.blocklist-brand-card.bbc-applied .bbc-count {
+    color: rgba(255, 255, 255, 0.7) !important;
+}
+
+/* allow logos + labels to keep original contrast instead of forcing white */
+
+.bbc-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px 8px;
+    /* subtle light strip (partial) so logos remain readable without full white */
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    /* gentle green accent on the left */
+    border-left: 4px solid color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+
+.bbc-applied .bbc-top {
+    /* Vibrant applied header */
+    background: linear-gradient(180deg, color-mix(in srgb, var(--color-success) 15%, transparent), var(--color-success-dim));
+    border-left-color: var(--color-success);
+    border-bottom-color: color-mix(in srgb, var(--color-success) 15%, transparent);
+}
+
+.bbc-logos {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.bbc-logo {
+    height: 28px;
+    width: auto;
+    max-width: 80px;
+    object-fit: contain;
+    filter: brightness(0.85) saturate(0.9);
+    opacity: 0.9;
+}
+
+.bbc-logo.invert-in-dark {
+    filter: invert(1) brightness(0.85) saturate(0.9);
+}
+
+.bbc-applied .bbc-logo {
+    opacity: 0.95;
+    /* Removed intense glow, keeping subtle brightness */
+    filter: brightness(1.1);
+    /* hover changes: opacity, filter */
+    transition: opacity var(--dur-slow, 300ms) var(--ease),
+                filter var(--dur-slow, 300ms) var(--ease);
+}
+
+.bbc-applied .bbc-logo:hover {
+    opacity: 1;
+    filter: brightness(1.2);
+}
+
+.bbc-applied .bbc-logo.invert-in-dark {
+    filter: invert(1) drop-shadow(0 0 8px color-mix(in srgb, var(--color-success) 60%, transparent)) brightness(1.2);
+}
+
+/* DNS category logos — no container, just clean sizing with a subtle drop-shadow
+   so transparent-bg logos remain readable on both light and dark card strips */
+.bbc-logos.dns-bbc-logos {
+    gap: 6px;
+}
+
+.bbc-logo.dns-bbc-logo {
+    height: 30px;
+    max-width: 60px;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35)) brightness(1) saturate(1);
+    opacity: 1;
+}
+
+/* Purpose-fit thumbnail variants. Preserve the source aspect ratio rather
+   than treating a small illustration and a long wordmark as the same icon. */
+.bbc-logo.dns-bbc-logo-illustration {
+    height: 34px;
+    max-width: 48px;
+}
+
+.bbc-logo.dns-bbc-logo-wordmark {
+    height: 24px;
+    max-width: 60px;
+}
+
+/* Tinder and Bumble share one visual box despite their different source
+   canvases, so neither appears smaller in the Dating card. */
+.bbc-logo.dns-bbc-logo-dating {
+    height: 36px;
+    max-width: 60px;
+}
+
+.bbc-applied .bbc-logo.dns-bbc-logo {
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3)) brightness(1.05);
+    opacity: 1;
+}
+
+/* Social category's telegram logo is a landscape asset — without an
+   explicit width it renders ~53px wide vs the other categories' square
+   30px icons, throwing off the card's logo-row spacing. */
+.bbc-logo.dns-bbc-logo-social {
+    width: 30px;
+    max-width: 30px;
+    object-fit: contain;
+}
+
+.bbc-logo.dns-bbc-logo-social.dns-bbc-logo-telegram {
+    height: 34px;
+    width: 42px;
+    max-width: 42px;
+}
+
+/* Stake logo is white/light — invert in dark mode so it's visible */
+.bbc-logo.dns-bbc-logo.invert-in-dark {
+    filter: invert(1) drop-shadow(0 1px 2px rgba(255, 255, 255, 0.2));
+    opacity: 1;
+}
+.light .bbc-logo.dns-bbc-logo.invert-in-dark {
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35)) brightness(1) saturate(1);
+    opacity: 1;
+}
+
+/* Censorship protection settings row in the DNS panel body */
+.dns-censorship-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    margin-bottom: 14px;
+}
+
+.bbc-count {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--color-text-muted);
+    font-weight: 600;
+}
+
+.blocklist-brand-card .universal-toggle-row {
+    border: none !important;
+    border-radius: var(--radius-lg) !important;
+    background: transparent !important;
+    flex: 1;
+    padding: 14px !important;
+    margin-bottom: 0 !important;
+}
+
+.blocklist-brand-card .toggle-label {
+    white-space: normal !important;
+    line-height: 1.3;
+    font-size: 13px;
+    display: block;
+    width: 100%;
+}
+
+.blocklist-brand-card .toggle-description {
+    color: inherit;
+    opacity: 0.8;
+}
+
+/* Custom Brand Card Bottom Content Area */
+.bbc-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    flex: 1;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.bbc-content:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.bbc-applied .bbc-content:hover {
+    background: color-mix(in srgb, var(--color-success) 4%, transparent);
+}
+
+.bbc-text {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+    padding-right: 16px;
+}
+
+.bbc-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    line-clamp: 2;
+    overflow: hidden;
+    line-height: 1.2;
+    text-transform: uppercase;
+}
+
+.bbc-applied .bbc-title {
+    color: #fff !important;
+}
+
+.bbc-desc {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    line-height: 1.4;
+}
+
+.bbc-applied .bbc-desc {
+    color: rgba(255, 255, 255, 0.85) !important;
+    font-weight: 500;
+}
+
+.bbc-action {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+}
+
+/* Custom Switch Knob (Modern Pill) */
+.wc-custom-switch {
+    width: 40px;
+    height: 22px;
+    border-radius: 11px;
+    background: rgba(255, 255, 255, 0.1);
+    position: relative;
+    /* on/off changes: background, box-shadow */
+    transition: background-color var(--dur-slow, 300ms) cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow var(--dur-slow, 300ms) cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.wc-custom-switch.is-on {
+    background: var(--color-success);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--color-success) 30%, transparent), inset 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.wc-switch-knob {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: white;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    /* on/off changes: left (knob position) */
+    transition: left var(--dur-slow, 300ms) cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.wc-custom-switch.is-on .wc-switch-knob {
+    left: 20px;
+}
+
+/* Light-mode .wc-custom-switch override.
+ * The default off-state is rgba(255, 255, 255, 0.1) -- 10% white on
+ * transparent -- which renders as nearly pure white on the blocklist
+ * brand-card surface, hiding the switch entirely (user reported this
+ * with a CLOUD UPLOAD blocklist screenshot). Slate track + visible
+ * knob border so the off-state reads on white. */
+html.light .wc-custom-switch {
+    background: #cbd5e1;
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.15);
+}
+
+html.light .wc-switch-knob {
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(15, 23, 42, 0.1);
+}
+
+html.light .wc-custom-switch.is-on {
+    /* Keep the success-green on-state -- it has plenty of contrast on
+     * white -- but soften the outer glow which was tuned for dark mode. */
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-success) 18%, transparent), inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* Light Mode Overrides */
+.light .chip {
+    background: rgba(0, 0, 0, 0.06);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    color: var(--color-text-primary);
+}
+
+.light .chip:hover {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+    color: var(--color-bg-primary);
+}
+
+.light .chip-port {
+    color: var(--color-text-secondary);
+}
+
+.light .add-rule-form {
+    border-top: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.light .rule-item:hover {
+    background: rgba(0, 0, 0, 0.02);
+}
+
+.light .bbc-logo.invert-in-dark {
+    filter: brightness(0.85) saturate(0.9);
+}
+
+/* Light Mode Applied Card - Calm Green */
+.light .blocklist-brand-card.bbc-applied {
+    background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+    border-color: var(--color-success);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.light .bbc-applied .bbc-title {
+    color: var(--color-text-primary) !important;
+}
+
+.light .bbc-applied .bbc-desc {
+    color: var(--color-text-secondary) !important;
+}
+
+.light .blocklist-brand-card.bbc-applied .bbc-count {
+    color: var(--color-success) !important;
+    opacity: 0.9;
+}
+
+.light .bbc-applied .status-text {
+    background: var(--color-success-dim);
+    color: var(--color-success);
+    border-color: color-mix(in srgb, var(--color-success) 20%, transparent);
+}
+
+.light .bbc-applied .bbc-top {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--color-success) 8%, transparent), color-mix(in srgb, var(--color-success) 3%, transparent));
+    border-bottom-color: color-mix(in srgb, var(--color-success) 10%, transparent);
+}
+
+.light .bbc-applied .bbc-logo.invert-in-dark {
+    filter: none;
+}
+
+.network-security-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+}
+
+.dns-firewall-card,
+.network-security-card {
+    width: 100%;
+}
+
+.network-security-card__header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.firewall-subcard {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    padding: 14px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    background: color-mix(in srgb, var(--color-bg-secondary) 55%, transparent);
+}
+
+.firewall-subcard__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.firewall-subcard__title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 800;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+}
+
+.firewall-subcard__title span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.firewall-subcard__header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.recommended-pill {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-secondary);
+    border-radius: var(--radius-full);
+}
+
+.recommended-pill__label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 800;
+    color: var(--color-accent);
+    letter-spacing: 0.08em;
+    white-space: nowrap;
+}
+
+.security-split-row {
+    display: grid;
+    grid-template-columns: 0.6fr 0.4fr;
+    gap: 24px;
+    align-items: start;
+}
+
+.blocklists-grid.four-columns {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    align-items: stretch;
+}
+
+.blocklists-grid.three-columns {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    align-items: stretch;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1400px) {
+    .blocklists-grid.four-columns {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media (max-width: 1100px) {
+    .security-split-row {
+        grid-template-columns: 1fr;
+    }
+
+    .blocklists-grid.four-columns {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+.refresh-btn {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.select-all-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    margin-top: 20px;
+    background: var(--color-accent-subtle);
+    border: 1px solid var(--color-accent);
+}
+
+.select-all-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--color-accent);
+}
+
+.select-all-status {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-secondary);
+}
+
+.blocklists-container {
+    margin-top: 0px;
+    flex: 1;
+    position: relative;
+    min-height: 200px;
+}
+
+.blocklist-groups-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 0px;
+}
+
+.blocklist-group {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.group-header {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.group-title {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--color-accent);
+    letter-spacing: 0.1em;
+}
+
+.group-desc {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+}
+
+.blocklists-grid {
+    display: grid;
+    gap: 12px;
+}
+
+.blocklist-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+}
+
+.blocklist-item.applied {
+    border-left: 3px solid var(--color-accent);
+}
+
+.blocklist-name {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.blocklist-count {
+    font-size: 9px;
+    color: var(--color-text-muted);
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2px 4px;
+    margin-left: 8px;
+    flex-shrink: 0;
+}
+
+.blocklist-description {
+    font-size: 10px;
+    color: var(--color-text-secondary);
+    margin-top: 4px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.dns-content {
+    margin-top: 24px;
+    flex: 1;
+    position: relative;
+    min-height: 150px;
+}
+
+.firewall-subcard .dns-content,
+.dns-firewall-card .dns-content {
+    margin-top: 0;
+}
+
+.dns-icon-badge {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+    color: var(--color-accent);
+}
+
+.dns-icon-badge--category {
+    width: 22px;
+    height: 22px;
+    flex-basis: 22px;
+}
+
+.dns-guard-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    background: var(--color-bg-secondary);
+}
+
+.dns-guard-row--disabled {
+    opacity: 0.55;
+}
+
+.dns-guard-row__main {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+}
+
+.dns-guard-row__text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.dns-guard-row__title {
+    font-weight: 700;
+    color: var(--color-text-primary);
+}
+
+.dns-guard-row__desc {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--color-text-secondary);
+}
+
+.toggle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.toggle-label {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.toggle-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.dns-provider-select {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid var(--color-border);
+}
+
+.select-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    display: block;
+}
+
+.dns-upsell {
+    margin-top: 12px;
+    font-size: 11px;
+    border-radius: var(--radius-md) !important;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+}
+
+/* "HOW IT WORKS" header button — system minimal button, mono nudges
+   only (replaces the old inline style on the JSX <Button>). */
+.dns-howit {
+    font-family: var(--font-mono) !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    letter-spacing: 1px !important;
+}
+
+/* ─── DNS provider grid (replaces the legacy single-column dropdown) ─── */
+
+.dns-provider-grid {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid var(--color-border);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.dns-provider-grid__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.dns-provider-grid__label {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+}
+
+.simple-firewall-title {
+    margin: 0;
+    color: var(--color-accent);
+}
+
+.dns-provider-grid__hint {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.5px;
+    color: var(--color-text-muted);
+    margin-top: -4px;
+}
+
+.dns-provider-grid__count {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 800;
+    color: var(--color-accent);
+}
+
+.dns-cards {
+    display: grid;
+    /* Auto-fit lets the grid drop to 3 / 2 / 1 columns based on actual
+       container width — NOT viewport width. A collapsed sidebar still
+       leaves the cards roomy. min 200px lets two cards sit side-by-side
+       inside the narrow 0.4fr split-row column on mid widths. */
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+}
+
+/* When only one card is rendered (a provider is active and picker is
+   collapsed), cap its width so it doesn't stretch awkwardly across the
+   whole grid row. */
+.dns-cards:has(> .dns-card:only-child) {
+    grid-template-columns: minmax(220px, 320px);
+}
+
+/* The split-row collapses to a single 1fr column at 1100px (~line 509);
+   once the DNS card has the full width, give it room to go 2-up. */
+@media (max-width: 1100px) {
+    .dns-cards {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+}
+
+.dns-card {
+    position: relative;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    /* 2px reserves space for the active accent rail; idle uses the border
+       colour so the left edge stays visible (was transparent → looked like a
+       missing left border). Active overrides border-left-color with the accent. */
+    border-left: 2px solid var(--color-border);
+    padding: 12px 14px;
+    cursor: pointer;
+    /* All transitions < 300ms per the design-system rule. */
+    transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    user-select: none;
+    min-height: 150px;
+}
+
+.dns-card:hover:not(.dns-card--locked) {
+    border-color: var(--color-border-light);
+    background: var(--color-bg-tertiary);
+}
+
+.dns-card:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+}
+
+.dns-card:active:not(.dns-card--locked) {
+    transform: scale(0.99);
+}
+
+/* Strong, unmistakable ON state: accent left-bar + success border +
+   success-dim fill. Clearly distinct from the neutral :hover tint. */
+.dns-card--active {
+    border-color: var(--color-success);
+    border-left-color: var(--color-accent);
+    background: var(--color-success-dim);
+}
+
+.dns-card--locked {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* Badge sits in its own flex header row → it can never overlap the
+   title (kills the old absolute-badge + padding-right: 56px hack). */
+.dns-card__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.dns-card__title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.dns-card__title {
+    font-weight: 700;
+    font-size: 13.5px;
+    line-height: 1.25;
+    color: var(--color-text-primary);
+    /* Allow up to 2 lines, but no more — keeps cards uniform. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+}
+
+.dns-card__badge {
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    line-height: 1.4;
+}
+
+.dns-card__badge--free {
+    background: var(--color-success-dim);
+    color: var(--color-success);
+    border: 1px solid var(--color-success);
+}
+
+.dns-card__badge--pro {
+    background: var(--color-accent-subtle);
+    color: var(--color-accent);
+    border: 1px solid var(--color-accent);
+}
+
+.dns-card__badge--locked {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
+}
+
+.dns-card__subtitle {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    /* Single line — dynamic active states use short strings so they fit. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dns-card--active .dns-card__subtitle {
+    color: var(--color-success);
+}
+
+.dns-card__blurb {
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--color-text-secondary);
+    flex: 1;
+    /* Clamp to 3 lines so cards stay uniform height across the row. */
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.dns-card__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: auto;
+    padding-top: 6px;
+}
+
+.dns-card__status {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.dns-card__status--on {
+    color: var(--color-success);
+}
+
+.dns-card__status--idle,
+.dns-card__status--locked {
+    color: var(--color-text-muted);
+}
+
+/* Thin wrapper on the system .bp6-button — size/letter-spacing nudges
+   only, no new color or radius (the system button is already square). */
+.dns-card__btn {
+    font-family: var(--font-mono) !important;
+    font-size: 9px !important;
+    letter-spacing: 1px !important;
+    min-height: 22px !important;
+    padding: 2px 10px !important;
+    display: inline-flex !important;
+    align-items: center;
+    gap: 4px;
+}
+
+/* ─── DNS Firewall categories ─────────────────────────────────────────────── */
+
+.simple-firewall-inline {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.dns-category-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.dns-category-group--optional {
+    padding-top: 16px;
+    border-top: 1px solid var(--color-border);
+}
+
+.dns-category-group__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+}
+
+.dns-category-group__heading,
+.dns-category-group__actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.dns-category-group__actions {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+.dns-category-group__description {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.45;
+    color: var(--color-text-muted);
+}
+
+.simple-firewall-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.simple-firewall-grid--optional {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 1200px) {
+    .simple-firewall-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 800px) {
+    .simple-firewall-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .dns-category-group__header,
+    .dns-category-group__heading {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .dns-category-group__actions {
+        width: 100%;
+        justify-content: space-between;
+    }
+}
+
+@media (max-width: 560px) {
+    .simple-firewall-grid,
+    .simple-firewall-grid--optional {
+        grid-template-columns: 1fr;
+    }
+
+    .network-security-card__header-actions {
+        gap: 6px;
+    }
+
+    .recommended-pill {
+        padding-inline: 8px;
+    }
+}
+
+/* Dimmed (not disabled — still legible) when an Advanced provider is the
+   active DNS source, since the categories aren't the thing actually applied. */
+.simple-firewall-grid--inactive {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* ─── Advanced DNS disclosure (AdGuard / Enterprise Firewall / custom) ───
+   Secondary to the Simple Firewall categories above — collapsed by default,
+   plain trigger row rather than a full card so it doesn't compete visually. */
+.advanced-dns-disclosure {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--color-border);
+}
+
+.advanced-dns-disclosure__trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+    transition: color 0.15s ease;
+}
+
+.advanced-dns-disclosure__trigger:hover {
+    color: var(--color-text-primary);
+}
+
+.advanced-dns-disclosure__badge {
+    margin-left: 4px;
+    padding: 1px 7px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--color-warning) 15%, transparent);
+    color: var(--color-warning);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
+    font-size: 9px;
+    letter-spacing: 0.4px;
+    text-transform: none;
+}
+
+.advanced-dns-disclosure__body {
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.advanced-dns-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+}
+
+.advanced-dns-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-secondary);
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.15s ease, background 0.15s ease;
+    color: var(--color-text-primary);
+}
+
+.advanced-dns-option:hover:not(:disabled) {
+    border-color: var(--color-border-light);
+    background: var(--color-bg-tertiary);
+}
+
+.advanced-dns-option:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.advanced-dns-option--active {
+    border-color: var(--color-success);
+    background: var(--color-success-dim);
+}
+
+.advanced-dns-option__text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+.advanced-dns-option__title {
+    font-size: 12.5px;
+    font-weight: 700;
+}
+
+.advanced-dns-option__desc {
+    font-size: 10.5px;
+    color: var(--color-text-muted);
+    line-height: 1.35;
+}
+
+
+.dns-upsell .bp6-callout-icon {
+    margin: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 18px;
+    height: 18px;
+}
+
+.dns-upsell .bp6-callout-icon svg {
+    width: 14px;
+    height: 14px;
+}
+
+.dns-upsell .bp6-callout-content {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* Override Blueprint absolute positioning for callout icons */
+.dns-upsell.bp6-callout .bp6-icon:first-child {
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    margin: 0 !important;
+}
+
+.status-messages {
+    margin-top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.loader-spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--color-border);
+    border-top-color: var(--color-accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+.loader-spinner.small {
+    width: 16px;
+    height: 16px;
+}
+
+.spinning {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.scanning-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(16, 22, 26, 0.6);
+    backdrop-filter: blur(2px);
+    z-index: 5;
+}
+
+/* Dialog shell theming is owned by the global .wc-dialog (src/index.css).
+   The DNS dialogs carry both `wc-dialog swiss-dialog`; the former's
+   header/body/footer treatment governs. The old .swiss-dialog background
+   overrides were removed to stop the !important source-order fight. */
+
+/* Light Mode Scanning Overlay */
+.light .scanning-overlay {
+    background: rgba(255, 255, 255, 0.7);
+}
+
+/* ─── DoH setup guide ─── */
+
+.doh-guide {
+    margin-top: 20px;
+    background: color-mix(in srgb, var(--color-success) 6%, var(--color-bg-secondary));
+    border: 1px solid color-mix(in srgb, var(--color-success) 30%, transparent);
+    border-radius: var(--radius-xl);
+    padding: 12px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    animation: doh-guide-in 0.25s ease both;
+}
+
+@keyframes doh-guide-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0);    }
+}
+
+.doh-guide__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.doh-guide__close {
+    background: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    transition: color 0.15s, background 0.15s;
+}
+
+.doh-guide__close:hover {
+    color: var(--color-text-primary);
+    background: var(--color-bg-tertiary);
+}
+
+/* .doh-guide__gif removed: DoH now applies automatically (per-adapter
+   DohFlags=2 QWORD in dns.ps1), so the manual walkthrough GIF is gone. */
+
+html.light .doh-guide {
+    background: color-mix(in srgb, var(--color-success) 5%, #ffffff);
+}
+
+/* ─── Network Adapters merged card ─── */
+
+.adapter-section-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 20px 0 12px;
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+}
+
+.adapter-section-divider::before,
+.adapter-section-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--color-border);
+}
+
+.adapter-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* More than 2 adapters → cap the list and scroll inside it, so a long NIC
+   list (servers, VMs, many virtual adapters) can't push the rest of the card
+   off-screen. The :has guard means 1–2 adapters render at natural height with
+   no scrollbar; the 3rd row triggers the cap. */
+.adapter-list:has(.adapter-row:nth-of-type(3)) {
+    max-height: 210px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.adapter-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    transition: border-color 0.15s, opacity 0.15s;
+    flex-wrap: wrap;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.adapter-row > .adapter-row__identity {
+    flex: 1 1 140px;
+}
+
+/* Inside the narrow merged card column, the row falls to two lines:
+   icon + identity on top, MAC controls beneath. Prevents the dropdown +
+   re-roll button from punching through the right edge of the 25% column. */
+.merged-adapters-wifi-guard .adapter-row,
+.merged-adapters-evil-twin .adapter-row {
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.merged-adapters-wifi-guard .adapter-row__identity,
+.merged-adapters-evil-twin .adapter-row__identity {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    flex: 1 1 150px;
+}
+
+.merged-adapters-wifi-guard .adapter-row__identity > div,
+.merged-adapters-evil-twin .adapter-row__identity > div {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+}
+
+.merged-adapters-wifi-guard .adapter-row .adapter-row__mac,
+.merged-adapters-evil-twin .adapter-row .adapter-row__mac {
+    width: 100%;
+    margin-top: 4px;
+    min-width: 0;
+}
+
+.merged-adapters-wifi-guard .adapter-row .adapter-row__mac .bp6-html-select,
+.merged-adapters-wifi-guard .adapter-row .adapter-row__mac select,
+.merged-adapters-evil-twin .adapter-row .adapter-row__mac .bp6-html-select,
+.merged-adapters-evil-twin .adapter-row .adapter-row__mac select {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.adapter-row--busy {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.adapter-row--inactive {
+    opacity: 0.45;
+    padding: 8px 16px;
+    background: var(--color-bg-tertiary);
+}
+
+.adapter-row__identity {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.adapter-row__identity > div {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.adapter-row__identity > div > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.adapter-row__dns {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 120px;
+}
+
+.adapter-row__mac {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    min-width: 0;
+}
+
+.adapter-status-chip {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    line-height: 1.5;
+}
+
+.adapter-status-chip--up {
+    background: var(--color-success-dim);
+    color: var(--color-success);
+    border: 1px solid color-mix(in srgb, var(--color-success) 25%, transparent);
+}
+
+.adapter-status-chip--down {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
+}
+
+.adapter-dns-badge {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border);
+    white-space: nowrap;
+}
+
+.adapter-dns-badge--active {
+    background: var(--color-accent-subtle);
+    color: var(--color-accent);
+    border-color: var(--color-border-accent);
+}
+
+/* ─── Auto-apply debounce status pill ──────────────────────────────────────── */
+
+.auto-apply-pill {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    padding: 2px 7px;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+    transition: opacity 0.2s ease;
+}
+
+.auto-apply-pill--pending {
+    background: color-mix(in srgb, var(--color-warning) 15%, transparent);
+    color: var(--color-warning);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
+}
+
+.auto-apply-pill--applying {
+    background: color-mix(in srgb, var(--color-info) 15%, transparent);
+    color: var(--color-info);
+    border: 1px solid color-mix(in srgb, var(--color-info) 40%, transparent);
+}
+
+.auto-apply-pill--applied {
+    background: color-mix(in srgb, var(--color-success) 15%, transparent);
+    color: var(--color-success);
+    border: 1px solid color-mix(in srgb, var(--color-success) 40%, transparent);
+}
+
+/* Censorship row controls: pill + switch inline. */
+.dns-guard-row__controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+
+/* Enterprise Firewall input sizing */
+.enterprise-input.bp6-input-group .bp6-input {
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+html.light .adapter-row {
+    background: #ffffff;
+    border-color: rgba(15, 23, 42, 0.1);
+}
+
+html.light .adapter-row--inactive {
+    background: #f8fafc;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Daylight (light) overrides — residual white tints baked for dark mode.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Non-applied brand-card header strip: a white→white gradient + white
+   bottom border that disappeared on the light card surface. */
+html.light .bbc-top {
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.03), rgba(0, 0, 0, 0.015));
+    border-bottom-color: var(--color-border);
+}
+
+html.light .bbc-content:hover {
+    background: rgba(0, 0, 0, 0.02);
+}
+
+/* White separator/fill on the firewall + blocklist sections. */
+html.light .add-rule-form,
+html.light .group-header {
+    border-top-color: var(--color-border);
+    border-bottom-color: var(--color-border);
+}
+
+html.light .blocklist-count {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+/* ─── Network Adapters / Evil Twin / WebRTC side-by-side grid ─── */
+
+.network-adapters-side-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    align-items: start;
+}
+
+.network-adapters-side-grid--solo {
+    grid-template-columns: 1fr;
+}
+
+.network-adapters-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+@media (max-width: 1100px) {
+    .network-adapters-side-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ─── Network control: panel-level vertical rhythm ─────────────────
+   Each top-level section in the network panel gets a clear gap below it
+   so Hosts Protection, the Port Watch row, and the DNS / Active Ports row
+   never read as glued-together cards. */
+.network-panel-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+/* Inter-section rhythm (Hosts Protection / Port Watch row / Active Ports
+   row) lives here instead — the outer stack's gap is now the tighter
+   header→content gap, and this wrapper preserves the original 32px
+   breathing room between the actual panel sections. */
+.network-panel-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+/* ─── DNS header switch ────────────────────────────────────────────
+   Replaces the in-body "Encrypted DNS (DoH)" toggle card. */
+.dns-header-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.dns-toggle-cluster {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+
+/* One-line blurb above the provider picker — replaces the long
+   UniversalToggle description the toggle card used to carry. */
+.dns-blurb {
+    margin: 0 0 10px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--color-text-secondary);
+}
+
+/* ─── Network control: single-column tab rows ───────────────────────
+   Each tab now hosts at most one card per row (Port Watch and Active
+   Ports moved to separate tabs from the merged Adapters/Wi-Fi Guard
+   card), so the former --port 13fr/7fr split has no remaining use —
+   removed along with the .ncr-side wrapper it justified. */
+.network-control-row {
+    display: grid;
+    gap: 24px;
+}
+
+.network-control-row--active {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+}
+
+.network-control-row .ncr-main {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+}
+
+/* Active row: cards take their natural height (start-aligned). The DNS
+   card may grow when the provider picker is on; Active Ports' inner
+   table caps and scrolls internally so it stays viewable. */
+.network-control-row--active .ncr-main > .section-card .active-ports-scroll {
+    max-height: 640px;
+    overflow: auto;
+}
+
+/* Merged Adapters + Evil‑Twin Wi‑Fi card — two stacked SEGMENTS with their
+   own labelled headers so each half reads as a self-contained block inside
+   the parent card. Replaced the old single-line `.merged-card-divider` so
+   both sections share one consistent treatment (owner 2026-06-11). */
+.merged-adapters-wifi-guard,
+.merged-adapters-evil-twin {
+    display: flex;
+    flex-direction: column;
+    /* Tight gap — segments size to content so the card has no internal
+       blank space (owner 2026-06-11). Row 1 align-items is now `start`,
+       so the parent column also sizes to content. */
+    gap: 8px;
+    min-width: 0;
+}
+
+.merged-segment {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 11px 11px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--color-bg-secondary) 50%, transparent);
+    min-width: 0;
+}
+
+.merged-segment__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 7px;
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-text-muted);
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+}
+
+.merged-segment__header > svg {
+    flex-shrink: 0;
+    color: var(--color-accent);
+    opacity: 0.85;
+}
+
+.merged-segment__title {
+    flex: 1;
+    min-width: 0;
+    /* Title can wrap (e.g. "Evil‑Twin Wi‑Fi Detector" in a narrow column),
+       but the U+2011 non-breaking hyphens in the JSX keep each compound
+       word ("Evil‑Twin", "Wi‑Fi") together. */
+    overflow-wrap: anywhere;
+}
+
+.merged-segment__count {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border-radius: var(--radius-full, 999px);
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+    color: var(--color-accent);
+    font-size: 9px;
+    letter-spacing: 0.6px;
+    text-transform: lowercase;
+}
+
+.merged-segment__body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+
+/* Friendly helper blurb above the adapter list — same tone/sizing as
+   WifiGuardSection's intro copy, so the two segments read consistently. */
+.merged-segment__blurb {
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--color-text-secondary);
+}
+
+/* Clear left accent on the currently-active (Up) adapter row so it's
+   unmistakably distinct from the collapsed inactive-adapter list below. */
+.adapter-row--active {
+    border-left: 2px solid var(--color-success);
+}
+
+.wifi-guard-embedded__header {
+    padding-bottom: 7px;
+}
+
+.wifi-guard-embedded__header .bp6-control {
+    margin-bottom: 0 !important;
+    font-size: 10px !important;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.wifi-guard-manual-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 6px;
+    align-items: center;
+    min-width: 0;
+}
+
+.wifi-guard-manual-row .bp6-input-group {
+    min-width: 0;
+}
+
+@media (max-width: 1180px) {
+    .wifi-guard-manual-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* The embedded AdaptersList still renders its own "ADAPTERS" divider for
+   the standalone case — hide it inside the merged card so the segment
+   header above isn't duplicated. */
+.merged-adapters-wifi-guard .adapter-section-divider,
+.merged-adapters-evil-twin .adapter-section-divider {
+    display: none;
+}
+
+/* Drop the top margin AdaptersList puts above its first row (it expected
+   the now-hidden divider to space it). */
+.merged-adapters-wifi-guard .adapter-list,
+.merged-adapters-evil-twin .adapter-list {
+    margin-top: 0;
+}
+
+
+@media (max-width: 1100px) {
+    .network-control-row--active {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Network maintenance tables (neighbour cache + firewall audit)
+   Both tables can run to dozens of rows of monospace addresses, so they get
+   their own scroll container. WHY the container and not the page: a wide MAC
+   or a long program path must never push the panel into horizontal overflow.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Keep the neighbour table wide enough to read normally. The smaller adapter
+   controls occupy the right side; Firewall Audit deliberately spans the row
+   below instead of being squeezed into that side column. */
+.network-maintenance-layout {
+    display: grid;
+    gap: 24px;
+}
+
+.network-maintenance-layout__top {
+    display: grid;
+    grid-template-columns: minmax(38rem, 1fr) minmax(19rem, 0.55fr);
+    gap: 24px;
+    align-items: start;
+}
+
+.network-maintenance-layout__adapters {
+    min-width: 0;
+}
+
+@media (max-width: 1120px) {
+    .network-maintenance-layout__top {
+        grid-template-columns: 1fr;
+    }
+}
+
+.wc-net-table-scroll {
+    max-height: 340px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    background: var(--surface);
+}
+
+.wc-net-table {
+    width: 100%;
+    min-width: 520px;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12px;
+    color: var(--text);
+    /* Digits line up column-to-column so IPs and ports are scannable. */
+    font-variant-numeric: tabular-nums;
+}
+
+.wc-net-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 6px 10px;
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border-strong);
+    white-space: nowrap;
+}
+
+.wc-net-table tbody td {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+
+.wc-net-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.wc-net-table tbody tr:nth-child(even) {
+    background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+.wc-net-mono {
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+
+.wc-net-dim {
+    color: var(--text-dim);
+}
+
+.wc-net-truncate {
+    max-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A MAC answering for several IPs on one adapter — the ARP-spoof tell. */
+.wc-net-table tbody tr.is-flagged {
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+    box-shadow: inset 2px 0 0 var(--warn);
+}
+
+.wc-net-row-selectable {
+    cursor: pointer;
+}
+
+.wc-net-row-selectable:hover {
+    background: var(--surface-2);
+}
+
+.wc-net-table tbody tr.is-selected,
+.wc-net-table tbody tr.is-selected:nth-child(even) {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Column sizing. Fixed minimums for the address columns so nothing wraps;
+   the wide text columns absorb the remaining width and truncate. */
+.wc-net-col-check { width: 30px; }
+.wc-net-col-ip { width: 130px; }
+.wc-net-col-mac { width: 175px; }
+.wc-net-col-type { width: 120px; }
+.wc-net-col-adapter { width: auto; }
+.wc-net-col-rule { width: 38%; }
+.wc-net-col-state { width: 190px; }
+.wc-net-col-program { width: auto; }
+
+@media (max-width: 760px) {
+    .wc-net-table-scroll {
+        max-height: 300px;
+    }
+}

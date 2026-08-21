@@ -1,0 +1,1507 @@
+.vault-panel {
+  width: 100%;
+  min-width: 0;
+  padding-top: 0;
+  padding-bottom: 2rem;
+  margin: 0;
+}
+
+.vault-panel > .panel-header {
+  margin-bottom: 16px;
+}
+
+/* Active-mount indicator dot. Pulsing green so a mounted volume / RAM disk
+   is unmistakable in the drive column of either table.
+   WHY calc(2.4s * var(--motion,1)): the ambient pulse is deliberately slower
+   than the standard token scale (max 500ms). Using --motion keeps it
+   consistent with mesh-ring-breathe and mesh-presence-pulse patterns, and
+   ensures html.wc-no-motion collapses it to 0.01ms via the global block. */
+.vault-active-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 8px;
+  background: var(--color-success);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--color-success) 60%, transparent);
+  vertical-align: middle;
+  animation: vault-active-pulse calc(2.4s * var(--motion, 1)) var(--ease) infinite;
+}
+
+@keyframes vault-active-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.vault-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+/* Quick Actions row inside the Encrypted Volumes card — replaces the old
+   separate right-hand Quick Actions card so the right column can host
+   RAM Disks. */
+.vault-card-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+}
+
+.vault-card-action-row .vault-action-btn {
+  flex: 1 1 120px;
+  min-width: 100px;
+}
+
+.ramdisk-create-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.ramdisk-create-row .vault-action-btn,
+.ramdisk-create-row .ramdisk-autostart-card {
+  width: 100%;
+  min-width: 0;
+}
+
+.ramdisk-create-row .vault-action-btn {
+  height: 100%;
+}
+
+.ramdisk-create-row .ramdisk-autostart-card {
+  margin: 0;
+}
+
+/* Modal layout for the RAM-disk autostart config — clean vertical stack
+   instead of the cramped 3-column grid used in the inline form. The
+   bp.tsx Classes.DIALOG_BODY shim returns "" (no Blueprint padding), so
+   the wrapper supplies its own padding here. */
+.ramdisk-autostart-form.ramdisk-autostart-form--modal {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 0;
+  padding: 20px 24px;
+  border-top: 0;
+}
+
+/* Drive Letter + Filesystem on one horizontal line. align-items: stretch
+   lines the FormGroup labels at the same top edge AND lines the selects
+   at the same bottom edge regardless of label height. */
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  width: 100%;
+}
+
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  width: 100%;
+}
+
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-field--label {
+  width: 100%;
+  margin-top: 0;
+}
+
+/* Field labels in the modal — bright, slightly larger, mono-cased so the
+   "Drive Letter / Filesystem / Label" headings above each dropdown read
+   clearly. The bp.tsx FormGroup shim renders plain <label> tags inside
+   the FormGroup wrapper, so we target the direct child <label>. */
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-field > label,
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .vault-range-label {
+  min-height: 16px;
+  margin-bottom: 6px !important;
+  font-family: var(--font-mono);
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-primary) !important;
+}
+
+/* Make sure the selected value in each dropdown + the text in the Label
+   input are bright and full-size. The bp.tsx shim uses var(--text)
+   internally; we re-pin the colour here so a theme-token mismatch can't
+   render invisible text inside the modal. */
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-field select,
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-field input[type="text"],
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-field .bp6-input {
+  width: 100% !important;
+  min-width: 0;
+  color: var(--color-text-primary) !important;
+  background: var(--color-bg-tertiary) !important;
+  border-color: var(--color-border) !important;
+  font-size: 13px !important;
+  height: 36px;
+}
+
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-field > div,
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .bp6-html-select {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Read-only Switch label in the footer — keep it bright too. */
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-footer label,
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-footer .bp6-control {
+  font-size: 12px !important;
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: inherit;
+  font-weight: 600 !important;
+  color: var(--color-text-primary) !important;
+}
+
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+}
+
+/* Slider needs internal breathing room so the thumb doesn't sit flush
+   against the modal edge. The wrapper itself stays full-width, but a
+   small horizontal pad on the <input> keeps the track + thumb away from
+   the dialog border. */
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .vault-range-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ramdisk-autostart-form.ramdisk-autostart-form--modal .vault-range {
+  margin: 4px 0;
+}
+
+/* The editor is opened from a compact card and is often used on small
+   laptop/tablet screens. Keep the dialog inside the viewport, let its long
+   title wrap, and give the form a usable one-column layout before anything
+   can be clipped by the dialog's GPU clipping boundary. */
+.ramdisk-autostart-dialog {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+}
+
+.ramdisk-autostart-dialog > :first-child {
+  min-width: 0;
+}
+
+@media (max-width: 520px) {
+  .ramdisk-autostart-form.ramdisk-autostart-form--modal {
+    gap: 14px;
+    padding: 16px;
+  }
+
+  .ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-form-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-footer {
+    align-items: stretch;
+  }
+
+  .ramdisk-autostart-form.ramdisk-autostart-form--modal .ramdisk-autostart-footer > button {
+    width: 100%;
+  }
+
+  .ramdisk-autostart-form.ramdisk-autostart-form--modal .vault-range-limits {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+}
+
+/* System Drive encryption status row — moved into the Encrypted Volumes
+   card header area as a compact one-liner so the standalone SystemEncryption
+   card doesn't take a full stacked-section slot. */
+.vault-sys-enc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-top: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.vault-sys-enc-row .vault-sys-enc-label {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+.vault-sys-enc-row.is-encrypted .vault-sys-enc-label {
+  color: var(--color-success);
+}
+
+.vault-sys-enc-row.is-unprotected .vault-sys-enc-label {
+  color: var(--color-danger);
+}
+
+.vault-sys-enc-row .vault-sys-enc-refresh {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.vault-sys-enc-row .vault-sys-enc-refresh:hover {
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+}
+
+/* Mount source segmented control — File Container vs Partition/Drive.
+   Active state is unmistakable: accent border, tinted background, and a
+   pulsing green dot. The owner couldn't tell which mode was selected
+   with the previous bp Button `active` styling. */
+.mount-type-selector {
+  display: flex;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+}
+
+.mount-type-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.mount-type-btn:hover:not(.is-active) {
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+}
+
+.mount-type-btn.is-active {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-bg-card));
+  box-shadow: 0 0 0 1px var(--color-accent) inset;
+}
+
+/* Partition picker inside the Mount Volume dialog — replaces the cramped
+   single-line HTMLSelect with a stack of selectable rows so the
+   active-mount signal (green dot + bright drive-letter chip) is visible
+   at a glance. */
+.partition-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+}
+
+.partition-list-empty {
+  padding: 16px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: center;
+}
+
+.partition-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.partition-row:hover {
+  border-color: var(--color-border-light, var(--color-accent));
+  background: color-mix(in srgb, var(--color-accent) 4%, var(--color-bg-card));
+}
+
+.partition-row.is-selected {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-card));
+  box-shadow: 0 0 0 1px var(--color-accent) inset;
+}
+
+.partition-row-lead {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.partition-row-dot-spacer {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+}
+
+.partition-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.partition-row-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.partition-row-size {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.partition-row-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.partition-row-letter {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-success) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-success) 45%, transparent);
+  color: var(--color-success);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+/* Cap the inline Disk Space Analyzer height and scroll internally — the
+   analyzer body is intentionally tall (top bar + summaries + dir tree +
+   large-items list) and if left uncapped it pushed siblings (e.g. Disk
+   Cleanup) off the bottom of the panel where the owner couldn't reach
+   them without scrolling past the entire analyzer. */
+.vault-dsa-scroll {
+  max-height: 720px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Inner Dialog body uses flex: 0 0 auto in inline mode — without
+     min-height: 0 the flex parent could still expand to content height
+     and defeat the cap. */
+  min-height: 0;
+}
+
+.panic-btn {
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+  letter-spacing: 1px;
+  border-radius: var(--radius-lg) !important;
+}
+
+.action-btn {
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  letter-spacing: 0.5px;
+  border-radius: var(--radius-lg) !important;
+}
+
+.vault-card {
+  background-color: var(--color-bg-card) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-xl) !important;
+  padding: 16px !important;
+}
+
+.install-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 48px !important;
+}
+
+.install-icon {
+  color: var(--color-warning);
+  margin-bottom: 16px;
+}
+
+.install-prompt h2 {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.install-prompt p {
+  color: var(--color-text-secondary);
+  margin-bottom: 24px;
+}
+
+.install-btn {
+  font-family: var(--font-mono) !important;
+  border-radius: var(--radius-lg) !important;
+}
+
+.empty-icon {
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+
+.volumes-table {
+  width: 100%;
+}
+
+.volumes-table th {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--color-text-muted);
+}
+
+.type-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  border: 1px solid var(--color-border);
+}
+
+.type-badge--hidden {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+}
+
+.actions-cell {
+  width: 36px;
+  text-align: center;
+  padding: 4px 8px !important;
+}
+
+.mono-cell {
+  font-family: var(--font-mono);
+  font-weight: bold;
+  color: var(--color-accent);
+}
+
+.path-cell {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-content {
+  margin-top: 14px;
+  min-height: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+}
+
+.vault-content--empty {
+  max-height: none;
+  overflow: visible;
+}
+
+.vault-content .volumes-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-bg-card);
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 112px;
+  padding: 24px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.mount-dialog .wc-dialog-body {
+  padding: 24px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.mount-privacy-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.mount-privacy-note > svg {
+  flex: 0 0 auto;
+  color: var(--color-success);
+  margin-top: 2px;
+}
+
+.mount-privacy-note strong,
+.mount-privacy-note span {
+  display: block;
+}
+
+.mount-privacy-note strong {
+  color: var(--color-text-primary);
+  margin-bottom: 2px;
+}
+
+.quick-toggle--locked {
+  cursor: default;
+}
+
+.quick-toggle--locked > svg {
+  color: var(--color-success);
+}
+
+.mount-result-dialog {
+  max-width: 520px;
+}
+
+.mount-result-dialog__body {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 24px;
+}
+
+.mount-result-dialog__icon {
+  flex: 0 0 auto;
+  color: var(--color-warning);
+}
+
+.mount-result-dialog__body strong {
+  color: var(--color-text-primary);
+}
+
+.mount-result-dialog__body p {
+  margin: 8px 0 0;
+  color: var(--color-text-secondary);
+}
+
+.mount-result-dialog__note {
+  font-size: 12px;
+}
+
+.mount-dialog {
+  background: var(--color-bg-secondary) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-xl) !important;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5) !important;
+  width: min(450px, calc(100vw - 32px)) !important;
+  /* Give the scrolling form a real height budget.  A max-height alone lets
+     lengthy mount options push the footer below the visible dialog. */
+  height: min(44rem, calc(100dvh - 32px));
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden !important;
+}
+
+.mount-dialog .bp6-input {
+  background: var(--color-bg-tertiary) !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-primary) !important;
+  border-radius: var(--radius-md) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  box-shadow: none !important;
+}
+
+.mount-dialog .bp6-input:focus {
+  border-color: var(--color-accent) !important;
+  background: var(--color-accent-subtle) !important;
+}
+
+.mount-dialog .wc-dialog-header {
+  background: var(--color-bg-tertiary) !important;
+  border-bottom: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-xl) !important;
+  padding: 12px 20px !important;
+}
+
+.mount-dialog .bp6-html-select select {
+  background: var(--color-bg-tertiary) !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-primary) !important;
+  border-radius: var(--radius-md) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  box-shadow: none !important;
+}
+
+.drive-letter-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  max-height: 142px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.drive-letter-picker__option {
+  min-height: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease);
+}
+
+.drive-letter-picker__option:hover,
+.drive-letter-picker__option:focus-visible {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+  outline: none;
+}
+
+.drive-letter-picker__option--selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-subtle);
+  color: var(--color-accent);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
+.mount-dialog .bp6-heading {
+  font-family: var(--font-mono);
+  font-size: 11px !important;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--color-accent) !important;
+}
+
+.mount-options-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-tertiary);
+}
+
+.mount-hidden-protection {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-lg);
+  background: var(--color-warning-dim);
+}
+
+.mount-dialog-footer {
+  display: flex;
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 1;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  background: var(--color-bg-tertiary);
+  border-top: 1px solid var(--color-border);
+}
+
+/* Keep the primary actions reachable on compact laptops and short RDP
+   desktops.  Only the form body scrolls; the footer remains in view. */
+@media (max-height: 48rem) {
+  .mount-dialog {
+    height: calc(100dvh - 16px);
+    max-height: calc(100vh - 16px);
+  }
+
+  .mount-dialog .wc-dialog-body {
+    padding: 16px;
+  }
+
+  .mount-dialog-footer {
+    gap: 10px;
+    padding: 12px 16px;
+  }
+}
+
+.modal-cancel-btn {
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  color: var(--color-text-muted) !important;
+  letter-spacing: 1px !important;
+}
+
+.modal-primary-btn {
+  background: var(--color-accent-subtle) !important;
+  border: 1px solid var(--color-accent) !important;
+  color: var(--color-accent) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 1px !important;
+  padding: 8px 24px !important;
+  border-radius: var(--radius-lg) !important;
+  /* hover changes: background, box-shadow, border-color */
+  transition: background-color var(--dur-normal, 200ms) var(--ease),
+              box-shadow var(--dur-normal, 200ms) var(--ease),
+              border-color var(--dur-normal, 200ms) var(--ease) !important;
+}
+
+.modal-primary-btn:hover:not(:disabled) {
+  background: var(--color-accent-dim) !important;
+  box-shadow: 0 0 15px color-mix(in srgb, var(--color-accent) 30%, transparent) !important;
+  border-color: var(--color-accent) !important;
+}
+
+.modal-primary-btn:disabled {
+  opacity: 0.3;
+  filter: grayscale(1);
+  border-color: var(--color-border) !important;
+}
+
+.mount-dialog .bp6-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+
+.mount-dialog .bp6-helper-text {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+}
+
+/* Blueprint Switch label inside the mount-dialog: the default Blueprint
+   text colour disappears against the dark dialog backdrop (looks ghosted
+   in dark mode, like "Quick format" / "Read-only" did). Force the label
+   to the dialog's primary text colour and bump the contrast of the
+   indicator track so the off-state is visually present, not gone. */
+.mount-dialog .bp6-switch,
+.mount-dialog .bp6-control.bp6-switch {
+  color: var(--color-text-primary) !important;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  opacity: 1;
+}
+
+/* Off-state track — Blueprint defaults to a near-transparent grey on dark
+   backgrounds, making toggles look identical to background. */
+.mount-dialog .bp6-switch .bp6-control-indicator,
+.mount-dialog .bp6-control.bp6-switch .bp6-control-indicator {
+  background: rgba(255, 255, 255, 0.18) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1) !important;
+}
+
+/* On-state — match the accent used by the primary button. */
+.mount-dialog .bp6-switch input:checked ~ .bp6-control-indicator,
+.mount-dialog .bp6-control.bp6-switch input:checked ~ .bp6-control-indicator {
+  background: var(--color-accent) !important;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-accent) 40%, transparent) !important;
+}
+
+/* Light-mode mount-dialog: invert the off-state contrast so the track
+   reads against a white panel. */
+.mount-dialog.light .bp6-switch,
+.mount-dialog.light .bp6-control.bp6-switch {
+  color: var(--color-text-primary) !important;
+}
+.mount-dialog.light .bp6-switch .bp6-control-indicator,
+.mount-dialog.light .bp6-control.bp6-switch .bp6-control-indicator {
+  background: rgba(0, 0, 0, 0.18) !important;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12) !important;
+}
+
+/* Hide browser-default password reveal and clear buttons */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none;
+}
+
+input::-webkit-contacts-auto-fill-button,
+input::-webkit-credentials-auto-fill-button {
+  visibility: hidden;
+  display: none !important;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+}
+
+.vault-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  margin-top: 0;
+  min-height: 0;
+}
+
+.vault-title {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vault-subtitle,
+.vault-subsection-subtitle {
+  margin: 4px 0 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.support-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
+}
+
+.support-text {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--color-text-muted);
+}
+
+.support-logo {
+  height: 14px;
+  width: auto;
+  opacity: 0.7;
+  /* hover changes: opacity, filter */
+  transition: opacity var(--dur-normal, 200ms) var(--ease),
+              filter var(--dur-normal, 200ms) var(--ease);
+}
+
+.support-badge:hover .support-logo {
+  opacity: 1;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--color-accent) 30%, transparent));
+}
+
+/* Light mode support */
+.light-mode .support-badge,
+.light .support-badge {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.vault-subsection {
+  margin-top: 24px;
+}
+
+.vault-subsection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  margin-bottom: 12px;
+}
+
+.vault-subsection-title {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: var(--color-text-muted);
+}
+
+.vault-action-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.ramdisk-action-grid {
+  align-items: stretch;
+}
+
+.vault-stat-card {
+  display: flex;
+  min-height: 60px;
+  flex-direction: column;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  padding: 10px 14px;
+}
+
+.vault-stat-label {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.vault-stat-value {
+  margin-top: 4px;
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.vault-stat-note {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+
+.ramdisk-autostart-card {
+  margin: 8px 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg-card);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.ramdisk-autostart-card.is-enabled {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent 60%),
+    var(--color-bg-card);
+  border-color: color-mix(in srgb, var(--color-accent) 38%, var(--color-border));
+}
+
+.ramdisk-autostart-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ramdisk-autostart-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.ramdisk-autostart-title span {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ramdisk-autostart-expand {
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+
+.ramdisk-autostart-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.ramdisk-autostart-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 2px;
+}
+
+@media (max-width: 980px) {
+  .vault-action-grid,
+  .ramdisk-autostart-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .vault-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .vault-action-grid,
+  .ramdisk-autostart-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ramdisk-autostart-row,
+  .ramdisk-autostart-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+/* =====================================================================
+   Vault V2 Card Layout
+   ===================================================================== */
+
+.vault-storage-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Encrypted Volumes and RAM Disks sit together at the top; Stego Backup uses
+   the full row beneath them so its two workflows have room to breathe. */
+.vault-volumes-ramdisks-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+/* Dynamic one-line status under a SectionCard title (e.g. RAM Disks' mounted
+   count / free-space note) — replaces the old vault-card-title-area subtitle
+   now that headers come from SectionCard itself. */
+.vault-card-status-line {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.vault-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 99px;
+  flex-shrink: 0;
+}
+
+/* WHY calc(1.4s * var(--motion,1)): ambient blink is deliberately slow
+   (outside the 100–500ms standard scale). --motion scalar ties it to the
+   same motion-preference knob as all other ambient animations in the theme,
+   and html.wc-no-motion silences it via the global duration-collapse block. */
+.vault-status-badge i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: vault-badge-blink calc(1.4s * var(--motion, 1)) var(--ease) infinite;
+}
+
+.vault-status-badge--mounted {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  color: var(--color-accent);
+}
+
+.vault-status-badge--mounted i {
+  background: var(--color-accent);
+}
+
+@keyframes vault-badge-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.vault-card-desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.vault-section-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin: 28px 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.vault-section-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+.vault-expert-tag {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent);
+  text-transform: none;
+  font-style: normal;
+}
+
+.vault-action-grid--2col {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+/* =====================================================================
+   Consolidated Quick-Action button group (inside the card)
+   Replaces the four loose UniversalToggle widgets with one tidy,
+   consistent set of buttons that the card owns.
+   ===================================================================== */
+
+.vault-action-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: auto;
+}
+
+.vault-action-btn {
+  justify-content: flex-start !important;
+  gap: 8px;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.04em;
+  border-radius: 6px !important;
+  border: 1px solid var(--color-border) !important;
+  background: var(--color-bg-tertiary) !important;
+  color: var(--color-text-secondary) !important;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.vault-action-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border)) !important;
+  color: var(--color-text-primary) !important;
+  background: var(--color-accent-subtle) !important;
+}
+
+.vault-action-btn--primary {
+  border-color: var(--color-accent) !important;
+  background: var(--color-accent-subtle) !important;
+  color: var(--color-accent) !important;
+  font-weight: 700 !important;
+}
+
+.vault-action-btn--primary:hover:not(:disabled) {
+  background: var(--color-accent-dim) !important;
+  border-color: var(--color-accent) !important;
+  color: var(--color-accent) !important;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--color-accent) 25%, transparent) !important;
+}
+
+@media (max-width: 620px) {
+  .vault-action-group {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* =====================================================================
+   Range Slider — RAM Disk size
+   ===================================================================== */
+
+.vault-range-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vault-range-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.vault-range-value {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.vault-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+  background:
+    linear-gradient(var(--color-accent), var(--color-accent)) 0 / var(--fill, 0%) 100% no-repeat,
+    var(--color-bg-tertiary);
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+}
+
+.vault-range:focus {
+  outline: none;
+}
+
+.vault-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-bg-secondary);
+  cursor: grab;
+  border: 2px solid var(--color-accent);
+  box-shadow:
+    0 2px 8px -2px color-mix(in srgb, var(--color-accent) 45%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.vault-range::-webkit-slider-thumb:hover {
+  transform: scale(1.12);
+  box-shadow:
+    0 2px 12px -2px color-mix(in srgb, var(--color-accent) 60%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+.vault-range::-webkit-slider-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.18);
+}
+
+.vault-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-bg-secondary);
+  cursor: grab;
+  border: 2px solid var(--color-accent);
+  box-shadow: 0 2px 8px -2px color-mix(in srgb, var(--color-accent) 45%, transparent);
+  transition: transform 140ms ease;
+}
+
+.vault-range::-moz-range-thumb:hover {
+  transform: scale(1.12);
+}
+
+.vault-range::-moz-range-progress {
+  background: var(--color-accent);
+  height: 6px;
+  border-radius: 999px;
+}
+
+.vault-range::-moz-range-track {
+  background: var(--color-bg-tertiary);
+  height: 6px;
+  border-radius: 999px;
+}
+
+.vault-range-limits {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  opacity: 0.75;
+}
+
+.vault-range-info {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--color-text-muted);
+}
+
+.vault-range-over-cap {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--color-danger, #ff6b6b);
+}
+
+@media (max-width: 860px) {
+  .vault-volumes-ramdisks-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.vault-backup-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 16px 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-secondary);
+}
+
+.vault-backup-target strong,
+.vault-backup-target span {
+  margin-right: 10px;
+}
+
+.vault-backup-target span {
+  color: var(--color-accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.vault-backup-target p {
+  margin: 5px 0 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.vault-backup-target__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+@media (max-width: 680px) {
+  .vault-backup-target {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+/* Style all inputs and HTML selects inside the Vault panel to have sharp corners */
+.vault-panel .bp6-input,
+.vault-panel .bp6-input-group input,
+.vault-panel .bp6-html-select select {
+  background: var(--color-bg-tertiary) !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-primary) !important;
+  border-radius: var(--radius-md) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  box-shadow: none !important;
+}
+
+.vault-panel .bp6-input:focus,
+.vault-panel .bp6-input-group input:focus,
+.vault-panel .bp6-html-select select:focus {
+  border-color: var(--color-accent) !important;
+  background: var(--color-accent-subtle) !important;
+}
+
+/* Light mode overrides for inputs in the Vault panel */
+.light-mode .vault-panel .bp6-input,
+.light-mode .vault-panel .bp6-input-group input,
+.light-mode .vault-panel .bp6-html-select select,
+.light .vault-panel .bp6-input,
+.light .vault-panel .bp6-input-group input,
+.light .vault-panel .bp6-html-select select {
+  background: rgba(0, 0, 0, 0.03) !important;
+  border-color: rgba(0, 0, 0, 0.15) !important;
+  color: var(--color-text-primary) !important;
+}
+
+.light-mode .vault-panel .bp6-input:focus,
+.light-mode .vault-panel .bp6-input-group input:focus,
+.light-mode .vault-panel .bp6-html-select select:focus,
+.light .vault-panel .bp6-input:focus,
+.light .vault-panel .bp6-input-group input:focus,
+.light .vault-panel .bp6-html-select select:focus {
+  border-color: var(--color-accent) !important;
+  background: var(--color-accent-subtle) !important;
+}
