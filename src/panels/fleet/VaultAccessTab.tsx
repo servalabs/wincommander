@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
+import { clearVaultAccessDraft, readVaultAccessDraft, writeVaultAccessDraft } from "./vaultAccessDraft";
 import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
 import {
   newVaultEntry, newVaultPolicy, validateVaultAccessIntent, vaultMountResultLabel, vaultPresentationLabel,
@@ -27,22 +28,39 @@ function appliedAt(timestamp: number | null) {
 }
 
 export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
-  const [policy, setPolicy] = useState<VaultAccessPolicy | null>(null);
+  const initialDraft = useMemo(() => readVaultAccessDraft(), []);
+  const [policy, setPolicy] = useState<VaultAccessPolicy | null>(initialDraft);
   const [status, setStatus] = useState<VaultPolicyStatus | null>(null);
   const [authorizedEntries, setAuthorizedEntries] = useState<VaultAuthorizedEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [legacyNotice, setLegacyNotice] = useState<string | null>(null);
   const [mountTargetId, setMountTargetId] = useState<string | null>(null);
+  const [draftConfirmation, setDraftConfirmation] = useState<"replace" | "discard" | null>(null);
   const [mountingEntryId, setMountingEntryId] = useState<string | null>(null);
   const [unmountingEntryId, setUnmountingEntryId] = useState<string | null>(null);
   const [mountResults, setMountResults] = useState<Record<string, VaultMountEntryResult>>({});
   const passwordInputRef = useRef<HTMLInputElement>(null);
+  const policyRef = useRef<VaultAccessPolicy | null>(initialDraft);
+  const dirtyRef = useRef(initialDraft !== null);
+  const [draftDirty, setDraftDirty] = useState(initialDraft !== null);
   const { getPolicy, getStatus, applyPolicy, mountEntry, unmountEntry, listAuthorizedEntries } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
   const error = useMemo(() => policy ? validateVaultAccessIntent(policy) : null, [policy]);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const replacePolicy = useCallback((next: VaultAccessPolicy | null, dirty: boolean) => {
+    policyRef.current = next;
+    dirtyRef.current = dirty;
+    setPolicy(next);
+    setDraftDirty(dirty);
+    if (dirty && next) writeVaultAccessDraft(next);
+    else clearVaultAccessDraft();
+  }, []);
+
+  const editPolicy = useCallback((update: (current: VaultAccessPolicy | null) => VaultAccessPolicy | null) => {
+    replacePolicy(update(policyRef.current), true);
+  }, [replacePolicy]);
+
+  const refresh = useCallback(async (replaceDirtyDraft = false) => {
     try {
       const entries = await listAuthorizedEntries();
       setAuthorizedEntries(entries);
@@ -51,21 +69,18 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
           getPolicy(),
           getStatus(),
         ]);
-        setPolicy(loadedPolicy);
+        if (replaceDirtyDraft || !dirtyRef.current) replacePolicy(loadedPolicy, false);
         setStatus(loadedStatus);
       } else {
-        setPolicy(null);
         setStatus(null);
       }
     } catch {
-      setPolicy(null);
-      setStatus(null);
-      setAuthorizedEntries([]);
+      // A service/status refresh must never destroy an administrator's draft.
       showError("Your Vault list is unavailable.");
     } finally {
       setLoading(false);
     }
-  }, [getPolicy, getStatus, isAdmin, listAuthorizedEntries]);
+  }, [getPolicy, getStatus, isAdmin, listAuthorizedEntries, replacePolicy]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -75,7 +90,7 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
     return () => window.removeEventListener("focus", refreshOnFocus);
   }, [refresh]);
 
-  const updateEntry = (id: string, patch: Partial<VaultAccessEntry>) => setPolicy(current => {
+  const updateEntry = (id: string, patch: Partial<VaultAccessEntry>) => editPolicy(current => {
     const source = current ?? newVaultPolicy();
     return { ...source, entries: source.entries.map(entry => entry.id === id ? { ...entry, ...patch } : entry) };
   });
@@ -85,15 +100,18 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
     if (error) return void showError(error);
     setSaving(true);
     try {
-      await applyPolicy({
+      const submittedPolicy = {
         // The service's optimistic lock accepts only the next revision. The
         // displayed version remains the last observed policy until refresh.
         ...policy,
         expected_previous_version: policy.version,
         version: policy.version + 1,
-      });
-      await refresh();
-      showSuccess("Vault access intent was submitted and Windows ACL read-back was refreshed.");
+      };
+      const appliedStatus = await applyPolicy(submittedPolicy);
+      replacePolicy(submittedPolicy, false);
+      setStatus(appliedStatus);
+      await refresh(true);
+      showSuccess("Vault settings saved. Future mounts only need the password.");
     } catch (cause) {
       showError(cause instanceof Error ? cause.message : "Vault policy was not applied.");
     } finally {
@@ -104,8 +122,38 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
   const importLegacyDraft = () => {
     const entries = readUntrustedLegacyVaultDraft();
     if (!entries) return void setLegacyNotice("No retired local planner draft was found.");
-    setPolicy(current => ({ ...(current ?? newVaultPolicy()), entries }));
+    editPolicy(current => ({ ...(current ?? newVaultPolicy()), entries }));
     setLegacyNotice("Imported as an untrusted draft. Review container paths and grants before applying.");
+  };
+
+  const replaceWithSharedDraft = () => {
+    const source = newVaultPolicy();
+    const entry = newVaultEntry("shared");
+    entry.owner_account = "";
+    entry.grants = [{ principal_name: "", access: "write" }];
+    replacePolicy({ ...source, entries: [entry] }, true);
+  };
+
+  const createSharedDraft = () => {
+    if (policyRef.current) return void setDraftConfirmation("replace");
+    replaceWithSharedDraft();
+  };
+
+  const reloadSavedPolicy = async () => {
+    replacePolicy(null, false);
+    await refresh(true);
+  };
+
+  const discardDraftAndReload = () => {
+    if (draftDirty) return void setDraftConfirmation("discard");
+    void reloadSavedPolicy();
+  };
+
+  const confirmDraftChange = () => {
+    const action = draftConfirmation;
+    setDraftConfirmation(null);
+    if (action === "replace") replaceWithSharedDraft();
+    if (action === "discard") void reloadSavedPolicy();
   };
 
   const recordMountResult = (result: VaultMountEntryResult) => {
@@ -168,14 +216,16 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
     <div className="fleet-admin-stack">
       <Card>
         <CardHeader>
-          <CardTitle>My vaults</CardTitle>
+          <CardTitle>{isAdmin ? "Saved vaults" : "My vaults"}</CardTitle>
           <CardDescription>
-            Only Vaults that the service has authorized for this Windows account appear here.
+            {isAdmin
+              ? "Saved vault settings stay on this PC. Mounting asks only for the password, which is never stored."
+              : "Only Vaults that the service has authorized for this Windows account appear here; mounting asks only for the password."}
           </CardDescription>
         </CardHeader>
         <CardContent className="fleet-admin-stack">
           {authorizedEntries.length === 0 && (
-            <p className="fleet-field-hint">No Vault access is currently assigned to this Windows account.</p>
+            <p className="fleet-field-hint">{isAdmin ? "No vault has been saved and assigned to this account yet." : "No Vault access is currently assigned to this Windows account."}</p>
           )}
           {authorizedEntries.map(entry => {
             const mountResult = mountResults[entry.entry_id];
@@ -212,26 +262,29 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
       {isAdmin && <>
       <Card>
         <CardHeader>
-          <CardTitle>Vault access</CardTitle>
+          <CardTitle>Set up a vault</CardTitle>
           <CardDescription>
-            Requested access is intent. The SYSTEM service resolves Windows accounts, applies ACLs, and reports what it observed.
+            Enter these settings once, save them, and use only the vault password for future mounts.
           </CardDescription>
         </CardHeader>
         <CardContent className="fleet-action-row">
-          <Button onClick={() => setPolicy(current => current ?? newVaultPolicy())}>Create three-vault starter</Button>
+          <Button onClick={createSharedDraft}>Create shared vault</Button>
+          <Button variant="outline" onClick={() => editPolicy(current => current ?? newVaultPolicy())}>Create three-vault starter</Button>
           <Button variant="outline" onClick={importLegacyDraft}>Import retired planner as draft</Button>
-          <Button variant="outline" onClick={() => void refresh()}>Refresh observed status</Button>
+          <Button variant="outline" onClick={() => void refresh()}>Refresh status</Button>
+          <Button variant="outline" onClick={() => void discardDraftAndReload()}>Discard draft & reload saved</Button>
           {legacyNotice && <span className="fleet-field-hint">{legacyNotice}</span>}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Requested policy</CardTitle>
+          <CardTitle>Vault settings</CardTitle>
           <CardDescription>File containers only. Each managed container needs its own dedicated parent folder, so Windows can apply one unambiguous folder ACL. Account and group names are requests for the service to resolve; this screen never stores SIDs or ACLs.</CardDescription>
         </CardHeader>
         <CardContent className="fleet-admin-stack">
-          {!activePolicy && <p className="fleet-field-hint">No service policy exists yet. Create the three-vault starter or import a retired planner as a draft.</p>}
+          {!activePolicy && <p className="fleet-field-hint">No saved policy or local draft exists yet. Create one shared vault to begin.</p>}
+          {activePolicy && <p className="fleet-field-hint">{draftDirty ? "Draft auto-saved on this PC — not yet applied to Windows." : "Showing the policy saved by the security service."}</p>}
           {activePolicy?.entries.map((entry, entryIndex) => {
             const observed = statusById.get(entry.id);
             const mountResult = mountResults[entry.id];
@@ -239,20 +292,20 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
             return <div className="fleet-vault-workspace" key={entry.id}>
               <div className="fleet-vault-workspace-header">
                 <strong>Vault {entryIndex + 1}</strong>
-                <Button variant="outline" size="sm" onClick={() => setPolicy(current => current && ({ ...current, entries: current.entries.filter(item => item.id !== entry.id) }))}>Remove</Button>
+                <Button variant="outline" size="sm" onClick={() => editPolicy(current => current && ({ ...current, entries: current.entries.filter(item => item.id !== entry.id) }))}>Remove</Button>
               </div>
               <div className="fleet-owner-inputs">
-                <Input aria-label={`Vault ${entryIndex + 1} label`} value={entry.label} placeholder="Vault label" onChange={event => updateEntry(entry.id, { label: event.target.value })} />
-                <Input aria-label={`Vault ${entryIndex + 1} container path`} value={entry.container_path} placeholder="C:\\Vaults\\shared.hc" onChange={event => updateEntry(entry.id, { container_path: event.target.value })} />
-                <Input aria-label={`Vault ${entryIndex + 1} owner`} value={entry.owner_account} placeholder="Administrator account" onChange={event => updateEntry(entry.id, { owner_account: event.target.value })} />
-                <label className="fleet-field"><span>Presentation</span><select value={entry.mount.presentation} onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, presentation: event.target.value as VaultAccessEntry["mount"]["presentation"] } })}><option value="machine">Machine (shared)</option><option value="per-user">Per-user (private)</option></select></label>
-                <Input aria-label={`Vault ${entryIndex + 1} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="Preferred letter" onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} />
+                <label className="fleet-field"><span>Vault name</span><Input aria-label={`Vault ${entryIndex + 1} label`} value={entry.label} placeholder="Shared vault" onChange={event => updateEntry(entry.id, { label: event.target.value })} /></label>
+                <label className="fleet-field"><span>Container file</span><Input aria-label={`Vault ${entryIndex + 1} container path`} value={entry.container_path} placeholder="D:\\Vaults\\shared.hc" onChange={event => updateEntry(entry.id, { container_path: event.target.value })} /></label>
+                <label className="fleet-field"><span>Primary owner</span><Input aria-label={`Vault ${entryIndex + 1} owner`} value={entry.owner_account} placeholder="SERVER\\shrey" onChange={event => updateEntry(entry.id, { owner_account: event.target.value })} /></label>
+                <label className="fleet-field"><span>Who sees the mounted drive</span><select value={entry.mount.presentation} onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, presentation: event.target.value as VaultAccessEntry["mount"]["presentation"] } })}><option value="machine">All authorized users on this PC</option><option value="per-user">Only the user who mounts it</option></select></label>
+                <label className="fleet-field"><span>Drive letter</span><Input aria-label={`Vault ${entryIndex + 1} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} /></label>
               </div>
               <div className="fleet-vault-matrix">
-                <strong>Named grants (intent)</strong>
+                <strong>Who can use this vault</strong>
                 {entry.grants.map((grant, grantIndex) => <div className="fleet-action-row" key={`${entry.id}-${grantIndex}`}>
-                  <Input aria-label={`Grant ${grantIndex + 1} principal`} value={grant.principal_name} placeholder="Windows account or group" onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, principal_name: event.target.value } : current) })} />
-                  <select aria-label={`Grant ${grantIndex + 1} access`} value={grant.access} onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, access: event.target.value as "read" | "write" } : current) })}><option value="write">Read & write</option><option value="read">Read only</option></select>
+                  <label className="fleet-field"><span>Windows user or group</span><Input aria-label={`Grant ${grantIndex + 1} principal`} value={grant.principal_name} placeholder="SERVER\\Admins" onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, principal_name: event.target.value } : current) })} /></label>
+                  <label className="fleet-field"><span>Access</span><select aria-label={`Grant ${grantIndex + 1} access`} value={grant.access} onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, access: event.target.value as "read" | "write" } : current) })}><option value="write">Read & write</option><option value="read">Read only</option></select></label>
                   <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: entry.grants.filter((_, index) => index !== grantIndex) })}>Remove grant</Button>
                 </div>)}
                 <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: [...entry.grants, { principal_name: "", access: "write" }] })}>Add grant</Button>
@@ -281,15 +334,15 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
             </div>;
           })}
           <div className="fleet-action-row">
-            <Button variant="outline" onClick={() => setPolicy(current => {
+            <Button variant="outline" onClick={() => editPolicy(current => {
               const source = current ?? newVaultPolicy();
               return { ...source, entries: [...source.entries, newVaultEntry()] };
             })}>Add private vault</Button>
-            <Button variant="outline" onClick={() => setPolicy(current => {
+            <Button variant="outline" onClick={() => editPolicy(current => {
               const source = current ?? newVaultPolicy();
               return { ...source, entries: [...source.entries, newVaultEntry("shared")] };
             })}>Add shared vault</Button>
-            <Button variant="primary" disabled={saving || !!error} onClick={() => void apply()}>{saving ? "Applying…" : "Apply requested policy"}</Button>
+            <Button variant="primary" disabled={saving || !!error} onClick={() => void apply()}>{saving ? "Saving…" : "Save vault settings"}</Button>
           </div>
           {error && <p className="fleet-validation-errors">{error}</p>}
         </CardContent>
@@ -326,6 +379,23 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
           <DialogFooter>
             <Button variant="outline" onClick={closeMountPrompt}>Cancel</Button>
             <Button variant="primary" onClick={() => void mountSelectedEntry()}>Mount Vault</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={draftConfirmation !== null} onOpenChange={open => { if (!open) setDraftConfirmation(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{draftConfirmation === "replace" ? "Replace this draft?" : "Discard local changes?"}</DialogTitle>
+            <DialogDescription>
+              {draftConfirmation === "replace"
+                ? "This replaces the fields currently in the editor with one blank shared vault."
+                : "This removes the local draft and reloads the last policy saved by the security service."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDraftConfirmation(null)}>Keep editing</Button>
+            <Button variant="primary" onClick={confirmDraftChange}>{draftConfirmation === "replace" ? "Replace draft" : "Discard & reload"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

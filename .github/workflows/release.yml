@@ -1,7 +1,7 @@
 name: release
 
 # A vX.Y.Z tag starts the release. Pushing the tag (locally or after a
-# prepare-release PR merges) aligns Cargo/package versions, then the MSI
+# prepare-release PR merges) aligns Cargo/package versions, then the NSIS setup
 # job uses the protected `release` environment (signing key + R2).
 # Owners/admins and usernames in RELEASE_AUTO_APPROVERS skip the manual
 # Review deployments click; anyone else cannot start the workflow.
@@ -208,10 +208,10 @@ jobs:
             fi
             sleep 3
           done
-          echo "No pending deployment appeared. If the MSI job is waiting, approve the release environment in the Actions UI. If Prevent self-review is enabled, turn it off for owner-triggered releases."
+          echo "No pending deployment appeared. If the setup job is waiting, approve the release environment in the Actions UI. If Prevent self-review is enabled, turn it off for owner-triggered releases."
 
   build-free-release:
-    name: Build, sign, publish to R2 and GitHub, and attest Free MSI
+    name: Build, sign, publish to R2 and GitHub, and attest Free setup
     needs: align-version
     runs-on: windows-latest
     environment:
@@ -306,11 +306,76 @@ jobs:
 
           "TAURI_SIGNING_PRIVATE_KEY=$key" | Add-Content -Path $env:GITHUB_ENV
 
-      - name: Build signed Free MSI
+      # Do not replace this with `bun tauri build`: the public release wrapper builds
+      # commander-svc, stages it as a Tauri resource, and forces NSIS so its
+      # service install/update/uninstall hooks are compiled into the setup. It
+      # deliberately does not require the separate private Pro source checkout.
+      - name: Build signed Free NSIS setup
         env:
           RUST_MIN_STACK: "16777216"
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: bun tauri build --config src-tauri/commander-free/tauri.conf.json
+        run: bun run build:free:release-installer
+
+      # This is an artifact-level gate, not a source-contract check.  It
+      # proves the installer contains the staged service by actually running
+      # its NSIS lifecycle: install, create/configure/start WinCommanderSvc,
+      # then uninstall and remove it again on the clean hosted runner.
+      - name: Verify Free setup installs and removes WinCommanderSvc
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:RELEASE_TAG.Substring(1)
+          $setups = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "WinCommander*${version}*_x64-setup.exe" -File | Where-Object { $_.Name -notlike "*.sig*" })
+          if ($setups.Count -ne 1) {
+            throw "Expected exactly one NSIS setup for v$version; found $($setups.Count)."
+          }
+
+          $setup = $setups[0].FullName
+          & $setup /S
+          if ($LASTEXITCODE -ne 0) {
+            throw "The NSIS setup failed with exit code $LASTEXITCODE."
+          }
+
+          $servicePath = Join-Path $env:ProgramFiles "WinCommander\\wincommander-svc.exe"
+          if (-not (Test-Path -LiteralPath $servicePath -PathType Leaf)) {
+            throw "The NSIS setup did not install wincommander-svc.exe at $servicePath."
+          }
+          $service = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
+          if ($null -eq $service) {
+            throw "The NSIS setup did not create WinCommanderSvc."
+          }
+          if ($service.StartMode -ne "Auto" -or $service.PathName -notmatch [Regex]::Escape($servicePath)) {
+            throw "WinCommanderSvc was not configured with the expected automatic service executable: $($service.PathName)"
+          }
+          $running = Get-Service -Name WinCommanderSvc -ErrorAction Stop
+          $running.WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
+          $running.Refresh()
+          if ($running.Status -ne "Running") {
+            throw "WinCommanderSvc was installed but is not running (state: $($running.Status))."
+          }
+
+          $uninstaller = Join-Path $env:ProgramFiles "WinCommander\\uninstall.exe"
+          if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
+            throw "The NSIS setup did not create its uninstaller at $uninstaller."
+          }
+          & $uninstaller /S
+          if ($LASTEXITCODE -ne 0) {
+            throw "The NSIS uninstaller failed with exit code $LASTEXITCODE."
+          }
+          $deadline = (Get-Date).AddSeconds(30)
+          do {
+            $remainingService = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
+            if ($null -eq $remainingService) { break }
+            Start-Sleep -Seconds 1
+          } while ((Get-Date) -lt $deadline)
+          if ($null -ne $remainingService) {
+            throw "The NSIS uninstaller did not remove WinCommanderSvc."
+          }
+          if (Test-Path -LiteralPath $servicePath) {
+            throw "The NSIS uninstaller did not remove wincommander-svc.exe."
+          }
 
       - name: Verify bundled shared media
         shell: pwsh
@@ -389,12 +454,12 @@ jobs:
             throw "Tag $env:RELEASE_TAG does not match Tauri version $($config.version)."
           }
 
-          $msis = @(Get-ChildItem "src-tauri/target/release/bundle" -Filter "WinCommander*${version}*_x64_en-US.msi" -Recurse | Where-Object { $_.Name -notlike "*.sig*" })
-          if ($msis.Count -ne 1) {
-            throw "Expected exactly one MSI for v$version; found $($msis.Count)."
+          $setups = @(Get-ChildItem "src-tauri/target/release/bundle/nsis" -Filter "WinCommander*${version}*_x64-setup.exe" -File | Where-Object { $_.Name -notlike "*.sig*" })
+          if ($setups.Count -ne 1) {
+            throw "Expected exactly one NSIS setup for v$version; found $($setups.Count)."
           }
-          $msi = $msis[0]
-          $signaturePath = "$($msi.FullName).sig"
+          $setup = $setups[0]
+          $signaturePath = "$($setup.FullName).sig"
           if (-not (Test-Path $signaturePath)) {
             throw "Tauri updater signature not found: $signaturePath"
           }
@@ -404,15 +469,15 @@ jobs:
             throw "Tauri updater signature is empty."
           }
           $signatureText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($signature))
-          if ($signatureText -notmatch [Regex]::Escape($msi.Name)) {
-            throw "The updater signature does not name $($msi.Name)."
+          if ($signatureText -notmatch [Regex]::Escape($setup.Name)) {
+            throw "The updater signature does not name $($setup.Name)."
           }
 
           $assetDirectory = Join-Path $env:RUNNER_TEMP "wincommander-release-assets"
           New-Item -ItemType Directory -Path $assetDirectory -Force | Out-Null
           $manifestPath = Join-Path $assetDirectory "latest.json"
           $checksumPath = Join-Path $assetDirectory "SHA256SUMS.txt"
-          $assetName = [Uri]::EscapeDataString($msi.Name)
+          $assetName = [Uri]::EscapeDataString($setup.Name)
           $updateDomain = $env:UPDATE_DOMAIN.Trim().TrimEnd('/')
           if ([string]::IsNullOrWhiteSpace($updateDomain)) {
             throw "The release environment does not provide CF_UPDATE_DOMAIN."
@@ -433,33 +498,33 @@ jobs:
           } | ConvertTo-Json -Depth 6
           [IO.File]::WriteAllText($manifestPath, $manifest, [Text.UTF8Encoding]::new($false))
 
-          $sha256 = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          [IO.File]::WriteAllText($checksumPath, "$sha256 *$($msi.Name)`n", [Text.UTF8Encoding]::new($false))
+          $sha256 = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText($checksumPath, "$sha256 *$($setup.Name)`n", [Text.UTF8Encoding]::new($false))
 
-          "MSI_PATH=$($msi.FullName)" | Add-Content -Path $env:GITHUB_ENV
-          "MSI_SIGNATURE_PATH=$signaturePath" | Add-Content -Path $env:GITHUB_ENV
+          "SETUP_PATH=$($setup.FullName)" | Add-Content -Path $env:GITHUB_ENV
+          "SETUP_SIGNATURE_PATH=$signaturePath" | Add-Content -Path $env:GITHUB_ENV
           "LATEST_JSON_PATH=$manifestPath" | Add-Content -Path $env:GITHUB_ENV
           "CHECKSUM_PATH=$checksumPath" | Add-Content -Path $env:GITHUB_ENV
 
-      - name: Attest signed MSI provenance
+      - name: Attest signed Free setup provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: ${{ env.MSI_PATH }}
+          subject-path: ${{ env.SETUP_PATH }}
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wincommander-free-${{ env.RELEASE_TAG }}
           path: |
-            ${{ env.MSI_PATH }}
-            ${{ env.MSI_SIGNATURE_PATH }}
+            ${{ env.SETUP_PATH }}
+            ${{ env.SETUP_SIGNATURE_PATH }}
             ${{ env.LATEST_JSON_PATH }}
             ${{ env.CHECKSUM_PATH }}
             wincommander-free.sbom.cdx.json
           if-no-files-found: error
 
       # Upload immutable artifacts before the mutable latest.json pointer. A
-      # client that sees a new manifest can therefore always fetch its MSI and
+      # client that sees a new manifest can therefore always fetch its setup and
       # minisign sidecar from the same R2 release.
       - name: Publish signed Free release to R2
         shell: pwsh
@@ -481,17 +546,17 @@ jobs:
 
           $remote = "r2:windows"
           $version = $env:RELEASE_TAG.Substring(1)
-          $msiName = Split-Path -Leaf $env:MSI_PATH
-          & $rclone copyto $env:MSI_PATH "$remote/free/v$version/$msiName" "--s3-no-check-bucket"
-          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned MSI to R2." }
-          & $rclone copyto $env:MSI_SIGNATURE_PATH "$remote/free/v$version/$msiName.sig" "--s3-no-check-bucket"
-          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned MSI signature to R2." }
+          $setupName = Split-Path -Leaf $env:SETUP_PATH
+          & $rclone copyto $env:SETUP_PATH "$remote/free/v$version/$setupName" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned setup to R2." }
+          & $rclone copyto $env:SETUP_SIGNATURE_PATH "$remote/free/v$version/$setupName.sig" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned setup signature to R2." }
           & $rclone copyto $env:CHECKSUM_PATH "$remote/free/v$version/SHA256SUMS.txt" "--s3-no-check-bucket"
           if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned checksum to R2." }
           & $rclone copyto "wincommander-free.sbom.cdx.json" "$remote/free/v$version/wincommander-free.sbom.cdx.json" "--s3-no-check-bucket"
           if ($LASTEXITCODE -ne 0) { throw "Could not upload the versioned SBOM to R2." }
-          & $rclone copyto $env:MSI_PATH "$remote/free/latest.msi" "--ignore-times" "--s3-no-check-bucket"
-          if ($LASTEXITCODE -ne 0) { throw "Could not promote the latest MSI to R2." }
+          & $rclone copyto $env:SETUP_PATH "$remote/free/latest.exe" "--ignore-times" "--s3-no-check-bucket"
+          if ($LASTEXITCODE -ne 0) { throw "Could not promote the latest setup to R2." }
           & $rclone copyto $env:LATEST_JSON_PATH "$remote/free/latest.json" "--ignore-times" "--s3-no-check-bucket"
           if ($LASTEXITCODE -ne 0) { throw "Could not publish free/latest.json to R2." }
 
@@ -504,13 +569,13 @@ jobs:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           $releaseAssets = @(
-            $env:MSI_PATH,
-            $env:MSI_SIGNATURE_PATH,
+            $env:SETUP_PATH,
+            $env:SETUP_SIGNATURE_PATH,
             $env:LATEST_JSON_PATH,
             $env:CHECKSUM_PATH,
             "wincommander-free.sbom.cdx.json"
           )
-          $notes = "Automated Free MSI release. Verify provenance with: gh attestation verify `"<installer>.msi`" -R ${{ github.repository }}"
+          $notes = "Automated Free NSIS setup release. Verify provenance with: gh attestation verify `"<installer>-setup.exe`" -R ${{ github.repository }}"
 
           gh release view $env:RELEASE_TAG 2>$null
           if ($LASTEXITCODE -eq 0) {

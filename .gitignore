@@ -143,7 +143,7 @@ archive/
 # Isolated local Cargo target used by live Vault candidate validation
 .cargo-target-live-vault-fix/
 UI_problem/
-
+/.cargo-target-service-handoff/
 # Local Superdesign working files and drafts must never be committed.
 /.superdesign/
 # Release-only service staging payload (created and removed by build-tauri-release.ts)

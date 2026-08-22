@@ -34,14 +34,14 @@ export interface VaultGrantInput {
 
 export interface VaultMountPolicy {
   presentation: VaultPresentation;
-  preferred_letter?: string;
+  preferred_letter?: string | null;
 }
 
 export interface VaultAccessEntry {
   id: string;
   label: string;
   container_path: string;
-  container_identity?: string;
+  container_identity?: string | null;
   owner_account: string;
   grants: VaultGrantInput[];
   mount: VaultMountPolicy;

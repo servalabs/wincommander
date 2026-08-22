@@ -24,6 +24,7 @@
     "build:free": "bun run encrypt-backend && bun x tsc && bun x vite build",
     "build": "bun run encrypt-backend && bun run build:service:release && bun run build:pro:release && bun run hash-pro && bun x tsc && bun x vite build",
     "build:tauri:release": "bun run gen:eula-rtf:check && bun run encrypt-backend && bun run build:pro:release && bun run hash-pro && bun x tsc && bun x vite build && bun run tools/build-tauri-release.ts",
+    "build:free:release-installer": "bun run gen:eula-rtf:check && bun run tools/build-tauri-release.ts",
     "build:fleet-kit": "bun run tools/make-fleet-kit.ts --release",
     "build:fleet-kit:debug": "bun run tools/make-fleet-kit.ts",
     "preview": "bun x vite preview",

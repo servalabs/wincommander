@@ -4,8 +4,8 @@ The Free updater reads the R2-backed public update domain directly:
 
 `https://winupdates.servalabs.com/free/latest.json`
 
-The protected public release workflow builds and Tauri-signs the MSI, attests
-its provenance, then uploads the MSI, minisign signature, SHA-256 checksum,
+The protected public release workflow builds and Tauri-signs the NSIS setup,
+attests its provenance, then uploads the setup, minisign signature, SHA-256 checksum,
 and SBOM to R2 under `/free/vX.Y.Z/`. Once those immutable artifacts are
 available, it updates `/free/latest.json` as the signed updater pointer. The
 same artifacts remain attached to the versioned GitHub Release as the public
@@ -16,7 +16,7 @@ downloads. The Free release bucket is `windows`.
 
 The usual path is to tag the commits you want to ship. Pushing that tag starts
 the release workflow: it updates the Free version files if they are still on
-the previous version, then builds the signed MSI and publishes to R2.
+the previous version, then builds the signed NSIS setup and publishes to R2.
 
 ```powershell
 git checkout main
@@ -34,14 +34,14 @@ git push origin v3.2.17
    that commit.
 3. If you (owner/admin) or a username in `RELEASE_AUTO_APPROVERS` pushed
    the tag, the workflow approves the `release` environment itself. Anyone
-   else still uses **Review deployments**. The MSI job then signs the
+   else still uses **Review deployments**. The setup job then signs the
    installer, copies the artifacts to R2, and publishes the GitHub Release.
 
 The reviewable alternative is unchanged: run **prepare release** with the
 exact version, merge the `release/vX.Y.Z` pull request, and let the tag
-workflow create `vX.Y.Z`. That tag push starts the same MSI + R2 job.
+workflow create `vX.Y.Z`. That tag push starts the same NSIS setup + R2 job.
 
-The updater manifest points to the versioned R2 MSI, so the manifest and
+The updater manifest points to the versioned R2 NSIS setup, so the manifest and
 installer cannot drift. The release environment must provide `CF_UPDATE_DOMAIN`,
 `CF_R2_API`, `R2_KEY`, and `R2_SECRET`.
 
@@ -75,13 +75,13 @@ edit cannot weaken it alone:
 When the actor is an owner/admin or is allowlisted, **prepare release**
 also merges its version PR with `--admin` so CODEOWNERS on
 `tauri.conf.json` does not wait for a second human. The tag push then
-starts the same MSI job.
+starts the same NSIS setup job.
 
 ## Free bundle media boundary
 
 The shared `assets` submodule also supports website and other-product media.
 The Free desktop build imports only its explicit runtime asset allowlist from
-`src/assets.ts`; adding a file to the submodule does not put it in the MSI.
+`src/assets.ts`; adding a file to the submodule does not put it in the setup.
 The release workflow rejects bundled installers, archives, Theron media, and
 media payloads larger than 64 MiB. Add a genuinely required desktop asset to
 the allowlist and release verification patterns in the same change.
@@ -99,6 +99,8 @@ service installation do not require a separate Authenticode certificate; this
 does not change the release workflow's existing installer/updater signing.
 
 The source contract tests cover the quoted service ImagePath and rollback of a
-failed replacement to the previous executable/configuration. They are not an
-NSIS compiler, packaged-installer, SCM, or clean-machine result: run those
-checks on the exact release artifact before claiming installation acceptance.
+failed replacement to the previous executable/configuration. The release
+workflow additionally runs the exact NSIS setup on a clean hosted runner and
+requires it to install `wincommander-svc.exe`, create/configure/start
+`WinCommanderSvc`, then uninstall and remove both. A failed lifecycle gate
+blocks publishing; clean-machine endpoint acceptance remains a separate check.

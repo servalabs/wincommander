@@ -55,14 +55,14 @@ Visual Studio C++ Build Tools and Windows SDK remain manual prerequisites.
 
 ## Verify your download
 
-Every release is built in public CI and verifiable end to end. The signed MSI,
+Every release is built in public CI and verifiable end to end. The signed NSIS setup,
 updater manifest, signature, SBOM, and SHA-256 checksum are published together
 on the GitHub Release:
 
 - **Build provenance (SLSA)** — each installer carries a Sigstore-backed attestation tying it to the exact public commit and CI run that built it:
 
   ```powershell
-  gh attestation verify ".\WinCommander_<version>_x64_en-US.msi" -R servalabs/wincommander
+  gh attestation verify ".\WinCommander_<version>_x64-setup.exe" -R servalabs/wincommander
   ```
 
 - **Dependency inventory** — every release includes a CycloneDX SBOM for offline vulnerability scanning.

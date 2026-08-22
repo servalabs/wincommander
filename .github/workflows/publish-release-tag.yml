@@ -61,4 +61,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v${version}" -m "release: v${version}"
           git push origin "v${version}"
-          echo "Created ${GITHUB_REPOSITORY} tag v${version}. The tag push starts the signed MSI release."
+          echo "Created ${GITHUB_REPOSITORY} tag v${version}. The tag push starts the signed NSIS setup release."

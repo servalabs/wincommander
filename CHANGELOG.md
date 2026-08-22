@@ -12,6 +12,19 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **Fleet Vault drafts persist and release packaging proves the security
+  service lifecycle** (2026-08-22) — editing a Vault no longer loses typed
+  fields when the window regains focus or service status refreshes. A
+  versioned local draft stores only paths and account/group intent until the
+  administrator explicitly discards or applies it; mount passwords remain
+  request-only. The editor now starts with a single shared-vault workflow,
+  keeps field labels visible, and distinguishes a local draft from the policy
+  saved by the SYSTEM service. The release job now builds the NSIS setup that
+  actually stages `wincommander-svc.exe`, then installs the exact artifact and
+  requires an automatic running `WinCommanderSvc` before publication; it also
+  verifies uninstall cleanup. This closes the v3.4.4 packaging path that could
+  install the desktop UI without its Fleet permissions service.
+
 - **Encrypted-volume driver repair and explicit decoy mounting**
   (2026-08-22) — Free now distinguishes standard, visible-decoy, and hidden
   mounts in the Secure Storage dialog and sends a bounded volume role to Pro.

@@ -9,6 +9,9 @@ const releaseTool = readFileSync("tools/build-tauri-release.ts", "utf8");
 const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
 const manifest = readFileSync("src-tauri/commander-free/app.manifest", "utf8");
 const buildScript = readFileSync("src-tauri/commander-free/build.rs", "utf8");
+const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
+const publishTagWorkflow = readFileSync(".github/workflows/publish-release-tag.yml", "utf8");
+const prepareReleaseWorkflow = readFileSync(".github/workflows/prepare-release.yml", "utf8");
 
 describe("public service release packaging", () => {
   test("keeps raw Cargo checks independent of a release-only service artifact", () => {
@@ -20,8 +23,28 @@ describe("public service release packaging", () => {
     expect(releaseTool).toContain('config.bundle.resources = [...config.bundle.resources.filter');
     expect(releaseTool).toContain('rmSync(generatedConfigPath, { force: true })');
     expect(releaseTool).toContain('rmSync(stagedServicePath, { force: true })');
-    expect(packageJson.scripts["build:tauri:release"]).toContain("bun run tools/build-tauri-release.ts");
+    expect(packageJson.scripts["build:free:release-installer"]).toContain("bun run tools/build-tauri-release.ts");
+    expect(packageJson.scripts["build:free:release-installer"]).not.toContain("build:pro");
     expect(packageJson.scripts.build).toContain("bun run build:service:release");
+  });
+
+  test("builds and publishes the NSIS artifact that exercises the service lifecycle", () => {
+    expect(releaseWorkflow).toContain("run: bun run build:free:release-installer");
+    expect(releaseWorkflow).not.toContain("run: bun tauri build --config src-tauri/commander-free/tauri.conf.json");
+    expect(releaseWorkflow).toContain('bundle/nsis" -Filter "WinCommander*${version}*_x64-setup.exe"');
+    expect(releaseWorkflow).toContain("Verify Free setup installs and removes WinCommanderSvc");
+    expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\\\wincommander-svc.exe"');
+    expect(releaseWorkflow).toContain('Get-CimInstance Win32_Service -Filter "Name=\'WinCommanderSvc\'"');
+    expect(releaseWorkflow).toContain('$running.WaitForStatus("Running", [TimeSpan]::FromSeconds(30))');
+    expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\\\uninstall.exe"');
+    expect(releaseWorkflow).toContain('"SETUP_PATH=$($setup.FullName)"');
+    expect(releaseWorkflow).toContain('"$remote/free/latest.exe"');
+    expect(releaseWorkflow).not.toContain("MSI_PATH=");
+    expect(releaseWorkflow).not.toContain("latest.msi");
+    expect(publishTagWorkflow).toContain("signed NSIS setup release");
+    expect(publishTagWorkflow).not.toContain("signed MSI release");
+    expect(prepareReleaseWorkflow).toContain("signed Free NSIS setup workflow");
+    expect(prepareReleaseWorkflow).not.toContain("signed Free MSI workflow");
   });
 
   test("uses a fixed quoted Program Files service path with checked lifecycle commands", () => {
