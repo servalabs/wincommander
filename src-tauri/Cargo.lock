@@ -865,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "commander-free"
-version = "3.4.2"
+version = "3.4.3"
 dependencies = [
  "aes-gcm",
  "argon2",
