@@ -52,8 +52,8 @@ from a Windows release workstation. It is a release tool, not a replacement for
 the workflow's GitHub OIDC provenance attestation.
 
 ```powershell
-pwsh -File .\tools\release-free.ps1 -Version 3.4.6 -StageOnly
-pwsh -File .\tools\release-free.ps1 -Version 3.4.6
+pwsh -File .\tools\release-free.ps1 -Version 3.4.9 -StageOnly
+pwsh -File .\tools\release-free.ps1 -Version 3.4.9
 ```
 
 It refuses a dirty checkout, a version mismatch, a tag not pointing at the

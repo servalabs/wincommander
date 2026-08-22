@@ -262,14 +262,19 @@ function Publish-GitHubArchive {
     & gh auth status -h github.com 2>$null
     if ($LASTEXITCODE -ne 0) { Stop-Release 'GitHub CLI is not authenticated; cannot publish the GitHub Release archive.' }
     $releaseAssets = @($Assets.Setup, $Assets.Signature, $Assets.Manifest, $Assets.Checksum, $Assets.Sbom)
-    & gh release view $script:Tag 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        & gh release upload $script:Tag @releaseAssets --clobber
-        if ($LASTEXITCODE -ne 0) { Stop-Release 'Could not update GitHub Release assets.' }
-        return
-    }
     # Local publication cannot make the GitHub Actions/OIDC provenance claim.
     $notes = 'Manual Free NSIS setup release. No GitHub Actions provenance attestation was generated for this local publication.'
+    $existingJson = (& gh release view $script:Tag --json isDraft 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0) {
+        $existing = $existingJson | ConvertFrom-Json
+        & gh release upload $script:Tag @releaseAssets --clobber
+        if ($LASTEXITCODE -ne 0) { Stop-Release 'Could not update GitHub Release assets.' }
+        if ($existing.isDraft) {
+            & gh release edit $script:Tag --draft=false --title $script:Tag --notes $notes
+            if ($LASTEXITCODE -ne 0) { Stop-Release 'Could not publish the recovered GitHub Release draft.' }
+        }
+        return
+    }
     $arguments = @('release', 'create', $script:Tag, '--title', $script:Tag, '--notes', $notes)
     if ($script:Tag.Contains('-')) { $arguments += '--prerelease' }
     $arguments += $releaseAssets

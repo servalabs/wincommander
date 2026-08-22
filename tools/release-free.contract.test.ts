@@ -43,5 +43,6 @@ describe("manual Free release publisher", () => {
     expect(publisher).toContain("No GitHub Actions provenance attestation was generated");
     expect(publisher).toContain("@('release', 'create'");
     expect(publisher).toContain("& gh release upload");
+    expect(publisher).toContain("gh release edit $script:Tag --draft=false");
   });
 });
