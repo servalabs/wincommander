@@ -53,7 +53,7 @@ describe("public service release packaging", () => {
   test("uses a fixed quoted Program Files service path with checked lifecycle commands", () => {
     // The probe-verified NSIS form compiles to `\"\\\"path\\\"\"`, the
     // one argument sc.exe needs for a quoted Program Files ImagePath.
-    const scmImagePathArgument = String.raw`"\$\"${WC_SERVICE_EXE}\$\""`;
+    const scmImagePathArgument = String.raw`"\$\"\${WC_SERVICE_EXE}\$\""`;
 
     expect(hooks).toContain('!define WC_SERVICE_EXE "${WC_INSTALL_DIR}\\wincommander-svc.exe"');
     expect(hooks).toContain('StrCpy $INSTDIR "${WC_INSTALL_DIR}"');
@@ -112,7 +112,7 @@ describe("public service release packaging", () => {
   });
 
   test("repairs only the fixed owned encryption driver on install or update", () => {
-    const quotedDriverArgument = String.raw`"\$\"${WC_ENCVOL_DRIVER}\$\""`;
+    const quotedDriverArgument = String.raw`"\$\"\${WC_ENCVOL_DRIVER}\$\""`;
 
     expect(hooks).toContain('!define WC_ENCVOL_DRIVER "$PROGRAMDATA\\WinCommander\\bin\\engine\\EncVolKm.sys"');
     expect(hooks).toContain('IfFileExists "${WC_ENCVOL_DRIVER}" wc_encvol_driver_present wc_encvol_driver_ready');
