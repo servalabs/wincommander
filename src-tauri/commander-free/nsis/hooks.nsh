@@ -210,7 +210,7 @@
   ; `sc.exe` must receive one ImagePath argument containing the executable's
   ; inner quotes, so Program Files remains a single executable path in SCM.
   StrCpy $R3 "service-create"
-  nsExec::ExecToStack 'sc create WinCommanderSvc binPath= "$\"${WC_SERVICE_EXE}$\"" start= auto obj= LocalSystem'
+  nsExec::ExecToStack 'sc.exe create WinCommanderSvc binPath= "\$\"${WC_SERVICE_EXE}\$\"" start= auto obj= LocalSystem'
   Pop $R8
   Pop $R9
   ${If} $R8 != 0
@@ -223,7 +223,7 @@
     Abort "WinCommander service appeared during installation; run the installer again."
   ${EndIf}
   StrCpy $R3 "service-config"
-  nsExec::ExecToStack 'sc config WinCommanderSvc binPath= "$\"${WC_SERVICE_EXE}$\"" start= auto obj= LocalSystem'
+  nsExec::ExecToStack 'sc.exe config WinCommanderSvc binPath= "\$\"${WC_SERVICE_EXE}\$\"" start= auto obj= LocalSystem'
   Pop $R8
   Pop $R9
   ${If} $R8 != 0
@@ -330,7 +330,7 @@
   ; Pass the kernel image as one quoted SCM argument so its fixed path cannot
   ; be interpreted as multiple tokens.
     StrCpy $R3 "encvol-create"
-    nsExec::ExecToStack 'sc create WinCommanderEncVol type= kernel binPath= "$\"${WC_ENCVOL_DRIVER}$\"" start= system'
+    nsExec::ExecToStack 'sc.exe create WinCommanderEncVol type= kernel binPath= "\$\"${WC_ENCVOL_DRIVER}\$\"" start= system'
     Pop $R8
     Pop $R9
     ${If} $R8 != 0
@@ -339,7 +339,7 @@
       Goto wc_encvol_driver_rollback
     ${EndIf}
     StrCpy $R3 "encvol-config"
-    nsExec::ExecToStack 'sc config WinCommanderEncVol type= kernel binPath= "$\"${WC_ENCVOL_DRIVER}$\"" start= system'
+    nsExec::ExecToStack 'sc.exe config WinCommanderEncVol type= kernel binPath= "\$\"${WC_ENCVOL_DRIVER}\$\"" start= system'
     Pop $R8
     Pop $R9
     ${If} $R8 != 0

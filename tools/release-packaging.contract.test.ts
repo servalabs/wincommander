@@ -51,9 +51,9 @@ describe("public service release packaging", () => {
   });
 
   test("uses a fixed quoted Program Files service path with checked lifecycle commands", () => {
-    // NSIS `$\"` emits a literal quote in the one ImagePath argument passed
-    // to sc.exe; four literal quotes make sc.exe return error 1639.
-    const scmImagePathArgument = '"$\\\"${WC_SERVICE_EXE}$\\\""';
+    // The probe-verified NSIS form compiles to `\"\\\"path\\\"\"`, the
+    // one argument sc.exe needs for a quoted Program Files ImagePath.
+    const scmImagePathArgument = String.raw`"\$\"${WC_SERVICE_EXE}\$\""`;
 
     expect(hooks).toContain('!define WC_SERVICE_EXE "${WC_INSTALL_DIR}\\wincommander-svc.exe"');
     expect(hooks).toContain('StrCpy $INSTDIR "${WC_INSTALL_DIR}"');
@@ -78,15 +78,16 @@ describe("public service release packaging", () => {
     expect(hooks).toContain('kernel32::CopyFileW(w "${WC_BUNDLED_SERVICE}", w "${WC_SERVICE_EXE}", i 0)');
     expect(hooks).toContain('kernel32::CopyFileW(w "${WC_SERVICE_BACKUP}", w "${WC_SERVICE_EXE}", i 0)');
     expect(hooks).not.toContain('CopyFiles /SILENT "${WC_BUNDLED_SERVICE}"');
-    expect(hooks).toContain(`sc create WinCommanderSvc binPath= ${scmImagePathArgument} start= auto obj= LocalSystem`);
+    expect(hooks).toContain(`sc.exe create WinCommanderSvc binPath= ${scmImagePathArgument} start= auto obj= LocalSystem`);
+    expect(hooks).not.toContain('sc create WinCommanderSvc binPath= """"${WC_SERVICE_EXE}""""');
     expect(hooks).toContain('IfFileExists "${WC_BUNDLED_SERVICE}" wc_service_payload_ready 0');
     expect(hooks).toContain("wc_service_payload_ready:");
     expect(hooks).not.toContain('IfFileExists "${WC_BUNDLED_SERVICE}" +2 0');
-    expect(hooks).toContain(`sc config WinCommanderSvc binPath= ${scmImagePathArgument} start= auto obj= LocalSystem`);
+    expect(hooks).toContain(`sc.exe config WinCommanderSvc binPath= ${scmImagePathArgument} start= auto obj= LocalSystem`);
     expect(hooks).toContain('${If} $R8 == 1073');
     expect(hooks).toContain('${AndIf} $R6 == 0');
-    expect(hooks).toContain('sc create WinCommanderEncVol type= kernel binPath= "$\\"${WC_ENCVOL_DRIVER}$\\"" start= system');
-    expect(hooks).toContain('sc config WinCommanderEncVol type= kernel binPath= "$\\"${WC_ENCVOL_DRIVER}$\\"" start= system');
+    expect(hooks).toContain('sc.exe create WinCommanderEncVol type= kernel binPath= "\\$\\"${WC_ENCVOL_DRIVER}\\$\\"" start= system');
+    expect(hooks).toContain('sc.exe config WinCommanderEncVol type= kernel binPath= "\\$\\"${WC_ENCVOL_DRIVER}\\$\\"" start= system');
     expect(hooks).toContain("sc failure WinCommanderSvc reset= 86400 actions= restart/5000/restart/5000/none/0");
     expect(hooks).toContain("sc start WinCommanderSvc");
     expect(hooks).toContain("sc delete WinCommanderSvc");
@@ -111,14 +112,14 @@ describe("public service release packaging", () => {
   });
 
   test("repairs only the fixed owned encryption driver on install or update", () => {
-    const quotedDriverArgument = '"$\\\"${WC_ENCVOL_DRIVER}$\\\""';
+    const quotedDriverArgument = String.raw`"\$\"${WC_ENCVOL_DRIVER}\$\""`;
 
     expect(hooks).toContain('!define WC_ENCVOL_DRIVER "$PROGRAMDATA\\WinCommander\\bin\\engine\\EncVolKm.sys"');
     expect(hooks).toContain('IfFileExists "${WC_ENCVOL_DRIVER}" wc_encvol_driver_present wc_encvol_driver_ready');
     expect(hooks).toContain("sc query WinCommanderEncVol");
     expect(hooks).toContain('sc qc WinCommanderEncVol | findstr /I /C:"${WC_ENCVOL_DRIVER}"');
-    expect(hooks).toContain(`sc create WinCommanderEncVol type= kernel binPath= ${quotedDriverArgument} start= system`);
-    expect(hooks).toContain(`sc config WinCommanderEncVol type= kernel binPath= ${quotedDriverArgument} start= system`);
+    expect(hooks).toContain(`sc.exe create WinCommanderEncVol type= kernel binPath= ${quotedDriverArgument} start= system`);
+    expect(hooks).toContain(`sc.exe config WinCommanderEncVol type= kernel binPath= ${quotedDriverArgument} start= system`);
     expect(hooks).toContain("sc start WinCommanderEncVol");
     expect(hooks).toContain("wc_encvol_driver_rollback:");
     expect(hooks).not.toContain("sc create veracrypt");
