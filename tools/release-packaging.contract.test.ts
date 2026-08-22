@@ -38,8 +38,9 @@ describe("public service release packaging", () => {
     expect(releaseWorkflow).toContain('$running.WaitForStatus("Running", [TimeSpan]::FromSeconds(30))');
     expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\\\uninstall.exe"');
     expect(releaseWorkflow).toContain('Join-Path $env:TEMP "WinCommander-nsis-lifecycle.log"');
-    expect(releaseWorkflow).toContain('Get-Content -LiteralPath $diagnosticLog -Raw | Write-Host');
-    expect(releaseWorkflow).toContain('Remove-Item -LiteralPath $diagnosticLog -Force');
+    expect(releaseWorkflow).toContain('Join-Path $env:WINDIR "Temp\\WinCommander-nsis-lifecycle.log"');
+    expect(releaseWorkflow).toContain('Get-Content -LiteralPath $_ -Raw | Write-Host');
+    expect(releaseWorkflow).toContain('Remove-Item -LiteralPath $_ -Force');
     expect(releaseWorkflow).toContain('"SETUP_PATH=$($setup.FullName)"');
     expect(releaseWorkflow).toContain('"$remote/free/latest.exe"');
     expect(releaseWorkflow).not.toContain("MSI_PATH=");
