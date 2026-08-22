@@ -140,6 +140,8 @@ archive/
 # Claude Code local config and runtime state — machine-specific, never commit
 .claude/
 
+# Isolated local Cargo target used by live Vault candidate validation
+.cargo-target-live-vault-fix/
 UI_problem/
 
 # Local Superdesign working files and drafts must never be committed.

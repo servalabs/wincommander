@@ -34,6 +34,22 @@ function Invoke-Client([string]$Action, [string]$EntryId, [string]$InputSecret) 
     return $output | ConvertFrom-Json
 }
 
+function Expand-ListResult($Value) {
+    if ($null -eq $Value) { return }
+    $items = if ($Value -is [System.Array]) {
+        $Value
+    } elseif ($Value.PSObject.Properties.Match('entries').Count -eq 1) {
+        @($Value.entries)
+    } elseif ($Value.PSObject.Properties.Match('items').Count -eq 1) {
+        @($Value.items)
+    } else {
+        @($Value)
+    }
+    foreach ($item in $items) {
+        Write-Output $item
+    }
+}
+
 function Invoke-SshClient([string]$User, [string]$Action, [string]$EntryId, [string]$InputSecret) {
     $remoteCommand = "`$ProgressPreference='SilentlyContinue'; & '$client' -Action '$Action'"
     if ($EntryId) { $remoteCommand += " -EntryId '$EntryId'" }
@@ -71,6 +87,7 @@ $password = [Convert]::ToBase64String($passwordBytes)
 
 $adminPrincipal = "$env:COMPUTERNAME\$Administrator"
 $partnerPrincipal = "$env:COMPUTERNAME\$Partner"
+Assert-True ([Security.Principal.WindowsIdentity]::GetCurrent().Name -ieq $adminPrincipal) "Run this harness from the active $Administrator session."
 $entries = @(
     @{ id = 'live-shared'; label = 'Shared Vault'; folder = 'shared'; file = 'shared.hc'; presentation = 'machine'; letter = 'Q'; grants = @($adminPrincipal, $partnerPrincipal) },
     @{ id = 'live-decoy-a'; label = 'Admin Decoy A'; folder = 'decoy-a'; file = 'decoy-a.hc'; presentation = 'per-user'; letter = 'R'; grants = @($adminPrincipal) },
@@ -118,11 +135,12 @@ try {
 
     # This PowerShell process logged on before the managed groups were created.
     # Explicit user grants must still take effect immediately without a relog.
-    $immediateAdminList = @(Invoke-Client 'list' $null $null)
-    Assert-True ($immediateAdminList.Count -eq 3) "The existing Administrator token saw $($immediateAdminList.Count) entries instead of three."
+    $immediateAdminList = @(Expand-ListResult (Invoke-Client 'list' $null $null))
+    $immediateAdminIds = @($immediateAdminList | ForEach-Object entry_id) -join ', '
+    Assert-True ($immediateAdminList.Count -eq 3) "The existing Administrator token saw $($immediateAdminList.Count) entries instead of three: $immediateAdminIds"
 
-    $adminList = @(Invoke-SshClient $Administrator 'list' $null $null)
-    $partnerList = @(Invoke-SshClient $Partner 'list' $null $null)
+    $adminList = @(Expand-ListResult (Invoke-SshClient $Administrator 'list' $null $null))
+    $partnerList = @(Expand-ListResult (Invoke-SshClient $Partner 'list' $null $null))
     Assert-True ($adminList.Count -eq 3) "Administrator saw $($adminList.Count) entries instead of three."
     Assert-True ($partnerList.Count -eq 1 -and $partnerList[0].entry_id -eq 'live-shared') 'Partner projection was not limited to the shared Vault.'
 
@@ -137,16 +155,19 @@ try {
     $sharedMount = Invoke-SshClient $Partner 'mount' 'live-shared' $password
     Assert-True ($sharedMount.state -eq 'mounted' -and $sharedMount.drive_letter -eq 'Q:') "Partner shared mount failed: $(ConvertTo-Json -InputObject $sharedMount -Compress)"
     Assert-True ((Invoke-SshPowerShell $Partner "Set-Content -LiteralPath 'Q:\partner.txt' -Value 'partner-write' -NoNewline; if((Get-Content -LiteralPath 'Q:\partner.txt' -Raw) -eq 'partner-write'){exit 0}else{exit 9}") -eq 0) 'Partner shared write/read failed.'
-    Assert-True ((Invoke-SshPowerShell $Administrator "if((Get-Content -LiteralPath 'Q:\partner.txt' -Raw) -eq 'partner-write'){Set-Content -LiteralPath 'Q:\admin.txt' -Value 'admin-write' -NoNewline; exit 0}else{exit 10}") -eq 0) 'Administrator could not read/write the shared mount.'
+    Assert-True ((Get-Content -LiteralPath 'Q:\partner.txt' -Raw) -eq 'partner-write') 'Administrator could not read the shared mount.'
+    Set-Content -LiteralPath 'Q:\admin.txt' -Value 'admin-write' -NoNewline
+    Assert-True ((Get-Content -LiteralPath 'Q:\admin.txt' -Raw) -eq 'admin-write') 'Administrator could not write the shared mount.'
     # Keep this mount active for the SCM shutdown cleanup case below.
 
     foreach ($id in @('live-decoy-a', 'live-decoy-b')) {
-        $mounted = Invoke-SshClient $Administrator 'mount' $id $password
+        $mounted = Invoke-Client 'mount' $id $password
         Assert-True ($mounted.state -eq 'mounted') "Administrator could not mount $id."
         $drive = $mounted.drive_letter
-        Assert-True ((Invoke-SshPowerShell $Administrator "Set-Content -LiteralPath '$drive\admin-only.txt' -Value '$id' -NoNewline; if((Get-Content -LiteralPath '$drive\admin-only.txt' -Raw) -eq '$id'){exit 0}else{exit 11}") -eq 0) "Administrator write/read failed for $id."
+        Set-Content -LiteralPath "$drive\admin-only.txt" -Value $id -NoNewline
+        Assert-True ((Get-Content -LiteralPath "$drive\admin-only.txt" -Raw) -eq $id) "Administrator write/read failed for $id."
         Assert-True ((Invoke-SshPowerShell $Partner "if(Test-Path -LiteralPath '$drive\admin-only.txt' -ErrorAction SilentlyContinue){exit 12}else{exit 0}") -eq 0) "Partner could read $id."
-        $unmounted = Invoke-SshClient $Administrator 'unmount' $id $null
+        $unmounted = Invoke-Client 'unmount' $id $null
         Assert-True ($unmounted.state -eq 'unmounted') "Administrator could not unmount $id."
     }
 
@@ -186,7 +207,13 @@ finally {
     $password = $null
     if ($policyApplied -and $policyWasEmpty) {
         foreach ($entry in $entries) {
-            try { Invoke-SshClient $Administrator 'unmount' $entry.id $null | Out-Null } catch {}
+            try {
+                if ($entry.presentation -eq 'machine') {
+                    Invoke-SshClient $Partner 'unmount' $entry.id $null | Out-Null
+                } else {
+                    Invoke-Client 'unmount' $entry.id $null | Out-Null
+                }
+            } catch {}
         }
         try {
             Stop-Service WinCommanderSvc -Force

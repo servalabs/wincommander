@@ -23,6 +23,15 @@ import './index.css';
 import DriveLetterPicker from "./DriveLetterPicker";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
+const MOUNT_ERROR_MAX_LENGTH = 300;
+
+const boundedMountError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : "Failed to mount volume.";
+  const normalized = message.replace(/\s+/g, " ").trim();
+  return normalized.length > MOUNT_ERROR_MAX_LENGTH
+    ? `${normalized.slice(0, MOUNT_ERROR_MAX_LENGTH - 1)}…`
+    : normalized;
+};
 
 type VaultVolume = NonNullable<EncryptionStatus["volumes"]>[number];
 
@@ -88,6 +97,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [backupTargetBusy, setBackupTargetBusy] = useState(false);
   const [mountedVolume, setMountedVolume] = useState<MountVolumeResult | null>(null);
   const [openingMountedVolume, setOpeningMountedVolume] = useState(false);
+  const [mountFailure, setMountFailure] = useState("");
 
   const {
     mountVolume,
@@ -114,6 +124,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   );
 
   const resetMountForm = useCallback(() => {
+    setMountFailure("");
     setMountPath("");
     setMountPassword("");
     setMountKeyfile("");
@@ -210,8 +221,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
 
   const handleMountVolume = useCallback(async () => {
     setMounting(true);
+    setMountFailure("");
     try {
-      const result = await mountVolume({
+      const mountRequest = mountVolume({
         volumePath: mountPath,
         driveLetter: mountLetter,
         password: mountPassword,
@@ -226,6 +238,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         scope: "per-user",
         hardenAcl: true,
       });
+      setMountPassword("");
+      setHiddenPassword("");
+      const result = await mountRequest;
       if (!result.success || !result.data) throw new Error(result.error || "Failed to mount volume");
       if (result.data.scope !== "per-user") {
         throw new Error("The encrypted volume was not mounted privately for this Windows account.");
@@ -244,9 +259,12 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       setMountedVolume(result.data);
     } catch (e) {
       // Operational volume result → Notifications tab, not System Alerts.
-      showError(e instanceof Error ? e.message : "Failed to mount volume.", undefined, { kind: "notification" });
-      setMountPassword("");
+      const message = boundedMountError(e);
+      setMountFailure(message);
+      showError(message, undefined, { kind: "notification" });
     } finally {
+      setMountPassword("");
+      setHiddenPassword("");
       setMounting(false);
     }
   }, [hiddenKeyfile, hiddenPassword, hiddenPim, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, protectHidden, refreshVault, resetMountForm, verifyVaultDrive]);
@@ -520,6 +538,18 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         }}
       >
         <div className="wc-dialog-body" onKeyDown={handleMountDialogKeyDown}>
+          {mountFailure && (
+            <div className="mount-error" role="alert">
+              <Icon icon="warning-sign" size={16} />
+              <span>{mountFailure}</span>
+            </div>
+          )}
+          {mounting && (mountPim || (protectHidden && hiddenPim)) && (
+            <div className="mount-progress" role="status">
+              <Icon icon="time" size={16} />
+              <span>Unlocking with your PIM can take several minutes. Your password was cleared for safety.</span>
+            </div>
+          )}
           {/* Mount source toggle. The previous Button-with-active pattern
               didn't stand out clearly — the user couldn't tell at a glance
               which mode was selected. Switched to a segmented control where

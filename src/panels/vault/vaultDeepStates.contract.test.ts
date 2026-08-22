@@ -7,6 +7,10 @@ const propertiesSource = readFileSync("src/panels/vault/VolumePropertiesDialog.t
 const backendSource = readFileSync("src/hooks/useBackend.ts", "utf8");
 const sidebarSource = readFileSync("src/components/RightSidebar.tsx", "utf8");
 const appContextSource = readFileSync("src/context/AppContext.tsx", "utf8");
+const mountHandlerSource = vaultSource.slice(
+  vaultSource.indexOf("const handleMountVolume"),
+  vaultSource.indexOf("const handleOpenMountedVolume"),
+);
 
 describe("secure storage deep-state contracts", () => {
   test("distinguishes initial loading from a confirmed empty volume list", () => {
@@ -24,6 +28,22 @@ describe("secure storage deep-state contracts", () => {
   test("native failures remain visible and announced", () => {
     expect(ramDiskSource).toContain("catch (error)");
     expect(propertiesSource).toContain('className="props-error" role="alert"');
+    expect(vaultSource).toContain('className="mount-error" role="alert"');
+    expect(vaultSource).toContain('className="mount-progress" role="status"');
+    expect(vaultSource).toContain("Unlocking with your PIM can take several minutes. Your password was cleared for safety.");
+    expect(vaultSource).toContain("const boundedMountError");
+    expect(mountHandlerSource).toContain("setMountFailure(message);");
+    expect(mountHandlerSource).toContain("const mountRequest = mountVolume({");
+    expect(mountHandlerSource).toContain("setMountPassword(\"\");");
+    expect(mountHandlerSource).toContain("setHiddenPassword(\"\");");
+    const failureBranch = mountHandlerSource.slice(
+      mountHandlerSource.indexOf("} catch"),
+      mountHandlerSource.indexOf("} finally"),
+    );
+    expect(failureBranch).not.toContain("setMountDialogOpen(false)");
+    expect(failureBranch).not.toContain("setMountPim");
+    expect(failureBranch).not.toContain("setHiddenPim");
+    expect(failureBranch).not.toContain("setProtectHidden");
   });
 
   test("emergency backup registration is paid, no-path, and one-mount only", () => {

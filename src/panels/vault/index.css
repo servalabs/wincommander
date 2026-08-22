@@ -615,6 +615,43 @@
   margin-bottom: 2px;
 }
 
+.mount-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-lg);
+  background: var(--color-danger-dim);
+  color: var(--color-danger);
+  font-size: 12px;
+}
+
+.mount-error > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.mount-progress {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-lg);
+  background: var(--color-accent-subtle);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.mount-progress > svg {
+  flex: 0 0 auto;
+  color: var(--color-accent);
+  margin-top: 1px;
+}
+
 .quick-toggle--locked {
   cursor: default;
 }

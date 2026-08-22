@@ -595,6 +595,22 @@ export interface MountVolumeResult {
   hiddenProtection: boolean;
 }
 
+export const buildMountVolumeRequest = (params: MountVolumeParams) => ({
+  VolumePath: params.volumePath,
+  ...(params.driveLetter ? { DriveLetter: params.driveLetter } : {}),
+  Password: params.password,
+  Keyfiles: JSON.stringify(params.keyfiles ?? []),
+  ...(params.pim ? { Pim: params.pim } : {}),
+  ReadOnly: params.readOnly ?? false,
+  Removable: params.removable ?? false,
+  ProtectHidden: params.protectHidden ?? false,
+  ...(params.hiddenPassword ? { HiddenPassword: params.hiddenPassword } : {}),
+  HiddenKeyfiles: JSON.stringify(params.hiddenKeyfiles ?? []),
+  ...(params.hiddenPim ? { HiddenPim: params.hiddenPim } : {}),
+  ...(params.scope ? { Scope: params.scope } : {}),
+  HardenAcl: params.hardenAcl ?? true,
+});
+
 export interface CreateStegoMp4Params {
   /** Carrier MP4 the container is appended to. */
   carrierMp4: string;
@@ -1792,21 +1808,7 @@ export function useBackend() {
     clearEncryptedBackupTarget: () =>
       execute<{ ok: boolean; cleared: boolean }>("Clear-EncryptedBackupTarget"),
     mountVolume: (params: MountVolumeParams) =>
-      execute<MountVolumeResult>("Mount-EncryptionVolume", {
-        VolumePath: params.volumePath,
-        ...(params.driveLetter ? { DriveLetter: params.driveLetter } : {}),
-        Password: params.password,
-        Keyfiles: JSON.stringify(params.keyfiles ?? []),
-        ...(params.pim ? { Pim: params.pim } : {}),
-        ReadOnly: params.readOnly ?? false,
-        Removable: params.removable ?? false,
-        ProtectHidden: params.protectHidden ?? false,
-        ...(params.hiddenPassword ? { HiddenPassword: params.hiddenPassword } : {}),
-        HiddenKeyfiles: JSON.stringify(params.hiddenKeyfiles ?? []),
-        ...(params.hiddenPim ? { HiddenPim: params.hiddenPim } : {}),
-        ...(params.scope ? { Scope: params.scope } : {}),
-        HardenAcl: params.hardenAcl ?? true,
-      }),
+      execute<MountVolumeResult>("Mount-EncryptionVolume", buildMountVolumeRequest(params)),
     verifyVaultDrive: (drive: string) =>
       invoke<{ drive: string; accessible: boolean }>("verify_vault_drive", { drive }),
     dismountVolume: (letter: string, force = false, internalDrive?: number) =>

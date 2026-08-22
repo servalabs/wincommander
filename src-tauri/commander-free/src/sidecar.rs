@@ -98,6 +98,19 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// within a reasonable wall-clock for the user.
 const SESSION_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Mounting a dual volume with a non-default PIM can legitimately spend
+/// several minutes deriving keys. Match the backend command ceiling without
+/// extending the failure window for unrelated Pro requests.
+const MOUNT_ENCRYPTION_VOLUME_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+
+fn request_timeout_for(feature_id: &str) -> Duration {
+    if feature_id == "Mount-EncryptionVolume" {
+        MOUNT_ENCRYPTION_VOLUME_TIMEOUT
+    } else {
+        SESSION_REQUEST_TIMEOUT
+    }
+}
+
 /// How long Free will wait on each handshake stage (pipe.connect, Hello
 /// write, Hello read). Pro mirrors this with its own read-side timeout.
 ///
@@ -974,6 +987,7 @@ async fn dispatch_request(
     req: Request,
 ) -> Result<serde_json::Value, String> {
     let request_id = req.request_id;
+    let request_timeout = request_timeout_for(&req.feature_id);
     let (tx, rx) = oneshot::channel();
 
     // Insert before write so a fast reader (already-buffered reply)
@@ -988,7 +1002,7 @@ async fn dispatch_request(
         return Err(format!("write request: {}", e));
     }
 
-    match timeout(SESSION_REQUEST_TIMEOUT, rx).await {
+    match timeout(request_timeout, rx).await {
         Ok(Ok(result)) => result,
         Ok(Err(_recv_err)) => {
             // Sender dropped — either reader exited (pipe closed, EOF,
@@ -1417,6 +1431,29 @@ mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn mount_encryption_volume_has_a_longer_request_timeout() {
+        assert_eq!(
+            request_timeout_for("Mount-EncryptionVolume"),
+            Duration::from_secs(20 * 60)
+        );
+    }
+
+    #[test]
+    fn ordinary_pro_requests_keep_the_standard_timeout() {
+        for feature_id in [
+            "Create-EncryptionVolume",
+            "Mount-EncryptionVolume-Other",
+            "Clear-EventLogs",
+        ] {
+            assert_eq!(
+                request_timeout_for(feature_id),
+                Duration::from_secs(120),
+                "{feature_id} must not receive the mount timeout"
+            );
+        }
+    }
 
     #[test]
     fn agent_affine_covers_fleet_and_collectors_only() {

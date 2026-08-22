@@ -55,6 +55,7 @@ trait AuthenticatedVaultBroker: Send + Sync {
         internal_drive: u8,
         presentation: VaultPresentation,
         target_session_id: u32,
+        caller_sid: &str,
     ) -> Result<(), VaultMountReason>;
     fn cleanup_orphans(&self) -> Result<(), VaultMountReason>;
 }
@@ -79,6 +80,8 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
                 request.target_session_id,
+                &request.caller_sid,
+                request.presentation,
                 "vault.broker.mount",
                 args,
             ))
@@ -111,12 +114,15 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
     fn dismount(
         &self,
         internal_drive: u8,
-        _presentation: VaultPresentation,
+        presentation: VaultPresentation,
         target_session_id: u32,
+        caller_sid: &str,
     ) -> Result<(), VaultMountReason> {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
                 target_session_id,
+                caller_sid,
+                presentation,
                 "vault.broker.dismount",
                 serde_json::json!({ "internal_drive": internal_drive }),
             ))
@@ -139,6 +145,7 @@ struct InternalMountRequest {
     presentation: VaultPresentation,
     preferred_letter: Option<String>,
     target_session_id: u32,
+    caller_sid: String,
     mounted_root_acl_sddl: MountedRootAclSddl,
     password: String,
 }
@@ -239,6 +246,7 @@ impl VaultMountBroker {
             presentation,
             preferred_letter,
             target_session_id: session_id,
+            caller_sid: caller_sid.clone(),
             mounted_root_acl_sddl: mounted_root_acl_sddl(&plan.grants),
             password: std::mem::take(password),
         };
@@ -253,9 +261,9 @@ impl VaultMountBroker {
             || !valid_drive_letter(&reply.drive_letter)
             || reply.internal_drive > 25
         {
-            let _ = self
-                .broker
-                .dismount(reply.internal_drive, presentation, session_id);
+            let _ =
+                self.broker
+                    .dismount(reply.internal_drive, presentation, session_id, &caller_sid);
             return failed(
                 entry_id,
                 Some(presentation),
@@ -263,9 +271,9 @@ impl VaultMountBroker {
             );
         }
         let Some((policy_id, policy_version)) = store.active_policy_identity() else {
-            let _ = self
-                .broker
-                .dismount(reply.internal_drive, presentation, session_id);
+            let _ =
+                self.broker
+                    .dismount(reply.internal_drive, presentation, session_id, &caller_sid);
             return failed(
                 entry_id,
                 Some(presentation),
@@ -300,6 +308,7 @@ impl VaultMountBroker {
                         mount.internal_drive,
                         mount.presentation,
                         mount.session_id,
+                        &mount.caller_sid,
                     );
                 }
                 return failed(
@@ -309,9 +318,9 @@ impl VaultMountBroker {
                 );
             }
         } else {
-            let _ = self
-                .broker
-                .dismount(reply.internal_drive, presentation, session_id);
+            let _ =
+                self.broker
+                    .dismount(reply.internal_drive, presentation, session_id, &caller_sid);
             return failed(
                 entry_id,
                 Some(presentation),
@@ -348,6 +357,7 @@ impl VaultMountBroker {
                 active.internal_drive,
                 active.presentation,
                 active.session_id,
+                &active.caller_sid,
             )
             .is_err()
         {
@@ -480,7 +490,12 @@ impl VaultMountBroker {
         for mount in registry.mounts.values() {
             if self
                 .broker
-                .dismount(mount.internal_drive, mount.presentation, mount.session_id)
+                .dismount(
+                    mount.internal_drive,
+                    mount.presentation,
+                    mount.session_id,
+                    &mount.caller_sid,
+                )
                 .is_err()
             {
                 self.recovery_failed

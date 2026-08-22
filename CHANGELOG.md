@@ -160,6 +160,16 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Fixed
 
+- **Encrypted-volume mounts no longer disappear at the two-minute boundary**
+  (2026-08-22) — Free now gives the exact `Mount-EncryptionVolume` request up
+  to 20 minutes while all other Pro requests retain their two-minute bound.
+  This covers legitimate long-running PIM and hidden-volume key derivation.
+  The mount dialog clears both passwords as soon as dispatch begins, preserves
+  the non-secret path/PIM/options, shows an in-place progress explanation, and
+  retains a bounded in-place error instead of closing with no useful result.
+  Request-shape tests prove outer and hidden PIM values remain distinct across
+  the Free-to-Pro boundary.
+
 - **Fleet administrator tabs recover from transient service startup failures**
   (2026-08-21) — the Fleet panel now retries its service-derived permission
   check, refreshes it when the window regains focus, and exposes a manual retry
