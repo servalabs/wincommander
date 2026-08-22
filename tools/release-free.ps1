@@ -106,7 +106,7 @@ function Assert-ReleaseSource {
         Stop-Release "$script:Tag must exist locally and point exactly at HEAD."
     }
 
-    git -C $script:Root fetch --quiet origin "refs/tags/$script:Tag:refs/tags/$script:Tag" origin/main
+    git -C $script:Root fetch --quiet origin "refs/tags/${script:Tag}:refs/tags/${script:Tag}" origin/main
     if ($LASTEXITCODE -ne 0) { Stop-Release 'Could not refresh origin/main and the release tag.' }
     $remoteTag = (git -C $script:Root rev-parse "$script:Tag^{commit}").Trim()
     $originMain = (git -C $script:Root rev-parse origin/main).Trim()

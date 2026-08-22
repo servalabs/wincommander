@@ -8,6 +8,7 @@ describe("manual Free release publisher", () => {
     expect(publisher).toContain("Refusing to release from a dirty worktree.");
     expect(publisher).toContain("@(git -C $script:Root status --porcelain).Count");
     expect(publisher).toContain('"$script:Tag^{commit}"');
+    expect(publisher).toContain('"refs/tags/${script:Tag}:refs/tags/${script:Tag}"');
     expect(publisher).toContain('origin/main');
     expect(publisher).toContain("'package.json'");
     expect(publisher).toContain("'Free Tauri config'");
