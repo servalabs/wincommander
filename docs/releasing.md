@@ -45,6 +45,32 @@ The updater manifest points to the versioned R2 NSIS setup, so the manifest and
 installer cannot drift. The release environment must provide `CF_UPDATE_DOMAIN`,
 `CF_R2_API`, `R2_KEY`, and `R2_SECRET`.
 
+## Manual Free publication
+
+When the hosted workflow is unavailable, use the checked-in manual publisher
+from a Windows release workstation. It is a release tool, not a replacement for
+the workflow's GitHub OIDC provenance attestation.
+
+```powershell
+pwsh -File .\tools\release-free.ps1 -Version 3.4.6 -StageOnly
+pwsh -File .\tools\release-free.ps1 -Version 3.4.6
+```
+
+It refuses a dirty checkout, a version mismatch, a tag not pointing at the
+current `origin/main`, or a missing updater signature. The requested `v3.4.6`
+tag and matching source version files must already exist; the script does not
+change versions or move tags. It imports the private local `.env` without
+printing it, builds the signed NSIS setup (unless `-SkipBuild` is explicitly
+given), creates a CycloneDX SBOM with a SHA-256-pinned Syft archive when needed,
+uploads and re-downloads all immutable R2 artifacts, then promotes `latest.exe`
+and finally `latest.json`. It also creates or refreshes the GitHub Release
+archive using the authenticated GitHub CLI.
+
+`-StageOnly` is the safe rehearsal: it builds and validates the artifacts but
+does not contact R2 or GitHub. A manual publication truthfully notes that no
+GitHub Actions provenance attestation was generated; do not present it as an
+attested workflow release.
+
 ## Who can release
 
 A tag push is **not** owner-only by GitHub default. Anyone with Write on the
