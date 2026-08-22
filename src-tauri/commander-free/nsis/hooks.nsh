@@ -15,7 +15,7 @@
 !define WC_BUNDLED_SERVICE "$INSTDIR\resources\wincommander-svc.exe"
 !define WC_SERVICE_BACKUP "${WC_INSTALL_DIR}\wincommander-svc.exe.wc-backup"
 !define WC_SERVICE_CONFIG_BACKUP "$PLUGINSDIR\WinCommanderSvc-before.reg"
-!define WC_LIFECYCLE_DIAGNOSTIC_LOG "$TEMP\WinCommander-nsis-lifecycle.log"
+!define WC_LIFECYCLE_DIAGNOSTIC_LOG "${WC_INSTALL_DIR}\installer-lifecycle.log"
 ; The encryption engine is installed separately below ProgramData.  Its
 ; driver service is nevertheless owned by this installer, so repair only this
 ; fixed name and only when the fixed driver payload is actually present.
