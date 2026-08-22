@@ -12,6 +12,15 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **Encrypted-volume driver repair and explicit decoy mounting**
+  (2026-08-22) — Free now distinguishes standard, visible-decoy, and hidden
+  mounts in the Secure Storage dialog and sends a bounded volume role to Pro.
+  The SYSTEM service validates the fixed Microsoft-signed driver by path,
+  ownership, ACL, Authenticode, and pinned SHA-256 before recreating and
+  starting only WinCommander's driver service. The installer preserves the
+  same system-start lifecycle, preventing an update from leaving ordinary
+  users without a loaded encryption driver.
+
 - **Vault access takes effect immediately and service shutdown is mount-safe**
   (2026-08-22) — explicit owner/user SIDs are now retained separately from the
   managed-group ACL, so an already-logged-in user does not need to sign out and

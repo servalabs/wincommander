@@ -45,6 +45,9 @@ mod pipe;
 #[cfg(windows)]
 mod pro_broker;
 
+#[cfg(windows)]
+mod encvol_driver;
+
 // `SessionHelper` peer authentication (D-2). Windows-only because it derives
 // process/session identity and canonical image paths with Win32 APIs, matching
 // `pipe.rs`'s own Windows-only stance. No Authenticode certificate is required.
@@ -303,6 +306,28 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
     tokio::spawn(reconciler_loop());
     tokio::spawn(command_worker_loop());
     tokio::spawn(fleet_conn_loop());
+    // Pro can extract the engine after this service has already started.
+    // Poll only the fixed payload: the helper is private, accepts no renderer
+    // arguments, and fails closed until its signer/ownership/ACL checks pass.
+    tokio::spawn(async {
+        loop {
+            let delay = if !encvol_driver::fixed_payload_present() {
+                // Pro's extraction window is short; observe it quickly without
+                // doing an expensive signature/ACL check while absent.
+                std::time::Duration::from_secs(1)
+            } else {
+                let ensured = tokio::task::spawn_blocking(encvol_driver::ensure_for_vault_mount)
+                    .await
+                    .map(|result| result.is_ok())
+                    .unwrap_or(false);
+                if ensured {
+                    break;
+                }
+                std::time::Duration::from_secs(5)
+            };
+            tokio::time::sleep(delay).await;
+        }
+    });
 
     // ── Named-pipe server ────────────────────────────────────────────────
     let pipe_server = pipe::serve(policy_store, session_helper_gate, clipboard_state, Arc::clone(&vault_access), Arc::clone(&vault_mount));

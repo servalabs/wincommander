@@ -15,6 +15,11 @@
 !define WC_BUNDLED_SERVICE "$INSTDIR\resources\wincommander-svc.exe"
 !define WC_SERVICE_BACKUP "${WC_INSTALL_DIR}\wincommander-svc.exe.wc-backup"
 !define WC_SERVICE_CONFIG_BACKUP "$PLUGINSDIR\WinCommanderSvc-before.reg"
+; The encryption engine is installed separately below ProgramData.  Its
+; driver service is nevertheless owned by this installer, so repair only this
+; fixed name and only when the fixed driver payload is actually present.
+!define WC_ENCVOL_DRIVER "$PROGRAMDATA\WinCommander\bin\engine\EncVolKm.sys"
+!define WC_ENCVOL_CONFIG_BACKUP "$PLUGINSDIR\WinCommanderEncVol-before.reg"
 
 !macro NSIS_HOOK_PREINSTALL
   ; Releases use one non-customizable machine location.  The service's SCM
@@ -272,6 +277,93 @@
     ${EndIf}
 
   wc_service_ready:
+  ; A prior uninstall removes WinCommanderEncVol but deliberately leaves the
+  ; engine installer responsible for the driver file itself.  A subsequent
+  ; Free install/update must recreate the *owned* system-start kernel service
+  ; when that exact payload is present.  Do not probe, alter, or remove any
+  ; third-party driver (including VeraCrypt).
+  IfFileExists "${WC_ENCVOL_DRIVER}" wc_encvol_driver_present wc_encvol_driver_ready
+
+  wc_encvol_driver_present:
+    InitPluginsDir
+    Delete "${WC_ENCVOL_CONFIG_BACKUP}"
+    StrCpy $R2 "0"
+    nsExec::ExecToStack 'sc query WinCommanderEncVol'
+    Pop $R8
+    Pop $R9
+    ${If} $R8 == 0
+      StrCpy $R2 "1"
+      ; A colliding service name is not proof of ownership.  Refuse to
+      ; reconfigure it unless SCM already points at our fixed driver payload.
+      nsExec::ExecToStack 'cmd /c sc qc WinCommanderEncVol | findstr /I /C:"${WC_ENCVOL_DRIVER}"'
+      Pop $R8
+      Pop $R9
+      ${If} $R8 != 0
+        Abort "WinCommander encryption driver service does not reference the owned driver payload."
+      ${EndIf}
+      nsExec::ExecToStack 'reg.exe export "HKLM\SYSTEM\CurrentControlSet\Services\WinCommanderEncVol" "${WC_ENCVOL_CONFIG_BACKUP}" /y'
+      Pop $R8
+      Pop $R9
+      ${If} $R8 != 0
+        Abort "WinCommander encryption driver configuration could not be backed up."
+      ${EndIf}
+    ${ElseIf} $R8 != 1060
+      Abort "WinCommander encryption driver could not be inspected."
+    ${EndIf}
+
+    ; The inner quotes are retained in SCM's ImagePath.  This is required for
+    ; a fixed kernel image path and avoids a space-containing path ever being
+    ; interpreted as multiple tokens.
+    nsExec::ExecToStack 'sc create WinCommanderEncVol type= kernel binPath= """"${WC_ENCVOL_DRIVER}"""" start= system'
+    Pop $R8
+    Pop $R9
+    ${If} $R8 != 0
+    ${AndIf} $R8 != 1073
+      StrCpy $R4 "WinCommander encryption driver could not be created."
+      Goto wc_encvol_driver_rollback
+    ${EndIf}
+    nsExec::ExecToStack 'sc config WinCommanderEncVol type= kernel binPath= """"${WC_ENCVOL_DRIVER}"""" start= system'
+    Pop $R8
+    Pop $R9
+    ${If} $R8 != 0
+      StrCpy $R4 "WinCommander encryption driver could not be configured."
+      Goto wc_encvol_driver_rollback
+    ${EndIf}
+    nsExec::ExecToStack 'sc start WinCommanderEncVol'
+    Pop $R8
+    Pop $R9
+    ${If} $R8 != 0
+    ${AndIf} $R8 != 1056
+      StrCpy $R4 "WinCommander encryption driver could not be started."
+      Goto wc_encvol_driver_rollback
+    ${EndIf}
+    Delete "${WC_ENCVOL_CONFIG_BACKUP}"
+    Goto wc_encvol_driver_ready
+
+  ; Restore a pre-existing owned-service configuration on repair failure.  A
+  ; newly-created service is deleted instead, leaving no partial driver entry.
+  wc_encvol_driver_rollback:
+    ${If} $R2 == 1
+      nsExec::ExecToStack 'reg.exe import "${WC_ENCVOL_CONFIG_BACKUP}"'
+      Pop $R8
+      Pop $R9
+      ${If} $R8 != 0
+        Abort "$R4 The previous encryption driver configuration could not be restored."
+      ${EndIf}
+      Delete "${WC_ENCVOL_CONFIG_BACKUP}"
+      Abort "$R4 The previous encryption driver configuration was restored."
+    ${Else}
+      nsExec::ExecToStack 'sc delete WinCommanderEncVol'
+      Pop $R8
+      Pop $R9
+      ${If} $R8 != 0
+      ${AndIf} $R8 != 1060
+        Abort "$R4 The incomplete encryption driver service could not be removed."
+      ${EndIf}
+      Abort "$R4 The incomplete encryption driver service was removed."
+    ${EndIf}
+
+  wc_encvol_driver_ready:
   ; --- 1. Unblock EXE (remove Zone.Identifier alternate data stream) ----------
   nsExec::ExecToLog 'powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
     -Command "Get-ChildItem -Path ''$INSTDIR'' -Recurse -Include *.exe,*.dll | \

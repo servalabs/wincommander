@@ -46,6 +46,21 @@ describe("secure storage deep-state contracts", () => {
     expect(failureBranch).not.toContain("setProtectHidden");
   });
 
+  test("dual-volume mount makes its target explicit and protects writable decoys", () => {
+    expect(vaultSource).toContain('selectVolumeKind("dual")');
+    expect(vaultSource).toContain('selectVolumeRole("outer")');
+    expect(vaultSource).toContain('selectVolumeRole("hidden")');
+    expect(mountHandlerSource).toContain("volumeKind,");
+    expect(mountHandlerSource).toContain("volumeRole,");
+    expect(vaultSource).toContain("Open hidden volume");
+    expect(vaultSource).toContain("Open visible decoy");
+    expect(vaultSource).toContain('label={volumeRole === "hidden" ? "Hidden volume password" : "Password"}');
+    expect(vaultSource).toContain("const requiresHiddenProtection = isOuterDualVolume && !mountReadOnly;");
+    expect(vaultSource).toContain("protectHidden: requiresHiddenProtection && protectHidden");
+    expect(backendSource).toContain("VolumeKind: params.volumeKind");
+    expect(backendSource).toContain("VolumeRole: params.volumeRole");
+  });
+
   test("emergency backup registration is paid, no-path, and one-mount only", () => {
     expect(vaultSource).toContain('{paid && volumes.length === 1 && (');
     expect(vaultSource).toContain('getEncryptedBackupTargetStatus');

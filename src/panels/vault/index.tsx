@@ -78,6 +78,8 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [mountDialogOpen, setMountDialogOpen] = useState(false);
   const [mountPath, setMountPath] = useState("");
   const [mountLetter, setMountLetter] = useState("Y");
+  const [volumeKind, setVolumeKind] = useState<"standard" | "dual">("standard");
+  const [volumeRole, setVolumeRole] = useState<"standard" | "outer" | "hidden">("standard");
   const [mountPassword, setMountPassword] = useState("");
   const [mountKeyfile, setMountKeyfile] = useState("");
   const [mountPim, setMountPim] = useState("");
@@ -114,18 +116,22 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const paid = canUse("paid");
 
   const [mounting, setMounting] = useState(false);
+  const isDualVolume = volumeKind === "dual";
+  const isOuterDualVolume = isDualVolume && volumeRole === "outer";
+  const requiresHiddenProtection = isOuterDualVolume && !mountReadOnly;
   const canMount = Boolean(
     mountPath
     && (mountPassword || mountKeyfile)
     && validPim(mountPim)
-    && (!protectHidden || hiddenPassword || hiddenKeyfile)
-    && (!protectHidden || validPim(hiddenPim))
+    && (!requiresHiddenProtection || (protectHidden && (hiddenPassword || hiddenKeyfile) && validPim(hiddenPim)))
     && !mounting
   );
 
   const resetMountForm = useCallback(() => {
     setMountFailure("");
     setMountPath("");
+    setVolumeKind("standard");
+    setVolumeRole("standard");
     setMountPassword("");
     setMountKeyfile("");
     setMountPim("");
@@ -137,6 +143,23 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     setHiddenPim("");
     setMountLetter("Y");
     setMountType('file');
+  }, []);
+
+  const selectVolumeKind = useCallback((nextKind: "standard" | "dual") => {
+    setVolumeKind(nextKind);
+    setVolumeRole(nextKind === "dual" ? "outer" : "standard");
+    setProtectHidden(false);
+    setHiddenPassword("");
+    setHiddenKeyfile("");
+    setHiddenPim("");
+  }, []);
+
+  const selectVolumeRole = useCallback((nextRole: "outer" | "hidden") => {
+    setVolumeRole(nextRole);
+    setProtectHidden(false);
+    setHiddenPassword("");
+    setHiddenKeyfile("");
+    setHiddenPim("");
   }, []);
 
   // Fetch available (unused) drive letters when the mount dialog opens
@@ -226,15 +249,17 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       const mountRequest = mountVolume({
         volumePath: mountPath,
         driveLetter: mountLetter,
+        volumeKind,
+        volumeRole,
         password: mountPassword,
         keyfiles: mountKeyfile ? [mountKeyfile] : [],
         pim: mountPim || undefined,
         readOnly: mountReadOnly,
         removable: mountRemovable,
-        protectHidden,
-        hiddenPassword: protectHidden ? hiddenPassword : undefined,
-        hiddenKeyfiles: protectHidden && hiddenKeyfile ? [hiddenKeyfile] : [],
-        hiddenPim: protectHidden ? hiddenPim || undefined : undefined,
+        protectHidden: requiresHiddenProtection && protectHidden,
+        hiddenPassword: requiresHiddenProtection ? hiddenPassword : undefined,
+        hiddenKeyfiles: requiresHiddenProtection && hiddenKeyfile ? [hiddenKeyfile] : [],
+        hiddenPim: requiresHiddenProtection ? hiddenPim || undefined : undefined,
         scope: "per-user",
         hardenAcl: true,
       });
@@ -267,7 +292,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       setHiddenPassword("");
       setMounting(false);
     }
-  }, [hiddenKeyfile, hiddenPassword, hiddenPim, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, protectHidden, refreshVault, resetMountForm, verifyVaultDrive]);
+  }, [hiddenKeyfile, hiddenPassword, hiddenPim, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, protectHidden, refreshVault, requiresHiddenProtection, resetMountForm, verifyVaultDrive, volumeKind, volumeRole]);
 
   const handleOpenMountedVolume = useCallback(async () => {
     if (!mountedVolume) return;
@@ -550,6 +575,53 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               <span>Unlocking with your PIM can take several minutes. Your password was cleared for safety.</span>
             </div>
           )}
+          <div className="mount-volume-selector" role="radiogroup" aria-label="Volume kind">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={volumeKind === "standard"}
+              className={`mount-volume-selector__option${volumeKind === "standard" ? " is-active" : ""}`}
+              onClick={() => selectVolumeKind("standard")}
+            >
+              <Icon icon="lock" size={14} />
+              <span>Standard volume</span>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={volumeKind === "dual"}
+              className={`mount-volume-selector__option${volumeKind === "dual" ? " is-active" : ""}`}
+              onClick={() => selectVolumeKind("dual")}
+            >
+              <Icon icon="layers" size={14} />
+              <span>Hidden + decoy</span>
+            </button>
+          </div>
+
+          {isDualVolume && (
+            <div className="mount-volume-selector mount-volume-selector--role" role="radiogroup" aria-label="Dual-volume action">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={volumeRole === "hidden"}
+                className={`mount-volume-selector__option${volumeRole === "hidden" ? " is-active" : ""}`}
+                onClick={() => selectVolumeRole("hidden")}
+              >
+                <Icon icon="eye-off" size={14} />
+                <span>Open hidden volume</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={volumeRole === "outer"}
+                className={`mount-volume-selector__option${volumeRole === "outer" ? " is-active" : ""}`}
+                onClick={() => selectVolumeRole("outer")}
+              >
+                <Icon icon="eye-open" size={14} />
+                <span>Open visible decoy</span>
+              </button>
+            </div>
+          )}
           {/* Mount source toggle. The previous Button-with-active pattern
               didn't stand out clearly — the user couldn't tell at a glance
               which mode was selected. Switched to a segmented control where
@@ -670,9 +742,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
           </div>
 
           <FormGroup
-            label="Password"
+            label={volumeRole === "hidden" ? "Hidden volume password" : "Password"}
             labelFor="password"
-            helperText="Make sure CAPS Lock is off."
+            helperText={volumeRole === "hidden" ? "Use the hidden volume's password." : "Make sure CAPS Lock is off."}
           >
             <InputGroup
               id="password"
@@ -692,7 +764,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             />
           </FormGroup>
 
-          <FormGroup label="Keyfile (optional)" labelFor="mount-keyfile">
+          <FormGroup label={volumeRole === "hidden" ? "Hidden volume keyfile (optional)" : "Keyfile (optional)"} labelFor="mount-keyfile">
             <InputGroup
               id="mount-keyfile"
               placeholder="Path to keyfile or folder"
@@ -706,7 +778,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             />
           </FormGroup>
 
-          <FormGroup label="PIM (optional)" labelFor="mount-pim" helperText="Leave blank for default; otherwise it must match the volume's creation PIM.">
+          <FormGroup label={volumeRole === "hidden" ? "Hidden volume PIM (optional)" : "PIM (optional)"} labelFor="mount-pim" helperText="Leave blank for default; otherwise it must match the volume's creation PIM.">
             <InputGroup
               id="mount-pim"
               type="number"
@@ -743,16 +815,18 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               <span>Removable media</span>
               <span className="quick-desc">Reports the mounted volume as removable.</span>
             </label>
-            <label className="quick-toggle">
-              <CheckboxControl
-                checked={protectHidden}
-                disabled={mountReadOnly}
-                ariaLabel="Protect hidden volume"
-                onChange={event => setProtectHidden(event.currentTarget.checked)}
-              />
-              <span>Protect hidden volume</span>
-              <span className="quick-desc">Required for safe writes to an outer decoy volume.</span>
-            </label>
+            {isOuterDualVolume && (
+              <label className="quick-toggle">
+                <CheckboxControl
+                  checked={protectHidden}
+                  disabled={mountReadOnly}
+                  ariaLabel="Protect hidden volume"
+                  onChange={event => setProtectHidden(event.currentTarget.checked)}
+                />
+                <span>Protect hidden volume</span>
+                <span className="quick-desc">Required for writable outer-decoy mounts.</span>
+              </label>
+            )}
             <div className="quick-toggle quick-toggle--locked" aria-label="Private NTFS permissions enabled">
               <Icon icon="lock" size={14} />
               <span>Private NTFS permissions</span>
@@ -760,7 +834,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             </div>
           </div>
 
-          {protectHidden && (
+          {requiresHiddenProtection && protectHidden && (
             <div className="mount-hidden-protection">
               <FormGroup label="Hidden volume password or keyfile" labelFor="hidden-password" helperText="Used only in memory to protect the hidden region; it is not mounted.">
                 <InputGroup

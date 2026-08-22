@@ -588,6 +588,15 @@ fn handle_vault_mount(
         client_pid,
     );
     let result = if authorization.allowed {
+        // This internal guard has no pipe verb: an authenticated user may ask
+        // for a policy-authorized mount, but can never name a driver, service,
+        // or executable.  Validate/repair the fixed engine driver before the
+        // privileged broker receives the password.
+        if let Err(error) = crate::encvol_driver::ensure_for_vault_mount() {
+            use zeroize::Zeroize;
+            request.password.zeroize();
+            return Err(VerbError::new("vault_driver_unavailable", error.public_message()));
+        }
         vault_mount.mount_authorized(
             vault_access,
             &request.entry_id,

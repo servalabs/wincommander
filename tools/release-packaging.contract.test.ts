@@ -63,17 +63,37 @@ describe("public service release packaging", () => {
   });
 
   test("preserves third-party encryption drivers and waits before removing its own", () => {
-    const stop = hooks.indexOf("sc stop WinCommanderEncVol");
-    const stopped = hooks.indexOf('sc query WinCommanderEncVol | findstr /C:": 1  STOPPED"');
-    const remove = hooks.indexOf("sc delete WinCommanderEncVol");
+    const uninstall = hooks.indexOf("!macro NSIS_HOOK_PREUNINSTALL");
+    const uninstallHooks = hooks.slice(uninstall);
+    const stop = uninstallHooks.indexOf("sc stop WinCommanderEncVol");
+    const stopped = uninstallHooks.indexOf('sc query WinCommanderEncVol | findstr /C:": 1  STOPPED"');
+    const remove = uninstallHooks.indexOf("sc delete WinCommanderEncVol");
 
     expect(hooks).toContain("sc query WinCommanderEncVol");
     expect(hooks).not.toContain("sc stop veracrypt");
     expect(hooks).not.toContain("sc delete veracrypt");
+    expect(uninstall).toBeGreaterThanOrEqual(0);
     expect(stop).toBeGreaterThanOrEqual(0);
     expect(stopped).toBeGreaterThan(stop);
     expect(remove).toBeGreaterThan(stopped);
     expect(hooks).toContain("Restart Windows, then run the uninstaller again.");
+  });
+
+  test("repairs only the fixed owned encryption driver on install or update", () => {
+    const quotedDriverArgument = '""""${WC_ENCVOL_DRIVER}""""';
+    const expectedImagePath = '"${WC_ENCVOL_DRIVER}"';
+
+    expect(hooks).toContain('!define WC_ENCVOL_DRIVER "$PROGRAMDATA\\WinCommander\\bin\\engine\\EncVolKm.sys"');
+    expect(hooks).toContain('IfFileExists "${WC_ENCVOL_DRIVER}" wc_encvol_driver_present wc_encvol_driver_ready');
+    expect(hooks).toContain("sc query WinCommanderEncVol");
+    expect(hooks).toContain('sc qc WinCommanderEncVol | findstr /I /C:"${WC_ENCVOL_DRIVER}"');
+    expect(hooks).toContain(`sc create WinCommanderEncVol type= kernel binPath= ${quotedDriverArgument} start= system`);
+    expect(hooks).toContain(`sc config WinCommanderEncVol type= kernel binPath= ${quotedDriverArgument} start= system`);
+    expect(quotedDriverArgument.slice(3, -3)).toBe(expectedImagePath);
+    expect(hooks).toContain("sc start WinCommanderEncVol");
+    expect(hooks).toContain("wc_encvol_driver_rollback:");
+    expect(hooks).not.toContain("sc create veracrypt");
+    expect(hooks).not.toContain("sc config veracrypt");
   });
 
   test("lets ordinary users run with their own token while debug stays asInvoker", () => {

@@ -570,6 +570,8 @@ export interface DeviceCreateTarget {
 export interface MountVolumeParams {
   volumePath: string;
   driveLetter?: string;
+  volumeKind?: "standard" | "dual";
+  volumeRole?: "standard" | "outer" | "hidden";
   password: string;
   keyfiles?: string[];
   pim?: string;
@@ -598,6 +600,8 @@ export interface MountVolumeResult {
 export const buildMountVolumeRequest = (params: MountVolumeParams) => ({
   VolumePath: params.volumePath,
   ...(params.driveLetter ? { DriveLetter: params.driveLetter } : {}),
+  ...(params.volumeKind ? { VolumeKind: params.volumeKind } : {}),
+  ...(params.volumeRole ? { VolumeRole: params.volumeRole } : {}),
   Password: params.password,
   Keyfiles: JSON.stringify(params.keyfiles ?? []),
   ...(params.pim ? { Pim: params.pim } : {}),
