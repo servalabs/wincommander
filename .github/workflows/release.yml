@@ -333,9 +333,9 @@ jobs:
           }
 
           $setup = $setups[0].FullName
-          & $setup /S
-          if ($LASTEXITCODE -ne 0) {
-            throw "The NSIS setup failed with exit code $LASTEXITCODE."
+          $setupProcess = Start-Process -FilePath $setup -ArgumentList "/S" -Wait -PassThru
+          if ($setupProcess.ExitCode -ne 0) {
+            throw "The NSIS setup failed with exit code $($setupProcess.ExitCode)."
           }
 
           $servicePath = Join-Path $env:ProgramFiles "WinCommander\\wincommander-svc.exe"
@@ -360,9 +360,9 @@ jobs:
           if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
             throw "The NSIS setup did not create its uninstaller at $uninstaller."
           }
-          & $uninstaller /S
-          if ($LASTEXITCODE -ne 0) {
-            throw "The NSIS uninstaller failed with exit code $LASTEXITCODE."
+          $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru
+          if ($uninstallProcess.ExitCode -ne 0) {
+            throw "The NSIS uninstaller failed with exit code $($uninstallProcess.ExitCode)."
           }
           $deadline = (Get-Date).AddSeconds(30)
           do {
