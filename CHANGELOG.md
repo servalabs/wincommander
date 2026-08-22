@@ -12,6 +12,18 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **Vault access takes effect immediately and service shutdown is mount-safe**
+  (2026-08-22) — explicit owner/user SIDs are now retained separately from the
+  managed-group ACL, so an already-logged-in user does not need to sign out and
+  back in after policy apply. Older persisted policies are migrated only after
+  their identity, group membership, and exact ACL revalidate. The service now
+  reports `StopPending` while its bounded dismount cleanup runs. The live
+  Administrator/Partner1 matrix passed immediate projection, shared and decoy
+  I/O boundaries, password non-persistence, active-mount service stop, policy
+  restart revalidation, and complete cleanup. The source CLI catalog audit also
+  stops treating intentionally desktop-only mutations as missing headless
+  adapters.
+
 - **Vault service hardening and developer-host multi-user validation**
   (2026-08-21) — the public
   service now has rollback-aware deterministic NetAPI group reconciliation,

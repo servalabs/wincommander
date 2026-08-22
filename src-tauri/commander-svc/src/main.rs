@@ -52,9 +52,7 @@ mod pro_broker;
 mod peer_auth;
 
 #[cfg(windows)]
-use std::sync::Arc;
-#[cfg(windows)]
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(windows)]
 static VAULT_MOUNT_FOR_STOP: OnceLock<Arc<vault_mount::VaultMountBroker>> = OnceLock::new();
@@ -74,6 +72,19 @@ use windows_service::{
 
 #[cfg(windows)]
 const SERVICE_NAME: &str = "WinCommanderSvc";
+
+#[cfg(windows)]
+fn stop_pending_status() -> ServiceStatus {
+    ServiceStatus {
+        service_type: ServiceType::OWN_PROCESS,
+        current_state: ServiceState::StopPending,
+        controls_accepted: ServiceControlAccept::empty(),
+        exit_code: ServiceExitCode::Win32(0),
+        checkpoint: 1,
+        wait_hint: std::time::Duration::from_secs(135),
+        process_id: None,
+    }
+}
 
 /// Entry point on Windows.
 #[cfg(windows)]
@@ -108,12 +119,24 @@ define_windows_service!(ffi_service_main, service_main);
 #[cfg(windows)]
 fn service_main(_arguments: Vec<std::ffi::OsString>) {
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-    // Register a minimal SCM control handler (Phase 0 — just accepts Stop).
+    let status_slot: Arc<
+        Mutex<Option<windows_service::service_control_handler::ServiceStatusHandle>>,
+    > = Arc::new(Mutex::new(None));
+    let handler_status_slot = Arc::clone(&status_slot);
     let status_handle = match service_control_handler::register(
         SERVICE_NAME,
         move |control| -> ServiceControlHandlerResult {
             match control {
                 ServiceControl::Stop => {
+                    // A mounted vault can take up to the broker deadline to
+                    // dismount. Tell SCM that cleanup is in progress before
+                    // returning from the callback; otherwise `Stop-Service`
+                    // treats the still-running process as a failed stop.
+                    if let Ok(slot) = handler_status_slot.lock() {
+                        if let Some(handle) = *slot {
+                            let _ = handle.set_service_status(stop_pending_status());
+                        }
+                    }
                     // The runtime observes this channel, closes its pipe and
                     // tasks, then invokes broker cleanup before SCM sees a
                     // stopped process. Never leave an update holding the exe.
@@ -156,6 +179,9 @@ fn service_main(_arguments: Vec<std::ffi::OsString>) {
             return;
         }
     };
+    if let Ok(mut slot) = status_slot.lock() {
+        *slot = Some(status_handle);
+    }
 
     // Tell the SCM we're running.
     let _ = status_handle.set_service_status(ServiceStatus {
@@ -425,6 +451,15 @@ mod tests {
         // returns `None`.
         let v = serde_json::json!({ "fleet_signing_key": 12345 });
         assert_eq!(extract_pinned_fleet_signing_key(&v), "");
+    }
+
+    #[test]
+    fn stop_status_allows_bounded_vault_cleanup() {
+        let status = stop_pending_status();
+        assert_eq!(status.current_state, ServiceState::StopPending);
+        assert_eq!(status.controls_accepted, ServiceControlAccept::empty());
+        assert_eq!(status.checkpoint, 1);
+        assert_eq!(status.wait_hint, std::time::Duration::from_secs(135));
     }
 
     // ── run_iteration_catching_panics: the loop-resilience contract ──────

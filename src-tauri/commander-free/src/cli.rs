@@ -526,6 +526,10 @@ fn classify_headless_support(entry: &GeneratedCommand) -> HeadlessSupport {
     }
 }
 
+fn is_missing_headless_adapter(entry: &CommandDescription) -> bool {
+    entry.registered && !entry.debug_only && entry.headless_support == HeadlessSupport::Cataloged
+}
+
 fn list_commands(transport: Option<Transport>, risk: Option<Risk>) -> i32 {
     let catalog = match catalog() {
         Ok(catalog) => catalog,
@@ -576,7 +580,10 @@ fn audit_catalog() -> i32 {
         .collect();
     let missing_headless: Vec<&CommandDescription> = descriptions
         .iter()
-        .filter(|entry| entry.registered && entry.headless_support != HeadlessSupport::Executable)
+        // UI-only is an intentional safety boundary for mutations and
+        // destructive actions, not a missing implementation. Only a registered
+        // command left merely "cataloged" represents an audit gap.
+        .filter(|entry| is_missing_headless_adapter(entry))
         .collect();
     let count = |risk| {
         descriptions
@@ -1257,7 +1264,7 @@ mod tests {
         // Keep this snapshot count intentional: the generated catalog is the
         // authority, but a count change must be reviewed with the handler
         // registrations rather than silently widening the CLI surface.
-        assert_eq!(tauri_commands.len(), 443);
+        assert_eq!(tauri_commands.len(), 461);
         assert!(tauri_commands.iter().all(|entry| entry.registered));
         for name in [
             "decoy_read_audit_status",
@@ -1295,8 +1302,22 @@ mod tests {
                 .iter()
                 .filter(|entry| available_in_this_build(entry))
                 .count(),
-            if cfg!(debug_assertions) { 443 } else { 439 }
+            if cfg!(debug_assertions) { 461 } else { 457 }
         );
+    }
+
+    #[test]
+    fn catalog_audit_does_not_call_intentional_ui_only_commands_missing() {
+        let descriptions = catalog()
+            .expect("catalog parses")
+            .commands
+            .iter()
+            .map(describe)
+            .collect::<Vec<_>>();
+        assert!(descriptions
+            .iter()
+            .any(|entry| entry.headless_support == HeadlessSupport::UiOnly));
+        assert!(!descriptions.iter().any(is_missing_headless_adapter));
     }
 
     /// `--confirm --dry-run` used to absorb `--dry-run` as the confirmation

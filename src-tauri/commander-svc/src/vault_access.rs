@@ -116,11 +116,26 @@ pub struct ResolvedGrant {
     pub access: VaultAccess,
 }
 
+fn merge_grant(grants: &mut Vec<ResolvedGrant>, sid: String, access: VaultAccess) {
+    if let Some(existing) = grants.iter_mut().find(|existing| existing.sid == sid) {
+        if access == VaultAccess::Write {
+            existing.access = VaultAccess::Write;
+        }
+    } else {
+        grants.push(ResolvedGrant { sid, access });
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultAclPlan {
     pub parent: PathBuf,
     pub container: PathBuf,
     pub grants: Vec<ResolvedGrant>,
+    /// Principals eligible to request a mount. This includes direct user SIDs
+    /// as well as the group SIDs used by the host/container ACL. Keeping the
+    /// direct SIDs here lets an explicit grant take effect for an already
+    /// logged-on user whose Windows token predates managed-group creation.
+    pub authorization_grants: Vec<ResolvedGrant>,
     pub managed_groups: Vec<GroupMembershipPlan>,
 }
 
@@ -167,6 +182,8 @@ struct ResolvedEntry {
     id: String,
     identity: String,
     grants: Vec<ResolvedGrantRecord>,
+    #[serde(default)]
+    authorization_grants: Vec<ResolvedGrantRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,15 +245,25 @@ impl VaultAccessStore {
     }
 
     pub fn load_at_startup(&self) {
-        let loaded: Option<PersistedPolicy> = self
+        let mut loaded: Option<PersistedPolicy> = self
             .fs
             .read(&self.path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-        let revalidated = loaded
-            .as_ref()
+        let revalidated: Result<Option<()>, VaultError> = loaded
+            .as_mut()
             .filter(|policy| policy.policy.schema_version == VAULT_ACCESS_SCHEMA_VERSION)
-            .map(|policy| self.revalidate_persisted_policy(policy))
+            .map(|policy| {
+                let migrated = self.migrate_authorization_grants(policy)?;
+                self.revalidate_persisted_policy(policy)?;
+                if migrated {
+                    let bytes = serde_json::to_vec(policy).map_err(|_| VaultError::Persistence)?;
+                    self.fs
+                        .atomic_write(&self.path, &bytes)
+                        .map_err(|_| VaultError::Persistence)?;
+                }
+                Ok(())
+            })
             .transpose();
         let mut state = self
             .state
@@ -261,6 +288,41 @@ impl VaultAccessStore {
             }
             None => {}
         }
+    }
+
+    /// Policies written before direct authorization SIDs were persisted are
+    /// upgraded only after re-deriving them from the trusted policy and current
+    /// principal resolver. Exact ACL and membership checks still run before the
+    /// migrated bytes replace the durable policy.
+    fn migrate_authorization_grants(
+        &self,
+        persisted: &mut PersistedPolicy,
+    ) -> Result<bool, VaultError> {
+        let mut plans = self.resolve_and_plan(&persisted.policy)?;
+        if plans.len() != persisted.resolved.len() {
+            return Err(VaultError::Validation);
+        }
+        let mut migrated = false;
+        for (entry, plan) in &mut plans {
+            let stored = persisted
+                .resolved
+                .iter_mut()
+                .find(|stored| stored.id == entry.id)
+                .ok_or(VaultError::Validation)?;
+            if stored.authorization_grants.is_empty() {
+                self.hydrate_managed_group_sids(plan)?;
+                stored.authorization_grants = plan
+                    .authorization_grants
+                    .iter()
+                    .map(|grant| ResolvedGrantRecord {
+                        sid: grant.sid.clone(),
+                        access: grant.access,
+                    })
+                    .collect();
+                migrated = true;
+            }
+        }
+        Ok(migrated)
     }
 
     /// Re-derive every durable identity and principal mapping on boot.  ACL
@@ -311,6 +373,21 @@ impl VaultAccessStore {
             derived.sort_by(|left, right| left.0.cmp(right.0));
             stored_grants.sort_by(|left, right| left.0.cmp(right.0));
             if derived != stored_grants {
+                return Err(VaultError::PrincipalResolution);
+            }
+            let mut derived_authorization = plan
+                .authorization_grants
+                .iter()
+                .map(|grant| (&grant.sid, grant.access))
+                .collect::<Vec<_>>();
+            let mut stored_authorization = stored
+                .authorization_grants
+                .iter()
+                .map(|grant| (&grant.sid, grant.access))
+                .collect::<Vec<_>>();
+            derived_authorization.sort_by(|left, right| left.0.cmp(right.0));
+            stored_authorization.sort_by(|left, right| left.0.cmp(right.0));
+            if derived_authorization != stored_authorization {
                 return Err(VaultError::PrincipalResolution);
             }
             self.acls.verify_exact(&plan)?;
@@ -372,6 +449,7 @@ impl VaultAccessStore {
                         access: grant.access,
                     })
                     .collect(),
+                authorization_grants: Vec::new(),
                 managed_groups: Vec::new(),
             },
             entry.mount.presentation,
@@ -488,6 +566,14 @@ impl VaultAccessStore {
                             access: g.access,
                         })
                         .collect(),
+                    authorization_grants: plan
+                        .authorization_grants
+                        .into_iter()
+                        .map(|g| ResolvedGrantRecord {
+                            sid: g.sid,
+                            access: g.access,
+                        })
+                        .collect(),
                 })
                 .collect(),
             applied_at,
@@ -559,7 +645,7 @@ impl VaultAccessStore {
             return denied(VaultMountDenial::NotAuthorized);
         }
         let allowed = resolved
-            .grants
+            .authorization_grants
             .iter()
             .filter(|grant| caller_sids.iter().any(|sid| sid == &grant.sid))
             .map(|grant| grant.access)
@@ -596,20 +682,29 @@ impl VaultAccessStore {
                 // deterministic local groups. Existing group grants remain
                 // direct ACL principals; we never infer or create nesting.
                 let mut grants = Vec::new();
+                let mut authorization_grants = Vec::new();
                 let mut read_members = Vec::new();
                 let mut write_members = Vec::new();
                 let mut managed_groups = Vec::new();
                 let owner = self.principals.resolve_principal(&entry.owner_account)?;
                 match owner.kind {
-                    PrincipalKind::User => write_members.push(owner.sid),
-                    PrincipalKind::Group => grants.push(ResolvedGrant {
-                        sid: owner.sid,
-                        access: VaultAccess::Write,
-                    }),
+                    PrincipalKind::User => {
+                        write_members.push(owner.sid.clone());
+                        merge_grant(&mut authorization_grants, owner.sid, VaultAccess::Write);
+                    }
+                    PrincipalKind::Group => {
+                        merge_grant(&mut grants, owner.sid.clone(), VaultAccess::Write);
+                        merge_grant(&mut authorization_grants, owner.sid, VaultAccess::Write);
+                    }
                 }
                 for grant in &entry.grants {
                     let principal = self.principals.resolve_principal(&grant.principal_name)?;
                     if principal.kind == PrincipalKind::User {
+                        merge_grant(
+                            &mut authorization_grants,
+                            principal.sid.clone(),
+                            grant.access,
+                        );
                         match grant.access {
                             VaultAccess::Read => read_members.push(principal.sid),
                             VaultAccess::Write => write_members.push(principal.sid),
@@ -617,16 +712,8 @@ impl VaultAccessStore {
                         continue;
                     }
                     let sid = principal.sid;
-                    if let Some(existing) = grants.iter_mut().find(|existing| existing.sid == sid) {
-                        if grant.access == VaultAccess::Write {
-                            existing.access = VaultAccess::Write;
-                        }
-                    } else {
-                        grants.push(ResolvedGrant {
-                            sid,
-                            access: grant.access,
-                        });
-                    }
+                    merge_grant(&mut grants, sid.clone(), grant.access);
+                    merge_grant(&mut authorization_grants, sid, grant.access);
                 }
                 for (access, members) in [
                     (VaultAccess::Read, &mut read_members),
@@ -657,6 +744,7 @@ impl VaultAccessStore {
                         parent,
                         container,
                         grants,
+                        authorization_grants,
                         managed_groups,
                     },
                 ))
@@ -673,10 +761,11 @@ impl VaultAccessStore {
                 }
             } else {
                 plan.grants.push(ResolvedGrant {
-                    sid,
+                    sid: sid.clone(),
                     access: group.access,
                 });
             }
+            merge_grant(&mut plan.authorization_grants, sid, group.access);
         }
         Ok(())
     }
@@ -1464,7 +1553,7 @@ pub fn authorize_mount_for_process(
         let Some(resolved) = active.resolved.iter().find(|entry| entry.id == entry_id) else {
             return denied(VaultMountDenial::NotAuthorized);
         };
-        resolved.grants.clone()
+        resolved.authorization_grants.clone()
     };
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if process.is_null() {
@@ -1725,7 +1814,7 @@ mod tests {
             Ok(vec![AclSnapshot {
                 path: plan.container.clone(),
                 descriptor: vec![],
-                dacl_protected: false,
+                dacl_protected: true,
             }])
         }
         fn restore(&self, _: &[AclSnapshot]) -> Result<(), VaultError> {
@@ -1812,6 +1901,12 @@ mod tests {
         assert!(r.allowed);
         assert!(r.launch_ready);
         assert_eq!(r.denial_reason, None);
+        let already_logged_on_partner = s.authorize_mount("shared", &["S-1-test-Partner".into()]);
+        assert!(
+            already_logged_on_partner.allowed,
+            "an explicit user grant must not require a fresh Windows logon"
+        );
+        assert_eq!(already_logged_on_partner.mode, Some(VaultAccess::Write));
         assert!(
             !s.authorize_mount("shared", &["S-1-test-Other".into()])
                 .allowed
@@ -1952,6 +2047,41 @@ mod tests {
             restarted.status().validation_state,
             VaultValidationState::Degraded
         );
+    }
+
+    #[test]
+    fn startup_migrates_legacy_policy_and_keeps_explicit_user_access() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let installed = store(files.clone());
+        installed.apply(policy(1, 0), 7).unwrap();
+        let path = PathBuf::from("/policy").join(POLICY_FILE);
+        {
+            let mut locked = files.lock().unwrap();
+            let mut value: serde_json::Value =
+                serde_json::from_slice(locked.get(&path).unwrap()).unwrap();
+            for entry in value["resolved"].as_array_mut().unwrap() {
+                entry
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("authorization_grants");
+            }
+            locked.insert(path.clone(), serde_json::to_vec(&value).unwrap());
+        }
+
+        let restarted = store(files.clone());
+        restarted.load_at_startup();
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Current
+        );
+        assert!(
+            restarted
+                .authorize_mount("shared", &["S-1-test-Partner".into()])
+                .allowed
+        );
+        let migrated: serde_json::Value =
+            serde_json::from_slice(files.lock().unwrap().get(&path).unwrap()).unwrap();
+        assert!(migrated["resolved"][0]["authorization_grants"].is_array());
     }
 
     #[test]

@@ -32,6 +32,11 @@ exit $process.ExitCode
 
 The generated catalog contains 1,267 entries: 806 backend-script commands and 461 Tauri handlers. Four Tauri handlers are debug-only, so the shipped release binary executes 1,263 commands; it retains the four debug-only entries for catalog-drift auditing and refuses them at runtime.
 
+`audit catalog` reports a failure only for a genuinely missing dispatcher or a
+registered command left without a declared execution boundary. A command marked
+`uiOnly` is intentionally restricted to the desktop's confirmation and locking
+path; it is not a missing headless adapter.
+
 Backend commands run in a windowless Tauri context. Native commands run through a real, invisible `cli-runtime.html` Tauri WebView that invokes the same production handler as the GUI. CLI mode never mounts the React dashboard or creates a tray icon, taskbar window, hotkeys, ambient monitors, autostart state, or updater polling.
 
 Native Tauri commands require Microsoft Edge WebView2. If it is unavailable, CLI mode returns one JSON error with `error: "runtime_prerequisite"` and exit code `9`; it does not display the GUI prerequisite dialog.

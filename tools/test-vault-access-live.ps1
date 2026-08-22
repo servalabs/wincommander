@@ -116,6 +116,11 @@ try {
     $createdGroups = @(Get-LocalGroup | Where-Object Name -Like 'WC-Vault-*' | ForEach-Object Name | Where-Object { $existingGroups -notcontains $_ })
     Assert-True ($createdGroups.Count -eq 3) "Expected three new write groups, found $($createdGroups.Count)."
 
+    # This PowerShell process logged on before the managed groups were created.
+    # Explicit user grants must still take effect immediately without a relog.
+    $immediateAdminList = @(Invoke-Client 'list' $null $null)
+    Assert-True ($immediateAdminList.Count -eq 3) "The existing Administrator token saw $($immediateAdminList.Count) entries instead of three."
+
     $adminList = @(Invoke-SshClient $Administrator 'list' $null $null)
     $partnerList = @(Invoke-SshClient $Partner 'list' $null $null)
     Assert-True ($adminList.Count -eq 3) "Administrator saw $($adminList.Count) entries instead of three."
@@ -133,8 +138,7 @@ try {
     Assert-True ($sharedMount.state -eq 'mounted' -and $sharedMount.drive_letter -eq 'Q:') "Partner shared mount failed: $(ConvertTo-Json -InputObject $sharedMount -Compress)"
     Assert-True ((Invoke-SshPowerShell $Partner "Set-Content -LiteralPath 'Q:\partner.txt' -Value 'partner-write' -NoNewline; if((Get-Content -LiteralPath 'Q:\partner.txt' -Raw) -eq 'partner-write'){exit 0}else{exit 9}") -eq 0) 'Partner shared write/read failed.'
     Assert-True ((Invoke-SshPowerShell $Administrator "if((Get-Content -LiteralPath 'Q:\partner.txt' -Raw) -eq 'partner-write'){Set-Content -LiteralPath 'Q:\admin.txt' -Value 'admin-write' -NoNewline; exit 0}else{exit 10}") -eq 0) 'Administrator could not read/write the shared mount.'
-    $sharedUnmount = Invoke-SshClient $Partner 'unmount' 'live-shared' $null
-    Assert-True ($sharedUnmount.state -eq 'unmounted') 'Shared Vault did not unmount.'
+    # Keep this mount active for the SCM shutdown cleanup case below.
 
     foreach ($id in @('live-decoy-a', 'live-decoy-b')) {
         $mounted = Invoke-SshClient $Administrator 'mount' $id $password
@@ -149,6 +153,20 @@ try {
     $status = Invoke-Client 'get-status' $null $null
     Assert-True ($status.validation_state -eq 'current') 'Final policy status was not current.'
 
+    # SCM stop must report StopPending while it dismounts, then leave no driver
+    # slot behind. This is the updater/reboot safety path, not ordinary unmount.
+    $stopMount = $sharedMount
+    Assert-True ($stopMount.state -eq 'mounted') "Could not create the active mount used for the service-stop test: $(ConvertTo-Json -InputObject $stopMount -Compress)"
+    Stop-Service WinCommanderSvc
+    (Get-Service WinCommanderSvc).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(135))
+    $remaining = @(& $engine list)
+    Assert-True ($LASTEXITCODE -eq 0) 'Engine list failed after service stop.'
+    Assert-True ($remaining.Count -eq 0) 'Service stop left an encrypted volume mounted.'
+    Start-Service WinCommanderSvc
+    (Get-Service WinCommanderSvc).WaitForStatus('Running', [TimeSpan]::FromSeconds(20))
+    $postRestartStatus = Invoke-Client 'get-status' $null $null
+    Assert-True ($postRestartStatus.validation_state -eq 'current') 'Vault policy did not revalidate after service restart.'
+
     [pscustomobject]@{
         Result = 'PASS'
         ReleaseProHash = (Get-FileHash 'C:\ProgramData\WinCommander\bin\wincommander-pro.exe' -Algorithm SHA256).Hash
@@ -159,6 +177,8 @@ try {
         PartnerDecoyDenied = 'verified'
         AdministratorDecoysWriteRead = 'verified'
         Dismounts = 'verified'
+        ExistingTokenAccess = 'verified'
+        GracefulServiceStop = 'verified'
         PasswordPersisted = $false
     } | ConvertTo-Json -Compress
 }

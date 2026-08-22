@@ -25,8 +25,10 @@ only safe labels, access/presentation, mount state, and drive letter. The
 password is requested for every mount and is held only long enough to send the
 mount request; paths, Windows identities, and ACLs are not displayed. A policy
 editor is shown only when the service returns the bounded capability that the
-current caller may manage policy. A 2026-08-21 developer-host run using distinct
-Administrator and Partner1 SSH tokens passed shared write/read, private-decoy
-denial, Administrator-only decoy I/O, and dismount cleanup with released Pro
-3.2.19. Packaged-installer, distinct interactive-desktop, unrelated-user,
-revocation/restart, and clean-machine acceptance remain separate gates.
+current caller may manage policy. A 2026-08-22 developer-host run using distinct
+Administrator and Partner1 SSH tokens passed immediate access for the
+already-logged-in Administrator token, shared write/read, private-decoy denial,
+Administrator-only decoy I/O, active-mount service stop/dismount, policy restart
+revalidation, and cleanup with released Pro 3.2.20. Packaged-installer, distinct
+interactive desktops, live revocation, and clean-machine acceptance remain
+separate gates.

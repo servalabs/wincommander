@@ -5,7 +5,10 @@ param(
     [string]$Action,
 
     [string]$EntryId,
-    [string]$PolicyPath
+    [string]$PolicyPath,
+
+    [Parameter(ValueFromPipeline = $true)]
+    [string]$InputSecret
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,7 +59,11 @@ try {
         $argsValue = Get-Content -LiteralPath $PolicyPath -Raw | ConvertFrom-Json
     } elseif ($Action -eq 'mount') {
         if (-not $EntryId) { throw '-EntryId is required for mount.' }
-        $passwordText = [Console]::In.ReadToEnd().TrimEnd([char[]]"`r`n")
+        $passwordText = if (-not [string]::IsNullOrEmpty($InputSecret)) {
+            $InputSecret
+        } else {
+            [Console]::In.ReadToEnd().TrimEnd([char[]]"`r`n")
+        }
         if (-not $passwordText) { throw 'Mount password must be provided on standard input.' }
         $argsValue = [ordered]@{ entry_id = $EntryId; password = $passwordText }
     } elseif ($Action -eq 'unmount') {
@@ -106,5 +113,6 @@ try {
     Write-Frame $pipe '{"kind":"bye"}'
 } finally {
     $passwordText = $null
+    $InputSecret = $null
     if ($pipe) { $pipe.Dispose() }
 }
