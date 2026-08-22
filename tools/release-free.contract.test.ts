@@ -6,6 +6,7 @@ const publisher = readFileSync("tools/release-free.ps1", "utf8");
 describe("manual Free release publisher", () => {
   test("requires an exact clean, tagged, version-aligned main source", () => {
     expect(publisher).toContain("Refusing to release from a dirty worktree.");
+    expect(publisher).toContain("@(git -C $script:Root status --porcelain).Count");
     expect(publisher).toContain('"$script:Tag^{commit}"');
     expect(publisher).toContain('origin/main');
     expect(publisher).toContain("'package.json'");

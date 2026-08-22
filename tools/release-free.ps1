@@ -96,7 +96,7 @@ function Get-CargoPackageVersion {
 }
 
 function Assert-ReleaseSource {
-    if ((git -C $script:Root status --porcelain).Count -ne 0) {
+    if (@(git -C $script:Root status --porcelain).Count -ne 0) {
         Stop-Release 'Refusing to release from a dirty worktree.'
     }
 
