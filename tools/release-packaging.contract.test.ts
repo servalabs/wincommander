@@ -37,6 +37,9 @@ describe("public service release packaging", () => {
     expect(releaseWorkflow).toContain('Get-CimInstance Win32_Service -Filter "Name=\'WinCommanderSvc\'"');
     expect(releaseWorkflow).toContain('$running.WaitForStatus("Running", [TimeSpan]::FromSeconds(30))');
     expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\\\uninstall.exe"');
+    expect(releaseWorkflow).toContain('Join-Path $env:TEMP "WinCommander-nsis-lifecycle.log"');
+    expect(releaseWorkflow).toContain('Get-Content -LiteralPath $diagnosticLog -Raw | Write-Host');
+    expect(releaseWorkflow).toContain('Remove-Item -LiteralPath $diagnosticLog -Force');
     expect(releaseWorkflow).toContain('"SETUP_PATH=$($setup.FullName)"');
     expect(releaseWorkflow).toContain('"$remote/free/latest.exe"');
     expect(releaseWorkflow).not.toContain("MSI_PATH=");
@@ -67,6 +70,11 @@ describe("public service release packaging", () => {
     expect(hooks).toContain('reg.exe export "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WinCommanderSvc" "${WC_SERVICE_CONFIG_BACKUP}" /y');
     expect(hooks).toContain('reg.exe import "${WC_SERVICE_CONFIG_BACKUP}"');
     expect(hooks).toContain('!define WC_SERVICE_BACKUP "${WC_INSTALL_DIR}\\wincommander-svc.exe.wc-backup"');
+    expect(hooks).toContain('!define WC_LIFECYCLE_DIAGNOSTIC_LOG "$TEMP\\WinCommander-nsis-lifecycle.log"');
+    expect(hooks).toContain('!macro WC_WRITE_LIFECYCLE_DIAGNOSTIC');
+    expect(hooks).toContain('FileWrite $R0 "stage=$R3 exit=$R8 reason=$R4$\\r$\\n"');
+    expect(hooks).toContain('StrCpy $R3 "service-start"');
+    expect(hooks).toContain('wc_service_rollback:\n    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC');
     expect(hooks).toContain('StrCpy $R4 "WinCommander service payload is missing; the installation was not completed."');
     expect(hooks).toContain('StrCpy $R4 "WinCommander service executable could not be backed up."');
     expect(hooks).toContain('kernel32::CopyFileW(w "${WC_SERVICE_EXE}", w "${WC_SERVICE_BACKUP}", i 0)');

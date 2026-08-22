@@ -15,13 +15,21 @@
 !define WC_BUNDLED_SERVICE "$INSTDIR\resources\wincommander-svc.exe"
 !define WC_SERVICE_BACKUP "${WC_INSTALL_DIR}\wincommander-svc.exe.wc-backup"
 !define WC_SERVICE_CONFIG_BACKUP "$PLUGINSDIR\WinCommanderSvc-before.reg"
+!define WC_LIFECYCLE_DIAGNOSTIC_LOG "$TEMP\WinCommander-nsis-lifecycle.log"
 ; The encryption engine is installed separately below ProgramData.  Its
 ; driver service is nevertheless owned by this installer, so repair only this
 ; fixed name and only when the fixed driver payload is actually present.
 !define WC_ENCVOL_DRIVER "$PROGRAMDATA\WinCommander\bin\engine\EncVolKm.sys"
 !define WC_ENCVOL_CONFIG_BACKUP "$PLUGINSDIR\WinCommanderEncVol-before.reg"
 
+!macro WC_WRITE_LIFECYCLE_DIAGNOSTIC
+  FileOpen $R0 "${WC_LIFECYCLE_DIAGNOSTIC_LOG}" a
+  FileWrite $R0 "stage=$R3 exit=$R8 reason=$R4$\r$\n"
+  FileClose $R0
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
+  Delete "${WC_LIFECYCLE_DIAGNOSTIC_LOG}"
   ; Releases use one non-customizable machine location.  The service's SCM
   ; ImagePath is therefore stable across fresh install, repair, and update.
   StrCpy $INSTDIR "${WC_INSTALL_DIR}"
@@ -161,6 +169,7 @@
   ; fixed root before configuring SCM, so ImagePath is always the quoted
   ; Program Files executable rather than a bundler implementation detail.
   IfFileExists "${WC_BUNDLED_SERVICE}" wc_service_payload_ready 0
+    StrCpy $R3 "service-payload"
     StrCpy $R4 "WinCommander service payload is missing; the installation was not completed."
     Goto wc_service_rollback
 
@@ -172,6 +181,7 @@
   StrCpy $R7 "0"
   Delete "${WC_SERVICE_BACKUP}"
   ${If} $R6 == 1
+    StrCpy $R3 "service-backup"
     IfFileExists "${WC_SERVICE_EXE}" 0 wc_service_missing_previous_exe
     System::Call 'kernel32::CopyFileW(w "${WC_SERVICE_EXE}", w "${WC_SERVICE_BACKUP}", i 0) i .R8'
     ${If} $R8 == 0
@@ -186,6 +196,7 @@
     Abort "WinCommander service configuration exists but its executable is missing."
 
   wc_service_copy_new_exe:
+  StrCpy $R3 "service-copy"
   System::Call 'kernel32::CopyFileW(w "${WC_BUNDLED_SERVICE}", w "${WC_SERVICE_EXE}", i 0) i .R8'
   ${If} $R8 == 0
     StrCpy $R4 "WinCommander service executable could not be installed."
@@ -199,6 +210,7 @@
   ; `sc.exe` must receive the ImagePath as one argument containing the inner
   ; quotes. Four quotes on each side survive CreateProcess parsing as exactly
   ; `"C:\Program Files\WinCommander\wincommander-svc.exe"` in SCM.
+  StrCpy $R3 "service-create"
   nsExec::ExecToStack 'sc create WinCommanderSvc binPath= """"${WC_SERVICE_EXE}"""" start= auto obj= LocalSystem'
   Pop $R8
   Pop $R9
@@ -211,6 +223,7 @@
   ${AndIf} $R6 == 0
     Abort "WinCommander service appeared during installation; run the installer again."
   ${EndIf}
+  StrCpy $R3 "service-config"
   nsExec::ExecToStack 'sc config WinCommanderSvc binPath= """"${WC_SERVICE_EXE}"""" start= auto obj= LocalSystem'
   Pop $R8
   Pop $R9
@@ -218,6 +231,7 @@
     StrCpy $R4 "WinCommander service could not be configured."
     Goto wc_service_rollback
   ${EndIf}
+  StrCpy $R3 "service-recovery-config"
   nsExec::ExecToStack 'sc failure WinCommanderSvc reset= 86400 actions= restart/5000/restart/5000/none/0'
   Pop $R8
   Pop $R9
@@ -225,6 +239,7 @@
     StrCpy $R4 "WinCommander service recovery could not be configured."
     Goto wc_service_rollback
   ${EndIf}
+  StrCpy $R3 "service-start"
   nsExec::ExecToStack 'sc start WinCommanderSvc'
   Pop $R8
   Pop $R9
@@ -241,6 +256,7 @@
   ; import the exact service registry configuration captured before stopping
   ; it.  A fresh-install failure removes the newly-created service instead.
   wc_service_rollback:
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC
     ${If} $R6 == 1
       ${If} $R7 == 1
         System::Call 'kernel32::CopyFileW(w "${WC_SERVICE_BACKUP}", w "${WC_SERVICE_EXE}", i 0) i .R8'
@@ -285,6 +301,7 @@
   IfFileExists "${WC_ENCVOL_DRIVER}" wc_encvol_driver_present wc_encvol_driver_ready
 
   wc_encvol_driver_present:
+    StrCpy $R3 "encvol-inspect"
     InitPluginsDir
     Delete "${WC_ENCVOL_CONFIG_BACKUP}"
     StrCpy $R2 "0"
@@ -314,6 +331,7 @@
     ; The inner quotes are retained in SCM's ImagePath.  This is required for
     ; a fixed kernel image path and avoids a space-containing path ever being
     ; interpreted as multiple tokens.
+    StrCpy $R3 "encvol-create"
     nsExec::ExecToStack 'sc create WinCommanderEncVol type= kernel binPath= """"${WC_ENCVOL_DRIVER}"""" start= system'
     Pop $R8
     Pop $R9
@@ -322,6 +340,7 @@
       StrCpy $R4 "WinCommander encryption driver could not be created."
       Goto wc_encvol_driver_rollback
     ${EndIf}
+    StrCpy $R3 "encvol-config"
     nsExec::ExecToStack 'sc config WinCommanderEncVol type= kernel binPath= """"${WC_ENCVOL_DRIVER}"""" start= system'
     Pop $R8
     Pop $R9
@@ -329,6 +348,7 @@
       StrCpy $R4 "WinCommander encryption driver could not be configured."
       Goto wc_encvol_driver_rollback
     ${EndIf}
+    StrCpy $R3 "encvol-start"
     nsExec::ExecToStack 'sc start WinCommanderEncVol'
     Pop $R8
     Pop $R9
@@ -343,6 +363,7 @@
   ; Restore a pre-existing owned-service configuration on repair failure.  A
   ; newly-created service is deleted instead, leaving no partial driver entry.
   wc_encvol_driver_rollback:
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC
     ${If} $R2 == 1
       nsExec::ExecToStack 'reg.exe import "${WC_ENCVOL_CONFIG_BACKUP}"'
       Pop $R8

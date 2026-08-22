@@ -333,10 +333,17 @@ jobs:
           }
 
           $setup = $setups[0].FullName
+          $diagnosticLog = Join-Path $env:TEMP "WinCommander-nsis-lifecycle.log"
+          Remove-Item -LiteralPath $diagnosticLog -Force -ErrorAction SilentlyContinue
           # The Free setup is per-machine and installs an SCM service. Hosted
           # runners have a split administrator token, so launch it elevated.
           $setupProcess = Start-Process -FilePath $setup -ArgumentList "/S" -Verb RunAs -Wait -PassThru
           if ($setupProcess.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $diagnosticLog -PathType Leaf) {
+              Write-Host "NSIS lifecycle diagnostic:"
+              Get-Content -LiteralPath $diagnosticLog -Raw | Write-Host
+              Remove-Item -LiteralPath $diagnosticLog -Force
+            }
             throw "The NSIS setup failed with exit code $($setupProcess.ExitCode)."
           }
 
@@ -364,6 +371,11 @@ jobs:
           }
           $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Verb RunAs -Wait -PassThru
           if ($uninstallProcess.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $diagnosticLog -PathType Leaf) {
+              Write-Host "NSIS lifecycle diagnostic:"
+              Get-Content -LiteralPath $diagnosticLog -Raw | Write-Host
+              Remove-Item -LiteralPath $diagnosticLog -Force
+            }
             throw "The NSIS uninstaller failed with exit code $($uninstallProcess.ExitCode)."
           }
           $deadline = (Get-Date).AddSeconds(30)
@@ -378,6 +390,7 @@ jobs:
           if (Test-Path -LiteralPath $servicePath) {
             throw "The NSIS uninstaller did not remove wincommander-svc.exe."
           }
+          Remove-Item -LiteralPath $diagnosticLog -Force -ErrorAction SilentlyContinue
 
       - name: Verify bundled shared media
         shell: pwsh
