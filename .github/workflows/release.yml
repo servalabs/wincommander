@@ -333,7 +333,9 @@ jobs:
           }
 
           $setup = $setups[0].FullName
-          $setupProcess = Start-Process -FilePath $setup -ArgumentList "/S" -Wait -PassThru
+          # The Free setup is per-machine and installs an SCM service. Hosted
+          # runners have a split administrator token, so launch it elevated.
+          $setupProcess = Start-Process -FilePath $setup -ArgumentList "/S" -Verb RunAs -Wait -PassThru
           if ($setupProcess.ExitCode -ne 0) {
             throw "The NSIS setup failed with exit code $($setupProcess.ExitCode)."
           }
@@ -360,7 +362,7 @@ jobs:
           if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
             throw "The NSIS setup did not create its uninstaller at $uninstaller."
           }
-          $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru
+          $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Verb RunAs -Wait -PassThru
           if ($uninstallProcess.ExitCode -ne 0) {
             throw "The NSIS uninstaller failed with exit code $($uninstallProcess.ExitCode)."
           }
