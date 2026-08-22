@@ -738,7 +738,7 @@
 
 .drive-letter-picker {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 6px;
   max-height: 142px;
   overflow-y: auto;
