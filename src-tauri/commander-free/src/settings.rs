@@ -4494,7 +4494,7 @@ mod tests {
         let _lock = super::GLOBAL_STATE_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        use base64::{Engine, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine};
         use ed25519_dalek::{Signer, SigningKey};
 
         let signing_key = SigningKey::generate(&mut rand_core::OsRng);

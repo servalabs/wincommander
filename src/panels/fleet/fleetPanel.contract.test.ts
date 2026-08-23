@@ -31,7 +31,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(panel).toContain('{isAdmin && <TabsTrigger value="enrollment">Enrollment</TabsTrigger>}');
     expect(panel).toContain('{isAdmin && <TabsTrigger value="access-control">Access control</TabsTrigger>}');
     expect(panel).toContain('{isAdmin ? "Vault permissions" : "My vaults"}');
-    expect(panel).toContain('<VaultAccessTab isAdmin={isAdmin} />');
+    expect(panel).toContain('<VaultAccessTab isAdmin={isAdmin} directory={directory} />');
   });
 
   test("retries transient service failures instead of permanently demoting an administrator", () => {
@@ -148,6 +148,8 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("own dedicated parent folder");
     expect(vault).toContain("Draft auto-saved on this PC");
     expect(vault).toContain("dirtyRef.current");
+    expect(vault).toContain("Rebase draft with saved settings");
+    expect(vaultDraft).toContain("rebaseVaultAccessDraft");
     expect(vault).toContain("if (replaceDirtyDraft || !dirtyRef.current)");
     expect(vault).not.toContain("setLoading(true)");
     expect(vaultDraft).toContain("window.localStorage");

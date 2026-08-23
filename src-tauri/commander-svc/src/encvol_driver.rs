@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::{Mutex, OnceLock};
 
 const SERVICE_NAME: &str = "WinCommanderEncVol";
 const DRIVER_PATH: &str = r"C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys";
@@ -15,6 +16,15 @@ const DRIVER_SHA256: &str = "1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE
 const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
 const ERROR_SERVICE_EXISTS: i32 = 1073;
 const ERROR_SERVICE_ALREADY_RUNNING: i32 = 1056;
+
+#[derive(Clone, PartialEq, Eq)]
+struct DriverIdentity {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+static VALIDATED_DRIVER: OnceLock<Mutex<Option<DriverIdentity>>> = OnceLock::new();
+static READY_DRIVER: OnceLock<Mutex<Option<DriverIdentity>>> = OnceLock::new();
 
 #[derive(Debug)]
 pub(crate) enum EnsureDriverError {
@@ -50,7 +60,11 @@ pub(crate) fn fixed_payload_present() -> bool {
 /// encryption work.  Validation precedes every SCM change; the client cannot
 /// influence the service name, driver path, signer policy, or ACL policy.
 pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
-    validate_payload().map_err(|_| EnsureDriverError::PayloadValidation)?;
+    let identity = driver_identity().map_err(|_| EnsureDriverError::PayloadValidation)?;
+    if cached_identity_matches(&READY_DRIVER, &identity) {
+        return Ok(());
+    }
+    validate_payload_cached(&identity).map_err(|_| EnsureDriverError::PayloadValidation)?;
 
     let query =
         run_sc(&["query", SERVICE_NAME]).map_err(|_| EnsureDriverError::ServiceInspection)?;
@@ -104,6 +118,44 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
         rollback_new_service(created);
         return Err(EnsureDriverError::ServiceStart);
     }
+    cache_identity(&READY_DRIVER, identity);
+    Ok(())
+}
+
+/// Validation is expensive (hash, signature, and ACL inspection) but the
+/// driver is immutable for a normal boot. Revalidate if its file identity
+/// changes; otherwise reuse only a successful in-process verification.
+fn driver_identity() -> std::io::Result<DriverIdentity> {
+    let metadata = std::fs::metadata(DRIVER_PATH)?;
+    Ok(DriverIdentity {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+fn cached_identity_matches(
+    cache: &OnceLock<Mutex<Option<DriverIdentity>>>,
+    identity: &DriverIdentity,
+) -> bool {
+    cache
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map(|cached| cached.as_ref() == Some(identity))
+        .unwrap_or(false)
+}
+
+fn cache_identity(cache: &OnceLock<Mutex<Option<DriverIdentity>>>, identity: DriverIdentity) {
+    if let Ok(mut cached) = cache.get_or_init(|| Mutex::new(None)).lock() {
+        *cached = Some(identity);
+    }
+}
+
+fn validate_payload_cached(identity: &DriverIdentity) -> std::io::Result<()> {
+    if cached_identity_matches(&VALIDATED_DRIVER, identity) {
+        return Ok(());
+    }
+    validate_payload()?;
+    cache_identity(&VALIDATED_DRIVER, identity.clone());
     Ok(())
 }
 
@@ -210,5 +262,22 @@ mod tests {
         assert!(source.contains("Test-WcDriver $driver"));
         assert!(source.contains(DRIVER_SHA256));
         assert!(source.contains("$signature.Status -ne 'Valid'"));
+    }
+
+    #[test]
+    fn readiness_cache_requires_the_exact_driver_identity() {
+        let cache = OnceLock::new();
+        let first = DriverIdentity {
+            len: 10,
+            modified: Some(std::time::UNIX_EPOCH),
+        };
+        let changed = DriverIdentity {
+            len: 11,
+            modified: Some(std::time::UNIX_EPOCH),
+        };
+        assert!(!cached_identity_matches(&cache, &first));
+        cache_identity(&cache, first.clone());
+        assert!(cached_identity_matches(&cache, &first));
+        assert!(!cached_identity_matches(&cache, &changed));
     }
 }

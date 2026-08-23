@@ -18,10 +18,12 @@
 
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import type { StartupProtectionOperation } from "../lib/startupProtectionReadiness";
 
 export default function useRemoteAccessMonitor(
   enabled: boolean,
   toolOverrides: Record<string, boolean> | null,
+  onStartupRearm?: (operation: StartupProtectionOperation, succeeded: boolean) => void,
 ) {
   const lastReconciled = useRef<string>("");
 
@@ -48,12 +50,16 @@ export default function useRemoteAccessMonitor(
           }
         }
         await invoke("start_remote_access_monitor");
+        if (cancelled) return;
         lastReconciled.current = fingerprint;
+        onStartupRearm?.("remote-access-monitor", true);
       } catch (err) {
         console.warn("[useRemoteAccessMonitor] reconcile failed:", err);
         attempt += 1;
         if (!cancelled && attempt < 3) {
           retryTimer = setTimeout(() => { void reconcile(); }, attempt * 5_000);
+        } else if (!cancelled && enabled) {
+          onStartupRearm?.("remote-access-monitor", false);
         }
       }
     };
@@ -67,5 +73,5 @@ export default function useRemoteAccessMonitor(
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [enabled, toolOverrides]);
+  }, [enabled, toolOverrides, onStartupRearm]);
 }

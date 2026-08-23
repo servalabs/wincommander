@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ui } from "@/assets";
+import { ui } from "@/assets/products";
 import {
   AlertTriangle,
   FileText,

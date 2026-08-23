@@ -134,6 +134,8 @@ access control, and retention policy.
 
 ## Source pointers
 
+The generated catalog has 1,270 entries: 806 backend scripts plus 464 Tauri handlers; four are debug-only, leaving 1,266 executable release commands.
+
 - Panels and UI: `src/panels/`, `src/components/`
 - Feature/tier registry: `src/registry/`
 - Public backend: `src-tauri/commander-free/src/`

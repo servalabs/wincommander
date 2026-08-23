@@ -9,7 +9,7 @@ import { Switch } from "../../components/ui/switch";
 import { showError, showWarning } from "../../utils/toast";
 import ManageExtensionsPanel from "./ManageExtensionsPanel";
 import { browserExtensionSettingKey } from "../../registry/browserExtensions";
-import { browserLogos } from "../../assets";
+import { browserLogos } from "../../assets/privacy";
 import { resolveBrowserIconUrl } from "./browserIcons";
 
 interface BrowserHardeningSectionProps {

@@ -396,7 +396,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
                 <i />{volumes.length} mounted
               </span>
             )}
-            <SystemEncryptionSection compact />
+            <SystemEncryptionSection />
             <Tooltip content="Refresh status" position="top">
               <Button
                 icon="refresh"

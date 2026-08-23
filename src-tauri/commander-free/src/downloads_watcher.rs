@@ -142,7 +142,11 @@ fn upsert(entry: DownloadEntry) {
     // Drop any existing entry for the same path so a file that's modified
     // several times during a download doesn't appear twice.
     buf.retain(|e| e.path != entry.path);
-    buf.push_front(entry);
+    let insert_at = buf
+        .iter()
+        .position(|existing| existing.modified_at < entry.modified_at)
+        .unwrap_or(buf.len());
+    buf.insert(insert_at, entry);
     while buf.len() > MAX_ENTRIES {
         buf.pop_back();
     }
@@ -154,21 +158,38 @@ fn remove_path(path: &Path) {
     buf.retain(|e| e.path != target);
 }
 
-/// Seed the buffer from the current directory contents (newest-first).
-fn initial_scan(dir: &Path) {
+/// Select the newest entries without sorting the whole Downloads directory.
+fn newest_entries(dir: &Path) -> Vec<DownloadEntry> {
     let Ok(read) = std::fs::read_dir(dir) else {
-        return;
+        return Vec::new();
     };
-    let mut entries: Vec<DownloadEntry> = read
-        .flatten()
-        .filter_map(|e| entry_for(&e.path()))
-        .collect();
-    entries.sort_by_key(|b| std::cmp::Reverse(b.modified_at));
-    entries.truncate(MAX_ENTRIES);
-    let mut buf = RECENT.lock().unwrap();
-    buf.clear();
-    for e in entries {
-        buf.push_back(e);
+    let mut newest = Vec::with_capacity(MAX_ENTRIES);
+    for entry in read.flatten().filter_map(|entry| entry_for(&entry.path())) {
+        retain_newest(&mut newest, entry);
+    }
+    newest.sort_by_key(|entry| std::cmp::Reverse(entry.modified_at));
+    newest
+}
+
+fn retain_newest(entries: &mut Vec<DownloadEntry>, entry: DownloadEntry) {
+    if entries.len() < MAX_ENTRIES {
+        entries.push(entry);
+        return;
+    }
+    let (oldest_index, oldest_modified) = entries
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, entry)| entry.modified_at)
+        .map(|(index, entry)| (index, entry.modified_at))
+        .expect("non-empty bounded Downloads selection");
+    if entry.modified_at > oldest_modified {
+        entries[oldest_index] = entry;
+    }
+}
+
+fn merge_initial_scan(dir: &Path) {
+    for entry in newest_entries(dir) {
+        upsert(entry);
     }
 }
 
@@ -190,26 +211,32 @@ pub fn init(app: &AppHandle) {
         return;
     };
 
-    initial_scan(&dir);
-
     let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let mut handle = match crate::services::fs_watcher::subscribe(dir.clone(), false) {
-            Ok(h) => h,
-            Err(e) => {
-                crate::log_message(
-                    "warn",
-                    &format!(
-                        "[Downloads] fs_watcher subscribe {} failed: {}",
-                        dir.display(),
-                        e
-                    ),
-                );
-                return;
-            }
-        };
-        crate::log_message("debug", "[Downloads] watcher started");
+    let mut handle = match crate::services::fs_watcher::subscribe(dir.clone(), false) {
+        Ok(handle) => handle,
+        Err(e) => {
+            crate::log_message(
+                "warn",
+                &format!(
+                    "[Downloads] fs_watcher subscribe {} failed: {}",
+                    dir.display(),
+                    e
+                ),
+            );
+            return;
+        }
+    };
+    crate::log_message("debug", "[Downloads] watcher started");
+    crate::startup_trace::job_started(&app, "downloads.initial-scan");
 
+    let scan_app = app.clone();
+    std::thread::spawn(move || {
+        merge_initial_scan(&dir);
+        crate::startup_trace::job_finished(&scan_app, "downloads.initial-scan", true);
+        let _ = scan_app.emit("downloads://changed", ());
+    });
+
+    tauri::async_runtime::spawn(async move {
         use notify::EventKind;
         while let Some(event) = handle.rx.recv().await {
             let mut changed = false;
@@ -236,4 +263,62 @@ pub fn init(app: &AppHandle) {
         }
         crate::log_message("debug", "[Downloads] watcher stopped");
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static RECENT_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    fn entry(name: &str, modified_at: i64) -> DownloadEntry {
+        DownloadEntry {
+            name: name.to_string(),
+            path: name.to_string(),
+            size_bytes: 0,
+            modified_at,
+        }
+    }
+
+    #[test]
+    fn updates_keep_recent_downloads_newest_first() {
+        let _lock = RECENT_TEST_LOCK.lock().unwrap();
+        RECENT.lock().unwrap().clear();
+        upsert(entry("older", 10));
+        upsert(entry("newer", 20));
+        upsert(entry("middle", 15));
+
+        let names: Vec<String> = get_recent_downloads()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(names, ["newer", "middle", "older"]);
+        RECENT.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn refresh_replaces_an_existing_path_without_duplication() {
+        let _lock = RECENT_TEST_LOCK.lock().unwrap();
+        RECENT.lock().unwrap().clear();
+        upsert(entry("same", 10));
+        upsert(entry("same", 20));
+
+        let downloads = get_recent_downloads();
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].modified_at, 20);
+        RECENT.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn initial_selection_retains_only_the_newest_fifty() {
+        let mut selected = Vec::new();
+        for modified_at in 0..=MAX_ENTRIES as i64 {
+            retain_newest(&mut selected, entry(&modified_at.to_string(), modified_at));
+        }
+        selected.sort_by_key(|entry| std::cmp::Reverse(entry.modified_at));
+
+        assert_eq!(selected.len(), MAX_ENTRIES);
+        assert_eq!(selected.first().unwrap().modified_at, MAX_ENTRIES as i64);
+        assert_eq!(selected.last().unwrap().modified_at, 1);
+    }
 }

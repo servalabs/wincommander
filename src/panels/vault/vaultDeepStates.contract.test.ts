@@ -11,6 +11,7 @@ const mountHandlerSource = vaultSource.slice(
   vaultSource.indexOf("const handleMountVolume"),
   vaultSource.indexOf("const handleOpenMountedVolume"),
 );
+const systemEncryptionSource = readFileSync("src/panels/vault/SystemEncryptionSection.tsx", "utf8");
 
 describe("secure storage deep-state contracts", () => {
   test("distinguishes initial loading from a confirmed empty volume list", () => {
@@ -88,5 +89,13 @@ describe("secure storage deep-state contracts", () => {
     expect(sidebarSource).toContain("await verifyVaultDrive(r.data.drive)");
     expect(backendSource).toContain('invoke<{ drive: string; accessible: boolean }>("verify_vault_drive"');
     expect(appContextSource).toContain("setEncryptionStatus(null);");
+  });
+
+  test("does not spawn an unsupported system-encryption probe when Secure Storage opens", () => {
+    expect(vaultSource).toContain("<SystemEncryptionSection />");
+    expect(systemEncryptionSource).toContain("Verification unavailable");
+    expect(systemEncryptionSource).not.toContain("useBackend");
+    expect(systemEncryptionSource).not.toContain("Get-SystemEncryptionStatus");
+    expect(systemEncryptionSource).not.toContain("useEffect");
   });
 });

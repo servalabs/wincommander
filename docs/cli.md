@@ -30,7 +30,7 @@ exit $process.ExitCode
 
 ## Catalog and runtime
 
-The generated catalog contains 1,267 entries: 806 backend-script commands and 461 Tauri handlers. Four Tauri handlers are debug-only, so the shipped release binary executes 1,263 commands; it retains the four debug-only entries for catalog-drift auditing and refuses them at runtime.
+The generated catalog contains 1,270 entries: 806 backend-script commands and 464 Tauri handlers. Four Tauri handlers are debug-only, so the shipped release binary executes 1,266 commands; it retains the four debug-only entries for catalog-drift auditing and refuses them at runtime.
 
 `audit catalog` reports a failure only for a genuinely missing dispatcher or a
 registered command left without a declared execution boundary. A command marked

@@ -28,6 +28,7 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { useAppState } from "../context/AppContext";
 
 // Base URL for Pro manifests. The per-version path ensures each Free release
 // only downloads the Pro binary that was tested alongside it, preventing
@@ -377,14 +378,54 @@ function resetInstall() {
     setState({ install: { kind: "idle" } });
 }
 
-export default function useProInstall() {
+export interface ProInstallProbePolicy {
+    /** Read the local sidecar state. This may hash an installed Pro binary. */
+    status: boolean;
+    /** Fetch the version-pinned Pro manifest. */
+    manifest: boolean;
+    /** Inspect Defender only when an install/update surface needs it. */
+    defender: boolean;
+}
+
+export default function useProInstall(policy: ProInstallProbePolicy) {
     const snap = useSyncExternalStore(subscribe, () => state, () => state);
+    const { runStartupJob } = useAppState();
 
     useEffect(() => {
-        if (!snap.manifest && !manifestFetchInFlight && !snap.manifestError) void fetchManifest();
-        if (!snap.status && !statusFetchInFlight) void refreshStatus();
-        if (!snap.defender && !defenderFetchInFlight) void refreshDefender();
-    }, [snap.manifest, snap.status, snap.defender, snap.manifestError]);
+        if (policy.manifest && !snap.manifest && !manifestFetchInFlight && !snap.manifestError) {
+            void runStartupJob({
+                id: "pro-manifest",
+                priority: "background",
+                cost: "light",
+                timeoutMs: 15_000,
+                run: async (signal) => {
+                    if (!signal.aborted) await fetchManifest();
+                },
+            });
+        }
+        if (policy.status && !snap.status && !statusFetchInFlight) {
+            void runStartupJob({
+                id: "pro-install-status",
+                priority: "background",
+                cost: "expensive",
+                timeoutMs: 30_000,
+                run: async (signal) => {
+                    if (!signal.aborted) await refreshStatus();
+                },
+            });
+        }
+        if (policy.defender && !snap.defender && !defenderFetchInFlight) {
+            void runStartupJob({
+                id: "defender-status",
+                priority: "background",
+                cost: "expensive",
+                timeoutMs: 30_000,
+                run: async (signal) => {
+                    if (!signal.aborted) await refreshDefender();
+                },
+            });
+        }
+    }, [policy.manifest, policy.status, policy.defender, runStartupJob, snap.manifest, snap.status, snap.defender, snap.manifestError]);
 
     const install = useCallback((consent: boolean) => installPro(consent), []);
     const reset = useCallback(() => resetInstall(), []);

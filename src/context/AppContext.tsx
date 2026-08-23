@@ -24,6 +24,12 @@ import { getDefaultModules } from '../types/modules';
 import type { ModuleConfig } from '../types/modules';
 import { getStartupStaggerStep } from '../lib/performancePolicy';
 import { waitForSoftTimeout } from '../lib/softTimeout';
+import { canRunStartupJob, type StartupEligibility } from '../lib/startupJobPolicy';
+import { createStartupCoordinator, type StartupCoordinator, type StartupJob, type StartupJobResult } from '../services/startupCoordinator';
+import { createStartupProbeStore } from '../services/startupProbeStore';
+import { useLicenseQuery } from '../hooks/queries/useLicenseQuery';
+import { createTauriStartupReporter } from '../events/startup';
+import { reportStartupPhase } from '../hooks/startupTrace';
 
 interface AppState {
     systemInfo: SystemInfo | null;
@@ -101,6 +107,7 @@ interface AppState {
     refreshDependencies: (silent?: boolean) => Promise<void>;
     /** Refresh SMART health for visible logical drives using smartctl CLI. */
     refreshDriveHealth: () => Promise<void>;
+    runStartupJob: <T>(job: StartupJob<T>) => Promise<StartupJobResult<T>>;
 }
 
 const AppContext = createContext<AppState | null>(null);
@@ -149,6 +156,10 @@ function stripNullLeaves(obj: unknown): Record<string, unknown> | undefined {
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { mode: authMode } = useAuthMode();
+    const { data: startupLicense } = useLicenseQuery();
+    const startupCoordinatorRef = useRef<StartupCoordinator | null>(null);
+    const systemProbeStoreRef = useRef(createStartupProbeStore<unknown>());
+    const startupStatusStoreRef = useRef(createStartupProbeStore<unknown>());
     const {
         getSystemInfo,
         getDriveSmartHealth,
@@ -163,6 +174,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         getProductivityStatus,
         getAppInventory,
     } = useBackend();
+    if (!startupCoordinatorRef.current) {
+        startupCoordinatorRef.current = createStartupCoordinator({
+            reportToNative: createTauriStartupReporter((command, args) => invoke(command, args)),
+        });
+    }
+    const runStartupJob = useCallback(<T,>(job: StartupJob<T>) => startupCoordinatorRef.current!.run(job), []);
 
     // Data State
     const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
@@ -596,7 +613,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }));
     }, []);
 
-    const initializeApp = useCallback(async (): Promise<boolean> => {
+    const initializeApp = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
         // Consolidated startup call - fetches System, Hardening, Privacy, and Essential Apps in one go
         // A warm settings cache is usable. Keep it on screen while probes refresh
         // rather than replacing it with skeletons a second time.
@@ -606,7 +623,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setLoading(prev => ({ ...prev, apps: true }));
         }
         try {
-            const res = await getStartupStatus();
+            const activeSignal = signal ?? new AbortController().signal;
+            const res = await startupStatusStoreRef.current.refresh(
+                () => getStartupStatus(),
+                activeSignal,
+            ) as Awaited<ReturnType<typeof getStartupStatus>>;
+            if (activeSignal.aborted) return false;
             if (res.success && res.data) {
                 // systemInfo is omitted from Get-StartupStatus — static hardware fields
                 // (cpu, gpu, ram, hostname) are already in the UI via seedFromCachedSettings.
@@ -915,10 +937,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const probeRanRef = useRef(false);
 
     // Unified Settings: Load on init, run system probe, populate ideal+current
-    const initSettings = useCallback(async () => {
+    const initSettings = useCallback(async (runProbe = true, cachedSettings?: AppSettings, signal?: AbortSignal): Promise<AppSettings | null> => {
         try {
             // Phase 1: Fast cache read (~1-5ms) — seeds state for instant score
-            let settings = await invoke<AppSettings>('get_settings');
+            let settings = cachedSettings ?? await invoke<AppSettings>('get_settings');
+            if (signal?.aborted) return null;
 
             // Heal sparse/legacy module maps so missing keys do NOT default to false on restart.
             const currentLevel = settings.app?.experienceLevel ?? 'standard';
@@ -938,14 +961,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             // Phase 2: System probe runs after the cache hydration so startup is
             // responsive on both first and subsequent launches.
             // Guard: skip if already running (React strict mode / dep-change re-fire)
-            if (!probeRanRef.current) {
+            if (runProbe && !probeRanRef.current) {
                 probeRanRef.current = true;
 
                 if (!settings.app.firstRunComplete) {
                     // First launch: the Dashboard and the auto-started first-run tour
                     // data asynchronously. The shell is safe with its explicit
                     // loading state while this slow PowerShell work completes.
-                    void (async () => {
+                    await (async () => {
                         let probeRes: unknown = null;
                         try {
                             probeRes = await invoke<unknown>('run_backend_script', {
@@ -955,6 +978,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         } catch {
                             return;
                         }
+                        if (signal?.aborted) return;
 
                         if (probeRes && typeof probeRes === 'object') {
                             // First run: probe populates BOTH ideal and current.
@@ -986,11 +1010,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     })();
                 } else {
                     // Subsequent runs: fire-and-forget — UI renders from cached current.* immediately
-                    void invoke<any>('run_backend_script', {
+                    await invoke<unknown>('run_backend_script', {
                         command: 'Get-WCSystemProbe',
                         params: {},
                     })
                         .then(async (probeRes) => {
+                            if (signal?.aborted) return;
                             if (probeRes && typeof probeRes === 'object') {
                                 const updated = await invoke<AppSettings>('update_current_state', {
                                     probe: probeRes,
@@ -1006,9 +1031,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         .catch(() => {}); // best-effort
                 }
             }
+            return settings;
         } catch {
             // Settings engine not available
             setStartupDataState('stale');
+            return null;
         }
     }, [seedFromCachedSettings, normalizeModulesConfig, queryClient]);
 
@@ -1069,6 +1096,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return run;
     }, [authMode, seedFromCachedSettings, normalizeModulesConfig, queryClient]);
 
+    const startupEligibility = useMemo<StartupEligibility>(() => ({
+        hasVerifiedPaidEntitlement: (startupLicense?.licensed === true && startupLicense.valid === true)
+            || startupLicense?.trial_active === true,
+        isProInstalled: false,
+        isProConfigured: !import.meta.env.DEV,
+        autoUpdateEnabled: appSettings?.app?.autoUpdate ?? true,
+        meshEnabled: appSettings?.app?.fleet?.enabled === true,
+        dependenciesEnabled: true,
+        hasIdleWindow: false,
+    }), [appSettings?.app?.autoUpdate, appSettings?.app?.fleet?.enabled, startupLicense]);
+    const startupEligibilityRef = useRef(startupEligibility);
+    useEffect(() => { startupEligibilityRef.current = startupEligibility; }, [startupEligibility]);
+
     // Initial Load
     // KT: Run startup as an explicit sequence instead of clock-based phases.
     // That keeps the app from advancing to the next step before the previous
@@ -1114,34 +1154,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             };
 
             emitProgress(10, 'reading configuration');
-            await initSettings();
+            const cached = await runStartupJob({
+                id: 'settings-cache', priority: 'critical', cost: 'light', timeoutMs: 1_500,
+                run: (signal) => initSettings(false, undefined, signal),
+            });
             if (cancelled) return;
+            if (cached.outcome !== 'completed' || !cached.value) {
+                setStartupDataState('stale');
+                return;
+            }
 
             // Settings are the immediate, persisted source of truth. Let the
             // user enter the shell now; slow PowerShell/native probes refresh
             // it progressively in the background instead of holding splash.
             emitProgress(70, 'showing saved settings');
+            reportStartupPhase('settings_cache_hydrated');
             setStartupComplete(true);
             setStartupDataState('refreshing');
-            void initializeApp().then((fresh) => {
-                if (!cancelled) setStartupDataState(fresh ? 'ready' : 'stale');
+            void runStartupJob({
+                id: 'startup-status', priority: 'background', cost: 'expensive', timeoutMs: 20_000,
+                run: (signal) => initializeApp(signal),
+            }).then((result) => {
+                if (!cancelled) setStartupDataState(result.outcome === 'completed' && result.value === true ? 'ready' : 'stale');
+            });
+            void runStartupJob({
+                id: 'system-probe', priority: 'background', cost: 'expensive', timeoutMs: 30_000,
+                run: (signal) => systemProbeStoreRef.current.refresh(
+                    () => initSettings(true, cached.value ?? undefined, signal), signal,
+                ),
+            }).then((result) => {
+                if (!cancelled && result.outcome === 'completed') reportStartupPhase('fresh_system_probe_complete');
             });
 
             emitProgress(95, 'refreshing system data');
 
             const dependencyStep = getStartupStaggerStep("dependencies");
             scheduleAfter(dependencyStep.delayMs, () => {
-                void Promise.allSettled([
-                    refreshBranding(),
-                    refreshDependencies(true),
-                ]);
+                void refreshBranding();
+                if (canRunStartupJob('dependencies', startupEligibilityRef.current)) {
+                    void runStartupJob({ id: 'dependencies', priority: 'background', cost: 'expensive', timeoutMs: 20_000, run: () => refreshDependencies(true) });
+                }
             });
 
             // Pre-warm mesh status in background so the Private Mesh panel
             // has a cached value ready when the user first opens it.
             const meshStep = getStartupStaggerStep("mesh");
             scheduleAfter(meshStep.delayMs, () => {
-                void refreshMesh(true);
+                if (canRunStartupJob('mesh-status', startupEligibilityRef.current)) {
+                    void runStartupJob({ id: 'mesh-status', priority: 'background', cost: 'light', timeoutMs: 8_000, run: () => refreshMesh(true) });
+                }
             });
 
             // Lazy hardware refresh: re-run Get-SystemInfo to refresh the cached
@@ -1172,7 +1233,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             // dashboard has rendered and lighter checks have had their turn.
             const inventoryStep = getStartupStaggerStep("inventory");
             scheduleWhenIdle(inventoryStep.delayMs, () => {
-                void runAppInventoryScan(true);
+                if (canRunStartupJob('app-inventory', { ...startupEligibilityRef.current, hasIdleWindow: true })) {
+                    void runStartupJob({ id: 'app-inventory', priority: 'idle', cost: 'expensive', timeoutMs: APP_INVENTORY_SOFT_TIMEOUT_MS, run: () => runAppInventoryScan(true) })
+                        .then((result) => {
+                            // A frontend timeout cannot kill winget/native work.
+                            // Do not claim idle while that underlying operation drains.
+                            if (result.outcome === 'completed' || result.outcome === 'failed') {
+                                reportStartupPhase('background_idle');
+                            }
+                        });
+                } else {
+                    reportStartupPhase('background_idle');
+                }
             });
         };
 
@@ -1188,7 +1260,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 idleCallbacks.forEach((handle) => win.cancelIdleCallback!(handle));
             }
         };
-    }, [initializeApp, initSettings, refreshMesh, runAppInventoryScan, refreshDependencies, refreshBranding, getSystemInfo, mergeDiskHealth, persistProbeToSettings]);
+    }, [initializeApp, initSettings, refreshMesh, runAppInventoryScan, refreshDependencies, refreshBranding, getSystemInfo, mergeDiskHealth, persistProbeToSettings, runStartupJob]);
 
     // Periodic app inventory refresh — keeps the radar's "APP UPDATES PENDING"
     // count and the Update All Apps button current without requiring the user
@@ -1237,6 +1309,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         runAppInventoryScan,
         refreshDependencies,
         refreshDriveHealth,
+        runStartupJob,
     }), [
         systemInfo,
         meshInstalled,
@@ -1272,6 +1345,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         runAppInventoryScan,
         refreshDependencies,
         refreshDriveHealth,
+        runStartupJob,
     ]);
 
     return (

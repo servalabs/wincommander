@@ -97,7 +97,7 @@ export default function FleetPanel() {
           <AccessControlTab directory={directory} onChange={updateDirectory} onSave={saveDirectory} />
         </TabsContent>}
         <TabsContent value="vault" className="fleet-tab-content">
-          <VaultAccessTab isAdmin={isAdmin} />
+          <VaultAccessTab isAdmin={isAdmin} directory={directory} />
         </TabsContent>
       </Tabs>
     </div>

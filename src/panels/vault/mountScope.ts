@@ -14,15 +14,14 @@ export type EngineMountScope = "machine" | "per-user";
 /** Windows Server and Enterprise/Education "multi-session" SKUs (Azure
  *  Virtual Desktop) are the machines where more than one person is routinely
  *  signed in at once — a machine-wide drive letter is the wrong default
- *  there, so "auto" resolves to per-user. Everything else (a normal
- *  single-user desktop) resolves to per-machine, matching today's existing
- *  (pre-per-user-scope) behavior. */
+ *  there, so "auto" resolves to per-user. A desktop can also have a second
+ *  interactive or RDP session, so unknown and client SKUs fail closed to the
+ *  calling logon session. Machine scope requires an explicit choice. */
 export function resolveEffectiveMountScope(
   preference: MountScopePreference | null | undefined,
   osName: string | null | undefined,
 ): EngineMountScope {
   if (preference === "machine" || preference === "per-user") return preference;
-  const n = (osName ?? "").toLowerCase();
-  if (n.includes("server") || n.includes("multi-session")) return "per-user";
-  return "machine";
+  void osName;
+  return "per-user";
 }

@@ -6,7 +6,7 @@ import { isMeshPeerOnline, isMeshPeerStale, parseMeshLastSeen } from "./meshPres
 import { panelVariants, panelTransition, DURATION_S, EASE } from "../../components/shared/motion";
 import { staggerDelay } from "../../components/shared/AnimatedList";
 import './MeshGrid.css';
-import { serviceIcons } from '@/assets';
+import { serviceIcons } from '@/assets/mesh';
 
 export default function MeshGrid({
     title,

@@ -205,7 +205,9 @@ export default function VersionManagementCard() {
 }
 
 function useProVersionState() {
-    const pro = useProInstall();
+    // This hook is only mounted by paid Pro rows inside the explicit Version
+    // Management surface, so all three integrity probes are relevant here.
+    const pro = useProInstall({ status: true, manifest: true, defender: true });
     const proCompare = compareVersions(pro.manifest?.version, pro.status?.local_version);
     const hashMatchesLatest = !!(
         pro.manifest?.sha256

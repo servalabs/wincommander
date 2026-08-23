@@ -809,6 +809,9 @@ mod tests {
         let old = r#"{"roots":[],"exclusions":[]}"#;
         let old_fs: FileSearchSettings = serde_json::from_str(old).expect("old deserialize");
         assert!(!old_fs.initialized, "missing field must default to false");
-        assert_eq!(old_fs.result_limit, 200, "missing limit must retain the shipped default");
+        assert_eq!(
+            old_fs.result_limit, 200,
+            "missing limit must retain the shipped default"
+        );
     }
 }

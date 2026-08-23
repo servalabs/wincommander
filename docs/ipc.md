@@ -79,6 +79,22 @@ Tier column: **Free** runs in-process in `commander-free`; **Paid** is gated by 
 | `clear_startup_pin` | Paid | Remove a configured PIN. |
 | `enter_calculator_mode` / `exit_calculator_mode` | Paid | Resize + retitle the window to/from the calculator cover. |
 
+### Startup diagnostics
+
+These Free, local-only commands feed one process-local monotonic launch trace.
+Their arguments are closed enums: the renderer cannot submit paths, URLs,
+filenames, settings, licence material, command arguments, device identifiers,
+or arbitrary diagnostic/error text.
+
+| Command | Returns | Purpose |
+|---------|---------|---------|
+| `report_startup_phase` | — | Record one allowlisted launch phase such as DOM ready, cache hydrated, dashboard visible, fresh probe complete, or background idle. |
+| `report_startup_milestone` | — | Record queued/start/completed/timeout/cancel/failure for one allowlisted startup job. Durations are capped at one hour. |
+| `get_startup_trace` | `{ launchId, elapsedMs, events[] }` | Read the bounded in-memory trace for local performance diagnosis. |
+
+Native listeners can subscribe to `startup://phase` and
+`startup://milestone`. The trace is not persisted or uploaded by this layer.
+
 ### License & entitlement
 
 | Command | Purpose |
@@ -339,6 +355,12 @@ All Argus collectors enforce the privacy invariant: window titles, exe paths, UR
 | `vault_mount_entry` | Requests a mount with `{ entryId, password }`. The UI prompts on every request, retains the password only in component/request memory, and clears it immediately after dispatch. Results are bounded to entry ID, lifecycle state, presentation, drive letter, and reason. |
 | `vault_unmount_entry` | Requests an authorized unmount by `{ entryId }`; the service rechecks authorization. |
 | `verify_vault_drive` | Checks whether a supplied drive letter is available to the signed-in Windows session; it returns only the letter and an accessibility result. |
+
+Named-pipe calls use a short bounded transport/read deadline plus longer
+verb-specific mutation deadlines (mount 130 seconds; apply/unmount 90 seconds).
+Every request has a unique correlation ID. If a mutation exceeds its deadline,
+the client reports that the outcome is unknown and requires a state refresh
+before retrying; it does not claim that the service rolled the operation back.
 
 The service, not a cached desktop administrator probe, decides whether the
 caller may edit policy. Non-administrators use the caller-filtered **My

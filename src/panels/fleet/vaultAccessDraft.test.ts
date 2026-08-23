@@ -3,6 +3,8 @@ import { newVaultPolicy } from "./vaultAccessTypes";
 import {
   clearVaultAccessDraft,
   readVaultAccessDraft,
+  readVaultAccessDraftSnapshot,
+  rebaseVaultAccessDraft,
   writeVaultAccessDraft,
   type VaultDraftStorage,
 } from "./vaultAccessDraft";
@@ -35,5 +37,33 @@ describe("Vault access draft persistence", () => {
     const storage = memoryStorage();
     storage.setItem("wincommander.vault-access-draft.v1", JSON.stringify({ schema_version: 1, entries: "bad" }));
     expect(readVaultAccessDraft(storage)).toBeNull();
+  });
+
+  test("persists the saved base snapshot needed for a safe rebase", () => {
+    const storage = memoryStorage();
+    const base = newVaultPolicy();
+    const draft = { ...base, entries: base.entries.map((entry, index) => index === 0 ? { ...entry, label: "Local label" } : entry) };
+
+    writeVaultAccessDraft(draft, storage, base);
+    expect(readVaultAccessDraftSnapshot(storage)).toEqual({ policy: draft, basePolicy: base });
+  });
+
+  test("rebases a local vault edit while preserving a separately-added saved vault", () => {
+    const base = newVaultPolicy();
+    const draft = { ...base, entries: base.entries.map((entry, index) => index === 0 ? { ...entry, label: "Local label" } : entry) };
+    const saved = { ...base, version: 4, expected_previous_version: 4, entries: [...base.entries, { ...base.entries[0]!, id: "server-added", label: "Server vault" }] };
+
+    const rebased = rebaseVaultAccessDraft(draft, base, saved);
+    expect(rebased?.version).toBe(4);
+    expect(rebased?.entries.find(entry => entry.id === base.entries[0]?.id)?.label).toBe("Local label");
+    expect(rebased?.entries.find(entry => entry.id === "server-added")?.label).toBe("Server vault");
+  });
+
+  test("refuses a rebase when the same vault changed in both drafts", () => {
+    const base = newVaultPolicy();
+    const draft = { ...base, entries: base.entries.map((entry, index) => index === 0 ? { ...entry, label: "Local label" } : entry) };
+    const saved = { ...base, version: 2, entries: base.entries.map((entry, index) => index === 0 ? { ...entry, label: "Saved label" } : entry) };
+
+    expect(rebaseVaultAccessDraft(draft, base, saved)).toBeNull();
   });
 });

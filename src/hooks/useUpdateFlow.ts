@@ -61,7 +61,11 @@ interface DohUpdateInfo {
  */
 export function useUpdateFlow(hasPaid: boolean, automaticProInstallConsent: boolean | null = null) {
     const updater = useUpdater();
-    const pro = useProInstall();
+    const pro = useProInstall({
+        status: hasPaid,
+        manifest: hasPaid,
+        defender: hasPaid,
+    });
     const { refreshForFreeVersion } = pro;
     const [phase, setPhase] = useState<UpdateFlowPhase>("idle");
     const [freeOutcome, setFreeOutcome] = useState<"updated" | "up-to-date" | null>(null);

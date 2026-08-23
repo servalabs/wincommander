@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { FileScan, RefreshCw, FileText, FileSpreadsheet, Image, Video, Music, Archive, Code2 } from "lucide-react";
 import useBackend, { type StorageStats } from "../../hooks/useBackend";
 import SectionCard from "../../components/shared/SectionCard";
-import { ui } from "@/assets";
+import { ui } from "@/assets/products";
 import "./DiskSpaceAnalyzerDialog.css";
 
 interface RowDef { key: keyof StorageStats; label: string; icon: React.ReactNode; }

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { products } from "@/assets";
+import { products } from "@/assets/products";
 import {
   ArrowRight,
   CheckCircle2,

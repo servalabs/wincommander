@@ -11,7 +11,7 @@
 //      any app without touching code — the slug is derived from the id below.
 
 import type { IconName } from "@/components/ui/bp";
-import { appIcons } from "@/assets";
+import { appIcons } from "@/assets/apps";
 
 const DISABLED_BUNDLED_BRAND_SLUGS = new Set([
   "audacity",

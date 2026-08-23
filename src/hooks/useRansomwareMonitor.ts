@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { RansomwareAction } from "../types/settings";
 import { showWarning } from "../utils/toast";
+import type { StartupProtectionOperation } from "../lib/startupProtectionReadiness";
 
 export const DEFAULT_RANSOMWARE_THRESHOLD = 50;
 export const DEFAULT_RANSOMWARE_WINDOW_SECONDS = 30;
@@ -34,6 +35,7 @@ export default function useRansomwareMonitor(
   attributionMinFiles: number,
   customWatchDirs: string[],
   action: RansomwareAction,
+  onStartupRearm?: (operation: StartupProtectionOperation, succeeded: boolean) => void,
 ) {
   const warnedFailures = useRef(new Set<string>());
   const warnOnce = useCallback((key: string, message: string, err: unknown) => {
@@ -71,7 +73,9 @@ export default function useRansomwareMonitor(
         });
         if (cancelled) return;
         await invoke(enabled ? "start_ransomware_monitor" : "stop_ransomware_monitor");
+        if (cancelled) return;
         warnedFailures.current.delete("reconcile");
+        if (enabled) onStartupRearm?.("ransomware-monitor", true);
       } catch (err) {
         warnOnce(
           "reconcile",
@@ -83,6 +87,8 @@ export default function useRansomwareMonitor(
         attempt += 1;
         if (!cancelled && attempt < 3) {
           retryTimer = setTimeout(() => { void reconcile(); }, attempt * 5_000);
+        } else if (!cancelled && enabled) {
+          onStartupRearm?.("ransomware-monitor", false);
         }
       }
     };
@@ -91,5 +97,5 @@ export default function useRansomwareMonitor(
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [enabled, hasPaid, threshold, windowSeconds, alertCooldownSeconds, attributionMinFiles, action, watchDirsJson, warnOnce]);
+  }, [enabled, hasPaid, threshold, windowSeconds, alertCooldownSeconds, attributionMinFiles, action, watchDirsJson, warnOnce, onStartupRearm]);
 }

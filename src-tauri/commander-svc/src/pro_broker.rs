@@ -190,6 +190,24 @@ pub async fn vault_call(
     result.map_err(str::to_string)
 }
 
+/// Recovery cannot depend on the original interactive user still being logged
+/// on. This path has no renderer input and names only a bounded engine slot;
+/// it launches the authenticated Pro sidecar as SYSTEM to close that slot.
+#[cfg(windows)]
+pub async fn vault_recovery_dismount(internal_drive: u8) -> Result<serde_json::Value, String> {
+    if internal_drive > 25 {
+        return Err("broker_rejected".to_string());
+    }
+    vault_call(
+        0,
+        "S-1-5-18",
+        wincmd_shared::vault_access::VaultPresentation::Machine,
+        "vault.broker.dismount",
+        serde_json::json!({ "internal_drive": internal_drive }),
+    )
+    .await
+}
+
 #[cfg(windows)]
 enum BrokerReply {
     Notification,
@@ -250,7 +268,32 @@ fn fixed_pro_path() -> std::path::PathBuf {
 fn hash_matches_fixed_pro(reported: &str) -> bool {
     use sha2::{Digest, Sha256};
     use std::io::Read;
-    let Ok(mut file) = std::fs::File::open(fixed_pro_path()) else {
+    use std::sync::{Mutex, OnceLock};
+
+    #[derive(Clone, PartialEq, Eq)]
+    struct FileIdentity {
+        len: u64,
+        modified: Option<std::time::SystemTime>,
+    }
+    static HASH_CACHE: OnceLock<Mutex<Option<(FileIdentity, String)>>> = OnceLock::new();
+
+    let path = fixed_pro_path();
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return false;
+    };
+    let identity = FileIdentity {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    };
+    let cache = HASH_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(cache) = cache.lock() {
+        if let Some((cached_identity, hash)) = cache.as_ref() {
+            if cached_identity == &identity {
+                return hash.eq_ignore_ascii_case(reported);
+            }
+        }
+    }
+    let Ok(mut file) = std::fs::File::open(path) else {
         return false;
     };
     let mut hash = Sha256::new();
@@ -262,7 +305,11 @@ fn hash_matches_fixed_pro(reported: &str) -> bool {
             Err(_) => return false,
         }
     }
-    bytes_to_hex(&hash.finalize()).eq_ignore_ascii_case(reported)
+    let actual = bytes_to_hex(&hash.finalize());
+    if let Ok(mut cache) = cache.lock() {
+        *cache = Some((identity, actual.clone()));
+    }
+    actual.eq_ignore_ascii_case(reported)
 }
 
 #[cfg(windows)]
@@ -530,6 +577,15 @@ mod tests {
         let pipe = random_pipe_name();
         assert!(pipe.starts_with(r"\\.\pipe\wincmd-pro-"));
         assert_eq!(pipe.len(), r"\\.\pipe\wincmd-pro-".len() + 16);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn recovery_dismount_rejects_out_of_range_slots_before_launching_pro() {
+        assert_eq!(
+            vault_recovery_dismount(26).await,
+            Err("broker_rejected".to_string())
+        );
     }
 
     #[test]

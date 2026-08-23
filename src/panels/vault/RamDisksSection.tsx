@@ -23,7 +23,6 @@ function fmtMB(mb: number): string {
 function RamDisksSection() {
   const confirmAction = useAppConfirm();
   const {
-    testRamDiskInstalled,
     installRamDiskEngine,
     getRamDiskStatus,
     getSystemRamInfo,
@@ -145,26 +144,14 @@ function RamDisksSection() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const test = await testRamDiskInstalled();
-      const installed = (() => {
-        if (!test?.success) return false;
-        const d = test.data as { installed?: boolean } | boolean | undefined;
-        if (typeof d === "boolean") return d;
-        return Boolean(d?.installed);
-      })();
-
-      if (!installed) {
-        setStatus({ installed: false, disks: [] });
-        return;
-      }
-
       const [statusRes, ramRes] = await Promise.all([getRamDiskStatus(), getSystemRamInfo()]);
       if (statusRes?.success && statusRes.data) setStatus(statusRes.data);
+      else setStatus({ installed: false, disks: [] });
       if (ramRes?.success && ramRes.data) setSysRam(ramRes.data);
     } finally {
       setLoading(false);
     }
-  }, [testRamDiskInstalled, getRamDiskStatus, getSystemRamInfo]);
+  }, [getRamDiskStatus, getSystemRamInfo]);
 
   useEffect(() => {
     void refresh();

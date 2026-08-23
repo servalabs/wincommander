@@ -6,8 +6,11 @@ import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
-import { clearVaultAccessDraft, readVaultAccessDraft, writeVaultAccessDraft } from "./vaultAccessDraft";
+import {
+  clearVaultAccessDraft, readVaultAccessDraftSnapshot, rebaseVaultAccessDraft, writeVaultAccessDraft,
+} from "./vaultAccessDraft";
 import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
+import type { FleetAccessDirectory } from "./accessControlTypes";
 import {
   newVaultEntry, newVaultPolicy, validateVaultAccessIntent, vaultMountResultLabel, vaultPresentationLabel,
   type VaultAuthorizedEntry,
@@ -17,14 +20,15 @@ import {
 import { applyVaultAccessPreset, VAULT_ACCESS_PRESETS, vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
 import VaultAccessPatternPicker from "./VaultAccessPatternPicker";
 import { vaultPolicyVerification } from "./vaultAccessPresentation";
+import { patchAuthorizedEntriesFromMountResult } from "./vaultAccessUiState";
 
 function appliedAt(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleString();
 }
 
-export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
-  const initialDraft = useMemo(() => readVaultAccessDraft(), []);
-  const [policy, setPolicy] = useState<VaultAccessPolicy | null>(initialDraft);
+export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolean; directory: FleetAccessDirectory }) {
+  const initialDraft = useMemo(() => readVaultAccessDraftSnapshot(), []);
+  const [policy, setPolicy] = useState<VaultAccessPolicy | null>(initialDraft?.policy ?? null);
   const [status, setStatus] = useState<VaultPolicyStatus | null>(null);
   const [authorizedEntries, setAuthorizedEntries] = useState<VaultAuthorizedEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,42 +40,59 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
   const [unmountingEntryId, setUnmountingEntryId] = useState<string | null>(null);
   const [mountResults, setMountResults] = useState<Record<string, VaultMountEntryResult>>({});
   const passwordInputRef = useRef<HTMLInputElement>(null);
-  const policyRef = useRef<VaultAccessPolicy | null>(initialDraft);
+  const policyRef = useRef<VaultAccessPolicy | null>(initialDraft?.policy ?? null);
+  const draftBaseRef = useRef<VaultAccessPolicy | null>(initialDraft?.basePolicy ?? null);
+  const [savedPolicy, setSavedPolicy] = useState<VaultAccessPolicy | null>(null);
   const dirtyRef = useRef(initialDraft !== null);
+  const draftWriteTimer = useRef<number | null>(null);
+  const focusRefreshTimer = useRef<number | null>(null);
+  const lastRefreshErrorAt = useRef(0);
   const [draftDirty, setDraftDirty] = useState(initialDraft !== null);
   const { getPolicy, getStatus, applyPolicy, mountEntry, unmountEntry, listAuthorizedEntries } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
   const error = useMemo(() => policy ? validateVaultAccessIntent(policy) : null, [policy]);
 
-  const replacePolicy = useCallback((next: VaultAccessPolicy | null, dirty: boolean) => {
+  const replacePolicy = useCallback((next: VaultAccessPolicy | null, dirty: boolean, basePolicy?: VaultAccessPolicy | null) => {
     policyRef.current = next;
     dirtyRef.current = dirty;
+    if (basePolicy !== undefined) draftBaseRef.current = basePolicy;
+    if (!dirty) draftBaseRef.current = next;
     setPolicy(next);
     setDraftDirty(dirty);
-    if (dirty && next) writeVaultAccessDraft(next);
-    else clearVaultAccessDraft();
+    if (draftWriteTimer.current !== null) window.clearTimeout(draftWriteTimer.current);
+    if (dirty && next) {
+      // Persist the recovery draft, not each individual keystroke.
+      draftWriteTimer.current = window.setTimeout(() => writeVaultAccessDraft(next, undefined, draftBaseRef.current), 300);
+    } else clearVaultAccessDraft();
   }, []);
 
   const editPolicy = useCallback((update: (current: VaultAccessPolicy | null) => VaultAccessPolicy | null) => {
     replacePolicy(update(policyRef.current), true);
   }, [replacePolicy]);
 
-  const refresh = useCallback(async (replaceDirtyDraft = false) => {
+  const refresh = useCallback(async (replaceDirtyDraft = false, includeStatus = true) => {
     try {
-      const entries = await listAuthorizedEntries();
-      setAuthorizedEntries(entries);
       if (isAdmin) {
-        const [loadedPolicy, loadedStatus] = await Promise.all([
+        const [entries, loadedPolicy, loadedStatus] = await Promise.all([
+          listAuthorizedEntries(),
           getPolicy(),
-          getStatus(),
+          includeStatus ? getStatus() : Promise.resolve(null),
         ]);
+        setAuthorizedEntries(entries);
+        setSavedPolicy(loadedPolicy);
         if (replaceDirtyDraft || !dirtyRef.current) replacePolicy(loadedPolicy, false);
-        setStatus(loadedStatus);
+        else if (!draftBaseRef.current && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
+        if (loadedStatus) setStatus(loadedStatus);
       } else {
+        setAuthorizedEntries(await listAuthorizedEntries());
         setStatus(null);
       }
     } catch {
       // A service/status refresh must never destroy an administrator's draft.
-      showError("Your Vault list is unavailable.");
+      const now = Date.now();
+      if (now - lastRefreshErrorAt.current > 30_000) {
+        lastRefreshErrorAt.current = now;
+        showError("Your Vault list is unavailable.");
+      }
     } finally {
       setLoading(false);
     }
@@ -80,10 +101,26 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
   useEffect(() => { void refresh(); }, [refresh]);
 
   useEffect(() => {
-    const refreshOnFocus = () => { void refresh(); };
+    const refreshOnFocus = () => {
+      if (dirtyRef.current || focusRefreshTimer.current !== null) return;
+      focusRefreshTimer.current = window.setTimeout(() => {
+        focusRefreshTimer.current = null;
+        if (!dirtyRef.current) void refresh();
+      }, 500);
+    };
     window.addEventListener("focus", refreshOnFocus);
-    return () => window.removeEventListener("focus", refreshOnFocus);
+    return () => {
+      window.removeEventListener("focus", refreshOnFocus);
+      if (focusRefreshTimer.current !== null) {
+        window.clearTimeout(focusRefreshTimer.current);
+        focusRefreshTimer.current = null;
+      }
+    };
   }, [refresh]);
+
+  useEffect(() => () => {
+    if (draftWriteTimer.current !== null) window.clearTimeout(draftWriteTimer.current);
+  }, []);
 
   const updateEntry = (id: string, patch: Partial<VaultAccessEntry>) => editPolicy(current => {
     const source = current ?? newVaultPolicy();
@@ -127,8 +164,14 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
       const appliedStatus = await applyPolicy(submittedPolicy);
       replacePolicy(submittedPolicy, false);
       setStatus(appliedStatus);
-      await refresh(true);
-      showSuccess("Vault settings saved. Future mounts only need the password.");
+      // Applying a policy can change this caller's authorized rows, but the
+      // returned status is already current; avoid an immediate duplicate read.
+      await refresh(true, false);
+      if (appliedStatus.validation_state === "degraded") {
+        showError("Vault settings were saved with warnings. Fix the listed access problems before mounting.");
+      } else {
+        showSuccess("Vault settings saved. Future mounts only need the password.");
+      }
     } catch (cause) {
       showError(cause instanceof Error ? cause.message : "Vault policy was not applied.");
     } finally {
@@ -137,10 +180,15 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const importLegacyDraft = () => {
-    const entries = readUntrustedLegacyVaultDraft();
-    if (!entries) return void setLegacyNotice("No retired local planner draft was found.");
-    editPolicy(current => ({ ...(current ?? newVaultPolicy()), entries }));
-    setLegacyNotice("Imported as an untrusted draft. Review container paths and grants before applying.");
+    const imported = readUntrustedLegacyVaultDraft(directory);
+    if (!imported) return void setLegacyNotice("No retired local planner draft was found.");
+    if (imported.entries.length === 0) {
+      return void setLegacyNotice(`No safe planner entries were imported. ${imported.skippedVolumeCount} vault${imported.skippedVolumeCount === 1 ? " was" : "s were"} skipped because the owner could not be resolved.`);
+    }
+    editPolicy(current => ({ ...(current ?? newVaultPolicy()), entries: imported.entries }));
+    const drops = imported.droppedPrincipalCount > 0 ? ` ${imported.droppedPrincipalCount} unresolved grant${imported.droppedPrincipalCount === 1 ? " was" : "s were"} dropped.` : "";
+    const skips = imported.skippedVolumeCount > 0 ? ` ${imported.skippedVolumeCount} vault${imported.skippedVolumeCount === 1 ? " was" : "s were"} skipped.` : "";
+    setLegacyNotice(`Imported as an untrusted draft. Review container paths and grants before applying.${drops}${skips}`);
   };
 
   const replaceWithSharedDraft = () => {
@@ -157,8 +205,29 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
   };
 
   const reloadSavedPolicy = async () => {
-    replacePolicy(null, false);
-    await refresh(true);
+    try {
+      const loaded = await getPolicy();
+      replacePolicy(loaded, false);
+      setSavedPolicy(loaded);
+      await refresh(true);
+    } catch {
+      showError("Saved Vault settings could not be reloaded. Your draft is still available.");
+    }
+  };
+
+  const rebaseDraft = async () => {
+    const draft = policyRef.current;
+    if (!draft) return;
+    try {
+      const latest = savedPolicy ?? await getPolicy();
+      setSavedPolicy(latest);
+      const rebased = rebaseVaultAccessDraft(draft, draftBaseRef.current, latest);
+      if (!rebased) return void showError("The saved policy changed in the same Vault. Your draft was kept; reload and review before editing again.");
+      replacePolicy(rebased, true, latest);
+      showSuccess("Draft rebased on the latest saved Vault settings.");
+    } catch {
+      showError("Latest Vault settings could not be loaded. Your draft is still available.");
+    }
   };
 
   const discardDraftAndReload = () => {
@@ -175,6 +244,7 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
 
   const recordMountResult = (result: VaultMountEntryResult) => {
     setMountResults(current => ({ ...current, [result.entry_id]: result }));
+    setAuthorizedEntries(current => patchAuthorizedEntriesFromMountResult(current, result));
   };
 
   const closeMountPrompt = () => {
@@ -199,7 +269,6 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
       recordMountResult(result);
       if (result.state === "mounted") showSuccess(vaultMountResultLabel(result));
       else showError(vaultMountResultLabel(result));
-      await refresh();
     } catch {
       showError("The Vault mount request could not be completed.");
     } finally {
@@ -215,7 +284,6 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
       recordMountResult(result);
       if (result.state === "unmounted") showSuccess(vaultMountResultLabel(result));
       else showError(vaultMountResultLabel(result));
-      await refresh();
     } catch {
       showError("The Vault unmount request could not be completed.");
     } finally {
@@ -374,6 +442,7 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
             <p>Use these only to import an older planner draft or discard local edits and return to the last settings saved by Windows.</p>
             <div className="fleet-action-row">
               <Button variant="outline" size="sm" onClick={importLegacyDraft}>Import retired planner as draft</Button>
+              {draftDirty && <Button variant="outline" size="sm" onClick={() => void rebaseDraft()}>Rebase draft with saved settings</Button>}
               <Button variant="outline" size="sm" onClick={() => void discardDraftAndReload()}>Discard draft & reload saved</Button>
             </div>
             {legacyNotice && <span className="fleet-field-hint">{legacyNotice}</span>}

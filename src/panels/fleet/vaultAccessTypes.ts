@@ -116,16 +116,16 @@ export function vaultMountResultLabel(result: VaultMountEntryResult): string {
 export function newVaultEntry(kind: "shared" | "private" = "private"): VaultAccessEntry {
   const id = typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
-    : `vault-${Date.now().toString(36)}`;
+    : fallbackId("vault");
   const shared = kind === "shared";
   return {
     id,
     label: shared ? "Shared vault" : "Administrator vault",
     container_path: "",
     owner_account: "Administrator",
-    grants: shared
-      ? [{ principal_name: "Administrator", access: "write" }, { principal_name: "Partner", access: "write" }]
-      : [{ principal_name: "Administrator", access: "write" }],
+    // A shared presentation changes only where Windows exposes the mounted
+    // drive. It must not silently grant a generic local account write access.
+    grants: [{ principal_name: "Administrator", access: "write" }],
     mount: { presentation: shared ? "machine" : "per-user" },
   };
 }
@@ -133,7 +133,7 @@ export function newVaultEntry(kind: "shared" | "private" = "private"): VaultAcce
 export function newVaultPolicy(): VaultAccessPolicy {
   const policyId = typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
-    : `vault-policy-${Date.now().toString(36)}`;
+    : fallbackId("vault-policy");
   return {
     schema_version: 1,
     policy_id: policyId,
@@ -145,12 +145,20 @@ export function newVaultPolicy(): VaultAccessPolicy {
 
 export function validateVaultAccessIntent(policy: VaultAccessPolicy): string | null {
   if (!policy.policy_id.trim()) return "A policy identifier is required.";
-  if (policy.entries.length === 0) return "Add at least one file-container vault.";
+  // An empty policy is the explicit emergency/decommission state: the service
+  // atomically removes the prior policy and its active mounts before accepting it.
+  if (policy.entries.length === 0) return null;
   if (policy.entries.some(entry => !entry.label.trim() || !entry.container_path.trim() || !entry.owner_account.trim())) {
     return "Every vault needs a label, container path, and owner account.";
   }
   if (policy.entries.some(entry => entry.grants.length === 0 || entry.grants.some(grant => !grant.principal_name.trim()))) {
     return "Every vault needs at least one named grant.";
+  }
+  if (policy.entries.some(entry => {
+    const principals = entry.grants.map(grant => grant.principal_name.trim().toLocaleLowerCase());
+    return new Set(principals).size !== principals.length;
+  })) {
+    return "A vault cannot grant the same Windows user or group more than once.";
   }
   if (policy.entries.some(entry => entry.mount.preferred_letter && !/^[A-Z]$/i.test(entry.mount.preferred_letter))) {
     return "Preferred drive letters must be one letter from A to Z.";
@@ -163,6 +171,13 @@ export function validateVaultAccessIntent(policy: VaultAccessPolicy): string | n
     return "Each managed container needs its own dedicated parent folder; vaults cannot share a parent.";
   }
   return null;
+}
+
+let fallbackSequence = 0;
+
+function fallbackId(prefix: string): string {
+  fallbackSequence = (fallbackSequence + 1) % Number.MAX_SAFE_INTEGER;
+  return `${prefix}-${Date.now().toString(36)}-${fallbackSequence.toString(36)}`;
 }
 
 function containerParent(containerPath: string): string | null {

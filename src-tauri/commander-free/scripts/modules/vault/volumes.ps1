@@ -481,6 +481,10 @@ function Create-DualVolume {
 function Get-VolumeInfo {
     param([string]$DriveLetter)
 
+    if ($DriveLetter -notmatch '^[A-Za-z]:?$') {
+        return @{ status = 'error'; error = 'Drive letter must be one letter from A to Z' }
+    }
+
     # Query WMI for the logical disk matching the drive letter
     $cleanLetter = $DriveLetter.Replace(":", "")
     $drivePath = "${cleanLetter}:"
@@ -513,8 +517,11 @@ function Get-VolumeInfo {
         status     = 'ok'
         size       = $sizeFormatted
         filesystem = $fsName
-        encryption = 'AES-256-XTS'     # Standard for all VeraCrypt volumes
-        mode       = 'XTS'
+        # Windows does not reveal the VeraCrypt header cipher. Claiming AES
+        # here is misleading for Serpent/cascade volumes; the UI understands
+        # unknown values and must not manufacture an attestation.
+        encryption = $null
+        mode       = $null
         readOnly   = ($disk.Access -eq 1)
     }
 }
@@ -548,11 +555,9 @@ function Get-SystemEncryptionStatus {
 }
 
 function Get-AvailableDriveLetters {
-    # Force-clean any stale VeraCrypt DOS-device symlinks before measuring.
-    # After a `/force` dismount the symlink can survive (open handles, etc.),
-    # which makes Win32_LogicalDisk + .NET DriveInfo both keep reporting the
-    # letter as in-use — so the mount dialog drops it from the dropdown.
-    try { Clear-StaleVeraCryptDosDevices | Out-Null } catch {}
+    # This is a read-only availability probe. Stale-link repair is a separate,
+    # explicit maintenance operation: a getter must never remove a DOS-device
+    # mapping while another session may still be using it.
 
     $usedLetters = @()
 

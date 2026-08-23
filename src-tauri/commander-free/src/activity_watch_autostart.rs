@@ -1,8 +1,9 @@
-//! Starts a locally installed ActivityWatch alongside WinCommander.
+//! Starts a locally installed ActivityWatch when its module and tracker are enabled.
 //!
 //! This deliberately lives outside the frontend and the paid-command router:
-//! ActivityWatch should be available as soon as WinCommander starts, including
-//! when the Productivity panel is hidden or the webview has not painted yet.
+//! An enabled tracker should be available even when the Productivity panel is
+//! hidden or the webview has not painted yet. Disabled installations do no
+//! process scan, executable discovery, retry, or child-process work.
 
 #[cfg(windows)]
 use std::{
@@ -26,16 +27,44 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Begin the one-shot ActivityWatch supervisor without delaying app startup.
 pub fn init() {
     #[cfg(windows)]
+    if !is_configured() {
+        return;
+    }
+
+    #[cfg(windows)]
     thread::spawn(|| {
         // Let the single-instance guard, tray, and WebView initialize first.
         thread::sleep(Duration::from_secs(3));
-        if let Err(error) = ensure_started() {
-            crate::log_message(
-                "warn",
-                &format!("[ActivityWatch] auto-start skipped: {error}"),
-            );
+        for attempt in 1..=3 {
+            match ensure_started() {
+                Ok(()) => return,
+                Err(error) => {
+                    crate::log_message(
+                        "warn",
+                        &format!("[ActivityWatch] auto-start attempt {attempt}/3 skipped: {error}"),
+                    );
+                    // A missing installation cannot heal during this launch.
+                    if error == "ActivityWatch is not installed" || attempt == 3 {
+                        return;
+                    }
+                    thread::sleep(Duration::from_secs(attempt as u64 * 5));
+                }
+            }
         }
     });
+}
+
+#[cfg(windows)]
+fn is_configured() -> bool {
+    crate::settings::read_settings().is_ok_and(|settings| {
+        settings
+            .app
+            .modules
+            .get("productivity")
+            .copied()
+            .unwrap_or(false)
+            && settings.ideal.productivity.tracker_enabled.unwrap_or(false)
+    })
 }
 
 #[cfg(windows)]

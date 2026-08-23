@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { WifiGuardBaselineEntry } from "../types/settings";
 import { showWarning } from "../utils/toast";
+import type { StartupProtectionOperation } from "../lib/startupProtectionReadiness";
 
 export const DEFAULT_WIFI_GUARD_LEARNING_WINDOW_SECS = 24 * 60 * 60;
 export const DEFAULT_WIFI_GUARD_POLL_INTERVAL_SECS = 30;
@@ -39,6 +40,7 @@ export default function useWifiGuardMonitor(
   policy: WifiGuardPolicy,
   baseline: WifiGuardBaselineEntry[],
   onRuntimeStateChanged: (next: WifiGuardBaselineEntry[], learningUntil: string | null) => void,
+  onStartupRearm?: (operation: StartupProtectionOperation, succeeded: boolean) => void,
 ) {
   const baselineFingerprint = useMemo(
     () => JSON.stringify(stableBaseline(baseline)),
@@ -103,8 +105,10 @@ export default function useWifiGuardMonitor(
           lastError = error;
           console.warn("[useWifiGuardMonitor] start failed:", error);
         }
+        if (cancelled) return;
         if (configured && started) {
           degradedWarningShownRef.current = false;
+          onStartupRearm?.("wifi-guard", true);
           return;
         }
       }
@@ -116,10 +120,11 @@ export default function useWifiGuardMonitor(
         );
         console.warn("[useWifiGuardMonitor] detector remains degraded:", lastError);
       }
+      if (!cancelled) onStartupRearm?.("wifi-guard", false);
     };
     void reconcile();
     return () => { cancelled = true; };
-  }, [enabled, policy.learningWindowSecs, policy.learningUntil, policy.pollIntervalSecs, policy.alertDebounceSecs, baselineFingerprint, baselineToApply]);
+  }, [enabled, policy.learningWindowSecs, policy.learningUntil, policy.pollIntervalSecs, policy.alertDebounceSecs, baselineFingerprint, baselineToApply, onStartupRearm]);
 
   useEffect(() => {
     if (!enabled) return;

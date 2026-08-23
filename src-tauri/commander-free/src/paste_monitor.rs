@@ -1803,7 +1803,7 @@ pub async fn get_paste_monitor_auto_clear_on_lock() -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wincmd_clip_rules::{CompiledRuleSet, RuleSetLimits, compile};
+    use wincmd_clip_rules::{compile, CompiledRuleSet, RuleSetLimits};
 
     // ── Test helpers ──────────────────────────────────────────────────
 

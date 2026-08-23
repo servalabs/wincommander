@@ -9157,6 +9157,14 @@
       ]
     },
     {
+      "id": "tauri:get_startup_trace",
+      "name": "get_startup_trace",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "tauri:get_system_idle_seconds",
       "name": "get_system_idle_seconds",
       "transport": "tauri",
@@ -10004,6 +10012,26 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/panels/network/PortGuardSection.tsx"
+      ]
+    },
+    {
+      "id": "tauri:report_startup_milestone",
+      "name": "report_startup_milestone",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/events/startup.ts"
+      ]
+    },
+    {
+      "id": "tauri:report_startup_phase",
+      "name": "report_startup_phase",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/startupTrace.ts"
       ]
     },
     {

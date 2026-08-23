@@ -3,7 +3,7 @@ import { useAppState } from '../context/AppContext';
 import { useTheme } from '../context/ThemeContext';
 import useMotionPreference from '../hooks/useMotionPreference';
 import { getDisplayBranding } from '../lib/branding';
-import { LOGO_DATA_URL } from '../assets/logoData';
+import { LOGO_URL } from '../assets/logoUrl';
 import './SplashScreen.css';
 
 const SPLASH_DURATION_MS = 1500;
@@ -313,7 +313,7 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
                         <div className="sp-logo-plate" aria-hidden="true">
                             {!logoFailed ? (
                                 <img
-                                    src={LOGO_DATA_URL}
+                                    src={LOGO_URL}
                                     alt={branding.productLabel}
                                     className="sp-logo-img"
                                     onLoad={() => { setLogoLoaded(true); setLogoReady(true); }}

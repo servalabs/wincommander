@@ -34,9 +34,9 @@ fn covered_identity_active() -> bool {
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-/// Create or refresh the machine-wide logon autostart task, pointing it at the
-/// CURRENT exe (a moved portable exe re-binds on the next launch). Idempotent
-/// via `-Force`. Also clears the legacy HKCU `Run` value so we don't double-launch.
+/// Repair the machine-wide logon autostart task only when its identity or
+/// execution contract has drifted. A correct task is left untouched, avoiding
+/// a Scheduled Tasks write on every packaged launch.
 #[cfg(windows)]
 #[tauri::command]
 pub fn ensure_autostart_task() -> Result<(), String> {
@@ -59,6 +59,18 @@ fn ensure_autostart_task_named(covered: bool) -> Result<(), String> {
 
     let script = format!(
         "$ErrorActionPreference='Stop'
+$task = Get-ScheduledTask -TaskName '{name}' -ErrorAction SilentlyContinue
+$needsRepair = $null -eq $task
+if (-not $needsRepair) {{
+  $action = @($task.Actions)
+  $logonTrigger = @($task.Triggers | Where-Object {{ $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }})
+  $needsRepair = $action.Count -ne 1 -or $action[0].Execute -ne '{exe}' -or $action[0].Arguments -ne '--autostart' -or $logonTrigger.Count -ne 1 -or $task.Principal.GroupId -ne 'S-1-5-32-545' -or $task.Principal.RunLevel -ne 'Limited' -or $task.Settings.MultipleInstances -ne 'IgnoreNew' -or $task.Settings.ExecutionTimeLimit -ne 'PT0S'
+}}
+$staleTask = Get-ScheduledTask -TaskName '{stale_name}' -ErrorAction SilentlyContinue
+$legacyTasks = @('Sys Health Checker', 'WinCommander Input Service') | Where-Object {{ Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue }}
+$legacyRun = Get-ItemPropertyValue -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{run}' -ErrorAction SilentlyContinue
+if ($staleTask -or $legacyTasks.Count -gt 0 -or $null -ne $legacyRun -or (Test-Path -LiteralPath \"$env:ProgramData\\WinCommander\\reopen.cfg\")) {{ $needsRepair = $true }}
+if ($needsRepair) {{
 $a = New-ScheduledTaskAction -Execute '{exe}' -Argument '--autostart'
 $t = New-ScheduledTaskTrigger -AtLogOn
 $p = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
@@ -68,7 +80,8 @@ Unregister-ScheduledTask -TaskName '{stale_name}' -Confirm:$false -ErrorAction S
 Unregister-ScheduledTask -TaskName 'Sys Health Checker' -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName 'WinCommander Input Service' -Confirm:$false -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath \"$env:ProgramData\\WinCommander\\reopen.cfg\" -Force -ErrorAction SilentlyContinue
-Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{run}' -ErrorAction SilentlyContinue",
+Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{run}' -ErrorAction SilentlyContinue
+}}",
         exe = exe_ps,
         name = name_ps,
         stale_name = stale_name_ps,
@@ -90,7 +103,7 @@ Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\
     if out.status.success() {
         crate::log::log_message(
             "info",
-            &format!("autostart task registered/refreshed: {}", name_ps),
+            &format!("autostart task checked/repaired: {}", name_ps),
         );
         Ok(())
     } else {

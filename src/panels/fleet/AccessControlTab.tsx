@@ -99,6 +99,7 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
     `${group.name} ${group.localGroup}`.toLocaleLowerCase().includes(groupSearch.toLocaleLowerCase()));
   const visibleUsers = selectedGroup
     ? directory.users
+      .filter(user => user.isAvailable !== false)
       .filter(user => `${user.username} ${user.displayName ?? ""}`.toLocaleLowerCase().includes(userSearch.toLocaleLowerCase()))
       .sort((left, right) => {
         const membershipOrder = Number(selectedGroup.userIds.includes(right.id)) - Number(selectedGroup.userIds.includes(left.id));

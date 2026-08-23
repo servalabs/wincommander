@@ -15,7 +15,7 @@ import { NetworkMaintenanceTools } from "./NetworkMaintenanceTools";
 import { showSuccess, showError } from "../../utils/toast";
 import { BLOCKLISTS, blocklistBackendId } from "../../registry/features";
 import { DNS_CATEGORIES, DNS_CATEGORY_DEFAULT_IDS, buildControldSlug, parseControldSlug } from "../../registry/dnsCategories";
-import { blocklistLogos, companyLogos, software } from "@/assets";
+import { blocklistLogos, companyLogos, software } from "@/assets/network";
 import PanelHeader from "../../components/shared/PanelHeader";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { useNetworkSessionState } from "./networkSessionState";

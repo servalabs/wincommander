@@ -459,7 +459,7 @@ async fn dispatch_verb(
         }
         "svc.vault.apply_policy" => handle_vault_apply_and_cleanup(vault_access, vault_mount, args),
         "svc.vault.authorize_mount" => handle_vault_authorize(vault_access, args, client_pid),
-        "svc.vault.mount" => handle_vault_mount(vault_access, vault_mount, args, client_pid),
+        "svc.vault.mount" => handle_vault_mount(vault_access, vault_mount, args, client_pid).await,
         "svc.vault.unmount" => handle_vault_unmount(vault_access, vault_mount, args, client_pid),
         "svc.vault.list_authorized" => {
             handle_vault_list_authorized(vault_access, vault_mount, client_pid)
@@ -545,13 +545,15 @@ fn handle_vault_apply_and_cleanup(
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
 ) -> Result<serde_json::Value, VerbError> {
-    vault_mount.dismount_all(vault_access).map_err(|_| {
-        VerbError::new(
-            "vault_dismount_failed",
-            "active vaults could not be dismounted",
-        )
-    })?;
-    handle_vault_apply(vault_access, args)
+    vault_mount.with_exclusive_operation(|| {
+        vault_mount.dismount_all_locked(vault_access).map_err(|_| {
+            VerbError::new(
+                "vault_dismount_failed",
+                "active vaults could not be dismounted",
+            )
+        })?;
+        handle_vault_apply(vault_access, args)
+    })
 }
 
 fn handle_vault_authorize(
@@ -572,7 +574,7 @@ fn handle_vault_authorize(
         .unwrap_or_else(|_| serde_json::json!({"allowed":false,"launch_ready":false,"denial_reason":"not_authorized","mode":null,"presentation":null,"preferred_letter":null})))
 }
 
-fn handle_vault_mount(
+async fn handle_vault_mount(
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     mut args: serde_json::Value,
@@ -592,10 +594,19 @@ fn handle_vault_mount(
         // for a policy-authorized mount, but can never name a driver, service,
         // or executable.  Validate/repair the fixed engine driver before the
         // privileged broker receives the password.
-        if let Err(error) = crate::encvol_driver::ensure_for_vault_mount() {
+        let driver_check =
+            tokio::task::spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)
+                .await
+                .unwrap_or(Err(
+                    crate::encvol_driver::EnsureDriverError::ServiceInspection,
+                ));
+        if let Err(error) = driver_check {
             use zeroize::Zeroize;
             request.password.zeroize();
-            return Err(VerbError::new("vault_driver_unavailable", error.public_message()));
+            return Err(VerbError::new(
+                "vault_driver_unavailable",
+                error.public_message(),
+            ));
         }
         vault_mount.mount_authorized(
             vault_access,

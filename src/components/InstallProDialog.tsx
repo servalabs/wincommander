@@ -30,7 +30,7 @@ interface InstallProDialogProps {
 }
 
 export default function InstallProDialog({ isOpen, onClose, onNotNow }: InstallProDialogProps) {
-    const pro = useProInstall();
+    const pro = useProInstall({ status: isOpen, manifest: isOpen, defender: isOpen });
     const [consent, setConsent] = useState(false);
 
     // Reset the consent checkbox when the dialog closes so reopening

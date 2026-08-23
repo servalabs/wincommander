@@ -3,7 +3,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Cpu, HardDrive, Server, Shield } from "lucide-react";
 import AnimatedNumber from "@/components/shared/AnimatedNumber";
 import { DURATION_S } from "@/components/shared/motion";
-import { products, saas } from "@/assets";
+import { products } from "@/assets/products";
+import { saas } from "@/assets/cloud";
 import "./PrivateServerShowcase.css";
 
 type ServerModel = "pro" | "max";

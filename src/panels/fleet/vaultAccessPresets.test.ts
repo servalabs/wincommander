@@ -26,7 +26,7 @@ describe("Vault access presets", () => {
 
   test("labels mixed grants as custom without changing their policy intent", () => {
     const entry = newVaultEntry("shared");
-    entry.grants[1]!.access = "read";
+    entry.grants.push({ principal_name: "PC\\Readers", access: "read" });
 
     expect(vaultAccessPreset(entry)).toBe("custom");
   });

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  newVaultEntry,
   newVaultPolicy,
   validateVaultAccessIntent,
   vaultMountResultLabel,
@@ -18,6 +19,27 @@ describe("Vault Access service intent", () => {
   test("does not treat an incomplete renderer draft as deployable", () => {
     const policy = newVaultPolicy();
     expect(validateVaultAccessIntent(policy)).toBe("Every vault needs a label, container path, and owner account.");
+  });
+
+  test("uses owner-only defaults and permits an explicit empty revoke policy", () => {
+    expect(newVaultEntry("shared").grants).toEqual([{ principal_name: "Administrator", access: "write" }]);
+    const policy = newVaultPolicy();
+    policy.entries = [];
+    expect(validateVaultAccessIntent(policy)).toBeNull();
+  });
+
+  test("rejects whitespace and case insensitive duplicate grants", () => {
+    const policy = newVaultPolicy();
+    const entry = policy.entries[0]!;
+    policy.entries = [entry];
+    entry.container_path = "C:\\Vaults\\shared\\vault.hc";
+    entry.grants = [
+      { principal_name: "DOMAIN\\Partner", access: "read" },
+      { principal_name: " domain\\partner ", access: "write" },
+    ];
+    expect(validateVaultAccessIntent(policy)).toBe(
+      "A vault cannot grant the same Windows user or group more than once.",
+    );
   });
 
   test("submits a next version while guarding against the version it edited", () => {

@@ -33,7 +33,11 @@ export default function SystemCleanupPanel() {
     //   useCleanupLegacyDialogs.tsx as migration ballast, but card clicks
     //   no longer open it.
     const { hasPaid, isLoading: entitlementsLoading, isInvestigator } = useEntitlements();
-    const { isInstalled: proInstalled } = useProInstall();
+    const { isInstalled: proInstalled } = useProInstall({
+        status: hasPaid,
+        manifest: false,
+        defender: false,
+    });
 
     const [driveWipeOpen, setDriveWipeOpen] = useState(false);
     const [otherDetail, setOtherDetail] = useState<{ catId: string; label: string; icon: string; color: string } | null>(null);

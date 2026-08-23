@@ -5,10 +5,42 @@
 //! SYSTEM service, which derives the peer identity from the pipe client.
 
 use serde_json::Value;
+#[cfg(any(windows, test))]
+use std::sync::atomic::{AtomicU64, Ordering};
 use zeroize::Zeroize;
 
-const SVC_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const SVC_TRANSPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const VAULT_MOUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(130);
+const VAULT_MUTATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+#[cfg(any(windows, test))]
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+fn request_timeout_for(feature_id: &str) -> std::time::Duration {
+    match feature_id {
+        // Applying a policy first dismounts active vaults and may resolve
+        // domain principals. A five-second caller deadline falsely reported a
+        // failure while the service continued the exclusive operation.
+        "svc.vault.apply_policy" | "svc.vault.unmount" => VAULT_MUTATION_TIMEOUT,
+        "svc.vault.mount" => VAULT_MOUNT_TIMEOUT,
+        _ => SVC_TRANSPORT_TIMEOUT,
+    }
+}
+
+#[cfg(any(windows, test))]
+fn may_still_be_completing(feature_id: &str) -> bool {
+    matches!(
+        feature_id,
+        "svc.vault.mount" | "svc.vault.apply_policy" | "svc.vault.unmount"
+    )
+}
+
+#[cfg(any(windows, test))]
+fn next_request_id() -> u64 {
+    // A pipe currently carries one request at a time, yet an ID unique across
+    // connections keeps a delayed response from ever looking like a retry if
+    // the client gains connection reuse later.
+    NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Call a service verb through the production pipe.
 pub async fn call(feature_id: &str, args: Value) -> Result<Value, String> {
@@ -16,20 +48,20 @@ pub async fn call(feature_id: &str, args: Value) -> Result<Value, String> {
         wincmd_shared::svc::SVC_PIPE_NAME,
         feature_id,
         args,
-        SVC_REQUEST_TIMEOUT,
+        request_timeout_for(feature_id),
     )
     .await
 }
 
 /// Vault mounting may take up to two minutes in the engine.  Keep its UI pipe
-/// open long enough to receive the final bounded result; all ordinary service
+/// open long enough to receive the final bounded result; read-only service
 /// RPCs retain the short five-second deadline.
 pub async fn call_vault_mount(args: Value) -> Result<Value, String> {
     call_via_with_timeout(
         wincmd_shared::svc::SVC_PIPE_NAME,
         "svc.vault.mount",
         args,
-        VAULT_MOUNT_TIMEOUT,
+        request_timeout_for("svc.vault.mount"),
     )
     .await
 }
@@ -41,7 +73,7 @@ pub async fn call_vault_mount(args: Value) -> Result<Value, String> {
 /// named-pipe peer and apply its own capability gate.
 #[cfg(windows)]
 pub async fn call_via(pipe_name: &str, feature_id: &str, args: Value) -> Result<Value, String> {
-    call_via_with_timeout(pipe_name, feature_id, args, SVC_REQUEST_TIMEOUT).await
+    call_via_with_timeout(pipe_name, feature_id, args, request_timeout_for(feature_id)).await
 }
 
 #[cfg(windows)]
@@ -63,28 +95,32 @@ async fn call_via_with_timeout(
     let hello = wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(&session_token));
 
     timeout(
-        request_timeout,
+        SVC_TRANSPORT_TIMEOUT,
         wincmd_shared::write_envelope(&mut client, &hello),
     )
     .await
     .map_err(|_| "service Hello write timed out".to_string())?
     .map_err(|e| format!("service Hello write failed: {e}"))?;
-    let ack = timeout(request_timeout, wincmd_shared::read_envelope(&mut client))
-        .await
-        .map_err(|_| "service Hello acknowledgement timed out".to_string())?
-        .map_err(|e| format!("service Hello acknowledgement failed: {e}"))?;
+    let ack = timeout(
+        SVC_TRANSPORT_TIMEOUT,
+        wincmd_shared::read_envelope(&mut client),
+    )
+    .await
+    .map_err(|_| "service Hello acknowledgement timed out".to_string())?
+    .map_err(|e| format!("service Hello acknowledgement failed: {e}"))?;
     if !matches!(ack, wincmd_shared::Envelope::Hello(_)) {
         return Err("service returned an invalid Hello acknowledgement".to_string());
     }
 
+    let request_id = next_request_id();
     let mut request = wincmd_shared::Envelope::Request(wincmd_shared::Request {
-        request_id: 1,
+        request_id,
         feature_id: feature_id.to_string(),
         args,
     })
     .sign(&session_token);
     let write_result = timeout(
-        request_timeout,
+        SVC_TRANSPORT_TIMEOUT,
         wincmd_shared::write_envelope(&mut client, &request),
     )
     .await;
@@ -96,7 +132,14 @@ async fn call_via_with_timeout(
         .map_err(|e| format!("service request write failed: {e}"))?;
     let reply = timeout(request_timeout, wincmd_shared::read_envelope(&mut client))
         .await
-        .map_err(|_| "service reply timed out".to_string())?
+        .map_err(|_| {
+            if may_still_be_completing(feature_id) {
+                "service operation did not confirm before its deadline; refresh vault state before retrying"
+                    .to_string()
+            } else {
+                "service reply timed out".to_string()
+            }
+        })?
         .map_err(|e| format!("service reply read failed: {e}"))?;
     let reply = if matches!(reply, wincmd_shared::Envelope::Signed(_)) {
         reply
@@ -108,7 +151,7 @@ async fn call_via_with_timeout(
     let _ = wincmd_shared::write_envelope(&mut client, &wincmd_shared::Envelope::Bye).await;
 
     match reply {
-        wincmd_shared::Envelope::Response(response) if response.request_id == 1 => {
+        wincmd_shared::Envelope::Response(response) if response.request_id == request_id => {
             Ok(response.result)
         }
         wincmd_shared::Envelope::Response(_) => {
@@ -168,6 +211,36 @@ mod tests {
         };
         assert!(signed.inner.is_empty());
         assert!(signed.tag.is_empty());
+    }
+
+    #[test]
+    fn long_deadlines_are_reserved_for_vault_mutations() {
+        assert_eq!(request_timeout_for("svc.vault.mount"), VAULT_MOUNT_TIMEOUT);
+        assert_eq!(
+            request_timeout_for("svc.vault.apply_policy"),
+            VAULT_MUTATION_TIMEOUT
+        );
+        assert_eq!(
+            request_timeout_for("svc.vault.unmount"),
+            VAULT_MUTATION_TIMEOUT
+        );
+        assert_eq!(
+            request_timeout_for("svc.vault.get_policy"),
+            SVC_TRANSPORT_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn service_calls_do_not_reuse_request_correlation_ids() {
+        assert_ne!(next_request_id(), next_request_id());
+    }
+
+    #[test]
+    fn only_mutation_timeouts_are_described_as_unknown_outcomes() {
+        assert!(may_still_be_completing("svc.vault.apply_policy"));
+        assert!(may_still_be_completing("svc.vault.unmount"));
+        assert!(may_still_be_completing("svc.vault.mount"));
+        assert!(!may_still_be_completing("svc.vault.get_status"));
     }
 }
 

@@ -14,7 +14,11 @@ import AppLicensePanel from "../identity/components/AppLicensePanel";
 
 export default function AppLicensingSection() {
     const { hasPaid } = useEntitlements();
-    const { isInstalled: proInstalled } = useProInstall();
+    const { isInstalled: proInstalled } = useProInstall({
+        status: hasPaid,
+        manifest: false,
+        defender: false,
+    });
     const [isLicenseOpen, setIsLicenseOpen] = useState(true);
 
     const licenseAutoSeededRef = useRef(false);

@@ -10,14 +10,18 @@ import { licenseStateLabel } from "../utils/licensePresentation";
 
 export default function LicenseQuickPanel() {
   const { getLicenseStatus, activateAppLicense, refreshAppLicense, clearAppLicenseCache, deactivateAppLicense } = useBackend();
-  // Pro install detection -- read from the same module-level cache that
-  // the InstallProDialog uses so toggling Install Pro works without a
-  // second backend round-trip.
-  const { isInstalled: proInstalled } = useProInstall();
   const [status, setStatus] = useState<AppLicenseStatus | null>(null);
   const [licenseKey, setLicenseKey] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const hasPaid = status?.valid === true && (status.features ?? []).includes("paid");
+  // Pro install detection shares the module-level cache with the installer,
+  // but it only performs local sidecar work after entitlement is known.
+  const { isInstalled: proInstalled } = useProInstall({
+    status: hasPaid,
+    manifest: false,
+    defender: false,
+  });
   // Two-step confirm: false = idle, true = awaiting second click
   const [confirmPending, setConfirmPending] = useState(false);
 

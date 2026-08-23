@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useRef } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppState } from "../../context/AppContext";
 import { useLiveMetrics } from "../../context/LiveMetricsContext";
@@ -10,9 +10,7 @@ import ViewToggle from "../../components/dashboard/ViewToggle";
 import NeedsAttention from "../../components/dashboard/NeedsAttention";
 import type { ScanFinding } from "../../components/startup/WizardAnimations";
 import { useDashboardRadar } from "../../hooks/useDashboardRadar";
-import SovereigntyRiskMatrix from "../../components/SovereigntyRiskMatrix";
 import { AnimatePresence, motion } from "framer-motion";
-import MoreProductsView from "../../components/dashboard/MoreProductsView";
 import PrivacyTogglesCard from "../../components/dashboard/PrivacyTogglesCard";
 import HardwareSpecsCard from "../../components/dashboard/HardwareSpecsCard";
 import StorageOverviewCard from "../../components/dashboard/StorageOverviewCard";
@@ -33,7 +31,6 @@ import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/p
 import { getRadarDriftToggles, getToggleById } from "../../registry";
 import { getByPath, getToggleVisibility, resolveToggleText } from "../../types/toggles";
 import { getToggleDrift } from "../../lib/toggleDrift";
-import { isModuleEnabled } from "../../types/modules";
 import { getDisplayBranding } from "../../lib/branding";
 import { useTaskStatus } from "../../context/TaskStatusContext";
 import { Icon } from "../../components/ui/icon";
@@ -41,6 +38,9 @@ import { showWarning } from "../../utils/toast";
 // Motion SSOT — never hardcode durations or curves directly in JSX.
 import { DURATION_S, EASE } from "../../components/shared/motion";
 import './index.css';
+
+const SovereigntyRiskMatrix = lazy(() => import("../../components/SovereigntyRiskMatrix"));
+const MoreProductsView = lazy(() => import("../../components/dashboard/MoreProductsView"));
 
 // Right-column collapsible card group: at most two expanded at once.
 const MAX_OPEN_CARDS = 2;
@@ -120,7 +120,11 @@ export default function DashboardPanel() {
 
   const visibility = useVisibility();
   const { hasPaid, canUse } = useEntitlements();
-  const pro = useProInstall();
+  const pro = useProInstall({
+    status: hasPaid,
+    manifest: hasPaid,
+    defender: false,
+  });
   const updater = useUpdater();
   const [updateFlowOpen, setUpdateFlowOpen] = useState(false);
   const score = useSovereigntyScore();
@@ -432,52 +436,9 @@ export default function DashboardPanel() {
   }, [activeFindings.length, ignoredFindingIds.length]);
   const hideCenterChrome = hasPendingFixes && needsAttentionExpanded;
 
-  // Reclaimable disk space ("X to clean") — deferred scan; surfaced as a chip
-  // inside the Needs-Attention footer (with Update All Apps) when ≥ 500 MB.
-  const [cleanupMb, setCleanupMb] = useState<number | null>(null);
-  const cleanupModuleEnabled = isModuleEnabled(appSettings?.app?.modules, "cleanup");
-  useEffect(() => {
-    if (!cleanupModuleEnabled) {
-      setCleanupMb(null);
-      return;
-    }
-    let cancelled = false;
-    const t = setTimeout(() => {
-      // Goes through DiskCleanupGranular's shared fetchDiskCleanupScan()
-      // (dynamically imported so its Blueprint UI code stays out of this
-      // bundle) instead of calling Get-DiskCleanupScan directly — that scan
-      // is a real recursive disk walk (Temp, Windows Update cache,
-      // Windows.old, ...), not cheap, and Dashboard is always the app's
-      // first-shown panel. Calling it directly here meant this timer and
-      // the app-startup Secure Storage pre-load (App.tsx) would each kick
-      // off their own full scan within a couple seconds of every launch —
-      // two expensive walks instead of one. fetchDiskCleanupScan() dedupes
-      // concurrent callers onto a single in-flight scan, so whichever of
-      // the two fires first is the only one that actually runs
-      // (2026-07-10 fix).
-      import("../../components/tweaks/managers/DiskCleanupGranular")
-        .then((m) => m.fetchDiskCleanupScan())
-        .then((res) => {
-          if (cancelled || !res.success) return;
-          // Mirror DiskCleanupGranular's default selection: non-empty categories
-          // only, excluding windowsOld (large but potentially needed). This keeps
-          // the dashboard figure consistent with what the cleanup card would
-          // actually clean by default.
-          const cleanable = res.categories.filter(
-            (c) => (c.FileCount ?? 0) > 0 && c.Id !== "windowsOld"
-          );
-          setCleanupMb(cleanable.reduce((s, c) => s + (c.SizeMb ?? 0), 0));
-        })
-        .catch(() => {});
-    }, 2500);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [cleanupModuleEnabled]);
   const naExpandedWithFindings = needsAttentionExpanded && activeFindings.length > 0;
   const updateFindingCount = activeFindings.filter((f) => f.category === "updates").length;
   const pendingAppUpdateCount = activeFindings.filter((f) => f.id.startsWith("app-update:")).length;
-  const cleanLabel = cleanupMb != null && cleanupMb >= 500
-    ? `≈ ${cleanupMb >= 1024 ? `${(cleanupMb / 1024).toFixed(1)} GB` : `${Math.round(cleanupMb)} MB`} to clean`
-    : null;
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   // Category filter set by clicking a radar node; null = show all.
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
@@ -765,27 +726,10 @@ export default function DashboardPanel() {
   // Anduril and Daylight and eases smoothly when the band changes.
   const glowColor = isLoading ? "var(--color-text-muted)" : score.color;
 
-  // The actions that live INSIDE Needs-Attention while it's expanded (and
-  // below the radar when it's collapsed): the disk-cleanup chip + Update All Apps.
-  const fixFooterActions = (cleanLabel || pendingAppUpdateCount > 0) ? (
+  // Cleanup is intentionally absent here: its recursive scan is started only
+  // after explicit Maintenance/Cleanup intent, never by the launch dashboard.
+  const fixFooterActions = pendingAppUpdateCount > 0 ? (
     <div className="na-footer-actions">
-      {cleanLabel && !borrowedActive && (
-        <button
-          type="button"
-          className="na-footer-btn"
-          onClick={() => {
-            // Disk Cleanup lives in System Maintenance > Storage & files. Navigate there
-            // first, then fire `open-disk-cleanup` once the panel has mounted
-            // so DiskCleanupGranular (which listens for that event) opens and
-            // scrolls into view.
-            window.dispatchEvent(new CustomEvent("navigate-panel", { detail: "maintenance" }));
-            setTimeout(() => window.dispatchEvent(new CustomEvent("open-disk-cleanup")), 300);
-          }}
-          title="Open System Maintenance → Disk Cleanup"
-        >
-          {cleanLabel}
-        </button>
-      )}
       {pendingAppUpdateCount > 0 && <AppsUpdateButton compact />}
     </div>
   ) : null;
@@ -856,7 +800,9 @@ export default function DashboardPanel() {
                   transition={{ duration: DURATION_S.normal, ease: EASE.standard }}
                   className="w-full min-h-0 flex-1 flex items-stretch justify-start p-0 overflow-hidden"
                 >
-                  <SovereigntyRiskMatrix />
+                  <Suspense fallback={<DashboardViewFallback label="Loading risk matrix" />}>
+                    <SovereigntyRiskMatrix />
+                  </Suspense>
                 </motion.div>
               ) : effectiveViewMode === "products" ? (
                 <motion.div
@@ -868,7 +814,9 @@ export default function DashboardPanel() {
                   transition={{ duration: DURATION_S.normal, ease: EASE.standard }}
                   className="w-full min-h-0 flex-1"
                 >
-                  <MoreProductsView />
+                  <Suspense fallback={<DashboardViewFallback label="Loading products" />}>
+                    <MoreProductsView />
+                  </Suspense>
                 </motion.div>
               ) : (
                 <motion.div
@@ -992,6 +940,14 @@ export default function DashboardPanel() {
         hasPaid={hasPaid}
         updateAvailable
       />
+    </div>
+  );
+}
+
+function DashboardViewFallback({ label }: { label: string }) {
+  return (
+    <div className="h-full w-full flex items-center justify-center text-xs text-[var(--color-text-muted)]" role="status">
+      {label}
     </div>
   );
 }

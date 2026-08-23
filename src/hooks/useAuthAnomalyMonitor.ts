@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AuthAnomalyTimeBasis } from "../types/settings";
+import type { StartupProtectionOperation } from "../lib/startupProtectionReadiness";
 
 export const DEFAULT_AUTH_FAILED_BURST_THRESHOLD = 5;
 export const DEFAULT_AUTH_FAILED_BURST_WINDOW_SECS = 90;
@@ -29,6 +30,7 @@ export default function useAuthAnomalyMonitor(
   policy: AuthAnomalyPolicy,
   isEntitled: boolean,
   fleetReportingRequired = false,
+  onStartupRearm?: (operation: StartupProtectionOperation, succeeded: boolean) => void,
 ) {
   useEffect(() => {
     if (!isEntitled) return;
@@ -56,6 +58,7 @@ export default function useAuthAnomalyMonitor(
         }
         if (!cancelled) {
           retryAttempts = 0;
+          if (enabled) onStartupRearm?.("auth-anomaly-monitor", true);
           window.dispatchEvent(new CustomEvent("auth-anomaly-monitor-health", { detail: { error: null } }));
         }
       } catch (error) {
@@ -69,6 +72,8 @@ export default function useAuthAnomalyMonitor(
             const delayMs = retryAttempts === 0 ? 5_000 : 10_000;
             retryAttempts += 1;
             retryTimer = window.setTimeout(() => void apply(), delayMs);
+          } else if (enabled) {
+            onStartupRearm?.("auth-anomaly-monitor", false);
           }
         }
       }
@@ -78,5 +83,5 @@ export default function useAuthAnomalyMonitor(
       cancelled = true;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [enabled, fleetReportingRequired, isEntitled, policy]);
+  }, [enabled, fleetReportingRequired, isEntitled, policy, onStartupRearm]);
 }

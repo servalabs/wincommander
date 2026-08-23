@@ -37,8 +37,12 @@ describe("native and UI-audit entrypoints", () => {
     const source = await read("src/main.tsx");
 
     expect(source).toContain("const hasNativeBackend = Boolean");
-    expect(source).toContain("Native backend disconnected");
-    expect(source).toContain("bun run dev:tauri:free");
+    expect(source).toContain('import("./entries/backendRequired")');
+    expect(await read("src/entries/backendRequired.tsx")).toContain("Native backend disconnected");
+    expect(await read("src/entries/backendRequired.tsx")).toContain("bun run dev:tauri:free");
     expect(source).toContain("if (!hasNativeBackend)");
+    expect(source).toContain('import("./entries/searchOverlay")');
+    expect(source).toContain('import("./entries/notificationAlerts")');
+    expect(source).toContain('import("./entries/mainWindow")');
   });
 });

@@ -3,7 +3,7 @@ import { Classes, Dialog, Spinner, Icon, Button, Alert, CheckboxControl } from "
 import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
 import useBackend from "../../hooks/useBackend";
 import { showError, showSuccess } from "../../utils/toast";
-import { ui } from "@/assets";
+import { ui } from "@/assets/products";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

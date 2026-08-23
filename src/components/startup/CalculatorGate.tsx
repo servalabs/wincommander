@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { AuthMode } from "../../context/AuthModeContext";
-import { appIcons } from "@/assets";
+import calcIcon from "@assets/softwares/calc.png";
 import "./CalculatorGate.css";
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -366,7 +366,7 @@ export default function CalculatorGate({ onAuth }: Props) {
   return (
     <div className="calc-root" ref={containerRef}>
       <div className="calc-titlebar" data-tauri-drag-region onMouseDown={handleDragMouseDown}>
-        <img src={appIcons["calc.png"]} alt="" className="calc-titlebar-icon" aria-hidden="true" />
+        <img src={calcIcon} alt="" className="calc-titlebar-icon" aria-hidden="true" />
         <div className="calc-window-title">Calculator</div>
         <div className="calc-window-controls" data-tauri-drag-region={false} onMouseDown={(e) => e.stopPropagation()}>
           <button type="button" onClick={handleMinimize} aria-label="Minimize">−</button>

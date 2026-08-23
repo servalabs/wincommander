@@ -8,7 +8,7 @@
 // PowerShell command-name tokens in tools/strings-grep-forbidden.txt.
 
 import type { GuideTopic } from "./types";
-import { products } from "../../assets";
+import { products } from "../../assets/products";
 import PrivacyShieldAnimation from "../../panels/privacy/PrivacyShieldAnimation";
 
 // Guide media belongs to the same pinned asset map as the rest of the app.

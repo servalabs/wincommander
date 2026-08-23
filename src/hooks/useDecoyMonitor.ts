@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAuthMode } from "../context/AuthModeContext";
 import { showWarning } from "../utils/toast";
+import type { StartupProtectionOperation } from "../lib/startupProtectionReadiness";
 
 const MAX_REARM_ATTEMPTS = 3;
 
@@ -16,6 +17,7 @@ export default function useDecoyMonitor(
   readAuditEnabled: boolean,
   fleetAlertEnabled: boolean,
   entitlementLoading: boolean,
+  onStartupRearm?: (operation: StartupProtectionOperation, succeeded: boolean) => void,
 ) {
   const { mode } = useAuthMode();
   const lastReconciled = useRef<string>("");
@@ -60,6 +62,7 @@ export default function useDecoyMonitor(
         // being permanently hidden by a render-level fingerprint dedupe.
         lastReconciled.current = fingerprint;
         warnedFailures.current.delete("reconcile");
+        if (enabled) onStartupRearm?.("decoy-monitor", true);
       } catch (error) {
         if (cancelled) return;
         warnOnce(
@@ -72,6 +75,8 @@ export default function useDecoyMonitor(
         attempt += 1;
         if (attempt < MAX_REARM_ATTEMPTS) {
           retryTimer = setTimeout(() => { void reconcile(); }, attempt * 5_000);
+        } else if (enabled) {
+          onStartupRearm?.("decoy-monitor", false);
         }
       }
     };
@@ -81,5 +86,5 @@ export default function useDecoyMonitor(
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [enabled, enrolledPaths, readAuditEnabled, fleetAlertEnabled, entitlementLoading, mode, warnOnce]);
+  }, [enabled, enrolledPaths, readAuditEnabled, fleetAlertEnabled, entitlementLoading, mode, warnOnce, onStartupRearm]);
 }

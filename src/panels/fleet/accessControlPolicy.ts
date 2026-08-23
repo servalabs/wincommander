@@ -26,15 +26,8 @@ function sidId(sid: string | undefined) {
   return normalized ? `sid:${normalized}` : null;
 }
 
-function sameWindowsIdentity(left: FleetAccessUser, right: FleetAccessUser) {
-  const leftSid = sidId(left.sid);
-  const rightSid = sidId(right.sid);
-  if (leftSid && rightSid) return leftSid === rightSid;
-  return userId(left.username) === userId(right.username);
-}
-
 function canonicalUserId(user: FleetAccessUser) {
-  return sidId(user.sid) ?? userId(user.username);
+  return sidId(user.sid) ?? (user.id.trim() || userId(user.username));
 }
 
 /** Reconcile renamed Windows accounts by SID and carry their group memberships forward. */
@@ -42,32 +35,43 @@ export function reconcileAccessDirectoryUsers(
   directory: FleetAccessDirectory,
   discovered: FleetAccessUser[],
 ): FleetAccessDirectory {
-  const groups: FleetAccessUser[][] = [];
+  const groups = new Map<string, FleetAccessUser[]>();
+  const withoutSid: FleetAccessUser[] = [];
   const sources = [...directory.users, ...discovered];
 
+  // SID-bearing rows are authoritative. Group them before considering legacy
+  // name-only records so two accounts that reused a display/login name can
+  // never be bridged through that older record.
   for (const user of sources) {
     if (!userId(user.username)) continue;
-    const matchingGroups = groups.filter(group => group.some(candidate => sameWindowsIdentity(candidate, user)));
-    if (matchingGroups.length === 0) {
-      groups.push([user]);
-      continue;
-    }
+    const sid = sidId(user.sid);
+    if (sid) groups.set(sid, [...(groups.get(sid) ?? []), user]);
+    else withoutSid.push(user);
+  }
 
-    const target = matchingGroups[0];
-    target.push(user);
-    for (const duplicate of matchingGroups.slice(1)) {
-      target.push(...duplicate);
-      groups.splice(groups.indexOf(duplicate), 1);
-    }
+  for (const user of withoutSid) {
+    const sameNameSidGroups = [...groups.entries()].filter(([, candidates]) =>
+      candidates.some(candidate => userId(candidate.username) === userId(user.username)));
+    // A legacy name-only row may adopt exactly one discovered identity. More
+    // than one SID is ambiguous, so preserve it as unavailable history rather
+    // than merging memberships into either account.
+    const key = sameNameSidGroups.length === 1
+      ? sameNameSidGroups[0]![0]
+      : `legacy:${user.id.trim() || userId(user.username)}`;
+    groups.set(key, [...(groups.get(key) ?? []), user]);
   }
 
   const remappedIds = new Map<string, string>();
-  const users = groups.map(group => {
+  const users = [...groups.values()].map(group => {
     const preferred = [...group].reverse().find(user => discovered.includes(user)) ?? group[group.length - 1];
+    // Do not let a partial discovery row overwrite a persisted SID with
+    // undefined. A SID is the only stable account identity across renames.
     const merged = Object.assign({}, ...group, preferred) as FleetAccessUser;
+    const stableSid = group.map(user => user.sid?.trim()).find(Boolean);
+    if (stableSid) merged.sid = stableSid;
     const id = canonicalUserId(merged);
     for (const source of group) remappedIds.set(source.id, id);
-    return { ...merged, id };
+    return { ...merged, id, isAvailable: group.some(user => discovered.includes(user)) };
   }).sort((left, right) =>
     left.username.localeCompare(right.username, undefined, { sensitivity: "base" }));
 
@@ -147,6 +151,10 @@ export function validateAccessDirectory(directory: FleetAccessDirectory): string
   }
   if (directory.groups.some(group => group.userIds.some(id => !userIds.has(id)))) {
     errors.push("A group contains a Windows user that is no longer available.");
+  }
+  if (directory.groups.some(group => group.userIds.some(id =>
+    directory.users.find(user => user.id === id)?.isAvailable === false))) {
+    errors.push("A group contains a Windows account that is disabled or deleted.");
   }
   return errors;
 }

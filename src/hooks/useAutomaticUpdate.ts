@@ -16,7 +16,11 @@ function proNeedsUpdate(
 /** Runs a no-dialog update only after the user chose automatic updates. */
 export default function useAutomaticUpdate(enabled: boolean, hasPaid: boolean) {
     const updater = useUpdater();
-    const pro = useProInstall();
+    const pro = useProInstall({
+        status: enabled && hasPaid,
+        manifest: enabled && hasPaid,
+        defender: enabled && hasPaid,
+    });
     // Automatic mode may update Pro only after the person already approved its
     // Defender exclusion. It must never create that exclusion by itself.
     const canUpdatePro = hasPaid && pro.defender?.exclusion_already_set === true;

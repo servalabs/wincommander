@@ -38,7 +38,8 @@
     "lint:tiers": "bun run tools/check-tier-invariants.ts && bun run tools/check-tier-drift.ts",
     "lint:quality": "bun run tools/check-code-quality-guards.ts",
     "lint:strings-free": "powershell -ExecutionPolicy Bypass -File tools/strings-grep-free.ps1 -HardGate",
-    "lint": "eslint . --ext .ts,.tsx --max-warnings=0"
+    "lint": "eslint . --ext .ts,.tsx --max-warnings=0",
+    "startup:benchmark": "bun tools/startup-benchmark.ts"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "5.3.0",

@@ -40,7 +40,8 @@ describe("redesign surface copy guardrails", () => {
     // main shell and the Ctrl+Space overlay window is preserved.
     expect(await read("src/App.tsx")).not.toContain("<EverythingSearchBar");
     expect(await read("src/main.tsx")).toContain('windowLabel === "search-overlay"');
-    expect(await read("src/main.tsx")).toContain("<EverythingSearchBar overlayMode");
+    expect(await read("src/main.tsx")).toContain('import("./entries/searchOverlay")');
+    expect(await read("src/entries/searchOverlay.tsx")).toContain("<EverythingSearchBar overlayMode");
     expect(await read("src-tauri/commander-free/src/lib.rs")).toContain('on_shortcut("Ctrl+Space"');
     expect(await read("src-tauri/commander-free/src/lib.rs")).toContain("handle_search_hotkey(app)");
     // The right sidebar now hosts the search launcher (navigates to the panel).
@@ -59,13 +60,13 @@ describe("redesign surface copy guardrails", () => {
     expect(await read("src/components/RightSidebar.tsx")).toContain('"search-files"');
   });
 
-  test("Secure Storage shows system-drive status and action buttons above mounted volumes", async () => {
+  test("Secure Storage shows the system-drive verification notice and actions above mounted volumes", async () => {
     const source = await read("src/panels/vault/index.tsx");
 
     // Encrypted Volumes moved onto the shared SectionCard (2026-07); its
     // title prop is the header, not a bespoke "vault-card-new-header" div.
     const headerIndex = source.indexOf('title="Encrypted Volumes"');
-    const systemStatusIndex = source.indexOf("<SystemEncryptionSection compact />");
+    const systemStatusIndex = source.indexOf("<SystemEncryptionSection />");
     const mountedVolumesIndex = source.indexOf('className={`vault-content ${volumes.length === 0 ? "vault-content--empty" : ""}`}');
     const actionRowIndex = source.indexOf('className="vault-card-action-row"');
 

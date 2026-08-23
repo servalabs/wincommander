@@ -8,7 +8,7 @@ import { getDisplayBranding } from "../lib/branding";
 import useProInstall from "../hooks/useProInstall";
 import useEntitlements from "../hooks/useEntitlements";
 import { useTheme } from "../context/ThemeContext";
-import { logo as brandLogo } from "@/assets";
+import { logo as brandLogo } from "@/assets/brand";
 import { Icon } from "./ui/icon";
 import { Badge } from "./ui/badge";
 import NotificationsMenu from "./NotificationsMenu";
@@ -38,8 +38,12 @@ function TitleBar({ activePanel }: TitleBarProps) {
   const score = useSovereigntyScore();
   const branding = getDisplayBranding(appSettings);
 
-  const { isInstalled: proInstalled } = useProInstall();
   const { hasPaid } = useEntitlements();
+  const { isInstalled: proInstalled } = useProInstall({
+    status: hasPaid,
+    manifest: false,
+    defender: false,
+  });
   const edition = hasPaid && proInstalled ? 'PRO' : 'FREE';
 
   const { mode: authMode } = useAuthMode();

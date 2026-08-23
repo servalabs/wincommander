@@ -39,7 +39,7 @@ describe("generated WinCommander CLI catalog", () => {
   // the computed values so a catalog change cannot silently stale the docs.
   test("matches the command totals quoted in the docs", () => {
     const totals = commandTotals(catalog.commands as Entry[]);
-    expect(totals).toEqual({ total: 1267, tauri: 461, backend: 806, releaseExecutable: 1263 });
+    expect(totals).toEqual({ total: 1270, tauri: 464, backend: 806, releaseExecutable: 1266 });
 
     const total = grouped(totals.total);
     const tauri = grouped(totals.tauri);

@@ -4,7 +4,7 @@
 // Zero external dependencies.
 
 import React, { useRef, useEffect, useCallback } from 'react';
-import { companyLogos, software, saas } from '@/assets';
+import { companyLogos, software, saas } from '@/assets/featureLogos';
 
 // ── Constants ────────────────────────────────────────────────────────
 

@@ -90,8 +90,61 @@ function serveAppAssetsInDevelopment(): Plugin {
   };
 }
 
+/** Emits a reviewable snapshot of the main entry's static dependency graph. */
+function reportInitialResources(): Plugin {
+  return {
+    name: "wincommander-initial-resource-report",
+    apply: "build",
+    generateBundle(_, bundle) {
+      // Vite's HTML entry owns the root chunk; `src/main.tsx` is a module of
+      // that chunk rather than its facade. There is only one browser entry in
+      // this desktop build, so the first entry chunk is the initial resource.
+      const entry = Object.values(bundle).find(
+        (item) => item.type === "chunk" && item.isEntry,
+      );
+      if (!entry || entry.type !== "chunk") return;
+      const mainWindow = Object.values(bundle).find(
+        (item) => item.type === "chunk" && /(?:^|[\\/])entries[\\/]mainWindow\.tsx$/.test(item.facadeModuleId ?? ""),
+      );
+
+      const initialChunks = new Set<string>();
+      const visit = (fileName: string) => {
+        if (initialChunks.has(fileName)) return;
+        initialChunks.add(fileName);
+        const chunk = bundle[fileName];
+        if (chunk?.type === "chunk") chunk.imports.forEach(visit);
+      };
+      visit(entry.fileName);
+      // The main window root is selected immediately for the normal desktop
+      // label, unlike the search and notification auxiliary roots.
+      if (mainWindow?.type === "chunk") visit(mainWindow.fileName);
+
+      const files = [...initialChunks]
+        .map((fileName) => bundle[fileName])
+        .filter((item): item is Extract<(typeof bundle)[string], { type: "chunk" }> => item?.type === "chunk")
+        .map((item) => ({ file: item.fileName, bytes: Buffer.byteLength(item.code) }));
+      const fonts = Object.values(bundle)
+        .filter((item) => item.type === "asset" && /\.woff2$/i.test(item.fileName))
+        .map((item) => ({ file: item.fileName, bytes: typeof item.source === "string" ? Buffer.byteLength(item.source) : item.source.byteLength }));
+      const report = {
+        entry: entry.fileName,
+        mainWindow: mainWindow?.type === "chunk" ? mainWindow.fileName : null,
+        initialJavaScriptBytes: files.reduce((total, item) => total + item.bytes, 0),
+        defaultFontBytes: fonts.reduce((total, item) => total + item.bytes, 0),
+        initialChunks: files,
+        fonts,
+      };
+      this.emitFile({
+        type: "asset",
+        fileName: "performance-initial-resources.json",
+        source: `${JSON.stringify(report, null, 2)}\n`,
+      });
+    },
+  };
+}
+
 export default defineConfig(({ command }): UserConfig => ({
-  plugins: [serveAppAssetsInDevelopment(), ...react(), ...tailwindcss()],
+  plugins: [serveAppAssetsInDevelopment(), reportInitialResources(), ...react(), ...tailwindcss()],
   resolve: {
     alias: [
       { find: "@", replacement: path.resolve(__dirname, "./src") },

@@ -5,6 +5,10 @@ export interface FleetAccessUser {
   displayName?: string;
   sid?: string;
   isCurrent?: boolean;
+  /** A successful Windows discovery did not return this account. Keep its
+   * historical memberships visible to validation, but never offer it for a
+   * new assignment. */
+  isAvailable?: boolean;
 }
 
 export interface FleetAccessGroup {

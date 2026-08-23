@@ -41,6 +41,13 @@ static TEMP_CACHE: Lazy<Mutex<(Option<Instant>, Option<f32>)>> =
 // queries always fail, so there is no point retrying every 30 seconds.
 static TEMP_UNAVAILABLE: AtomicBool = AtomicBool::new(false);
 
+// Disk enumeration is read-only but can still traverse network-backed mount
+// points. Keep the high-frequency dashboard path bounded to one enumeration
+// per short window instead of rebuilding the list for every live-metric tick.
+const DISK_SNAPSHOT_REFRESH: Duration = Duration::from_secs(5);
+static DISK_SNAPSHOT: Lazy<Mutex<(Option<Instant>, Vec<DiskMetric>)>> =
+    Lazy::new(|| Mutex::new((None, Vec::new())));
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DiskMetric {
@@ -58,6 +65,38 @@ pub struct LiveMetrics {
     pub ram_used_gb: f64,
     pub ram_total_gb: f64,
     pub disks: Vec<DiskMetric>,
+}
+
+fn disk_snapshot_is_fresh(updated_at: Option<Instant>, now: Instant) -> bool {
+    updated_at
+        .map(|updated_at| now.saturating_duration_since(updated_at) < DISK_SNAPSHOT_REFRESH)
+        .unwrap_or(false)
+}
+
+fn collect_disk_metrics() -> Vec<DiskMetric> {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    disks
+        .iter()
+        .map(|disk: &sysinfo::Disk| DiskMetric {
+            name: disk.mount_point().to_string_lossy().to_string(),
+            total_gb: disk.total_space() as f64 / 1_073_741_824.0,
+            free_gb: disk.available_space() as f64 / 1_073_741_824.0,
+        })
+        .collect()
+}
+
+/// Bounded native snapshot for frequent dashboard reads. It carries no
+/// portable state, device identity, licence state, or mutation capability.
+fn disk_metrics_snapshot() -> Vec<DiskMetric> {
+    let now = Instant::now();
+    let mut snapshot = DISK_SNAPSHOT.lock().unwrap();
+    if disk_snapshot_is_fresh(snapshot.0, now) {
+        return snapshot.1.clone();
+    }
+
+    let disks = collect_disk_metrics();
+    *snapshot = (Some(now), disks.clone());
+    disks
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -646,8 +685,6 @@ pub fn get_live_metrics() -> LiveMetrics {
     // may not expose CPU DTS to Windows WMI — HWInfo uses proprietary drivers.
     let cpu_temp: Option<f32> = cpu_temp_throttled();
 
-    let disks = sysinfo::Disks::new_with_refreshed_list();
-
     LiveMetrics {
         cpu_usage: sys.global_cpu_usage(),
         cpu_temp,
@@ -658,13 +695,25 @@ pub fn get_live_metrics() -> LiveMetrics {
         },
         ram_used_gb: sys.used_memory() as f64 / 1_073_741_824.0,
         ram_total_gb: sys.total_memory() as f64 / 1_073_741_824.0,
-        disks: disks
-            .iter()
-            .map(|d: &sysinfo::Disk| DiskMetric {
-                name: d.mount_point().to_string_lossy().to_string(),
-                total_gb: d.total_space() as f64 / 1_073_741_824.0,
-                free_gb: d.available_space() as f64 / 1_073_741_824.0,
-            })
-            .collect(),
+        disks: disk_metrics_snapshot(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disk_snapshot_expires_after_its_short_read_only_window() {
+        let now = Instant::now();
+        assert!(disk_snapshot_is_fresh(
+            Some(now - DISK_SNAPSHOT_REFRESH + Duration::from_millis(1)),
+            now,
+        ));
+        assert!(!disk_snapshot_is_fresh(
+            Some(now - DISK_SNAPSHOT_REFRESH),
+            now
+        ));
+        assert!(!disk_snapshot_is_fresh(None, now));
     }
 }

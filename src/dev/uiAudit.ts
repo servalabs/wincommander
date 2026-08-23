@@ -568,8 +568,6 @@ export function uiAuditBackendResponse(command: string): unknown {
           { letter: "W:", path: "C:\\Audit\\Vaults\\plausible-cover.hc", type: "Hidden" },
         ],
       };
-    case "Get-SystemEncryptionStatus":
-      return { encrypted: true, progress: 100, algorithm: "XTS-AES-256", mode: "TPM + PIN" };
     case "Get-AvailableDriveLetters":
       return { letters: ["X", "Y", "Z"] };
     case "Get-EncryptionPartitions":

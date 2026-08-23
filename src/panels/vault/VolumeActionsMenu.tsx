@@ -1,7 +1,6 @@
 import { Button, Dialog, Tooltip } from "@/components/ui/bp";
 import { useState } from "react";
 import useBackend from "../../hooks/useBackend";
-import { useAppState } from "../../context/AppContext";
 import VolumePropertiesDialog from "./VolumePropertiesDialog";
 import TierGate from "../../components/shared/TierGate";
 import { showSuccess, showError } from "../../utils/toast";
@@ -17,7 +16,6 @@ interface VolumeActionsMenuProps {
 
 function VolumeActionsMenu({ letter, path, type, internalDrive, onDismounted }: VolumeActionsMenuProps) {
   const { dismountVolume, getEncryptedVolumeStatus, openEncryptionVolume } = useBackend();
-  const { refreshVault } = useAppState();
 
   const [dismounting, setDismounting] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
@@ -53,7 +51,6 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, onDismounted }: 
     }
     setDismountFailure("");
     setForceConfirmOpen(false);
-    await refreshVault(true);
     onDismounted();
     showSuccess(`Volume ${driveLabel} ${forced ? "force-" : ""}dismounted.`);
     return true;

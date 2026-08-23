@@ -48,7 +48,9 @@ describe("application confirmation surface", () => {
   });
 
   test("the main application owns one confirmation provider", () => {
-    const main = readFileSync(`${root}src/main.tsx`, "utf8");
+    const entry = readFileSync(`${root}src/main.tsx`, "utf8");
+    const main = readFileSync(`${root}src/entries/mainWindow.tsx`, "utf8");
+    expect(entry).toContain('import("./entries/mainWindow")');
     expect(main).toContain("<AppConfirmProvider>");
     expect(main).toContain("</AppConfirmProvider>");
   });

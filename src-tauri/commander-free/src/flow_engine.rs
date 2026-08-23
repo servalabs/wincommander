@@ -27,7 +27,7 @@ use crate::settings;
 // ═══════════════════════════════════════════════════════════════════════
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum TriggerBlock {
     HotkeyTrigger {
@@ -110,7 +110,7 @@ pub enum TriggerBlock {
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum ConditionBlock {
     TimeCondition {
@@ -142,7 +142,7 @@ pub enum ConditionBlock {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum ActionBlock {
     CommandAction {
@@ -178,7 +178,7 @@ pub enum ActionBlock {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Flow {
     pub id: String,
@@ -599,15 +599,36 @@ pub(crate) fn persist_flows_to_settings(flows: &[Flow]) -> Result<(), String> {
     settings::patch_settings(patch).map(|_| ())
 }
 
-fn ensure_default_flows_persisted() {
-    let flows = get_flows_from_settings();
-    if let Err(err) = persist_flows_to_settings(&flows) {
-        flow_engine_log(
-            "error",
-            None,
-            "bootstrap",
-            format!("Failed to persist merged flow catalog: {}", err),
-        );
+fn ensure_default_flows_persisted() -> bool {
+    let settings = match settings::read_settings() {
+        Ok(settings) => settings,
+        Err(err) => {
+            flow_engine_log(
+                "warn",
+                None,
+                "bootstrap",
+                format!(
+                    "Skipped flow catalog persistence because settings could not be read: {err}"
+                ),
+            );
+            return false;
+        }
+    };
+    let merged = merge_default_system_flows(settings.app.flows.clone());
+    if merged == settings.app.flows {
+        return true;
+    }
+    match persist_flows_to_settings(&merged) {
+        Ok(()) => true,
+        Err(err) => {
+            flow_engine_log(
+                "error",
+                None,
+                "bootstrap",
+                format!("Failed to persist merged flow catalog: {err}"),
+            );
+            false
+        }
     }
 }
 
@@ -1349,11 +1370,16 @@ fn queue_trigger_event(
 /// Spawns the main event loop and registers listeners for all enabled flows.
 pub fn init(app: &AppHandle) {
     init_headless(app);
-
-    ensure_default_flows_persisted();
-
-    // Start listeners for all enabled flows from settings
+    // Security-sensitive listeners must be armed from the merged in-memory
+    // catalog before the optional first-run settings write begins.
     start_all_listeners(app);
+
+    let app = app.clone();
+    crate::startup_trace::job_started(&app, "flows.persist-defaults");
+    tauri::async_runtime::spawn(async move {
+        let succeeded = ensure_default_flows_persisted();
+        crate::startup_trace::job_finished(&app, "flows.persist-defaults", succeeded);
+    });
 }
 
 /// Register the in-memory engine and execution loop without persisting default
@@ -4149,6 +4175,25 @@ pub async fn reload_flows(app: AppHandle) -> Result<(), String> {
     start_all_listeners(&app);
     flow_engine_log("info", None, "listener", "Flow listener reload complete");
     Ok(())
+}
+
+#[cfg(test)]
+mod default_flow_merge_tests {
+    use super::*;
+
+    #[test]
+    fn merged_defaults_are_semantically_stable_after_first_persist() {
+        let defaults = default_system_flows();
+        assert_eq!(merge_default_system_flows(defaults.clone()), defaults);
+    }
+
+    #[test]
+    fn missing_system_flows_change_the_persisted_catalog_once() {
+        let defaults = default_system_flows();
+        let merged = merge_default_system_flows(Vec::new());
+        assert_eq!(merged, defaults);
+        assert_ne!(merged, Vec::<Flow>::new());
+    }
 }
 
 #[cfg(test)]

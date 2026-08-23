@@ -94,7 +94,14 @@ import type { WifiGuardBaselineEntry } from "./types/settings";
 import { getModuleForPanel, isModuleEnabled } from "./types/modules";
 import { setSoundEnabled } from "./utils/sound";
 import { importPanelWithRetry } from "./lib/panelLoading";
+import { PanelPrefetchQueue, scheduleWhenIdle } from "./lib/panelPrefetch";
 import { isTourActive } from "./lib/tourActive";
+import { reportStartupPhase } from "./hooks/startupTrace";
+import {
+  createStartupProtectionReadiness,
+  type StartupProtectionOperation,
+  type StartupProtectionReadiness,
+} from "./lib/startupProtectionReadiness";
 import DashboardPanel from "./panels/dashboard";
 
 // INACTIVITY TIMER: After this amount of no mouse or keyboard activity, 
@@ -184,28 +191,6 @@ function PanelRoute({
   return <LazyPanel />;
 }
 
-// Eagerly preload the primary rail only. Preloading every hidden/capability
-// panel pulled heavy Search/AI/Investigator chunks into startup and made the
-// app feel sluggish before the user asked for those panels.
-function preloadAllPanels() {
-  Promise.all(
-    PANEL_MANIFESTS
-      .filter((m) => m.navTier === "primary" && m.id !== "dashboard")
-      .map((m) => m.importFn())
-  ).catch(() => { /* best-effort — panels still lazy-load on demand */ });
-}
-
-let searchFilesPanelPreloaded = false;
-function preloadSearchFilesPanel() {
-  if (searchFilesPanelPreloaded) return;
-  const manifest = PANEL_MANIFESTS.find((m) => m.id === "search-files");
-  if (!manifest) return;
-  searchFilesPanelPreloaded = true;
-  manifest.importFn().catch(() => {
-    searchFilesPanelPreloaded = false;
-  });
-}
-
 function AppContent() {
   // Chromium's stock menu exposes developer tooling in packaged builds. Keep
   // it available to the dev server, but suppress the browser menu in releases.
@@ -248,7 +233,8 @@ function AppContent() {
   // that are used directly in this component. Declared here (before
   // lockHiddenPanels) so the borrowed-panel redirect can read lockedPanelIds.
   const appState = useAppState();
-  const { productivityStatus, appSettings, patchAppSettings, startupComplete, startupDataState } = appState;
+  const { productivityStatus, appSettings, patchAppSettings, startupComplete, startupDataState, runStartupJob } = appState;
+  const panelPrefetchRef = useRef<PanelPrefetchQueue | null>(null);
   const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
   useAutomaticUpdate(automaticUpdatesEnabled, hasPaid);
 
@@ -405,7 +391,20 @@ function AppContent() {
   // version) evaluated again at a later launch doesn't re-announce itself —
   // see the effect for how this is kept in sync with reality.
   const lastAnnouncedUpdateVersion = appSettings?.app?.lastAnnouncedUpdateVersion ?? null;
-  const proInstall = useProInstall();
+  const hasStartupProEntitlement = !!licenseStatus && (
+    (licenseStatus.licensed && licenseStatus.valid) || licenseStatus.trial_active === true
+  );
+  const shouldProbeProPrompt =
+    !automaticUpdatesEnabled &&
+    licenseChecked &&
+    hasStartupProEntitlement &&
+    !import.meta.env.DEV &&
+    !proInstallPromptDismissed;
+  const proInstall = useProInstall({
+    status: shouldProbeProPrompt,
+    manifest: shouldProbeProPrompt,
+    defender: false,
+  });
   const [updateFlowOpen, setUpdateFlowOpen] = useState(false);
   const updateFlowIsStartupNagRef = useRef(false);
   const updateFlowAutoPromptedRef = useRef(false);
@@ -440,9 +439,7 @@ function AppContent() {
     // Pro side: same detection the old standalone nag used, fired at most once.
     if (updateFlowAutoPromptedRef.current) return;
     if (!licenseChecked || !licenseStatus) return;
-    const hasEntitlement =
-      (licenseStatus.licensed && licenseStatus.valid) || licenseStatus.trial_active === true;
-    if (!hasEntitlement) return;
+    if (!hasStartupProEntitlement) return;
     // Dev builds must run only against the local repo-built Pro binary. Do not
     // fetch the manifest or prompt update/repair from the public manifest.
     if (import.meta.env.DEV) {
@@ -535,6 +532,7 @@ function AppContent() {
     updaterSnapshot.version,
     licenseChecked,
     licenseStatus,
+    hasStartupProEntitlement,
     proInstallPromptDismissed,
     proInstall.status,
     proInstall.manifest,
@@ -598,6 +596,43 @@ function AppContent() {
     });
   }, [rdpIdleEnabled, rdpIdleEnabledIdeal, hasPaid, entitlementLoading, rdpIdleTimeout, rdpIdleDisabledReason]);
 
+  // This launch-only aggregate deliberately follows real privileged rearm
+  // completions below. Settings hydration, listeners, and inactive controls
+  // do not make a protection "ready".
+  const startupProtectionReadinessRef = useRef<StartupProtectionReadiness | null>(null);
+  if (!startupProtectionReadinessRef.current) {
+    startupProtectionReadinessRef.current = createStartupProtectionReadiness(reportStartupPhase);
+  }
+  const startupProtectionConfiguredRef = useRef(false);
+  const reportStartupProtectionRearm = useCallback((operation: StartupProtectionOperation, succeeded: boolean) => {
+    startupProtectionReadinessRef.current?.report(operation, succeeded);
+  }, []);
+  const configuredStartupProtectionOperations = useMemo<readonly StartupProtectionOperation[] | null>(() => {
+    if (!appSettings || entitlementLoading) return null;
+    const privacy = appSettings.ideal?.privacy;
+    const usb = privacy?.usbSecurity;
+    const paidUsbEnabled = hasPaid && (
+      usb?.hidGuardEnabled === true
+      || usb?.meteringEnabled === true
+      || usb?.autoSandboxEnabled === true
+      || usb?.hidApprovalGateEnabled === true
+    );
+    return [
+      ...(hasPaid && privacy?.decoyMonitor?.enabled === true ? ["decoy-monitor" as const] : []),
+      ...(privacy?.ransomwareMonitor?.enabled === true ? ["ransomware-monitor" as const] : []),
+      ...(hasPaid && privacy?.remoteAccessMonitor?.enabled === true ? ["remote-access-monitor" as const] : []),
+      ...(usb && (usb.monitorEnabled === true || paidUsbEnabled) ? ["usb-security" as const] : []),
+      ...(hasPaid && appSettings.ideal?.network?.wifiGuard?.enabled === true ? ["wifi-guard" as const] : []),
+      ...(hasPaid && privacy?.authAnomalyMonitor?.enabled === true ? ["auth-anomaly-monitor" as const] : []),
+      ...(hasPaid && privacy?.screenCapture?.detectionEnabled === true ? ["screen-capture-watch" as const] : []),
+    ];
+  }, [appSettings, entitlementLoading, hasPaid]);
+  useEffect(() => {
+    if (startupProtectionConfiguredRef.current || !configuredStartupProtectionOperations) return;
+    startupProtectionConfiguredRef.current = true;
+    startupProtectionReadinessRef.current?.configure(configuredStartupProtectionOperations);
+  }, [configuredStartupProtectionOperations]);
+
   // F-1 Paste monitor — clipboard credential watcher driven off the
   // privacy.clipboard settings group. Free feature; the Rust side is
   // idempotent so a duplicate start is harmless. Toast handler for the
@@ -638,6 +673,7 @@ function AppContent() {
     decoyReadAuditEnabled,
     decoyFleetAlertEnabled,
     entitlementLoading,
+    hasPaid && decoyEnabled ? reportStartupProtectionRearm : undefined,
   );
 
   // F-3 Anti-ransomware monitor — mass-modify detector over user-content
@@ -658,13 +694,18 @@ function AppContent() {
     ransomwareAttributionMinFiles,
     ransomwareCustomDirs,
     ransomwareAction,
+    ransomwareEnabled ? reportStartupProtectionRearm : undefined,
   );
 
   // #4 Remote-access monitor — paid Pro-sidecar detector. Hook pushes
   // per-tool overrides then start/stop; Pro + Free wrapper enforce paid.
   const remoteAccessEnabled = appSettings?.ideal?.privacy?.remoteAccessMonitor?.enabled ?? false;
   const remoteAccessTools = appSettings?.ideal?.privacy?.remoteAccessMonitor?.tools ?? null;
-  useRemoteAccessMonitor(remoteAccessEnabled, remoteAccessTools);
+  useRemoteAccessMonitor(
+    remoteAccessEnabled,
+    remoteAccessTools,
+    hasPaid && remoteAccessEnabled ? reportStartupProtectionRearm : undefined,
+  );
 
   // Free owns only the basic attach timeline. Pro owns HID timing intelligence
   // and automatic isolation. Reconcile them separately so a Free user keeps
@@ -726,7 +767,11 @@ function AppContent() {
             await invoke("stop_usb_hid_approval_gate");
           }
         }
+        if (cancelled) return;
         usbRearmFailureRef.current = null;
+        if (basicMonitorDesired || (hasPaid && paidMonitorDesired)) {
+          reportStartupProtectionRearm("usb-security", true);
+        }
       } catch (err) {
         if (cancelled) return;
         const message = String(err);
@@ -737,6 +782,8 @@ function AppContent() {
         attempt += 1;
         if (attempt < 3) {
           retryTimer = setTimeout(() => { void reconcile(); }, attempt * 5_000);
+        } else if (basicMonitorDesired || (hasPaid && paidMonitorDesired)) {
+          reportStartupProtectionRearm("usb-security", false);
         }
       }
     };
@@ -755,6 +802,7 @@ function AppContent() {
     usbAutoSandboxEnabled,
     usbHidApprovalGateEnabled,
     usbHidApprovalTtlSecs,
+    reportStartupProtectionRearm,
   ]);
 
   // Wi-Fi Guard retains trusted SSID/BSSID observations in the local settings
@@ -783,6 +831,7 @@ function AppContent() {
     },
     wifiGuardBaseline,
     persistWifiGuardBaseline,
+    hasPaid && wifiGuardEnabled ? reportStartupProtectionRearm : undefined,
   );
 
   const authAnomaly = appSettings?.ideal?.privacy?.authAnomalyMonitor;
@@ -818,6 +867,7 @@ function AppContent() {
     authAnomalyPolicy,
     hasPaid,
     appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true,
+    hasPaid && authAnomalyEnabled ? reportStartupProtectionRearm : undefined,
   );
 
   // Anti-Acquisition Defenses: continuous WARN-mode watcher — polls the
@@ -853,19 +903,27 @@ function AppContent() {
     const desired = appSettings?.ideal?.privacy?.screenCapture?.detectionEnabled;
     if (desired === undefined) return;
     if (!hasPaid && desired === true) return;
+    let cancelled = false;
     const command = desired === true
       ? "start_screen_capture_watch"
       : "stop_screen_capture_watch";
     void invoke(command)
-      .then(() => { screenCaptureRearmFailureRef.current = null; })
+      .then(() => {
+        if (cancelled) return;
+        screenCaptureRearmFailureRef.current = null;
+        if (desired === true) reportStartupProtectionRearm("screen-capture-watch", true);
+      })
       .catch((err) => {
+        if (cancelled) return;
         if (desired !== true) return;
+        reportStartupProtectionRearm("screen-capture-watch", false);
         const message = String(err);
         if (screenCaptureRearmFailureRef.current === message) return;
         screenCaptureRearmFailureRef.current = message;
         showWarning("Screen-capture detection could not re-arm. Open Privacy → Screen capture to retry.", 12_000);
       });
-  }, [appSettings?.ideal?.privacy?.screenCapture?.detectionEnabled, entitlementLoading, hasPaid]);
+    return () => { cancelled = true; };
+  }, [appSettings?.ideal?.privacy?.screenCapture?.detectionEnabled, entitlementLoading, hasPaid, reportStartupProtectionRearm]);
 
   // F-5 Coercion code-phrase trigger — paid. The hook gates on hasPaid
   // and the Rust start command also enforces require_paid.
@@ -998,8 +1056,20 @@ function AppContent() {
     }
   }, [productivityStatus?.running]);
 
-  // The shell must remain hidden until both the animation and startup data are ready.
-  const isLoading = !splashDone;
+  // Cached launches render the shell immediately. The decorative splash stays
+  // reserved for the real first-run loading state, where there is no cached
+  // settings surface to show truthfully yet.
+  const isFirstRunLoading = appSettings === null && startupDataState === "loading";
+  const isLoading = !splashDone && isFirstRunLoading;
+
+  useEffect(() => {
+    if (isLoading || appSettings === null) return;
+    reportStartupPhase("dashboard_first_visible");
+    const frame = window.requestAnimationFrame(() => {
+      reportStartupPhase("dashboard_interactive");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [appSettings, isLoading]);
 
   // Restore last active panel from settings.json — DISABLED
   // The user wants the app to always start on 'System Info' (Dashboard).
@@ -1026,27 +1096,69 @@ function AppContent() {
 
   const handleSplashComplete = useCallback(() => {
     setSplashDone(true);
-    // KT: Preload primary panel chunks right after splash; heavier optional
-    // panels stay lazy, with Search warmed separately after the UI settles.
-    preloadAllPanels();
-    // Fire-and-forget: kick off the Disk Clean-Up scan (Secure Storage ›
-    // Disk Clean-Up) now so the "MB selected" counter is already populated
-    // by the time the user navigates there, instead of showing a loading
-    // flash on first visit. Dynamic import keeps the panel's UI code out of
-    // the main bundle — only the scan trigger runs eagerly, the component
-    // itself still lazy-loads normally via PANEL_MANIFESTS. Never awaited,
-    // so this can't delay initial render; failures are swallowed and the
-    // panel just falls back to scanning on-demand, same as before.
-    import("./components/tweaks/managers/DiskCleanupGranular")
-      .then((m) => m.preloadDiskCleanupScan())
-      .catch(() => { /* best-effort — panel scans normally on open */ });
   }, []);
 
+  const preloadDiskCleanup = useCallback((priority: "background" | "idle") => {
+    void runStartupJob({
+      id: "disk-cleanup-preload",
+      priority,
+      cost: "expensive",
+      timeoutMs: 60_000,
+      run: async (signal) => {
+        if (signal.aborted) return;
+        const module = await import("./components/tweaks/managers/DiskCleanupGranular");
+        if (signal.aborted) return;
+        await module.fetchDiskCleanupScan();
+      },
+    });
+  }, [runStartupJob]);
+
   useEffect(() => {
-    if (!splashDone) return;
-    const id = window.setTimeout(preloadSearchFilesPanel, 1500);
-    return () => window.clearTimeout(id);
-  }, [splashDone]);
+    if (isLoading) return;
+    const queue = new PanelPrefetchQueue(1);
+    panelPrefetchRef.current = queue;
+    const queueWhenIdle = (signal: AbortSignal, items: ReadonlyArray<{ id: string; load: () => Promise<unknown> }>) =>
+      new Promise<void>((resolve) => {
+        const cancel = scheduleWhenIdle(() => {
+          if (!signal.aborted) queue.enqueueIdle(items);
+          resolve();
+        });
+        signal.addEventListener("abort", () => {
+          cancel();
+          resolve();
+        }, { once: true });
+      });
+
+    const primaryPanels = PANEL_MANIFESTS
+      .filter((panel) => panel.navTier === "primary" && panel.id !== "dashboard" && panel.id !== "search-files")
+      .map((panel) => ({ id: panel.id, load: panel.importFn }));
+    const searchPanel = PANEL_MANIFESTS.find((panel) => panel.id === "search-files");
+    void runStartupJob({
+      id: "panel-preload",
+      priority: "idle",
+      cost: "light",
+      timeoutMs: 15_000,
+      run: (signal) => queueWhenIdle(signal, primaryPanels),
+    });
+    if (searchPanel) {
+      void runStartupJob({
+        id: "search-preload",
+        priority: "idle",
+        cost: "light",
+        timeoutMs: 15_000,
+        run: (signal) => queueWhenIdle(signal, [{ id: searchPanel.id, load: searchPanel.importFn }]),
+      });
+    }
+    // Do not reserve the coordinator's single expensive lane while merely
+    // waiting for browser idle. The job enters that lane only once this timer
+    // actually runs, after critical probes have had a chance to start.
+    const cancelDiskIdle = scheduleWhenIdle(() => preloadDiskCleanup("idle"));
+    return () => {
+      cancelDiskIdle();
+      queue.dispose();
+      if (panelPrefetchRef.current === queue) panelPrefetchRef.current = null;
+    };
+  }, [isLoading, preloadDiskCleanup, runStartupJob]);
 
   // A flow's NotifyAction ("Show a notification") emits `flow-notify`; surface it
   // as a real toast + bell entry. Without this a NotifyAction fired but showed
@@ -1089,10 +1201,14 @@ function AppContent() {
       window.dispatchEvent(new Event("panel-scroll-top"));
       return;
     }
+    panelPrefetchRef.current?.keepRelevant(panel);
+    if (panel === "maintenance" || panel === "cleanup") {
+      preloadDiskCleanup("background");
+    }
     setActivePanel(panel);
     // KT: Persist to settings.json so next session resumes on the same panel
     patchAppSettings({ app: { lastPanel: panel } }).catch(() => { });
-  }, [activePanel, patchAppSettings, appSettings?.app?.modules, canUseDevTools]);
+  }, [activePanel, patchAppSettings, appSettings?.app?.modules, canUseDevTools, preloadDiskCleanup]);
 
   useEffect(() => {
     if (activePanel === "flows" && !canUseDevTools) setActivePanel("dashboard");
@@ -1149,11 +1265,25 @@ function AppContent() {
   const handlePanelHover = useCallback((panel: PanelId) => {
     if (isIdlePaused) return;
     const manifest = PANEL_MANIFESTS.find((m) => m.id === panel);
-    if (!manifest?.refreshKey) return;
-    // Look up the refresh function on the AppContext by its key
-    const refreshFn = (appState as Record<string, any>)[manifest.refreshKey];
-    if (typeof refreshFn === "function") refreshFn(true);
-  }, [appState, isIdlePaused]);
+    if (!manifest) return;
+    void runStartupJob({
+      id: "panel-preload",
+      priority: "background",
+      cost: "light",
+      timeoutMs: 10_000,
+      run: async (signal) => {
+        if (!signal.aborted) panelPrefetchRef.current?.enqueueIntent(manifest.id, manifest.importFn);
+      },
+    });
+    if (panel === "maintenance" || panel === "cleanup") {
+      preloadDiskCleanup("background");
+    }
+    if (manifest.refreshKey) {
+      // Look up the refresh function on the AppContext by its key.
+      const refreshFn = (appState as unknown as Record<string, unknown>)[manifest.refreshKey];
+      if (typeof refreshFn === "function") void (refreshFn as (force: boolean) => unknown)(true);
+    }
+  }, [appState, isIdlePaused, preloadDiskCleanup, runStartupJob]);
   const handleShredRequest = useCallback((payload: string | string[]) => {
     const incoming = Array.isArray(payload) ? payload : [payload];
     setShredPaths(prev => {

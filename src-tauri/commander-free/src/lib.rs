@@ -97,6 +97,7 @@ mod shortcut_cleaner;
 mod sidecar;
 mod startup_auth;
 mod startup_maintenance;
+mod startup_trace;
 mod storage_probe;
 mod svc_client;
 // This is an executable-free admission contract, covered by its unit tests.
@@ -1518,6 +1519,8 @@ fn setup_tauri_cli_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let cli_mode = cli::tauri_runtime_active();
+    startup_trace::init();
+    startup_trace::pre_window_milestone("process_start");
     dev_startup_trace("process start");
     if !cli_mode {
         log_message("info", "[System] WinCommander process starting...");
@@ -1628,6 +1631,7 @@ pub fn run() {
             log::purge_old_log_records(&log_file, 7);
         }
     }
+    startup_trace::pre_window_milestone("pre-builder.complete");
     dev_startup_trace("pre-builder work complete");
     let mut context = tauri::generate_context!();
     if cli_mode {
@@ -1674,6 +1678,7 @@ pub fn run() {
                 };
             }
             dev_startup_trace("setup entered");
+            startup_trace::milestone(app.handle(), "native_setup_entered");
             log_message(
                 "info",
                 "[System] setup() starting: Initializing tray and hotkeys...",
@@ -1708,6 +1713,19 @@ pub fn run() {
             #[cfg(windows)]
             session_instance::start_pipe_listener(app.handle().clone());
 
+            // Packaged builds own a machine-wide, per-session logon task. The
+            // check runs off the setup thread and writes only when task identity
+            // or integrity has drifted, including on Windows Server/RDS.
+            #[cfg(all(windows, not(debug_assertions)))]
+            {
+                let app_handle = app.handle().clone();
+                startup_trace::job_started(&app_handle, "autostart.integrity");
+                std::thread::spawn(move || {
+                    let succeeded = autostart::ensure_autostart_task().is_ok();
+                    startup_trace::job_finished(&app_handle, "autostart.integrity", succeeded);
+                });
+            }
+
             // Native session-end vault dismount — a reliable backstop for the
             // existing 10s-poll incoming-RDP dismount (useRdpIncomingDismount.ts):
             // that poll can miss its own session ending, since Windows may tear
@@ -1731,6 +1749,7 @@ pub fn run() {
                 );
             }
             dev_startup_trace("startup flags loaded");
+            startup_trace::milestone(app.handle(), "setup.flags-loaded");
 
             // ── R2: re-enforce hidden state + start reapply watcher ─────────
             // runtime_visibility::actions::reenforce_hidden_on_startup() and
@@ -1975,6 +1994,7 @@ pub fn run() {
                     let _ = window.set_focus();
                 }
                 dev_startup_trace("main window reveal requested");
+                startup_trace::milestone(app.handle(), "main_window_show_requested");
 
                 // Deferred: nothing here gates the window appearing. license/entitlement probes
                 // and hide re-enforcement spawn PowerShell (cold WMI = tens of seconds on a
@@ -2226,6 +2246,7 @@ pub fn run() {
             // safe to call repeatedly. Auto-resets the timer on startup.
             inactivity_timer::init(app.handle());
             dev_startup_trace("background services initialized");
+            startup_trace::milestone(app.handle(), "critical-listeners.armed");
 
             // Fleet agent auto-connect on startup: if the user previously
             // enrolled this device (app.fleet.enabled + non-empty serverUrl),
@@ -2444,6 +2465,7 @@ pub fn run() {
             session_instance::set_app_ready(&app.handle().clone());
 
             log_message("info", "[System] setup() finished. Application ready.");
+            startup_trace::milestone(app.handle(), "setup.complete");
             dev_startup_trace("setup complete");
             Ok(())
         })
@@ -2452,6 +2474,9 @@ pub fn run() {
             // inert during a normal desktop launch.
             cli::mark_tauri_cli_ready,
             cli::complete_tauri_cli,
+            startup_trace::get_startup_trace,
+            startup_trace::report_startup_milestone,
+            startup_trace::report_startup_phase,
             exit_app,
             reveal_main_window_for_security_alert,
             open_log_file,

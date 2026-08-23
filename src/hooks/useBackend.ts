@@ -640,13 +640,6 @@ export interface VolumeInfo {
   readOnly: boolean;
 }
 
-export interface SystemEncryptionStatus {
-  encrypted: boolean;
-  progress: number | null;
-  algorithm: string | null;
-  mode: string | null;
-}
-
 export interface RamDisk {
   deviceNumber: number;
   letter: string;
@@ -1892,8 +1885,6 @@ export function useBackend() {
       }),
     getVolumeInfo: (letter: string) =>
       execute<VolumeInfo>("Get-VolumeInfo", { DriveLetter: letter }),
-    getSystemEncryptionStatus: () =>
-      execute<SystemEncryptionStatus>("Get-SystemEncryptionStatus"),
     getEncryptionPartitions: () =>
       execute<{ partitions: EncryptionPartition[] }>("Get-EncryptionPartitions"),
     getAvailableDriveLetters: () =>

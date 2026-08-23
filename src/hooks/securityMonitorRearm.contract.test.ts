@@ -62,4 +62,29 @@ describe("security monitor startup contracts", () => {
     expect(app).toContain('? "start_screen_capture_watch"');
     expect(app).toContain("Screen-capture detection could not re-arm");
   });
+
+  test("startup readiness is driven by enabled rearm results, never cache hydration", () => {
+    const app = source("src/App.tsx");
+    expect(app).toContain("createStartupProtectionReadiness(reportStartupPhase)");
+    expect(app).toContain("startupProtectionConfiguredRef.current = true");
+    expect(app).toContain("configure(configuredStartupProtectionOperations)");
+    for (const operation of [
+      "decoy-monitor",
+      "ransomware-monitor",
+      "remote-access-monitor",
+      "usb-security",
+      "wifi-guard",
+      "auth-anomaly-monitor",
+      "screen-capture-watch",
+    ]) {
+      expect(app).toContain(`\"${operation}\" as const`);
+    }
+    expect(app).toContain('reportStartupProtectionRearm("usb-security", true)');
+    expect(app).toContain('reportStartupProtectionRearm("screen-capture-watch", true)');
+    expect(source("src/hooks/useRansomwareMonitor.ts")).toContain('onStartupRearm?.("ransomware-monitor", true)');
+    expect(source("src/hooks/useDecoyMonitor.ts")).toContain('onStartupRearm?.("decoy-monitor", true)');
+    expect(source("src/hooks/useRemoteAccessMonitor.ts")).toContain('onStartupRearm?.("remote-access-monitor", true)');
+    expect(source("src/hooks/useWifiGuardMonitor.ts")).toContain('onStartupRearm?.("wifi-guard", true)');
+    expect(source("src/hooks/useAuthAnomalyMonitor.ts")).toContain('onStartupRearm?.("auth-anomaly-monitor", true)');
+  });
 });

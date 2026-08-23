@@ -19,7 +19,7 @@
 
 import type { IconName } from "@/components/ui/bp";
 import type { Tier } from "../types/toggles";
-import { companyLogos, software, saas } from "@/assets";
+import { companyLogos, software, saas } from "@/assets/featureLogos";
 
 // ═══════════════════════════════════════════════════════════════════════
 // FEATURE DEFINITION — Generic non-toggle capability
