@@ -347,7 +347,7 @@ jobs:
             throw "The NSIS setup failed with exit code $($setupProcess.ExitCode)."
           }
 
-          $servicePath = Join-Path $env:ProgramFiles "WinCommander\\wincommander-svc.exe"
+          $servicePath = Join-Path $env:ProgramFiles "WinCommander\wincommander-svc.exe"
           if (-not (Test-Path -LiteralPath $servicePath -PathType Leaf)) {
             throw "The NSIS setup did not install wincommander-svc.exe at $servicePath."
           }
@@ -366,7 +366,7 @@ jobs:
             throw "WinCommanderSvc was installed but is not running (state: $($running.Status))."
           }
 
-          $uninstaller = Join-Path $env:ProgramFiles "WinCommander\\uninstall.exe"
+          $uninstaller = Join-Path $env:ProgramFiles "WinCommander\uninstall.exe"
           if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
             throw "The NSIS setup did not create its uninstaller at $uninstaller."
           }

@@ -13,10 +13,10 @@ commit timestamps). Shipped capabilities (not fixes) live in
 ### Added
 
 - **Reliable Windows service release gate** (2026-08-23) — the clean-install
-  release check now verifies the service manager's canonical `Start=2` value
-  for automatic startup instead of depending on a Windows provider's display
-  label. Failure output includes the startup value, provider label, and binary
-  path, and the packaging contract test is newline-safe on Windows checkouts.
+  release check now uses canonical single-separator service and uninstaller
+  paths and verifies the service manager's `Start=2` value for automatic
+  startup. Failure output includes the startup value, provider label, and
+  binary path, and the packaging contract test is newline-safe on Windows.
 
 - **Fleet account rename reconciliation and simpler Vault permissions**
   (2026-08-23) — Access Control now keys discovered Windows accounts by SID, so
