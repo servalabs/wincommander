@@ -1403,6 +1403,7 @@
 }
 
 .fleet-field-hint,
+.fleet-field > small,
 .fleet-switch-field small,
 .fleet-partition-list small {
   color: var(--text-mute);
@@ -2044,8 +2045,73 @@
   font-size: 11px;
 }
 
+.fleet-vault-refresh-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.fleet-vault-grants {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.fleet-vault-grant-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fleet-vault-add-grant {
+  justify-self: start;
+}
+
+.fleet-vault-save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ok);
+  font-size: 11px;
+}
+
+.fleet-vault-verification-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+}
+
+.fleet-vault-verification-warning > div {
+  display: grid;
+  gap: 3px;
+}
+
+.fleet-vault-verification-warning strong {
+  font-size: 12px;
+}
+
+.fleet-vault-verification-warning p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 @container (max-width: 960px) {
   .fleet-owner-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container (max-width: 600px) {
+  .fleet-vault-grant-row { grid-template-columns: minmax(0, 1fr); }
+  .fleet-vault-grant-row > button { justify-self: start; }
 }
 
 @container (max-width: 600px) {

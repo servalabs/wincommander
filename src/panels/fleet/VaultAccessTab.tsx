@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
@@ -11,22 +12,14 @@ import {
   newVaultEntry, newVaultPolicy, validateVaultAccessIntent, vaultMountResultLabel, vaultPresentationLabel,
   type VaultAuthorizedEntry,
   type VaultMountEntryResult,
-  type VaultAccessEntry, type VaultAccessPolicy, type VaultEntryStatus, type VaultPolicyStatus,
+  type VaultAccessEntry, type VaultAccessPolicy, type VaultPolicyStatus,
 } from "./vaultAccessTypes";
 import { applyVaultAccessPreset, VAULT_ACCESS_PRESETS, vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
 import VaultAccessPatternPicker from "./VaultAccessPatternPicker";
+import { vaultPolicyVerification } from "./vaultAccessPresentation";
 
-function observedResult(status: VaultEntryStatus | undefined) {
-  if (!status) return "Not observed by the service";
-  // Older persisted policy status can still carry this result. Current mount
-  // state is supplied separately by the concrete service mount lifecycle.
-  return status.result === "pending_mount_broker"
-    ? "Host policy applied; awaiting service mount-state refresh"
-    : status.result.replaceAll("_", " ");
-}
-
-function appliedAt(timestamp: number | null) {
-  return timestamp == null ? "Never" : new Date(timestamp * 1000).toLocaleString();
+function appliedAt(timestamp: number) {
+  return new Date(timestamp * 1000).toLocaleString();
 }
 
 export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
@@ -232,7 +225,8 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
 
   if (loading) return <div className="fleet-admin-stack">Loading your Vault access…</div>;
   const activePolicy = policy;
-  const statusById = new Map(status?.entries.map(entry => [entry.id, entry]));
+  const authorizedById = new Map(authorizedEntries.map(entry => [entry.entry_id, entry]));
+  const verification = draftDirty ? null : vaultPolicyVerification(status);
   const mountTarget = authorizedEntries.find(entry => entry.entry_id === mountTargetId)
     ?? activePolicy?.entries.find(entry => entry.id === mountTargetId);
 
@@ -279,7 +273,9 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
               )}
             </div>;
           })}
-          <Button variant="outline" size="sm" onClick={() => void refresh()}>Refresh Vault access</Button>
+          <div className="fleet-vault-refresh-row">
+            <Button variant="outline" size="sm" onClick={() => void refresh()}><Icon icon="refresh" size={14} />Refresh</Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -299,9 +295,9 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
           </div>}
           {activePolicy && <p className="fleet-field-hint">{draftDirty ? "Draft auto-saved on this PC — not yet applied to Windows." : "Showing the policy saved by the security service."}</p>}
           {activePolicy?.entries.map((entry, entryIndex) => {
-            const observed = statusById.get(entry.id);
+            const authorized = authorizedById.get(entry.id);
             const mountResult = mountResults[entry.id];
-            const isMounted = mountResult?.state === "mounted" || observed?.mount_state === "mounted";
+            const isMounted = mountResult?.state === "mounted" || authorized?.mount_state === "mounted";
             const accessPreset = vaultAccessPreset(entry);
             return <div className="fleet-vault-workspace" key={entry.id}>
               <div className="fleet-vault-workspace-header">
@@ -309,22 +305,23 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
                 <Button variant="outline" size="sm" onClick={() => editPolicy(current => current && ({ ...current, entries: current.entries.filter(item => item.id !== entry.id) }))}>Remove</Button>
               </div>
               <div className="fleet-owner-inputs">
-                <label className="fleet-field"><span>Vault name</span><Input aria-label={`Vault ${entryIndex + 1} label`} value={entry.label} placeholder="Shared vault" onChange={event => updateEntry(entry.id, { label: event.target.value })} /></label>
-                <label className="fleet-field"><span>Container file</span><Input aria-label={`Vault ${entryIndex + 1} container path`} value={entry.container_path} placeholder="D:\\Vaults\\shared.hc" onChange={event => updateEntry(entry.id, { container_path: event.target.value })} /><small>Keep each managed container inside its own dedicated parent folder.</small></label>
-                <label className="fleet-field"><span>Primary owner</span><Input aria-label={`Vault ${entryIndex + 1} owner`} value={entry.owner_account} placeholder="SERVER\\shrey" onChange={event => setOwnerAccount(entry.id, event.target.value)} /></label>
-                <label className="fleet-field"><span>Drive letter</span><Input aria-label={`Vault ${entryIndex + 1} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} /></label>
+                <label className="fleet-field"><span>Vault name</span><Input aria-label={`Vault ${entryIndex + 1} label`} value={entry.label} placeholder="Shared vault" onChange={event => updateEntry(entry.id, { label: event.target.value })} /><small>The label people recognize.</small></label>
+                <label className="fleet-field"><span>Container file</span><Input aria-label={`Vault ${entryIndex + 1} container path`} value={entry.container_path} placeholder="D:\\Vaults\\shared.hc" onChange={event => updateEntry(entry.id, { container_path: event.target.value })} /><small>The encrypted .hc file on this PC. Keep each managed Vault in its own dedicated parent folder.</small></label>
+                <label className="fleet-field"><span>Primary owner</span><Input aria-label={`Vault ${entryIndex + 1} owner`} value={entry.owner_account} placeholder="SERVER\\shrey" onChange={event => setOwnerAccount(entry.id, event.target.value)} /><small>The Windows account responsible for this Vault. Use PC-or-domain\username.</small></label>
+                <label className="fleet-field"><span>Drive letter</span><Input aria-label={`Vault ${entryIndex + 1} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} /><small>The preferred letter in File Explorer. Leave blank for Windows to choose.</small></label>
               </div>
               <VaultAccessPatternPicker value={accessPreset} onChange={preset => setAccessPreset(entry.id, preset)} />
-              <div className="fleet-vault-matrix">
+              <div className="fleet-vault-grants">
                 <strong>{accessPreset === "private" ? "3. Confirm owner access" : "3. Add Windows users or groups"}</strong>
+                {accessPreset !== "private" && <p className="fleet-field-hint">A Windows user or group gives that account or team the access selected above.</p>}
                 {accessPreset === "private"
                   ? <p className="fleet-field-hint">Only the primary owner can mount or edit this vault. Its drive appears only in that Windows session.</p>
-                  : entry.grants.map((grant, grantIndex) => <div className="fleet-action-row" key={`${entry.id}-${grantIndex}`}>
+                  : entry.grants.map((grant, grantIndex) => <div className="fleet-vault-grant-row" key={`${entry.id}-${grantIndex}`}>
                     <label className="fleet-field"><span>Windows user or group</span><Input aria-label={`Grant ${grantIndex + 1} principal`} value={grant.principal_name} placeholder="SERVER\\Admins" onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, principal_name: event.target.value } : current) })} /><small>{accessPreset === "custom" ? "This person has the level selected beside them." : VAULT_ACCESS_PRESETS[accessPreset].label}</small></label>
                     {accessPreset === "custom" && <label className="fleet-field"><span>Access</span><select aria-label={`Grant ${grantIndex + 1} access`} value={grant.access} onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, access: event.target.value as "read" | "write" } : current) })}><option value="write">Can edit</option><option value="read">View only</option></select></label>}
                     <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: entry.grants.filter((_, index) => index !== grantIndex) })}>Remove</Button>
                   </div>)}
-                {accessPreset !== "private" && <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: [...entry.grants, { principal_name: "", access: entry.grants[0]?.access ?? "write" }] })}>Add person or group</Button>}
+                {accessPreset !== "private" && <Button className="fleet-vault-add-grant" variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: [...entry.grants, { principal_name: "", access: entry.grants[0]?.access ?? "write" }] })}>Add person or group</Button>}
               </div>
               <div className="fleet-vault-lifecycle">
                 <div>
@@ -332,9 +329,15 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
                   <p className="fleet-field-hint">
                     {mountResult
                       ? vaultMountResultLabel(mountResult)
-                      : observed?.mount_state
-                        ? `Service state: ${observed.mount_state}`
-                        : observedResult(observed)}
+                      : authorized?.drive_letter
+                        ? `Mounted at ${authorized.drive_letter}`
+                        : authorized?.mount_state === "mounted"
+                          ? "Mounted for this Windows session"
+                          : authorized
+                            ? "Ready to mount when needed"
+                            : status?.validation_state === "degraded"
+                              ? "Mounting is unavailable until the saved access settings are fixed."
+                              : "Mount access is checked for the signed-in Windows account."}
                   </p>
                 </div>
                 {isMounted ? (
@@ -359,14 +362,18 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
               return { ...source, entries: [...source.entries, newVaultEntry("shared")] };
             })}>Add shared vault</Button>
             <Button variant="primary" disabled={saving || !!error} onClick={() => void apply()}>{saving ? "Saving…" : "Save vault settings"}</Button>
+            {verification?.tone === "success" && <span className="fleet-vault-save-status" role="status"><Icon icon="tick-circle" size={14} />{verification.title}{verification.appliedAt != null ? ` · ${appliedAt(verification.appliedAt)}` : ""}</span>}
           </div>
           {error && <p className="fleet-validation-errors">{error}</p>}
+          {verification?.tone === "warning" && <div className="fleet-vault-verification-warning" role="alert">
+            <Icon icon="warning-sign" size={16} />
+            <div><strong>{verification.title}</strong><p>{verification.detail}</p></div>
+          </div>}
           <details className="fleet-vault-advanced">
             <summary>Advanced and recovery</summary>
-            <p>Use these only to recover an older draft, reload service status, or undo local edits.</p>
+            <p>Use these only to import an older planner draft or discard local edits and return to the last settings saved by Windows.</p>
             <div className="fleet-action-row">
               <Button variant="outline" size="sm" onClick={importLegacyDraft}>Import retired planner as draft</Button>
-              <Button variant="outline" size="sm" onClick={() => void refresh()}>Refresh status</Button>
               <Button variant="outline" size="sm" onClick={() => void discardDraftAndReload()}>Discard draft & reload saved</Button>
             </div>
             {legacyNotice && <span className="fleet-field-hint">{legacyNotice}</span>}
@@ -374,16 +381,6 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
         </CardContent>
       </Card>
 
-      <Card>
-        <details className="fleet-vault-advanced fleet-vault-service-details">
-          <summary>Service verification details</summary>
-          <p>Service-reported policy validation and mount state, not a forecast. This source view does not establish live mount acceptance.</p>
-          <p>Policy: {status?.policy_id ?? "none"} · Version {status?.version ?? 0} · Validation: {status?.validation_state ?? "never_applied"} · Applied: {appliedAt(status?.applied_at ?? null)}</p>
-          <ul className="fleet-validation-errors">
-            {status?.entries.map((entry, index) => <li key={entry.id}>Vault {index + 1}: {observedResult(entry)}</li>)}
-          </ul>
-        </details>
-      </Card>
       </>}
 
       <Dialog open={mountTargetId !== null} onOpenChange={open => { if (!open) closeMountPrompt(); }}>

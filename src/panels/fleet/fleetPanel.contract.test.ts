@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 const panel = readFileSync("src/panels/fleet/index.tsx", "utf8");
 const access = readFileSync("src/panels/fleet/AccessControlTab.tsx", "utf8");
 const vault = readFileSync("src/panels/fleet/VaultAccessTab.tsx", "utf8");
+const vaultPresentation = readFileSync("src/panels/fleet/vaultAccessPresentation.ts", "utf8");
 const patternPicker = readFileSync("src/panels/fleet/VaultAccessPatternPicker.tsx", "utf8");
 const vaultHook = readFileSync("src/hooks/useVaultAccess.ts", "utf8");
 const vaultDraft = readFileSync("src/panels/fleet/vaultAccessDraft.ts", "utf8");
@@ -92,9 +93,38 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("1. Vault details");
     expect(vault).toContain("3. Add Windows users or groups");
     expect(vault).toContain("Advanced and recovery");
-    expect(vault).toContain("Service verification details");
     expect(patternPicker).toContain("2. Choose who can use this vault");
     expect(css).toContain(".fleet-vault-advanced");
+  });
+
+  test("explains every Vault setting and hides raw service bookkeeping", () => {
+    expect(vault).toContain("The label people recognize.");
+    expect(vault).toContain("The encrypted .hc file on this PC.");
+    expect(vault).toContain("The Windows account responsible for this Vault.");
+    expect(vault).toContain("The preferred letter in File Explorer.");
+    expect(vault).toContain("gives that account or team the access selected above");
+    expect(vaultPresentation).toContain("Saved to Windows");
+    expect(vaultPresentation).toContain("Mounting is unavailable until this is fixed");
+    expect(vault).not.toContain("Service verification details");
+    expect(vault).not.toContain("does not establish live mount acceptance");
+    expect(vault).not.toContain("Policy: {status?.policy_id");
+    expect(vault).not.toContain("Validation: {status?.validation_state");
+  });
+
+  test("offers one compact manual refresh action", () => {
+    expect(vault.match(/onClick=\{\(\) => void refresh\(\)\}/g)).toHaveLength(1);
+    expect(vault).toContain('<Icon icon="refresh" size={14} />');
+    expect(vault).toContain(">Refresh</Button>");
+    expect(vault).not.toContain("Refresh Vault access");
+    expect(vault).not.toContain("Refresh status");
+  });
+
+  test("keeps the user and group editor separate from the permissions table layout", () => {
+    expect(vault).toContain('className="fleet-vault-grants"');
+    expect(vault).toContain('className="fleet-vault-grant-row"');
+    expect(vault).not.toContain('<div className="fleet-vault-matrix">');
+    expect(css).toContain(".fleet-vault-grants");
+    expect(css).toContain(".fleet-vault-grant-row");
   });
 
   test("opens real information popovers for access groups and Vault permissions", () => {
@@ -113,9 +143,8 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("Saved vaults");
     expect(vault).toContain("Future mounts only need the password");
     expect(vault).toContain("Save vault settings");
-    expect(vault).toContain("awaiting service mount-state refresh");
-    expect(vault).toContain("pending_mount_broker");
-    expect(vault).toContain("does not establish live mount acceptance");
+    expect(vaultPresentation).toContain("needs to refresh this older Vault status");
+    expect(vaultPresentation).toContain("pending_mount_broker");
     expect(vault).toContain("own dedicated parent folder");
     expect(vault).toContain("Draft auto-saved on this PC");
     expect(vault).toContain("dirtyRef.current");
