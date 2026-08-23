@@ -187,12 +187,12 @@ Common tasks:
 
 | Task | Read first | Then read |
 |---|---|---|
-| Tier classification + paid-vs-free | [ARCHITECTURE.md — Executable open-core model](ARCHITECTURE.md#executable-open-core-model) | [src/types/toggles.ts](src/types/toggles.ts), [src/registry/](src/registry/) |
-| New paid command in Pro | [ARCHITECTURE.md — Executable open-core model](ARCHITECTURE.md#executable-open-core-model) | Request Pro contributor access; Free-side tiering is in [src-tauri/commander-free/src/backend.rs](src-tauri/commander-free/src/backend.rs). |
-| IPC wire format / pipe transport | [docs/ipc.md](docs/ipc.md) | [src-tauri/wincmd-shared/src/lib.rs](src-tauri/wincmd-shared/src/lib.rs), [src-tauri/commander-free/src/sidecar.rs](src-tauri/commander-free/src/sidecar.rs) |
-| UI / styling / components | [ARCHITECTURE.md — Components](ARCHITECTURE.md#components) | the source itself: [src/](src/) and [src/styles/](src/styles/) |
-| New panel / panel refactor | [src/types/panels.ts](src/types/panels.ts) | [FEATURES.md](FEATURES.md), [ARCHITECTURE.md — Components](ARCHITECTURE.md#components) |
-| Settings read/write + drift | [docs/settings-reference.md](docs/settings-reference.md) | [src/types/settings.ts](src/types/settings.ts) |
+| Tier classification + paid-vs-free | [ARCHITECTURE.md — Open-core model](ARCHITECTURE.md#open-core-model) | [src/types/toggles.ts](src/types/toggles.ts), [src/registry/](src/registry/) |
+| New paid command in Pro | [ARCHITECTURE.md — Open-core model](ARCHITECTURE.md#open-core-model) | Request Pro contributor access; Free-side tiering is in [src-tauri/commander-free/src/backend.rs](src-tauri/commander-free/src/backend.rs). |
+| IPC wire format / pipe transport | [ARCHITECTURE.md — Data and trust boundaries](ARCHITECTURE.md#data-and-trust-boundaries) | [src-tauri/wincmd-shared/src/lib.rs](src-tauri/wincmd-shared/src/lib.rs), [src-tauri/commander-free/src/sidecar.rs](src-tauri/commander-free/src/sidecar.rs) |
+| UI / styling / components | [ARCHITECTURE.md — Public components](ARCHITECTURE.md#public-components) | the source itself: [src/](src/) and [src/styles/](src/styles/) |
+| New panel / panel refactor | [src/types/panels.ts](src/types/panels.ts) | [FEATURES.md](FEATURES.md), [ARCHITECTURE.md — Public components](ARCHITECTURE.md#public-components) |
+| Settings read/write + drift | [ARCHITECTURE.md — Settings model](ARCHITECTURE.md#settings-model) | [src/types/settings.ts](src/types/settings.ts) |
 
 ## Pull request hygiene
 

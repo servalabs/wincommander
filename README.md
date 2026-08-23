@@ -49,7 +49,7 @@ cd wincommander
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\dev.ps1
 ```
 
-`tools/dev.ps1` installs Bun 1.3.14 when absent, installs the exact Rust
+`tools/dev.ps1` installs Bun 1.4.0 when absent, installs the exact Rust
 toolchain/components pinned in `rust-toolchain.toml`, then starts Tauri. The
 Visual Studio C++ Build Tools and Windows SDK remain manual prerequisites.
 
@@ -71,10 +71,9 @@ on the GitHub Release:
 
 | Doc                                | What's inside                                                 |
 | :--------------------------------- | :------------------------------------------------------------ |
-| [FEATURES.md](FEATURES.md)         | Every feature, exhaustively — Free and Pro                    |
-| [docs/security-defense-matrix.md](docs/security-defense-matrix.md) | Attack defenses, tier boundary, settings, and honest limits |
+| [FEATURES.md](FEATURES.md)         | Public capability and Free/Pro/Fleet/Investigator boundary    |
 | [docs/usb-keyboard-approval.md](docs/usb-keyboard-approval.md) | Configure and operate reactive unknown-keyboard approval safely |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | How it's built: two binaries, encrypted modules, IPC          |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Public architecture, trust boundaries, and source map         |
 | [SECURITY.md](SECURITY.md)         | Threat model, security posture, how to report a vulnerability |
 | [docs/cli.md](docs/cli.md)         | Automate the same Free executable with JSON and safety gates   |
 | [POSITIONING.md](POSITIONING.md)   | Who it's for and how it compares to alternatives              |

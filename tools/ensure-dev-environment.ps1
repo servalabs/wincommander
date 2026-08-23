@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $toolchainFile = Join-Path $repoRoot "rust-toolchain.toml"
-$bunVersion = "1.3.14"
+$bunVersion = "1.4.0"
 $rustupInitUrl = "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe"
 
 function Add-ProcessPathEntry {

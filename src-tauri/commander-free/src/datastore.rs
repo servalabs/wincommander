@@ -35,7 +35,7 @@
 // No callers are wired in P0 — this module is the seam P1/P2 build against.
 
 use aes_gcm::{
-    aead::{Aead, KeyInit},
+    aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
 };
 use argon2::{Argon2, Params};
@@ -49,7 +49,9 @@ use std::path::PathBuf;
 const MATERIAL_FILENAME: &str = ".install.material";
 const USER_MATERIAL_FILENAME: &str = ".user-store.material";
 const STORE_SUBDIR: &str = "store";
-const FORMAT_PREFIX: &str = "enc:v1:";
+const FORMAT_PREFIX_V1: &str = "enc:v1:";
+const FORMAT_PREFIX_V2: &str = "enc:v2:";
+const AAD_PREFIX: &str = "wincommander:datastore:v2:";
 
 // argon2id params — tuned for interactive load latency (~50 ms on modern hardware).
 const ARGON2_MEM_KIB: u32 = 65_536; // 64 MiB
@@ -340,24 +342,52 @@ fn derive_section_key(
     Ok(out)
 }
 
-fn encode_section(key: &[u8; DERIVED_KEY_LEN], plaintext: &[u8]) -> Result<String, String> {
+fn section_aad(scope: &str) -> String {
+    format!("{AAD_PREFIX}{scope}")
+}
+
+/// Writes the current datastore envelope.  The authenticated scope prevents a
+/// local attacker who can replace files from moving a valid ciphertext between
+/// settings sections or user-owned blobs.
+fn encode_section(
+    key: &[u8; DERIVED_KEY_LEN],
+    plaintext: &[u8],
+    scope: &str,
+) -> Result<String, String> {
     let cipher = Aes256Gcm::new(key.into());
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
+    let aad = section_aad(scope);
     let ciphertext = cipher
-        .encrypt(nonce, plaintext)
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad: aad.as_bytes(),
+            },
+        )
         .map_err(|e| format!("Encoding failed: {e}"))?;
     let mut payload = Vec::with_capacity(12 + ciphertext.len());
     payload.extend_from_slice(&nonce_bytes);
     payload.extend_from_slice(&ciphertext); // GCM tag is appended by aes_gcm
-    Ok(format!("{}{}", FORMAT_PREFIX, B64.encode(&payload)))
+    Ok(format!("{}{}", FORMAT_PREFIX_V2, B64.encode(&payload)))
 }
 
-fn decode_section(key: &[u8; DERIVED_KEY_LEN], encoded: &str) -> Result<Vec<u8>, String> {
-    let b64_part = encoded
-        .strip_prefix(FORMAT_PREFIX)
-        .ok_or_else(|| "Missing enc:v1: prefix".to_string())?;
+fn decode_section(
+    key: &[u8; DERIVED_KEY_LEN],
+    encoded: &str,
+    scope: &str,
+) -> Result<Vec<u8>, String> {
+    let (b64_part, uses_aad) = if let Some(value) = encoded.strip_prefix(FORMAT_PREFIX_V2) {
+        (value, true)
+    } else if let Some(value) = encoded.strip_prefix(FORMAT_PREFIX_V1) {
+        // Existing v1 records are intentionally readable for a non-destructive
+        // migration. Every later save emits v2 with authenticated context.
+        (value, false)
+    } else {
+        return Err("Missing supported encrypted-store prefix".to_string());
+    };
     let payload = B64
         .decode(b64_part)
         .map_err(|e| format!("Base64 decode failed: {e}"))?;
@@ -367,9 +397,19 @@ fn decode_section(key: &[u8; DERIVED_KEY_LEN], encoded: &str) -> Result<Vec<u8>,
     let (nonce_bytes, ciphertext) = payload.split_at(12);
     let cipher = Aes256Gcm::new(key.into());
     let nonce = Nonce::from_slice(nonce_bytes);
-    cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|_| "Decoding failed — wrong passphrase or corrupted data".to_string())
+    let aad = section_aad(scope);
+    let plaintext = if uses_aad {
+        cipher.decrypt(
+            nonce,
+            Payload {
+                msg: ciphertext,
+                aad: aad.as_bytes(),
+            },
+        )
+    } else {
+        cipher.decrypt(nonce, ciphertext)
+    };
+    plaintext.map_err(|_| "Decoding failed — wrong passphrase or corrupted data".to_string())
 }
 
 // ── Atomic write helper ───────────────────────────────────────────────────────
@@ -408,7 +448,7 @@ pub fn load(section: &str) -> Result<Value, String> {
         .map_err(|e| format!("Failed to read section '{section}': {e}"))?;
     let material = install_material()?;
     let key = derive_section_key(&material, None)?;
-    let bytes = decode_section(&key, raw.trim())?;
+    let bytes = decode_section(&key, raw.trim(), &format!("machine:{section}"))?;
     serde_json::from_slice(&bytes).map_err(|e| format!("Failed to parse section '{section}': {e}"))
 }
 
@@ -419,7 +459,7 @@ pub fn save(section: &str, data: &Value) -> Result<(), String> {
     let key = derive_section_key(&material, None)?;
     let bytes = serde_json::to_vec(data)
         .map_err(|e| format!("Failed to serialise section '{section}': {e}"))?;
-    let encoded = encode_section(&key, &bytes)?;
+    let encoded = encode_section(&key, &bytes, &format!("machine:{section}"))?;
     atomic_write_bytes(&path, encoded.as_bytes())
         .map_err(|e| format!("Failed to write section '{section}': {e}"))
 }
@@ -448,7 +488,7 @@ pub(crate) fn load_user_blob(
     let encoded =
         fs::read_to_string(&path).map_err(|_| "could not read per-user rules".to_string())?;
     let key = derive_section_key(&user_material()?, None)?;
-    let plaintext = decode_section(&key, encoded.trim())
+    let plaintext = decode_section(&key, encoded.trim(), &format!("user:{filename}"))
         .map_err(|_| "per-user rules could not be decoded".to_string())?;
     if plaintext.len() > max_plaintext_bytes {
         return Err("per-user rules exceed the size limit".to_string());
@@ -467,7 +507,7 @@ pub(crate) fn save_user_blob(
     }
     let path = user_file_path(filename)?;
     let key = derive_section_key(&user_material()?, None)?;
-    let encoded = encode_section(&key, plaintext)?;
+    let encoded = encode_section(&key, plaintext, &format!("user:{filename}"))?;
     atomic_write_bytes(&path, encoded.as_bytes())
         .map_err(|_| "could not persist per-user rules".to_string())
 }
@@ -479,7 +519,7 @@ pub(crate) fn save_user_blob(
 // session and is cached in a process-lifetime OnceLock.
 //
 // On-disk line format:
-//   L:<YYYY-MM-DD>:<base64(nonce[12] || ciphertext || gcm_tag)>
+//   L2:<YYYY-MM-DD>:<base64(nonce[12] || ciphertext || gcm_tag)>
 //
 // The date is plaintext so the rotation pass can drop old records without
 // decrypting.  It does not reveal log *content* — only that the app ran on
@@ -500,7 +540,7 @@ fn cached_log_key() -> Result<[u8; DERIVED_KEY_LEN], String> {
         .ok_or_else(|| "log key cache unavailable".to_string())
 }
 
-/// Encrypt one log body into an on-disk `L:<date>:<b64>` line.
+/// Encrypt one log body into an on-disk `L2:<date>:<b64>` line.
 /// `date` = `YYYY-MM-DD`; `body` = `[HH:MM:SS] [LEVEL] message`.
 /// Falls back to an unencrypted marker on key failure so the app never panics.
 #[allow(dead_code)]
@@ -513,20 +553,34 @@ pub fn log_encrypt_line(date: &str, body: &str) -> String {
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
-    match cipher.encrypt(nonce, body.as_bytes()) {
+    let aad = section_aad(&format!("log:{date}"));
+    match cipher.encrypt(
+        nonce,
+        Payload {
+            msg: body.as_bytes(),
+            aad: aad.as_bytes(),
+        },
+    ) {
         Ok(ct) => {
             let mut payload = Vec::with_capacity(12 + ct.len());
             payload.extend_from_slice(&nonce_bytes);
             payload.extend_from_slice(&ct);
-            format!("L:{}:{}", date, B64.encode(&payload))
+            format!("L2:{}:{}", date, B64.encode(&payload))
         }
         Err(_) => format!("[ENCRYPT_FAIL] {}", body),
     }
 }
 
-/// Decrypt one `L:<date>:<b64>` line. Returns `(date, body)` on success.
+/// Decrypt one versioned log line. `L:` records remain readable for migration;
+/// current `L2:` records authenticate their date as associated data.
 pub fn log_decrypt_line(line: &str) -> Option<(String, String)> {
-    let rest = line.strip_prefix("L:")?;
+    let (rest, uses_aad) = if let Some(value) = line.strip_prefix("L2:") {
+        (value, true)
+    } else if let Some(value) = line.strip_prefix("L:") {
+        (value, false)
+    } else {
+        return None;
+    };
     let colon_pos = rest.find(':')?;
     let date = &rest[..colon_pos];
     let b64_part = &rest[colon_pos + 1..];
@@ -538,7 +592,20 @@ pub fn log_decrypt_line(line: &str) -> Option<(String, String)> {
     let key = cached_log_key().ok()?;
     let cipher = Aes256Gcm::new(key.as_ref().into());
     let nonce = Nonce::from_slice(nonce_bytes);
-    let plaintext = cipher.decrypt(nonce, ct).ok()?;
+    let aad = section_aad(&format!("log:{date}"));
+    let plaintext = if uses_aad {
+        cipher
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: ct,
+                    aad: aad.as_bytes(),
+                },
+            )
+            .ok()?
+    } else {
+        cipher.decrypt(nonce, ct).ok()?
+    };
     let body = String::from_utf8(plaintext).ok()?;
     Some((date.to_string(), body))
 }
@@ -571,9 +638,9 @@ mod tests {
     fn encode_decode_roundtrip() {
         let key = test_key(42);
         let plain = b"hello world test data 1234";
-        let encoded = encode_section(&key, plain).unwrap();
-        assert!(encoded.starts_with("enc:v1:"));
-        let decoded = decode_section(&key, &encoded).unwrap();
+        let encoded = encode_section(&key, plain, "machine:settings").unwrap();
+        assert!(encoded.starts_with("enc:v2:"));
+        let decoded = decode_section(&key, &encoded, "machine:settings").unwrap();
         assert_eq!(decoded, plain);
     }
 
@@ -581,21 +648,27 @@ mod tests {
     fn wrong_key_fails_authentication() {
         let key1 = test_key(1);
         let key2 = test_key(2);
-        let encoded = encode_section(&key1, b"secret").unwrap();
-        assert!(decode_section(&key2, &encoded).is_err());
+        let encoded = encode_section(&key1, b"secret", "machine:settings").unwrap();
+        assert!(decode_section(&key2, &encoded, "machine:settings").is_err());
     }
 
     #[test]
     fn nonces_are_random() {
         let key = test_key(7);
         let plain = b"same plaintext";
-        let enc1 = encode_section(&key, plain).unwrap();
-        let enc2 = encode_section(&key, plain).unwrap();
+        let enc1 = encode_section(&key, plain, "machine:settings").unwrap();
+        let enc2 = encode_section(&key, plain, "machine:settings").unwrap();
         // Different nonces produce different ciphertexts.
         assert_ne!(enc1, enc2);
         // But both decrypt correctly.
-        assert_eq!(decode_section(&key, &enc1).unwrap(), plain);
-        assert_eq!(decode_section(&key, &enc2).unwrap(), plain);
+        assert_eq!(
+            decode_section(&key, &enc1, "machine:settings").unwrap(),
+            plain
+        );
+        assert_eq!(
+            decode_section(&key, &enc2, "machine:settings").unwrap(),
+            plain
+        );
     }
 
     #[test]
@@ -628,10 +701,40 @@ mod tests {
         let key = test_key(99);
         let data = json!({"version": 1, "foo": "bar", "nums": [1, 2, 3]});
         let bytes = serde_json::to_vec(&data).unwrap();
-        let encoded = encode_section(&key, &bytes).unwrap();
-        let decoded_bytes = decode_section(&key, &encoded).unwrap();
+        let encoded = encode_section(&key, &bytes, "machine:settings").unwrap();
+        let decoded_bytes = decode_section(&key, &encoded, "machine:settings").unwrap();
         let decoded: Value = serde_json::from_slice(&decoded_bytes).unwrap();
         assert_eq!(data, decoded);
+    }
+
+    #[test]
+    fn v2_ciphertext_cannot_be_moved_between_authenticated_sections() {
+        let key = test_key(77);
+        let encoded = encode_section(&key, b"settings payload", "machine:settings").unwrap();
+
+        assert!(decode_section(&key, &encoded, "machine:license").is_err());
+        assert_eq!(
+            decode_section(&key, &encoded, "machine:settings").unwrap(),
+            b"settings payload"
+        );
+    }
+
+    #[test]
+    fn legacy_v1_ciphertext_remains_readable_for_non_destructive_migration() {
+        let key = test_key(31);
+        let cipher = Aes256Gcm::new((&key).into());
+        let nonce_bytes = [3u8; 12];
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce_bytes), b"legacy payload".as_ref())
+            .unwrap();
+        let mut payload = nonce_bytes.to_vec();
+        payload.extend_from_slice(&ciphertext);
+        let encoded = format!("{FORMAT_PREFIX_V1}{}", B64.encode(payload));
+
+        assert_eq!(
+            decode_section(&key, &encoded, "machine:settings").unwrap(),
+            b"legacy payload"
+        );
     }
 
     #[test]
@@ -663,8 +766,8 @@ mod tests {
     #[test]
     fn missing_prefix_rejected() {
         let key = test_key(5);
-        assert!(decode_section(&key, "notenc:v1:aaaa").is_err());
-        assert!(decode_section(&key, "").is_err());
+        assert!(decode_section(&key, "notenc:v1:aaaa", "machine:settings").is_err());
+        assert!(decode_section(&key, "", "machine:settings").is_err());
     }
 
     // ── Golden / known-answer vector — pins the AES-256-GCM primitive ──────
