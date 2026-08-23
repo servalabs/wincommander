@@ -13,6 +13,8 @@ import {
   type VaultMountEntryResult,
   type VaultAccessEntry, type VaultAccessPolicy, type VaultEntryStatus, type VaultPolicyStatus,
 } from "./vaultAccessTypes";
+import { applyVaultAccessPreset, VAULT_ACCESS_PRESETS, vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
+import VaultAccessPatternPicker from "./VaultAccessPatternPicker";
 
 function observedResult(status: VaultEntryStatus | undefined) {
   if (!status) return "Not observed by the service";
@@ -93,6 +95,28 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
   const updateEntry = (id: string, patch: Partial<VaultAccessEntry>) => editPolicy(current => {
     const source = current ?? newVaultPolicy();
     return { ...source, entries: source.entries.map(entry => entry.id === id ? { ...entry, ...patch } : entry) };
+  });
+
+  const setAccessPreset = (id: string, preset: Exclude<VaultAccessPreset, "custom">) => editPolicy(current => {
+    const source = current ?? newVaultPolicy();
+    return {
+      ...source,
+      entries: source.entries.map(entry => entry.id === id ? applyVaultAccessPreset(entry, preset) : entry),
+    };
+  });
+
+  const setOwnerAccount = (id: string, ownerAccount: string) => editPolicy(current => {
+    const source = current ?? newVaultPolicy();
+    return {
+      ...source,
+      entries: source.entries.map(entry => {
+        if (entry.id !== id) return entry;
+        const ownerChanged = { ...entry, owner_account: ownerAccount };
+        return vaultAccessPreset(entry) === "private"
+          ? applyVaultAccessPreset(ownerChanged, "private")
+          : ownerChanged;
+      }),
+    };
   });
 
   const apply = async () => {
@@ -262,53 +286,45 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
       {isAdmin && <>
       <Card>
         <CardHeader>
-          <CardTitle>Set up a vault</CardTitle>
-          <CardDescription>
-            Enter these settings once, save them, and use only the vault password for future mounts.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="fleet-action-row">
-          <Button onClick={createSharedDraft}>Create shared vault</Button>
-          <Button variant="outline" onClick={() => editPolicy(current => current ?? newVaultPolicy())}>Create three-vault starter</Button>
-          <Button variant="outline" onClick={importLegacyDraft}>Import retired planner as draft</Button>
-          <Button variant="outline" onClick={() => void refresh()}>Refresh status</Button>
-          <Button variant="outline" onClick={() => void discardDraftAndReload()}>Discard draft & reload saved</Button>
-          {legacyNotice && <span className="fleet-field-hint">{legacyNotice}</span>}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Vault settings</CardTitle>
-          <CardDescription>File containers only. Each managed container needs its own dedicated parent folder, so Windows can apply one unambiguous folder ACL. Account and group names are requests for the service to resolve; this screen never stores SIDs or ACLs.</CardDescription>
+          <CardTitle>Vault access</CardTitle>
+          <CardDescription>Set the vault details, choose an everyday access pattern, and add the Windows users or groups who need it. WinCommander verifies the names and applies the matching security settings.</CardDescription>
         </CardHeader>
         <CardContent className="fleet-admin-stack">
-          {!activePolicy && <p className="fleet-field-hint">No saved policy or local draft exists yet. Create one shared vault to begin.</p>}
+          {!activePolicy && <div className="fleet-vault-empty-setup">
+            <div><strong>No vault access is configured yet</strong><span>Start with one shared vault, or use the recommended personal-and-shared starter.</span></div>
+            <div className="fleet-action-row">
+              <Button onClick={createSharedDraft}>Create first shared vault</Button>
+              <Button variant="outline" onClick={() => editPolicy(current => current ?? newVaultPolicy())}>Use three-vault starter</Button>
+            </div>
+          </div>}
           {activePolicy && <p className="fleet-field-hint">{draftDirty ? "Draft auto-saved on this PC — not yet applied to Windows." : "Showing the policy saved by the security service."}</p>}
           {activePolicy?.entries.map((entry, entryIndex) => {
             const observed = statusById.get(entry.id);
             const mountResult = mountResults[entry.id];
             const isMounted = mountResult?.state === "mounted" || observed?.mount_state === "mounted";
+            const accessPreset = vaultAccessPreset(entry);
             return <div className="fleet-vault-workspace" key={entry.id}>
               <div className="fleet-vault-workspace-header">
-                <strong>Vault {entryIndex + 1}</strong>
+                <div><span className="fleet-vault-step">1. Vault details</span><strong>Vault {entryIndex + 1}</strong></div>
                 <Button variant="outline" size="sm" onClick={() => editPolicy(current => current && ({ ...current, entries: current.entries.filter(item => item.id !== entry.id) }))}>Remove</Button>
               </div>
               <div className="fleet-owner-inputs">
                 <label className="fleet-field"><span>Vault name</span><Input aria-label={`Vault ${entryIndex + 1} label`} value={entry.label} placeholder="Shared vault" onChange={event => updateEntry(entry.id, { label: event.target.value })} /></label>
-                <label className="fleet-field"><span>Container file</span><Input aria-label={`Vault ${entryIndex + 1} container path`} value={entry.container_path} placeholder="D:\\Vaults\\shared.hc" onChange={event => updateEntry(entry.id, { container_path: event.target.value })} /></label>
-                <label className="fleet-field"><span>Primary owner</span><Input aria-label={`Vault ${entryIndex + 1} owner`} value={entry.owner_account} placeholder="SERVER\\shrey" onChange={event => updateEntry(entry.id, { owner_account: event.target.value })} /></label>
-                <label className="fleet-field"><span>Who sees the mounted drive</span><select value={entry.mount.presentation} onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, presentation: event.target.value as VaultAccessEntry["mount"]["presentation"] } })}><option value="machine">All authorized users on this PC</option><option value="per-user">Only the user who mounts it</option></select></label>
+                <label className="fleet-field"><span>Container file</span><Input aria-label={`Vault ${entryIndex + 1} container path`} value={entry.container_path} placeholder="D:\\Vaults\\shared.hc" onChange={event => updateEntry(entry.id, { container_path: event.target.value })} /><small>Keep each managed container inside its own dedicated parent folder.</small></label>
+                <label className="fleet-field"><span>Primary owner</span><Input aria-label={`Vault ${entryIndex + 1} owner`} value={entry.owner_account} placeholder="SERVER\\shrey" onChange={event => setOwnerAccount(entry.id, event.target.value)} /></label>
                 <label className="fleet-field"><span>Drive letter</span><Input aria-label={`Vault ${entryIndex + 1} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} /></label>
               </div>
+              <VaultAccessPatternPicker value={accessPreset} onChange={preset => setAccessPreset(entry.id, preset)} />
               <div className="fleet-vault-matrix">
-                <strong>Who can use this vault</strong>
-                {entry.grants.map((grant, grantIndex) => <div className="fleet-action-row" key={`${entry.id}-${grantIndex}`}>
-                  <label className="fleet-field"><span>Windows user or group</span><Input aria-label={`Grant ${grantIndex + 1} principal`} value={grant.principal_name} placeholder="SERVER\\Admins" onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, principal_name: event.target.value } : current) })} /></label>
-                  <label className="fleet-field"><span>Access</span><select aria-label={`Grant ${grantIndex + 1} access`} value={grant.access} onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, access: event.target.value as "read" | "write" } : current) })}><option value="write">Read & write</option><option value="read">Read only</option></select></label>
-                  <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: entry.grants.filter((_, index) => index !== grantIndex) })}>Remove grant</Button>
-                </div>)}
-                <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: [...entry.grants, { principal_name: "", access: "write" }] })}>Add grant</Button>
+                <strong>{accessPreset === "private" ? "3. Confirm owner access" : "3. Add Windows users or groups"}</strong>
+                {accessPreset === "private"
+                  ? <p className="fleet-field-hint">Only the primary owner can mount or edit this vault. Its drive appears only in that Windows session.</p>
+                  : entry.grants.map((grant, grantIndex) => <div className="fleet-action-row" key={`${entry.id}-${grantIndex}`}>
+                    <label className="fleet-field"><span>Windows user or group</span><Input aria-label={`Grant ${grantIndex + 1} principal`} value={grant.principal_name} placeholder="SERVER\\Admins" onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, principal_name: event.target.value } : current) })} /><small>{accessPreset === "custom" ? "This person has the level selected beside them." : VAULT_ACCESS_PRESETS[accessPreset].label}</small></label>
+                    {accessPreset === "custom" && <label className="fleet-field"><span>Access</span><select aria-label={`Grant ${grantIndex + 1} access`} value={grant.access} onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, access: event.target.value as "read" | "write" } : current) })}><option value="write">Can edit</option><option value="read">View only</option></select></label>}
+                    <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: entry.grants.filter((_, index) => index !== grantIndex) })}>Remove</Button>
+                  </div>)}
+                {accessPreset !== "private" && <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: [...entry.grants, { principal_name: "", access: entry.grants[0]?.access ?? "write" }] })}>Add person or group</Button>}
               </div>
               <div className="fleet-vault-lifecycle">
                 <div>
@@ -345,17 +361,28 @@ export default function VaultAccessTab({ isAdmin }: { isAdmin: boolean }) {
             <Button variant="primary" disabled={saving || !!error} onClick={() => void apply()}>{saving ? "Saving…" : "Save vault settings"}</Button>
           </div>
           {error && <p className="fleet-validation-errors">{error}</p>}
+          <details className="fleet-vault-advanced">
+            <summary>Advanced and recovery</summary>
+            <p>Use these only to recover an older draft, reload service status, or undo local edits.</p>
+            <div className="fleet-action-row">
+              <Button variant="outline" size="sm" onClick={importLegacyDraft}>Import retired planner as draft</Button>
+              <Button variant="outline" size="sm" onClick={() => void refresh()}>Refresh status</Button>
+              <Button variant="outline" size="sm" onClick={() => void discardDraftAndReload()}>Discard draft & reload saved</Button>
+            </div>
+            {legacyNotice && <span className="fleet-field-hint">{legacyNotice}</span>}
+          </details>
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>Observed service status</CardTitle><CardDescription>Service-reported policy validation and mount state, not a forecast. This source view does not establish live mount acceptance.</CardDescription></CardHeader>
-        <CardContent>
+        <details className="fleet-vault-advanced fleet-vault-service-details">
+          <summary>Service verification details</summary>
+          <p>Service-reported policy validation and mount state, not a forecast. This source view does not establish live mount acceptance.</p>
           <p>Policy: {status?.policy_id ?? "none"} · Version {status?.version ?? 0} · Validation: {status?.validation_state ?? "never_applied"} · Applied: {appliedAt(status?.applied_at ?? null)}</p>
           <ul className="fleet-validation-errors">
             {status?.entries.map((entry, index) => <li key={entry.id}>Vault {index + 1}: {observedResult(entry)}</li>)}
           </ul>
-        </CardContent>
+        </details>
       </Card>
       </>}
 

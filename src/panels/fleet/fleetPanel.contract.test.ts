@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 const panel = readFileSync("src/panels/fleet/index.tsx", "utf8");
 const access = readFileSync("src/panels/fleet/AccessControlTab.tsx", "utf8");
 const vault = readFileSync("src/panels/fleet/VaultAccessTab.tsx", "utf8");
+const patternPicker = readFileSync("src/panels/fleet/VaultAccessPatternPicker.tsx", "utf8");
 const vaultHook = readFileSync("src/hooks/useVaultAccess.ts", "utf8");
 const vaultDraft = readFileSync("src/panels/fleet/vaultAccessDraft.ts", "utf8");
 const volumeEditor = readFileSync("src/panels/fleet/VaultVolumesEditor.tsx", "utf8");
@@ -74,6 +75,26 @@ describe("Fleet access-control panel contracts", () => {
     expect(volumeEditor).toContain("Read & write");
     expect(css).toContain("fleet-vault-empty-inline");
     expect(css).toContain("overflow-x: auto");
+  });
+
+  test("keeps Vault owner and drive-letter fields readable at narrow widths", () => {
+    expect(vault).toContain('className="fleet-owner-inputs"');
+    expect(vault).toContain("Drive letter");
+    expect(css).toContain("container-type: inline-size;");
+    expect(css).toContain("grid-template-columns: minmax(160px, 1fr) minmax(220px, 1.6fr) minmax(220px, 1.4fr) minmax(92px, 0.55fr);");
+    expect(css).toContain("@container (max-width: 960px)");
+    expect(css).toContain("@container (max-width: 600px)");
+    expect(css).toContain(".fleet-owner-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); }");
+    expect(css).toContain(".fleet-owner-inputs { grid-template-columns: 1fr; }");
+  });
+
+  test("keeps the everyday Vault workflow primary and technical recovery details secondary", () => {
+    expect(vault).toContain("1. Vault details");
+    expect(vault).toContain("3. Add Windows users or groups");
+    expect(vault).toContain("Advanced and recovery");
+    expect(vault).toContain("Service verification details");
+    expect(patternPicker).toContain("2. Choose who can use this vault");
+    expect(css).toContain(".fleet-vault-advanced");
   });
 
   test("opens real information popovers for access groups and Vault permissions", () => {

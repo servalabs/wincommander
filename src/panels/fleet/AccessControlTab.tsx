@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import useBackend from "@/hooks/useBackend";
 import { showError, showSuccess } from "@/utils/toast";
 import {
-  createAccessGroup, membershipCount, mergeAccessUsers, validateAccessDirectory,
+  createAccessGroup, membershipCount, reconcileAccessDirectoryUsers, validateAccessDirectory,
 } from "./accessControlPolicy";
 import type { FleetAccessDirectory, FleetAccessGroup } from "./accessControlTypes";
 import FleetField from "./FleetField";
@@ -47,15 +47,15 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
       return;
     }
     const discovered = (result.data?.users ?? []).map(user => ({
-      id: user.name.toLocaleLowerCase(),
+      id: user.sid ? `sid:${user.sid.toLocaleLowerCase()}` : user.name.toLocaleLowerCase(),
       username: user.name,
       displayName: user.displayName,
       sid: user.sid,
       isCurrent: user.isCurrent,
     }));
     onChange(current => {
-      const users = mergeAccessUsers(current.users, discovered);
-      return JSON.stringify(users) === JSON.stringify(current.users) ? current : { ...current, users };
+      const reconciled = reconcileAccessDirectoryUsers(current, discovered);
+      return JSON.stringify(reconciled) === JSON.stringify(current) ? current : reconciled;
     });
     if (!quiet) void showSuccess(`Found ${discovered.length} Windows user${discovered.length === 1 ? "" : "s"}.`);
   };

@@ -124,6 +124,23 @@ describe("UI audit fixture", () => {
     expect(profiles.profiles.find((profile) => profile.isCurrent)?.displayName).toBe("Audit Analyst");
   });
 
+  test("renders Fleet access and Vault permissions with contract-shaped fixtures", () => {
+    const users = uiAuditBackendResponse("Get-FleetAccessUsers") as {
+      users: Array<{ name: string; sid: string; isCurrent: boolean }>;
+    };
+    const policy = uiAuditDirectResponse("get_vault_access_policy") as {
+      entries: Array<{ label: string; grants: unknown[] }>;
+    };
+    const authorized = uiAuditDirectResponse("vault_list_authorized_entries") as Array<{ entry_id: string }>;
+
+    expect(users.users).toHaveLength(2);
+    expect(users.users.find((user) => user.isCurrent)?.sid).toBe("S-1-5-21-1000-1000-1000-1001");
+    expect(uiAuditDirectResponse("get_vault_access_capabilities")).toEqual({ can_manage_policy: true });
+    expect(policy.entries[0]).toMatchObject({ label: "Team documents" });
+    expect(policy.entries[0]?.grants).toHaveLength(2);
+    expect(authorized).toEqual([{ entry_id: "audit-team-vault", label: "Team documents", access: "write", presentation: "machine", mount_state: "unmounted", drive_letter: null }]);
+  });
+
   test("supplies the activation shape consumed by the Settings panel", () => {
     expect(uiAuditBackendResponse("Get-ActivationStatus")).toEqual({
       windows: { activated: true, edition: "Windows 11 Pro" },

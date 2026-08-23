@@ -12,6 +12,18 @@ commit timestamps). Shipped capabilities (not fixes) live in
 
 ### Added
 
+- **Fleet account rename reconciliation and simpler Vault permissions**
+  (2026-08-23) — Access Control now keys discovered Windows accounts by SID, so
+  renaming the built-in `Administrator` account to `Admin` updates the existing
+  person instead of adding a duplicate and preserves group memberships. Vault
+  permissions now follows a three-step workflow—vault details, an everyday
+  personal/shared access pattern, then Windows users or groups—with advanced
+  recovery and service diagnostics collapsed out of the primary path. Owner,
+  container, and drive-letter fields reflow at narrow panel widths instead of
+  overlapping. The UI-audit fixture now renders the real Fleet administrator
+  flow with contract-shaped accounts, policies, capabilities, and authorized
+  vaults.
+
 - **Fleet Vault drafts persist and release packaging proves the security
   service lifecycle** (2026-08-22) — editing a Vault no longer loses typed
   fields when the window regains focus or service status refreshes. A

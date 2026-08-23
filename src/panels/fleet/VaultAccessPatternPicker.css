@@ -1,0 +1,81 @@
+.vault-access-pattern-picker {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.vault-access-pattern-picker > legend {
+  padding: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.vault-access-pattern-picker > p {
+  margin: 0;
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.vault-access-pattern-picker__options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.vault-access-pattern-picker__option,
+.vault-access-pattern-picker__custom {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  color: var(--text);
+  text-align: left;
+}
+
+.vault-access-pattern-picker__option {
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+
+.vault-access-pattern-picker__option:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+}
+
+.vault-access-pattern-picker__option.is-selected {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.vault-access-pattern-picker__option:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.vault-access-pattern-picker__option strong,
+.vault-access-pattern-picker__custom strong {
+  font-size: 12px;
+}
+
+.vault-access-pattern-picker__option span,
+.vault-access-pattern-picker__custom span {
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.vault-access-pattern-picker__custom {
+  border-style: dashed;
+}
+
+@media (max-width: 760px) {
+  .vault-access-pattern-picker__options { grid-template-columns: 1fr; }
+}

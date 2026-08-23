@@ -533,6 +533,14 @@ export function uiAuditBackendResponse(command: string): unknown {
         currentSid: "S-1-5-21-1000-1000-1000-1001",
         isAdmin: true,
       };
+    case "Get-FleetAccessUsers":
+      return {
+        users: [
+          { name: "AuditAnalyst", displayName: "Audit Analyst", sid: "S-1-5-21-1000-1000-1000-1001", isCurrent: true },
+          { name: "AuditReviewer", displayName: "Audit Reviewer", sid: "S-1-5-21-1000-1000-1000-1002", isCurrent: false },
+        ],
+        total: 2,
+      };
     case "Get-DependencyStatus":
       return {
         cacheAgeSecs: 0,
@@ -745,6 +753,7 @@ export const UI_AUDIT_ARRAY_COMMANDS = [
   "list_canaries",
   "list_decoys",
   "search_content",
+  "vault_list_authorized_entries",
 ] as const;
 
 export const UI_AUDIT_POPULATED_ARRAY_COMMANDS = [
@@ -778,6 +787,7 @@ export const UI_AUDIT_POPULATED_ARRAY_COMMANDS = [
   "list_canaries",
   "list_decoys",
   "search_content",
+  "vault_list_authorized_entries",
 ] as const satisfies ReadonlyArray<(typeof UI_AUDIT_ARRAY_COMMANDS)[number]>;
 
 export function uiAuditDirectResponse(command: string): unknown {
@@ -798,6 +808,44 @@ export function uiAuditDirectResponse(command: string): unknown {
       return { ip: "203.0.113.42" };
     case "get_managed_policy":
       return { managed: false, source: "", values: {} };
+    case "get_vault_access_capabilities":
+      return { can_manage_policy: true };
+    case "get_vault_access_policy":
+      return {
+        schema_version: 1,
+        policy_id: "audit-vault-policy",
+        version: 4,
+        expected_previous_version: 3,
+        entries: [{
+          id: "audit-team-vault",
+          label: "Team documents",
+          container_path: "D:\\Vaults\\Team\\team-documents.hc",
+          owner_account: "AuditAnalyst",
+          grants: [
+            { principal_name: "AuditAnalyst", access: "write" },
+            { principal_name: "AuditReviewer", access: "write" },
+          ],
+          mount: { presentation: "machine", preferred_letter: "V" },
+        }],
+      };
+    case "get_vault_access_status":
+    case "apply_vault_access_policy":
+      return {
+        policy_id: "audit-vault-policy",
+        version: 4,
+        validation_state: "current",
+        applied_at: Date.parse("2026-08-01T22:40:00Z") / 1000,
+        entries: [{ id: "audit-team-vault", result: "applied", mount_state: "unmounted" }],
+      };
+    case "vault_list_authorized_entries":
+      return [{
+        entry_id: "audit-team-vault",
+        label: "Team documents",
+        access: "write",
+        presentation: "machine",
+        mount_state: "unmounted",
+        drive_letter: null,
+      }];
     case "flow_list_rules":
       return structuredClone(AUDIT_FLOW_RULES);
     case "list_backend_commands":

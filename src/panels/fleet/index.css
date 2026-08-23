@@ -1348,6 +1348,7 @@
 .fleet-admin-stack {
   display: grid;
   gap: 14px;
+  container-type: inline-size;
 }
 
 .fleet-subcard h4 {
@@ -1904,8 +1905,62 @@
   overflow-x: auto;
 }
 
+.fleet-vault-workspace-header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.fleet-vault-step {
+  color: var(--text-mute);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.fleet-vault-empty-setup {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+}
+
+.fleet-vault-empty-setup > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.fleet-vault-empty-setup span,
+.fleet-vault-advanced > p {
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.fleet-vault-advanced {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+}
+
+.fleet-vault-advanced > summary {
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.fleet-vault-advanced[open] > summary { margin-bottom: 10px; }
+.fleet-vault-advanced > p { margin: 0 0 10px; }
+.fleet-vault-service-details { margin: 16px; }
+
 .fleet-owner-inputs {
-  grid-template-columns: minmax(140px, 1.1fr) minmax(160px, 1.1fr) minmax(220px, 1.6fr) minmax(120px, 0.8fr);
+  grid-auto-flow: row;
+  grid-template-columns: minmax(160px, 1fr) minmax(220px, 1.6fr) minmax(220px, 1.4fr) minmax(92px, 0.55fr);
+  overflow-x: visible;
 }
 
 .fleet-owner-tools {
@@ -1987,6 +2042,14 @@
 .fleet-vault-access-label {
   color: var(--text-dim);
   font-size: 11px;
+}
+
+@container (max-width: 960px) {
+  .fleet-owner-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container (max-width: 600px) {
+  .fleet-owner-inputs { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 1100px) {
