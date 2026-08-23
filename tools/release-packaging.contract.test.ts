@@ -6,7 +6,7 @@ const baseConfig = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.
   bundle: { resources: string[] };
 };
 const releaseTool = readFileSync("tools/build-tauri-release.ts", "utf8");
-const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
+const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8").replace(/\r\n/g, "\n");
 const manifest = readFileSync("src-tauri/commander-free/app.manifest", "utf8");
 const buildScript = readFileSync("src-tauri/commander-free/build.rs", "utf8");
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
@@ -35,6 +35,9 @@ describe("public service release packaging", () => {
     expect(releaseWorkflow).toContain("Verify Free setup installs and removes WinCommanderSvc");
     expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\\\wincommander-svc.exe"');
     expect(releaseWorkflow).toContain('Get-CimInstance Win32_Service -Filter "Name=\'WinCommanderSvc\'"');
+    expect(releaseWorkflow).toContain('Get-ItemProperty -LiteralPath "Registry::HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\WinCommanderSvc"');
+    expect(releaseWorkflow).toContain('$serviceRegistry.Start -ne 2');
+    expect(releaseWorkflow).toContain('CIM StartMode=$($service.StartMode)');
     expect(releaseWorkflow).toContain('$running.WaitForStatus("Running", [TimeSpan]::FromSeconds(30))');
     expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\\\uninstall.exe"');
     expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\installer-lifecycle.log"');

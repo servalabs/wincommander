@@ -355,8 +355,9 @@ jobs:
           if ($null -eq $service) {
             throw "The NSIS setup did not create WinCommanderSvc."
           }
-          if ($service.StartMode -ne "Auto" -or $service.PathName -notmatch [Regex]::Escape($servicePath)) {
-            throw "WinCommanderSvc was not configured with the expected automatic service executable: $($service.PathName)"
+          $serviceRegistry = Get-ItemProperty -LiteralPath "Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\WinCommanderSvc" -ErrorAction Stop
+          if ($serviceRegistry.Start -ne 2 -or $service.PathName -notmatch [Regex]::Escape($servicePath)) {
+            throw "WinCommanderSvc configuration mismatch (Start=$($serviceRegistry.Start), CIM StartMode=$($service.StartMode), PathName=$($service.PathName))."
           }
           $running = Get-Service -Name WinCommanderSvc -ErrorAction Stop
           $running.WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
