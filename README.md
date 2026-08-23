@@ -72,7 +72,6 @@ on the GitHub Release:
 | Doc                                | What's inside                                                 |
 | :--------------------------------- | :------------------------------------------------------------ |
 | [FEATURES.md](FEATURES.md)         | Public capability and Free/Pro/Fleet/Investigator boundary    |
-| [docs/usb-keyboard-approval.md](docs/usb-keyboard-approval.md) | Configure and operate reactive unknown-keyboard approval safely |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Public architecture, trust boundaries, and source map         |
 | [SECURITY.md](SECURITY.md)         | Threat model, security posture, how to report a vulnerability |
 | [docs/cli.md](docs/cli.md)         | Automate the same Free executable with JSON and safety gates   |

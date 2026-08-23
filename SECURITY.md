@@ -82,20 +82,22 @@ explicitly uses a network-backed capability.
 
 On a Fleet-enrolled device, organization productivity reporting can include
 application names, window titles, URLs/page titles, source-file paths,
-project/language metadata, activity counts, and the interactive username. That
-path does not collect keystroke content, screenshots, webcam frames, clipboard
-contents, or file contents. Collection is not controlled by a per-cycle in-app
-consent switch. Deploying organizations are responsible for a lawful basis,
-clear notice, appropriate roles, retention, export controls, and employee/user
-rights in their jurisdiction.
+project/language metadata, activity counts, and the interactive username. The
+built-in ActivityWatch inputs use aggregate key/click/scroll counts rather than
+keystroke content, and do not capture screenshots, webcam frames, or clipboard
+contents. A generic watcher-data passthrough can carry any fields supplied by
+an installed watcher, so administrators must assess their watcher
+configuration rather than rely on an absolute no-content claim. Collection is
+not controlled by a per-cycle in-app consent switch. Deploying organizations
+are responsible for a lawful basis, clear notice, appropriate roles, retention,
+export controls, and employee/user rights in their jurisdiction.
 
 ## Product limits
 
 - Ransomware monitoring can detect and react after Windows observes activity;
   it cannot guarantee that no file is changed.
 - Unknown-keyboard approval is reactive. It cannot guarantee first-keystroke,
-  pre-boot, firmware, or fast-replug prevention. See
-  [docs/usb-keyboard-approval.md](docs/usb-keyboard-approval.md).
+  pre-boot, firmware, or fast-replug prevention.
 - UI confirmations are not proof of trusted physical input.
 - Secure deletion and crypto-erasure depend on media behavior, firmware,
   encryption state, escrow, and verification. Removing local access does not

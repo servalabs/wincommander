@@ -107,18 +107,20 @@ Fleet adds organization-managed behavior and server-backed operations:
 Fleet enrollment is an administrative boundary. On an enrolled device, the
 organization's configured productivity collection can include application
 names, window titles, URLs/page titles, source-file paths, project/language
-metadata, and the interactive username. It does not collect keystroke content,
-screenshots, webcam frames, clipboard contents, or file contents through that
-productivity path. There is no per-cycle in-app consent gate; the deploying
-organization is responsible for a lawful basis, employee/user notice, access
-control, and retention policy.
+metadata, and the interactive username. Built-in ActivityWatch inputs use
+aggregate key/click/scroll counts rather than keystroke content and do not
+capture screenshots, webcam frames, or clipboard contents. A generic
+watcher-data passthrough can carry any fields supplied by an installed watcher,
+so administrators must assess their watcher configuration rather than rely on
+an absolute no-content claim. There is no per-cycle in-app consent gate; the
+deploying organization is responsible for a lawful basis, employee/user notice,
+access control, and retention policy.
 
 ## Important limits
 
 - WinCommander is not an antivirus or EDR replacement.
 - Reactive USB keyboard approval cannot guarantee first-keystroke, pre-boot,
-  firmware-level, or fast-replug prevention. See
-  [docs/usb-keyboard-approval.md](docs/usb-keyboard-approval.md).
+  firmware-level, or fast-replug prevention.
 - Ransomware alerts and response reduce time-to-detection/containment; they do
   not guarantee that no file is changed.
 - Secure erase depends on storage media, firmware, encryption, and escrow. A

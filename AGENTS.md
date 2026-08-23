@@ -19,12 +19,14 @@ stricter rule when instructions conflict.
 - [POSITIONING.md](POSITIONING.md) — intended audience and product stance
 - [CHANGELOG.md](CHANGELOG.md) — public release-facing changes
 - [docs/cli.md](docs/cli.md) — Free command-line interface
-- [docs/usb-keyboard-approval.md](docs/usb-keyboard-approval.md) — public limits
-  of reactive unknown-keyboard approval
+- [docs/ipc.md](docs/ipc.md) — public Tauri and Free/Pro IPC catalog
+- [docs/settings-reference.md](docs/settings-reference.md) — public settings and toggle reference
+- [docs/flows.md](docs/flows.md) — public automation reference
 
-The public code is the source of truth for public interfaces. Detailed paid
-protocol catalogs, settings internals, plans, runbooks, mockups, and acceptance
-records are intentionally maintained only in `wincommander-pro`.
+The public code and the linked architecture references are the source of truth
+for public interfaces. Plans, runbooks, mockups, private implementation,
+commercial work, and acceptance records are intentionally maintained only in
+`wincommander-pro`.
 
 ## Repository shape
 

@@ -6,8 +6,8 @@ Public release notes are published with each versioned
 ## Unreleased
 
 - Public documentation was reduced to user-facing product, security, and
-  contributor information. Internal plans, runbooks, implementation catalogs,
-  acceptance evidence, and development ledgers are maintained privately.
+  contributor information. Internal plans, runbooks, mockups, acceptance
+  evidence, and development ledgers are maintained privately.
 
 This file intentionally excludes unshipped implementation detail and internal
 readiness status. A shipped change should be added here only when it is suitable
