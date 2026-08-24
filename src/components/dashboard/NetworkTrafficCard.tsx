@@ -19,6 +19,9 @@ interface NetworkTrafficCardProps {
    *  card still works if rendered standalone. */
   expanded?: boolean;
   onToggle?: () => void;
+  /** Controlled by the dashboard so only one right-panel alert drawer is open. */
+  drawerOpen?: boolean;
+  onDrawerOpenChange?: (open: boolean) => void;
 }
 
 const BYTES_PER_MB = 1_000_000;
@@ -30,8 +33,15 @@ function fmtSpeed(bytesPerSec: number): { value: string; unit: string } {
   return { value: kb < 10 ? kb.toFixed(1) : Math.round(kb).toString(), unit: "KB/s" };
 }
 
-export default function NetworkTrafficCard({ expanded = true, onToggle }: NetworkTrafficCardProps) {
-  const [drawerOpen, setDrawerOpen] = useState(false);
+export default function NetworkTrafficCard({
+  expanded = true,
+  onToggle,
+  drawerOpen: controlledDrawerOpen,
+  onDrawerOpenChange,
+}: NetworkTrafficCardProps) {
+  const [uncontrolledDrawerOpen, setUncontrolledDrawerOpen] = useState(false);
+  const drawerOpen = controlledDrawerOpen ?? uncontrolledDrawerOpen;
+  const setDrawerOpen = onDrawerOpenChange ?? setUncontrolledDrawerOpen;
   const { config: alerts } = useMetricAlerts();
   const { sample, upHistory, downHistory } = useNetworkTraffic();
 
@@ -67,7 +77,7 @@ export default function NetworkTrafficCard({ expanded = true, onToggle }: Networ
           <button
             type="button"
             className={`nettraffic-cog ${alertsOn ? "on" : ""}`}
-            onClick={() => setDrawerOpen((o) => !o)}
+            onClick={() => setDrawerOpen(!drawerOpen)}
             title="Configure upload / download alerts"
             aria-label="Network traffic alert"
           >

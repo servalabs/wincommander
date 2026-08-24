@@ -11,6 +11,9 @@ interface HardwareSpecsCardProps {
     metricsStatus?: "loading" | "live" | "stale";
     expanded?: boolean;
     onToggle?: () => void;
+    /** Controlled by the dashboard so only one right-panel alert drawer is open. */
+    alertOpen?: boolean;
+    onAlertOpenChange?: (open: boolean) => void;
 }
 
 const BATTERY_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -54,15 +57,26 @@ function isValidCpuTemp(temp: number | null | undefined): temp is number {
  *   beneath each metric (model/temp, GB usage, battery health) — both
  *   the visual and the context in one tight block per metric.
  */
-export default function HardwareSpecsCard({ systemInfo, isLoading, metricsStatus = "loading", expanded = true, onToggle }: HardwareSpecsCardProps) {
+export default function HardwareSpecsCard({
+    systemInfo,
+    isLoading,
+    metricsStatus = "loading",
+    expanded = true,
+    onToggle,
+    alertOpen: controlledAlertOpen,
+    onAlertOpenChange,
+}: HardwareSpecsCardProps) {
     const { getBatteryHealth } = useBackend();
     const { config: alerts } = useMetricAlerts();
     const cpuAlertOn = !!alerts?.cpu.enabled;
     const ramAlertOn = !!alerts?.ram.enabled;
-    const [alertOpen, setAlertOpen] = useState(false);
+    const [uncontrolledAlertOpen, setUncontrolledAlertOpen] = useState(false);
     const [liveCpuTemp, setLiveCpuTemp] = useState<number | null>(null);
     const [battery, setBattery] = useState<BatteryHealthResult | null>(null);
     const warmRef = useRef(false);
+
+    const alertOpen = controlledAlertOpen ?? uncontrolledAlertOpen;
+    const setAlertOpen = onAlertOpenChange ?? setUncontrolledAlertOpen;
 
     useEffect(() => {
         let cancelled = false;
@@ -132,7 +146,7 @@ export default function HardwareSpecsCard({ systemInfo, isLoading, metricsStatus
                 <button
                     type="button"
                     className={`hw-alert-btn ${cpuAlertOn || ramAlertOn ? "on" : ""}`}
-                    onClick={() => setAlertOpen((o) => !o)}
+                    onClick={() => setAlertOpen(!alertOpen)}
                     title={cpuAlertOn || ramAlertOn ? "Hardware alert on — configure" : "Configure CPU and RAM usage alerts"}
                     aria-label="CPU and RAM usage alerts"
                 >

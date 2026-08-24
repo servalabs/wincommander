@@ -1162,6 +1162,7 @@ html.light .tech-grid.armed {
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: 6px;
+    min-width: 0;
 }
 
 .metric-alert-report-fleet {
@@ -1186,14 +1187,17 @@ html.light .tech-grid.armed {
 
 .nettraffic-drawer .metric-alert-row {
     display: grid;
-    grid-template-columns: 24px minmax(52px, 1fr) auto;
+    grid-template-columns: 24px minmax(52px, 1fr);
     column-gap: 7px;
     padding: 3px 0;
 }
 
 .nettraffic-drawer .metric-alert-controls {
     margin-left: 0;
-    flex-wrap: nowrap;
+    grid-column: 2;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
     gap: 5px;
 }
 
@@ -1203,7 +1207,7 @@ html.light .tech-grid.armed {
 
 @media (max-width: 390px) {
     .nettraffic-drawer .metric-alert-row {
-        grid-template-columns: 24px minmax(48px, 1fr) auto;
+        grid-template-columns: 24px minmax(48px, 1fr);
     }
 
     .nettraffic-drawer .metric-alert-controls {

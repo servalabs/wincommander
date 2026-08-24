@@ -197,6 +197,13 @@ export default function DashboardPanel() {
     }
     patchAppSettings({ app: { dashboardOpenCards: next } });
   }, [appSettings?.app?.dashboardOpenCards, patchAppSettings]);
+  // Alert drawers are transient controls (not a saved dashboard preference).
+  // Keep their state together so System Info and Network Traffic behave as one
+  // accordion: opening one always closes the other.
+  const [openAlertDrawer, setOpenAlertDrawer] = useState<"system" | "network" | null>(null);
+  const setAlertDrawerOpen = useCallback((id: "system" | "network", open: boolean) => {
+    setOpenAlertDrawer(open ? id : (current) => current === id ? null : current);
+  }, []);
   const [capabilityPending, setCapabilityPending] = useState<"webcam" | "microphone" | null>(null);
   const [internetCut, setInternetCut] = useState(false);
   const [internetPending, setInternetPending] = useState(false);
@@ -909,6 +916,8 @@ export default function DashboardPanel() {
               metricsStatus={liveMetricsStatus}
               expanded={isCardOpen("system")}
               onToggle={() => toggleCard("system")}
+              alertOpen={openAlertDrawer === "system"}
+              onAlertOpenChange={(open) => setAlertDrawerOpen("system", open)}
             />
           </div>
           {isExpert && (
@@ -923,6 +932,8 @@ export default function DashboardPanel() {
             <NetworkTrafficCard
               expanded={isCardOpen("network")}
               onToggle={() => toggleCard("network")}
+              drawerOpen={openAlertDrawer === "network"}
+              onDrawerOpenChange={(open) => setAlertDrawerOpen("network", open)}
             />
           </TierGate>
         </div>
