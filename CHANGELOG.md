@@ -5,6 +5,15 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- A slow cold settings read now recovers in the background after the bounded
+  startup-cache deadline instead of leaving the dashboard shell at 0% with an
+  empty navigation rail.
+- Fleet Vault policy now supports standard and outer+hidden file containers,
+  including group-shared dual entries. Each dual mount selects outer or hidden
+  for that request only; writable outer mounts require a second transient
+  hidden-volume password so the service can force hidden-region protection.
+  Both passwords are cleared after the authenticated service-to-Pro request,
+  and older standard-container requests and drafts remain compatible.
 - Normal cached launches can show the dashboard without waiting for the
   decorative splash. Panel loading and Disk Cleanup warming now follow user
   intent or a bounded idle budget instead of competing with first interaction.

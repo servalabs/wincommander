@@ -84,6 +84,7 @@ export function importLegacyVaultDraft(
       // Old raw/partition backing paths are intentionally not carried into
       // the file-container policy. An admin must choose a valid container.
       container_path: "",
+      container_kind: "standard",
       owner_account: owner,
       grants: grants.length > 0 ? grants : [{ principal_name: owner, access: "write" }],
       mount: {

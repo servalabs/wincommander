@@ -608,19 +608,17 @@ export type InkReceiptStatus = "completed" | "scrub_warning" | "failed" | "faile
 export type ListDirResult = { ok: boolean, path: string, detail: string | null, entries: Array<FileEntry>, };
 
 /**
- * Agent → server report of ONE local Windows notification the agent already
- * showed the user (screen-capture-tool detected, CPU/RAM/network threshold
- * exceeded, ...), forwarded to the fleet console only when the corresponding
- * per-type `notifications.<type>.reportToFleet` setting is on (agent-side
- * gate — the server stores whatever it is sent). Carries the SAME concrete
- * detail the local toast already showed, so the console can render a
- * specific message instead of a generic "alert" line. PII-free: `detail`
- * must contain only scalars/process-executable-names/metric values, never
- * window titles, file contents, or free-text.
+ * Agent → server report of ONE local Windows monitor alert the agent already
+ * showed the user (screen capture, CPU/RAM/network threshold, ransomware,
+ * remote access, driver, Wi-Fi, network honeypot, VPN kill switch, USB
+ * security, or a content-free clipboard class). The per-alert setting or Fleet's signed master policy gates the
+ * forwarding. `detail` is a closed, Pro-normalized summary: class/severity,
+ * bounded counters, or aggregate metric values only—never clipboard text,
+ * process names, paths, peers, SSIDs, window titles, or other free text.
  */
 export type LocalAlertReport = {
 /**
- * `"screen_capture" | "cpu_usage" | "ram_usage" | "network_usage"`.
+ * Closed allowlist enforced by Pro's `normalize_local_alert`.
  */
 alert_type: string,
 /**

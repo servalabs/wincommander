@@ -101,7 +101,8 @@ Fleet adds organization-managed behavior and server-backed operations:
 - remote command approval, dispatch, result, and audit workflows;
 - organization roles, device groups, reports, compliance views, and
   integrations;
-- centrally managed Vault access and organization policy;
+- centrally managed Vault access for standard and outer+hidden file
+  containers, including group-authorized entries and one-request mount roles;
 - organization productivity and security reporting where configured.
 
 Fleet enrollment is an administrative boundary. On an enrolled device, the

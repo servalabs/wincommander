@@ -1,4 +1,4 @@
-import { normalizeVaultAccessPolicy, type VaultAccessPolicy } from "./vaultAccessTypes";
+import { normalizeVaultAccessPolicy, type VaultAccessEntry, type VaultAccessPolicy } from "./vaultAccessTypes";
 
 const VAULT_ACCESS_DRAFT_KEY = "wincommander.vault-access-draft.v1";
 
@@ -26,12 +26,14 @@ function isVaultAccessPolicy(value: unknown): value is VaultAccessPolicy {
     || !Array.isArray(policy.entries)
   ) return false;
 
-  return policy.entries.every(entry => (
-    !!entry
+  return policy.entries.every(entry => {
+    const legacy = entry as VaultAccessEntry & { volume_kind?: unknown };
+    const containerKind = legacy.container_kind ?? legacy.volume_kind;
+    return !!entry
     && typeof entry.id === "string"
     && typeof entry.label === "string"
     && typeof entry.container_path === "string"
-    && (entry.volume_kind === undefined || entry.volume_kind === "standard" || entry.volume_kind === "dual")
+    && (containerKind === undefined || containerKind === "standard" || containerKind === "dual")
     && (entry.container_identity === undefined || entry.container_identity === null || typeof entry.container_identity === "string")
     && typeof entry.owner_account === "string"
     && Array.isArray(entry.grants)
@@ -42,8 +44,8 @@ function isVaultAccessPolicy(value: unknown): value is VaultAccessPolicy {
     ))
     && !!entry.mount
     && (entry.mount.presentation === "machine" || entry.mount.presentation === "per-user")
-    && (entry.mount.preferred_letter === undefined || entry.mount.preferred_letter === null || typeof entry.mount.preferred_letter === "string")
-  ));
+    && (entry.mount.preferred_letter === undefined || entry.mount.preferred_letter === null || typeof entry.mount.preferred_letter === "string");
+  });
 }
 
 function browserStorage(): VaultDraftStorage | null {

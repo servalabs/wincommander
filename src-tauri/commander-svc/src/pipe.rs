@@ -603,6 +603,10 @@ async fn handle_vault_mount(
         if let Err(error) = driver_check {
             use zeroize::Zeroize;
             request.password.zeroize();
+            if let Some(hidden_protection_password) = &mut request.hidden_protection_password {
+                hidden_protection_password.zeroize();
+            }
+            request.hidden_protection_password = None;
             return Err(VerbError::new(
                 "vault_driver_unavailable",
                 error.public_message(),
@@ -612,6 +616,8 @@ async fn handle_vault_mount(
             vault_access,
             &request.entry_id,
             &mut request.password,
+            &mut request.hidden_protection_password,
+            request.volume_role,
             client_pid,
             authorization
                 .mode
@@ -620,6 +626,10 @@ async fn handle_vault_mount(
     } else {
         use zeroize::Zeroize;
         request.password.zeroize();
+        if let Some(hidden_protection_password) = &mut request.hidden_protection_password {
+            hidden_protection_password.zeroize();
+        }
+        request.hidden_protection_password = None;
         wincmd_shared::vault_access::VaultMountResult {
             entry_id: request.entry_id,
             state: wincmd_shared::vault_access::VaultMountState::Denied,
@@ -639,7 +649,7 @@ fn take_vault_mount_request(
 ) -> Result<wincmd_shared::vault_access::VaultMountRequest, ()> {
     use zeroize::Zeroize;
     let object = args.as_object_mut().ok_or(())?;
-    if object.len() != 3 {
+    if !(2..=4).contains(&object.len()) {
         zeroize_json(args);
         return Err(());
     }
@@ -659,6 +669,7 @@ fn take_vault_mount_request(
         }
     };
     let volume_role = match object.remove("volume_role") {
+        None => wincmd_shared::vault_access::VaultVolumeRole::Outer,
         Some(serde_json::Value::String(value)) if value == "outer" => {
             wincmd_shared::vault_access::VaultVolumeRole::Outer
         }
@@ -673,11 +684,33 @@ fn take_vault_mount_request(
             return Err(());
         }
     };
+    let hidden_protection_password = match object.remove("hidden_protection_password") {
+        None => None,
+        Some(serde_json::Value::String(value)) => Some(value),
+        _ => {
+            entry_id.zeroize();
+            let mut password = password;
+            password.zeroize();
+            zeroize_json(args);
+            return Err(());
+        }
+    };
+    if !object.is_empty() {
+        entry_id.zeroize();
+        let mut password = password;
+        password.zeroize();
+        if let Some(mut hidden_protection_password) = hidden_protection_password {
+            hidden_protection_password.zeroize();
+        }
+        zeroize_json(args);
+        return Err(());
+    }
     zeroize_json(args);
     Ok(wincmd_shared::vault_access::VaultMountRequest {
         entry_id,
         password,
         volume_role,
+        hidden_protection_password,
     })
 }
 
@@ -2021,7 +2054,34 @@ mod tests {
         let request = take_vault_mount_request(&mut args).unwrap();
         assert_eq!(request.entry_id, "shared");
         assert_eq!(request.password, "canary-secret");
-        assert_eq!(request.volume_role, wincmd_shared::vault_access::VaultVolumeRole::Hidden);
+        assert_eq!(
+            request.volume_role,
+            wincmd_shared::vault_access::VaultVolumeRole::Hidden
+        );
+        assert!(request.hidden_protection_password.is_none());
+        assert!(args.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mount_secret_parser_keeps_legacy_standard_requests_compatible() {
+        let mut args = serde_json::json!({"entry_id":"shared","password":"canary-secret"});
+        let request = take_vault_mount_request(&mut args).unwrap();
+        assert_eq!(
+            request.volume_role,
+            wincmd_shared::vault_access::VaultVolumeRole::Outer
+        );
+        assert!(request.hidden_protection_password.is_none());
+        assert!(args.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mount_secret_parser_moves_hidden_protection_password_without_retaining_json() {
+        let mut args = serde_json::json!({"entry_id":"shared","password":"outer-secret","volume_role":"outer","hidden_protection_password":"hidden-secret"});
+        let request = take_vault_mount_request(&mut args).unwrap();
+        assert_eq!(
+            request.hidden_protection_password.as_deref(),
+            Some("hidden-secret")
+        );
         assert!(args.as_object().unwrap().is_empty());
     }
 

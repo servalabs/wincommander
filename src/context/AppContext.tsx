@@ -1159,9 +1159,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 run: (signal) => initSettings(false, undefined, signal),
             });
             if (cancelled) return;
+            let hydratedSettings = cached.outcome === 'completed' ? cached.value : null;
             if (cached.outcome !== 'completed' || !cached.value) {
+                // The coordinator's 1.5s budget keeps a cold/contended settings
+                // read from holding the splash indefinitely. A timeout aborts the
+                // result consumer, though, and the old path never retried — the
+                // shell appeared with appSettings=null, so Sidebar intentionally
+                // rendered zero rows and the dashboard score stayed at 0%.
+                // Recover outside the startup budget while the already-visible
+                // shell remains responsive. This is a single retry, not a loop;
+                // genuine backend failures stay in the explicit stale state.
                 setStartupDataState('stale');
-                return;
+                hydratedSettings = await initSettings(false);
+                if (cancelled || !hydratedSettings) return;
+                reportStartupPhase('settings_cache_hydrated');
             }
 
             // Settings are the immediate, persisted source of truth. Let the
@@ -1180,7 +1191,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             void runStartupJob({
                 id: 'system-probe', priority: 'background', cost: 'expensive', timeoutMs: 30_000,
                 run: (signal) => systemProbeStoreRef.current.refresh(
-                    () => initSettings(true, cached.value ?? undefined, signal), signal,
+                    () => initSettings(true, hydratedSettings ?? undefined, signal), signal,
                 ),
             }).then((result) => {
                 if (!cancelled && result.outcome === 'completed') reportStartupPhase('fresh_system_probe_complete');

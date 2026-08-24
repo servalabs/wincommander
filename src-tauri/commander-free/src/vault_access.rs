@@ -31,19 +31,22 @@ pub async fn get_vault_access_status() -> Result<Value, String> {
     crate::svc_client::call(GET_STATUS, json!({})).await
 }
 
-/// Tauri maps the UI's `{ entryId, password }` arguments to this snake_case
-/// Rust signature.  The password is sent once and cleared from both owned
-/// representations before this command returns.
+/// Tauri maps the UI's mount arguments to this snake_case Rust signature.
+/// `volume_role` remains optional so installed standard-container clients keep
+/// their two-field request contract. Secrets are sent once and cleared from
+/// both owned representations before this command returns.
 #[tauri::command]
 pub async fn vault_mount_entry(
     entry_id: String,
     password: String,
-    volume_role: wincmd_shared::vault_access::VaultVolumeRole,
+    volume_role: Option<wincmd_shared::vault_access::VaultVolumeRole>,
+    hidden_protection_password: Option<String>,
 ) -> Result<Value, String> {
     let mut request = wincmd_shared::vault_access::VaultMountRequest {
         entry_id,
         password,
-        volume_role,
+        volume_role: volume_role.unwrap_or_default(),
+        hidden_protection_password,
     };
     let payload = serde_json::to_value(&request);
     // The service-call payload now owns the only remaining copy. Clear the
@@ -95,11 +98,15 @@ mod tests {
             entry_id: "shared".into(),
             password: "canary".into(),
             volume_role: wincmd_shared::vault_access::VaultVolumeRole::Outer,
+            hidden_protection_password: None,
         })
         .unwrap();
         assert_eq!(value.as_object().unwrap().len(), 3);
         assert!(value.get("container_path").is_none());
         assert!(value.get("sid").is_none());
-        assert_eq!(value.get("volume_role"), Some(&serde_json::Value::String("outer".into())));
+        assert_eq!(
+            value.get("volume_role"),
+            Some(&serde_json::Value::String("outer".into()))
+        );
     }
 }
