@@ -90,6 +90,8 @@ const REQUEST_ID: u64 = 1;
 pub async fn vault_call(
     target_session_id: u32,
     caller_sid: &str,
+    caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
+    caller_authentication_id: Option<(u32, i32)>,
     presentation: wincmd_shared::vault_access::VaultPresentation,
     feature_id: &str,
     args: serde_json::Value,
@@ -111,7 +113,10 @@ pub async fn vault_call(
     let process = spawn_pro_for_presentation(
         target_session_id,
         caller_sid,
+        caller_token,
+        caller_authentication_id,
         presentation,
+        feature_id,
         &pipe_name,
         &session_token,
     )?;
@@ -224,6 +229,8 @@ pub async fn vault_recovery_dismount(internal_drive: u8) -> Result<serde_json::V
     vault_call(
         0,
         "S-1-5-18",
+        None,
+        None,
         wincmd_shared::vault_access::VaultPresentation::Machine,
         "vault.broker.dismount",
         serde_json::json!({ "internal_drive": internal_drive }),
@@ -339,7 +346,10 @@ fn hash_matches_fixed_pro(reported: &str) -> bool {
 fn spawn_pro_for_presentation(
     session_id: u32,
     caller_sid: &str,
+    caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
+    caller_authentication_id: Option<(u32, i32)>,
     presentation: wincmd_shared::vault_access::VaultPresentation,
+    feature_id: &str,
     pipe: &str,
     token: &str,
 ) -> Result<windows_sys::Win32::Foundation::HANDLE, &'static str> {
@@ -350,10 +360,26 @@ fn spawn_pro_for_presentation(
         // Manager presentation must not depend on a user's desktop token.
         VaultPresentation::Machine => spawn_pro_as_service(pipe, token),
         // Per-user mounts use only the logon token Windows associates with the
-        // authenticated pipe client's service-derived session and SID.
-        VaultPresentation::PerUser => {
-            spawn_pro_as_session_user(session_id, caller_sid, pipe, token)
-        }
+        // authenticated pipe client. A WTS session/SID match is insufficient:
+        // the per-user drive link is scoped to the caller token's DOS-device
+        // namespace, so a substituted session token can attest a mount the
+        // client cannot see.
+        VaultPresentation::PerUser => match caller_token {
+            Some(caller_token) => spawn_pro_as_authenticated_user_token(
+                caller_token,
+                caller_authentication_id,
+                session_id,
+                caller_sid,
+                pipe,
+                token,
+            ),
+            // Lifecycle cleanup has no live pipe client to duplicate. It uses
+            // an explicit internal slot and may retain the bounded WTS path.
+            None if per_user_wts_fallback_allowed(feature_id) => {
+                spawn_pro_as_session_user(session_id, caller_sid, pipe, token)
+            }
+            None => Err("broker_rejected"),
+        },
     }
 }
 
@@ -385,17 +411,83 @@ fn spawn_pro_as_session_user(
     token: &str,
 ) -> Result<windows_sys::Win32::Foundation::HANDLE, &'static str> {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::Security::{
-        DuplicateTokenEx, GetTokenInformation, SecurityImpersonation, TokenPrimary, TokenSessionId,
-        TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY,
-    };
     use windows_sys::Win32::System::RemoteDesktop::WTSQueryUserToken;
-    use windows_sys::Win32::System::Threading::{
-        CreateProcessAsUserW, CREATE_NO_WINDOW, PROCESS_INFORMATION, STARTUPINFOW,
-    };
-    let exe = fixed_pro_path();
-    if session_id == 0 || !exe.is_file() {
+    if session_id == 0 {
         return Err("broker_unavailable");
+    }
+    unsafe {
+        let mut user_token: HANDLE = std::ptr::null_mut();
+        if WTSQueryUserToken(session_id, &mut user_token) == 0 {
+            return Err("session_unavailable");
+        }
+        let result =
+            spawn_pro_with_user_token(user_token, None, session_id, caller_sid, pipe, token);
+        CloseHandle(user_token);
+        result
+    }
+}
+
+#[cfg(windows)]
+fn per_user_wts_fallback_allowed(feature_id: &str) -> bool {
+    feature_id == "vault.broker.dismount"
+}
+
+#[cfg(windows)]
+fn spawn_pro_as_authenticated_user_token(
+    client_token: windows_sys::Win32::Foundation::HANDLE,
+    expected_authentication_id: Option<(u32, i32)>,
+    session_id: u32,
+    caller_sid: &str,
+    pipe: &str,
+    token: &str,
+) -> Result<windows_sys::Win32::Foundation::HANDLE, &'static str> {
+    if client_token.is_null() || session_id == 0 {
+        return Err("broker_rejected");
+    }
+    spawn_pro_with_user_token(
+        client_token,
+        expected_authentication_id,
+        session_id,
+        caller_sid,
+        pipe,
+        token,
+    )
+}
+
+#[cfg(windows)]
+fn spawn_pro_with_user_token(
+    user_token: windows_sys::Win32::Foundation::HANDLE,
+    expected_authentication_id: Option<(u32, i32)>,
+    session_id: u32,
+    caller_sid: &str,
+    pipe: &str,
+    token: &str,
+) -> Result<windows_sys::Win32::Foundation::HANDLE, &'static str> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        DuplicateTokenEx, SecurityImpersonation, TokenPrimary, TOKEN_ASSIGN_PRIMARY,
+        TOKEN_DUPLICATE, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Environment::{
+        CreateEnvironmentBlock, DestroyEnvironmentBlock,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessAsUserW, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION,
+        STARTUPINFOW,
+    };
+
+    let exe = fixed_pro_path();
+    if !exe.is_file() {
+        return Err("broker_unavailable");
+    }
+    if !token_matches_authenticated_client(user_token, session_id, caller_sid) {
+        return Err("broker_rejected");
+    }
+    let source_authentication_id = token_authentication_id(user_token).ok_or("broker_rejected")?;
+    if expected_authentication_id.is_some()
+        && !same_authentication_id(Some(source_authentication_id), expected_authentication_id)
+    {
+        return Err("broker_rejected");
     }
     let command = format!(
         "\"{}\" --core-pipe={} --session-token={}",
@@ -404,28 +496,8 @@ fn spawn_pro_as_session_user(
         token
     );
     let mut command_wide: Vec<u16> = command.encode_utf16().chain(Some(0)).collect();
+    let mut desktop_wide: Vec<u16> = "winsta0\\default".encode_utf16().chain(Some(0)).collect();
     unsafe {
-        let mut user_token: HANDLE = std::ptr::null_mut();
-        if WTSQueryUserToken(session_id, &mut user_token) == 0 {
-            return Err("session_unavailable");
-        }
-        let mut actual_session = 0u32;
-        let mut returned = 0u32;
-        let session_matches = GetTokenInformation(
-            user_token,
-            TokenSessionId,
-            &mut actual_session as *mut _ as *mut _,
-            std::mem::size_of::<u32>() as u32,
-            &mut returned,
-        ) != 0
-            && actual_session == session_id;
-        let sid_matches = session_token_sid(user_token)
-            .as_deref()
-            .is_some_and(|sid| sid == caller_sid);
-        if !session_matches || !sid_matches {
-            CloseHandle(user_token);
-            return Err("broker_rejected");
-        }
         let mut primary_token: HANDLE = std::ptr::null_mut();
         if DuplicateTokenEx(
             user_token,
@@ -436,12 +508,21 @@ fn spawn_pro_as_session_user(
             &mut primary_token,
         ) == 0
         {
-            CloseHandle(user_token);
             return Err("broker_unavailable");
         }
-        CloseHandle(user_token);
+        let primary_authentication_id = token_authentication_id(primary_token);
+        if !same_authentication_id(primary_authentication_id, Some(source_authentication_id)) {
+            CloseHandle(primary_token);
+            return Err("broker_rejected");
+        }
+        let mut environment = std::ptr::null_mut();
+        if CreateEnvironmentBlock(&mut environment, primary_token, 0) == 0 {
+            CloseHandle(primary_token);
+            return Err("broker_unavailable");
+        }
         let startup = STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            lpDesktop: desktop_wide.as_mut_ptr(),
             ..std::mem::zeroed()
         };
         let mut process = PROCESS_INFORMATION::default();
@@ -452,12 +533,13 @@ fn spawn_pro_as_session_user(
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             0,
-            CREATE_NO_WINDOW,
-            std::ptr::null_mut(),
+            CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+            environment,
             std::ptr::null(),
             &startup,
             &mut process,
         );
+        DestroyEnvironmentBlock(environment);
         CloseHandle(primary_token);
         if ok == 0 {
             return Err("broker_unavailable");
@@ -465,6 +547,57 @@ fn spawn_pro_as_session_user(
         CloseHandle(process.hThread);
         Ok(process.hProcess)
     }
+}
+
+#[cfg(windows)]
+fn same_authentication_id(left: Option<(u32, i32)>, right: Option<(u32, i32)>) -> bool {
+    left.is_some() && left == right
+}
+
+#[cfg(windows)]
+fn token_matches_authenticated_client(
+    token: windows_sys::Win32::Foundation::HANDLE,
+    session_id: u32,
+    caller_sid: &str,
+) -> bool {
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenSessionId};
+
+    let mut actual_session = 0u32;
+    let mut returned = 0u32;
+    unsafe {
+        GetTokenInformation(
+            token,
+            TokenSessionId,
+            &mut actual_session as *mut _ as *mut _,
+            std::mem::size_of::<u32>() as u32,
+            &mut returned,
+        ) != 0
+            && actual_session == session_id
+            && session_token_sid(token)
+                .as_deref()
+                .is_some_and(|sid| sid == caller_sid)
+    }
+}
+
+#[cfg(windows)]
+fn token_authentication_id(token: windows_sys::Win32::Foundation::HANDLE) -> Option<(u32, i32)> {
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenStatistics, TOKEN_STATISTICS};
+
+    let mut statistics = TOKEN_STATISTICS::default();
+    let mut returned = 0u32;
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TokenStatistics,
+            &mut statistics as *mut _ as *mut _,
+            std::mem::size_of::<TOKEN_STATISTICS>() as u32,
+            &mut returned,
+        ) != 0
+    };
+    ok.then_some((
+        statistics.AuthenticationId.LowPart,
+        statistics.AuthenticationId.HighPart,
+    ))
 }
 
 #[cfg(windows)]
@@ -600,6 +733,23 @@ mod tests {
         let pipe = random_pipe_name();
         assert!(pipe.starts_with(r"\\.\pipe\wincmd-pro-"));
         assert_eq!(pipe.len(), r"\\.\pipe\wincmd-pro-".len() + 16);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn per_user_mount_never_falls_back_to_a_wts_token() {
+        assert!(!per_user_wts_fallback_allowed("vault.broker.mount"));
+        assert!(!per_user_wts_fallback_allowed("vault.broker.unknown"));
+        assert!(per_user_wts_fallback_allowed("vault.broker.dismount"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn duplicated_peer_token_must_keep_its_exact_logon_identity() {
+        assert!(same_authentication_id(Some((42, -7)), Some((42, -7))));
+        assert!(!same_authentication_id(Some((42, -7)), Some((43, -7))));
+        assert!(!same_authentication_id(Some((42, -7)), Some((42, -6))));
+        assert!(!same_authentication_id(Some((42, -7)), None));
     }
 
     #[cfg(windows)]

@@ -57,14 +57,15 @@ use windows_sys::Win32::{
     Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
     Security::{
         AllocateAndInitializeSid, CheckTokenMembership, DuplicateToken, EqualSid, FreeSid,
-        GetTokenInformation, LookupAccountNameW, SecurityIdentification, TokenUser,
-        PSECURITY_DESCRIPTOR, PSID, SECURITY_NT_AUTHORITY, SID_NAME_USE, TOKEN_DUPLICATE,
-        TOKEN_QUERY, TOKEN_USER,
+        GetTokenInformation, LookupAccountNameW, RevertToSelf, SecurityIdentification,
+        TokenSessionId, TokenStatistics, TokenUser, PSECURITY_DESCRIPTOR, PSID,
+        SECURITY_NT_AUTHORITY, SID_NAME_USE, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_STATISTICS,
+        TOKEN_USER,
     },
     System::{
-        Pipes::GetNamedPipeClientProcessId,
+        Pipes::{GetNamedPipeClientProcessId, ImpersonateNamedPipeClient},
         SystemServices::{DOMAIN_ALIAS_RID_ADMINS, SECURITY_BUILTIN_DOMAIN_RID},
-        Threading::{OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION},
+        Threading::{GetCurrentThread, OpenThreadToken},
     },
 };
 
@@ -83,6 +84,45 @@ use windows_sys::Win32::{
 // still derives the local client PID/token for every request.
 const PIPE_SDDL: &str = "D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x12019b;;;BU)";
 const VAULT_POLICY_ADMIN_GROUP: &str = "WinCommander Vault Policy Administrators";
+
+pub(crate) struct AuthenticatedPipePeer {
+    client_pid: u32,
+    token: HANDLE,
+    session_id: u32,
+    caller_sid: String,
+    authentication_id: (u32, i32),
+}
+
+unsafe impl Send for AuthenticatedPipePeer {}
+unsafe impl Sync for AuthenticatedPipePeer {}
+
+impl Drop for AuthenticatedPipePeer {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.token) };
+    }
+}
+
+impl AuthenticatedPipePeer {
+    pub(crate) fn client_pid(&self) -> u32 {
+        self.client_pid
+    }
+
+    pub(crate) fn token(&self) -> HANDLE {
+        self.token
+    }
+
+    pub(crate) fn session_id(&self) -> u32 {
+        self.session_id
+    }
+
+    pub(crate) fn caller_sid(&self) -> &str {
+        &self.caller_sid
+    }
+
+    pub(crate) fn authentication_id(&self) -> (u32, i32) {
+        self.authentication_id
+    }
+}
 
 fn is_vault_management_verb(verb: &str) -> bool {
     matches!(
@@ -142,15 +182,6 @@ pub async fn serve(
 
         let conn = std::mem::replace(&mut server, next_server);
 
-        // Determine caller privilege AND pid from the connected pipe peer,
-        // deriving the pid exactly once (see `caller_is_privileged`'s doc
-        // for why it returns both together rather than making a second
-        // caller re-derive the pid from the same handle).
-        let raw_handle = conn.as_raw_handle() as HANDLE;
-        let (caller_privileged, client_pid) =
-            caller_is_privileged(raw_handle).unwrap_or((false, 0));
-        let vault_policy_manager = caller_has_vault_policy_capability(client_pid).unwrap_or(false);
-
         let policy_store = Arc::clone(&policy_store);
         let session_helper_gate = Arc::clone(&session_helper_gate);
         let clipboard_state = Arc::clone(&clipboard_state);
@@ -160,9 +191,10 @@ pub async fn serve(
         tokio::spawn(async move {
             if let Err(e) = handle_connection(
                 conn,
-                caller_privileged,
-                vault_policy_manager,
-                client_pid,
+                false,
+                false,
+                None,
+                true,
                 policy_store,
                 session_helper_gate,
                 clipboard_state,
@@ -184,7 +216,8 @@ pub(crate) async fn handle_connection(
     mut conn: tokio::net::windows::named_pipe::NamedPipeServer,
     caller_privileged: bool,
     vault_policy_manager: bool,
-    client_pid: u32,
+    peer: Option<Arc<AuthenticatedPipePeer>>,
+    capture_live_peer: bool,
     policy_store: Arc<PolicyStore>,
     session_helper_gate: Arc<SessionHelperGate>,
     clipboard_state: Arc<ClipboardGuardState>,
@@ -201,14 +234,7 @@ pub(crate) async fn handle_connection(
             protocol_version,
             session_token,
             ..
-        }) if protocol_version == SVC_PROTOCOL_VERSION => {
-            // Echo the handshake ack.
-            let ack = Envelope::Hello(wincmd_shared::svc::hello_from_ui("svc-ack"));
-            write_envelope(&mut conn, &ack)
-                .await
-                .context("write Hello ack")?;
-            session_token
-        }
+        }) if protocol_version == SVC_PROTOCOL_VERSION => session_token,
         _ => {
             let err = Envelope::Error(ErrorReply {
                 request_id: 0,
@@ -222,6 +248,37 @@ pub(crate) async fn handle_connection(
             return Ok(());
         }
     };
+
+    // A named-pipe server can impersonate only after its client has written.
+    // Capture the exact peer after Hello, before the ack or authorization, and
+    // retain it for the connection's full lifetime.
+    let peer = if capture_live_peer {
+        let raw_handle = conn.as_raw_handle() as HANDLE;
+        Some(Arc::new(
+            capture_authenticated_pipe_peer(raw_handle)
+                .context("capture authenticated peer after Hello")?,
+        ))
+    } else {
+        peer
+    };
+    let caller_privileged = caller_privileged
+        || peer
+            .as_deref()
+            .and_then(|peer| token_is_privileged(peer.token()).ok())
+            .unwrap_or(false);
+    let vault_policy_manager = vault_policy_manager
+        || peer
+            .as_deref()
+            .and_then(|peer| caller_has_vault_policy_capability_token(peer.token()).ok())
+            .unwrap_or(false);
+    let client_pid = peer
+        .as_deref()
+        .map(AuthenticatedPipePeer::client_pid)
+        .unwrap_or(0);
+    let ack = Envelope::Hello(wincmd_shared::svc::hello_from_ui("svc-ack"));
+    write_envelope(&mut conn, &ack)
+        .await
+        .context("write Hello ack")?;
 
     // (b)/(c) Request loop.
     loop {
@@ -302,7 +359,7 @@ pub(crate) async fn handle_connection(
                     &clipboard_state,
                     &vault_access,
                     &vault_mount,
-                    client_pid,
+                    peer.as_deref(),
                     caller_privileged || vault_policy_manager,
                 )
                 .await;
@@ -415,7 +472,7 @@ async fn dispatch_verb(
     clipboard_state: &ClipboardGuardState,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
-    client_pid: u32,
+    peer: Option<&AuthenticatedPipePeer>,
     caller_privileged: bool,
 ) -> Envelope {
     let Request {
@@ -424,55 +481,54 @@ async fn dispatch_verb(
         args,
     } = req;
 
-    let outcome: Result<serde_json::Value, VerbError> = match feature_id.as_str() {
-        "svc.status" => Ok(serde_json::to_value(settings_host::status())
-            .unwrap_or_else(|_| serde_json::json!({"ok": true}))),
-        "svc.get_settings" => Ok(settings_host::get_settings()),
-        "svc.health" => Ok(settings_host::health()),
-        "svc.ping" => Ok(serde_json::json!({ "pong": true })),
+    let outcome: Result<serde_json::Value, VerbError> =
+        match feature_id.as_str() {
+            "svc.status" => Ok(serde_json::to_value(settings_host::status())
+                .unwrap_or_else(|_| serde_json::json!({"ok": true}))),
+            "svc.get_settings" => Ok(settings_host::get_settings()),
+            "svc.health" => Ok(settings_host::health()),
+            "svc.ping" => Ok(serde_json::json!({ "pong": true })),
 
-        "svc.clipboard.get_policy" => Ok(clipboard_policy_response(policy_store)),
+            "svc.clipboard.get_policy" => Ok(clipboard_policy_response(policy_store)),
 
-        "svc.policy.install_epoch" => handle_install_epoch(policy_store, args),
+            "svc.policy.install_epoch" => handle_install_epoch(policy_store, args),
 
-        "svc.clipboard.report_event" => match trust_origin {
-            Some(origin) => handle_report_event(clipboard_state, args, origin),
-            // `authorize()` only ever returns `Some` for the `SessionHelper`
-            // class, and this verb IS classified `SessionHelper` — reaching
-            // `None` here would mean that contract broke. Fail closed
-            // rather than silently accepting an unattributed event.
-            None => Err(VerbError::new(
-                "internal_error",
-                "missing trust attribution for a session-helper verb",
-            )),
-        },
+            "svc.clipboard.report_event" => match trust_origin {
+                Some(origin) => handle_report_event(clipboard_state, args, origin),
+                // `authorize()` only ever returns `Some` for the `SessionHelper`
+                // class, and this verb IS classified `SessionHelper` — reaching
+                // `None` here would mean that contract broke. Fail closed
+                // rather than silently accepting an unattributed event.
+                None => Err(VerbError::new(
+                    "internal_error",
+                    "missing trust attribution for a session-helper verb",
+                )),
+            },
 
-        "svc.clipboard.set_enabled" => handle_set_enabled(clipboard_state, args),
+            "svc.clipboard.set_enabled" => handle_set_enabled(clipboard_state, args),
 
-        "svc.vault.get_policy" => {
-            Ok(serde_json::to_value(vault_access.policy())
-                .unwrap_or_else(|_| serde_json::Value::Null))
-        }
-        "svc.vault.get_status" => {
-            Ok(serde_json::to_value(vault_access.status())
-                .unwrap_or_else(|_| serde_json::Value::Null))
-        }
-        "svc.vault.apply_policy" => handle_vault_apply_and_cleanup(vault_access, vault_mount, args),
-        "svc.vault.authorize_mount" => handle_vault_authorize(vault_access, args, client_pid),
-        "svc.vault.mount" => handle_vault_mount(vault_access, vault_mount, args, client_pid).await,
-        "svc.vault.unmount" => handle_vault_unmount(vault_access, vault_mount, args, client_pid),
-        "svc.vault.list_authorized" => {
-            handle_vault_list_authorized(vault_access, vault_mount, client_pid)
-        }
-        "svc.vault.capabilities" => {
-            Ok(serde_json::json!({ "can_manage_policy": caller_privileged }))
-        }
+            "svc.vault.get_policy" => Ok(serde_json::to_value(vault_access.policy())
+                .unwrap_or_else(|_| serde_json::Value::Null)),
+            "svc.vault.get_status" => Ok(serde_json::to_value(vault_access.status())
+                .unwrap_or_else(|_| serde_json::Value::Null)),
+            "svc.vault.apply_policy" => {
+                handle_vault_apply_and_cleanup(vault_access, vault_mount, args)
+            }
+            "svc.vault.authorize_mount" => handle_vault_authorize(vault_access, args, peer),
+            "svc.vault.mount" => handle_vault_mount(vault_access, vault_mount, args, peer).await,
+            "svc.vault.unmount" => handle_vault_unmount(vault_access, vault_mount, args, peer),
+            "svc.vault.list_authorized" => {
+                handle_vault_list_authorized(vault_access, vault_mount, peer)
+            }
+            "svc.vault.capabilities" => {
+                Ok(serde_json::json!({ "can_manage_policy": caller_privileged }))
+            }
 
-        // Every other verb (ink_receipt.* and anything privileged/unknown)
-        // is still a stub — out of this task's scope. `authorize()` above
-        // has already gated it correctly by CapabilityClass regardless.
-        _ => Ok(serde_json::json!({ "ok": true, "verb": feature_id })),
-    };
+            // Every other verb (ink_receipt.* and anything privileged/unknown)
+            // is still a stub — out of this task's scope. `authorize()` above
+            // has already gated it correctly by CapabilityClass regardless.
+            _ => Ok(serde_json::json!({ "ok": true, "verb": feature_id })),
+        };
 
     match outcome {
         Ok(result) => Envelope::Response(Response { request_id, result }),
@@ -559,7 +615,7 @@ fn handle_vault_apply_and_cleanup(
 fn handle_vault_authorize(
     vault_access: &VaultAccessStore,
     args: serde_json::Value,
-    client_pid: u32,
+    peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
     let request: wincmd_shared::vault_access::VaultAuthorizeMountRequest =
         serde_json::from_value(args).map_err(|_| {
@@ -570,7 +626,16 @@ fn handle_vault_authorize(
         })?;
     // The SID/group decision comes from this connection's named-pipe client
     // token.  The renderer supplies only an opaque registered entry id.
-    Ok(serde_json::to_value(crate::vault_access::authorize_mount_for_process(vault_access, &request.entry_id, client_pid))
+    let authorization = peer
+        .map(|peer| {
+            crate::vault_access::authorize_mount_for_token(
+                vault_access,
+                &request.entry_id,
+                peer.token(),
+            )
+        })
+        .unwrap_or_else(vault_authorization_denied);
+    Ok(serde_json::to_value(authorization)
         .unwrap_or_else(|_| serde_json::json!({"allowed":false,"launch_ready":false,"denial_reason":"not_authorized","mode":null,"presentation":null,"preferred_letter":null})))
 }
 
@@ -578,17 +643,21 @@ async fn handle_vault_mount(
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     mut args: serde_json::Value,
-    client_pid: u32,
+    peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
     let mut request = take_vault_mount_request(&mut args)
         .map_err(|_| VerbError::new("vault_validation_failed", "mount request is invalid"))?;
     // This must happen before a broker attempt: PID/token membership is
     // derived from the named-pipe peer, never from a renderer identity.
-    let authorization = crate::vault_access::authorize_mount_for_process(
-        vault_access,
-        &request.entry_id,
-        client_pid,
-    );
+    let authorization = peer
+        .map(|peer| {
+            crate::vault_access::authorize_mount_for_token(
+                vault_access,
+                &request.entry_id,
+                peer.token(),
+            )
+        })
+        .unwrap_or_else(vault_authorization_denied);
     let result = if authorization.allowed {
         // This internal guard has no pipe verb: an authenticated user may ask
         // for a policy-authorized mount, but can never name a driver, service,
@@ -612,13 +681,22 @@ async fn handle_vault_mount(
                 error.public_message(),
             ));
         }
+        let Some(peer) = peer else {
+            return Err(VerbError::new(
+                "vault_not_authorized",
+                "vault peer token unavailable",
+            ));
+        };
         vault_mount.mount_authorized(
             vault_access,
             &request.entry_id,
             &mut request.password,
             &mut request.hidden_protection_password,
             request.volume_role,
-            client_pid,
+            peer.token(),
+            peer.session_id(),
+            peer.caller_sid(),
+            peer.authentication_id(),
             authorization
                 .mode
                 .unwrap_or(wincmd_shared::vault_access::VaultAccess::Read),
@@ -732,24 +810,47 @@ fn zeroize_json(value: &mut serde_json::Value) {
     }
 }
 
+fn vault_authorization_denied() -> wincmd_shared::vault_access::VaultAuthorizeMountResponse {
+    wincmd_shared::vault_access::VaultAuthorizeMountResponse {
+        allowed: false,
+        launch_ready: false,
+        denial_reason: Some(wincmd_shared::vault_access::VaultMountDenial::NotAuthorized),
+        mode: None,
+        presentation: None,
+        preferred_letter: None,
+    }
+}
+
 fn handle_vault_unmount(
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
-    client_pid: u32,
+    peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
     let request: wincmd_shared::vault_access::VaultUnmountRequest = serde_json::from_value(args)
         .map_err(|_| VerbError::new("vault_validation_failed", "unmount request is invalid"))?;
-    let authorization = crate::vault_access::authorize_mount_for_process(
-        vault_access,
-        &request.entry_id,
-        client_pid,
-    );
+    let authorization = peer
+        .map(|peer| {
+            crate::vault_access::authorize_mount_for_token(
+                vault_access,
+                &request.entry_id,
+                peer.token(),
+            )
+        })
+        .unwrap_or_else(vault_authorization_denied);
     let result = if authorization.allowed {
+        let Some(peer) = peer else {
+            return Err(VerbError::new(
+                "vault_not_authorized",
+                "vault peer token unavailable",
+            ));
+        };
         vault_mount.dismount_authorized(
             vault_access,
             &request.entry_id,
-            client_pid,
+            peer.token(),
+            peer.session_id(),
+            peer.caller_sid(),
             authorization
                 .presentation
                 .unwrap_or(wincmd_shared::vault_access::VaultPresentation::PerUser),
@@ -774,17 +875,21 @@ fn handle_vault_unmount(
 fn handle_vault_list_authorized(
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
-    client_pid: u32,
+    peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
     let entries: Vec<wincmd_shared::vault_access::VaultAuthorizedEntry> = vault_access
         .entry_summaries()
         .into_iter()
         .filter_map(|(entry_id, label, container_kind)| {
-            let authorization = crate::vault_access::authorize_mount_for_process(
-                vault_access,
-                &entry_id,
-                client_pid,
-            );
+            let authorization = peer
+                .map(|peer| {
+                    crate::vault_access::authorize_mount_for_token(
+                        vault_access,
+                        &entry_id,
+                        peer.token(),
+                    )
+                })
+                .unwrap_or_else(vault_authorization_denied);
             if !authorization.allowed {
                 return None;
             }
@@ -1210,75 +1315,130 @@ fn clear_action_is_failing(events: &[QueuedClipboardEvent]) -> bool {
 
 // ── Peer-SID classifier ──────────────────────────────────────────────────────
 
-/// Return `(is_privileged, client_pid)` for the process connected to
-/// `pipe_handle`: `is_privileged` is `true` iff that process runs as
-/// LocalSystem or a member of Builtin\Administrators. The pid is derived
-/// exactly once, here, and reused by BOTH this admin/SYSTEM check and (via
-/// `serve()`/`handle_connection()`'s plumbing) the `SessionHelper` peer
-/// gate — never re-derived a second time via a fresh
-/// `GetNamedPipeClientProcessId` call.
-///
-/// # Safety
-/// `pipe_handle` must be a valid, open named-pipe server handle.
-pub fn caller_is_privileged(pipe_handle: HANDLE) -> Result<(bool, u32)> {
+/// Capture one authenticated token directly from the connected named-pipe
+/// client. The token remains owned for the whole connection, so later Vault
+/// authorization and broker launch cannot race a reused process ID.
+pub(crate) fn capture_authenticated_pipe_peer(
+    pipe_handle: HANDLE,
+) -> Result<AuthenticatedPipePeer> {
     unsafe {
-        // 1. Get the client PID from the pipe.
-        let mut client_pid: u32 = 0;
-        if GetNamedPipeClientProcessId(pipe_handle, &mut client_pid) == 0 {
+        let mut client_pid = 0u32;
+        if GetNamedPipeClientProcessId(pipe_handle, &mut client_pid) == 0 || client_pid == 0 {
             anyhow::bail!("GetNamedPipeClientProcessId failed");
         }
-
-        // 2. Open the client process.
-        let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, client_pid);
-        if proc.is_null() {
-            anyhow::bail!("OpenProcess failed for PID {}", client_pid);
+        if ImpersonateNamedPipeClient(pipe_handle) == 0 {
+            anyhow::bail!("ImpersonateNamedPipeClient failed");
         }
-        let _guard_proc = HandleGuard(proc);
-
-        // 3. Open the process token.
-        let mut token: HANDLE = std::ptr::null_mut();
-        if OpenProcessToken(proc, TOKEN_QUERY | TOKEN_DUPLICATE, &mut token) == 0 {
-            anyhow::bail!("OpenProcessToken failed");
+        let mut token = std::ptr::null_mut();
+        let opened = OpenThreadToken(
+            GetCurrentThread(),
+            TOKEN_QUERY | TOKEN_DUPLICATE,
+            1,
+            &mut token,
+        ) != 0;
+        let reverted = RevertToSelf() != 0;
+        if !reverted {
+            if opened {
+                CloseHandle(token);
+            }
+            // Returning to Tokio while still impersonating an untrusted
+            // client would corrupt the service's authority. Fail-stop.
+            std::process::abort();
         }
-        let _guard_token = HandleGuard(token);
+        if !opened {
+            anyhow::bail!("OpenThreadToken failed");
+        }
 
-        // CheckTokenMembership accepts an impersonation token, not the
-        // process primary token returned by OpenProcessToken. Duplicate it
-        // explicitly instead of treating ERROR_NO_IMPERSONATION_TOKEN as a
-        // negative membership result.
+        let result = (|| {
+            let session_id = token_session_id(token)
+                .ok_or_else(|| anyhow::anyhow!("token session unavailable"))?;
+            let caller_sid =
+                token_sid(token).ok_or_else(|| anyhow::anyhow!("token SID unavailable"))?;
+            let authentication_id = token_authentication_id(token)
+                .ok_or_else(|| anyhow::anyhow!("token authentication ID unavailable"))?;
+            Ok(AuthenticatedPipePeer {
+                client_pid,
+                token,
+                session_id,
+                caller_sid,
+                authentication_id,
+            })
+        })();
+        if result.is_err() {
+            CloseHandle(token);
+        }
+        result
+    }
+}
+
+fn token_session_id(token: HANDLE) -> Option<u32> {
+    let mut session_id = 0u32;
+    let mut returned = 0u32;
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TokenSessionId,
+            &mut session_id as *mut _ as *mut _,
+            std::mem::size_of::<u32>() as u32,
+            &mut returned,
+        ) != 0
+    };
+    ok.then_some(session_id)
+}
+
+fn token_sid(token: HANDLE) -> Option<String> {
+    let mut size = 0u32;
+    unsafe { GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut size) };
+    let mut buffer = vec![0u8; size as usize];
+    let ok = size != 0
+        && unsafe {
+            GetTokenInformation(token, TokenUser, buffer.as_mut_ptr() as _, size, &mut size)
+        } != 0;
+    let sid = ok.then(|| unsafe {
+        crate::vault_access::sid_to_string((buffer.as_ptr() as *const TOKEN_USER).read().User.Sid)
+    })?;
+    use zeroize::Zeroize;
+    buffer.zeroize();
+    sid
+}
+
+fn token_authentication_id(token: HANDLE) -> Option<(u32, i32)> {
+    let mut statistics = TOKEN_STATISTICS::default();
+    let mut returned = 0u32;
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TokenStatistics,
+            &mut statistics as *mut _ as *mut _,
+            std::mem::size_of::<TOKEN_STATISTICS>() as u32,
+            &mut returned,
+        ) != 0
+    };
+    ok.then_some((
+        statistics.AuthenticationId.LowPart,
+        statistics.AuthenticationId.HighPart,
+    ))
+}
+
+fn token_is_privileged(token: HANDLE) -> Result<bool> {
+    unsafe {
+        // CheckTokenMembership accepts an impersonation token, not a primary
+        // token. Duplicate the exact authenticated peer token; never reopen
+        // a process by PID on the live connection path.
         let mut membership_token: HANDLE = std::ptr::null_mut();
         if DuplicateToken(token, SecurityIdentification, &mut membership_token) == 0 {
             anyhow::bail!("DuplicateToken failed");
         }
         let _guard_membership_token = HandleGuard(membership_token);
-
-        // 4. Check Builtin\Administrators membership.
-        let is_admin = is_admin_token(membership_token)?;
-        if is_admin {
-            return Ok((true, client_pid));
+        if is_admin_token(membership_token)? {
+            return Ok(true);
         }
-
-        // 5. Check LocalSystem (S-1-5-18).
-        let is_system = is_local_system_token(membership_token)?;
-        Ok((is_system, client_pid))
+        is_local_system_token(membership_token)
     }
 }
 
-/// A deliberately narrow delegation: this local group can administer Vault
-/// policy only. It is never folded into `caller_privileged`, so it cannot
-/// operate Fleet, clipboard, or any future generic privileged verb.
-fn caller_has_vault_policy_capability(pid: u32) -> Result<bool> {
+fn caller_has_vault_policy_capability_token(token: HANDLE) -> Result<bool> {
     unsafe {
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if process.is_null() {
-            anyhow::bail!("OpenProcess failed");
-        }
-        let _process = HandleGuard(process);
-        let mut token = std::ptr::null_mut();
-        if OpenProcessToken(process, TOKEN_QUERY | TOKEN_DUPLICATE, &mut token) == 0 {
-            anyhow::bail!("OpenProcessToken failed");
-        }
-        let _token = HandleGuard(token);
         let mut membership_token = std::ptr::null_mut();
         if DuplicateToken(token, SecurityIdentification, &mut membership_token) == 0 {
             anyhow::bail!("DuplicateToken failed");
@@ -2034,20 +2194,6 @@ mod tests {
         assert!(state.health().rules_compiled);
     }
 
-    // ── caller_is_privileged: pseudo-handle smoke test ───────────────────
-
-    #[test]
-    fn caller_is_privileged_on_pseudo_handle_does_not_panic() {
-        use windows_sys::Win32::System::Threading::GetCurrentProcess;
-
-        // GetCurrentProcess() returns a pseudo-handle — not a real named-pipe
-        // handle, so GetNamedPipeClientProcessId will fail. The contract says
-        // "does not panic", which is satisfied by returning Err rather than
-        // unwrapping.
-        let pseudo = unsafe { GetCurrentProcess() };
-        let _ = caller_is_privileged(pseudo);
-    }
-
     #[test]
     fn mount_secret_parser_moves_only_the_password_and_clears_the_json_shell() {
         let mut args = serde_json::json!({"entry_id":"shared","password":"canary-secret","volume_role":"hidden"});
@@ -2114,7 +2260,12 @@ mod integration {
     ///
     /// Each caller passes a distinct `pipe_suffix` so concurrent tests use
     /// different pipe names and don't race on `first_pipe_instance`.
-    async fn run_one_request(pipe_suffix: &str, verb: &str, forced_privilege: bool) -> Envelope {
+    async fn run_one_request(
+        pipe_suffix: &str,
+        verb: &str,
+        forced_privilege: bool,
+        capture_live_peer: bool,
+    ) -> Envelope {
         let pipe_name = format!(r"\\.\pipe\wincmd-svc-test-{}", pipe_suffix);
 
         let server = ServerOptions::new()
@@ -2137,7 +2288,8 @@ mod integration {
                 s,
                 forced_privilege,
                 false,
-                999,
+                None,
+                capture_live_peer,
                 policy_store,
                 session_helper_gate,
                 clipboard_state,
@@ -2193,7 +2345,7 @@ mod integration {
 
     #[tokio::test]
     async fn privileged_verb_with_forced_unprivileged_returns_forbidden() {
-        let reply = run_one_request("forbidden", "svc.dispatch", false).await;
+        let reply = run_one_request("forbidden", "svc.dispatch", false, false).await;
         match reply {
             Envelope::Error(ErrorReply { kind, .. }) => {
                 assert_eq!(kind, "forbidden", "expected kind=forbidden, got {:?}", kind);
@@ -2204,7 +2356,7 @@ mod integration {
 
     #[tokio::test]
     async fn privileged_verb_with_forced_privileged_returns_response() {
-        let reply = run_one_request("priv-ok", "svc.dispatch", true).await;
+        let reply = run_one_request("priv-ok", "svc.dispatch", true, false).await;
         match reply {
             Envelope::Response(r) => {
                 assert_eq!(r.result["ok"], true);
@@ -2216,13 +2368,19 @@ mod integration {
 
     #[tokio::test]
     async fn read_only_verb_with_forced_unprivileged_returns_response() {
-        let reply = run_one_request("ro-ok", "svc.ping", false).await;
+        let reply = run_one_request("ro-ok", "svc.ping", false, false).await;
         match reply {
             Envelope::Response(r) => {
                 assert_eq!(r.result["pong"], true);
             }
             other => panic!("expected Envelope::Response, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn captures_the_named_pipe_peer_after_hello_before_responding() {
+        let reply = run_one_request("capture-after-hello", "svc.ping", false, true).await;
+        assert!(matches!(reply, Envelope::Response(_)));
     }
 
     /// End-to-end: a `Signed` request (the documented post-handshake shape
@@ -2252,7 +2410,8 @@ mod integration {
                 s,
                 false,
                 false,
-                4242,
+                None,
+                false,
                 policy_store,
                 session_helper_gate,
                 clipboard_state,
@@ -2323,7 +2482,8 @@ mod integration {
                 s,
                 false,
                 false,
-                4242,
+                None,
+                false,
                 policy_store,
                 session_helper_gate,
                 clipboard_state,

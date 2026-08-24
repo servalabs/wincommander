@@ -1540,23 +1540,21 @@ unsafe fn release_acl_sids(sids: &[windows_sys::Win32::Security::PSID]) {
     }
 }
 
-/// Check the captured pipe client's process token against each stored SID.
-/// It intentionally accepts a PID, never a renderer-supplied account name.
+/// Check one captured named-pipe peer token against the stored grants. The
+/// service owns the handle for the connection lifetime; callers must never
+/// reopen a PID after pipe authentication.
 #[cfg(windows)]
-pub fn authorize_mount_for_process(
+pub fn authorize_mount_for_token(
     store: &VaultAccessStore,
     entry_id: &str,
-    pid: u32,
+    token: windows_sys::Win32::Foundation::HANDLE,
 ) -> VaultAuthorizeMountResponse {
     use windows_sys::Win32::Foundation::{CloseHandle, LocalFree};
     use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
     use windows_sys::Win32::Security::{
-        CheckTokenMembership, DuplicateToken, SecurityIdentification, PSID, TOKEN_DUPLICATE,
-        TOKEN_QUERY,
+        CheckTokenMembership, DuplicateToken, SecurityIdentification, PSID,
     };
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
+
     let sids = {
         let state = match store.state.lock() {
             Ok(s) => s,
@@ -1570,23 +1568,10 @@ pub fn authorize_mount_for_process(
         };
         resolved.authorization_grants.clone()
     };
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if process.is_null() {
-        return denied(VaultMountDenial::NotAuthorized);
-    };
-    let mut token = std::ptr::null_mut();
     // CheckTokenMembership needs TOKEN_DUPLICATE when handed a process
     // primary token so Windows can create the impersonation token it tests.
-    if unsafe { OpenProcessToken(process, TOKEN_QUERY | TOKEN_DUPLICATE, &mut token) } == 0 {
-        unsafe { CloseHandle(process) };
-        return denied(VaultMountDenial::NotAuthorized);
-    }
     let mut membership_token = std::ptr::null_mut();
     if unsafe { DuplicateToken(token, SecurityIdentification, &mut membership_token) } == 0 {
-        unsafe {
-            CloseHandle(token);
-            CloseHandle(process);
-        }
         return denied(VaultMountDenial::NotAuthorized);
     }
     let mut allowed = Vec::new();
@@ -1603,11 +1588,7 @@ pub fn authorize_mount_for_process(
             unsafe { LocalFree(sid as _) };
         }
     }
-    unsafe {
-        CloseHandle(membership_token);
-        CloseHandle(token);
-        CloseHandle(process)
-    };
+    unsafe { CloseHandle(membership_token) };
     store.authorize_mount(entry_id, &allowed)
 }
 
