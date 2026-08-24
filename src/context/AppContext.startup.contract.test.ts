@@ -12,6 +12,8 @@ describe("AppContext startup coordination", () => {
     expect(source).toContain("reportStartupPhase('settings_cache_hydrated')");
     expect(source).toMatch(/id:\s*['"]system-probe['"]/);
     expect(source).toMatch(/id:\s*['"]startup-status['"]/);
+    expect(source).toContain("emitProgress(70, 'checking system readiness')");
+    expect(source).toContain("setStartupComplete(true);");
     expect(source).toContain("startupEligibilityRef.current");
     expect(source).not.toContain("runStartupJob,\n    startupEligibility,");
   });

@@ -5,12 +5,16 @@ import { useUpdater } from "./updaterStore";
 import useProInstall, { getCachedFreeVersion, isProVersionCompatible } from "./useProInstall";
 import { useUpdateFlow } from "./useUpdateFlow";
 
-function proNeedsUpdate(
+export function proNeedsUpdate(
     localSha256: string | null | undefined,
     manifestSha256: string | null | undefined,
 ): boolean {
-    return !!localSha256 && !!manifestSha256
-        && localSha256.toLowerCase() !== manifestSha256.toLowerCase();
+    // Pre-metadata installations have no local hash. They are still an
+    // installed Pro copy, so treat them as needing the verified latest binary
+    // instead of leaving them permanently outside the automatic update path.
+    if (!manifestSha256) return false;
+    if (!localSha256) return true;
+    return localSha256.toLowerCase() !== manifestSha256.toLowerCase();
 }
 
 /** Runs a no-dialog update only after the user chose automatic updates. */

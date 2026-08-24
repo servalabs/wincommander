@@ -1056,11 +1056,10 @@ function AppContent() {
     }
   }, [productivityStatus?.running]);
 
-  // Cached launches render the shell immediately. The decorative splash stays
-  // reserved for the real first-run loading state, where there is no cached
-  // settings surface to show truthfully yet.
-  const isFirstRunLoading = appSettings === null && startupDataState === "loading";
-  const isLoading = !splashDone && isFirstRunLoading;
+  // Keep the native splash over every launch until the startup readiness gate
+  // completes. Cached settings are useful, but they are not proof that the
+  // dashboard, capability state, and startup services are ready to use.
+  const isLoading = !splashDone;
 
   useEffect(() => {
     if (isLoading || appSettings === null) return;

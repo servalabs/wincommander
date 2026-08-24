@@ -1175,18 +1175,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 reportStartupPhase('settings_cache_hydrated');
             }
 
-            // Settings are the immediate, persisted source of truth. Let the
-            // user enter the shell now; slow PowerShell/native probes refresh
-            // it progressively in the background instead of holding splash.
-            emitProgress(70, 'showing saved settings');
+            // Cached settings are enough to begin the native readiness check,
+            // but not enough to reveal the shell. Otherwise a cached launch
+            // shows a half-initialised dashboard while startup services and
+            // current state are still loading.
+            emitProgress(70, 'checking system readiness');
             reportStartupPhase('settings_cache_hydrated');
-            setStartupComplete(true);
             setStartupDataState('refreshing');
             void runStartupJob({
                 id: 'startup-status', priority: 'background', cost: 'expensive', timeoutMs: 20_000,
                 run: (signal) => initializeApp(signal),
             }).then((result) => {
-                if (!cancelled) setStartupDataState(result.outcome === 'completed' && result.value === true ? 'ready' : 'stale');
+                if (cancelled) return;
+                // The coordinator's bounded result is the readiness gate. A
+                // failed or timed-out probe still releases the splash after its
+                // safety limit, using the already-hydrated settings instead of
+                // trapping the person behind a permanent loading screen.
+                setStartupDataState(result.outcome === 'completed' && result.value === true ? 'ready' : 'stale');
+                setStartupComplete(true);
             });
             void runStartupJob({
                 id: 'system-probe', priority: 'background', cost: 'expensive', timeoutMs: 30_000,
