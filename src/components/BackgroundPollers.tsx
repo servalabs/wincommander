@@ -28,6 +28,7 @@ import { savedRamDiskMountRequest } from "../lib/ramDisk";
 import useAutoHeal from "../hooks/useAutoHeal";
 import useAdoptCurrentState from "../hooks/useAdoptCurrentState";
 import { privacyShieldBlurTriggers, resolvePrivacyShieldMode } from "../lib/privacyShieldMode";
+import { resolveFleetPrivacyShieldControl } from "../lib/fleetPrivacyShieldControl";
 import type { PanelId } from "../types/panels";
 
 interface PasteMonitorDetected {
@@ -143,6 +144,7 @@ export default function BackgroundPollers({
   const hasPaidRef = useRef(hasPaid);
   const appSettingsRef = useRef(appSettings);
   const fleetShieldReportedStateRef = useRef<string | null>(null);
+  const fleetShieldReceivedStateRef = useRef<string | null>(null);
   useEffect(() => {
     modulesRef.current = modules;
     productivityQuietManagedRef.current = productivityQuietManaged;
@@ -171,8 +173,10 @@ export default function BackgroundPollers({
       try {
         await invoke("fleet_report_privacy_shield_status", { status, detail });
         fleetShieldReportedStateRef.current = key;
+        return true;
       } catch {
         // Keep the prior key so the next supervisor tick retries this state.
+        return false;
       }
     };
     const tick = async () => {
@@ -181,12 +185,29 @@ export default function BackgroundPollers({
       const ps = settings?.ideal?.privacy?.privacyShield;
       if (!settings?.app?.fleet?.enabled) return;
       const fleetOwnsSession = settings.app.fleet.privacyShieldSessionOwned === true;
-      // Pull the latest admin desired-state (separate, non-policy_epoch
-      // channel) so PrivacyShieldCard's Stop-button lock reflects the org's
-      // CURRENT mandate even between full settings syncs.
-      try { await invoke("fleet_sync_shield_state"); } catch { /* best-effort */ }
+      // Pull the latest admin desired-state (separate from policy epochs).
+      // Use this returned value in THIS tick too: patching settings alone only
+      // takes effect after React re-renders, which used to make a freshly
+      // delivered remote start look like an instruction that did nothing.
+      let desiredState = settings.app.fleet.shieldDesiredState ?? null;
       try {
-        const status = await executeBackendCommand<{ running?: boolean; cameraAvailable?: boolean; cameraMessage?: string }>("Get-PrivacyShieldStatus");
+        desiredState = await invoke<typeof desiredState>("fleet_sync_shield_state");
+      } catch { /* a later tick retries the authenticated state pull */ }
+      const shieldControl = resolveFleetPrivacyShieldControl({
+        fleetEnabled: settings.app.fleet.enabled === true,
+        legacyManaged: ps?.fleetManaged === true,
+        legacyMonitoringEnabled: ps?.fleetMonitoringEnabled === true,
+        desiredState,
+      });
+      // These are durable, closed lifecycle receipts in the Pro-side protected
+      // state. They let Fleet distinguish delivery from actual application;
+      // no camera, application, or screen information is included.
+      const receiptKey = desiredState?.updatedAt ?? `${ps?.fleetManaged === true}:${ps?.fleetMonitoringEnabled === true}`;
+      if (shieldControl.managed && fleetShieldReceivedStateRef.current !== receiptKey) {
+        if (await report("received")) fleetShieldReceivedStateRef.current = receiptKey;
+      }
+      try {
+        const status = await executeBackendCommand<{ running?: boolean; cameraAvailable?: boolean; cameraMessage?: string; isWindowsServer?: boolean }>("Get-PrivacyShieldStatus");
         const running = status.success && status.data?.running === true;
         const stopOwnedSession = async () => {
           if (running) {
@@ -203,7 +224,7 @@ export default function BackgroundPollers({
         // is enrolled. They remain locally stoppable unless Fleet owns them.
         // Reporting both transitions keeps the console's latest capability
         // snapshot truthful even when an employee starts or stops the Shield.
-        if (ps?.fleetManaged !== true || ps.fleetMonitoringEnabled !== true) {
+        if (!shieldControl.managed || !shieldControl.enabled) {
           if (fleetOwnsSession) {
             if (await stopOwnedSession()) await report("disabled_by_policy");
           } else {
@@ -243,13 +264,21 @@ export default function BackgroundPollers({
           return;
         }
         if (status.success && status.data?.cameraAvailable === false) {
-          await report("camera_busy", status.data.cameraMessage ?? "Camera unavailable or in use by another app.");
+          // Fixed, content-free capability classification: no camera name,
+          // installed application, or image leaves the endpoint.
+          await report(
+            status.data.isWindowsServer === true
+              ? "windows_server_camera_unavailable"
+              : "camera_unavailable",
+            status.data.cameraMessage ?? "Camera protection is unavailable.",
+          );
           return;
         }
+        await report("applying");
         starting = true;
         const mode = resolvePrivacyShieldMode({
-          fleetManaged: ps?.fleetManaged === true,
-          fleetMode: settings.app.fleet.shieldDesiredState?.mode
+          fleetManaged: shieldControl.managed,
+          fleetMode: shieldControl.mode
             ?? (ps?.gazeDetectionEnabled === false
               && ps?.antiPeepingEnabled === false
               && ps?.cameraHunterEnabled === false
@@ -416,7 +445,11 @@ export default function BackgroundPollers({
             `Looks like you copied a ${pattern} — be careful where you paste it.`,
           );
         }
-        reportConfiguredFleetAlert("clipboard_guard", { class: "local_match", severity: severity === "danger" ? "danger" : "warning" });
+        reportConfiguredFleetAlert(
+          "clipboard_guard",
+          { class: "local_match", severity: severity === "danger" ? "danger" : "warning" },
+          appSettingsRef.current?.ideal?.privacy?.clipboard?.pasteMonitorReportToFleet === true,
+        );
       },
     );
 

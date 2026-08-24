@@ -1294,6 +1294,10 @@ pub struct ClipboardSettings {
     /// `monitor.paste.auto-expire`: seconds to wait before clearing.
     /// Backend clamps to [5, 600]. None = backend default (30).
     pub paste_monitor_auto_clear_seconds: Option<u32>,
+    /// Forward only a closed, content-free Clipboard Monitor match summary to
+    /// Fleet. Admin-lockable through `privacy.clipboard.pasteMonitorReportToFleet`.
+    #[serde(default)]
+    pub paste_monitor_report_to_fleet: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

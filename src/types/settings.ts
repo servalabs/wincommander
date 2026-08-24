@@ -789,6 +789,11 @@ export interface ClipboardSettings {
   /** `monitor.paste.auto-expire`: seconds to wait before clearing.
    *  Backend clamps to [5, 600]. Null = backend default (30). */
   pasteMonitorAutoClearSeconds: number | null;
+  /** Forward a content-free Clipboard Monitor match summary to Fleet. When
+   *  `privacy.clipboard.pasteMonitorReportToFleet` is managed, this is
+   *  visible but cannot be changed locally. Clipboard contents never leave
+   *  the device. */
+  pasteMonitorReportToFleet?: boolean | null;
   /** `monitor.paste.clear-on-lock` (free): erase the clipboard the
    *  moment the workstation locks (Win+L / screen-lock). Fires on the
    *  unlocked→locked transition only. Null = backend default (off). */

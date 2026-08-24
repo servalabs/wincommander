@@ -61,6 +61,13 @@ function Install-AIDependencies {
 function Get-PrivacyShieldCameraAvailability {
     try {
         $devices = @()
+        # ProductType 2/3 means Windows Server. Fleet receives only this
+        # coarse capability when Privacy Shield cannot use a camera there.
+        $isWindowsServer = $false
+        try {
+            $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
+            $isWindowsServer = [int]$os.ProductType -ne 1
+        } catch {}
 
         foreach ($className in @("Camera", "Image")) {
             try {
@@ -81,10 +88,11 @@ function Get-PrivacyShieldCameraAvailability {
             available = ($names.Count -gt 0)
             devices   = $names
             message   = if ($names.Count -gt 0) { "Camera available." } else { "No usable camera detected." }
+            isWindowsServer = $isWindowsServer
         }
     }
     catch {
-        @{ available = $false; devices = @(); message = $_.Exception.Message }
+        @{ available = $false; devices = @(); message = $_.Exception.Message; isWindowsServer = $false }
     }
 }
 
@@ -127,6 +135,7 @@ function Get-PrivacyShieldStatus {
             cameraAvailable = [bool]$camera.available
             cameraDevices   = @($camera.devices)
             cameraMessage   = $camera.message
+            isWindowsServer = [bool]$camera.isWindowsServer
         }
     }
     catch {
