@@ -19,14 +19,37 @@ stricter rule when instructions conflict.
 - [POSITIONING.md](POSITIONING.md) — intended audience and product stance
 - [CHANGELOG.md](CHANGELOG.md) — public release-facing changes
 - [docs/cli.md](docs/cli.md) — Free command-line interface
-- [docs/ipc.md](docs/ipc.md) — public Tauri and Free/Pro IPC catalog
-- [docs/settings-reference.md](docs/settings-reference.md) — public settings and toggle reference
-- [docs/flows.md](docs/flows.md) — public automation reference
+- [docs/README.md](docs/README.md) — detailed documentation map
+- [docs/engineering/ipc.md](docs/engineering/ipc.md) — public Tauri and Free/Pro IPC catalog
+- [docs/frontend/settings-reference.md](docs/frontend/settings-reference.md) — public settings and toggle reference
+- [docs/product/flows.md](docs/product/flows.md) — public automation reference
 
 The public code and the linked architecture references are the source of truth
 for public interfaces. Plans, runbooks, mockups, private implementation,
 commercial work, and acceptance records are intentionally maintained only in
 `wincommander-pro`.
+
+## Documentation layout
+
+- Keep repository-wide documents in the root: `README.md`, architecture,
+  security, performance when present, and primary product-truth documents.
+  Do not move them into `docs/`.
+- Keep detailed, component-specific architecture, security, and performance
+  references in `docs/engineering/`.
+- Keep detailed product references in `docs/product/`; repository-wide features,
+  positioning, roadmap, non-goals, weaknesses, user/owner tasks, and changelog
+  remain at the root when present.
+- Put area-specific references in the relevant `docs/` folder, such as Fleet,
+  operations, integrations, Vault, Investigator, frontend, or backend.
+- Keep public-safe plans, contracts, implementation records, and acceptance
+  evidence in `docs/plans/`, separate from current feature references. Private
+  material remains in `wincommander-pro`.
+- Put exploratory or historical research in `docs/research/`; do not treat it
+  as current product truth without verification.
+- Keep contributor and agent guidance in `docs/agents/`; retain root
+  `AGENTS.md` as the tool-discoverable entry point.
+- When adding or moving documentation, update its Markdown links and
+  `docs/README.md` in the same change.
 
 ## Repository shape
 

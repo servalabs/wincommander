@@ -2,7 +2,7 @@
 
 > How it's built. Code blocks and diagrams welcome. Facts here are derived from the source under
 > `src-tauri/` and `src/`; the code is authoritative. Deeper references live in [`docs/`](docs/) —
-> see [docs/ipc.md](docs/ipc.md) for the full Free ↔ Pro wire protocol, [docs/cli.md](docs/cli.md) for same-executable automation, and [docs/settings-reference.md](docs/settings-reference.md) for the settings tree.
+> see [docs/engineering/ipc.md](docs/engineering/ipc.md) for the full Free ↔ Pro wire protocol, [docs/cli.md](docs/cli.md) for same-executable automation, and [docs/frontend/settings-reference.md](docs/frontend/settings-reference.md) for the settings tree.
 
 ## Overview
 
@@ -252,7 +252,7 @@ sequenceDiagram
 - **Request/Response:** after handshake every frame is wrapped as `Envelope::Signed { tag, inner }` where `tag = HMAC-SHA256(session_token, serde_json(inner))`, verified constant-time via the `subtle` crate (`verify_body`). `Hello`/`Bye` are unsigned (Hello establishes the key).
 - **Notifications:** Pro pushes UI events (decoy-accessed, dead-man's-switch tick) signed the same way; Free's reader task re-emits them via `app.emit(event, payload)` so existing frontend listeners are unchanged.
 
-The full wire protocol — every envelope variant, field, and frame example — is documented in [docs/ipc.md](docs/ipc.md). The spawn-to-signed-traffic sequence:
+The full wire protocol — every envelope variant, field, and frame example — is documented in [docs/engineering/ipc.md](docs/engineering/ipc.md). The spawn-to-signed-traffic sequence:
 
 ```mermaid
 sequenceDiagram
@@ -294,7 +294,7 @@ Trust model: a swapped Pro binary fails the pinned-hash check; a tampered frame 
 
 Persistent state is local (atomic write via temp + rename); no server-side state except paid licence rows. **Gate/identity state — the encrypted settings (incl. the three startup-PIN hashes), the licence cache, the hidden-mode flag, and the runtime-visibility manifest — lives MACHINE-WIDE under `%ProgramData%\WinCommander\` so one activation + one PIN set covers every Windows account (the app runs elevated, so no extra ACL is needed). Per-user scratch (logs, Privacy Shield quota) stays under `%LOCALAPPDATA%`.**
 
-- `store/settings.dat` — the central tree, encoded at rest (`enc:v1:` AES-256-GCM, argon2id KDF, per-install salt). `ideal` (user intent) vs `current` (machine reality), plus `app` (preferences, modules, flows), `policy` (admin/fleet). Schema in `src/types/settings.ts` + `settings.rs`; every key is catalogued in [docs/settings-reference.md](docs/settings-reference.md). Plaintext `settings.json` is migrated on first launch and deleted after the encoded write succeeds.
+- `store/settings.dat` — the central tree, encoded at rest (`enc:v1:` AES-256-GCM, argon2id KDF, per-install salt). `ideal` (user intent) vs `current` (machine reality), plus `app` (preferences, modules, flows), `policy` (admin/fleet). Schema in `src/types/settings.ts` + `settings.rs`; every key is catalogued in [docs/frontend/settings-reference.md](docs/frontend/settings-reference.md). Plaintext `settings.json` is migrated on first launch and deleted after the encoded write succeeds.
 - Licence cache (`%ProgramData%\WinCommander\license_cache.json`, machine-wide) — signed JWT envelope (`payload` + `signature`), `last_verified_at`, optional seat info; verified against the build-embedded Ed25519 pubkey, bound to `current_device_hash()` — now derived from motherboard UUID + disk serial via `Get-CimInstance` (not the removed `wmic`), memoised per process (`license.rs`).
 - `trial.json` (`%ProgramData%\WinCommander\`) — write-only local 16-day trial record for UI display (`started_at`/`expires_at`); it is never read for entitlement. Starting a trial contacts the licence worker (`POST /trial`, device hash only) which mints a worker-signed token cached in `license_cache.json` and enforces once-per-device server-side (`device_trials`) — trial entitlement is not purely local. **Compiled out of the `portable` build and ignored if present, so a copied portable build can't farm trials.**
 - `shield-quota.json` — Privacy Shield daily-minute counter (`shield_quota.rs`).
@@ -416,9 +416,9 @@ fleet-server/
 - [FEATURES.md](FEATURES.md) — capability inventory with entry points.
 - [SECURITY.md](SECURITY.md) — trust boundaries & posture.
 - [OPEN_CORE.md](OPEN_CORE.md) — licence & tier rationale.
-- [docs/ipc.md](docs/ipc.md) — full Free ↔ Pro wire protocol reference.
+- [docs/engineering/ipc.md](docs/engineering/ipc.md) — full Free ↔ Pro wire protocol reference.
 - [docs/cli.md](docs/cli.md) — same-executable JSON automation and safety contract.
-- [docs/settings-reference.md](docs/settings-reference.md) — complete settings-tree catalogue.
+- [docs/frontend/settings-reference.md](docs/frontend/settings-reference.md) — complete settings-tree catalogue.
 - `wincmd-shared/src/lib.rs` — IPC wire-format source of truth.
 - `fleet-proto/src/lib.rs` — fleet wire-protocol SSOT: signing preimages + golden vectors.
 - `fleet-agent-core/src/lib.rs` — generic fleet-client loop (enroll/check-in/verify/dispatch).

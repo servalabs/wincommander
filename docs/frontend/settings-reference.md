@@ -7,9 +7,9 @@ switch to its backend commands.
 This document is descriptive. The authoritative, machine-checkable definitions
 live in code:
 
-- [`src/types/settings.ts`](../src/types/settings.ts) — the TypeScript schema (mirror of the Rust struct).
-- [`src-tauri/commander-free/src/settings.rs`](../src-tauri/commander-free/src/settings.rs) — the Rust `AppSettings` engine (schema, migration, drift, convergence).
-- [`src/registry/*.toggles.ts`](../src/registry/) — the per-toggle registry (UI label, backend commands, scores, radar, setup) — the single source of truth for every toggle.
+- [`src/types/settings.ts`](../../src/types/settings.ts) — the TypeScript schema (mirror of the Rust struct).
+- [`src-tauri/commander-free/src/settings.rs`](../../src-tauri/commander-free/src/settings.rs) — the Rust `AppSettings` engine (schema, migration, drift, convergence).
+- [`src/registry/*.toggles.ts`](../../src/registry/) — the per-toggle registry (UI label, backend commands, scores, radar, setup) — the single source of truth for every toggle.
 
 When this doc and the code disagree, the code wins.
 
@@ -67,7 +67,7 @@ auto-healed.
 Settings are persisted **machine-wide** under `%ProgramData%`, not per-user, so
 every Windows account on the device — including Windows Server/RDS sessions —
 shares one protection, policy and monitor configuration. Persistence goes through the app-data store
-([`datastore.rs`](../src-tauri/commander-free/src/datastore.rs)), which encodes
+([`datastore.rs`](../../src-tauri/commander-free/src/datastore.rs)), which encodes
 each section at rest:
 
 - **Store files:** `%ProgramData%\<APP>\store\<section>.dat`. Settings are the `settings` section.
@@ -138,7 +138,7 @@ never persist over — or erase — the real configuration.
 
 ## Root schema (v2)
 
-The top-level shape, from [`src/types/settings.ts`](../src/types/settings.ts):
+The top-level shape, from [`src/types/settings.ts`](../../src/types/settings.ts):
 
 ```json
 {
@@ -198,21 +198,21 @@ part of system state. Notable groups (see the struct for the complete list):
 - **Vault:** `vault.defaultMountLetter`, `vault.recentPaths`, `vault.quickMountSlots`, `vault.ramdiskAutostart`.
 - **Automation/contingency:** `flows`, `contingency`, `modules`, `advisor`, `scheduledRecycleBin`, `internetKillSwitch`, `autoHeal`.
 - **File search (Free):** `fileSearch` — see [file content search](#file-content-search-appfilesearch).
-- **Paid preferences:** `metricAlerts`, `decoyMode`, `fleet` — persisted by Free, consumed by the Pro sidecar (see [open-core model](../OPEN_CORE.md)).
+- **Paid preferences:** `metricAlerts`, `decoyMode`, `fleet` — persisted by Free, consumed by the Pro sidecar (see [open-core model](../../OPEN_CORE.md)).
 
 ## Settings tree by category
 
 The catalog below is organized by panel/category. UI labels and command names
 are accurate as of this writing; the registry in
-[`src/registry/`](../src/registry/) is the source of truth for the exact set,
-and [`src-tauri/commander-free/src/backend.rs`](../src-tauri/commander-free/src/backend.rs)
+[`src/registry/`](../../src/registry/) is the source of truth for the exact set,
+and [`src-tauri/commander-free/src/backend.rs`](../../src-tauri/commander-free/src/backend.rs)
 is the source of truth for the PowerShell command implementations.
 
 ### Reading the catalog
 
 - **Enable / Disable Cmd** — the PowerShell verbs the toggle invokes. Note that the *direction* a verb maps to (hardening vs reverting) follows the UI semantics, not the verb name; see each row.
 - **Storage** — where the setting takes effect (registry hive, scheduled task, env var, etc.).
-- **Tier** — `free` runs in the Free binary; `paid` routes through the Pro sidecar over IPC (see [open-core model](../OPEN_CORE.md)).
+- **Tier** — `free` runs in the Free binary; `paid` routes through the Pro sidecar over IPC (see [open-core model](../../OPEN_CORE.md)).
 - **Score** — `P` = Privacy Score contribution, `FS` = Cleanup Score contribution (toggle-state only, never one-shot actions), `—` = none.
 
 > **Two dashboard scores.** The **Privacy Score** (100 pts, shown to all users)
@@ -397,7 +397,7 @@ exclusion, and structured JSON output.
 ### Privacy monitors and panic triggers
 
 Persisted under `ideal.privacy.*`. Several are paid (Pro sidecar). See
-[`src/types/settings.ts`](../src/types/settings.ts) for the exact field shapes.
+[`src/types/settings.ts`](../../src/types/settings.ts) for the exact field shapes.
 
 | Setting key                       | Purpose                                                                            | Tier |
 |-----------------------------------|-----------------------------------------------------------------------------------|------|
@@ -463,7 +463,7 @@ noted.
 Additional granular UI flags persisted under `ideal.tweaks.ui` (desktop icons,
 shortcut-arrow overlay, snap-assist, Explorer compact mode and checkboxes,
 window shake, clock seconds) — see `UiTweaks` in
-[`src/types/settings.ts`](../src/types/settings.ts).
+[`src/types/settings.ts`](../../src/types/settings.ts).
 
 ### Tweaks — security & apps
 
@@ -592,7 +592,7 @@ via `Get-*` where present).
 Persisted under `ideal.tweaks.performance`, `ideal.tweaks.gpu`,
 `ideal.tweaks.power`, and `ideal.tweaks.powerPlan`. See `PerformanceTweaks`,
 `GpuTweaks`, `PowerTweaks`, and `RdpTweaks` in
-[`src/types/settings.ts`](../src/types/settings.ts).
+[`src/types/settings.ts`](../../src/types/settings.ts).
 
 - **Performance:** MMCSS gaming profile, keyboard latency, Num Lock at boot, hardware-accelerated GPU scheduling, SvcHost split, instant menus, mouse-acceleration off, etc.
 - **GPU (vendor-specific):** AMD ULPS / power-gating / video-clock-gating / ASPM, NVIDIA dynamic & async P-states, Intel async flips & adaptive V-sync.
@@ -819,12 +819,12 @@ A selection of commands implemented directly in Rust rather than PowerShell.
 `lastSyncedAt`, `masterConfigVersion`, `organization`, and the pinned
 `fleetSigningKey`. When `managed` is set by org policy, in-app disconnect is
 refused. Fleet onboarding and the control plane are Pro features; see the
-[open-core model](../OPEN_CORE.md).
+[open-core model](../../OPEN_CORE.md).
 
 ## Related references
 
-- [Architecture](../ARCHITECTURE.md) — overall system design.
-- [Features](../FEATURES.md) — user-facing feature catalog.
-- [IPC reference](ipc.md) — the Tauri commands the frontend invokes.
-- [Flows](flows.md) — automation flow model (`app.flows`).
-- [Open-core model](../OPEN_CORE.md) — Free vs Pro split and tiering.
+- [Architecture](../../ARCHITECTURE.md) — overall system design.
+- [Features](../../FEATURES.md) — user-facing feature catalog.
+- [IPC reference](../engineering/ipc.md) — the Tauri commands the frontend invokes.
+- [Flows](../product/flows.md) — automation flow model (`app.flows`).
+- [Open-core model](../../OPEN_CORE.md) — Free vs Pro split and tiering.

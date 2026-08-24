@@ -74,6 +74,7 @@ on the GitHub Release:
 | [FEATURES.md](FEATURES.md)         | Public capability and Free/Pro/Fleet/Investigator boundary    |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Public architecture, trust boundaries, and source map         |
 | [SECURITY.md](SECURITY.md)         | Threat model, security posture, how to report a vulnerability |
+| [docs/README.md](docs/README.md)   | Detailed, area-specific documentation map                     |
 | [docs/cli.md](docs/cli.md)         | Automate the same Free executable with JSON and safety gates   |
 | [POSITIONING.md](POSITIONING.md)   | Who it's for and how it compares to alternatives              |
 | [NON-GOALS.md](NON-GOALS.md)       | What WinCommander deliberately is not                         |

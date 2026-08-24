@@ -156,12 +156,12 @@ hook or watcher:
 | Filesystem watcher | `services/fs_watcher.rs` | One `notify` (`ReadDirectoryChangesW`) watcher per `(path, recursive)` tuple (`FileTrigger`, decoy monitor, ransomware monitor). |
 | Webhook server | `services/webhook_server.rs` | One `hyper` HTTP/1.1 server, bound to the mesh-VPN interface only (discovered via `tailscale.exe ip --4`), HMAC-SHA256 authenticated, refuses to fall back to `0.0.0.0` (load-bearing security invariant), refuses to start if the mesh VPN isn't running. Bodies capped at 64 KiB; every request must carry `X-Wincmd-Signature = HMAC-SHA256(secret, body)`. |
 
-### Legacy commands (docs/ipc.md has the full table)
+### Legacy commands (the IPC reference has the full table)
 
 `get_flows`, `save_flow`, `delete_flow`, `toggle_flow`, `fire_flow` (supports `dryRun`),
 `get_flow_executions`, `reload_flows`, `preflight_validate_flow`, `export_flow_bundle` /
 `verify_flow_bundle` / `import_flow_bundle` (Ed25519-signed), `probe_flow_capabilities`,
-`get_flow_health`. See [docs/ipc.md § Flow engine](ipc.md#flow-engine) for the full
+`get_flow_health`. See [IPC reference § Flow engine](../engineering/ipc.md#flow-engine) for the full
 command/return-type table.
 
 ### Legacy engine limitations (still true — carried over verbatim)
@@ -204,4 +204,4 @@ Claims that would be **false** today:
 
 This document describes shipped flow behaviour. Some advanced actions target
 restricted capabilities that run in the Pro sidecar — see
-[OPEN_CORE.md](../OPEN_CORE.md).
+[OPEN_CORE.md](../../OPEN_CORE.md).

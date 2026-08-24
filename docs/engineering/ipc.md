@@ -7,13 +7,13 @@ WinCommander has two IPC boundaries:
 1. **Frontend ↔ Backend (Tauri IPC)** — the React UI invokes Rust `#[tauri::command]` handlers in `wincommander-free.exe`. Cataloged below.
 2. **commander-free ↔ commander-pro (Windows named pipe)** — Free spawns the Pro sidecar on demand for paid commands.
 
-The **wire format, handshake, signing, and trust model** for both channels are documented in [ARCHITECTURE.md — Free ↔ Pro IPC](../ARCHITECTURE.md#free--pro-ipc) and the [Data flow](../ARCHITECTURE.md#data-flow) section. This document does not repeat them; it is the command-catalog companion. The wire-format source of truth is [`wincmd-shared/src/lib.rs`](../src-tauri/wincmd-shared/src/lib.rs).
+The **wire format, handshake, signing, and trust model** for both channels are documented in [ARCHITECTURE.md — Free ↔ Pro IPC](../../ARCHITECTURE.md#free--pro-ipc) and the [Data flow](../../ARCHITECTURE.md#data-flow) section. This document does not repeat them; it is the command-catalog companion. The wire-format source of truth is [`wincmd-shared/src/lib.rs`](../../src-tauri/wincmd-shared/src/lib.rs).
 
-Command registration lives in [`src-tauri/commander-free/src/lib.rs`](../src-tauri/commander-free/src/lib.rs) (the `tauri::generate_handler!` block), plus the data-driven tier entries registered at startup by `backend::register_p2_commands` / `register_p3_commands` / `register_file_search_commands`.
+Command registration lives in [`src-tauri/commander-free/src/lib.rs`](../../src-tauri/commander-free/src/lib.rs) (the `tauri::generate_handler!` block), plus the data-driven tier entries registered at startup by `backend::register_p2_commands` / `register_p3_commands` / `register_file_search_commands`.
 
 ## How a command is routed
 
-Every UI-driven toggle funnels through `run_backend_script`, which decides — by `get_command_tier` — whether the work runs in-process (Free) or is forwarded to the Pro sidecar (Paid). The dedicated commands below are direct Tauri handlers; many of them call `license::require_paid` internally and dispatch to Pro over the signed pipe. See [ARCHITECTURE.md — Data flow](../ARCHITECTURE.md#data-flow) for the full guard order (evidence-integrity kill-switch → shield quota → tier gate → module gate).
+Every UI-driven toggle funnels through `run_backend_script`, which decides — by `get_command_tier` — whether the work runs in-process (Free) or is forwarded to the Pro sidecar (Paid). The dedicated commands below are direct Tauri handlers; many of them call `license::require_paid` internally and dispatch to Pro over the signed pipe. See [ARCHITECTURE.md — Data flow](../../ARCHITECTURE.md#data-flow) for the full guard order (evidence-integrity kill-switch → shield quota → tier gate → module gate).
 
 ## Tauri command catalog (frontend ↔ backend)
 
@@ -132,7 +132,7 @@ Native listeners can subscribe to `startup://phase` and
 
 Paid (`require_paid("flows")` on every command). Rules persist to `settings.app.proFlows`
 (separate store from the legacy `app.flows[]` below, so the two engines never double-fire the
-same trigger). Full architecture: [docs/flows.md](flows.md).
+same trigger). Full architecture: [Flows](../product/flows.md).
 
 | Command | Returns | Purpose |
 |---------|---------|---------|
@@ -399,16 +399,16 @@ a source-level interface contract; live mount acceptance is not claimed here.
 
 When `run_backend_script` (or a `require_paid` handler) determines a command is paid, `commander-free` spawns `wincommander-pro.exe` and forwards the call over a per-spawn Windows named pipe, then returns Pro's response verbatim. The handshake, length-prefixed JSON envelopes, HMAC-SHA256 per-frame signing, pinned binary-hash trust, and notification re-emission are all detailed in:
 
-- [ARCHITECTURE.md — Free ↔ Pro IPC](../ARCHITECTURE.md#free--pro-ipc) — transport, framing, handshake, signing, trust model.
-- [`wincmd-shared/src/lib.rs`](../src-tauri/wincmd-shared/src/lib.rs) — wire-format source of truth (`Envelope`, `read_envelope`/`write_envelope`, `sign_body`/`verify_body`).
-- [`commander-free/src/sidecar.rs`](../src-tauri/commander-free/src/sidecar.rs) — Free-side broker (`ProSession`, `dispatch_paid_command`).
+- [ARCHITECTURE.md — Free ↔ Pro IPC](../../ARCHITECTURE.md#free--pro-ipc) — transport, framing, handshake, signing, trust model.
+- [`wincmd-shared/src/lib.rs`](../../src-tauri/wincmd-shared/src/lib.rs) — wire-format source of truth (`Envelope`, `read_envelope`/`write_envelope`, `sign_body`/`verify_body`).
+- [`commander-free/src/sidecar.rs`](../../src-tauri/commander-free/src/sidecar.rs) — Free-side broker (`ProSession`, `dispatch_paid_command`).
 
 Paid commands are dispatched on the Pro side by `feature_id` in `commander-pro`'s handlers; the Free-side wrappers in the catalog above are the thin `require_paid` + dispatch stubs.
 
 ## See also
 
-- [Architecture](../ARCHITECTURE.md) — binary model, data flow, and the Free ↔ Pro wire format.
-- [Features](../FEATURES.md) — capability inventory with entry points.
-- [Settings reference](settings-reference.md) — the settings schema these commands read and write.
-- [Flows](flows.md) — the Flow engine triggers/conditions/actions that drive many of these commands.
-- [Open core](../OPEN_CORE.md) — Free vs Pro tier rationale.
+- [Architecture](../../ARCHITECTURE.md) — binary model, data flow, and the Free ↔ Pro wire format.
+- [Features](../../FEATURES.md) — capability inventory with entry points.
+- [Settings reference](../frontend/settings-reference.md) — the settings schema these commands read and write.
+- [Flows](../product/flows.md) — the Flow engine triggers/conditions/actions that drive many of these commands.
+- [Open core](../../OPEN_CORE.md) — Free vs Pro tier rationale.
