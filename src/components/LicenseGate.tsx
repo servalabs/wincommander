@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import useBackend from "../hooks/useBackend";
 import { useAppState } from "../context/AppContext";
 import { useInvalidateLicense, useLicenseQuery } from "../hooks/queries/useLicenseQuery";
+import { nextLicenseRefreshDelay } from "../lib/licenseRefreshSchedule";
 import { fireLicenseCelebration } from "./shared/LicenseCelebrationListener";
 import LicensePurchasePanel from "./LicensePurchasePanel";
 import { DURATION_S, EASE } from "./shared/motion";
@@ -103,19 +104,30 @@ export default function LicenseGate({
   }, [activeTab, openOnDemand]);
 
   useEffect(() => {
+    let cancelled = false;
+    let failures = 0;
+    let timer: ReturnType<typeof window.setTimeout> | null = null;
+    const schedule = (delay: number) => {
+      timer = window.setTimeout(() => { void refresh(); }, delay);
+    };
     const refresh = async () => {
       try {
         await refreshAppLicense();
         invalidateLicense();
+        failures = 0;
       } catch {
         // The signed local token remains authoritative through its offline grace.
+        failures += 1;
+      } finally {
+        if (!cancelled) schedule(nextLicenseRefreshDelay(failures));
       }
     };
-    const onlineTimer = window.setTimeout(() => void refresh(), 1_500);
-    const periodicTimer = window.setInterval(() => void refresh(), 12 * 60 * 60 * 1_000);
+    // One launch check plus jittered twice-daily validation keeps entitlement
+    // current without repeatedly calling the licensing service.
+    schedule(1_500);
     return () => {
-      window.clearTimeout(onlineTimer);
-      window.clearInterval(periodicTimer);
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
     };
   }, [invalidateLicense, refreshAppLicense]);
 

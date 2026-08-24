@@ -116,12 +116,12 @@ export default function LicenseQuickPanel() {
   };
 
   useEffect(() => {
-    refreshStatus(true);
-    const interval = setInterval(() => refreshStatus(true), 60 * 60 * 1000);
+    // The global LicenceGate owns online refresh scheduling. This sidebar
+    // reads the signed local cache so mounting it cannot add an hourly request.
+    void refreshStatus(false);
     const onLicenseUpdated = () => refreshStatus(false);
     window.addEventListener("license-updated", onLicenseUpdated as EventListener);
     return () => {
-      clearInterval(interval);
       window.removeEventListener("license-updated", onLicenseUpdated as EventListener);
     };
   }, [refreshStatus]);
