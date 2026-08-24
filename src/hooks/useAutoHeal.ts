@@ -12,6 +12,7 @@
 //     every render, to avoid hammering the backend during normal use
 
 import { useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSettingsQuery, settingsKeys } from "./queries/useSettingsQuery";
 import { executeBackendCommand } from "./useBackend";
@@ -20,6 +21,7 @@ import { getToggleDrift } from "../lib/toggleDrift";
 import { useAuthMode } from "../context/AuthModeContext";
 
 const HEAL_COOLDOWN_MS = 60_000;
+const DRIFT_PROBE_INTERVAL_MS = 60_000;
 
 export default function useAutoHeal() {
   const { mode: authMode } = useAuthMode();
@@ -28,6 +30,33 @@ export default function useAutoHeal() {
   const healCooldown = useRef<Record<string, number>>({});
   const isHealingRef = useRef(false);
   const lastCurrentHashRef = useRef<string>("");
+
+  useEffect(() => {
+    if (authMode === "decoy" || !appSettings?.app?.firstRunComplete) return;
+
+    const managed = appSettings.policy?.syncMode === "managed";
+    const lockEnforcing = managed && (appSettings.policy?.lockedPaths?.length ?? 0) > 0;
+    if (!appSettings.app.autoHeal && !lockEnforcing) return;
+
+    let cancelled = false;
+    const refreshProbe = async () => {
+      try {
+        const probe = await executeBackendCommand<unknown>("Get-WCSystemProbe");
+        if (!probe.success || !probe.data || cancelled) return;
+        const updated = await invoke("update_current_state", { probe: probe.data });
+        if (!cancelled && updated) queryClient.setQueryData(settingsKeys.detail(), updated);
+      } catch {
+        // The next interval retries. A failed probe must never overwrite current.*.
+      }
+    };
+
+    const interval = window.setInterval(() => { void refreshProbe(); }, DRIFT_PROBE_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [authMode, appSettings?.app?.autoHeal, appSettings?.app?.firstRunComplete,
+    appSettings?.policy?.lockedPaths, appSettings?.policy?.syncMode, queryClient]);
 
   useEffect(() => {
     // KT: decoy guard — real hardening commands fired during a coerced decoy
@@ -60,6 +89,8 @@ export default function useAutoHeal() {
     const now = Date.now();
 
     const drifted = getRadarDriftToggles().filter(t => {
+      // One-shot actions and incomplete registry rows cannot be safely replayed.
+      if (t.isAction || (!t.capabilityKey && (!t.enableCmd || !t.disableCmd))) return false;
       if (!getToggleDrift(appSettings, t)) return false;
       const lastHeal = healCooldown.current[t.id] ?? 0;
       if ((now - lastHeal) <= HEAL_COOLDOWN_MS) return false;

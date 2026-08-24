@@ -290,17 +290,21 @@ function ProVersionActions({ freeNeedsUpdate }: { freeNeedsUpdate: boolean }) {
 
     const deletePro = async () => {
         const accepted = await confirmAction({
-            title: "Remove the installed Pro sidecar?",
-            description: "This deletes the installed WinCommander Pro binary. Pro features will be unavailable until it is installed again.",
+            title: "Remove WinCommander Pro?",
+            description: "This stops and removes the installed WinCommander Pro program. Your WinCommander settings, licence, and user data are kept. If Windows is holding a file open, Pro will be disabled and its remaining file can be removed later.",
             confirmLabel: "Remove Pro",
         });
         if (!accepted) return;
         setDeletingPro(true);
         try {
-            await invoke("delete_pro_binary");
+            const result = await invoke<{ fully_removed?: boolean; warnings?: string[] }>("delete_pro_binary");
             await refresh();
             window.dispatchEvent(new CustomEvent("pro-install-state-changed"));
-            showSuccess("Installed Pro sidecar removed.");
+            if (result.fully_removed === false) {
+                showWarning("Pro is disabled. Windows is still holding one or more files, so close related programs and remove Pro again to finish cleanup.", undefined, { kind: "notification" });
+            } else {
+                showSuccess("WinCommander Pro removed. Your settings and user data were kept.");
+            }
         } catch (err) {
             showError(err instanceof Error ? err.message : String(err), undefined, { kind: "notification" });
         } finally {
@@ -327,8 +331,8 @@ function ProVersionActions({ freeNeedsUpdate }: { freeNeedsUpdate: boolean }) {
                 loading={deletingPro}
                 disabled={!status?.installed || proBusy}
                 onClick={deletePro}
-                title="Delete Pro"
-                aria-label="Delete Pro"
+                title="Remove Pro"
+                aria-label="Remove Pro"
             />
         </>
     );

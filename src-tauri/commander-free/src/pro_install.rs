@@ -344,40 +344,82 @@ fn write_pro_install_metadata(version: Option<String>, sha256: &str) -> Result<(
     std::fs::write(&path, bytes).map_err(|e| format!("disk:metadata write: {}", e))
 }
 
+fn remove_file_if_present(
+    path: PathBuf,
+    removed: &mut Vec<String>,
+    missing: &mut Vec<String>,
+) -> Result<(), String> {
+    let label = path.display().to_string();
+    if !path.exists() {
+        missing.push(label);
+        return Ok(());
+    }
+    std::fs::remove_file(&path).map_err(|e| format!("disk:remove {}: {}", label, e))?;
+    removed.push(label);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn delete_pro_binary() -> Result<serde_json::Value, String> {
     crate::paths::migrate_user_data_layout()?;
+    // Disable first. If an antivirus product or an already-running process keeps
+    // a file locked, Pro must still remain off rather than being rediscovered on
+    // the next launch.
+    let disabled_marker =
+        write_disabled_marker().map_err(|e| format!("disk:disable pro marker: {}", e))?;
     crate::sidecar::close_pro_session().await;
     let mut removed = Vec::new();
     let mut missing = Vec::new();
-    let mut remove_file = |path: PathBuf| -> Result<(), String> {
-        let label = path.display().to_string();
-        if !path.exists() {
-            missing.push(label);
-            return Ok(());
-        }
-        std::fs::remove_file(&path)
-            .map_err(|e| format!("disk:remove {}: {} (close Pro first if running)", label, e))?;
-        removed.push(label);
-        Ok(())
-    };
+    let mut warnings = Vec::new();
 
     let install_path = pro_install_path()?;
-    remove_file(install_path.with_extension("exe.tmp"))?;
-    remove_file(install_path.with_file_name("wincommander-pro.json"))?;
-    remove_file(install_path)?;
+    for path in [
+        install_path.with_extension("exe.tmp"),
+        install_path.with_file_name("wincommander-pro.json"),
+    ] {
+        if let Err(error) = remove_file_if_present(path, &mut removed, &mut missing) {
+            warnings.push(error);
+        }
+    }
+    if !install_path.exists() {
+        missing.push(install_path.display().to_string());
+    } else if let Err(error) = remove_existing_pro_binary(&install_path).await {
+        warnings.push(error);
+    } else if install_path.exists() {
+        warnings.push(format!(
+            "disk:remove {}: file still exists",
+            install_path.display()
+        ));
+    } else {
+        removed.push(install_path.display().to_string());
+    }
 
     if let Ok(legacy_path) = crate::paths::legacy_pro_sidecar_path() {
-        remove_file(legacy_path.with_file_name("wincommander-pro.json"))?;
-        remove_file(legacy_path)?;
+        let legacy_metadata = legacy_path.with_file_name("wincommander-pro.json");
+        if let Err(error) = remove_file_if_present(legacy_metadata, &mut removed, &mut missing) {
+            warnings.push(error);
+        }
+        if !legacy_path.exists() {
+            missing.push(legacy_path.display().to_string());
+        } else if let Err(error) = remove_existing_pro_binary(&legacy_path).await {
+            warnings.push(error);
+        } else if legacy_path.exists() {
+            warnings.push(format!(
+                "disk:remove {}: file still exists",
+                legacy_path.display()
+            ));
+        } else {
+            removed.push(legacy_path.display().to_string());
+        }
     }
-    let disabled_marker =
-        write_disabled_marker().map_err(|e| format!("disk:disable pro marker: {}", e))?;
 
     Ok(serde_json::json!({
         "ok": true,
+        "disabled": true,
+        "fully_removed": warnings.is_empty(),
         "removed": removed,
         "missing": missing,
+        "warnings": warnings,
         "disabled_marker": disabled_marker.display().to_string(),
     }))
 }
@@ -594,11 +636,7 @@ fn defender_pref_field(field: &str) -> Option<String> {
         return None;
     }
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 #[cfg(windows)]
