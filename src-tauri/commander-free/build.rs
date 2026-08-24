@@ -69,7 +69,8 @@ fn main() {
     }
     let development_manifest;
     let app_manifest = if is_development_profile {
-        development_manifest = release_manifest.replacen(HIGHEST_AVAILABLE_LEVEL, r#"level="asInvoker""#, 1);
+        development_manifest =
+            release_manifest.replacen(HIGHEST_AVAILABLE_LEVEL, r#"level="asInvoker""#, 1);
         development_manifest.as_str()
     } else {
         release_manifest

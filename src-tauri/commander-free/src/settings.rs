@@ -4285,7 +4285,8 @@ mod tests {
 
     /// Minimal stand-in for `commander-svc/src/pipe.rs`'s Hello+Request
     /// loop — accepts exactly one connection, does the Hello handshake,
-    /// reads one frame, then writes back `reply`. Mirrors that file's own
+    /// reads one frame, then writes back `reply` correlated to that request.
+    /// Mirrors that file's own
     /// integration-test pattern (a `wincmd-svc-test-<suffix>` pipe name)
     /// so it never touches the real system pipe.
     async fn run_fake_svc_once(pipe_name: &'static str, reply: wincmd_shared::Envelope) {
@@ -4297,17 +4298,40 @@ mod tests {
             .expect("create test svc pipe");
         server.connect().await.expect("test svc pipe accept");
 
-        let _hello = wincmd_shared::read_envelope(&mut server)
+        let hello = wincmd_shared::read_envelope(&mut server)
             .await
             .expect("read Hello");
-        let ack = wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui("svc-ack"));
+        let wincmd_shared::Envelope::Hello(hello) = hello else {
+            panic!("expected Hello");
+        };
+        let session_token = hello.session_token;
+        let ack = wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(
+            session_token.clone(),
+        ));
         wincmd_shared::write_envelope(&mut server, &ack)
             .await
             .expect("write Hello ack");
 
-        let _request = wincmd_shared::read_envelope(&mut server)
+        let request = wincmd_shared::read_envelope(&mut server)
             .await
-            .expect("read Request");
+            .expect("read Request")
+            .verify_and_unwrap(&session_token)
+            .expect("verify Request");
+        let wincmd_shared::Envelope::Request(request) = request else {
+            panic!("expected Request");
+        };
+        let reply = match reply {
+            wincmd_shared::Envelope::Response(mut response) => {
+                response.request_id = request.request_id;
+                wincmd_shared::Envelope::Response(response)
+            }
+            wincmd_shared::Envelope::Error(mut error) => {
+                error.request_id = request.request_id;
+                wincmd_shared::Envelope::Error(error)
+            }
+            other => other,
+        }
+        .sign(&session_token);
         wincmd_shared::write_envelope(&mut server, &reply)
             .await
             .expect("write reply");
