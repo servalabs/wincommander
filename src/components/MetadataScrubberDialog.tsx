@@ -17,7 +17,7 @@
 // Lives in `components/` because it's launched from the global Right
 // Sidebar — not bound to any one panel.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
@@ -26,9 +26,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useAppState } from '../context/AppContext';
 import useDependencies from '../hooks/useDependencies';
 
-// Resolved once at module init — used as <base href> inside srcDoc iframes so
-// that relative paths like /leaflet/leaflet.js resolve correctly from about:srcdoc.
-const MAP_ORIGIN = window.location.origin;
+const GPS_MAP_MESSAGE = 'wincommander:metadata-gps-map';
 
 interface StrippedField {
   /** Stable category id — drives chip colour + summary roll-up. */
@@ -1753,49 +1751,45 @@ function buildGpsMarkerGroups(results: GpsMapResult[]): GpsMarkerGroup[] {
 }
 
 function GpsCoordList({ results, isDryRun }: { results: GpsMapResult[]; isDryRun: boolean }) {
-  if (results.length === 0) return null;
+  const groups = useMemo(() => buildGpsMarkerGroups(results), [results]);
+  const mapFrame = useRef<HTMLIFrameElement>(null);
+  const [mapFrameReady, setMapFrameReady] = useState(false);
+  const mapData = useMemo(() => {
+    const markers = groups.map((g) => {
+      const popupItems = g.files
+        .map((path) => `<li>${escapeHtml(path.split(/[/\\]/).pop() ?? path)}</li>`)
+        .join('');
+      const popupTitle =
+        g.files.length === 1
+          ? '1 file at this location'
+          : `${g.files.length} files at this location`;
+      const popup =
+        `<b style="font-size:12px">${popupTitle}</b>` +
+        `<br><span style="font-family:monospace;font-size:10px">${escapeHtml(g.label)}</span>` +
+        `<ul style="margin:6px 0 0;padding-left:16px;max-height:140px;overflow:auto;font-family:monospace;font-size:10px">${popupItems}</ul>`;
+      const tooltip =
+        g.files.length === 1
+          ? `1 file<br>${escapeHtml(g.label)}`
+          : `${g.files.length} files<br>${escapeHtml(g.label)}`;
+      return { lat: g.lat, lon: g.lon, radius: g.files.length > 1 ? 11 : 7, tooltip, popup };
+    });
+    return {
+      markers,
+      center: groups.length === 1 ? { lat: groups[0].lat, lon: groups[0].lon } : null,
+      bounds: groups.length === 1 ? null : groups.map((g) => [g.lat, g.lon]),
+    };
+  }, [groups]);
+  const mapUrl = new URL('leaflet/gps-map.html', `${window.location.origin}/`).toString();
 
-  const groups = buildGpsMarkerGroups(results);
-  const markers = groups.map((g) => {
-    const popupItems = g.files
-      .map((path) => `<li>${escapeHtml(path.split(/[/\\]/).pop() ?? path)}</li>`)
-      .join('');
-    const popupTitle =
-      g.files.length === 1
-        ? '1 file at this location'
-        : `${g.files.length} files at this location`;
-    const popup =
-      `<b style="font-size:12px">${popupTitle}</b>` +
-      `<br><span style="font-family:monospace;font-size:10px">${escapeHtml(g.label)}</span>` +
-      `<ul style="margin:6px 0 0;padding-left:16px;max-height:140px;overflow:auto;font-family:monospace;font-size:10px">${popupItems}</ul>`;
-    const tooltip =
-      g.files.length === 1
-        ? `1 file<br>${escapeHtml(g.label)}`
-        : `${g.files.length} files<br>${escapeHtml(g.label)}`;
-    return { lat: g.lat, lon: g.lon, radius: g.files.length > 1 ? 11 : 7, tooltip, popup };
-  });
-  const mapData = {
-    markers,
-    center: groups.length === 1 ? { lat: groups[0].lat, lon: groups[0].lon } : null,
-    bounds: groups.length === 1 ? null : groups.map((g) => [g.lat, g.lon]),
-  };
-  // Embed as a non-executable JSON data block (CSP does not gate these) and let
-  // the bundled, same-origin /leaflet/map-init.js read + render it. Escaping `<`
-  // prevents a filename/label containing "</script>" from closing the block.
-  const mapDataJson = JSON.stringify(mapData).replace(/</g, '\\u003c');
-  const srcdoc = `<!DOCTYPE html><html><head>
-<base href="${MAP_ORIGIN}/">
-<link rel="stylesheet" href="/leaflet/leaflet.css">
-<style>html,body,#m{margin:0;padding:0;height:100%;background:#0a0f12}
-.leaflet-popup-content-wrapper{background:#111a1f;color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:4px;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
-.leaflet-popup-tip{background:#111a1f}
-.leaflet-tooltip{background:#111a1f;color:#e2e8f0;border:1px solid rgba(255,255,255,0.14);border-radius:4px;box-shadow:0 6px 20px rgba(0,0,0,0.45);font-family:monospace;font-size:10px;line-height:1.35}
-</style>
-</head><body><div id="m"></div>
-<script type="application/json" id="map-data">${mapDataJson}</script>
-<script src="/leaflet/leaflet.js"></script>
-<script src="/leaflet/map-init.js"></script>
-</body></html>`;
+  useEffect(() => {
+    if (!mapFrameReady) return;
+    mapFrame.current?.contentWindow?.postMessage(
+      { type: GPS_MAP_MESSAGE, mapData },
+      '*',
+    );
+  }, [mapData, mapFrameReady]);
+
+  if (results.length === 0) return null;
 
   return (
     <div
@@ -1831,10 +1825,13 @@ function GpsCoordList({ results, isDryRun }: { results: GpsMapResult[]; isDryRun
       {/* Leaflet map — one red pin per file that contained GPS */}
       <div style={{ borderBottom: '1px solid color-mix(in srgb, var(--color-danger) 45%, transparent)' }}>
         <iframe
-          srcDoc={srcdoc}
+          ref={mapFrame}
+          src={mapUrl}
+          onLoad={() => setMapFrameReady(true)}
           style={{ width: '100%', height: 200, border: 'none', display: 'block' }}
           title="GPS locations map"
-          sandbox="allow-scripts allow-same-origin"
+          sandbox="allow-scripts"
+          referrerPolicy="no-referrer"
         />
       </div>
     </div>

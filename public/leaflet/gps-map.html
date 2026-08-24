@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="referrer" content="no-referrer">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="leaflet.css">
+    <style>
+      html, body, #m { margin: 0; padding: 0; height: 100%; background: #0a0f12; }
+      .leaflet-popup-content-wrapper { background: #111a1f; color: #e2e8f0; border: 1px solid rgba(255,255,255,.12); border-radius: 4px; box-shadow: 0 8px 32px rgba(0,0,0,.5); }
+      .leaflet-popup-tip { background: #111a1f; }
+      .leaflet-tooltip { background: #111a1f; color: #e2e8f0; border: 1px solid rgba(255,255,255,.14); border-radius: 4px; box-shadow: 0 6px 20px rgba(0,0,0,.45); font-family: monospace; font-size: 10px; line-height: 1.35; }
+    </style>
+  </head>
+  <body>
+    <div id="m" aria-label="GPS locations map"></div>
+    <script src="leaflet.js"></script>
+    <script src="map-init.js"></script>
+  </body>
+</html>
