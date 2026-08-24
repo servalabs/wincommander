@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback } from "react";
-import type { VaultAccessCapabilities, VaultAuthorizedEntry, VaultMountEntryResult } from "@/panels/fleet/vaultAccessTypes";
+import type { VaultAccessCapabilities, VaultAuthorizedEntry, VaultMountEntryResult, VaultVolumeRole } from "@/panels/fleet/vaultAccessTypes";
 
 /** Typed renderer boundary for the service-owned Vault Access policy. */
 export default function useVaultAccess<Policy, Status>() {
@@ -17,8 +17,8 @@ export default function useVaultAccess<Policy, Status>() {
     [],
   );
   const mountEntry = useCallback(
-    (entryId: string, password: string) =>
-      invoke<VaultMountEntryResult>("vault_mount_entry", { entryId, password }),
+    (entryId: string, password: string, volumeRole: VaultVolumeRole, hiddenProtectionPassword?: string) =>
+      invoke<VaultMountEntryResult>("vault_mount_entry", { entryId, password, volumeRole, hiddenProtectionPassword }),
     [],
   );
   const unmountEntry = useCallback(

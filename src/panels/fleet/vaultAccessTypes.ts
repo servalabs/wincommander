@@ -6,6 +6,10 @@
  */
 export type VaultAccess = "read" | "write";
 export type VaultPresentation = "machine" | "per-user";
+/** `dual` is a VeraCrypt outer + hidden pair in one container file. */
+export type VaultVolumeKind = "standard" | "dual";
+/** Chosen for one mount request; this is never persisted with the policy. */
+export type VaultVolumeRole = "outer" | "hidden";
 export type VaultEntryResult =
   | "applied"
   | "pending_mount_broker"
@@ -42,6 +46,7 @@ export interface VaultAccessEntry {
   label: string;
   container_path: string;
   container_identity?: string | null;
+  volume_kind: VaultVolumeKind;
   owner_account: string;
   grants: VaultGrantInput[];
   mount: VaultMountPolicy;
@@ -87,6 +92,7 @@ export interface VaultAuthorizedEntry {
   label: string;
   access: VaultAccess;
   presentation: VaultPresentation;
+  volume_kind: VaultVolumeKind;
   mount_state: VaultMountState;
   drive_letter: string | null;
 }
@@ -122,6 +128,7 @@ export function newVaultEntry(kind: "shared" | "private" = "private"): VaultAcce
     id,
     label: shared ? "Shared vault" : "Administrator vault",
     container_path: "",
+    volume_kind: "standard",
     owner_account: "Administrator",
     // A shared presentation changes only where Windows exposes the mounted
     // drive. It must not silently grant a generic local account write access.
@@ -143,6 +150,14 @@ export function newVaultPolicy(): VaultAccessPolicy {
   };
 }
 
+/** Older saved policies predate container kinds; their safe interpretation is standard. */
+export function normalizeVaultAccessPolicy(policy: VaultAccessPolicy): VaultAccessPolicy {
+  return {
+    ...policy,
+    entries: policy.entries.map(entry => ({ ...entry, volume_kind: entry.volume_kind ?? "standard" })),
+  };
+}
+
 export function validateVaultAccessIntent(policy: VaultAccessPolicy): string | null {
   if (!policy.policy_id.trim()) return "A policy identifier is required.";
   // An empty policy is the explicit emergency/decommission state: the service
@@ -150,6 +165,9 @@ export function validateVaultAccessIntent(policy: VaultAccessPolicy): string | n
   if (policy.entries.length === 0) return null;
   if (policy.entries.some(entry => !entry.label.trim() || !entry.container_path.trim() || !entry.owner_account.trim())) {
     return "Every vault needs a label, container path, and owner account.";
+  }
+  if (policy.entries.some(entry => entry.volume_kind !== "standard" && entry.volume_kind !== "dual")) {
+    return "Every vault must use a standard or dual container type.";
   }
   if (policy.entries.some(entry => entry.grants.length === 0 || entry.grants.some(grant => !grant.principal_name.trim()))) {
     return "Every vault needs at least one named grant.";
@@ -159,6 +177,14 @@ export function validateVaultAccessIntent(policy: VaultAccessPolicy): string | n
     return new Set(principals).size !== principals.length;
   })) {
     return "A vault cannot grant the same Windows user or group more than once.";
+  }
+  if (policy.entries.some(entry => entry.volume_kind === "dual" && (
+    entry.mount.presentation !== "per-user"
+    || entry.grants.length !== 1
+    || entry.grants[0]?.access !== "write"
+    || entry.grants[0]?.principal_name.trim().toLocaleLowerCase() !== entry.owner_account.trim().toLocaleLowerCase()
+  ))) {
+    return "A dual outer + hidden container must stay private to its primary owner.";
   }
   if (policy.entries.some(entry => entry.mount.preferred_letter && !/^[A-Z]$/i.test(entry.mount.preferred_letter))) {
     return "Preferred drive letters must be one letter from A to Z.";

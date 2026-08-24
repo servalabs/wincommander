@@ -26,6 +26,8 @@ pub struct VaultAccessEntry {
     pub container_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_identity: Option<String>,
+    #[serde(default)]
+    pub container_kind: VaultContainerKind,
     pub owner_account: String,
     pub grants: Vec<VaultGrantInput>,
     pub mount: VaultMountPolicy,
@@ -36,6 +38,26 @@ pub struct VaultAccessEntry {
 pub enum VaultAccess {
     Read,
     Write,
+}
+
+/// `Dual` is an outer + hidden VeraCrypt container. The service, not the
+/// renderer, decides which policy entries may use it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultContainerKind {
+    #[default]
+    Standard,
+    Dual,
+}
+
+/// A one-request-only choice for a dual container. It is not policy state and
+/// must never be persisted with a credential.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultVolumeRole {
+    #[default]
+    Outer,
+    Hidden,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +135,8 @@ pub struct VaultAuthorizeMountRequest {
 pub struct VaultMountRequest {
     pub entry_id: String,
     pub password: String,
+    #[serde(default)]
+    pub volume_role: VaultVolumeRole,
 }
 
 impl std::fmt::Debug for VaultMountRequest {
@@ -120,6 +144,7 @@ impl std::fmt::Debug for VaultMountRequest {
         formatter
             .debug_struct("VaultMountRequest")
             .field("entry_id", &self.entry_id)
+            .field("volume_role", &self.volume_role)
             .field("password", &"[redacted]")
             .finish()
     }
@@ -178,6 +203,8 @@ pub struct VaultAuthorizedEntry {
     pub label: String,
     pub access: VaultAccess,
     pub presentation: VaultPresentation,
+    #[serde(default)]
+    pub container_kind: VaultContainerKind,
     pub mount_state: VaultMountState,
     pub drive_letter: Option<String>,
 }
@@ -219,6 +246,7 @@ mod tests {
                 label: "Shared".into(),
                 container_path: "C:\\vault.hc".into(),
                 container_identity: None,
+                container_kind: VaultContainerKind::Standard,
                 owner_account: "Administrator".into(),
                 grants: vec![VaultGrantInput {
                     principal_name: "Partner".into(),
@@ -237,15 +265,17 @@ mod tests {
     }
 
     #[test]
-    fn mount_wire_contains_only_the_ephemeral_password_and_entry_id() {
+    fn mount_wire_contains_only_the_ephemeral_password_and_role() {
         let request = VaultMountRequest {
             entry_id: "shared".into(),
             password: "one-shot".into(),
+            volume_role: VaultVolumeRole::Outer,
         };
         let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json.as_object().unwrap().len(), 2);
+        assert_eq!(json.as_object().unwrap().len(), 3);
         assert!(json.get("entry_id").is_some());
         assert!(json.get("password").is_some());
+        assert_eq!(json.get("volume_role"), Some(&serde_json::Value::String("outer".into())));
         assert!(json.get("container_path").is_none());
         assert!(json.get("sid").is_none());
 
@@ -261,6 +291,7 @@ mod tests {
         let request = VaultMountRequest {
             entry_id: "shared".into(),
             password: "canary-password".into(),
+            volume_role: VaultVolumeRole::Hidden,
         };
         assert!(!format!("{request:?}").contains("canary-password"));
         let result = VaultMountResult {

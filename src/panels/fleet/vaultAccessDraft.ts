@@ -1,4 +1,4 @@
-import type { VaultAccessPolicy } from "./vaultAccessTypes";
+import { normalizeVaultAccessPolicy, type VaultAccessPolicy } from "./vaultAccessTypes";
 
 const VAULT_ACCESS_DRAFT_KEY = "wincommander.vault-access-draft.v1";
 
@@ -31,6 +31,7 @@ function isVaultAccessPolicy(value: unknown): value is VaultAccessPolicy {
     && typeof entry.id === "string"
     && typeof entry.label === "string"
     && typeof entry.container_path === "string"
+    && (entry.volume_kind === undefined || entry.volume_kind === "standard" || entry.volume_kind === "dual")
     && (entry.container_identity === undefined || entry.container_identity === null || typeof entry.container_identity === "string")
     && typeof entry.owner_account === "string"
     && Array.isArray(entry.grants)
@@ -75,11 +76,14 @@ export function readVaultAccessDraftSnapshot(storage: VaultDraftStorage | null =
     const parsed: unknown = JSON.parse(raw);
     // v1 persisted the policy directly. Keep it readable, but it has no
     // trusted base snapshot and therefore cannot be automatically rebased.
-    if (isVaultAccessPolicy(parsed)) return { policy: parsed, basePolicy: null };
+    if (isVaultAccessPolicy(parsed)) return { policy: normalizeVaultAccessPolicy(parsed), basePolicy: null };
     if (!parsed || typeof parsed !== "object") return null;
     const record = parsed as { policy?: unknown; basePolicy?: unknown };
     return isVaultAccessPolicy(record.policy)
-      ? { policy: record.policy, basePolicy: isVaultAccessPolicy(record.basePolicy) ? record.basePolicy : null }
+      ? {
+        policy: normalizeVaultAccessPolicy(record.policy),
+        basePolicy: isVaultAccessPolicy(record.basePolicy) ? normalizeVaultAccessPolicy(record.basePolicy) : null,
+      }
       : null;
   } catch {
     return null;

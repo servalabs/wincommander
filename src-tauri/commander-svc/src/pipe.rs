@@ -639,7 +639,7 @@ fn take_vault_mount_request(
 ) -> Result<wincmd_shared::vault_access::VaultMountRequest, ()> {
     use zeroize::Zeroize;
     let object = args.as_object_mut().ok_or(())?;
-    if object.len() != 2 {
+    if object.len() != 3 {
         zeroize_json(args);
         return Err(());
     }
@@ -658,8 +658,27 @@ fn take_vault_mount_request(
             return Err(());
         }
     };
+    let volume_role = match object.remove("volume_role") {
+        Some(serde_json::Value::String(value)) if value == "outer" => {
+            wincmd_shared::vault_access::VaultVolumeRole::Outer
+        }
+        Some(serde_json::Value::String(value)) if value == "hidden" => {
+            wincmd_shared::vault_access::VaultVolumeRole::Hidden
+        }
+        _ => {
+            entry_id.zeroize();
+            let mut password = password;
+            password.zeroize();
+            zeroize_json(args);
+            return Err(());
+        }
+    };
     zeroize_json(args);
-    Ok(wincmd_shared::vault_access::VaultMountRequest { entry_id, password })
+    Ok(wincmd_shared::vault_access::VaultMountRequest {
+        entry_id,
+        password,
+        volume_role,
+    })
 }
 
 fn zeroize_json(value: &mut serde_json::Value) {
@@ -727,7 +746,7 @@ fn handle_vault_list_authorized(
     let entries: Vec<wincmd_shared::vault_access::VaultAuthorizedEntry> = vault_access
         .entry_summaries()
         .into_iter()
-        .filter_map(|(entry_id, label)| {
+        .filter_map(|(entry_id, label, container_kind)| {
             let authorization = crate::vault_access::authorize_mount_for_process(
                 vault_access,
                 &entry_id,
@@ -742,6 +761,7 @@ fn handle_vault_list_authorized(
                 label,
                 access: authorization.mode?,
                 presentation: authorization.presentation?,
+                container_kind,
                 mount_state,
                 drive_letter,
             })
@@ -1997,10 +2017,11 @@ mod tests {
 
     #[test]
     fn mount_secret_parser_moves_only_the_password_and_clears_the_json_shell() {
-        let mut args = serde_json::json!({"entry_id":"shared","password":"canary-secret"});
+        let mut args = serde_json::json!({"entry_id":"shared","password":"canary-secret","volume_role":"hidden"});
         let request = take_vault_mount_request(&mut args).unwrap();
         assert_eq!(request.entry_id, "shared");
         assert_eq!(request.password, "canary-secret");
+        assert_eq!(request.volume_role, wincmd_shared::vault_access::VaultVolumeRole::Hidden);
         assert!(args.as_object().unwrap().is_empty());
     }
 

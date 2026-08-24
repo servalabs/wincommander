@@ -138,7 +138,7 @@ describe("UI audit fixture", () => {
     expect(uiAuditDirectResponse("get_vault_access_capabilities")).toEqual({ can_manage_policy: true });
     expect(policy.entries[0]).toMatchObject({ label: "Team documents" });
     expect(policy.entries[0]?.grants).toHaveLength(2);
-    expect(authorized).toEqual([{ entry_id: "audit-team-vault", label: "Team documents", access: "write", presentation: "machine", mount_state: "unmounted", drive_letter: null }]);
+    expect(authorized).toEqual([{ entry_id: "audit-team-vault", label: "Team documents", access: "write", presentation: "machine", volume_kind: "standard", mount_state: "unmounted", drive_letter: null }]);
   });
 
   test("supplies the activation shape consumed by the Settings panel", () => {

@@ -14,6 +14,7 @@ describe("Vault Access service intent", () => {
     expect(policy.entries).toHaveLength(3);
     expect(policy.entries[0]?.mount.presentation).toBe("machine");
     expect(policy.entries.slice(1).every(entry => entry.mount.presentation === "per-user")).toBe(true);
+    expect(policy.entries.every(entry => entry.volume_kind === "standard")).toBe(true);
   });
 
   test("does not treat an incomplete renderer draft as deployable", () => {
@@ -58,6 +59,24 @@ describe("Vault Access service intent", () => {
     policy.entries.forEach((entry, index) => { entry.container_path = `C:\\Vaults\\vault-${index}.hc`; });
     expect(validateVaultAccessIntent(policy)).toBe(
       "Each managed container needs its own dedicated parent folder; vaults cannot share a parent.",
+    );
+  });
+
+  test("keeps a dual outer plus hidden container private to its owner", () => {
+    const policy = newVaultPolicy();
+    const entry = policy.entries[1]!;
+    policy.entries = [entry];
+    entry.label = "Kaushal private";
+    entry.container_path = "K:\\Vaults\\Kaushal\\private.hc";
+    entry.owner_account = "Kaushal";
+    entry.volume_kind = "dual";
+    entry.grants = [{ principal_name: "Kaushal", access: "write" }];
+    entry.mount.presentation = "per-user";
+    expect(validateVaultAccessIntent(policy)).toBeNull();
+
+    entry.mount.presentation = "machine";
+    expect(validateVaultAccessIntent(policy)).toBe(
+      "A dual outer + hidden container must stay private to its primary owner.",
     );
   });
 

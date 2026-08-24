@@ -12,10 +12,10 @@ import {
 import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
 import type { FleetAccessDirectory } from "./accessControlTypes";
 import {
-  newVaultEntry, newVaultPolicy, validateVaultAccessIntent, vaultMountResultLabel, vaultPresentationLabel,
+  newVaultEntry, newVaultPolicy, normalizeVaultAccessPolicy, validateVaultAccessIntent, vaultMountResultLabel, vaultPresentationLabel,
   type VaultAuthorizedEntry,
   type VaultMountEntryResult,
-  type VaultAccessEntry, type VaultAccessPolicy, type VaultPolicyStatus,
+  type VaultAccessEntry, type VaultAccessPolicy, type VaultPolicyStatus, type VaultVolumeKind, type VaultVolumeRole,
 } from "./vaultAccessTypes";
 import { applyVaultAccessPreset, VAULT_ACCESS_PRESETS, vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
 import VaultAccessPatternPicker from "./VaultAccessPatternPicker";
@@ -26,6 +26,11 @@ function appliedAt(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleString();
 }
 
+interface MountTarget {
+  entryId: string;
+  volumeKind: VaultVolumeKind;
+}
+
 export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolean; directory: FleetAccessDirectory }) {
   const initialDraft = useMemo(() => readVaultAccessDraftSnapshot(), []);
   const [policy, setPolicy] = useState<VaultAccessPolicy | null>(initialDraft?.policy ?? null);
@@ -34,12 +39,14 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [legacyNotice, setLegacyNotice] = useState<string | null>(null);
-  const [mountTargetId, setMountTargetId] = useState<string | null>(null);
+  const [mountTarget, setMountTarget] = useState<MountTarget | null>(null);
+  const [volumeRole, setVolumeRole] = useState<VaultVolumeRole>("outer");
   const [draftConfirmation, setDraftConfirmation] = useState<"replace" | "discard" | null>(null);
   const [mountingEntryId, setMountingEntryId] = useState<string | null>(null);
   const [unmountingEntryId, setUnmountingEntryId] = useState<string | null>(null);
   const [mountResults, setMountResults] = useState<Record<string, VaultMountEntryResult>>({});
   const passwordInputRef = useRef<HTMLInputElement>(null);
+  const hiddenProtectionPasswordInputRef = useRef<HTMLInputElement>(null);
   const policyRef = useRef<VaultAccessPolicy | null>(initialDraft?.policy ?? null);
   const draftBaseRef = useRef<VaultAccessPolicy | null>(initialDraft?.basePolicy ?? null);
   const [savedPolicy, setSavedPolicy] = useState<VaultAccessPolicy | null>(null);
@@ -74,7 +81,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       if (isAdmin) {
         const [entries, loadedPolicy, loadedStatus] = await Promise.all([
           listAuthorizedEntries(),
-          getPolicy(),
+          getPolicy().then(normalizeVaultAccessPolicy),
           includeStatus ? getStatus() : Promise.resolve(null),
         ]);
         setAuthorizedEntries(entries);
@@ -206,7 +213,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
   const reloadSavedPolicy = async () => {
     try {
-      const loaded = await getPolicy();
+      const loaded = normalizeVaultAccessPolicy(await getPolicy());
       replacePolicy(loaded, false);
       setSavedPolicy(loaded);
       await refresh(true);
@@ -219,7 +226,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     const draft = policyRef.current;
     if (!draft) return;
     try {
-      const latest = savedPolicy ?? await getPolicy();
+      const latest = savedPolicy ?? normalizeVaultAccessPolicy(await getPolicy());
       setSavedPolicy(latest);
       const rebased = rebaseVaultAccessDraft(draft, draftBaseRef.current, latest);
       if (!rebased) return void showError("The saved policy changed in the same Vault. Your draft was kept; reload and review before editing again.");
@@ -249,22 +256,36 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
   const closeMountPrompt = () => {
     if (passwordInputRef.current) passwordInputRef.current.value = "";
-    setMountTargetId(null);
+    if (hiddenProtectionPasswordInputRef.current) hiddenProtectionPasswordInputRef.current.value = "";
+    setMountTarget(null);
+    setVolumeRole("outer");
+  };
+
+  const openMountPrompt = (entry: { entry_id?: string; id?: string; volume_kind: VaultVolumeKind }) => {
+    const entryId = entry.entry_id ?? entry.id;
+    if (!entryId) return;
+    setVolumeRole("outer");
+    setMountTarget({ entryId, volumeKind: entry.volume_kind ?? "standard" });
   };
 
   const mountSelectedEntry = async () => {
-    const entryId = mountTargetId;
+    const entryId = mountTarget?.entryId;
+    const requestedRole = mountTarget?.volumeKind === "dual" ? volumeRole : "outer";
     const input = passwordInputRef.current;
+    const hiddenProtectionInput = hiddenProtectionPasswordInputRef.current;
     let password = input?.value ?? "";
+    let hiddenProtectionPassword = requestedRole === "outer" ? hiddenProtectionInput?.value ?? "" : "";
     if (!entryId || !password) return void showError("Enter the vault password to mount it.");
 
     // Clear the DOM field before awaiting IPC. The local stays only for this request.
     if (input) input.value = "";
-    setMountTargetId(null);
+    if (hiddenProtectionInput) hiddenProtectionInput.value = "";
+    setMountTarget(null);
     setMountingEntryId(entryId);
     try {
-      const mountRequest = mountEntry(entryId, password);
+      const mountRequest = mountEntry(entryId, password, requestedRole, hiddenProtectionPassword || undefined);
       password = "";
+      hiddenProtectionPassword = "";
       const result = await mountRequest;
       recordMountResult(result);
       if (result.state === "mounted") showSuccess(vaultMountResultLabel(result));
@@ -273,6 +294,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       showError("The Vault mount request could not be completed.");
     } finally {
       password = "";
+      hiddenProtectionPassword = "";
       setMountingEntryId(null);
     }
   };
@@ -295,8 +317,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const activePolicy = policy;
   const authorizedById = new Map(authorizedEntries.map(entry => [entry.entry_id, entry]));
   const verification = draftDirty ? null : vaultPolicyVerification(status);
-  const mountTarget = authorizedEntries.find(entry => entry.entry_id === mountTargetId)
-    ?? activePolicy?.entries.find(entry => entry.id === mountTargetId);
+  const mountTargetEntry = authorizedEntries.find(entry => entry.entry_id === mountTarget?.entryId)
+    ?? activePolicy?.entries.find(entry => entry.id === mountTarget?.entryId);
 
   return (
     <div className="fleet-admin-stack">
@@ -335,7 +357,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                   {unmountingEntryId === entry.entry_id ? "Unmounting…" : "Unmount"}
                 </Button>
               ) : (
-                <Button variant="primary" size="sm" disabled={mountingEntryId === entry.entry_id} onClick={() => setMountTargetId(entry.entry_id)}>
+                <Button variant="primary" size="sm" disabled={mountingEntryId === entry.entry_id} onClick={() => openMountPrompt(entry)}>
                   {mountingEntryId === entry.entry_id ? "Mounting…" : "Mount"}
                 </Button>
               )}
@@ -367,6 +389,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             const mountResult = mountResults[entry.id];
             const isMounted = mountResult?.state === "mounted" || authorized?.mount_state === "mounted";
             const accessPreset = vaultAccessPreset(entry);
+            const isDualContainer = entry.volume_kind === "dual";
             return <div className="fleet-vault-workspace" key={entry.id}>
               <div className="fleet-vault-workspace-header">
                 <div><span className="fleet-vault-step">1. Vault details</span><strong>Vault {entryIndex + 1}</strong></div>
@@ -375,21 +398,24 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
               <div className="fleet-owner-inputs">
                 <label className="fleet-field"><span>Vault name</span><Input aria-label={`Vault ${entryIndex + 1} label`} value={entry.label} placeholder="Shared vault" onChange={event => updateEntry(entry.id, { label: event.target.value })} /><small>The label people recognize.</small></label>
                 <label className="fleet-field"><span>Container file</span><Input aria-label={`Vault ${entryIndex + 1} container path`} value={entry.container_path} placeholder="D:\\Vaults\\shared.hc" onChange={event => updateEntry(entry.id, { container_path: event.target.value })} /><small>The encrypted .hc file on this PC. Keep each managed Vault in its own dedicated parent folder.</small></label>
+                <label className="fleet-field"><span>Container type</span><select aria-label={`Vault ${entryIndex + 1} container type`} value={entry.volume_kind} onChange={event => updateEntry(entry.id, event.target.value === "dual" ? { ...applyVaultAccessPreset(entry, "private"), volume_kind: "dual" } : { volume_kind: "standard" })}><option value="standard">Standard container</option><option value="dual">Outer + hidden container</option></select><small>{isDualContainer ? "Outer and hidden passwords are requested only when mounting; this Vault stays private to its owner." : "Standard containers can be private or shared."}</small></label>
                 <label className="fleet-field"><span>Primary owner</span><Input aria-label={`Vault ${entryIndex + 1} owner`} value={entry.owner_account} placeholder="SERVER\\shrey" onChange={event => setOwnerAccount(entry.id, event.target.value)} /><small>The Windows account responsible for this Vault. Use PC-or-domain\username.</small></label>
                 <label className="fleet-field"><span>Drive letter</span><Input aria-label={`Vault ${entryIndex + 1} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} /><small>The preferred letter in File Explorer. Leave blank for Windows to choose.</small></label>
               </div>
-              <VaultAccessPatternPicker value={accessPreset} onChange={preset => setAccessPreset(entry.id, preset)} />
+              {isDualContainer
+                ? <p className="fleet-field-hint">2. Dual containers are owner-only. They cannot be shared through Fleet access policy.</p>
+                : <VaultAccessPatternPicker value={accessPreset} onChange={preset => setAccessPreset(entry.id, preset)} />}
               <div className="fleet-vault-grants">
-                <strong>{accessPreset === "private" ? "3. Confirm owner access" : "3. Add Windows users or groups"}</strong>
-                {accessPreset !== "private" && <p className="fleet-field-hint">A Windows user or group gives that account or team the access selected above.</p>}
-                {accessPreset === "private"
+                <strong>{accessPreset === "private" || isDualContainer ? "3. Confirm owner access" : "3. Add Windows users or groups"}</strong>
+                {!isDualContainer && accessPreset !== "private" && <p className="fleet-field-hint">A Windows user or group gives that account or team the access selected above.</p>}
+                {accessPreset === "private" || isDualContainer
                   ? <p className="fleet-field-hint">Only the primary owner can mount or edit this vault. Its drive appears only in that Windows session.</p>
                   : entry.grants.map((grant, grantIndex) => <div className="fleet-vault-grant-row" key={`${entry.id}-${grantIndex}`}>
                     <label className="fleet-field"><span>Windows user or group</span><Input aria-label={`Grant ${grantIndex + 1} principal`} value={grant.principal_name} placeholder="SERVER\\Admins" onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, principal_name: event.target.value } : current) })} /><small>{accessPreset === "custom" ? "This person has the level selected beside them." : VAULT_ACCESS_PRESETS[accessPreset].label}</small></label>
                     {accessPreset === "custom" && <label className="fleet-field"><span>Access</span><select aria-label={`Grant ${grantIndex + 1} access`} value={grant.access} onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, access: event.target.value as "read" | "write" } : current) })}><option value="write">Can edit</option><option value="read">View only</option></select></label>}
                     <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: entry.grants.filter((_, index) => index !== grantIndex) })}>Remove</Button>
                   </div>)}
-                {accessPreset !== "private" && <Button className="fleet-vault-add-grant" variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: [...entry.grants, { principal_name: "", access: entry.grants[0]?.access ?? "write" }] })}>Add person or group</Button>}
+                {!isDualContainer && accessPreset !== "private" && <Button className="fleet-vault-add-grant" variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: [...entry.grants, { principal_name: "", access: entry.grants[0]?.access ?? "write" }] })}>Add person or group</Button>}
               </div>
               <div className="fleet-vault-lifecycle">
                 <div>
@@ -413,7 +439,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                     {unmountingEntryId === entry.id ? "Unmounting…" : "Unmount"}
                   </Button>
                 ) : (
-                  <Button variant="primary" size="sm" disabled={mountingEntryId === entry.id} onClick={() => setMountTargetId(entry.id)}>
+                  <Button variant="primary" size="sm" disabled={mountingEntryId === entry.id} onClick={() => openMountPrompt(entry)}>
                     {mountingEntryId === entry.id ? "Mounting…" : "Mount"}
                   </Button>
                 )}
@@ -452,14 +478,16 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
       </>}
 
-      <Dialog open={mountTargetId !== null} onOpenChange={open => { if (!open) closeMountPrompt(); }}>
+      <Dialog open={mountTarget !== null} onOpenChange={open => { if (!open) closeMountPrompt(); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Mount {mountTarget?.label ?? "Vault"}</DialogTitle>
+            <DialogTitle>Mount {mountTargetEntry?.label ?? "Vault"}</DialogTitle>
             <DialogDescription>
               Enter the password for this mount only. It is cleared before the mount request finishes and is never saved.
             </DialogDescription>
           </DialogHeader>
+          {mountTarget?.volumeKind === "dual" && <label className="fleet-field"><span>Open</span><select aria-label="Vault volume role" value={volumeRole} onChange={event => setVolumeRole(event.target.value as VaultVolumeRole)}><option value="outer">Outer volume</option><option value="hidden">Hidden volume</option></select><small>Choose the volume for this mount only. The choice and password are never saved.</small></label>}
+          {mountTarget?.volumeKind === "dual" && volumeRole === "outer" && <Input ref={hiddenProtectionPasswordInputRef} aria-label="Hidden volume protection password" type="password" autoComplete="off" placeholder="Hidden password to protect it while writing (optional)" />}
           <Input
             ref={passwordInputRef}
             aria-label="Vault password"

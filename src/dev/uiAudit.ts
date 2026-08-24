@@ -818,6 +818,7 @@ export function uiAuditDirectResponse(command: string): unknown {
           id: "audit-team-vault",
           label: "Team documents",
           container_path: "D:\\Vaults\\Team\\team-documents.hc",
+          volume_kind: "standard",
           owner_account: "AuditAnalyst",
           grants: [
             { principal_name: "AuditAnalyst", access: "write" },
@@ -841,6 +842,7 @@ export function uiAuditDirectResponse(command: string): unknown {
         label: "Team documents",
         access: "write",
         presentation: "machine",
+        volume_kind: "standard",
         mount_state: "unmounted",
         drive_letter: null,
       }];

@@ -460,7 +460,7 @@ impl VaultAccessStore {
 
     /// Bounded internal lookup used to construct a caller-specific projection.
     /// It intentionally returns no container, grants, SID, or ACL detail.
-    pub fn entry_summaries(&self) -> Vec<(String, String)> {
+    pub fn entry_summaries(&self) -> Vec<(String, String, wincmd_shared::vault_access::VaultContainerKind)> {
         self.state
             .lock()
             .ok()
@@ -472,7 +472,7 @@ impl VaultAccessStore {
                                 .policy
                                 .entries
                                 .iter()
-                                .map(|entry| (entry.id.clone(), entry.label.clone()))
+                                .map(|entry| (entry.id.clone(), entry.label.clone(), entry.container_kind))
                                 .collect()
                         })
                     })
@@ -1832,6 +1832,7 @@ mod tests {
                 label: "Shared".into(),
                 container_path: "C:\\vaults\\shared.hc".into(),
                 container_identity: None,
+                container_kind: wincmd_shared::vault_access::VaultContainerKind::Standard,
                 owner_account: "Admin".into(),
                 grants: vec![
                     wincmd_shared::vault_access::VaultGrantInput {

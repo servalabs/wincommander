@@ -35,8 +35,16 @@ pub async fn get_vault_access_status() -> Result<Value, String> {
 /// Rust signature.  The password is sent once and cleared from both owned
 /// representations before this command returns.
 #[tauri::command]
-pub async fn vault_mount_entry(entry_id: String, password: String) -> Result<Value, String> {
-    let mut request = wincmd_shared::vault_access::VaultMountRequest { entry_id, password };
+pub async fn vault_mount_entry(
+    entry_id: String,
+    password: String,
+    volume_role: wincmd_shared::vault_access::VaultVolumeRole,
+) -> Result<Value, String> {
+    let mut request = wincmd_shared::vault_access::VaultMountRequest {
+        entry_id,
+        password,
+        volume_role,
+    };
     let payload = serde_json::to_value(&request);
     // The service-call payload now owns the only remaining copy. Clear the
     // command-local copy before the potentially long engine wait begins.
@@ -86,10 +94,12 @@ mod tests {
         let value = serde_json::to_value(wincmd_shared::vault_access::VaultMountRequest {
             entry_id: "shared".into(),
             password: "canary".into(),
+            volume_role: wincmd_shared::vault_access::VaultVolumeRole::Outer,
         })
         .unwrap();
-        assert_eq!(value.as_object().unwrap().len(), 2);
+        assert_eq!(value.as_object().unwrap().len(), 3);
         assert!(value.get("container_path").is_none());
         assert!(value.get("sid").is_none());
+        assert_eq!(value.get("volume_role"), Some(&serde_json::Value::String("outer".into())));
     }
 }

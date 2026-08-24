@@ -351,8 +351,8 @@ All Argus collectors enforce the privacy invariant: window titles, exe paths, UR
 | Command | Purpose |
 |---------|---------|
 | `get_vault_access_capabilities` | Returns the current named-pipe client's bounded policy-management capability. The Fleet UI fails closed if it cannot obtain this response. |
-| `vault_list_authorized_entries` | Returns only entries authorized for the caller, with a safe label, access/presentation, mount state, and drive letter. It does not return container paths, Windows identities, or ACLs. |
-| `vault_mount_entry` | Requests a mount with `{ entryId, password }`. The UI prompts on every request, retains the password only in component/request memory, and clears it immediately after dispatch. Results are bounded to entry ID, lifecycle state, presentation, drive letter, and reason. |
+| `vault_list_authorized_entries` | Returns only entries authorized for the caller, with a safe label, access/presentation, container kind, mount state, and drive letter. It does not return container paths, Windows identities, or ACLs. |
+| `vault_mount_entry` | Requests a mount with `{ entryId, password, volumeRole }`. `volumeRole` is `outer` or `hidden` for a dual container and is chosen for that request only; standard containers use `outer`. The UI prompts on every request, retains the password only in component/request memory, and clears it immediately after dispatch. A dual container remains owner-only and cannot be a Fleet-shared policy entry. Results are bounded to entry ID, lifecycle state, presentation, drive letter, and reason. |
 | `vault_unmount_entry` | Requests an authorized unmount by `{ entryId }`; the service rechecks authorization. |
 | `verify_vault_drive` | Checks whether a supplied drive letter is available to the signed-in Windows session; it returns only the letter and an accessibility result. |
 
