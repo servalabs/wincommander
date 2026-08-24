@@ -94,17 +94,11 @@ The process exits after one response. A read-only wait timeout returns exit code
 | `10` | Read-only command exceeded its requested/default wait deadline |
 | `11` | Another mutating or destructive CLI command holds the cross-process execution lock |
 
-## Known limitations
+## Current limitations
 
-Automation should account for these; they are open, not oversights.
-
-- Settings writes are last-writer-wins. The cross-process lock serialises CLI mutations against each other; the desktop app never takes it, so a concurrent GUI change and `run tauri:set_settings` can discard one side. Do not run CLI settings mutations against a machine someone is actively using.
-- Search-index readers and reindex/replacement now share one bounded session-
-  local lock and fail closed with a busy result instead of racing the directory
-  replacement. Signed-build GUI/CLI contention acceptance remains pending.
-- Confirmation tokens are safeguards against mistakes and mis-targeting, not authentication. Anyone able to run the executable can supply them.
-- A destructive command's exit code reports dispatch, not completion. `lockdown` and `full_lockdown` in particular acknowledge only that the worker was launched — verify the result independently.
-- Risk grading is fail-closed and deliberately over-classifies a few commands that *schedule* erasure rather than perform it (`Set-AutoEraseSchedule`, `Set-MultiUserAutoEraseSchedule`, `Set-ShredPolicy`), so those require `DESTROY:`.
+Current CLI limitations and validation gaps are maintained in
+[WEAKNESSES.md](../WEAKNESSES.md). The command behavior and safety contract in
+this document remain authoritative.
 
 ## Developer checks
 

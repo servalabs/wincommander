@@ -50,7 +50,7 @@ the legacy engine never had:
 | Trigger | What it fires on |
 | :-- | :-- |
 | `SettingChangedTrigger` | A settings JSON path transitions (optionally to a specific value). Backed by a diff emitted at the single settings write choke point (`write_settings_internal`); DECOY_MODE-gated (nothing emits during a coerced session). Makes "telemetry turned on → location off"-style rules possible — the legacy engine could only gate on a setting, never trigger from one. |
-| `GazeTrigger` | Privacy Shield's gaze/attention detector fires `look_away` / `no_face` / `multiple_faces` / `secondary_device`. Replaces the legacy engine's dead `CameraTrigger` (which had no producer and was permanently `Disabled`) — the gaze event is now real, wired from Pro's `attention_collector::handle_episode_line` through `send_notification("privacy-shield-event", {kind})`. |
+| `GazeTrigger` | Privacy Shield's gaze/attention detector fires `look_away` / `no_face` / `multiple_faces` / `secondary_device`; the event is wired from Pro's `attention_collector::handle_episode_line` through `send_notification("privacy-shield-event", {kind})`. |
 
 The editor discovers scalar and array leaves from the live settings tree instead of limiting
 rules to a small hard-coded preset list. Trigger and `Setting` condition fields are searchable
@@ -59,9 +59,8 @@ phrases, tokens, private keys), stored flow payloads, contingency configuration,
 high-frequency internal bookkeeping paths are excluded from suggestions. A setting trigger can
 match any transition or one exact JSON value; setting conditions expose `==` and `!=`.
 
-The legacy trigger vocabulary's `CameraTrigger` survives in the v2 schema only as a
-deserialize-only legacy variant — an old `settings.json` with a rule using it loads without
-erroring, but the rule is disabled on migration, never executed.
+Legacy-trigger compatibility is deserialize-only; current limitations are
+maintained in [WEAKNESSES.md](../../WEAKNESSES.md).
 
 ### Condition & action vocabulary
 
@@ -91,22 +90,9 @@ decision, not an oversight.
 ### Storage & commands
 
 Rules live in `settings.app.proFlows[]` — separate from the legacy `app.flows[]` specifically so
-neither engine's listeners can double-fire the same trigger. `flow_bridge.rs` exposes:
-
-| Command | Purpose |
-| :-- | :-- |
-| `flow_list_rules` | List the raw rule JSON. |
-| `flow_save_rule` | Create/update by `id`; persists then re-syncs the whole set to Pro. Refuses if the rule is fleet-locked or the device is policy-locked (`app.flows`/`app.proFlows` in `locked_paths`). |
-| `flow_delete_rule` | Delete by id; same fleet/policy-lock refusal. |
-| `flow_set_enabled` | Toggle a rule on/off; same refusal. |
-| `flow_fire_now` | Manual test trigger — currently just re-syncs to Pro and emits a UI acknowledgement event (`flow-fired-manually`); real per-rule manual dispatch through the Pro engine is a follow-up, not yet wired. |
-
-There is **no** `get_flow_executions` equivalent for v2 — unlike the legacy engine's in-memory
-Rust-side 50-run ring buffer, v2's "execution log" is purely a frontend `useState` array
-(`useFlowsV2.ts`, capped, newest-first) populated live from `flow-executed`/`flow-log` Tauri
-events. Closing the Flows panel or restarting the app loses it entirely; there is no backend
-buffer to re-fetch from. This is a step down from the legacy engine's (already non-durable, but
-at least re-fetchable) ring buffer — a durable or backend-buffered log is not yet built for v2.
+neither engine's listeners can double-fire the same trigger. The authoritative
+flow command catalog is in the [IPC reference](../engineering/ipc.md); current
+automation limitations are in [WEAKNESSES.md](../../WEAKNESSES.md).
 
 ### Fleet distribution
 
@@ -156,51 +142,11 @@ hook or watcher:
 | Filesystem watcher | `services/fs_watcher.rs` | One `notify` (`ReadDirectoryChangesW`) watcher per `(path, recursive)` tuple (`FileTrigger`, decoy monitor, ransomware monitor). |
 | Webhook server | `services/webhook_server.rs` | One `hyper` HTTP/1.1 server, bound to the mesh-VPN interface only (discovered via `tailscale.exe ip --4`), HMAC-SHA256 authenticated, refuses to fall back to `0.0.0.0` (load-bearing security invariant), refuses to start if the mesh VPN isn't running. Bodies capped at 64 KiB; every request must carry `X-Wincmd-Signature = HMAC-SHA256(secret, body)`. |
 
-### Legacy commands (the IPC reference has the full table)
+### Legacy commands and limitations
 
-`get_flows`, `save_flow`, `delete_flow`, `toggle_flow`, `fire_flow` (supports `dryRun`),
-`get_flow_executions`, `reload_flows`, `preflight_validate_flow`, `export_flow_bundle` /
-`verify_flow_bundle` / `import_flow_bundle` (Ed25519-signed), `probe_flow_capabilities`,
-`get_flow_health`. See [IPC reference § Flow engine](../engineering/ipc.md#flow-engine) for the full
-command/return-type table.
-
-### Legacy engine limitations (still true — carried over verbatim)
-
-- **`CameraTrigger` was never usable in the legacy engine** — hard-rejected by `validate_flow`,
-  hidden from the palette, capability probe hardcoded `Fail`. Superseded by v2's real
-  `GazeTrigger` (above), not fixed in the legacy engine itself.
-- **Execution log is not durable** — the in-memory ring of 50 runs is lost on restart.
-- **No debounce on destructive flows** — concurrent fires of the same `flow_id` can race; a
-  triple-tap F12 that registers ambiguously could spawn overlapping contingency cascades. (v2's
-  governor fixes this with debounce + re-entrancy + loop-guard — another reason new automations
-  belong in v2, not the legacy engine.)
-- **Action sequencing stops on first failure** — no rollback, no "continue on failure."
-- **`ShellAction` is unsandboxed** — runs whatever PowerShell you write with your full user
-  privileges, no gate chain. **`HTTPAction`** is an arbitrary-URL HTTP request — no allowlist.
-  Both exist only in the legacy engine and only for backward-compat with existing
-  `settings.app.flows[]` entries; neither exists in v2's action vocabulary at all — v2's schema
-  keeps them as deserialize-only legacy variants that `migrate()` disables on load rather than
-  ever executing.
-- **`SignalReceivedTrigger` is a brittle directory poll** — it polls the Pvt Mesh (Tailscale)
-  Taildrop inbox (`%LOCALAPPDATA%\Tailscale\Taildrop`) for arriving `wc-signal-*.json` contingency
-  files instead of subscribing to a filesystem event, so it silently breaks if the VPN relocates
-  its Taildrop directory. Migration to the shared `services::fs_watcher` is pending
-  (`flow_engine.rs:937`, watcher at `flow_engine.rs:2286`).
-
-## Accuracy notes for product copy
-
-Claims that would be **false** today:
-
-- "Every trigger in the type system is production-ready" — the legacy engine's `CameraTrigger`
-  is permanently disabled (use v2's `GazeTrigger` instead).
-- "Durable, restart-safe execution history" — true of neither engine. The legacy engine has an
-  in-memory 50-run ring (lost on restart, but readable via `get_flow_executions` while the
-  process is up); v2 has no backend log at all — only an ephemeral frontend event stream.
-- "Fully sandboxed action execution" — the legacy engine's `ShellAction` runs unsandboxed
-  PowerShell with full user privileges. v2 has no shell-execution action type, so this claim is
-  true for v2 specifically, false for the legacy engine.
-- "Flows can run arbitrary PowerShell or hit any URL" — true only of the legacy engine's
-  `ShellAction`/`HTTPAction`; both are absent from v2's action vocabulary by design.
+The [IPC reference](../engineering/ipc.md) owns the legacy command catalog.
+[WEAKNESSES.md](../../WEAKNESSES.md) owns current legacy-engine limitations and
+the product claims they qualify.
 
 This document describes shipped flow behaviour. Some advanced actions target
 restricted capabilities that run in the Pro sidecar — see

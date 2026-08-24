@@ -778,8 +778,7 @@ optional `customCss`. Commands: `open_server_app`, `hide_server_app`,
 
 Keyword content search via tantivy. **Free** tier; the five backend commands are
 `search_content`, `content_index_status`, `content_index_configure`,
-`content_reindex`, `content_get_doc`. Semantic search is deferred
-to Pro.
+`content_reindex`, `content_get_doc`.
 
 | Key                       | Type       | Default                                          | Notes |
 |---------------------------|------------|--------------------------------------------------|-------|
@@ -792,25 +791,11 @@ to Pro.
 > per-user at `%LOCALAPPDATA%\WinCommander\file-search\fts` (tantivy on-disk
 > segment store), not machine-wide.
 
-### Rust-native commands
+### Native command catalog
 
-A selection of commands implemented directly in Rust rather than PowerShell.
-
-| Command                       | Function                                              |
-|-------------------------------|------------------------------------------------------|
-| `toggle_context_menu`         | Registry CRUD — context-menu shredder                |
-| `get_context_menu_status`     | Registry read (boolean)                              |
-| `kill_privacy_shield_process` | Kill the Privacy Shield AI process                  |
-| `run_backend_script`          | PowerShell module router (AES-256-GCM module decrypt)|
-| `run_bleachbit_clean`         | System cleaner (BleachBit), preview + browser exclude|
-| `lockdown`                    | Full erase + licence deactivation, then shutdown    |
-| `connect_rdp`                 | RDP quick-connect (Win32 TermServ)                  |
-| `set_rdp_credentials`         | Store RDP credentials (Credential Manager)          |
-| `exit_app`                    | Graceful shutdown (tray + all windows)              |
-| `update_tray_shield_label`    | Update tray tooltip                                 |
-| `update_panic_hotkey`         | Register global panic hotkey                        |
-| `open_server_app`             | WebView2 multi-window for self-hosted apps          |
-| `activate_license` / `validate_license` | Ed25519 licence flow (Cloudflare Workers)  |
+The authoritative Tauri command catalog, including Rust-native commands, is in
+the [IPC reference](../engineering/ipc.md). This document owns the settings
+keys those commands read and write.
 
 ## Admin / fleet policy
 

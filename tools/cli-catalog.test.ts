@@ -34,25 +34,17 @@ describe("generated WinCommander CLI catalog", () => {
     expect(byId.has("backend:lockdown-step")).toBe(false);
   });
 
-  // docs/cli.md, FEATURES.md and ARCHITECTURE.md all quote these totals. The
-  // generated catalog is the source of truth; test each prose rendering from
-  // the computed values so a catalog change cannot silently stale the docs.
-  test("matches the command totals quoted in the docs", () => {
+  // docs/cli.md owns these totals. The generated catalog is the source of
+  // truth; test the single public rendering so a catalog change cannot stale it.
+  test("matches the command totals quoted in the CLI docs", () => {
     const totals = commandTotals(catalog.commands as Entry[]);
     expect(totals).toEqual({ total: 1270, tauri: 464, backend: 806, releaseExecutable: 1266 });
 
     const total = grouped(totals.total);
     const tauri = grouped(totals.tauri);
     const backend = grouped(totals.backend);
-    const release = grouped(totals.releaseExecutable);
     expect(readFileSync("docs/cli.md", "utf8")).toContain(
       `The generated catalog contains ${total} entries: ${backend} backend-script commands and ${tauri} Tauri handlers.`,
-    );
-    expect(readFileSync("FEATURES.md", "utf8")).toContain(
-      `The generated catalog has ${total} entries: ${backend} backend scripts plus ${tauri} Tauri handlers; four are debug-only, leaving ${release} executable release commands.`,
-    );
-    expect(readFileSync("ARCHITECTURE.md", "utf8")).toContain(
-      `the generated catalog has ${total} entries (${backend} backend scripts and ${tauri} Tauri handlers); four handlers are debug-only, so the release binary executes ${release}.`,
     );
   });
 

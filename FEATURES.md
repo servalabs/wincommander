@@ -116,31 +116,9 @@ an absolute no-content claim. There is no per-cycle in-app consent gate; the
 deploying organization is responsible for a lawful basis, employee/user notice,
 access control, and retention policy.
 
-## Important limits
+## Current limits and technical references
 
-- WinCommander is not an antivirus or EDR replacement.
-- Reactive USB keyboard approval cannot guarantee first-keystroke, pre-boot,
-  firmware-level, or fast-replug prevention.
-- Ransomware alerts and response reduce time-to-detection/containment; they do
-  not guarantee that no file is changed.
-- Secure erase depends on storage media, firmware, encryption, and escrow. A
-  successful request is not automatically proof that every recovery copy is
-  gone.
-- Windows Server/RDS, physical USB, hardware-backed keys, signed installers,
-  and clean-machine behavior require environment-specific validation.
-- A feature shown in the UI may still be unavailable because the installed
-  Windows edition, hardware, policy, privilege, entitlement, or private
-  component does not support it.
-
-## Source pointers
-
-The generated catalog has 1,270 entries: 806 backend scripts plus 464 Tauri handlers; four are debug-only, leaving 1,266 executable release commands.
-
-- Panels and UI: `src/panels/`, `src/components/`
-- Feature/tier registry: `src/registry/`
-- Public backend: `src-tauri/commander-free/src/`
-- Public settings schemas: `src/types/settings.ts`,
-  `src-tauri/commander-free/src/settings.rs`
-- Public search engine: `src-tauri/wincmd-search/`
-- Neutral shared contracts: `src-tauri/wincmd-shared/`,
-  `src-tauri/fleet-proto/`, `src-tauri/fleet-agent-core/`
+Current capability limits and validation gaps are maintained in
+[WEAKNESSES.md](WEAKNESSES.md). Deliberate product exclusions are in
+[NON-GOALS.md](NON-GOALS.md); source ownership and technical interfaces are in
+[ARCHITECTURE.md](ARCHITECTURE.md) and the detailed [documentation map](docs/README.md).

@@ -38,7 +38,7 @@ WinCommander is the third option: a single, open-source command console that sho
 ## Install
 
 1. Download the latest installer from [Releases](https://github.com/servalabs/wincommander/releases).
-2. For desktop operation, use Windows 11 or Windows Server 2019, 2022, or 2025 with Desktop Experience and WebView2 (most features need Administrator). Server Core is not a full GUI target: it has no Explorer/taskbar, and CLI commands work only when WebView2 and that command's prerequisites are installed. Live Server acceptance remains pending.
+2. For desktop operation, use Windows 11 or Windows Server 2019, 2022, or 2025 with Desktop Experience and WebView2 (most features need Administrator). Server Core is not a full GUI target: it has no Explorer/taskbar, and CLI commands work only when WebView2 and that command's prerequisites are installed. See [WEAKNESSES.md](WEAKNESSES.md) for current validation limits.
 3. Pick **Casual** or **Secure** in the first-run setup — that's it.
 
 Or run from source:
@@ -74,6 +74,8 @@ on the GitHub Release:
 | [FEATURES.md](FEATURES.md)         | Public capability and Free/Pro/Fleet/Investigator boundary    |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Public architecture, trust boundaries, and source map         |
 | [SECURITY.md](SECURITY.md)         | Threat model, security posture, how to report a vulnerability |
+| [PERFORMANCE.md](PERFORMANCE.md)   | Responsiveness design and public measurement status           |
+| [WEAKNESSES.md](WEAKNESSES.md)     | Current open limitations and validation gaps                  |
 | [docs/README.md](docs/README.md)   | Detailed, area-specific documentation map                     |
 | [docs/cli.md](docs/cli.md)         | Automate the same Free executable with JSON and safety gates   |
 | [POSITIONING.md](POSITIONING.md)   | Who it's for and how it compares to alternatives              |

@@ -5,7 +5,8 @@ Start with the repository-wide documents at the root: [README](../README.md),
 [features](../FEATURES.md), [architecture](../ARCHITECTURE.md),
 [security](../SECURITY.md), [open-core model](../OPEN_CORE.md),
 [positioning](../POSITIONING.md), [non-goals](../NON-GOALS.md), and
-[changelog](../CHANGELOG.md).
+[changelog](../CHANGELOG.md), [performance](../PERFORMANCE.md), and
+[current weaknesses](../WEAKNESSES.md).
 
 ## Detailed references
 

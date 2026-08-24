@@ -14,6 +14,8 @@ stricter rule when instructions conflict.
 - [FEATURES.md](FEATURES.md) — user-visible Free/Pro/Fleet/Investigator boundary
 - [ARCHITECTURE.md](ARCHITECTURE.md) — public architecture and source map
 - [SECURITY.md](SECURITY.md) — disclosure policy, threat model, and public limits
+- [PERFORMANCE.md](PERFORMANCE.md) — responsiveness design and measurement status
+- [WEAKNESSES.md](WEAKNESSES.md) — current open limitations and validation gaps
 - [OPEN_CORE.md](OPEN_CORE.md) — licensing and public/private source boundary
 - [NON-GOALS.md](NON-GOALS.md) — deliberate product boundaries
 - [POSITIONING.md](POSITIONING.md) — intended audience and product stance
@@ -50,6 +52,22 @@ commercial work, and acceptance records are intentionally maintained only in
   `AGENTS.md` as the tool-discoverable entry point.
 - When adding or moving documentation, update its Markdown links and
   `docs/README.md` in the same change.
+
+## Documentation ownership
+
+- `README.md` is the concise public front door; it links to detail rather than
+  reproducing feature, security, or technical reference material.
+- `FEATURES.md` owns current user-visible capabilities and tiers;
+  `POSITIONING.md` owns audience and differentiation; `NON-GOALS.md` owns
+  deliberate exclusions; `OPEN_CORE.md` owns the licence boundary.
+- `ARCHITECTURE.md` owns components, control/data flow, interfaces, and trust
+  boundaries. `SECURITY.md` owns the threat model and disclosure policy.
+- `PERFORMANCE.md` owns responsiveness design, budgets, baselines, and
+  measurement evidence. `WEAKNESSES.md` owns current open limitations and
+  validation gaps. `CHANGELOG.md` owns shipped historical changes.
+- Detailed command, settings, and automation references own their subject-area
+  contracts. Other documents may keep only a short summary and link to the
+  authoritative reference.
 
 ## Repository shape
 

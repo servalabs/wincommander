@@ -92,22 +92,11 @@ not controlled by a per-cycle in-app consent switch. Deploying organizations
 are responsible for a lawful basis, clear notice, appropriate roles, retention,
 export controls, and employee/user rights in their jurisdiction.
 
-## Product limits
+## Current operational limits
 
-- Ransomware monitoring can detect and react after Windows observes activity;
-  it cannot guarantee that no file is changed.
-- Unknown-keyboard approval is reactive. It cannot guarantee first-keystroke,
-  pre-boot, firmware, or fast-replug prevention.
-- UI confirmations are not proof of trusted physical input.
-- Secure deletion and crypto-erasure depend on media behavior, firmware,
-  encryption state, escrow, and verification. Removing local access does not
-  necessarily remove an external recovery copy.
-- Fleet reachability is not an air gap, and offline devices cannot receive new
-  commands until they reconnect.
-- Windows Server/RDS, hardware, signed installers, and physical-device behavior
-  require environment-specific validation.
-- No public statement of a planned or source-tested feature should be read as a
-  shipped or independently certified security guarantee.
+The current limits that qualify product and security claims are maintained in
+[WEAKNESSES.md](WEAKNESSES.md). The threat-model boundaries above remain the
+authoritative statement of what WinCommander does not claim to defend against.
 
 ## Cryptography and post-quantum status
 

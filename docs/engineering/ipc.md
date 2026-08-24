@@ -140,11 +140,7 @@ same trigger). Full architecture: [Flows](../product/flows.md).
 | `flow_save_rule` | `Value` | Create/update a rule by `id`; persists then re-syncs the whole set to Pro (`Flow-Sync-Rules`). Refuses a fleet-locked rule or a policy-locked device. |
 | `flow_delete_rule` | `Value` | Delete by id; same fleet/policy-lock refusal. |
 | `flow_set_enabled` | `Value` | Toggle a rule on/off; same refusal. |
-| `flow_fire_now` | — | Manual test trigger — currently re-syncs to Pro and emits a `flow-fired-manually` UI event; true per-rule manual dispatch through the Pro engine is not yet wired. |
-
-There is no v2 equivalent of `get_flow_executions` — the v2 execution log is a frontend-only
-in-memory event stream (`flow-executed`/`flow-log` events consumed by `useFlowsV2.ts`), not a
-backend-buffered command.
+| `flow_fire_now` | — | Request the manual flow test bridge. |
 
 ### Flow engine — legacy (`flow_engine.rs`, 4 pre-seeded system flows only)
 
@@ -267,7 +263,7 @@ All Paid, dispatched to Pro's `vm_sandbox.rs`.
 | `usb_device_trust_score` | Paid / Pro | Read-only presentation of a Pro-derived 0-100 score combining identity stability, vendor signal, HID alerts, quarantine history, and transfer volume. |
 | `block_usb_device` / `allow_usb_device` / `set_usb_volume_readonly` / `quarantine_usb_device` (U-D/E) | Paid | Trust-policy enforcement (dispatched to Pro). |
 | `start_usb_autosandbox` … `clear_usb_autosandbox_recent` (U-F) | Paid / Pro | Reactive post-attach isolation — start/stop/status, config, recent. Observe is default; HID action is separately confirmed. |
-| `start_usb_hid_approval_gate` / `stop_usb_hid_approval_gate` / `usb_hid_approval_gate_status` / `get_usb_hid_pending_approvals` / `block_usb_hid_pending` (U-G) | Paid / Pro | Reactive new-HID containment and operator decision state. Pending devices default to blocked; stop is allowed as entitlement-expiry cleanup. This is not first-keystroke or pre-boot prevention. |
+| `start_usb_hid_approval_gate` / `stop_usb_hid_approval_gate` / `usb_hid_approval_gate_status` / `get_usb_hid_pending_approvals` / `block_usb_hid_pending` (U-G) | Paid / Pro | Reactive new-HID containment and operator decision state. Pending devices default to blocked; stop is allowed as entitlement-expiry cleanup. See [current limitations](../../WEAKNESSES.md). |
 | `begin_usb_hid_visual_challenge` / `submit_usb_hid_visual_challenge_digit` (U-G) | Paid / Pro | Backend-bound, per-click visual human-presence challenge for Allow once or, for a stable-serial device, Always trust. Pro owns digit progression, keypad rotation, expiry, and rate limits; the UI never treats browser pointer input as physical-mouse attribution. Block/Retry remains a direct containment action. |
 | `approve_usb_hid_once` / `trust_usb_hid_always` (U-G compatibility) | Paid / Pro | Action-bound aliases for the same **single-digit** backend challenge submission. Despite their historical names, neither command directly enables or trusts a device; both still require the active challenge ID, step, one digit, attachment binding, and final containment/topology checks. New UI code uses `submit_usb_hid_visual_challenge_digit`. |
 
