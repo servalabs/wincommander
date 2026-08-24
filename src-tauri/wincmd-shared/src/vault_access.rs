@@ -125,11 +125,10 @@ pub struct VaultAuthorizeMountRequest {
     pub entry_id: String,
 }
 
-/// A one-shot unlock request.  `password` is intentionally the only secret on
-/// this wire and is never persisted, echoed in a response, or accepted from a
-/// command line.  The SYSTEM service resolves every other mount fact from its
-/// registered policy and wipes its owned copy after forwarding it on stdin to
-/// the fixed broker.
+/// A one-shot unlock request. Secrets on this wire are never persisted, echoed
+/// in a response, or accepted from a command line. The SYSTEM service resolves
+/// every other mount fact from its registered policy and wipes its owned copies
+/// after forwarding them to the fixed broker.
 #[derive(PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VaultMountRequest {
@@ -137,6 +136,8 @@ pub struct VaultMountRequest {
     pub password: String,
     #[serde(default)]
     pub volume_role: VaultVolumeRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_protection_password: Option<String>,
 }
 
 impl std::fmt::Debug for VaultMountRequest {
@@ -146,6 +147,7 @@ impl std::fmt::Debug for VaultMountRequest {
             .field("entry_id", &self.entry_id)
             .field("volume_role", &self.volume_role)
             .field("password", &"[redacted]")
+            .field("hidden_protection_password", &"[redacted]")
             .finish()
     }
 }
@@ -265,17 +267,22 @@ mod tests {
     }
 
     #[test]
-    fn mount_wire_contains_only_the_ephemeral_password_and_role() {
+    fn mount_wire_contains_only_ephemeral_secrets_and_role() {
         let request = VaultMountRequest {
             entry_id: "shared".into(),
             password: "one-shot".into(),
             volume_role: VaultVolumeRole::Outer,
+            hidden_protection_password: Some("hidden-one-shot".into()),
         };
         let json = serde_json::to_value(&request).unwrap();
-        assert_eq!(json.as_object().unwrap().len(), 3);
+        assert_eq!(json.as_object().unwrap().len(), 4);
         assert!(json.get("entry_id").is_some());
         assert!(json.get("password").is_some());
-        assert_eq!(json.get("volume_role"), Some(&serde_json::Value::String("outer".into())));
+        assert_eq!(
+            json.get("volume_role"),
+            Some(&serde_json::Value::String("outer".into()))
+        );
+        assert!(json.get("hidden_protection_password").is_some());
         assert!(json.get("container_path").is_none());
         assert!(json.get("sid").is_none());
 
@@ -292,8 +299,10 @@ mod tests {
             entry_id: "shared".into(),
             password: "canary-password".into(),
             volume_role: VaultVolumeRole::Hidden,
+            hidden_protection_password: Some("hidden-canary-password".into()),
         };
         assert!(!format!("{request:?}").contains("canary-password"));
+        assert!(!format!("{request:?}").contains("hidden-canary-password"));
         let result = VaultMountResult {
             entry_id: "shared".into(),
             state: VaultMountState::Denied,

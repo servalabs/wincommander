@@ -14,7 +14,8 @@ use zeroize::Zeroize;
 
 use crate::vault_access::{ResolvedGrant, VaultAccessStore};
 use wincmd_shared::vault_access::{
-    VaultMountReason, VaultMountResult, VaultMountState, VaultPresentation,
+    VaultContainerKind, VaultMountReason, VaultMountResult, VaultMountState, VaultPresentation,
+    VaultVolumeRole,
 };
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -71,26 +72,16 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
         &self,
         request: &mut InternalMountRequest,
     ) -> Result<InternalMountReply, VaultMountReason> {
-        let args = serde_json::json!({
-            "container_path": &request.container_path,
-            "password": &request.password,
-            "mounted_root_acl_sddl": &request.mounted_root_acl_sddl.0,
-            "mount_mode": request.mount_mode,
-            "presentation": request.presentation,
-            "preferred_letter": &request.preferred_letter,
-            "read_only": request.read_only,
-            "target_session_id": request.target_session_id,
-        });
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
                 request.target_session_id,
                 &request.caller_sid,
                 request.presentation,
                 "vault.broker.mount",
-                args,
+                broker_mount_args(request),
             ))
         });
-        request.password.zeroize();
+        request.zeroize_secrets();
         let value = result.map_err(|error| match error.as_str() {
             "session_unavailable" => VaultMountReason::SessionUnavailable,
             "vault_acl_apply_failed" => VaultMountReason::AclApplyFailed,
@@ -154,6 +145,8 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
 struct InternalMountRequest {
     container_path: String,
     mount_mode: &'static str,
+    volume_kind: &'static str,
+    volume_role: &'static str,
     read_only: bool,
     presentation: VaultPresentation,
     preferred_letter: Option<String>,
@@ -161,6 +154,37 @@ struct InternalMountRequest {
     caller_sid: String,
     mounted_root_acl_sddl: MountedRootAclSddl,
     password: String,
+    hidden_protection_password: Option<String>,
+}
+
+fn broker_mount_args(request: &InternalMountRequest) -> serde_json::Value {
+    let mut args = serde_json::json!({
+        "container_path": &request.container_path,
+        "password": &request.password,
+        "mounted_root_acl_sddl": &request.mounted_root_acl_sddl.0,
+        "mount_mode": request.mount_mode,
+        "volume_kind": request.volume_kind,
+        "volume_role": request.volume_role,
+        "presentation": request.presentation,
+        "preferred_letter": &request.preferred_letter,
+        "read_only": request.read_only,
+        "target_session_id": request.target_session_id,
+    });
+    if let Some(hidden_protection_password) = &request.hidden_protection_password {
+        args["hidden_protection_password"] =
+            serde_json::Value::String(hidden_protection_password.clone());
+    }
+    args
+}
+
+impl InternalMountRequest {
+    fn zeroize_secrets(&mut self) {
+        self.password.zeroize();
+        if let Some(hidden_protection_password) = &mut self.hidden_protection_password {
+            hidden_protection_password.zeroize();
+        }
+        self.hidden_protection_password = None;
+    }
 }
 
 /// The broker attests that it applied and exactly read back the service-provided
@@ -222,11 +246,21 @@ impl VaultMountBroker {
         store: &VaultAccessStore,
         entry_id: &str,
         password: &mut String,
+        hidden_protection_password: &mut Option<String>,
+        volume_role: VaultVolumeRole,
         client_pid: u32,
         effective_access: wincmd_shared::vault_access::VaultAccess,
     ) -> VaultMountResult {
         self.with_exclusive_operation(|| {
-            self.mount_authorized_locked(store, entry_id, password, client_pid, effective_access)
+            self.mount_authorized_locked(
+                store,
+                entry_id,
+                password,
+                hidden_protection_password,
+                volume_role,
+                client_pid,
+                effective_access,
+            )
         })
     }
 
@@ -235,21 +269,43 @@ impl VaultMountBroker {
         store: &VaultAccessStore,
         entry_id: &str,
         password: &mut String,
+        hidden_protection_password: &mut Option<String>,
+        volume_role: VaultVolumeRole,
         client_pid: u32,
         effective_access: wincmd_shared::vault_access::VaultAccess,
     ) -> VaultMountResult {
         if !self.recovery_allows_entry(entry_id, store) {
-            password.zeroize();
+            zeroize_mount_secrets(password, hidden_protection_password);
             return failed(entry_id, None, VaultMountReason::DismountFailed);
         }
-        let Some((plan, presentation, preferred_letter, container_identity)) =
+        let Some((plan, presentation, preferred_letter, container_identity, container_kind)) =
             store.mount_plan(entry_id)
         else {
-            password.zeroize();
+            zeroize_mount_secrets(password, hidden_protection_password);
             return denied(entry_id, VaultMountReason::NotAuthorized);
         };
+        let profile = match mount_profile(
+            container_kind,
+            volume_role,
+            effective_access,
+            hidden_protection_password.as_deref(),
+        ) {
+            Ok(profile) => profile,
+            Err(reason) => {
+                zeroize_mount_secrets(password, hidden_protection_password);
+                return failed(entry_id, Some(presentation), reason);
+            }
+        };
+        if !profile.requires_hidden_protection && hidden_protection_password.is_some() {
+            zeroize_mount_secrets(password, hidden_protection_password);
+            return failed(
+                entry_id,
+                Some(presentation),
+                VaultMountReason::InvalidRequest,
+            );
+        }
         let Some(session_id) = session_for_pid(client_pid) else {
-            password.zeroize();
+            zeroize_mount_secrets(password, hidden_protection_password);
             return failed(
                 entry_id,
                 Some(presentation),
@@ -257,7 +313,7 @@ impl VaultMountBroker {
             );
         };
         let Some(caller_sid) = caller_sid_for_pid(client_pid) else {
-            password.zeroize();
+            zeroize_mount_secrets(password, hidden_protection_password);
             return denied(entry_id, VaultMountReason::NotAuthorized);
         };
         if let Some(existing) = self
@@ -269,11 +325,11 @@ impl VaultMountBroker {
             // A second authorized session must never evict a per-user mount.
             // Only the same authenticated user in the same session may remount.
             if existing.session_id != session_id || existing.caller_sid != caller_sid {
-                password.zeroize();
+                zeroize_mount_secrets(password, hidden_protection_password);
                 return denied(entry_id, VaultMountReason::NotAuthorized);
             }
             if self.dismount_entry_locked(store, entry_id).state != VaultMountState::Unmounted {
-                password.zeroize();
+                zeroize_mount_secrets(password, hidden_protection_password);
                 return failed(
                     entry_id,
                     Some(presentation),
@@ -283,10 +339,11 @@ impl VaultMountBroker {
         }
         let mut request = InternalMountRequest {
             container_path: plan.container.to_string_lossy().into_owned(),
-            // Hidden-vs-standard is an immutable registered container fact,
-            // never inferred from a member's read/write access. MVP exposes
-            // only the registered standard container.
-            mount_mode: "standard",
+            // Policy fixes the container kind; the caller chooses only a
+            // bounded role for that registered dual container.
+            mount_mode: profile.mount_mode,
+            volume_kind: profile.container_kind,
+            volume_role: profile.volume_role,
             read_only: false,
             presentation,
             preferred_letter,
@@ -294,10 +351,11 @@ impl VaultMountBroker {
             caller_sid: caller_sid.clone(),
             mounted_root_acl_sddl: mounted_root_acl_sddl(&plan.grants),
             password: std::mem::take(password),
+            hidden_protection_password: std::mem::take(hidden_protection_password),
         };
         request.read_only = effective_access == wincmd_shared::vault_access::VaultAccess::Read;
         let reply = self.broker.mount(&mut request);
-        request.password.zeroize();
+        request.zeroize_secrets();
         let reply = match reply {
             Ok(reply) => reply,
             Err(reason) => return failed(entry_id, Some(presentation), reason),
@@ -739,6 +797,53 @@ fn valid_drive_letter(value: &str) -> bool {
     value.len() == 1 && value.as_bytes()[0].is_ascii_alphabetic()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MountProfile {
+    mount_mode: &'static str,
+    container_kind: &'static str,
+    volume_role: &'static str,
+    requires_hidden_protection: bool,
+}
+
+fn mount_profile(
+    container_kind: VaultContainerKind,
+    volume_role: VaultVolumeRole,
+    effective_access: wincmd_shared::vault_access::VaultAccess,
+    hidden_protection_password: Option<&str>,
+) -> Result<MountProfile, VaultMountReason> {
+    let (mount_mode, broker_container_kind, broker_volume_role) =
+        match (container_kind, volume_role) {
+            (VaultContainerKind::Standard, VaultVolumeRole::Outer) => {
+                ("standard", "standard", "standard")
+            }
+            (VaultContainerKind::Dual, VaultVolumeRole::Outer) => ("standard", "dual", "outer"),
+            (VaultContainerKind::Dual, VaultVolumeRole::Hidden) => ("hidden", "dual", "hidden"),
+            (VaultContainerKind::Standard, VaultVolumeRole::Hidden) => {
+                return Err(VaultMountReason::InvalidRequest);
+            }
+        };
+    let requires_hidden_protection = container_kind == VaultContainerKind::Dual
+        && volume_role == VaultVolumeRole::Outer
+        && effective_access == wincmd_shared::vault_access::VaultAccess::Write;
+    if requires_hidden_protection && hidden_protection_password.unwrap_or("").is_empty() {
+        return Err(VaultMountReason::InvalidRequest);
+    }
+    Ok(MountProfile {
+        mount_mode,
+        container_kind: broker_container_kind,
+        volume_role: broker_volume_role,
+        requires_hidden_protection,
+    })
+}
+
+fn zeroize_mount_secrets(password: &mut String, hidden_protection_password: &mut Option<String>) {
+    password.zeroize();
+    if let Some(hidden_protection_password) = hidden_protection_password {
+        hidden_protection_password.zeroize();
+    }
+    *hidden_protection_password = None;
+}
+
 fn same_mount_owner(active: &ActiveMount, session_id: u32, caller_sid: &str) -> bool {
     active.session_id == session_id && active.caller_sid == caller_sid
 }
@@ -800,6 +905,109 @@ mod tests {
         assert!(valid_drive_letter("V"));
         assert!(valid_drive_letter("V:"));
         assert!(!valid_drive_letter("V:\\private"));
+    }
+
+    #[test]
+    fn dual_hidden_mount_routes_to_the_hidden_engine_mode() {
+        assert_eq!(
+            mount_profile(
+                VaultContainerKind::Dual,
+                VaultVolumeRole::Hidden,
+                wincmd_shared::vault_access::VaultAccess::Write,
+                None,
+            ),
+            Ok(MountProfile {
+                mount_mode: "hidden",
+                container_kind: "dual",
+                volume_role: "hidden",
+                requires_hidden_protection: false,
+            })
+        );
+    }
+
+    #[test]
+    fn writable_dual_outer_mount_requires_and_forces_inner_protection() {
+        assert_eq!(
+            mount_profile(
+                VaultContainerKind::Dual,
+                VaultVolumeRole::Outer,
+                wincmd_shared::vault_access::VaultAccess::Write,
+                None,
+            ),
+            Err(VaultMountReason::InvalidRequest)
+        );
+        let profile = mount_profile(
+            VaultContainerKind::Dual,
+            VaultVolumeRole::Outer,
+            wincmd_shared::vault_access::VaultAccess::Write,
+            Some("hidden-secret"),
+        )
+        .unwrap();
+        assert_eq!(profile.mount_mode, "standard");
+        assert_eq!(profile.container_kind, "dual");
+        assert_eq!(profile.volume_role, "outer");
+        assert!(profile.requires_hidden_protection);
+    }
+
+    #[test]
+    fn standard_entries_keep_the_legacy_outer_mode_and_reject_hidden_role() {
+        assert_eq!(
+            mount_profile(
+                VaultContainerKind::Standard,
+                VaultVolumeRole::Outer,
+                wincmd_shared::vault_access::VaultAccess::Write,
+                None,
+            ),
+            Ok(MountProfile {
+                mount_mode: "standard",
+                container_kind: "standard",
+                volume_role: "standard",
+                requires_hidden_protection: false,
+            })
+        );
+        assert_eq!(
+            mount_profile(
+                VaultContainerKind::Standard,
+                VaultVolumeRole::Hidden,
+                wincmd_shared::vault_access::VaultAccess::Write,
+                None,
+            ),
+            Err(VaultMountReason::InvalidRequest)
+        );
+    }
+
+    #[test]
+    fn broker_uses_exact_private_contract_tuples() {
+        for (mount_mode, container_kind, volume_role, hidden_protection_password) in [
+            ("standard", "standard", "standard", None),
+            ("standard", "dual", "outer", Some("hidden-secret")),
+            ("hidden", "dual", "hidden", None),
+        ] {
+            let request = InternalMountRequest {
+                container_path: "C:\\vaults\\dual.hc".into(),
+                mount_mode,
+                volume_kind: container_kind,
+                volume_role,
+                read_only: false,
+                presentation: VaultPresentation::Machine,
+                preferred_letter: Some("V".into()),
+                target_session_id: 7,
+                caller_sid: "S-1-5-21-test".into(),
+                mounted_root_acl_sddl: MountedRootAclSddl("D:P".into()),
+                password: "outer-secret".into(),
+                hidden_protection_password: hidden_protection_password.map(str::to_owned),
+            };
+            let args = broker_mount_args(&request);
+            assert_eq!(args["mount_mode"], mount_mode);
+            assert_eq!(args["volume_kind"], container_kind);
+            assert_eq!(args["volume_role"], volume_role);
+            assert_eq!(args.get("protect_inner"), None);
+            assert_eq!(
+                args.get("hidden_protection_password")
+                    .and_then(serde_json::Value::as_str),
+                hidden_protection_password,
+            );
+        }
     }
 
     #[test]

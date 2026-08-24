@@ -150,16 +150,18 @@ pub async fn vault_call(
         {
             return Err("broker_handshake");
         }
-        let request = Envelope::Request(Request {
+        let mut request = Envelope::Request(Request {
             request_id: REQUEST_ID,
             feature_id: feature_id.into(),
             args,
         })
         .sign(&session_token);
-        timeout_at(deadline, write_envelope(&mut pipe, &request))
+        let write_result = timeout_at(deadline, write_envelope(&mut pipe, &request))
             .await
-            .map_err(|_| "broker_timeout")?
-            .map_err(|_| "broker_io")?;
+            .map_err(|_| "broker_timeout")
+            .and_then(|result| result.map_err(|_| "broker_io"));
+        zeroize_broker_request(&mut request);
+        write_result?;
         let mut notification_count = 0;
         let result = loop {
             let reply = timeout_at(deadline, read_envelope(&mut pipe))
@@ -188,6 +190,27 @@ pub async fn vault_call(
         windows_sys::Win32::Foundation::CloseHandle(process);
     }
     result.map_err(str::to_string)
+}
+
+#[cfg(windows)]
+fn zeroize_broker_request(request: &mut wincmd_shared::Envelope) {
+    use zeroize::Zeroize;
+    match request {
+        wincmd_shared::Envelope::Signed(signed) => signed.inner.zeroize(),
+        wincmd_shared::Envelope::Request(request) => zeroize_json(&mut request.args),
+        _ => {}
+    }
+}
+
+#[cfg(windows)]
+fn zeroize_json(value: &mut serde_json::Value) {
+    use zeroize::Zeroize;
+    match value {
+        serde_json::Value::String(text) => text.zeroize(),
+        serde_json::Value::Array(values) => values.iter_mut().for_each(zeroize_json),
+        serde_json::Value::Object(values) => values.values_mut().for_each(zeroize_json),
+        _ => {}
+    }
 }
 
 /// Recovery cannot depend on the original interactive user still being logged

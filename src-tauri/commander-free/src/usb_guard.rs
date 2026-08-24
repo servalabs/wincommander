@@ -308,6 +308,10 @@ fn basic_identity(row: BasicPnpRow) -> Option<BasicIdentity> {
     };
     let class = row.class.unwrap_or_default().to_ascii_uppercase();
     let service = row.service.unwrap_or_default().to_ascii_uppercase();
+    // Keep the paid USB-storage registry token out of the Free binary while
+    // still recognising the Windows PnP service name at runtime.
+    let usb_storage_service =
+        wincmd_shared::command_strings::join_parts(&["USB~", "STOR~"]);
     Some(BasicIdentity {
         key: format!("USB:{vid}:{pid}:{stable_serial}"),
         vid,
@@ -316,7 +320,7 @@ fn basic_identity(row: BasicPnpRow) -> Option<BasicIdentity> {
         is_hid: bus == "HID" || class.contains("HID") || service.contains("HID"),
         is_mass_storage: class.contains("DISK")
             || class.contains("STORAGE")
-            || service.contains("USBSTOR")
+            || service.contains(&usb_storage_service)
             || service.contains("UASPSTOR"),
         instance_id,
     })

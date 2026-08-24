@@ -42,11 +42,24 @@ describe("Vault access draft persistence", () => {
   test("upgrades older drafts to a standard container without inventing a secret", () => {
     const storage = memoryStorage();
     const policy = newVaultPolicy();
-    const legacy = structuredClone(policy) as { entries: Array<Record<string, unknown>> };
-    for (const entry of legacy.entries) delete entry.volume_kind;
+    const legacy = structuredClone(policy) as unknown as { entries: Array<Record<string, unknown>> };
+    for (const entry of legacy.entries) delete entry.container_kind;
     storage.setItem("wincommander.vault-access-draft.v1", JSON.stringify(legacy));
 
-    expect(readVaultAccessDraft(storage)?.entries.every(entry => entry.volume_kind === "standard")).toBe(true);
+    expect(readVaultAccessDraft(storage)?.entries.every(entry => entry.container_kind === "standard")).toBe(true);
+  });
+
+  test("migrates the short-lived volume_kind draft field to the service wire name", () => {
+    const storage = memoryStorage();
+    const policy = newVaultPolicy();
+    const legacy = structuredClone(policy) as unknown as { entries: Array<Record<string, unknown>> };
+    legacy.entries[0]!.volume_kind = "dual";
+    delete legacy.entries[0]!.container_kind;
+    storage.setItem("wincommander.vault-access-draft.v1", JSON.stringify(legacy));
+
+    const restored = readVaultAccessDraft(storage)!;
+    expect(restored.entries[0]!.container_kind).toBe("dual");
+    expect("volume_kind" in restored.entries[0]!).toBe(false);
   });
 
   test("persists the saved base snapshot needed for a safe rebase", () => {

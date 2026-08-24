@@ -418,7 +418,13 @@ impl VaultAccessStore {
     pub fn mount_plan(
         &self,
         entry_id: &str,
-    ) -> Option<(VaultAclPlan, VaultPresentation, Option<String>, String)> {
+    ) -> Option<(
+        VaultAclPlan,
+        VaultPresentation,
+        Option<String>,
+        String,
+        wincmd_shared::vault_access::VaultContainerKind,
+    )> {
         let state = self
             .state
             .lock()
@@ -455,12 +461,19 @@ impl VaultAccessStore {
             entry.mount.presentation,
             entry.mount.preferred_letter.clone(),
             resolved.identity.clone(),
+            entry.container_kind,
         ))
     }
 
     /// Bounded internal lookup used to construct a caller-specific projection.
     /// It intentionally returns no container, grants, SID, or ACL detail.
-    pub fn entry_summaries(&self) -> Vec<(String, String, wincmd_shared::vault_access::VaultContainerKind)> {
+    pub fn entry_summaries(
+        &self,
+    ) -> Vec<(
+        String,
+        String,
+        wincmd_shared::vault_access::VaultContainerKind,
+    )> {
         self.state
             .lock()
             .ok()
@@ -472,7 +485,9 @@ impl VaultAccessStore {
                                 .policy
                                 .entries
                                 .iter()
-                                .map(|entry| (entry.id.clone(), entry.label.clone(), entry.container_kind))
+                                .map(|entry| {
+                                    (entry.id.clone(), entry.label.clone(), entry.container_kind)
+                                })
                                 .collect()
                         })
                     })
@@ -1947,6 +1962,14 @@ mod tests {
                 .access,
             VaultAccess::Write
         );
+    }
+
+    #[test]
+    fn accepts_a_shared_dual_container_policy() {
+        let mut shared_dual = policy(1, 0);
+        shared_dual.entries[0].container_kind =
+            wincmd_shared::vault_access::VaultContainerKind::Dual;
+        assert_eq!(validate_policy(&shared_dual), Ok(()));
     }
 
     #[test]

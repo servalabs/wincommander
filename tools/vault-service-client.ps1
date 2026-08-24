@@ -7,6 +7,9 @@ param(
     [string]$EntryId,
     [string]$PolicyPath,
 
+    [ValidateSet('outer', 'hidden')]
+    [string]$VolumeRole = 'outer',
+
     [Parameter(ValueFromPipeline = $true)]
     [string]$InputSecret
 )
@@ -59,13 +62,14 @@ try {
         $argsValue = Get-Content -LiteralPath $PolicyPath -Raw | ConvertFrom-Json
     } elseif ($Action -eq 'mount') {
         if (-not $EntryId) { throw '-EntryId is required for mount.' }
-        $passwordText = if (-not [string]::IsNullOrEmpty($InputSecret)) {
-            $InputSecret
-        } else {
-            [Console]::In.ReadToEnd().TrimEnd([char[]]"`r`n")
-        }
+        $secretInput = if (-not [string]::IsNullOrEmpty($InputSecret)) { $InputSecret } else { [Console]::In.ReadToEnd() }
+        $secretLines = @($secretInput -split "`r?`n" | Where-Object { $_.Length -gt 0 })
+        $passwordText = $secretLines | Select-Object -First 1
         if (-not $passwordText) { throw 'Mount password must be provided on standard input.' }
-        $argsValue = [ordered]@{ entry_id = $EntryId; password = $passwordText }
+        $argsValue = [ordered]@{ entry_id = $EntryId; password = $passwordText; volume_role = $VolumeRole }
+        if ($secretLines.Count -gt 1) {
+            $argsValue.hidden_protection_password = $secretLines[1]
+        }
     } elseif ($Action -eq 'unmount') {
         if (-not $EntryId) { throw '-EntryId is required for unmount.' }
         $argsValue = [ordered]@{ entry_id = $EntryId }
@@ -113,6 +117,8 @@ try {
     Write-Frame $pipe '{"kind":"bye"}'
 } finally {
     $passwordText = $null
+    $secretInput = $null
+    $secretLines = $null
     $InputSecret = $null
     if ($pipe) { $pipe.Dispose() }
 }
