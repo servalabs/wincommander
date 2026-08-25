@@ -66,7 +66,6 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
     const animRef = useRef<number>(0);
     const branding = getDisplayBranding(appSettings);
     const [logoFailed, setLogoFailed] = useState(false);
-    const [logoLoaded, setLogoLoaded] = useState(false);
     const [logoReady, setLogoReady] = useState(false);
     const [scrambleText, setScrambleText] = useState(() => scrambleWord(branding.companyLabel, 0));
     const [animDone, setAnimDone] = useState(false);
@@ -226,18 +225,15 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
         return () => cancelAnimationFrame(animRef.current);
     }, [isLight, reducedMotion]);
 
-    // Two-stage logo safety valve — protects against slow cold-disk reads
-    // (Defender scanning the bundle on first run) and GPU OOM edge cases.
+    // Let the real product mark finish loading on a cold first start. The old
+    // 1.5-second timer permanently replaced it with the generic "WC" fallback
+    // while Defender/WebView2 was still reading the packaged image.
     useEffect(() => {
-        const fallbackTimer = setTimeout(() => {
-            if (!logoLoaded) setLogoFailed(true);
-        }, 1500);
         const readyTimer = setTimeout(() => setLogoReady(true), 2500);
         return () => {
-            clearTimeout(fallbackTimer);
             clearTimeout(readyTimer);
         };
-    }, [logoLoaded]);
+    }, []);
 
     // Mark animation complete only AFTER the intro animation has had time to
     // finish, so the splash never cuts to the dashboard mid-animation. The
@@ -316,7 +312,7 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
                                     src={LOGO_URL}
                                     alt={branding.productLabel}
                                     className="sp-logo-img"
-                                    onLoad={() => { setLogoLoaded(true); setLogoReady(true); }}
+                                    onLoad={() => setLogoReady(true)}
                                     onError={() => { setLogoFailed(true); setLogoReady(true); }}
                                 />
                             ) : (
