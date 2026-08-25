@@ -323,6 +323,13 @@ const POOL_CAPACITY: usize = 1;
 #[cfg(not(debug_assertions))]
 const POOL_CAPACITY: usize = 4;
 
+// Worker processes are deliberately kept briefly so bursty paid actions can
+// reuse their verified pipes. They must not become permanent background
+// processes after the work ends.
+const PRO_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+const PRO_POOL_REAP_INTERVAL: Duration = Duration::from_secs(15);
+static PRO_POOL_REAPER_STARTED: AtomicBool = AtomicBool::new(false);
+
 /// Per-session table of dispatchers awaiting a Response/Error keyed by
 /// `request_id`. The reader task removes an entry when it finds the
 /// matching reply and sends down the oneshot. Dispatchers that time
@@ -347,6 +354,11 @@ pub struct ProSession {
     /// They self-terminate on EOF when the child dies, but are aborted on Drop
     /// for tidiness. Draining is also what stops Pro blocking on a full pipe.
     log_drains: Vec<JoinHandle<()>>,
+}
+
+struct PooledProSession {
+    session: ProSession,
+    idle_until: Instant,
 }
 
 impl Drop for ProSession {
@@ -510,9 +522,128 @@ async fn reader_loop<R>(
 
 /// Free pool of idle Pro sessions ready for reuse. Sessions are
 /// pushed back here when their dispatch completes successfully.
-fn pro_session_pool() -> &'static Mutex<Vec<ProSession>> {
-    static POOL: OnceLock<Mutex<Vec<ProSession>>> = OnceLock::new();
+fn pro_session_pool() -> &'static Mutex<Vec<PooledProSession>> {
+    static POOL: OnceLock<Mutex<Vec<PooledProSession>>> = OnceLock::new();
     POOL.get_or_init(|| Mutex::new(Vec::with_capacity(POOL_CAPACITY)))
+}
+
+fn pool_session_is_expired(now: Instant, idle_until: Instant) -> bool {
+    now >= idle_until
+}
+
+fn pooled_child_is_running(session: &mut ProSession) -> bool {
+    match session.child.try_wait() {
+        Ok(None) => true,
+        Ok(Some(status)) => {
+            crate::log_message(
+                "info",
+                &format!("[ProPool] discarding exited idle worker: {status}"),
+            );
+            false
+        }
+        Err(error) => {
+            crate::log_message(
+                "warn",
+                &format!("[ProPool] discarding unreadable idle worker: {error}"),
+            );
+            false
+        }
+    }
+}
+
+async fn stop_pro_session(mut session: ProSession) {
+    // A worker has no durable state. Sending Bye gives a cooperative Pro a
+    // chance to close its pipe; kill_on_drop remains the final backstop.
+    let _ = timeout(
+        Duration::from_secs(2),
+        write_envelope(&mut session.write, &Envelope::Bye),
+    )
+    .await;
+    let _ = session.child.start_kill();
+    let _ = timeout(Duration::from_secs(2), session.child.wait()).await;
+}
+
+async fn stop_pro_sessions(sessions: Vec<ProSession>) {
+    for session in sessions {
+        stop_pro_session(session).await;
+    }
+}
+
+fn drain_pro_session_pool(
+    pool: &mut Vec<PooledProSession>,
+    take_one: bool,
+) -> (Option<ProSession>, Vec<ProSession>) {
+    let now = Instant::now();
+    let mut session = None;
+    let mut reusable = Vec::with_capacity(pool.len());
+    let mut retired = Vec::new();
+
+    for mut entry in std::mem::take(pool) {
+        if pool_session_is_expired(now, entry.idle_until)
+            || !pooled_child_is_running(&mut entry.session)
+        {
+            retired.push(entry.session);
+        } else if take_one && session.is_none() {
+            session = Some(entry.session);
+        } else {
+            reusable.push(entry);
+        }
+    }
+    *pool = reusable;
+    (session, retired)
+}
+
+async fn take_pooled_pro_session() -> Option<ProSession> {
+    let (session, retired) = {
+        let mut pool = pro_session_pool().lock().await;
+        drain_pro_session_pool(&mut pool, true)
+    };
+    stop_pro_sessions(retired).await;
+    session
+}
+
+async fn reap_idle_pro_sessions() {
+    let retired = {
+        let mut pool = pro_session_pool().lock().await;
+        let (_, retired) = drain_pro_session_pool(&mut pool, false);
+        retired
+    };
+    stop_pro_sessions(retired).await;
+}
+
+fn start_pro_pool_reaper() {
+    if PRO_POOL_REAPER_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(PRO_POOL_REAP_INTERVAL).await;
+            reap_idle_pro_sessions().await;
+        }
+    });
+}
+
+async fn return_pro_session_to_pool(session: ProSession) {
+    let excess = {
+        let mut pool = pro_session_pool().lock().await;
+        pool.push(PooledProSession {
+            session,
+            idle_until: Instant::now() + PRO_POOL_IDLE_TIMEOUT,
+        });
+        if pool.len() > POOL_CAPACITY {
+            Some(pool.remove(0).session)
+        } else {
+            None
+        }
+    };
+    if let Some(session) = excess {
+        stop_pro_session(session).await;
+    }
+    start_pro_pool_reaper();
 }
 
 /// Caps the total number of in-flight paid dispatches at POOL_CAPACITY.
@@ -1337,10 +1468,7 @@ pub async fn dispatch_paid_command(
     // The pool lock is released BEFORE awaiting spawn — otherwise
     // a slow spawn would block other dispatches from claiming idle
     // sessions in parallel.
-    let popped = {
-        let mut pool = pro_session_pool().lock().await;
-        pool.pop()
-    };
+    let popped = take_pooled_pro_session().await;
     let mut session: ProSession = match popped {
         Some(s) => {
             crate::log_message(
@@ -1416,7 +1544,7 @@ pub async fn dispatch_paid_command(
                     ),
                 );
                 // Healthy session → return it to the pool for reuse.
-                pro_session_pool().lock().await.push(session);
+                return_pro_session_to_pool(session).await;
                 return Ok(v);
             }
             Err(e) if e.starts_with("[pro:") => {
@@ -1425,7 +1553,7 @@ pub async fn dispatch_paid_command(
                     &format!("[Sidecar] '{}' semantic error: {}", feature_id, e),
                 );
                 // Semantic error — pipe is still healthy, recycle.
-                pro_session_pool().lock().await.push(session);
+                return_pro_session_to_pool(session).await;
                 return Err(e);
             }
             Err(transport_err) => {
@@ -1490,15 +1618,7 @@ pub async fn close_pro_session() {
     let mut pool = pro_session_pool().lock().await;
     let sessions = std::mem::take(&mut *pool);
     drop(pool);
-    for mut session in sessions {
-        // Bye is unsigned by convention — Pro short-circuits the
-        // signature check on it (see commander-pro/src/main.rs).
-        let _ = write_envelope(&mut session.write, &Envelope::Bye).await;
-        let _ = session.child.start_kill();
-        let _ = session.child.wait().await;
-        // Dropping `session` here also aborts its reader task via the
-        // ProSession::drop impl, so the reader doesn't outlive its pipe.
-    }
+    stop_pro_sessions(sessions.into_iter().map(|entry| entry.session).collect()).await;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1542,6 +1662,14 @@ mod tests {
         assert!(pro_spawn_cooldown_error(now, Some(retry_after)).is_some());
         assert!(pro_spawn_cooldown_error(retry_after, Some(retry_after)).is_none());
         assert!(pro_spawn_cooldown_error(now, None).is_none());
+    }
+
+    #[test]
+    fn pooled_workers_expire_at_the_idle_deadline() {
+        let now = Instant::now();
+        assert!(!pool_session_is_expired(now, now + PRO_POOL_IDLE_TIMEOUT));
+        assert!(pool_session_is_expired(now, now));
+        assert!(pool_session_is_expired(now, now - Duration::from_secs(1)));
     }
 
     #[test]

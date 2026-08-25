@@ -35,7 +35,7 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": "all",
+    "targets": "nsis",
     "publisher": "Secure Health",
     "homepage": "https://servalabs.com",
     "resources": [

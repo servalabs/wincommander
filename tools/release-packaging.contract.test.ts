@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> };
 const baseConfig = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8")) as {
-  bundle: { resources: string[] };
+  bundle: { resources: string[]; targets: string | string[] };
 };
 const releaseTool = readFileSync("tools/build-tauri-release.ts", "utf8");
 const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8").replace(/\r\n/g, "\n");
@@ -14,6 +14,39 @@ const publishTagWorkflow = readFileSync(".github/workflows/publish-release-tag.y
 const prepareReleaseWorkflow = readFileSync(".github/workflows/prepare-release.yml", "utf8");
 
 describe("public service release packaging", () => {
+  test("pins the normal Tauri configuration to NSIS", () => {
+    expect(baseConfig.bundle.targets).toBe("nsis");
+  });
+
+  test("closes its app processes and retires only a verified legacy MSI display record", () => {
+    const preinstall = hooks.indexOf("!macro NSIS_HOOK_PREINSTALL");
+    const uninstall = hooks.indexOf("!macro NSIS_HOOK_PREUNINSTALL");
+    const preinstallHooks = hooks.slice(preinstall, uninstall);
+    const uninstallHooks = hooks.slice(uninstall);
+
+    expect(hooks).toContain("!macro WC_CLOSE_RUNNING_APPS");
+    expect(hooks).toContain('taskkill.exe /F /T /IM ${MAINBINARYNAME}.exe');
+    expect(hooks).toContain("taskkill.exe /F /T /IM wincommander-pro.exe");
+    expect(hooks).toContain('${AndIf} $R8 != 128');
+    expect(preinstallHooks.indexOf("sc stop WinCommanderSvc")).toBeLessThan(preinstallHooks.indexOf("!insertmacro WC_CLOSE_RUNNING_APPS"));
+    expect(preinstallHooks.indexOf("!insertmacro WC_CLOSE_RUNNING_APPS")).toBeLessThan(preinstallHooks.indexOf("!insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS"));
+    expect(uninstallHooks).toContain("!insertmacro WC_CLOSE_RUNNING_APPS");
+    expect(uninstallHooks).toContain("!insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS");
+
+    expect(hooks).toContain("Function WcRetireLegacyMsiRegistrations");
+    expect(hooks).toContain("SetRegView 64");
+    expect(hooks).toContain("SetRegView 32");
+    expect(hooks).toContain('"WindowsInstaller"');
+    expect(hooks).toContain('StrCmp $3 "WinCommander Pro"');
+    expect(hooks).toContain('StrCmp $4 "Secure Health"');
+    expect(hooks).toContain('StrCmp $5 "${WC_INSTALL_DIR}" wc_legacy_msi_remove');
+    expect(hooks).toContain('StrCmp $5 "${WC_INSTALL_DIR}\\" wc_legacy_msi_remove');
+    expect(hooks).toContain('StrCmp $5 "$\\"${WC_INSTALL_DIR}\\$\\"" wc_legacy_msi_remove wc_legacy_msi_next');
+    expect(hooks).toContain('DeleteRegKey HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\$1"');
+    expect(hooks).not.toContain("msiexec");
+    expect(hooks).toContain('DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\WinCommander"');
+  });
+
   test("keeps raw Cargo checks independent of a release-only service artifact", () => {
     expect(baseConfig.bundle.resources).not.toContain("../target/release/wincommander-svc.exe");
     expect(releaseTool).toContain('["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"]');

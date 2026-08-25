@@ -22,6 +22,113 @@
 !define WC_ENCVOL_DRIVER "$PROGRAMDATA\WinCommander\bin\engine\EncVolKm.sys"
 !define WC_ENCVOL_CONFIG_BACKUP "$PLUGINSDIR\WinCommanderEncVol-before.reg"
 
+; An MSI build briefly shipped before the per-machine NSIS installer.  Its
+; registration can survive an NSIS upgrade even though both installers use the
+; same Program Files directory, which makes Apps & Features show two products.
+; Never execute the MSI uninstaller here: it owns the shared directory and can
+; remove files from the upgrade currently in progress.  Instead, retire only a
+; positively identified stale display registration.  Program files and user
+; data are left for this installer and the normal update path to preserve.
+!macro WC_RETIRE_LEGACY_MSI_REGISTRATIONS
+  Call WcRetireLegacyMsiRegistrations
+!macroend
+
+; Tauri's main process and the downloaded Pro sidecar both keep their binaries
+; open while running.  The service is stopped separately before this macro, so
+; its broker cannot immediately start another sidecar during an update.  Exit
+; code 128 means the process did not exist; every other failure is actionable.
+!macro WC_CLOSE_RUNNING_APPS
+  nsExec::ExecToStack 'taskkill.exe /F /T /IM ${MAINBINARYNAME}.exe'
+  Pop $R8
+  Pop $R9
+  ${If} $R8 != 0
+  ${AndIf} $R8 != 128
+    Abort "WinCommander could not be closed. Close it and run the installer again."
+  ${EndIf}
+
+  nsExec::ExecToStack 'taskkill.exe /F /T /IM wincommander-pro.exe'
+  Pop $R8
+  Pop $R9
+  ${If} $R8 != 0
+  ${AndIf} $R8 != 128
+    Abort "WinCommander Pro could not be closed. Close it and run the installer again."
+  ${EndIf}
+!macroend
+
+Function WcRetireLegacyMsiRegistrations
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+
+  SetRegView 64
+  Call WcRetireLegacyMsiRegistrationsInCurrentView
+  SetRegView 32
+  Call WcRetireLegacyMsiRegistrationsInCurrentView
+  SetRegView lastused
+
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+
+Function WcRetireLegacyMsiRegistrationsInCurrentView
+  StrCpy $0 0
+
+  wc_legacy_msi_next:
+    EnumRegKey $1 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" $0
+    StrCmp $1 "" wc_legacy_msi_done
+    IntOp $0 $0 + 1
+
+    ; The current NSIS record is named WinCommander and has no WindowsInstaller
+    ; flag.  A GUID alone is insufficient: remove only the old MSI record that
+    ; identifies the same product and shared install root.
+    ClearErrors
+    ReadRegDWORD $2 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "WindowsInstaller"
+    ${If} ${Errors}
+      Goto wc_legacy_msi_next
+    ${EndIf}
+    StrCmp $2 1 0 wc_legacy_msi_next
+    ClearErrors
+    ReadRegStr $3 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "DisplayName"
+    ${If} ${Errors}
+      Goto wc_legacy_msi_next
+    ${EndIf}
+    StrCmp $3 "WinCommander" wc_legacy_msi_name_ok
+    StrCmp $3 "WinCommander Pro" wc_legacy_msi_name_ok wc_legacy_msi_next
+
+  wc_legacy_msi_name_ok:
+    ClearErrors
+    ReadRegStr $4 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "Publisher"
+    ${If} ${Errors}
+      Goto wc_legacy_msi_next
+    ${EndIf}
+    StrCmp $4 "Secure Health" wc_legacy_msi_publisher_ok
+    StrCmp $4 "ServaLabs" wc_legacy_msi_publisher_ok wc_legacy_msi_next
+
+  wc_legacy_msi_publisher_ok:
+    ClearErrors
+    ReadRegStr $5 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "InstallLocation"
+    ${If} ${Errors}
+      Goto wc_legacy_msi_next
+    ${EndIf}
+    StrCmp $5 "${WC_INSTALL_DIR}" wc_legacy_msi_remove
+    StrCmp $5 "${WC_INSTALL_DIR}\" wc_legacy_msi_remove
+    StrCmp $5 "$\"${WC_INSTALL_DIR}$\"" wc_legacy_msi_remove wc_legacy_msi_next
+    StrCmp $5 "$\"${WC_INSTALL_DIR}\$\"" wc_legacy_msi_remove wc_legacy_msi_next
+
+  wc_legacy_msi_remove:
+    DeleteRegKey HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1"
+    Goto wc_legacy_msi_next
+
+  wc_legacy_msi_done:
+FunctionEnd
+
 !macro WC_WRITE_LIFECYCLE_DIAGNOSTIC
   FileOpen $R0 "${WC_LIFECYCLE_DIAGNOSTIC_LOG}" a
   FileWrite $R0 "stage=$R3 exit=$R8 reason=$R4$\r$\n"
@@ -80,6 +187,10 @@
       Goto wc_wait_svc_stop
     wc_svc_stopped:
   ${EndIf}
+
+  !insertmacro WC_CLOSE_RUNNING_APPS
+  !insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS
+
   ; --- 1. Remove stale per-user install location from old currentUser builds --
   DeleteRegValue HKCU "Software\servalabs.com\WinCommander" ""
   DeleteRegKey /ifempty HKCU "Software\servalabs.com\WinCommander"
@@ -92,9 +203,10 @@
   ; Files. Clean those up so the machine ends with a single, machine-wide
   ; install. User DATA in that folder (settings.json, logs, icon-cache) is
   ; preserved — only the old program binaries + uninstaller are removed.
+  ; The entry can outlive the binary after a broken prior uninstall, so retire
+  ; its exact former key independently of the file check.
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
   ${If} ${FileExists} "$LOCALAPPDATA\WinCommander\${MAINBINARYNAME}.exe"
-    ; Old per-user Apps & Features (uninstall) entry
-    DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
     ; Old per-user autostart pointing at the AppData exe (the app re-adds a
     ; Program Files Run entry on its next launch)
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "WinCommander"
@@ -520,6 +632,8 @@
       Goto wc_un_wait_svc_stop
     wc_un_svc_stopped:
   ${EndIf}
+  !insertmacro WC_CLOSE_RUNNING_APPS
+  !insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS
   nsExec::ExecToStack 'sc delete WinCommanderSvc'
   Pop $R8
   Pop $R9
