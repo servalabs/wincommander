@@ -92,7 +92,10 @@ pub fn pro_is_installed() -> bool {
     pro_resolve_path().is_some()
 }
 
-fn is_managed_program_files_install(executable: &std::path::Path, program_files: &std::path::Path) -> bool {
+fn is_managed_program_files_install(
+    executable: &std::path::Path,
+    program_files: &std::path::Path,
+) -> bool {
     let Some(parent) = executable.parent() else {
         return false;
     };
