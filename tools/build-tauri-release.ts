@@ -6,9 +6,19 @@ const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const serviceBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-svc.exe");
 const stagedServicePath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-svc.exe");
+// Release installers must run on a clean Windows machine. Link the MSVC C
+// runtime into both the service and the Tauri application so they do not
+// require a separately installed VCRUNTIME140.dll.
+const staticCrtFlags = "-C target-feature=+crt-static";
+const rustflags = [process.env.RUSTFLAGS, staticCrtFlags].filter(Boolean).join(" ");
 
 function run(command: string[], label: string) {
-  const result = Bun.spawnSync(command, { cwd: root, stdout: "inherit", stderr: "inherit" });
+  const result = Bun.spawnSync(command, {
+    cwd: root,
+    env: { ...process.env, RUSTFLAGS: rustflags },
+    stdout: "inherit",
+    stderr: "inherit",
+  });
   if (result.exitCode !== 0) throw new Error(`${label} failed with exit code ${result.exitCode}`);
 }
 

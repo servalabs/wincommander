@@ -51,6 +51,8 @@ describe("public service release packaging", () => {
     expect(baseConfig.bundle.resources).not.toContain("../target/release/wincommander-svc.exe");
     expect(releaseTool).toContain('["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"]');
     expect(releaseTool).toContain('const serviceResource = "resources/wincommander-svc.exe"');
+    expect(releaseTool).toContain('const staticCrtFlags = "-C target-feature=+crt-static"');
+    expect(releaseTool).toContain("RUSTFLAGS: rustflags");
     expect(releaseTool).toContain("copyFileSync(serviceBuildPath, stagedServicePath)");
     expect(releaseTool).toContain('config.bundle.targets = ["nsis"]');
     expect(releaseTool).toContain('config.bundle.resources = [...config.bundle.resources.filter');
