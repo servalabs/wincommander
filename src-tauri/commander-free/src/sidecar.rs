@@ -98,16 +98,11 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// within a reasonable wall-clock for the user.
 const SESSION_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Mounting a dual volume with a non-default PIM can legitimately spend
-/// several minutes deriving keys. Match the backend command ceiling without
-/// extending the failure window for unrelated Pro requests.
-const MOUNT_ENCRYPTION_VOLUME_TIMEOUT: Duration = Duration::from_secs(20 * 60);
-
-fn request_timeout_for(feature_id: &str) -> Duration {
+fn request_timeout_for(feature_id: &str) -> Option<Duration> {
     if feature_id == "Mount-EncryptionVolume" {
-        MOUNT_ENCRYPTION_VOLUME_TIMEOUT
+        None
     } else {
-        SESSION_REQUEST_TIMEOUT
+        Some(SESSION_REQUEST_TIMEOUT)
     }
 }
 
@@ -1212,21 +1207,24 @@ async fn dispatch_request(
         return Err(format!("write request: {}", e));
     }
 
-    match timeout(request_timeout, rx).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_recv_err)) => {
+    let response = match request_timeout {
+        Some(request_timeout) => match timeout(request_timeout, rx).await {
+            Ok(response) => response,
+            Err(_) => {
+                session.inflight.lock().await.remove(&request_id);
+                return Err("Pro response timeout".to_string());
+            }
+        },
+        None => rx.await,
+    };
+    match response {
+        Ok(result) => result,
+        Err(_recv_err) => {
             // Sender dropped — either reader exited (pipe closed, EOF,
             // protocol break) or someone else cleared the map. Either
             // way the session is no longer healthy and the caller's
             // transport-error retry path will spawn a fresh one.
             Err("Pro reader exited before responding".to_string())
-        }
-        Err(_) => {
-            // Timed out. Pull our sender so a late reply finds nothing
-            // and gets dropped instead of waking a Receiver we no
-            // longer care about.
-            session.inflight.lock().await.remove(&request_id);
-            Err("Pro response timeout".to_string())
         }
     }
 }
@@ -1632,11 +1630,8 @@ mod tests {
     use tokio::sync::mpsc;
 
     #[test]
-    fn mount_encryption_volume_has_a_longer_request_timeout() {
-        assert_eq!(
-            request_timeout_for("Mount-EncryptionVolume"),
-            Duration::from_secs(20 * 60)
-        );
+    fn personal_mount_has_no_free_side_request_timeout() {
+        assert_eq!(request_timeout_for("Mount-EncryptionVolume"), None);
     }
 
     #[test]
@@ -1648,7 +1643,7 @@ mod tests {
         ] {
             assert_eq!(
                 request_timeout_for(feature_id),
-                Duration::from_secs(120),
+                Some(Duration::from_secs(120)),
                 "{feature_id} must not receive the mount timeout"
             );
         }
