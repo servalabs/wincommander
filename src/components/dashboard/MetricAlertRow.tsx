@@ -23,6 +23,12 @@ interface MetricAlertRowProps {
    * control.
    */
   buzzWhenInputDisabled?: boolean;
+  /** Place the Fleet reporting switch at the end of the metric label row. */
+  reportToFleetOnLabelRow?: boolean;
+  /** Metric reports controlled by this switch; upload/download share one switch. */
+  reportToFleetMetrics?: readonly MetricKey[];
+  /** Omit the switch when another row owns the shared report setting. */
+  showReportToFleet?: boolean;
 }
 
 export function shouldBuzzMetricAlertInput(
@@ -43,8 +49,11 @@ export default function MetricAlertRow({
   label,
   unit,
   buzzWhenInputDisabled = false,
+  reportToFleetOnLabelRow = false,
+  reportToFleetMetrics,
+  showReportToFleet = true,
 }: MetricAlertRowProps) {
-  const { config, update } = useMetricAlerts();
+  const { config, update, updateMetrics } = useMetricAlerts();
   const { appSettings } = useAppState();
   const m = config?.[metric];
   const [draft, setDraft] = useState<string>("");
@@ -53,7 +62,8 @@ export default function MetricAlertRow({
   const [isShaking, setIsShaking] = useState(false);
 
   const fleetEnabled = appSettings?.app?.fleet?.enabled === true;
-  const fleetPath = FLEET_REPORT_PATH[metric];
+  const reportingMetrics = reportToFleetMetrics ?? [metric];
+  const fleetPaths = reportingMetrics.map((reportingMetric) => FLEET_REPORT_PATH[reportingMetric]);
   const lockedPaths = appSettings?.policy?.lockedPaths ?? [];
   const allDeviceAlertsRequired = appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true;
   const masterFleetAlertsLocked = lockedPaths.some(
@@ -67,7 +77,9 @@ export default function MetricAlertRow({
   // convention of prefixing generic toggle paths with "ideal." — whichever
   // the connected server actually publishes, this still locks correctly.
   const reportToFleetLocked = (allDeviceAlertsRequired && masterFleetAlertsLocked) || lockedPaths.some(
-    (p) => p.trim().length > 0 && (fleetPath.startsWith(p) || `ideal.${fleetPath}`.startsWith(p))
+    (p) => p.trim().length > 0 && fleetPaths.some(
+      (fleetPath) => fleetPath.startsWith(p) || `ideal.${fleetPath}`.startsWith(p),
+    )
   );
 
   useEffect(() => {
@@ -115,8 +127,39 @@ export default function MetricAlertRow({
     buzzBell();
   };
 
+  const reportLabel = reportingMetrics.includes("upload") || reportingMetrics.includes("download")
+    ? "network"
+    : reportingMetrics.includes("cpu") && reportingMetrics.includes("ram")
+      ? "system usage"
+      : label;
+  const reportToFleetEnabled = reportingMetrics.every(
+    (reportingMetric) => config?.[reportingMetric]?.reportToFleet === true,
+  );
+  const fleetReportControl = fleetEnabled && showReportToFleet ? (
+    <label
+      className="metric-alert-report-fleet"
+      title={reportToFleetLocked
+        ? "Set by your Fleet administrator — this device must report alerts to Fleet."
+        : "Forward this alert to your organization's Fleet console when it fires."}
+    >
+      <input
+        type="checkbox"
+        checked={reportToFleetEnabled}
+        disabled={busy || reportToFleetLocked}
+        onChange={(e) => {
+          setBusy(true);
+          void updateMetrics(reportingMetrics, { reportToFleet: e.target.checked })
+            .finally(() => setBusy(false));
+        }}
+        aria-label={`Report ${reportLabel} alerts to Fleet`}
+      />
+      <span>Report to Fleet</span>
+      {reportToFleetLocked && <Lock size={10} />}
+    </label>
+  ) : null;
+
   return (
-    <div className="metric-alert-row">
+    <div className={`metric-alert-row ${reportToFleetOnLabelRow && showReportToFleet ? "metric-alert-row--report-on-label" : ""}`}>
       <button
         type="button"
         className={`metric-alert-bell ${m.enabled ? "on" : "off"} ${isShaking ? "is-shaking" : ""}`}
@@ -131,6 +174,7 @@ export default function MetricAlertRow({
         {m.enabled ? <Bell size={12} /> : <BellOff size={12} />}
       </button>
       <span className="metric-alert-label">{label}</span>
+      {reportToFleetOnLabelRow && fleetReportControl}
       <div className="metric-alert-controls">
       <span className="metric-alert-over">over</span>
       <div className="metric-alert-input" onPointerDown={handleDisabledInputPointerDown}>
@@ -164,24 +208,7 @@ export default function MetricAlertRow({
         />
         <span className="metric-alert-unit">s</span>
       </div>
-      {fleetEnabled && (
-        <label
-          className="metric-alert-report-fleet"
-          title={reportToFleetLocked
-            ? "Set by your Fleet administrator — this device must report alerts to Fleet."
-            : "Forward this alert to your organization's Fleet console when it fires."}
-        >
-          <input
-            type="checkbox"
-            checked={m.reportToFleet === true}
-            disabled={busy || reportToFleetLocked}
-            onChange={(e) => void commit({ reportToFleet: e.target.checked })}
-            aria-label={`Report ${label} alerts to Fleet`}
-          />
-          <span>Report to Fleet</span>
-          {reportToFleetLocked && <Lock size={10} />}
-        </label>
-      )}
+      {!reportToFleetOnLabelRow && fleetReportControl}
       </div>
     </div>
   );

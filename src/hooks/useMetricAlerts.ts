@@ -69,23 +69,30 @@ export function useMetricAlerts() {
   // Patch one metric and persist the whole config. Best-practice suppressors
   // (hysteresis + sustained) are locked on so a value hovering near the limit
   // doesn't spam notifications — only enable + threshold are user-facing.
-  const update = useCallback(async (metric: MetricKey, patch: Partial<MetricAlert>) => {
+  const updateMetrics = useCallback(async (metrics: readonly MetricKey[], patch: Partial<MetricAlert>) => {
     const base = _cache ?? (await invoke<MetricAlertsConfig>("metric_alerts_get_config"));
-    const merged: MetricAlert = {
-      ...base[metric],
-      ...patch,
-      hysteresisEnabled: true,
-      hysteresisPct: (patch.hysteresisPct ?? base[metric].hysteresisPct) || 20,
-      sustainedEnabled: true,
-      // Respect a patched hold time; fall back to the existing value, then 30s.
-      sustainedSecs: (patch.sustainedSecs ?? base[metric].sustainedSecs) || 30,
-    };
-    const next: MetricAlertsConfig = { ...base, [metric]: merged };
+    const next = { ...base };
+    for (const metric of metrics) {
+      next[metric] = {
+        ...base[metric],
+        ...patch,
+        hysteresisEnabled: true,
+        hysteresisPct: (patch.hysteresisPct ?? base[metric].hysteresisPct) || 20,
+        sustainedEnabled: true,
+        // Respect a patched hold time; fall back to the existing value, then 30s.
+        sustainedSecs: (patch.sustainedSecs ?? base[metric].sustainedSecs) || 30,
+      };
+    }
     const saved = await invoke<MetricAlertsConfig>("metric_alerts_set_config", { config: next });
     _cache = saved;
     notify();
     return saved;
   }, []);
 
-  return { config, update };
+  const update = useCallback(
+    (metric: MetricKey, patch: Partial<MetricAlert>) => updateMetrics([metric], patch),
+    [updateMetrics],
+  );
+
+  return { config, update, updateMetrics };
 }

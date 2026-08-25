@@ -156,8 +156,14 @@ export default function HardwareSpecsCard({
 
             {alertOpen && (
                 <div className="hw-cpu-alert">
-                    <MetricAlertRow metric="cpu" label="CPU" unit="%" />
-                    <MetricAlertRow metric="ram" label="RAM" unit="%" />
+                    <MetricAlertRow
+                        metric="cpu"
+                        label="CPU"
+                        unit="%"
+                        reportToFleetMetrics={["cpu", "ram"]}
+                        reportToFleetOnLabelRow
+                    />
+                    <MetricAlertRow metric="ram" label="RAM" unit="%" showReportToFleet={false} />
                 </div>
             )}
 

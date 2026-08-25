@@ -135,6 +135,16 @@ const MASTER_FLEET_ALERT_PATH: &str = "security.requireAllDeviceAlertsInFleet";
 /// pipeline: it simply turns on the existing per-metric reports.
 fn config_from_settings(settings: &crate::settings::AppSettings) -> MetricAlertsConfig {
     let mut config: MetricAlertsConfig = settings.app.metric_alerts.clone().into();
+    // CPU and RAM have separate limits but one Fleet reporting policy.
+    // A partially enabled legacy setting must not silently report either metric.
+    let system_reports_to_fleet = config.cpu.report_to_fleet && config.ram.report_to_fleet;
+    config.cpu.report_to_fleet = system_reports_to_fleet;
+    config.ram.report_to_fleet = system_reports_to_fleet;
+    // Upload and download have separate limits but one Fleet reporting policy.
+    // A partially enabled legacy setting must not silently report either direction.
+    let network_reports_to_fleet = config.upload.report_to_fleet && config.download.report_to_fleet;
+    config.upload.report_to_fleet = network_reports_to_fleet;
+    config.download.report_to_fleet = network_reports_to_fleet;
     if settings.ideal.security.require_all_device_alerts_in_fleet {
         config.cpu.report_to_fleet = true;
         config.ram.report_to_fleet = true;
@@ -533,12 +543,19 @@ pub async fn metric_alerts_set_config(
 ) -> Result<MetricAlertsConfig, String> {
     crate::license::require_paid("metric alerting")?;
 
-    let normalized = MetricAlertsConfig {
+    let mut normalized = MetricAlertsConfig {
         cpu: config.cpu.normalized(),
         ram: config.ram.normalized(),
         upload: config.upload.normalized(),
         download: config.download.normalized(),
     };
+    let system_reports_to_fleet = normalized.cpu.report_to_fleet && normalized.ram.report_to_fleet;
+    normalized.cpu.report_to_fleet = system_reports_to_fleet;
+    normalized.ram.report_to_fleet = system_reports_to_fleet;
+    let network_reports_to_fleet =
+        normalized.upload.report_to_fleet && normalized.download.report_to_fleet;
+    normalized.upload.report_to_fleet = network_reports_to_fleet;
+    normalized.download.report_to_fleet = network_reports_to_fleet;
 
     let settings = crate::settings::read_settings()?;
     let current = config_from_settings(&settings);
@@ -614,5 +631,29 @@ mod tests {
         proposed.download.report_to_fleet = !current.download.report_to_fleet;
 
         assert!(ensure_report_to_fleet_changes_allowed(&current, &proposed, &settings).is_err());
+    }
+
+    #[test]
+    fn network_fleet_reporting_is_disabled_when_legacy_directions_disagree() {
+        let mut settings = crate::settings::create_default_settings();
+        settings.app.metric_alerts.upload.report_to_fleet = true;
+        settings.app.metric_alerts.download.report_to_fleet = false;
+
+        let config = config_from_settings(&settings);
+
+        assert!(!config.upload.report_to_fleet);
+        assert!(!config.download.report_to_fleet);
+    }
+
+    #[test]
+    fn system_fleet_reporting_is_disabled_when_legacy_metrics_disagree() {
+        let mut settings = crate::settings::create_default_settings();
+        settings.app.metric_alerts.cpu.report_to_fleet = true;
+        settings.app.metric_alerts.ram.report_to_fleet = false;
+
+        let config = config_from_settings(&settings);
+
+        assert!(!config.cpu.report_to_fleet);
+        assert!(!config.ram.report_to_fleet);
     }
 }

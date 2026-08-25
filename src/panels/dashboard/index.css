@@ -1091,9 +1091,26 @@ html.light .tech-grid.armed {
 
 /* ── Reusable metric alert row (CPU / Upload / Download) ───────────────── */
 .hw-cpu-alert {
-    margin-top: 8px;
-    padding-top: 8px;
+    margin-top: 6px;
+    padding-top: 6px;
     border-top: 1px solid var(--color-border);
+}
+
+/* Keep the Fleet switch beside CPU/RAM and the alert settings beneath it. */
+.hw-cpu-alert .metric-alert-row {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    column-gap: 7px;
+    row-gap: 2px;
+    padding: 2px 0;
+}
+
+.hw-cpu-alert .metric-alert-controls {
+    grid-column: 2 / -1;
+    margin-left: 0;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 5px;
 }
 
 .metric-alert-row {
@@ -1190,6 +1207,15 @@ html.light .tech-grid.armed {
     grid-template-columns: 24px minmax(52px, 1fr);
     column-gap: 7px;
     padding: 3px 0;
+}
+
+.nettraffic-drawer .metric-alert-row--report-on-label {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+}
+
+.nettraffic-drawer .metric-alert-row--report-on-label .metric-alert-controls {
+    grid-column: 2 / -1;
+    flex-wrap: nowrap;
 }
 
 .nettraffic-drawer .metric-alert-controls {
