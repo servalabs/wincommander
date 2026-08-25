@@ -388,17 +388,22 @@ fn spawn_pro_as_service(
     pipe: &str,
     token: &str,
 ) -> Result<windows_sys::Win32::Foundation::HANDLE, &'static str> {
+    use std::os::windows::process::CommandExt;
     use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
     let exe = fixed_pro_path();
     if !exe.is_file() {
         return Err("broker_unavailable");
     }
-    let child = std::process::Command::new(&exe)
+    let mut command = std::process::Command::new(&exe);
+    command
         .arg(format!("--core-pipe={pipe}"))
         .arg(format!("--session-token={token}"))
-        .spawn()
-        .map_err(|_| "broker_unavailable")?;
+        // The service has no interactive UI. Never attach a child console to
+        // the desktop if a Vault recovery helper cannot start.
+        .creation_flags(CREATE_NO_WINDOW);
+    let child = command.spawn().map_err(|_| "broker_unavailable")?;
     use std::os::windows::io::IntoRawHandle;
     Ok(child.into_raw_handle() as HANDLE)
 }

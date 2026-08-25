@@ -28,9 +28,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 // tokio::process::Command exposes creation_flags() as an inherent method
 // on Windows — no `use std::os::windows::process::CommandExt` needed.
 
@@ -125,6 +125,52 @@ fn request_timeout_for(feature_id: &str) -> Duration {
 /// tail without making genuinely-stuck pipes hang the UI for too long.
 /// Pair with Pro's HANDSHAKE_TIMEOUT (also 30s) — they must agree.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Windows shows its own modal error when the loader cannot start Pro (for
+/// example, a damaged binary or a missing CRT). A burst of background probes
+/// must not turn that one failure into a wall of OS dialogs. Serialize fresh
+/// launches and suppress new attempts briefly after any failed handshake.
+const PRO_SPAWN_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
+static PRO_SPAWN_GATE: OnceLock<Mutex<()>> = OnceLock::new();
+static PRO_SPAWN_RETRY_AFTER: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
+static PRO_SPAWN_IS_HEALTHY: AtomicBool = AtomicBool::new(false);
+
+fn pro_spawn_gate() -> &'static Mutex<()> {
+    PRO_SPAWN_GATE.get_or_init(|| Mutex::new(()))
+}
+
+fn pro_spawn_retry_after() -> &'static std::sync::Mutex<Option<Instant>> {
+    PRO_SPAWN_RETRY_AFTER.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn pro_spawn_cooldown_error(now: Instant, retry_after: Option<Instant>) -> Option<String> {
+    let retry_after = retry_after?;
+    if now >= retry_after {
+        return None;
+    }
+    let remaining = retry_after.duration_since(now);
+    Some(format!(
+        "Pro could not start. Further launch attempts are paused for {} seconds after the last failure.",
+        remaining.as_secs().max(1)
+    ))
+}
+
+fn clear_pro_spawn_cooldown() {
+    if let Ok(mut retry_after) = pro_spawn_retry_after().lock() {
+        *retry_after = None;
+    }
+}
+
+fn record_pro_spawn_failure() {
+    if let Ok(mut retry_after) = pro_spawn_retry_after().lock() {
+        *retry_after = Some(Instant::now() + PRO_SPAWN_FAILURE_COOLDOWN);
+    }
+}
+
+fn current_pro_spawn_cooldown_error() -> Option<String> {
+    let retry_after = pro_spawn_retry_after().lock().ok().and_then(|value| *value);
+    pro_spawn_cooldown_error(Instant::now(), retry_after)
+}
 
 // F-3 — Pro binary hash pinning.
 //
@@ -728,6 +774,39 @@ async fn spawn_pro_session() -> Result<ProSession, String> {
 }
 
 async fn spawn_pro_session_with_role(role: SessionRole) -> Result<ProSession, String> {
+    // Once a sidecar launch has completed successfully, preserve the pool's
+    // parallel-start behavior for cascade work. The serialized path below is
+    // needed only until the first confirmed launch or after a failure.
+    if PRO_SPAWN_IS_HEALTHY.load(Ordering::Acquire) {
+        let result = spawn_pro_session_unlocked(role).await;
+        if result.is_err() {
+            PRO_SPAWN_IS_HEALTHY.store(false, Ordering::Release);
+            record_pro_spawn_failure();
+        }
+        return result;
+    }
+
+    // Keep the permit through the handshake. `Command::spawn` succeeds even
+    // when Windows' native loader immediately rejects the child, so this is
+    // the only point where concurrent callers can be coalesced before the OS
+    // presents duplicate loader dialogs.
+    let _spawn_guard = pro_spawn_gate().lock().await;
+    if let Some(error) = current_pro_spawn_cooldown_error() {
+        return Err(error);
+    }
+
+    let result = spawn_pro_session_unlocked(role).await;
+    if result.is_ok() {
+        PRO_SPAWN_IS_HEALTHY.store(true, Ordering::Release);
+        clear_pro_spawn_cooldown();
+    } else {
+        PRO_SPAWN_IS_HEALTHY.store(false, Ordering::Release);
+        record_pro_spawn_failure();
+    }
+    result
+}
+
+async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, String> {
     crate::log_message_src("info", "core", "[Sidecar] spawn_pro_session: start");
     let pro_path = resolve_pro_binary()?;
     let pipe_name = random_pipe_name();
@@ -1453,6 +1532,16 @@ mod tests {
                 "{feature_id} must not receive the mount timeout"
             );
         }
+    }
+
+    #[test]
+    fn failed_pro_spawn_is_suppressed_until_the_cooldown_expires() {
+        let now = Instant::now();
+        let retry_after = now + Duration::from_secs(60);
+
+        assert!(pro_spawn_cooldown_error(now, Some(retry_after)).is_some());
+        assert!(pro_spawn_cooldown_error(retry_after, Some(retry_after)).is_none());
+        assert!(pro_spawn_cooldown_error(now, None).is_none());
     }
 
     #[test]
