@@ -92,6 +92,47 @@ pub fn pro_is_installed() -> bool {
     pro_resolve_path().is_some()
 }
 
+fn is_managed_program_files_install(executable: &std::path::Path, program_files: &std::path::Path) -> bool {
+    let Some(parent) = executable.parent() else {
+        return false;
+    };
+    parent
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&program_files.join("WinCommander").to_string_lossy())
+}
+
+fn select_pro_binary(
+    install: Option<PathBuf>,
+    sibling: Option<PathBuf>,
+    legacy_install: Option<PathBuf>,
+    prefer_managed_install: bool,
+) -> Option<PathBuf> {
+    if prefer_managed_install {
+        install.or(sibling).or(legacy_install)
+    } else {
+        sibling.or(install).or(legacy_install)
+    }
+}
+
+/// Installed releases must not run a leftover sidecar beside the Free EXE.
+/// Portable Fleet kits intentionally remain side-by-side and therefore retain
+/// the sibling-first behavior.
+fn should_prefer_managed_install() -> bool {
+    if cfg!(debug_assertions) {
+        return false;
+    }
+    let Ok(executable) = std::env::current_exe() else {
+        return false;
+    };
+    let Some(program_files) = std::env::var_os("ProgramW6432")
+        .or_else(|| std::env::var_os("ProgramFiles"))
+        .map(PathBuf::from)
+    else {
+        return false;
+    };
+    is_managed_program_files_install(&executable, &program_files)
+}
+
 /// Returns the Pro binary path that should actually be spawned.
 /// Order depends on build profile:
 ///   - debug builds  → dev sibling first (so `bun x tauri dev` picks up
@@ -113,12 +154,50 @@ pub fn pro_resolve_path() -> Option<PathBuf> {
         .ok()
         .filter(|p| p.exists());
     let dev = pro_dev_path().ok().filter(|p| p.exists());
-    // Sibling (dev) path wins in all builds. Release builds enforce the hash
-    // check during the handshake, so a tampered sibling is still rejected.
-    // Preferring install-path in release broke fleet-kit deployments where a
-    // freshly-built Pro is placed next to the exe and the older installed Pro
-    // (different hash) would be picked instead.
-    dev.or(install).or(legacy_install)
+    select_pro_binary(
+        install,
+        dev,
+        legacy_install,
+        should_prefer_managed_install(),
+    )
+}
+
+#[cfg(test)]
+mod path_selection_tests {
+    use super::{is_managed_program_files_install, select_pro_binary};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn managed_program_files_location_is_recognised() {
+        assert!(is_managed_program_files_install(
+            Path::new(r"C:\Program Files\WinCommander\wincommander-free.exe"),
+            Path::new(r"C:\Program Files"),
+        ));
+        assert!(!is_managed_program_files_install(
+            Path::new(r"C:\FleetKit\wincommander-free.exe"),
+            Path::new(r"C:\Program Files"),
+        ));
+    }
+
+    #[test]
+    fn installed_release_prefers_managed_pro_over_a_stale_sibling() {
+        let managed = PathBuf::from(r"C:\ProgramData\WinCommander\bin\wincommander-pro.exe");
+        let sibling = PathBuf::from(r"C:\Program Files\WinCommander\wincommander-pro.exe");
+        assert_eq!(
+            select_pro_binary(Some(managed.clone()), Some(sibling), None, true),
+            Some(managed),
+        );
+    }
+
+    #[test]
+    fn portable_fleet_kit_keeps_its_side_by_side_pro_binary() {
+        let managed = PathBuf::from(r"C:\ProgramData\WinCommander\bin\wincommander-pro.exe");
+        let sibling = PathBuf::from(r"C:\FleetKit\wincommander-pro.exe");
+        assert_eq!(
+            select_pro_binary(Some(managed), Some(sibling.clone()), None, false),
+            Some(sibling),
+        );
+    }
 }
 
 #[derive(serde::Serialize)]

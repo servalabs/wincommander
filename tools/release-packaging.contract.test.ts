@@ -30,6 +30,8 @@ describe("public service release packaging", () => {
     expect(hooks).toContain('${AndIf} $R8 != 128');
     expect(preinstallHooks.indexOf("sc stop WinCommanderSvc")).toBeLessThan(preinstallHooks.indexOf("!insertmacro WC_CLOSE_RUNNING_APPS"));
     expect(preinstallHooks.indexOf("!insertmacro WC_CLOSE_RUNNING_APPS")).toBeLessThan(preinstallHooks.indexOf("!insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS"));
+    expect(preinstallHooks).toContain('Delete "${WC_INSTALL_DIR}\\wincommander-pro.exe"');
+    expect(preinstallHooks).toContain('Delete "${WC_INSTALL_DIR}\\wincommander-pro.json"');
     expect(uninstallHooks).toContain("!insertmacro WC_CLOSE_RUNNING_APPS");
     expect(uninstallHooks).not.toContain("!insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS");
 

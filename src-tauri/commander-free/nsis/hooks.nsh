@@ -191,6 +191,12 @@ FunctionEnd
   !insertmacro WC_CLOSE_RUNNING_APPS
   !insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS
 
+  ; Current releases manage Pro only in %ProgramData%\WinCommander\bin.
+  ; An old MSI can leave a dynamically-linked sidecar beside Free in Program
+  ; Files, which must never override the verified managed sidecar at runtime.
+  Delete "${WC_INSTALL_DIR}\wincommander-pro.exe"
+  Delete "${WC_INSTALL_DIR}\wincommander-pro.json"
+
   ; --- 1. Remove stale per-user install location from old currentUser builds --
   DeleteRegValue HKCU "Software\servalabs.com\WinCommander" ""
   DeleteRegKey /ifempty HKCU "Software\servalabs.com\WinCommander"
