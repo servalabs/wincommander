@@ -1,10 +1,12 @@
 <#
   Manual WinCommander Free publisher.
 
-  This is the local equivalent of .github/workflows/release.yml.  It publishes
-  only a source commit that is clean, exactly version-aligned, at origin/main,
-  and already tagged vX.Y.Z.  It deliberately does not edit versions, move
-  tags, or claim a GitHub Actions provenance attestation.
+  This is the local equivalent of .github/workflows/release.yml. Publication
+  requires a source commit that is clean, exactly version-aligned, at
+  origin/main, and already tagged vX.Y.Z. StageOnly permits a clean,
+  version-aligned untagged commit for local installer testing. It deliberately
+  does not edit versions, move tags, or claim a GitHub Actions provenance
+  attestation.
 
   Examples:
     pwsh -File .\tools\release-free.ps1 -Version 3.4.6 -StageOnly
@@ -96,22 +98,26 @@ function Get-CargoPackageVersion {
 }
 
 function Assert-ReleaseSource {
+    param([switch]$AllowUntaggedStage)
+
     if (@(git -C $script:Root status --porcelain).Count -ne 0) {
         Stop-Release 'Refusing to release from a dirty worktree.'
     }
 
-    $head = (git -C $script:Root rev-parse HEAD).Trim()
-    $tagHead = (git -C $script:Root rev-parse "$script:Tag^{commit}" 2>$null).Trim()
-    if ($LASTEXITCODE -ne 0 -or $tagHead -ne $head) {
-        Stop-Release "$script:Tag must exist locally and point exactly at HEAD."
-    }
+    if (-not $AllowUntaggedStage) {
+        $head = (git -C $script:Root rev-parse HEAD).Trim()
+        $tagHead = (git -C $script:Root rev-parse "$script:Tag^{commit}" 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or $tagHead -ne $head) {
+            Stop-Release "$script:Tag must exist locally and point exactly at HEAD."
+        }
 
-    git -C $script:Root fetch --quiet origin "refs/heads/main:refs/remotes/origin/main" "refs/tags/${script:Tag}:refs/tags/${script:Tag}"
-    if ($LASTEXITCODE -ne 0) { Stop-Release 'Could not refresh origin/main and the release tag.' }
-    $remoteTag = (git -C $script:Root rev-parse "$script:Tag^{commit}").Trim()
-    $originMain = (git -C $script:Root rev-parse origin/main).Trim()
-    if ($remoteTag -ne $head) { Stop-Release "$script:Tag does not match its remote tag target." }
-    if ($originMain -ne $head) { Stop-Release 'The release tag must point exactly at origin/main.' }
+        git -C $script:Root fetch --quiet origin "refs/heads/main:refs/remotes/origin/main" "refs/tags/${script:Tag}:refs/tags/${script:Tag}"
+        if ($LASTEXITCODE -ne 0) { Stop-Release 'Could not refresh origin/main and the release tag.' }
+        $remoteTag = (git -C $script:Root rev-parse "$script:Tag^{commit}").Trim()
+        $originMain = (git -C $script:Root rev-parse origin/main).Trim()
+        if ($remoteTag -ne $head) { Stop-Release "$script:Tag does not match its remote tag target." }
+        if ($originMain -ne $head) { Stop-Release 'The release tag must point exactly at origin/main.' }
+    }
 
     $versions = @{
         'package.json' = Get-FileVersionFromJson (Join-Path $script:Root 'package.json')
@@ -285,7 +291,7 @@ function Publish-GitHubArchive {
 Push-Location $script:Root
 try {
     Import-ReleaseEnvironment
-    Assert-ReleaseSource
+    Assert-ReleaseSource -AllowUntaggedStage:$StageOnly
     Normalize-UpdaterSigningKey
     New-Item -ItemType Directory -Path $script:WorkRoot -Force | Out-Null
 

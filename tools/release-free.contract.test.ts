@@ -4,9 +4,11 @@ import { readFileSync } from "node:fs";
 const publisher = readFileSync("tools/release-free.ps1", "utf8");
 
 describe("manual Free release publisher", () => {
-  test("requires an exact clean, tagged, version-aligned main source", () => {
+  test("requires an exact clean, tagged, version-aligned main source for publication", () => {
     expect(publisher).toContain("Refusing to release from a dirty worktree.");
     expect(publisher).toContain("@(git -C $script:Root status --porcelain).Count");
+    expect(publisher).toContain("param([switch]$AllowUntaggedStage)");
+    expect(publisher).toContain("if (-not $AllowUntaggedStage)");
     expect(publisher).toContain('"$script:Tag^{commit}"');
     expect(publisher).toContain('"refs/heads/main:refs/remotes/origin/main"');
     expect(publisher).toContain('"refs/tags/${script:Tag}:refs/tags/${script:Tag}"');
@@ -16,6 +18,7 @@ describe("manual Free release publisher", () => {
     expect(publisher).toContain("'Free Cargo manifest'");
     expect(publisher).toContain("'Free Cargo lock record'");
     expect(publisher).not.toContain("Set-CargoVersion");
+    expect(publisher).toContain("Assert-ReleaseSource -AllowUntaggedStage:$StageOnly");
   });
 
   test("builds the signed NSIS artifact and validates its updater sidecar", () => {
