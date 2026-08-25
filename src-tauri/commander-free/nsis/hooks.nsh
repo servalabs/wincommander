@@ -633,7 +633,6 @@ FunctionEnd
     wc_un_svc_stopped:
   ${EndIf}
   !insertmacro WC_CLOSE_RUNNING_APPS
-  !insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS
   nsExec::ExecToStack 'sc delete WinCommanderSvc'
   Pop $R8
   Pop $R9

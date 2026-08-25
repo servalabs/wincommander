@@ -31,7 +31,7 @@ describe("public service release packaging", () => {
     expect(preinstallHooks.indexOf("sc stop WinCommanderSvc")).toBeLessThan(preinstallHooks.indexOf("!insertmacro WC_CLOSE_RUNNING_APPS"));
     expect(preinstallHooks.indexOf("!insertmacro WC_CLOSE_RUNNING_APPS")).toBeLessThan(preinstallHooks.indexOf("!insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS"));
     expect(uninstallHooks).toContain("!insertmacro WC_CLOSE_RUNNING_APPS");
-    expect(uninstallHooks).toContain("!insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS");
+    expect(uninstallHooks).not.toContain("!insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS");
 
     expect(hooks).toContain("Function WcRetireLegacyMsiRegistrations");
     expect(hooks).toContain("SetRegView 64");
