@@ -20,7 +20,7 @@
 # members, which is what we want). `yanked` explicitly set to deny.
 #
 # Known findings as of 2026-07 (not a config bug — real, currently-unfixed
-# upstream issues; see USER-TASKS.md for the owner follow-up to track/patch):
+# upstream issues; owner follow-up is tracked privately):
 #   - RUSTSEC-2026-0119 (hickory-proto, DoS via name-compression O(n^2))
 #   - RUSTSEC-2026-0098/0099/0104 (rustls-webpki 0.101.7, cert-validation bugs)
 #   - RUSTSEC-2026-0194/0195 (quick-xml, DoS via attribute/namespace parsing)

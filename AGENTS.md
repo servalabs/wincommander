@@ -43,9 +43,9 @@ commercial work, and acceptance records are intentionally maintained only in
   remain at the root when present.
 - Put area-specific references in the relevant `docs/` folder, such as Fleet,
   operations, integrations, Vault, Investigator, frontend, or backend.
-- Keep public-safe plans, contracts, implementation records, and acceptance
-  evidence in `docs/plans/`, separate from current feature references. Private
-  material remains in `wincommander-pro`.
+- Do not add plans, readiness ledgers, internal audits, or private runbooks
+  here. Unfinished private work lives in `wincommander-pro` `STATUS.md`,
+  `USER-TASKS.md`, and `REFACTOR.md`. Public `docs/plans/` is unused.
 - Put exploratory or historical research in `docs/research/`; do not treat it
   as current product truth without verification.
 - Keep contributor and agent guidance in `docs/agents/`; retain root
