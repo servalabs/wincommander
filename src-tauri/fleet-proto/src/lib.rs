@@ -808,7 +808,9 @@ pub struct ConfigPushRequest {
 
 /// Lifecycle of a remote command. `pending` awaits multi-party approval;
 /// `approved` is signed and pollable; `dispatched` was handed to the agent;
-/// `acked`/`failed` are terminal results.
+/// `acked` proves only that the agent responded; `applied` requires an
+/// explicit device-side postcondition receipt. `failed`/`rejected`/`expired`
+/// are terminal results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
@@ -818,6 +820,7 @@ pub enum CommandStatus {
     Approved,
     Dispatched,
     Acked,
+    Applied,
     Failed,
     Rejected,
     Expired,
@@ -872,6 +875,14 @@ pub struct CommandView {
     pub required_approvals: i32,
     pub requested_by: String,
     pub created_at: String,
+    /// Stable request/correlation id supplied when the command was created.
+    /// This is distinct from the server-assigned `command_id`.
+    #[serde(default)]
+    pub request_id: String,
+    /// Safe, human-readable terminal reason. This is deliberately a bounded
+    /// classification, not arbitrary device output or sensitive result data.
+    #[serde(default)]
+    pub terminal_reason: Option<String>,
     /// Command payload — included so the admin panel can reconstruct current
     /// per-capability state from command history without a separate endpoint.
     #[serde(default)]
@@ -1736,6 +1747,12 @@ pub struct ShieldDesiredState {
     /// Informational only (no anti-rollback gate — latest write always wins,
     /// unlike `ConfigEpoch`).
     pub updated_at: String,
+    /// The durable per-device command that caused this desired state, when
+    /// this is a device-scoped Start/Stop request. The endpoint echoes this
+    /// identifier only in lifecycle receipts; it never carries camera media
+    /// or application details. Org/group defaults have no command id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
 }
 
 /// Agent → server report of ONE local Windows monitor alert the agent already
@@ -1961,6 +1978,22 @@ pub struct FleetNotification {
     pub hostname: Option<String>,
     pub read: bool,
     pub created_at: String,
+    /// Number of identical events folded into this notification during its
+    /// cooldown window. A value above one means Fleet suppressed duplicate
+    /// paging while retaining occurrence evidence.
+    #[serde(default = "default_notification_occurrence_count")]
+    pub occurrence_count: u32,
+    /// Most recent occurrence, distinct from when this incident card started.
+    #[serde(default)]
+    pub latest_at: String,
+    /// Bounded, safe correlation/request IDs for this incident. Never carries
+    /// device content, camera data, clipboard data, or free-form text.
+    #[serde(default)]
+    pub correlation_ids: Vec<String>,
+}
+
+fn default_notification_occurrence_count() -> u32 {
+    1
 }
 
 /// Per-device drift view (F7): how the device's applied epoch compares to the

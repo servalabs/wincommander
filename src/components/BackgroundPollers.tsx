@@ -110,7 +110,7 @@ export default function BackgroundPollers({
 }: BackgroundPollersProps) {
   useAutoHeal();
   useAdoptCurrentState();
-  const { startPrivacyShield, getProductivityStatus, startProductivityTracker, invokeProductivityEngineMaintenance, testRamDiskInstalled, getRamDiskStatus, createRamDisk, getAvailableDriveLetters, getAIDependenciesStatus } = useBackend();
+  const { startPrivacyShield, invokeProductivityEngineMaintenance, testRamDiskInstalled, getRamDiskStatus, createRamDisk, getAvailableDriveLetters, getAIDependenciesStatus } = useBackend();
   const { appSettings } = useAppState();
   const { hasPaid } = useEntitlements();
   const modules = appSettings?.app?.modules;
@@ -145,6 +145,9 @@ export default function BackgroundPollers({
   const appSettingsRef = useRef(appSettings);
   const fleetShieldReportedStateRef = useRef<string | null>(null);
   const fleetShieldReceivedStateRef = useRef<string | null>(null);
+  // A device-scoped Fleet Start/Stop carries a durable command id. Every
+  // media-free lifecycle receipt echoes only that id, never a camera detail.
+  const fleetShieldCommandIdRef = useRef<string | null>(null);
   useEffect(() => {
     modulesRef.current = modules;
     productivityQuietManagedRef.current = productivityQuietManaged;
@@ -165,13 +168,14 @@ export default function BackgroundPollers({
     let cancelled = false;
     let starting = false;
     const report = async (status: string, detail?: string) => {
-      const key = `${status}:${detail ?? ""}`;
+      const commandId = fleetShieldCommandIdRef.current;
+      const key = `${commandId ?? ""}:${status}:${detail ?? ""}`;
       if (fleetShieldReportedStateRef.current === key) return;
       // Only deduplicate a state after Pro accepts it. Marking it before the
       // IPC call made a transient sidecar failure suppress that lifecycle
       // transition forever, leaving Fleet with stale Shield state.
       try {
-        await invoke("fleet_report_privacy_shield_status", { status, detail });
+        await invoke("fleet_report_privacy_shield_status", { status, detail, commandId });
         fleetShieldReportedStateRef.current = key;
         return true;
       } catch {
@@ -193,6 +197,7 @@ export default function BackgroundPollers({
       try {
         desiredState = await invoke<typeof desiredState>("fleet_sync_shield_state");
       } catch { /* a later tick retries the authenticated state pull */ }
+      fleetShieldCommandIdRef.current = desiredState?.commandId ?? null;
       const shieldControl = resolveFleetPrivacyShieldControl({
         fleetEnabled: settings.app.fleet.enabled === true,
         legacyManaged: ps?.fleetManaged === true,
@@ -642,29 +647,6 @@ export default function BackgroundPollers({
       },
     );
 
-    // ── Auto-start a detected ActivityWatch install ─────────────────────
-    // Detection must lead to a usable tracker.  Do not require a stale
-    // trackerEnabled preference from a previous WinCommander session: it is
-    // common for ActivityWatch to be installed separately or to have been
-    // stopped during shutdown.  Retry while the native backend settles so a
-    // startup race cannot leave a detected install permanently idle.
-    const autoStartProductivity = async () => {
-      try {
-        const status = await getProductivityStatus();
-        if (status.success && status.data?.installed && !status.data.running) {
-          const r = await startProductivityTracker();
-          if (r?.success === true) {
-            showSuccess("Productivity tracker auto-started.");
-          }
-        }
-      } catch {
-        // The scheduled retries below cover a backend still starting up.
-      }
-    };
-    const autoStartTimers = [5_000, 15_000, 30_000].map((delay) =>
-      setTimeout(() => { void autoStartProductivity(); }, delay),
-    );
-
     const productivityMaintenanceTimer = setInterval(async () => {
       if (!isModuleEnabled(modulesRef.current, 'productivity')) return;
       if (!productivityQuietManagedRef.current) return;
@@ -816,14 +798,13 @@ export default function BackgroundPollers({
         unlistenWifiGuard, unlistenNetworkHoneypot]) {
         p.then(f => { try { f(); } catch { /* already torn down */ } });
       }
-      autoStartTimers.forEach(clearTimeout);
       clearInterval(productivityMaintenanceTimer);
       clearTimeout(ramdiskAutostartTimer);
       clearTimeout(driverScanTimer);
       clearTimeout(privacyShieldAutostartTimer);
       if (shredTimer.current) clearTimeout(shredTimer.current);
     };
-  }, [startPrivacyShield, getProductivityStatus, startProductivityTracker, invokeProductivityEngineMaintenance, onShredRequest, onPanelChange, testRamDiskInstalled, getRamDiskStatus, createRamDisk, getAvailableDriveLetters, getAIDependenciesStatus]);
+  }, [startPrivacyShield, invokeProductivityEngineMaintenance, onShredRequest, onPanelChange, testRamDiskInstalled, getRamDiskStatus, createRamDisk, getAvailableDriveLetters, getAIDependenciesStatus]);
 
   // This component renders nothing — it's purely for side effects
   return null;

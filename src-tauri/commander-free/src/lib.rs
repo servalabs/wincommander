@@ -2510,6 +2510,7 @@ pub fn run() {
             backend::run_backend_script,
             vault_mount_verification::verify_vault_drive,
             activity_watch_autostart::activity_watch_request,
+            activity_watch_autostart::activity_watch_ensure_started,
             backend::toggle_context_menu,
             backend::get_context_menu_status,
             backend::toggle_scrub_context_menu,

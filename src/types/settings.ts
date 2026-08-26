@@ -423,7 +423,7 @@ export interface FleetSettings {
    *  SEPARATE, non-`policy_epoch`-versioned channel (toggling the shield
    *  never bumps the policy version). `null`/absent = not fleet-managed,
    *  or the connected server predates this field. */
-  shieldDesiredState?: { enabled: boolean; mode: 'blur_notify' | 'notify_only'; updatedAt: string } | null;
+  shieldDesiredState?: { enabled: boolean; mode: 'blur_notify' | 'notify_only'; updatedAt: string; commandId?: string | null } | null;
 }
 
 /** Paid: one reusable metric alert. Hysteresis and sustained-breach

@@ -295,11 +295,21 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 }
                 await invoke("update_tray_shield_label", { running: shield.data.running }).catch(() => {});
             }
-            // Malformed / undefined response → keep the last known state.
-            // (Previous code's `else { setRunning(false) }` was the cause
-            // of "button stuck on Activate" — a single bad reply demoted
-            // a real running shield to false.)
-        } catch { /* transient failure — keep last known state */ }
+            // A malformed response is not proof that the prior process state
+            // still holds. Clear it so the card offers Refresh, never a stale
+            // Start/Stop action.
+            else {
+                setPrivacyShieldRunning(null);
+                setCameraAvailable(null);
+                setCameraMessage("Privacy Shield status could not be confirmed. Refresh and try again.");
+            }
+        } catch {
+            // A failed probe is also unknown state, not evidence that the last
+            // observed running/camera value is still current.
+            setPrivacyShieldRunning(null);
+            setCameraAvailable(null);
+            setCameraMessage("Privacy Shield status could not be confirmed. Refresh and try again.");
+        }
     };
     const checkStatus = useCallback(() => checkStatusRef.current(), []);
 
@@ -529,7 +539,15 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         }
     };
 
-    const headerRight = (
+    const stateUnknown = privacyShieldRunning === null || cameraAvailable === null;
+    const headerRight = stateUnknown ? (
+        <Button
+            text="Refresh status"
+            intent="primary"
+            onClick={checkStatus}
+            className="shield-primary-btn physical-shield-header-btn"
+        />
+    ) : (
         <Button
             text={privacyShieldRunning ? (isAdvanced ? "Stop Shield" : "Turn Off") : (isAdvanced ? "Activate Shield" : "Turn On")}
             intent={privacyShieldRunning ? "danger" : "primary"}
@@ -589,7 +607,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                     <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-success)]/15 text-[var(--color-success)] border border-[var(--color-success)]/30 flex-shrink-0">Active</span>
                                 )}
                                 {privacyShieldRunning && lookingAway && (
-                                    <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-warning)]/15 text-[var(--color-warning)] border border-[var(--color-warning)]/30 flex-shrink-0">Looking away · webcam blocked</span>
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-warning)]/15 text-[var(--color-warning)] border border-[var(--color-warning)]/30 flex-shrink-0">{resolvedShieldMode === "notify_only" ? "Looking away · notification sent" : "Looking away · visual shield active"}</span>
                                 )}
                                 {!hasPaid && quota && !quota.is_unlimited && (
                                     <>

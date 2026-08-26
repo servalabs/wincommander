@@ -715,6 +715,7 @@ pub async fn fleet_update_posture_snapshot() -> Result<serde_json::Value, String
 pub async fn fleet_report_privacy_shield_status(
     status: String,
     detail: Option<String>,
+    command_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     crate::license::require_service_feature("fleet")?;
     let settings = crate::settings::read_settings()?;
@@ -726,6 +727,7 @@ pub async fn fleet_report_privacy_shield_status(
         serde_json::json!({
             "status": status,
             "detail": detail,
+            "commandId": command_id,
             "framesUploaded": false,
         }),
     )

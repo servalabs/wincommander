@@ -92,7 +92,7 @@ export type CommandRequest = { device_id: DeviceId, catalog_id: string, action_c
  * `approved` is signed and pollable; `dispatched` was handed to the agent;
  * `acked`/`failed` are terminal results.
  */
-export type CommandStatus = "pending" | "approved" | "dispatched" | "acked" | "failed" | "rejected" | "expired";
+export type CommandStatus = "pending" | "approved" | "dispatched" | "acked" | "applied" | "failed" | "rejected" | "expired";
 
 /**
  * Admin-facing view of a command and its gate state.

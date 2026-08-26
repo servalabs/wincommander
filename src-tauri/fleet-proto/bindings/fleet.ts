@@ -210,14 +210,26 @@ export type CommandRequest = { device_id: DeviceId, catalog_id: string, action_c
 /**
  * Lifecycle of a remote command. `pending` awaits multi-party approval;
  * `approved` is signed and pollable; `dispatched` was handed to the agent;
- * `acked`/`failed` are terminal results.
+ * `acked` proves only that the agent responded; `applied` requires an
+ * explicit device-side postcondition receipt. `failed`/`rejected`/`expired`
+ * are terminal results.
  */
-export type CommandStatus = "pending" | "approved" | "dispatched" | "acked" | "failed" | "rejected" | "expired";
+export type CommandStatus = "pending" | "approved" | "dispatched" | "acked" | "applied" | "failed" | "rejected" | "expired";
 
 /**
  * Admin-facing view of a command and its gate state.
  */
 export type CommandView = { command_id: string, device_id: DeviceId, catalog_id: string, action_class: ActionClass, status: CommandStatus, approvals: number, required_approvals: number, requested_by: string, created_at: string,
+/**
+ * Stable request/correlation id supplied when the command was created.
+ * This is distinct from the server-assigned `command_id`.
+ */
+request_id: string,
+/**
+ * Safe, human-readable terminal reason. This is deliberately a bounded
+ * classification, not arbitrary device output or sensitive result data.
+ */
+terminal_reason: string | null,
 /**
  * Command payload — included so the admin panel can reconstruct current
  * per-capability state from command history without a separate endpoint.
@@ -543,7 +555,22 @@ summary: string,
 /**
  * Structured PII-free detail (e.g. drifted toggle paths + desired values).
  */
-detail: JsonValue, device_id: DeviceId | null, hostname: string | null, read: boolean, created_at: string, };
+detail: JsonValue, device_id: DeviceId | null, hostname: string | null, read: boolean, created_at: string,
+/**
+ * Number of identical events folded into this notification during its
+ * cooldown window. A value above one means Fleet suppressed duplicate
+ * paging while retaining occurrence evidence.
+ */
+occurrence_count: number,
+/**
+ * Most recent occurrence, distinct from when this incident card started.
+ */
+latest_at: string,
+/**
+ * Bounded, safe correlation/request IDs for this incident. Never carries
+ * device content, camera data, clipboard data, or free-form text.
+ */
+correlation_ids: Array<string>, };
 
 /**
  * `files.hash` result — a content digest (currently SHA-256 only).
@@ -599,19 +626,17 @@ export type InkReceiptStatus = "completed" | "scrub_warning" | "failed" | "faile
 export type ListDirResult = { ok: boolean, path: string, detail: string | null, entries: Array<FileEntry>, };
 
 /**
- * Agent → server report of ONE local Windows notification the agent already
- * showed the user (screen-capture-tool detected, CPU/RAM/network threshold
- * exceeded, ...), forwarded to the fleet console only when the corresponding
- * per-type `notifications.<type>.reportToFleet` setting is on (agent-side
- * gate — the server stores whatever it is sent). Carries the SAME concrete
- * detail the local toast already showed, so the console can render a
- * specific message instead of a generic "alert" line. PII-free: `detail`
- * must contain only scalars/process-executable-names/metric values, never
- * window titles, file contents, or free-text.
+ * Agent → server report of ONE local Windows monitor alert the agent already
+ * showed the user (screen capture, CPU/RAM/network threshold, ransomware,
+ * remote access, driver, Wi-Fi, network honeypot, VPN kill switch, USB
+ * security, or a content-free clipboard class). The per-alert setting or Fleet's signed master policy gates the
+ * forwarding. `detail` is a closed, Pro-normalized summary: class/severity,
+ * bounded counters, or aggregate metric values only—never clipboard text,
+ * process names, paths, peers, SSIDs, window titles, or other free text.
  */
 export type LocalAlertReport = {
 /**
- * `"screen_capture" | "cpu_usage" | "ram_usage" | "network_usage"`.
+ * Closed allowlist enforced by Pro's `normalize_local_alert`.
  */
 alert_type: string,
 /**
@@ -963,7 +988,14 @@ mode: string,
  * Informational only (no anti-rollback gate — latest write always wins,
  * unlike `ConfigEpoch`).
  */
-updated_at: string, };
+updated_at: string,
+/**
+ * The durable per-device command that caused this desired state, when
+ * this is a device-scoped Start/Stop request. The endpoint echoes this
+ * identifier only in lifecycle receipts; it never carries camera media
+ * or application details. Org/group defaults have no command id.
+ */
+command_id: string | null, };
 
 /**
  * What an agent receives when it polls — the signed, executable envelope. The

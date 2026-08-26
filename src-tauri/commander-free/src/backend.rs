@@ -4787,10 +4787,21 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
                                 } else {
                                     reason.to_string()
                                 };
+                                let notify_only =
+                                    crate::settings::read_settings().ok().and_then(|settings| {
+                                        settings.ideal.privacy.privacy_shield.notify_mode
+                                    }) == Some(
+                                        crate::settings::PrivacyShieldNotifyMode::NotifyOnly,
+                                    );
+                                let notification_body = if notify_only {
+                                    format!("{} — notification only; screen unchanged.", detail)
+                                } else {
+                                    format!("{} — visual screen shield engaged.", detail)
+                                };
                                 let _ = crate::native_notify::show_native_notification(
                                     &app,
                                     "Privacy Shield — look-away",
-                                    &format!("{} — screen privacy action engaged.", detail),
+                                    &notification_body,
                                 );
                             }
                             Some("look_back") => {
