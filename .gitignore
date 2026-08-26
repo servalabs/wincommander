@@ -6,6 +6,7 @@
 .cargo-target-build-rust-all/
 .cargo-target-vault-free
 
+
 # Agent scratch files + the bundled CLI binary (claude.exe is ~242MB — GitHub
 # rejects >100MB, so an accidental `git add -A` push fails for everyone sharing
 # this tree). Keep them untracked.
@@ -148,3 +149,6 @@ UI_problem/
 /.superdesign/
 # Release-only service staging payload (created and removed by build-tauri-release.ts)
 /src-tauri/commander-free/resources/wincommander-svc.exe
+
+target-cmd-alert-check
+target-commander-free-shield
