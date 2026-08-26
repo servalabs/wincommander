@@ -9,3 +9,8 @@ import { invoke } from "@tauri-apps/api/core";
 export async function activityWatchRequest<T>(path: string): Promise<T> {
   return invoke<T>("activity_watch_request", { path });
 }
+
+/** Ask the single native supervisor to reuse a healthy tracker or start it. */
+export async function ensureActivityWatchStarted(): Promise<void> {
+  await invoke("activity_watch_ensure_started");
+}

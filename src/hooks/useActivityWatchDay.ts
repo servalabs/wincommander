@@ -8,6 +8,7 @@
 // an empty day — so the panel never shows an endless spinner or a crash.
 
 import { useEffect, useState } from "react";
+import { ensureActivityWatchStarted } from "./activityWatchIpc";
 import {
   activeIntervals,
   AW_BUCKET_FETCH_CONCURRENCY,
@@ -169,6 +170,17 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
     setState({ status: "loading" });
 
     (async () => {
+      try {
+        await ensureActivityWatchStarted();
+      } catch {
+        if (!cancelled) {
+          setState({
+            status: "unavailable",
+            message: "ActivityWatch could not be started or reached. Check Productivity settings, then retry.",
+          });
+        }
+        return;
+      }
       const bounds = dayBoundsLocal(date);
       const dateLabel = formatDateLabel(date);
       const deviceName = localHostname ?? "This device";

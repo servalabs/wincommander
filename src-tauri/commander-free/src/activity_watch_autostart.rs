@@ -1,4 +1,4 @@
-//! Starts a locally installed ActivityWatch when its module and tracker are enabled.
+//! Starts a locally installed ActivityWatch whenever Productivity is enabled.
 //!
 //! This deliberately lives outside the frontend and the paid-command router:
 //! An enabled tracker should be available even when the Productivity panel is
@@ -11,6 +11,7 @@ use std::{
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::Command,
+    sync::{Mutex, OnceLock},
     thread,
     time::Duration,
 };
@@ -63,7 +64,6 @@ fn is_configured() -> bool {
             .get("productivity")
             .copied()
             .unwrap_or(false)
-            && settings.ideal.productivity.tracker_enabled.unwrap_or(false)
     })
 }
 
@@ -77,23 +77,48 @@ struct Binaries {
 
 #[cfg(windows)]
 fn ensure_started() -> Result<(), String> {
+    static START_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = START_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "ActivityWatch start lock unavailable".to_string())?;
+    let running = running_processes();
+    let server_running = running
+        .iter()
+        .any(|name| name == "aw-server" || name == "aw-server-rust");
+    let server_healthy = server_ready();
+    let afk_running = running.iter().any(|name| name == "aw-watcher-afk");
+    let window_running = running.iter().any(|name| name == "aw-watcher-window");
+
+    // A healthy existing instance wins. Do not require its original installer
+    // path just to use it, and never start a second server process.
+    if server_healthy && afk_running && window_running {
+        crate::log_message(
+            "info",
+            "[ActivityWatch] existing server and watchers are healthy",
+        );
+        return Ok(());
+    }
+
     let binaries =
         discover_binaries().ok_or_else(|| "ActivityWatch is not installed".to_string())?;
-    let running = running_processes();
-
-    if !running
-        .iter()
-        .any(|name| name == "aw-server" || name == "aw-server-rust")
-    {
+    if !server_healthy {
+        if server_running {
+            return Err(
+                "ActivityWatch server process is running but its API is unreachable".to_string(),
+            );
+        }
         start(&binaries.server)?;
+        // Watchers need the REST API to be accepting connections; starting
+        // them before the server is ready can leave them disconnected.
+        if !server_ready() {
+            return Err("ActivityWatch server did not become ready on port 5600".to_string());
+        }
     }
 
-    // Watchers need the REST API to be accepting connections; starting them
-    // before the server is ready can leave them silently disconnected.
-    if !server_ready() {
-        return Err("ActivityWatch server did not become ready on port 5600".to_string());
-    }
-
+    // Re-scan after server readiness so a concurrent launcher cannot cause us
+    // to spawn a duplicate watcher between the initial health check and here.
+    let running = running_processes();
     if !running.iter().any(|name| name == "aw-watcher-afk") {
         start(&binaries.afk)?;
     }
@@ -106,6 +131,24 @@ fn ensure_started() -> Result<(), String> {
         "[ActivityWatch] server and watchers ensured at startup",
     );
     Ok(())
+}
+
+/// Verify or start ActivityWatch through the single native supervisor. The
+/// Productivity panel calls this on open, which covers a tracker stopped after
+/// Commander started without racing a browser-side process launcher.
+#[tauri::command]
+pub async fn activity_watch_ensure_started() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        if !is_configured() {
+            return Err("ActivityWatch startup is disabled in Productivity settings".to_string());
+        }
+        ensure_started()
+    }
+    #[cfg(not(windows))]
+    {
+        Err("ActivityWatch supervision is available only on Windows".to_string())
+    }
 }
 
 #[cfg(windows)]
