@@ -155,6 +155,40 @@ pub struct SecuritySettings {
     /// setting.
     #[serde(default)]
     pub require_all_device_alerts_in_fleet: bool,
+    /// Device-scoped Fleet reporting policy for the reusable resource-alert
+    /// sampler. `None` leaves the local preference in control; `Some(true)`
+    /// is a signed Fleet requirement and is paired for CPU/RAM and network
+    /// upload/download so the visible policy matches runtime behavior.
+    #[serde(default)]
+    pub metric_alert_reporting: FleetMetricAlertReporting,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FleetMetricAlertReporting {
+    pub system_report_to_fleet: Option<bool>,
+    pub network_report_to_fleet: Option<bool>,
+    /// Fleet-owned evaluation policy. `None` preserves the device user's
+    /// local alert thresholds and timing; a present value is a signed,
+    /// bounded policy applied atomically to all four metric evaluators.
+    #[serde(default)]
+    pub policy: Option<FleetMetricAlertPolicy>,
+}
+
+/// Typed, privacy-minimized policy for local CPU/RAM/network alerts. These
+/// are numbers and durations only: no process, window, URL, file, or payload
+/// content is ever carried in policy or alert reporting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FleetMetricAlertPolicy {
+    pub evaluation_interval_secs: u32,
+    pub sustained_secs: u32,
+    pub cooldown_secs: u32,
+    pub reset_pct: u8,
+    pub cpu_threshold_pct: f64,
+    pub ram_threshold_pct: f64,
+    pub upload_threshold_mb_s: f64,
+    pub download_threshold_mb_s: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -618,6 +652,11 @@ pub struct MetricAlertSettings {
     pub sustained_enabled: bool,
     /// Seconds of continuous breach required to fire. Clamped 1..=600.
     pub sustained_secs: u32,
+    /// Minimum time between separate incidents for this metric. A continuing
+    /// breach remains one incident; after recovery, a new breach waits for
+    /// this cooldown before notifying again. Clamped 0..=86,400.
+    #[serde(default = "default_metric_alert_cooldown_secs")]
+    pub cooldown_secs: u32,
     /// Forward this alert to the Fleet console when it fires. Settings path
     /// `notifications.{cpuUsage,ramUsage,networkUsage}.reportToFleet` — an
     /// admin-lockable path via the generic `ConfigEpoch.locked_paths`
@@ -638,6 +677,7 @@ impl MetricAlertSettings {
             hysteresis_pct: 20,
             sustained_enabled: true,
             sustained_secs: 30,
+            cooldown_secs: default_metric_alert_cooldown_secs(),
             report_to_fleet: false,
         }
     }
@@ -1298,6 +1338,10 @@ pub struct ClipboardSettings {
     /// Fleet. Admin-lockable through `privacy.clipboard.pasteMonitorReportToFleet`.
     #[serde(default)]
     pub paste_monitor_report_to_fleet: Option<bool>,
+}
+
+fn default_metric_alert_cooldown_secs() -> u32 {
+    300
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

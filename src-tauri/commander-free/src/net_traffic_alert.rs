@@ -50,6 +50,7 @@ pub struct MetricAlert {
     pub hysteresis_pct: u8,
     pub sustained_enabled: bool,
     pub sustained_secs: u32,
+    pub cooldown_secs: u32,
     /// Forward this alert to the Fleet console when it fires. Admin-lockable
     /// via `ConfigEpoch.locked_paths` on `notifications.{cpuUsage,ramUsage,
     /// networkUsage}.reportToFleet` — same mechanism `privacy.privacyShield`
@@ -66,6 +67,7 @@ impl From<crate::settings::MetricAlertSettings> for MetricAlert {
             hysteresis_pct: s.hysteresis_pct.clamp(1, 90),
             sustained_enabled: s.sustained_enabled,
             sustained_secs: s.sustained_secs.clamp(1, 600),
+            cooldown_secs: s.cooldown_secs.min(86_400),
             report_to_fleet: s.report_to_fleet,
         }
     }
@@ -81,6 +83,7 @@ impl MetricAlert {
             hysteresis_pct: self.hysteresis_pct.clamp(1, 90),
             sustained_enabled: self.sustained_enabled,
             sustained_secs: self.sustained_secs.clamp(1, 600),
+            cooldown_secs: self.cooldown_secs.min(86_400),
             report_to_fleet: self.report_to_fleet,
         }
     }
@@ -93,6 +96,7 @@ impl MetricAlert {
             "hysteresisPct": self.hysteresis_pct,
             "sustainedEnabled": self.sustained_enabled,
             "sustainedSecs": self.sustained_secs,
+            "cooldownSecs": self.cooldown_secs,
             "reportToFleet": self.report_to_fleet,
         })
     }
@@ -106,6 +110,14 @@ pub struct MetricAlertsConfig {
     pub ram: MetricAlert,
     pub upload: MetricAlert,
     pub download: MetricAlert,
+    /// The sampler retains safe one-second source samples, but evaluates the
+    /// policy only at this cadence. A signed Fleet policy may use 1..=300s.
+    #[serde(default = "default_evaluation_interval_secs")]
+    pub evaluation_interval_secs: u32,
+}
+
+fn default_evaluation_interval_secs() -> u32 {
+    1
 }
 
 impl From<crate::settings::MetricAlertsSettings> for MetricAlertsConfig {
@@ -115,6 +127,7 @@ impl From<crate::settings::MetricAlertsSettings> for MetricAlertsConfig {
             ram: s.ram.into(),
             upload: s.upload.into(),
             download: s.download.into(),
+            evaluation_interval_secs: default_evaluation_interval_secs(),
         }
     }
 }
@@ -151,7 +164,61 @@ fn config_from_settings(settings: &crate::settings::AppSettings) -> MetricAlerts
         config.upload.report_to_fleet = true;
         config.download.report_to_fleet = true;
     }
+    // A device-scoped signed policy is deliberately typed under
+    // `ideal.security`, not an untyped `notifications.*` object that serde
+    // drops while applying the epoch. Pair CPU/RAM and upload/download so a
+    // Fleet checkbox cannot leave half a category reporting.
+    if settings
+        .ideal
+        .security
+        .metric_alert_reporting
+        .system_report_to_fleet
+        == Some(true)
+    {
+        config.cpu.report_to_fleet = true;
+        config.ram.report_to_fleet = true;
+    }
+    if settings
+        .ideal
+        .security
+        .metric_alert_reporting
+        .network_report_to_fleet
+        == Some(true)
+    {
+        config.upload.report_to_fleet = true;
+        config.download.report_to_fleet = true;
+    }
+    if let Some(policy) = settings
+        .ideal
+        .security
+        .metric_alert_reporting
+        .policy
+        .as_ref()
+    {
+        // Fleet policy is one atomic evaluator policy. Clamp again at this
+        // boundary so a hand-edited cache can neither silence monitoring nor
+        // create a tight loop, even though the server has already validated
+        // the signed values.
+        config.evaluation_interval_secs = policy.evaluation_interval_secs.clamp(1, 300);
+        apply_fleet_metric_policy(&mut config.cpu, policy.cpu_threshold_pct, policy);
+        apply_fleet_metric_policy(&mut config.ram, policy.ram_threshold_pct, policy);
+        apply_fleet_metric_policy(&mut config.upload, policy.upload_threshold_mb_s, policy);
+        apply_fleet_metric_policy(&mut config.download, policy.download_threshold_mb_s, policy);
+    }
     config
+}
+
+fn apply_fleet_metric_policy(
+    metric: &mut MetricAlert,
+    threshold: f64,
+    policy: &crate::settings::FleetMetricAlertPolicy,
+) {
+    metric.threshold = threshold.max(0.1);
+    metric.hysteresis_enabled = true;
+    metric.hysteresis_pct = policy.reset_pct.clamp(1, 90);
+    metric.sustained_enabled = true;
+    metric.sustained_secs = policy.sustained_secs.clamp(1, 600);
+    metric.cooldown_secs = policy.cooldown_secs.min(86_400);
 }
 
 /// Refresh the sampler after a signed configuration epoch has changed the
@@ -235,6 +302,7 @@ fn ensure_report_to_fleet_changes_allowed(
 struct AlertState {
     breach_start: Option<Instant>,
     alerted: bool,
+    last_fired: Option<Instant>,
 }
 
 impl AlertState {
@@ -242,6 +310,7 @@ impl AlertState {
         Self {
             breach_start: None,
             alerted: false,
+            last_fired: None,
         }
     }
 }
@@ -280,10 +349,22 @@ struct AlertFire<'a> {
     sustained_secs: u32,
 }
 
-/// Evaluate one metric alert against `value`. Returns true exactly on the
-/// transition into the alerted state (the moment to fire). Shared by every
-/// metric — this is the reusable core.
-fn evaluate(cfg: &MetricAlert, state: &mut AlertState, value: f64, now: Instant) -> bool {
+/// Evaluate one metric alert. It emits exactly one fire transition for a
+/// continuous breach, then a recovery transition below the reset level. A
+/// later breach respects the configured cooldown before it can fire again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlertTransition {
+    None,
+    Fired,
+    Recovered,
+}
+
+fn evaluate(
+    cfg: &MetricAlert,
+    state: &mut AlertState,
+    value: f64,
+    now: Instant,
+) -> AlertTransition {
     let over = value > cfg.threshold;
 
     if over {
@@ -304,10 +385,18 @@ fn evaluate(cfg: &MetricAlert, state: &mut AlertState, value: f64, now: Instant)
             over
         };
         if should_fire {
+            let cooldown_elapsed = state
+                .last_fired
+                .map(|last| now.duration_since(last).as_secs() >= cfg.cooldown_secs as u64)
+                .unwrap_or(true);
+            if !cooldown_elapsed {
+                return AlertTransition::None;
+            }
             state.alerted = true;
-            return true;
+            state.last_fired = Some(now);
+            return AlertTransition::Fired;
         }
-        false
+        AlertTransition::None
     } else {
         let reset_level = if cfg.hysteresis_enabled {
             cfg.threshold * (1.0 - cfg.hysteresis_pct as f64 / 100.0)
@@ -317,8 +406,9 @@ fn evaluate(cfg: &MetricAlert, state: &mut AlertState, value: f64, now: Instant)
         if value < reset_level {
             state.alerted = false;
             state.breach_start = None;
+            return AlertTransition::Recovered;
         }
-        false
+        AlertTransition::None
     }
 }
 
@@ -385,6 +475,53 @@ fn fire_alert(app: &AppHandle, alert: AlertFire<'_>) {
     }
 }
 
+fn fire_recovery(app: &AppHandle, alert: AlertFire<'_>) {
+    let body = format!("{} recovered below its reset level.", alert.label);
+    if let Err(e) =
+        crate::native_notify::show_native_notification(app, "WinCommander - Alert recovery", &body)
+    {
+        crate::log_message(
+            "warn",
+            &format!("[MetricAlert] recovery notification failed: {}", e),
+        );
+    }
+    let _ = app.emit(
+        "metrics://metric-alert-recovery",
+        MetricAlertPayload {
+            metric: alert.metric.to_string(),
+            label: alert.label.to_string(),
+            value: alert.value,
+            unit: alert.unit.to_string(),
+            threshold: alert.threshold,
+        },
+    );
+    if alert.report_to_fleet {
+        let alert_type = match alert.metric {
+            "cpu" => "cpu_usage_recovered",
+            "ram" => "ram_usage_recovered",
+            _ => "network_usage_recovered",
+        };
+        let detail = serde_json::json!({
+            "metric": alert.metric,
+            "value": alert.value,
+            "unit": alert.unit,
+            "threshold": alert.threshold,
+            "recovered": true,
+        });
+        let alert_type = alert_type.to_string();
+        tauri::async_runtime::spawn(async move {
+            if let Err(error) =
+                crate::fleet_agent::fleet_report_local_alert(alert_type.clone(), detail).await
+            {
+                crate::flow_bridge::flow_trace(format!(
+                    "[MetricAlert] Fleet recovery not queued ({}): {}",
+                    alert_type, error
+                ));
+            }
+        });
+    }
+}
+
 /// One enabled metric: evaluate + fire, or reset state while disabled.
 ///
 /// `entitled` is re-checked by the caller every tick (not just at
@@ -405,8 +542,8 @@ fn tick_metric(
     entitled: bool,
 ) {
     if cfg.enabled && entitled {
-        if evaluate(cfg, state, value, now) {
-            fire_alert(
+        match evaluate(cfg, state, value, now) {
+            AlertTransition::Fired => fire_alert(
                 app,
                 AlertFire {
                     metric,
@@ -417,7 +554,20 @@ fn tick_metric(
                     report_to_fleet: cfg.report_to_fleet,
                     sustained_secs: cfg.sustained_secs,
                 },
-            );
+            ),
+            AlertTransition::Recovered => fire_recovery(
+                app,
+                AlertFire {
+                    metric,
+                    label,
+                    value,
+                    unit,
+                    threshold: cfg.threshold,
+                    report_to_fleet: cfg.report_to_fleet,
+                    sustained_secs: cfg.sustained_secs,
+                },
+            ),
+            AlertTransition::None => {}
         }
     } else {
         // Keep state clean while disabled (or unentitled) so re-enabling
@@ -443,6 +593,7 @@ pub fn init(app: &AppHandle) {
         let mut st_ram = AlertState::new();
         let mut st_up = AlertState::new();
         let mut st_down = AlertState::new();
+        let mut last_evaluated = Instant::now() - SAMPLE_INTERVAL;
 
         // Discard the first interval — NIC deltas are cumulative-since-boot on
         // the first reading, and CPU usage needs two refreshes to be meaningful.
@@ -471,6 +622,13 @@ pub fn init(app: &AppHandle) {
 
             let cfg = CONFIG.lock().unwrap().clone();
             let now = Instant::now();
+            if now.duration_since(last_evaluated).as_secs()
+                < cfg.evaluation_interval_secs.max(1) as u64
+            {
+                tokio::time::sleep(SAMPLE_INTERVAL).await;
+                continue;
+            }
+            last_evaluated = now;
             // Re-verified every tick — not just at config-write time — so a
             // lapsed licence silences alerts even if the persisted config
             // still has `enabled: true` from when the user was entitled.
@@ -548,6 +706,7 @@ pub async fn metric_alerts_set_config(
         ram: config.ram.normalized(),
         upload: config.upload.normalized(),
         download: config.download.normalized(),
+        evaluation_interval_secs: config.evaluation_interval_secs.clamp(1, 300),
     };
     let system_reports_to_fleet = normalized.cpu.report_to_fleet && normalized.ram.report_to_fleet;
     normalized.cpu.report_to_fleet = system_reports_to_fleet;
@@ -580,6 +739,7 @@ pub async fn metric_alerts_set_config(
                 "ram": normalized.ram.to_json(),
                 "upload": normalized.upload.to_json(),
                 "download": normalized.download.to_json(),
+                "evaluationIntervalSecs": normalized.evaluation_interval_secs,
             }
         }
     });
@@ -608,6 +768,59 @@ mod tests {
         assert!(config.cpu.report_to_fleet);
         assert!(config.upload.report_to_fleet);
         assert!(config.download.report_to_fleet);
+    }
+
+    #[test]
+    fn typed_device_policy_forces_paired_resource_reporting() {
+        let mut settings = crate::settings::create_default_settings();
+        settings
+            .ideal
+            .security
+            .metric_alert_reporting
+            .system_report_to_fleet = Some(true);
+        settings
+            .ideal
+            .security
+            .metric_alert_reporting
+            .network_report_to_fleet = Some(true);
+
+        let config = config_from_settings(&settings);
+
+        assert!(config.cpu.report_to_fleet);
+        assert!(config.ram.report_to_fleet);
+        assert!(config.upload.report_to_fleet);
+        assert!(config.download.report_to_fleet);
+    }
+
+    #[test]
+    fn typed_fleet_policy_overrides_threshold_timing_and_reset_for_every_metric() {
+        let mut settings = crate::settings::create_default_settings();
+        settings.ideal.security.metric_alert_reporting.policy =
+            Some(crate::settings::FleetMetricAlertPolicy {
+                evaluation_interval_secs: 5,
+                sustained_secs: 45,
+                cooldown_secs: 600,
+                reset_pct: 25,
+                cpu_threshold_pct: 50.0,
+                ram_threshold_pct: 70.0,
+                upload_threshold_mb_s: 12.5,
+                download_threshold_mb_s: 20.0,
+            });
+
+        let config = config_from_settings(&settings);
+
+        assert_eq!(config.evaluation_interval_secs, 5);
+        assert_eq!(config.cpu.threshold, 50.0);
+        assert_eq!(config.ram.threshold, 70.0);
+        assert_eq!(config.upload.threshold, 12.5);
+        assert_eq!(config.download.threshold, 20.0);
+        for metric in [&config.cpu, &config.ram, &config.upload, &config.download] {
+            assert!(metric.sustained_enabled);
+            assert_eq!(metric.sustained_secs, 45);
+            assert_eq!(metric.cooldown_secs, 600);
+            assert!(metric.hysteresis_enabled);
+            assert_eq!(metric.hysteresis_pct, 25);
+        }
     }
 
     #[test]
@@ -655,5 +868,44 @@ mod tests {
 
         assert!(!config.cpu.report_to_fleet);
         assert!(!config.ram.report_to_fleet);
+    }
+
+    #[test]
+    fn evaluator_emits_one_breach_then_recovery_then_respects_cooldown() {
+        let cfg = MetricAlert {
+            enabled: true,
+            threshold: 50.0,
+            hysteresis_enabled: true,
+            hysteresis_pct: 20,
+            sustained_enabled: false,
+            sustained_secs: 1,
+            cooldown_secs: 60,
+            report_to_fleet: true,
+        };
+        let start = Instant::now();
+        let mut state = AlertState::new();
+
+        assert_eq!(
+            evaluate(&cfg, &mut state, 70.0, start),
+            AlertTransition::Fired
+        );
+        assert_eq!(
+            evaluate(&cfg, &mut state, 80.0, start + Duration::from_secs(5)),
+            AlertTransition::None,
+            "a continuing breach is one incident"
+        );
+        assert_eq!(
+            evaluate(&cfg, &mut state, 39.0, start + Duration::from_secs(10)),
+            AlertTransition::Recovered
+        );
+        assert_eq!(
+            evaluate(&cfg, &mut state, 70.0, start + Duration::from_secs(20)),
+            AlertTransition::None,
+            "a new breach inside cooldown is suppressed"
+        );
+        assert_eq!(
+            evaluate(&cfg, &mut state, 70.0, start + Duration::from_secs(61)),
+            AlertTransition::Fired
+        );
     }
 }
