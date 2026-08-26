@@ -38,7 +38,7 @@ describe("generated WinCommander CLI catalog", () => {
   // truth; test the single public rendering so a catalog change cannot stale it.
   test("matches the command totals quoted in the CLI docs", () => {
     const totals = commandTotals(catalog.commands as Entry[]);
-    expect(totals).toEqual({ total: 1270, tauri: 464, backend: 806, releaseExecutable: 1266 });
+    expect(totals).toEqual({ total: 1272, tauri: 466, backend: 806, releaseExecutable: 1268 });
 
     const total = grouped(totals.total);
     const tauri = grouped(totals.tauri);
@@ -54,6 +54,12 @@ describe("generated WinCommander CLI catalog", () => {
       expect(entry.id).toBe(`${entry.transport === "tauri" ? "tauri" : "backend"}:${entry.name}`);
       expect(entry.frontendReferences.every((path) => path.startsWith("src/") && !path.includes("\\"))).toBe(true);
     }
+  });
+
+  test("retains invocations with inline object-type generics", () => {
+    expect(byId.get("tauri:delete_pro_binary")?.frontendReferences).toContain(
+      "src/components/settings/VersionManagementCard.tsx",
+    );
   });
 
   test("flags frontend invocations that are absent from their desktop dispatcher", () => {

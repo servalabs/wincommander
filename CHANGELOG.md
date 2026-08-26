@@ -5,6 +5,14 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Added a Monitor Operations Center that combines the local and Pro monitor
+  families into one privacy-safe snapshot. It shows useful counts, check
+  cadence, stale/degraded/unavailable states, Pro locks, coverage filters, and
+  manual refresh without exposing event contents, paths, usernames, or peers.
+  Stateful Pro monitor commands require one durable sidecar session so a
+  running monitor and its status/history do not drift between workers; if that
+  authoritative session is unavailable, the dashboard reports it instead of
+  querying a different worker.
 - A slow cold settings read now recovers in the background after the bounded
   startup-cache deadline instead of leaving the dashboard shell at 0% with an
   empty navigation rail.

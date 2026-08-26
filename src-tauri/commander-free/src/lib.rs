@@ -58,6 +58,10 @@ mod license;
 mod local_clipboard_rules;
 mod log;
 mod malware_scan;
+mod monitoring;
+mod monitoring_catalog;
+mod monitoring_local;
+mod monitoring_rows;
 mod native_notify;
 mod net;
 mod net_traffic_alert;
@@ -2545,6 +2549,7 @@ pub fn run() {
             shield_quota::reset_shield_quota,
             // ── Pro sidecar IPC ──
             sidecar::test_pro_handshake,
+            monitoring::get_monitoring_overview,
             // QA/dev-only round-trip surface — compiled out of release so a
             // compromised WebView cannot reach every Pro command ungated (C3).
             #[cfg(debug_assertions)]

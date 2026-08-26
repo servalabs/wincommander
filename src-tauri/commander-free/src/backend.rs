@@ -3669,6 +3669,19 @@ pub async fn run_backend_script(
     command: String,
     params: HashMap<String, String>,
 ) -> Result<serde_json::Value, String> {
+    run_backend_script_with_timeout(app, command, params, None).await
+}
+
+/// Internal callers that render a live status surface may use a shorter
+/// deadline than the general-purpose backend command timeout. The same timeout
+/// path kills the PowerShell process tree, so a cancelled UI poll cannot leave
+/// a background probe running indefinitely.
+pub(crate) async fn run_backend_script_with_timeout(
+    app: AppHandle,
+    command: String,
+    params: HashMap<String, String>,
+    timeout_override: Option<std::time::Duration>,
+) -> Result<serde_json::Value, String> {
     // Redact secrets before they hit the app log -- `params` can carry a
     // plaintext vault password/keyfile, one `WINCMD_LOG=debug` away from
     // being written to disk otherwise.
@@ -3979,7 +3992,8 @@ pub async fn run_backend_script(
     let child_pid = child.id();
     let wait_task = tokio::task::spawn_blocking(move || child.wait_with_output());
 
-    let output_res = match tokio::time::timeout(BACKEND_SCRIPT_TIMEOUT, wait_task).await {
+    let command_timeout = timeout_override.unwrap_or(BACKEND_SCRIPT_TIMEOUT);
+    let output_res = match tokio::time::timeout(command_timeout, wait_task).await {
         Ok(joined) => joined,
         Err(_) => {
             // spawn_blocking can't be cancelled from here -- the blocking
@@ -3991,9 +4005,9 @@ pub async fn run_backend_script(
             crate::log_message(
                 "error",
                 &format!(
-                    "[Backend] Command '{}' timed out after {}m — killing pid {}",
+                    "[Backend] Command '{}' timed out after {}s — killing pid {}",
                     command,
-                    BACKEND_SCRIPT_TIMEOUT.as_secs() / 60,
+                    command_timeout.as_secs(),
                     child_pid
                 ),
             );
@@ -4010,9 +4024,9 @@ pub async fn run_backend_script(
             })
             .await;
             return Err(format!(
-                "Command '{}' timed out after {} minutes and was terminated.",
+                "Command '{}' timed out after {} seconds and was terminated.",
                 command,
-                BACKEND_SCRIPT_TIMEOUT.as_secs() / 60
+                command_timeout.as_secs()
             ));
         }
     };

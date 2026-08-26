@@ -142,10 +142,13 @@ async function buildCatalog(): Promise<CommandCatalog> {
   const backendRefs = new Map<string, Set<string>>();
 
   for (const file of await frontendSources()) {
-    for (const match of file.source.matchAll(/\binvoke(?:<[^;]{0,500}?>)?\(\s*["']([a-z][a-z0-9_]*)["']/g)) {
+    // A TypeScript generic can contain semicolons (for example an inline object
+    // type). Match lazily through its closing `>` rather than treating `;` as
+    // a terminator, otherwise a real invoke disappears from the catalog.
+    for (const match of file.source.matchAll(/\binvoke(?:<[\s\S]{0,500}?>)?\(\s*["']([a-z][a-z0-9_]*)["']/g)) {
       addReference(tauriRefs, match[1], file.path);
     }
-    for (const match of file.source.matchAll(/\bexecuteBackendCommand(?:<[^;]{0,500}?>)?\(\s*["']([^"']+)["']/g)) {
+    for (const match of file.source.matchAll(/\bexecuteBackendCommand(?:<[\s\S]{0,500}?>)?\(\s*["']([^"']+)["']/g)) {
       backendNames.add(match[1]);
       addReference(backendRefs, match[1], file.path);
     }

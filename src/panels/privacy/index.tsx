@@ -1,11 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useSearchQuery } from "../../context/SearchContext";
 import { useAppState } from "../../context/AppContext";
 import useVisibility from "../../hooks/useVisibility";
-import useEntitlements from "../../hooks/useEntitlements";
 import { useTourActive } from "../../lib/tourActive";
-import { argus } from "../../hooks/useArgus";
-import { authAnomalyStatus, sessionMonitorStatus } from "../../hooks/monitorStatus";
+import useMonitoringOverview from "../../hooks/useMonitoringOverview";
 import ToggleSection from "../../components/shared/ToggleSection";
 import SectionCard from "../../components/shared/SectionCard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
@@ -29,6 +27,7 @@ import CanaryTokensSection from "./CanaryTokensSection";
 import UsbDevicesSection from "./UsbDevicesSection";
 import PrintActivitySection from "./PrintActivitySection";
 import RdpIdleCard from "./RdpIdleCard";
+import MonitoringOperationsSection from "./MonitoringOperationsSection";
 import PanelHeader from "../../components/shared/PanelHeader";
 import { useSettingsQuery } from "../../hooks/queries/useSettingsQuery";
 import {
@@ -56,7 +55,6 @@ export default function PrivacyPanel() {
     const { searchQuery } = useSearchQuery();
     const visibility = useVisibility();
     const { density } = visibility;
-    const { canUse } = useEntitlements();
 
     const isAdvanced = density === "expert";
     const tourActive = useTourActive();
@@ -161,34 +159,11 @@ export default function PrivacyPanel() {
         ("notifications.screenCapture.reportToFleet".startsWith(p) || "ideal.notifications.screenCapture.reportToFleet".startsWith(p))
     );
 
-    // These six Pro monitors are not represented in appSettings. Poll their
-    // status endpoints so the top strip includes their collector state.
-    const [extraMonitorsRunning, setExtraMonitorsRunning] = useState(0);
-    const refreshExtraMonitors = useCallback(async () => {
-        const checks: Promise<boolean>[] = [
-            argus.appUsageStatus().then((s) => s?.running === true).catch(() => false),
-            argus.dlpStatus().then((s) => s?.running === true).catch(() => false),
-            argus.tamperStatus().then((s) => s?.running === true).catch(() => false),
-            argus.printUsbStatus().then((s) => s?.running === true).catch(() => false),
-            authAnomalyStatus().then((s) => !!s?.running).catch(() => false),
-            sessionMonitorStatus().then((s) => !!s?.running).catch(() => false),
-        ];
-        const results = await Promise.all(checks);
-        setExtraMonitorsRunning(results.filter(Boolean).length);
-    }, []);
-
-    useEffect(() => {
-        // These commands are Pro-gated on the backend and the cards
-        // themselves are only mounted while the monitoring section is
-        // visible, so skip polling entirely otherwise.
-        if (!showMonitoring || !canUse("paid")) {
-            setExtraMonitorsRunning(0);
-            return;
-        }
-        void refreshExtraMonitors();
-        const id = setInterval(() => void refreshExtraMonitors(), 15_000);
-        return () => clearInterval(id);
-    }, [showMonitoring, canUse, refreshExtraMonitors]);
+    // One bounded snapshot feeds both the operations center and the compact
+    // count above it. This avoids waking six separate Pro status calls on
+    // every panel refresh.
+    const monitoringSnapshot = useMonitoringOverview(showMonitoring);
+    const { overview: monitoringOverview } = monitoringSnapshot;
 
     // Stats strip — counts active privacy controls and armed monitors
     const activePrivacyCount = useMemo(() => {
@@ -205,16 +180,19 @@ export default function PrivacyPanel() {
         [privacyToggles],
     );
 
-    const monitorCount = useMemo(() => {
+    const configuredMonitorCount = useMemo(() => {
         let c = 0;
         if (pasteMonitorEnabled) c++;
         if (decoyEnabled) c++;
         if (ransomwareEnabled) c++;
         if (screenCaptureDetectionEnabled) c++;
         if (remoteAccessEnabled) c++;
-        c += extraMonitorsRunning;
         return c;
-    }, [pasteMonitorEnabled, decoyEnabled, ransomwareEnabled, screenCaptureDetectionEnabled, remoteAccessEnabled, extraMonitorsRunning]);
+    }, [pasteMonitorEnabled, decoyEnabled, ransomwareEnabled, screenCaptureDetectionEnabled, remoteAccessEnabled]);
+
+    const monitorCount = monitoringOverview
+        ? monitoringOverview.summary.running
+        : configuredMonitorCount;
 
     const warningCount = useMemo(() => {
         if (!settingsData) return 0;
@@ -357,6 +335,8 @@ export default function PrivacyPanel() {
                                     searchQuery={searchQuery}
                                 />
                             )}
+
+                            {monitoringMatchesSearch && <MonitoringOperationsSection {...monitoringSnapshot} />}
 
                             {monitoringMatchesSearch && (
                                 <SectionCard title="Alerts & Monitoring">

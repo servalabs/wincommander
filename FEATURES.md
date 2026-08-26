@@ -34,6 +34,9 @@ the backend and private component before execution.
 - Local ransomware-style mass-change alerting.
 - Basic USB attach/detach timeline and device visibility.
 - Local clipboard-risk warnings and user-controlled clear/snooze behavior.
+- Monitor Operations Center: one content-free view of Free and Pro monitor
+  coverage, armed state, recent-event counts, cadence, stale/degraded health,
+  unavailable services, and entitlement-locked capabilities.
 - Local security and application status surfaces.
 - Local productivity view backed by the user's local ActivityWatch instance
   when installed and enabled.

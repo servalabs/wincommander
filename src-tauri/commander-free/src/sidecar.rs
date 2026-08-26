@@ -1237,13 +1237,12 @@ async fn dispatch_request(
 /// next dispatch transparently spawns a fresh one.
 /// Feature ids that MUST run in the dedicated fleet-agent process — everything
 /// touching that process's in-memory state: the enroll/heartbeat/posture/
-/// unenroll channel (`fleet_agent_*`) and every Argus collector (whose pending
-/// sample/signal queues live in that process's statics and are drained by the
-/// heartbeat loop THERE). Routing these to the one agent session co-locates
-/// collection with transmission (Option G). Fail-safe by construction: an
-/// agent-affine id that slips to the pool only reproduces the pre-fix stranding
-/// (no regression), and a non-agent id sent to the agent just serialises one
-/// extra light command — neither breaks anything.
+/// unenroll channel (`fleet_agent_*`), every Argus collector, and every
+/// stateful monitor lifecycle/history/config surface. Routing these to the one
+/// agent session co-locates collection, status, and transmission. Fail-safe by
+/// construction: an agent-affine id that slips to the pool only reproduces the
+/// pre-fix stranding (no regression), and a non-agent id sent to the agent just
+/// serialises one extra light command — neither breaks anything.
 fn is_agent_affine(feature_id: &str) -> bool {
     feature_id.starts_with("fleet_agent_")
         || feature_id.contains("argus")
@@ -1278,6 +1277,120 @@ fn is_agent_affine(feature_id: &str) -> bool {
         // drains them — the exact multi-process gap the dedicated agent session
         // was created to close (it just wasn't listed here).
         || feature_id.contains("auth_anomaly")
+        // All other stateful monitor surfaces use the same durable Pro
+        // process as their start/stop/status/history/config calls. Without
+        // this closed list, a status request can land on a different pooled
+        // worker and look as if a running monitor is off (or lose its
+        // in-memory alert ring). Read-only scans that do not own monitor
+        // state remain on the normal pool.
+        || matches!(feature_id,
+            "monitoring_overview"
+                | "start_network_honeypot"
+                | "stop_network_honeypot"
+                | "network_honeypot_status"
+                | "get_network_honeypot_recent"
+                | "clear_network_honeypot_recent"
+                | "get_network_honeypot_bind_all_interfaces"
+                | "set_network_honeypot_bind_all_interfaces"
+                | "get_network_honeypot_ports"
+                | "set_network_honeypot_port_enabled"
+                | "add_network_honeypot_custom_port"
+                | "remove_network_honeypot_custom_port"
+                | "start_wifi_guard"
+                | "stop_wifi_guard"
+                | "wifi_guard_status"
+                | "get_wifi_guard_recent"
+                | "clear_wifi_guard_recent"
+                | "get_wifi_guard_known"
+                | "get_wifi_guard_baseline"
+                | "configure_wifi_guard"
+                | "clear_wifi_guard_known"
+                | "add_wifi_guard_ssid"
+                | "start_usb_monitor"
+                | "reconcile_usb_guard"
+                | "stop_usb_monitor"
+                | "usb_monitor_status"
+                | "get_usb_timeline"
+                | "clear_usb_timeline"
+                | "set_usb_monitor_notify"
+                | "start_usb_metering"
+                | "stop_usb_metering"
+                | "usb_metering_status"
+                | "get_usb_transfer_stats"
+                | "clear_usb_transfer_stats"
+                | "set_usb_metering_config"
+                | "start_usb_hid_guard"
+                | "stop_usb_hid_guard"
+                | "usb_hid_guard_status"
+                | "set_usb_hid_guard_sensitivity"
+                | "get_usb_hid_alerts"
+                | "clear_usb_hid_alerts"
+                | "usb_hid_guard_allow_device"
+                | "usb_hid_guard_disallow_device"
+                | "usb_hid_guard_allow_list"
+                | "start_usb_hid_approval_gate"
+                | "stop_usb_hid_approval_gate"
+                | "usb_hid_approval_gate_status"
+                | "get_usb_hid_pending_approvals"
+                | "begin_usb_hid_visual_challenge"
+                | "submit_usb_hid_visual_challenge_digit"
+                | "approve_usb_hid_once"
+                | "trust_usb_hid_always"
+                | "block_usb_hid_pending"
+                | "usb_device_trust_score"
+                | "start_usb_autosandbox"
+                | "stop_usb_autosandbox"
+                | "usb_autosandbox_status"
+                | "set_usb_autosandbox_config"
+                | "get_usb_autosandbox_recent"
+                | "clear_usb_autosandbox_recent"
+                | "Set-UsbDeviceBlock"
+                | "Set-UsbDeviceAllow"
+                | "Set-UsbVolumeReadOnly"
+                | "Invoke-UsbQuarantine"
+                | "start_ransomware_etw"
+                | "stop_ransomware_etw"
+                | "ransomware_etw_status"
+                | "attribute_ransomware"
+                | "set_ransomware_etw_config"
+                | "start_remote_access_monitor"
+                | "stop_remote_access_monitor"
+                | "remote_access_monitor_status"
+                | "get_remote_access_recent"
+                | "clear_remote_access_recent"
+                | "get_remote_access_tools"
+                | "set_remote_access_tool_enabled"
+                | "start_screen_capture_watch"
+                | "stop_screen_capture_watch"
+                | "screen_capture_watch_status"
+                | "get_recent_screen_capture"
+                | "clear_recent_screen_capture"
+                | "Get-DriverHealth"
+                | "start_driver_watch"
+                | "stop_driver_watch"
+                | "driver_watch_status"
+                | "Get-VulnerableDrivers"
+                | "generate_canary"
+                | "list_canaries"
+                | "delete_canary"
+                | "start_canary_listener"
+                | "stop_canary_listener"
+                | "canary_listener_status"
+                | "get_canary_recent"
+                | "clear_canary_recent"
+                | "get_print_audit_status"
+                | "set_print_audit_enabled"
+                | "get_print_audit_log"
+                | "start_ink_receipt"
+                | "stop_ink_receipt"
+                | "ink_receipt_status"
+                | "get_ink_receipt_recent"
+                | "start_clipboard_guard"
+                | "stop_clipboard_guard"
+                | "clipboard_guard_status"
+                | "get_clipboard_guard_recent"
+                | "report_clipboard_event"
+        )
 }
 
 /// The single, long-lived fleet-agent Pro session, held OUT of the general pool
@@ -1291,9 +1404,10 @@ fn agent_session_slot() -> &'static tokio::sync::Mutex<Option<ProSession>> {
 
 /// Run an agent-affine command on the dedicated fleet-agent session. Returns
 /// `Some(result)` when it ran there; `None` when the agent session couldn't be
-/// established, so the caller falls back to the normal pool path (worst case:
-/// pre-fix stranding, never a hard break). Does NOT take a pool-semaphore permit
-/// — the agent session is outside the pool, so this never steals cascade width.
+/// established. The caller must surface that failure rather than query a pool
+/// worker, because pool state is not authoritative for an agent-affine monitor.
+/// Does NOT take a pool-semaphore permit — the agent session is outside the pool,
+/// so this never steals cascade width.
 async fn try_dispatch_via_agent(
     feature_id: &str,
     args: &serde_json::Value,
@@ -1440,19 +1554,18 @@ pub async fn dispatch_paid_command(
         ),
     );
 
-    // Agent-affine commands (fleet_agent_*, Argus collectors, session monitor)
-    // run on the dedicated fleet-agent session so their in-process state stays
+    // Agent-affine commands (fleet, collectors, and stateful monitors) run on
+    // the dedicated fleet-agent session so their in-process state stays
     // co-located with the heartbeat loop that drains it. This path is outside
-    // the pool (no semaphore permit → doesn't shrink cascade width) and falls
-    // back to the pool if the agent session can't be established.
+    // the pool (no semaphore permit -> does not shrink cascade width) and
+    // returns an explicit error if the agent session cannot be established.
     if is_agent_affine(feature_id) {
         if let Some(result) = try_dispatch_via_agent(feature_id, &args).await {
             return result;
         }
-        crate::log_message(
-            "warn",
-            &format!("[Sidecar] '{feature_id}' agent-affine but agent session down; using pool"),
-        );
+        return Err(format!(
+            "agent session unavailable for authoritative '{feature_id}' state"
+        ));
     }
 
     // Cap concurrent dispatches at POOL_CAPACITY. The permit lives
@@ -1668,9 +1781,9 @@ mod tests {
     }
 
     #[test]
-    fn agent_affine_covers_fleet_and_collectors_only() {
-        // Fleet channel + every Argus collector + the session monitor must pin
-        // to the agent process.
+    fn agent_affine_covers_fleet_collectors_and_monitors() {
+        // Fleet channel + every stateful collector/monitor must pin to the
+        // agent process so a later status call sees the same in-memory state.
         for id in [
             "fleet_agent_configure",
             "fleet_agent_set_posture",
@@ -1706,12 +1819,28 @@ mod tests {
         for id in [
             "Clear-DnsCache",
             "run_destruct_step",
-            "start_network_honeypot",
             "vm_launch",
             "Set-AppCapabilityAccess",
-            "start_screen_capture_watch",
         ] {
             assert!(!is_agent_affine(id), "{id} should NOT be agent-affine");
+        }
+        for id in [
+            "monitoring_overview",
+            "start_network_honeypot",
+            "network_honeypot_status",
+            "start_wifi_guard",
+            "wifi_guard_status",
+            "start_usb_metering",
+            "usb_hid_approval_gate_status",
+            "start_ransomware_etw",
+            "start_remote_access_monitor",
+            "start_screen_capture_watch",
+            "driver_watch_status",
+            "start_canary_listener",
+            "get_print_audit_status",
+            "ink_receipt_status",
+        ] {
+            assert!(is_agent_affine(id), "{id} should be agent-affine");
         }
     }
 
