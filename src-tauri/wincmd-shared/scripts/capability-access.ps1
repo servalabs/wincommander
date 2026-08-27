@@ -157,13 +157,26 @@ function Get-AppCapabilityAccessStatus {
     )
 
     try {
-        $path = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$Capability"
-        $value = (Get-ItemProperty -Path $path -Name "Value" -ErrorAction SilentlyContinue).Value
-        if ([string]::IsNullOrWhiteSpace($value)) { $value = "Allow" }
+        # Return the effective Windows decision. Set-AppCapabilityAccess writes
+        # more than the current user's ConsentStore, so reading only that one
+        # value can wrongly claim a camera is allowed/blocked after policy or
+        # Settings changes.
+        $denied = $false
+        foreach ($root in @(
+            "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore",
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore"
+        )) {
+            $value = (Get-ItemProperty -Path (Join-Path $root $Capability) -Name "Value" -ErrorAction SilentlyContinue).Value
+            if ($value -eq "Deny") { $denied = $true }
+        }
+        if ($Capability -eq 'webcam') {
+            $denied = $denied -or ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}' -Name 'Value' -ErrorAction SilentlyContinue).Value -eq 'Deny')
+        }
+        $value = if ($denied) { "Deny" } else { "Allow" }
         @{
             capability = $Capability
             value      = $value
-            disabled   = ($value -eq "Deny")
+            disabled   = $denied
         }
     }
     catch {
