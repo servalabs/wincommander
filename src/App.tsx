@@ -669,6 +669,7 @@ function AppContent() {
   // Filesystem decoys are an organisation-facing tripwire. Do not leave a
   // persisted trial setting armed after the licence expires.
   useDecoyMonitor(hasPaid && decoyEnabled,
+    !hasPaid && decoyEnabled,
     decoyEnrolledPaths,
     decoyReadAuditEnabled,
     decoyFleetAlertEnabled,

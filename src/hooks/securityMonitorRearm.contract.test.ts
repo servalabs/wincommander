@@ -54,6 +54,7 @@ describe("security monitor startup contracts", () => {
     expect(app).toContain("useDecoyMonitor(hasPaid && decoyEnabled");
     const hook = source("src/hooks/useDecoyMonitor.ts");
     expect(hook).toContain("if (entitlementLoading || mode === \"decoy\") return");
+    expect(hook).toContain('if (!shouldStopWhenDisabled)');
     expect(hook).toContain('await invoke("stop_decoy_monitor")');
   });
 

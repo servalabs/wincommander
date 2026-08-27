@@ -13,6 +13,7 @@ const MAX_REARM_ATTEMPTS = 3;
 
 export default function useDecoyMonitor(
   enabled: boolean,
+  shouldStopWhenDisabled: boolean,
   enrolledPaths: string[],
   readAuditEnabled: boolean,
   fleetAlertEnabled: boolean,
@@ -43,6 +44,15 @@ export default function useDecoyMonitor(
     const reconcile = async () => {
       try {
         if (!enabled) {
+          // A normally disabled setting has no running monitor to reconcile.
+          // Starting Pro merely to send an "off" command made every ordinary
+          // app launch depend on an unrelated monitor teardown. Only contact
+          // Pro when an enabled monitor must be shut down because entitlement
+          // was lost; the persisted Pro state remains the shutdown authority.
+          if (!shouldStopWhenDisabled) {
+            lastReconciled.current = fingerprint;
+            return;
+          }
           // This cleanup command remains available after entitlement expiry.
           // Do not manufacture a Pro-missing retry/toast for ordinary Free
           // startup; only an installed sidecar could possibly need cleanup.
@@ -86,5 +96,5 @@ export default function useDecoyMonitor(
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [enabled, enrolledPaths, readAuditEnabled, fleetAlertEnabled, entitlementLoading, mode, warnOnce, onStartupRearm]);
+  }, [enabled, shouldStopWhenDisabled, enrolledPaths, readAuditEnabled, fleetAlertEnabled, entitlementLoading, mode, warnOnce, onStartupRearm]);
 }

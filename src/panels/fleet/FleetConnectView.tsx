@@ -155,7 +155,14 @@ export default function FleetConnectView() {
           pollRef.current = setInterval(doPollStatus, STEADY_POLL_MS);
         }
       })
-      .catch(() => { /* Pro not running / not enrolled — leave state unchanged */ })
+      .catch((reason) => {
+        // A local Pro failure is distinct from an offline Fleet server. Do not
+        // leave the enrollment view indefinitely on "Connecting" when no
+        // local helper is alive to complete the request.
+        const message = typeof reason === "string" ? reason : "Local Pro service did not respond.";
+        setError(`Local WinCommander service problem: ${message}`);
+        setEnrolling(false);
+      })
       .finally(() => setStatusChecked(true));
   }
 
