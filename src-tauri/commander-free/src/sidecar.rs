@@ -1224,7 +1224,16 @@ async fn dispatch_request(
             // protocol break) or someone else cleared the map. Either
             // way the session is no longer healthy and the caller's
             // transport-error retry path will spawn a fresh one.
-            Err("Pro reader exited before responding".to_string())
+            // Check the child before returning the transport error. This turns
+            // an otherwise opaque "reader exited" report into a useful
+            // diagnosis when Pro really did terminate, while still accurately
+            // reporting a pipe-only failure when the child remains alive.
+            let child_state = match session.child.try_wait() {
+                Ok(Some(status)) => format!("Pro exited with status {status}"),
+                Ok(None) => "Pro is still running but its IPC pipe closed".to_string(),
+                Err(error) => format!("could not inspect Pro exit status: {error}"),
+            };
+            Err(format!("Pro reader exited before responding ({child_state})"))
         }
     }
 }

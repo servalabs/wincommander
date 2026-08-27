@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Next SemVer version, for example 3.2.16 or 3.2.16-rc.1. Merging its PR starts the release."
+        description: "Next version, for example 3.2.9 then 3.3.0 (patches stop at .9). Merging its PR starts the release."
         required: true
         type: string
 
@@ -54,10 +54,18 @@ jobs:
         run: |
           node <<'NODE'
           const fs = require('fs');
-          const version = process.env.RELEASE_VERSION;
+          let version = process.env.RELEASE_VERSION;
           if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
             throw new Error(`Invalid release version: ${version}`);
           }
+          const [, major, minor, patch, suffix = ''] = /^(\d+)\.(\d+)\.(\d+)(.*)$/.exec(version);
+          if (Number(patch) > 9) {
+            const carriedMinor = Number(minor) + Math.floor(Number(patch) / 10);
+            const carriedPatch = Number(patch) % 10;
+            version = `${major}.${carriedMinor}.${carriedPatch}${suffix}`;
+            console.log(`Release version auto-corrected to ${version}; patch numbers are single-digit.`);
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `release_version=${version}\n`);
 
           const packagePath = 'package.json';
           const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
@@ -98,7 +106,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
           RELEASE_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ steps.version.outputs.release_version }}
         run: |
           set -euo pipefail
           branch="release/v${RELEASE_VERSION}"
