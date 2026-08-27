@@ -19,8 +19,9 @@ describe("manual Free release publisher", () => {
     expect(publisher).toContain("'Free Cargo lock record'");
     expect(publisher).not.toContain("Set-CargoVersion");
     expect(publisher).toContain("Assert-ReleaseSource -AllowUntaggedStage:$StageOnly");
-    expect(publisher).toContain("patch versions stop at .9");
+    expect(publisher).toContain("Release version auto-corrected");
     expect(publisher).toContain("[int]$versionMatch.Groups['patch'].Value -gt 9");
+    expect(publisher).toContain("$carriedPatch = [int]$versionMatch.Groups['patch'].Value % 10");
   });
 
   test("builds the signed NSIS artifact and validates its updater sidecar", () => {

@@ -27,9 +27,12 @@ param(
 
 # Release-number policy: after X.Y.9, advance to X.(Y+1).0. This keeps
 # patch numbers single-digit and makes the next release obvious at a glance.
-$versionMatch = [regex]::Match($Version, '^\d+\.\d+\.(?<patch>\d+)')
+$versionMatch = [regex]::Match($Version, '^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)(?<suffix>-.*)?$')
 if ([int]$versionMatch.Groups['patch'].Value -gt 9) {
-    throw "Release policy: patch versions stop at .9. Use the next MINOR.0 version instead."
+    $carriedMinor = [int]$versionMatch.Groups['minor'].Value + [math]::Floor([int]$versionMatch.Groups['patch'].Value / 10)
+    $carriedPatch = [int]$versionMatch.Groups['patch'].Value % 10
+    $Version = "$($versionMatch.Groups['major'].Value).$carriedMinor.$carriedPatch$($versionMatch.Groups['suffix'].Value)"
+    Write-Warning "Release version auto-corrected to $Version; patch numbers are single-digit."
 }
 
 Set-StrictMode -Version Latest
