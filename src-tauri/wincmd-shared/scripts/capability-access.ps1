@@ -162,6 +162,7 @@ function Get-AppCapabilityAccessStatus {
         # value can wrongly claim a camera is allowed/blocked after policy or
         # Settings changes.
         $denied = $false
+        $desktopAppsValue = $null
         foreach ($root in @(
             "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore",
             "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore"
@@ -170,6 +171,11 @@ function Get-AppCapabilityAccessStatus {
             if ($value -eq "Deny") { $denied = $true }
         }
         if ($Capability -eq 'webcam') {
+            # Windows stores the desktop-app setting below NonPackaged.  Keep
+            # it as diagnostic context: it cannot override a global Deny, but
+            # it explains why Settings can show a desktop app as allowed while
+            # Fleet correctly reports the global camera gate as blocked.
+            $desktopAppsValue = (Get-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam\NonPackaged' -Name 'Value' -ErrorAction SilentlyContinue).Value
             $denied = $denied -or ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}' -Name 'Value' -ErrorAction SilentlyContinue).Value -eq 'Deny')
         }
         $value = if ($denied) { "Deny" } else { "Allow" }
@@ -177,6 +183,7 @@ function Get-AppCapabilityAccessStatus {
             capability = $Capability
             value      = $value
             disabled   = $denied
+            desktop_apps_allowed = if ($Capability -eq 'webcam' -and $desktopAppsValue -eq 'Allow') { $true } elseif ($Capability -eq 'webcam' -and $desktopAppsValue -eq 'Deny') { $false } else { $null }
         }
     }
     catch {
