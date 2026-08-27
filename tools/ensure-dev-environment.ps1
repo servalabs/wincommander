@@ -70,19 +70,27 @@ function Ensure-Bun {
     Add-ProcessPathEntry $bunBin
 
     $bun = Find-Application "bun"
-    if (-not $bun) {
-        Write-Host "Bun is not installed. Installing Bun $bunVersion..."
+    $installedVersion = if ($bun) { (& $bun --version).Trim() } else { $null }
+    if ($installedVersion -ne $bunVersion) {
+        $state = if ($installedVersion) { "Bun $installedVersion is installed" } else { "Bun is not installed" }
+        Write-Host "$state. Installing Bun $bunVersion..."
         $installer = Invoke-RestMethod -Uri "https://bun.com/install.ps1"
         & ([scriptblock]::Create($installer)) -Version $bunVersion
         Add-ProcessPathEntry $bunBin
-        $bun = Find-Application "bun"
+        # Get-Command can retain an earlier WinGet shim after PATH changes.
+        $bun = Join-Path $bunBin "bun.exe"
     }
 
     if (-not $bun) {
         throw "Bun installation completed but bun.exe was not found. Restart PowerShell and run tools/dev.ps1 again."
     }
 
-    Write-Host "Using Bun: $(& $bun --version)"
+    $installedVersion = (& $bun --version).Trim()
+    if ($installedVersion -ne $bunVersion) {
+        throw "Bun $bunVersion is required, but '$installedVersion' was found at $bun. Restart PowerShell and run tools/dev.ps1 again."
+    }
+
+    Write-Host "Using Bun: $installedVersion"
     return $bun
 }
 
@@ -161,3 +169,25 @@ if ($needsInstall) {
 }
 
 Write-Host "Using Rust: $(& $rustup run $channel rustc --version)"
+
+$assetsDir = Join-Path $repoRoot "assets"
+$assetsGitDir = Join-Path $assetsDir ".git"
+if ((Test-Path -LiteralPath $assetsDir) -and -not (Test-Path -LiteralPath $assetsGitDir)) {
+    throw "The assets directory exists but is not the repository submodule. Move it aside, then run tools/dev.ps1 again."
+}
+
+Write-Host "Checking out the pinned assets submodule..."
+& git -C $repoRoot submodule update --init --recursive -- assets
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to initialize the pinned assets submodule."
+}
+
+$requiredAssets = @(
+    (Join-Path $assetsDir "softwares\calc.png"),
+    (Join-Path $assetsDir "products\wincommander\logo.png")
+)
+foreach ($requiredAsset in $requiredAssets) {
+    if (-not (Test-Path -LiteralPath $requiredAsset)) {
+        throw "The assets submodule is missing required file: $requiredAsset"
+    }
+}
