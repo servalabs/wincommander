@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Next SemVer version, for example 3.2.16 or 3.2.16-rc.1. Merging its PR starts the release."
+        description: "Next version, for example 3.2.9 then 3.3.0 (patches stop at .9). Merging its PR starts the release."
         required: true
         type: string
 
@@ -57,6 +57,12 @@ jobs:
           const version = process.env.RELEASE_VERSION;
           if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
             throw new Error(`Invalid release version: ${version}`);
+          }
+          const [, major, minor, patch] = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+          if (Number(patch) > 9) {
+            throw new Error(
+              `Release policy: patch versions stop at .9. Use ${major}.${Number(minor) + 1}.0 after ${major}.${minor}.9.`,
+            );
           }
 
           const packagePath = 'package.json';

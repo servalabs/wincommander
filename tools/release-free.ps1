@@ -25,6 +25,13 @@ param(
     [switch]$SkipBuild
 )
 
+# Release-number policy: after X.Y.9, advance to X.(Y+1).0. This keeps
+# patch numbers single-digit and makes the next release obvious at a glance.
+$versionMatch = [regex]::Match($Version, '^\d+\.\d+\.(?<patch>\d+)')
+if ([int]$versionMatch.Groups['patch'].Value -gt 9) {
+    throw "Release policy: patch versions stop at .9. Use the next MINOR.0 version instead."
+}
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 

@@ -44,6 +44,20 @@ static IS_PORTABLE: OnceLock<bool> = OnceLock::new();
 // checks don't re-spawn the WMI/CIM probes.
 static DEVICE_HASH: OnceLock<String> = OnceLock::new();
 
+#[derive(Debug)]
+struct DeviceIdentity {
+    portable: bool,
+    motherboard_uuid: String,
+    primary_disk_serial: String,
+    system_drive_serial: Option<String>,
+}
+
+// Keep the probed identity together with the hash. A hardware probe can be
+// temporarily unavailable during activation; keeping both values lets the
+// verifier recognise the signed token made during that short-lived failure
+// without trusting a caller-supplied identity.
+static DEVICE_IDENTITY: OnceLock<DeviceIdentity> = OnceLock::new();
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignedTokenEnvelope {
     payload: String,
@@ -368,7 +382,7 @@ fn current_features_raw() -> Vec<String> {
         return Vec::new();
     };
 
-    if claims.device_hash != current_device_hash() {
+    if !device_hash_matches(&claims.device_hash) {
         return Vec::new();
     }
 
@@ -779,46 +793,150 @@ fn get_primary_disk_serial() -> String {
     String::new()
 }
 
+fn read_device_identity() -> DeviceIdentity {
+    let portable = is_portable_os();
+    #[cfg(windows)]
+    if portable {
+        return DeviceIdentity {
+            portable,
+            motherboard_uuid: String::new(),
+            primary_disk_serial: String::new(),
+            system_drive_serial: get_system_drive_serial(),
+        };
+    }
+
+    #[cfg(windows)]
+    {
+        return DeviceIdentity {
+            portable,
+            motherboard_uuid: get_motherboard_uuid(),
+            primary_disk_serial: get_primary_disk_serial(),
+            system_drive_serial: None,
+        };
+    }
+
+    #[cfg(not(windows))]
+    {
+        DeviceIdentity {
+            portable,
+            motherboard_uuid: String::new(),
+            primary_disk_serial: String::new(),
+            system_drive_serial: None,
+        }
+    }
+}
+
+fn device_identity() -> &'static DeviceIdentity {
+    DEVICE_IDENTITY.get_or_init(read_device_identity)
+}
+
+fn hash_hardware_identity(motherboard_uuid: &str, primary_disk_serial: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update("wincommander-license-v1");
+    hasher.update("|MB|");
+    hasher.update(motherboard_uuid);
+    hasher.update("|DS|");
+    hasher.update(primary_disk_serial);
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn hash_portable_identity(system_drive_serial: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update("wincommander-license-v1");
+    hasher.update("|WTG|");
+    hasher.update(system_drive_serial);
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn hash_device_identity(identity: &DeviceIdentity) -> String {
+    if identity.portable {
+        let mut hasher = Sha256::new();
+        hasher.update("wincommander-license-v1");
+        hasher.update("|WTG|");
+        if let Some(serial) = identity.system_drive_serial.as_deref() {
+            hasher.update(serial);
+        }
+        let digest = hasher.finalize();
+        digest.iter().map(|b| format!("{:02x}", b)).collect()
+    } else {
+        #[cfg(windows)]
+        {
+            hash_hardware_identity(&identity.motherboard_uuid, &identity.primary_disk_serial)
+        }
+        #[cfg(not(windows))]
+        {
+            let mut hasher = Sha256::new();
+            hasher.update("wincommander-license-v1");
+            for key in [
+                "COMPUTERNAME",
+                "USERDOMAIN",
+                "PROCESSOR_IDENTIFIER",
+                "NUMBER_OF_PROCESSORS",
+                "OS",
+            ] {
+                hasher.update("|");
+                hasher.update(std::env::var(key).unwrap_or_default());
+            }
+            let digest = hasher.finalize();
+            digest.iter().map(|b| format!("{:02x}", b)).collect()
+        }
+    }
+}
+
+fn device_hash_matches_parts(
+    claimed_hash: &str,
+    portable: bool,
+    motherboard_uuid: &str,
+    primary_disk_serial: &str,
+    system_drive_serial: Option<&str>,
+) -> bool {
+    if portable {
+        return system_drive_serial
+            .filter(|serial| !serial.trim().is_empty())
+            .is_some_and(|serial| hash_portable_identity(serial) == claimed_hash);
+    }
+
+    let motherboard_uuid = motherboard_uuid.trim();
+    let primary_disk_serial = primary_disk_serial.trim();
+    if motherboard_uuid.is_empty() && primary_disk_serial.is_empty() {
+        return false;
+    }
+
+    // The exact current identity is preferred. The two additional candidates
+    // are compatibility for tokens signed while one CIM probe was unavailable;
+    // at least one live machine identifier must still match.
+    hash_hardware_identity(motherboard_uuid, primary_disk_serial) == claimed_hash
+        || (!motherboard_uuid.is_empty()
+            && !primary_disk_serial.is_empty()
+            && (hash_hardware_identity(motherboard_uuid, "") == claimed_hash
+                || hash_hardware_identity("", primary_disk_serial) == claimed_hash))
+}
+
+/// Verify the token's device binding against the live machine identity.
+///
+/// A token is signed by the licence worker before this function is reached.
+/// If one CIM probe briefly returned no value during activation, accept the
+/// corresponding signed degraded hash once the other identifier is confirmed;
+/// never accept a hash when both live identifiers are unavailable.
+fn device_hash_matches(claimed_hash: &str) -> bool {
+    let identity = device_identity();
+    device_hash_matches_parts(
+        claimed_hash,
+        identity.portable,
+        &identity.motherboard_uuid,
+        &identity.primary_disk_serial,
+        identity.system_drive_serial.as_deref(),
+    )
+}
+
 pub fn current_device_hash() -> String {
     // Memoized — identity is stable for the process lifetime and the Windows
     // probes spawn powershell, too costly to repeat on every license check.
     // Exposed crate-wide so startup_auth can salt the PIN KDF with it.
     DEVICE_HASH
-        .get_or_init(|| {
-            let mut hasher = Sha256::new();
-            hasher.update("wincommander-license-v1");
-            if is_portable_os() {
-                // Windows To Go: bind the license to the USB drive's volume serial instead
-                // of host-machine identifiers so the key roams with the drive.
-                hasher.update("|WTG|");
-                if let Some(serial) = get_system_drive_serial() {
-                    hasher.update(&serial);
-                }
-            } else {
-                #[cfg(windows)]
-                {
-                    hasher.update("|MB|");
-                    hasher.update(get_motherboard_uuid());
-                    hasher.update("|DS|");
-                    hasher.update(get_primary_disk_serial());
-                }
-                #[cfg(not(windows))]
-                {
-                    for key in [
-                        "COMPUTERNAME",
-                        "USERDOMAIN",
-                        "PROCESSOR_IDENTIFIER",
-                        "NUMBER_OF_PROCESSORS",
-                        "OS",
-                    ] {
-                        hasher.update("|");
-                        hasher.update(std::env::var(key).unwrap_or_default());
-                    }
-                }
-            }
-            let digest = hasher.finalize();
-            digest.iter().map(|b| format!("{:02x}", b)).collect()
-        })
+        .get_or_init(|| hash_device_identity(device_identity()))
         .clone()
 }
 
@@ -859,8 +977,21 @@ fn status_from_cached(
     reason: Option<String>,
 ) -> LicenseStatus {
     let now = now_unix();
-    let features = features_from_verified_claims(claims, cached.last_verified_at, now);
+    let device_bound = device_hash_matches(&claims.device_hash);
+    let features = if device_bound {
+        features_from_verified_claims(claims, cached.last_verified_at, now)
+    } else {
+        Vec::new()
+    };
     let valid = !features.is_empty();
+    let reason = if device_bound {
+        reason
+    } else {
+        Some(
+            "License token is bound to a different device identity. Reactivate this device."
+                .to_string(),
+        )
+    };
     let grace_until = cached
         .last_verified_at
         .saturating_add(OFFLINE_GRACE_SECONDS);
@@ -896,7 +1027,7 @@ fn status_from_cached(
     LicenseStatus {
         configured: true,
         licensed: true,
-        valid,
+        valid: device_bound && valid,
         reason,
         plan: Some(claims.plan.clone()),
         features,
@@ -1134,7 +1265,20 @@ pub async fn refresh_license() -> Result<serde_json::Value, String> {
     let (api_base, public_key_b64) = get_config()?;
     let cached =
         load_cached_license()?.ok_or_else(|| "No license token to refresh.".to_string())?;
-    let device_hash = current_device_hash();
+    let cached_claims = parse_and_verify_claims(
+        &cached.token.payload,
+        &cached.token.signature,
+        &public_key_b64,
+    )?;
+    if !device_hash_matches(&cached_claims.device_hash) {
+        return Err(
+            "License token does not match this device. Reactivate this device.".to_string(),
+        );
+    }
+    // Reuse the signed claim's hash for refresh. This preserves a token
+    // created during a transient probe failure; the server requires the
+    // refresh request to carry the exact hash it originally issued.
+    let device_hash = cached_claims.device_hash.clone();
 
     let client = crate::net::doh_http_client()?;
 
@@ -1316,10 +1460,18 @@ pub async fn start_trial() -> Result<serde_json::Value, String> {
 /// deactivation always succeeds locally; the stale seat on the server will be
 /// reclaimed automatically by the idle-seat cleanup job.
 pub async fn deactivate_license_internal() -> Result<(), String> {
-    let (api_base, _public_key_b64) = get_config()?;
+    let (api_base, public_key_b64) = get_config()?;
     let cached =
         load_cached_license()?.ok_or_else(|| "No license token to deactivate.".to_string())?;
-    let device_hash = current_device_hash();
+    let device_hash = parse_and_verify_claims(
+        &cached.token.payload,
+        &cached.token.signature,
+        &public_key_b64,
+    )
+    .ok()
+    .filter(|claims| device_hash_matches(&claims.device_hash))
+    .map(|claims| claims.device_hash.clone())
+    .unwrap_or_else(current_device_hash);
 
     let client = crate::net::doh_http_client()?;
 
@@ -1594,6 +1746,66 @@ mod tests {
             !accepted_on_this_machine,
             "a signature-valid license minted for machine A must not be accepted as valid on machine B"
         );
+    }
+
+    #[test]
+    fn recovered_disk_probe_keeps_degraded_token_bound_to_same_motherboard() {
+        let degraded_hash = hash_hardware_identity("board-a", "");
+
+        assert!(device_hash_matches_parts(
+            &degraded_hash,
+            false,
+            "board-a",
+            "disk-a",
+            None,
+        ));
+        assert!(!device_hash_matches_parts(
+            &degraded_hash,
+            false,
+            "board-b",
+            "disk-a",
+            None,
+        ));
+    }
+
+    #[test]
+    fn recovered_motherboard_probe_keeps_degraded_token_bound_to_same_disk() {
+        let degraded_hash = hash_hardware_identity("", "disk-a");
+
+        assert!(device_hash_matches_parts(
+            &degraded_hash,
+            false,
+            "board-a",
+            "disk-a",
+            None,
+        ));
+        assert!(!device_hash_matches_parts(
+            &degraded_hash,
+            false,
+            "board-a",
+            "disk-b",
+            None,
+        ));
+    }
+
+    #[test]
+    fn device_binding_rejects_when_all_machine_identifiers_are_missing() {
+        let degraded_hash = hash_hardware_identity("", "");
+
+        assert!(!device_hash_matches_parts(
+            &degraded_hash,
+            false,
+            "",
+            "",
+            None,
+        ));
+        assert!(!device_hash_matches_parts(
+            &degraded_hash,
+            true,
+            "",
+            "",
+            None,
+        ));
     }
 
     /// A public key that isn't exactly 32 bytes (e.g. corrupted build-time
