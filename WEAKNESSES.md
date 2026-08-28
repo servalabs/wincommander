@@ -26,6 +26,17 @@ changes belong in [CHANGELOG.md](CHANGELOG.md).
   local access does not prove every recovery copy is gone.
 - Fleet reachability is not an air gap. Offline devices cannot receive a new
   command until they reconnect.
+- Fleet enforcement is not continuous. The fleet agent runs inside the Pro
+  sidecar that the desktop app spawns, so check-ins, command delivery, and
+  policy reapplication stop when WinCommander is not running — including an
+  ordinary close, logoff, or user switch, with no adversarial action involved.
+  The LocalSystem service that is intended to own this is installed but its
+  control-plane loops are not yet implemented; see
+  [ARCHITECTURE.md](ARCHITECTURE.md).
+- Fleet reports a device's state from a local operating-system probe rather
+  than from state WinCommander confirms it applied, and no component reconciles
+  managed desired state back onto the machine. A console reading is evidence of
+  what a probe observed, not proof that a policy is being enforced.
 - Planned or source-tested functionality is not a shipped or independently
   certified guarantee.
 
