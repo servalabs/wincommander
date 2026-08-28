@@ -15,7 +15,6 @@ stricter rule when instructions conflict.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — public architecture and source map
 - [SECURITY.md](SECURITY.md) — disclosure policy, threat model, and public limits
 - [PERFORMANCE.md](PERFORMANCE.md) — responsiveness design and measurement status
-- [WEAKNESSES.md](WEAKNESSES.md) — current open limitations and validation gaps
 - [OPEN_CORE.md](OPEN_CORE.md) — licensing and public/private source boundary
 - [NON-GOALS.md](NON-GOALS.md) — deliberate product boundaries
 - [POSITIONING.md](POSITIONING.md) — intended audience and product stance
@@ -63,8 +62,14 @@ commercial work, and acceptance records are intentionally maintained only in
 - `ARCHITECTURE.md` owns components, control/data flow, interfaces, and trust
   boundaries. `SECURITY.md` owns the threat model and disclosure policy.
 - `PERFORMANCE.md` owns responsiveness design, budgets, baselines, and
-  measurement evidence. `WEAKNESSES.md` owns current open limitations and
-  validation gaps. `CHANGELOG.md` owns shipped historical changes.
+  measurement evidence. `CHANGELOG.md` owns shipped historical changes.
+- This repository carries **no weaknesses ledger and no roadmap**. The open
+  limitations and validation gaps for this client are tracked privately in
+  `wincommander-pro` (`docs/product/PUBLIC-FREE-WEAKNESSES-INTERNAL.md`), and
+  approved future work in that repository's `ROADMAP.md`. A limitation that must
+  reach users belongs here as a boundary in `NON-GOALS.md` or a threat-model
+  statement in `SECURITY.md`, written for that audience — never as a new
+  weaknesses or roadmap file.
 - Detailed command, settings, and automation references own their subject-area
   contracts. Other documents may keep only a short summary and link to the
   authoritative reference.

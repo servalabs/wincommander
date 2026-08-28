@@ -189,8 +189,8 @@ pub fn map_receipt(
 /// VeraCrypt header destroy. Matches the documented ~128 KiB primary+backup
 /// overwrite window the Pro handler issues. Only the PRIMARY header (start of
 /// file) is checked this way — a VeraCrypt backup header near the end of a
-/// larger volume is not independently re-read here (WEAKNESSES.md tracks that
-/// as a further, separate gap).
+/// larger volume is not independently re-read here — a further, separate gap
+/// tracked in the internal Free-client weaknesses ledger.
 const HEADER_VERIFY_BYTES: usize = 128 * 1024;
 
 /// Best-effort read of the container's header window. `None` on any I/O
@@ -208,8 +208,8 @@ fn read_header_prefix(path: &str) -> Option<Vec<u8>> {
     Some(buf)
 }
 
-/// Independent post-erase verification for VeraCrypt (WEAKNESSES.md: "no
-/// INDEPENDENT post-erase verification"). The Pro handler's "destroyed"
+/// Independent post-erase verification for VeraCrypt — this closes the "no
+/// INDEPENDENT post-erase verification" gap. The Pro handler's "destroyed"
 /// status is a self-report of the overwrite it issued; this compares the
 /// on-disk header bytes read before vs. after the call and downgrades the
 /// receipt when they are unchanged, rather than trusting the self-report
@@ -361,7 +361,7 @@ pub async fn erase_encrypted_container(target: EraseTargetInput) -> Result<Erase
             )
             .await?;
             // Evict the FVEK for a DATA volume; the running OS drive can't be locked.
-            // WEAKNESSES.md: "no key-eviction retry" — an open handle (e.g. an
+            // "No key-eviction retry": an open handle (e.g. an
             // Explorer window on the volume) commonly clears within a second,
             // so retry once after a brief delay before accepting the honest
             // `erased_with_caveat` receipt. Never more than 2 attempts total:

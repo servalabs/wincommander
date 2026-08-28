@@ -122,7 +122,7 @@ access control, and retention policy.
 
 ## Current limits and technical references
 
-Current capability limits and validation gaps are maintained in
-[WEAKNESSES.md](WEAKNESSES.md). Deliberate product exclusions are in
+Current operational limits that qualify these capabilities are in
+[SECURITY.md](SECURITY.md). Deliberate product exclusions are in
 [NON-GOALS.md](NON-GOALS.md); source ownership and technical interfaces are in
 [ARCHITECTURE.md](ARCHITECTURE.md) and the detailed [documentation map](docs/README.md).

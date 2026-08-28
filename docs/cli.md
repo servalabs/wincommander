@@ -96,9 +96,25 @@ The process exits after one response. A read-only wait timeout returns exit code
 
 ## Current limitations
 
-Current CLI limitations and validation gaps are maintained in
-[WEAKNESSES.md](../WEAKNESSES.md). The command behavior and safety contract in
-this document remain authoritative.
+This document owns the CLI's behavior and safety contract, including these
+limits.
+
+- Settings writes are last-writer-wins. The CLI serializes its own mutations,
+  but the desktop app does not take that lock, so a concurrent GUI settings
+  write can discard one side.
+- Search-index readers and reindex/replacement share a bounded session-local
+  lock and fail closed with `busy`. Signed-build GUI/CLI contention acceptance
+  is still pending.
+- Confirmation tokens prevent mistakes and mistargeting. They do not prevent
+  use by someone already able to run the executable.
+- A destructive command's exit code reports dispatch, not completion.
+  `lockdown` and `full_lockdown` acknowledge only that their worker launched.
+- Risk grading deliberately over-classifies some erase-scheduling commands
+  (`Set-AutoEraseSchedule`, `Set-MultiUserAutoEraseSchedule`, `Set-ShredPolicy`),
+  so they require `DESTROY:` confirmation.
+
+Limits that qualify the product's security claims are in
+[SECURITY.md](../SECURITY.md).
 
 ## Developer checks
 

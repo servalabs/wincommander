@@ -21,5 +21,5 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
 
 No reproducible public baseline, device-class budget, or benchmark result is
 currently published. Treat responsiveness statements as design descriptions,
-not measured performance claims. This open documentation gap is tracked in
-[WEAKNESSES.md](WEAKNESSES.md).
+not measured performance claims. This document owns that gap; it is not
+qualified elsewhere.

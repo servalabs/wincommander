@@ -59,8 +59,8 @@ phrases, tokens, private keys), stored flow payloads, contingency configuration,
 high-frequency internal bookkeeping paths are excluded from suggestions. A setting trigger can
 match any transition or one exact JSON value; setting conditions expose `==` and `!=`.
 
-Legacy-trigger compatibility is deserialize-only; current limitations are
-maintained in [WEAKNESSES.md](../../WEAKNESSES.md).
+Legacy-trigger compatibility is deserialize-only; current limitations are in
+"Legacy commands and limitations" below.
 
 ### Condition & action vocabulary
 
@@ -92,7 +92,7 @@ decision, not an oversight.
 Rules live in `settings.app.proFlows[]` — separate from the legacy `app.flows[]` specifically so
 neither engine's listeners can double-fire the same trigger. The authoritative
 flow command catalog is in the [IPC reference](../engineering/ipc.md); current
-automation limitations are in [WEAKNESSES.md](../../WEAKNESSES.md).
+automation limitations are in "Legacy commands and limitations" below.
 
 ### Fleet distribution
 
@@ -145,8 +145,22 @@ hook or watcher:
 ### Legacy commands and limitations
 
 The [IPC reference](../engineering/ipc.md) owns the legacy command catalog.
-[WEAKNESSES.md](../../WEAKNESSES.md) owns current legacy-engine limitations and
-the product claims they qualify.
+This document owns the engine's current limitations.
+
+- The v2 manual-test bridge re-syncs rules and reports an acknowledgement; it
+  does not dispatch an individual rule. Its execution log is a capped,
+  frontend-only event stream, lost when the panel closes or the app restarts.
+- The legacy `CameraTrigger` is permanently disabled. Use the v2 `GazeTrigger`.
+- Legacy execution history is an in-memory 50-run ring and is lost on restart.
+  Destructive legacy flows have no debounce, actions stop at the first failure,
+  and there is no rollback or continue-on-failure behavior.
+- Legacy `ShellAction` runs unrestricted PowerShell and legacy `HTTPAction` can
+  reach an arbitrary URL. Both execute only in the legacy engine for backward
+  compatibility; v2 treats them as deserialize-only variants and disables them
+  during migration rather than executing them.
+- Legacy `SignalReceivedTrigger` polls the Taildrop inbox and can break if the
+  VPN relocates that directory. Migration to the shared filesystem watcher is
+  pending.
 
 This document describes shipped flow behaviour. Some advanced actions target
 restricted capabilities that run in the Pro sidecar — see

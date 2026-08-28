@@ -94,9 +94,32 @@ export controls, and employee/user rights in their jurisdiction.
 
 ## Current operational limits
 
-The current limits that qualify product and security claims are maintained in
-[WEAKNESSES.md](WEAKNESSES.md). The threat-model boundaries above remain the
+These qualify the product's security claims and are stated here because this
+document owns the public limits. The threat-model boundaries above remain the
 authoritative statement of what WinCommander does not claim to defend against.
+
+- Ransomware alerts and response can reduce time to detection or containment.
+  They cannot guarantee that no file changes before Windows observes activity.
+- Unknown-keyboard approval is reactive. It cannot guarantee first-keystroke,
+  pre-boot, firmware-level, or fast-replug prevention, and a UI confirmation is
+  not proof of trusted physical input.
+- Secure deletion and crypto-erasure depend on media behavior, firmware,
+  encryption state, escrow, and verification. A successful request, or removed
+  local access, does not prove every recovery copy is gone.
+- Fleet reachability is not an air gap. An offline device cannot receive a new
+  command until it reconnects.
+- Fleet enforcement is not continuous. The fleet agent runs inside the Pro
+  sidecar that the desktop app spawns, so check-ins, command delivery, and
+  policy reapplication stop when WinCommander is not running — including an
+  ordinary close, logoff, or user switch, with no adversarial action involved.
+- Fleet reports a device's state from a local operating-system probe rather
+  than from state WinCommander confirms it applied, and no component reconciles
+  managed desired state back onto the machine. A console reading is evidence of
+  what a probe observed, not proof that a policy is being enforced.
+- Windows Server/RDS, physical USB, hardware-backed keys, signed installers,
+  and clean-machine behavior still require environment-specific validation.
+  Planned or source-tested functionality is not a shipped or independently
+  certified guarantee.
 
 ## Cryptography and post-quantum status
 
