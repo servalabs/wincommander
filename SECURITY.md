@@ -108,14 +108,18 @@ authoritative statement of what WinCommander does not claim to defend against.
   local access, does not prove every recovery copy is gone.
 - Fleet reachability is not an air gap. An offline device cannot receive a new
   command until it reconnects.
-- Fleet enforcement is not continuous. The fleet agent runs inside the Pro
-  sidecar that the desktop app spawns, so check-ins, command delivery, and
-  policy reapplication stop when WinCommander is not running — including an
-  ordinary close, logoff, or user switch, with no adversarial action involved.
-- Fleet reports a device's state from a local operating-system probe rather
-  than from state WinCommander confirms it applied, and no component reconciles
-  managed desired state back onto the machine. A console reading is evidence of
-  what a probe observed, not proof that a policy is being enforced.
+- Fleet continuity depends on the managed endpoint runtime staying healthy.
+  Closing the main window hides WinCommander to the tray rather than exiting
+  it, and a Windows user switch leaves the previous session running. But an
+  explicit quit, a sign-out, a crash, a failed startup, or a sidecar or update
+  failure can interrupt session-bound check-ins and enforcement. The installed
+  LocalSystem service does not yet own the full Fleet lifecycle.
+- Managed-state enforcement is partial, not absent. Supported settings that
+  have a mapped enable/disable command are periodically probed and re-applied,
+  including organization-locked paths. Controls without such a mapping, and
+  one-shot or irreversible actions, are observational only. Console readings
+  can also come from evidence channels with different freshness and coverage,
+  so a reading is not by itself proof that every policy path converged.
 - Windows Server/RDS, physical USB, hardware-backed keys, signed installers,
   and clean-machine behavior still require environment-specific validation.
   Planned or source-tested functionality is not a shipped or independently
