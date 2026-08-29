@@ -2712,13 +2712,14 @@ mod tests {
             catalog_id: "device.lock".into(),
             action_class: ActionClass::Irreversible,
             outcome: ActionOutcomeState::Pass,
+            failure_stage: None,
             observed_at: "2026-08-19T00:00:00Z".into(),
             result_digest: serde_json::json!({"status":"completed"}),
             record_hash: String::new(),
             signature: String::new(),
         };
         outcome.record_hash = action_outcome_hash(&outcome);
-        let hash = hex_to_32_bytes(&outcome.record_hash).unwrap();
+        let hash = outcomes::hex_to_32_bytes(&outcome.record_hash).unwrap();
         outcome.signature = B64.encode(signing_key.sign(&hash).to_bytes());
         let public_key = B64.encode(signing_key.verifying_key().to_bytes());
         assert!(verify_action_outcome(&outcome, &public_key));
@@ -2727,6 +2728,45 @@ mod tests {
         assert!(!verify_action_outcome(&outcome, &wrong_key));
         outcome.device_id = DeviceId("device-two".into());
         assert!(!verify_action_outcome(&outcome, &public_key));
+        outcome.device_id = DeviceId("device-one".into());
+        outcome.failure_stage = Some(CommandFailureStage::Execute);
+        assert!(
+            !verify_action_outcome(&outcome, &public_key),
+            "the signed evidence must bind the failure stage as well as the outcome"
+        );
+    }
+
+    #[test]
+    fn recovery_checkpoint_binds_the_exact_continuity_cursor() {
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[19; 32]);
+        let public_key = B64.encode(signing_key.verifying_key().to_bytes());
+        let mut checkpoint = ActionOutcomeRecoveryCheckpoint {
+            checkpoint_id: "22222222-2222-2222-2222-222222222222".into(),
+            org_id: OrgId("org-one".into()),
+            device_id: DeviceId("device-one".into()),
+            next_sequence: 8,
+            previous_hash: Some("abc123".into()),
+            issued_at: "2026-08-29T00:00:00Z".into(),
+            signature: String::new(),
+            signer_key: public_key.clone(),
+        };
+        checkpoint.signature = B64.encode(
+            signing_key
+                .sign(&action_outcome_recovery_checkpoint_preimage(&checkpoint))
+                .to_bytes(),
+        );
+        assert!(verify_action_outcome_recovery_checkpoint(
+            &checkpoint,
+            &public_key
+        ));
+
+        checkpoint.next_sequence = 9;
+        assert!(
+            !verify_action_outcome_recovery_checkpoint(&checkpoint, &public_key),
+            "a recovery record must not be movable to another chain position"
+        );
     }
 
     #[test]

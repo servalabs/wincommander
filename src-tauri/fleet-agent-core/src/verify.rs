@@ -161,12 +161,10 @@ pub struct CheckinResponse {
     /// Signed commands to dispatch.
     #[serde(default)]
     pub commands: Vec<SignedCommand>,
-    /// The device's resolved config epoch (server-signed policy snapshot),
-    /// `None` when the org has published no policy. Opaque `Value` here — the
-    /// platform (WinCommander) verifies + applies it via
-    /// [`FleetActions::on_config_epoch`]; duress-only agents ignore it.
-    #[serde(default)]
-    pub config_epoch: Option<serde_json::Value>,
+    /// The only server-to-agent policy payload.  It contains independently
+    /// revised sections in one signed envelope; there is no legacy config or
+    /// shield field to dual-read.
+    pub policy: serde_json::Value,
     /// Opaque, ignored filler bytes (base64) mirroring `CheckinRequest::padding`
     /// — pads the response into the same size bucket regardless of whether it
     /// carries zero or several signed commands. Never covered by any

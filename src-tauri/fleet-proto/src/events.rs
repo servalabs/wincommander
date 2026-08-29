@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+//! Event and notification wire contracts. B3 owns this module after G-1.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,6 +17,10 @@ use crate::DeviceId;
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
 pub struct LocalAlertReport {
+    /// Endpoint-minted UUID. It is stable across an outbox retry, so the
+    /// server can retain a repeated check-in as one occurrence rather than
+    /// creating a second alert or second external notification.
+    pub event_id: String,
     /// Closed allowlist enforced by Pro's `normalize_local_alert`.
     pub alert_type: String,
     /// e.g. `{"detected":"OBS Studio","process":"obs64.exe"}` or

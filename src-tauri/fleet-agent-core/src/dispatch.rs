@@ -64,11 +64,10 @@ pub trait FleetActions: Send + Sync {
         false
     }
 
-    /// Called with the device's resolved config epoch (opaque server-signed
-    /// policy snapshot) when a check-in response carries one. The platform
-    /// verifies its signature + applies/queues it. Default: no-op — duress-only
-    /// agents (TuxCommander/Android) have no policy epoch.
-    fn on_config_epoch(&self, _epoch: &serde_json::Value) {}
+    /// Called with the device's one signed, independently-revised policy
+    /// envelope.  Duress-only agents deliberately no-op it; policy-capable
+    /// platforms must verify it against their enrollment-pinned server key.
+    fn on_policy_envelope(&self, _policy: &serde_json::Value) {}
 
     /// Sample live device-resource telemetry (CPU/RAM/disk/network) to attach
     /// to this check-in round-trip, if the platform has a collector wired up.
@@ -497,7 +496,7 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![cmd],
-            config_epoch: None,
+            policy: serde_json::Value::Null,
             padding: String::new(),
             pending_search_jobs: Vec::new(),
         };
@@ -522,7 +521,7 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![cmd],
-            config_epoch: None,
+            policy: serde_json::Value::Null,
             padding: String::new(),
             pending_search_jobs: Vec::new(),
         };
@@ -577,7 +576,7 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![cmd],
-            config_epoch: None,
+            policy: serde_json::Value::Null,
             padding: String::new(),
             pending_search_jobs: Vec::new(),
         };
@@ -625,7 +624,7 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![duress],
-            config_epoch: None,
+            policy: serde_json::Value::Null,
             padding: String::new(),
             pending_search_jobs: Vec::new(),
         };
@@ -658,7 +657,7 @@ pub(crate) mod tests {
         let resp2 = CheckinResponse {
             all_clear: false,
             commands: vec![ordinary],
-            config_epoch: None,
+            policy: serde_json::Value::Null,
             padding: String::new(),
             pending_search_jobs: Vec::new(),
         };
@@ -697,7 +696,7 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![cmd],
-            config_epoch: None,
+            policy: serde_json::Value::Null,
             padding: String::new(),
             pending_search_jobs: Vec::new(),
         };
@@ -719,7 +718,7 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: true,
             commands: vec![cmd],
-            config_epoch: None,
+            policy: serde_json::Value::Null,
             padding: String::new(),
             pending_search_jobs: Vec::new(),
         };
@@ -739,7 +738,7 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![cmd],
-            config_epoch: None,
+            policy: serde_json::Value::Null,
             padding: String::new(),
             pending_search_jobs: Vec::new(),
         };
@@ -765,7 +764,7 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![unseal_cmd],
-            config_epoch: None,
+            policy: serde_json::Value::Null,
             padding: String::new(),
             pending_search_jobs: Vec::new(),
         };
@@ -782,7 +781,7 @@ pub(crate) mod tests {
         let resp2 = CheckinResponse {
             all_clear: false,
             commands: vec![revoke_cmd],
-            config_epoch: None,
+            policy: serde_json::Value::Null,
             padding: String::new(),
             pending_search_jobs: Vec::new(),
         };
@@ -812,7 +811,7 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![],
-            config_epoch: None,
+            policy: serde_json::Value::Null,
             padding: String::new(),
             pending_search_jobs: Vec::new(),
         };
@@ -859,7 +858,7 @@ pub(crate) mod tests {
         // A server response with no `pending_search_jobs` key at all must
         // deserialize (not error) and yield an empty Vec — this is the
         // wire-level half of the no-op guarantee above.
-        let json = serde_json::json!({ "all_clear": true, "commands": [] });
+        let json = serde_json::json!({ "all_clear": true, "commands": [], "policy": {} });
         let resp: CheckinResponse = serde_json::from_value(json).unwrap();
         assert!(resp.pending_search_jobs.is_empty());
     }

@@ -138,34 +138,54 @@ pub struct ResolvedPolicy {
     pub intents: Vec<PolicyIntent>,
 }
 
-/// Privacy Shield's admin-desired on/off + mode, resolved device > group > org
-/// (same precedence as `ConfigEpoch`) but stored and versioned SEPARATELY from
-/// the policy `config_epochs` chain. Toggling the shield from the console
-/// must NEVER advance `ConfigEpoch.version` — that chain is for actual policy
-/// edits, and every version bump makes every OTHER device look momentarily
-/// "behind" in `routes::posture::drift` (which compares against the org's
-/// single highest version regardless of target). Delivered to the agent on
-/// the same fast `/v1/agents/checkin` round-trip as `config_epoch`, via
-/// `CheckinResponse.shield_state`.
+/// Privacy Shield's resolved desired state.  Its revision is deliberately
+/// independent from [`ConfigEpoch::version`]: changing the shield must not
+/// make ordinary configuration appear behind.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
 pub struct ShieldDesiredState {
     pub enabled: bool,
-    /// `"blur_notify"` (blur/black-out the screen AND notify) | `"notify_only"`
-    /// (notification only, no visual blur). Mutually exclusive — see the
-    /// Privacy Shield card's segmented toggle.
+    /// `"blur_notify"` | `"notify_only"`.
     pub mode: String,
-    /// RFC3339, set by the server when this desired state was last written.
-    /// Informational only (no anti-rollback gate — latest write always wins,
-    /// unlike `ConfigEpoch`).
+    /// Monotonic only for this resolved Shield policy domain.
+    pub revision: i64,
+    /// RFC3339 server write time, useful for display but never used as the
+    /// anti-rollback guard.
     pub updated_at: String,
-    /// The durable per-device command that caused this desired state, when
-    /// this is a device-scoped Start/Stop request. The endpoint echoes this
-    /// identifier only in lifecycle receipts; it never carries camera media
-    /// or application details. Org/group defaults have no command id.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Device-scoped Start/Stop command that caused this state, if any.
     pub command_id: Option<String>,
+}
+
+/// The only policy payload sent by a check-in response.  It carries separate
+/// independently-revised sections in one server-signed envelope so every
+/// agent receives the same policy decision atomically.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct PolicyEnvelope {
+    pub org_id: OrgId,
+    pub device_id: DeviceId,
+    pub config: Option<ConfigEpoch>,
+    pub shield: Option<ShieldDesiredState>,
+    /// Latest independent Shield revision for the organisation, including a
+    /// tombstone/empty shield section.  This prevents replaying an older
+    /// signed empty section to erase a newer Shield policy.
+    pub shield_revision: i64,
+    /// Base64 Ed25519 signature over [`policy_envelope_preimage`].
+    pub signature: String,
+    /// Base64 public key expected to match the key pinned at enrollment.
+    pub signer_key: String,
+}
+
+/// All fields which are signed for a policy delivery.  Keeping this separate
+/// from [`PolicyEnvelope`] prevents its signature from being self-referential.
+pub struct PolicyEnvelopeSigningInput<'a> {
+    pub org_id: &'a OrgId,
+    pub device_id: &'a DeviceId,
+    pub config: Option<&'a ConfigEpoch>,
+    pub shield: Option<&'a ShieldDesiredState>,
+    pub shield_revision: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -236,4 +256,87 @@ pub fn policy_preimage(
         "version": version,
     });
     canonical_epoch_bytes(version, &envelope)
+}
+
+/// Canonical bytes signed for a whole policy delivery.  The inner config
+/// section retains its own signature, while this outer signature binds the
+/// resolved config and shield sections to the intended org and device.
+pub fn policy_envelope_preimage(input: &PolicyEnvelopeSigningInput<'_>) -> Vec<u8> {
+    let envelope = serde_json::json!({
+        "config": input.config,
+        "device_id": input.device_id,
+        "org_id": input.org_id,
+        "shield": input.shield,
+        "shield_revision": input.shield_revision,
+    });
+    let mut canonical = String::new();
+    write_canonical(&envelope, &mut canonical);
+    canonical.into_bytes()
+}
+
+impl PolicyEnvelope {
+    pub fn signing_input(&self) -> PolicyEnvelopeSigningInput<'_> {
+        PolicyEnvelopeSigningInput {
+            org_id: &self.org_id,
+            device_id: &self.device_id,
+            config: self.config.as_ref(),
+            shield: self.shield.as_ref(),
+            shield_revision: self.shield_revision,
+        }
+    }
+
+    pub fn preimage(&self) -> Vec<u8> {
+        policy_envelope_preimage(&self.signing_input())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use ed25519_dalek::{Signer, SigningKey};
+
+    fn envelope() -> PolicyEnvelope {
+        PolicyEnvelope {
+            org_id: OrgId("local".into()),
+            device_id: DeviceId("device-a".into()),
+            config: None,
+            shield: Some(ShieldDesiredState {
+                enabled: true,
+                mode: "blur_notify".into(),
+                revision: 3,
+                updated_at: "2026-08-28T00:00:00Z".into(),
+                command_id: None,
+            }),
+            shield_revision: 3,
+            signature: String::new(),
+            signer_key: String::new(),
+        }
+    }
+
+    #[test]
+    fn policy_envelope_golden_vector_is_canonical_and_section_bound() {
+        let policy = envelope();
+        assert_eq!(
+            String::from_utf8(policy.preimage()).unwrap(),
+            r#"{"config":null,"device_id":"device-a","org_id":"local","shield":{"command_id":null,"enabled":true,"mode":"blur_notify","revision":3,"updated_at":"2026-08-28T00:00:00Z"},"shield_revision":3}"#,
+        );
+
+        let signing_key = SigningKey::from_bytes(&[9; 32]);
+        let signature = B64.encode(signing_key.sign(&policy.preimage()).to_bytes());
+        let public_key = B64.encode(signing_key.verifying_key().to_bytes());
+        assert!(crate::verify_signature_b64(
+            &public_key,
+            &policy.preimage(),
+            &signature
+        ));
+
+        let mut tampered = policy;
+        tampered.shield.as_mut().unwrap().revision = 2;
+        assert!(!crate::verify_signature_b64(
+            &public_key,
+            &tampered.preimage(),
+            &signature
+        ));
+    }
 }

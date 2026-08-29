@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+//! Signed action-outcome wire contract. B1 owns this module after G-1.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::{write_canonical, ActionClass, DeviceId};
+use crate::{write_canonical, ActionClass, DeviceId, OrgId};
 
 /// A device-signed, hash-chained record of an action outcome. These records
 /// travel only inside the authenticated check-in envelope; `device_id` is
@@ -29,6 +30,8 @@ pub struct ActionOutcome {
     pub catalog_id: String,
     pub action_class: ActionClass,
     pub outcome: ActionOutcomeState,
+    /// Required for failed/unknown records; absent only for a confirmed pass.
+    pub failure_stage: Option<CommandFailureStage>,
     pub observed_at: String,
     /// Bounded structured data interpreted by the catalog-specific result
     /// seam. The server validates its size and readiness-self-test shape.
@@ -52,6 +55,69 @@ pub enum ActionOutcomeState {
     Pass,
     Fail,
     Unknown,
+}
+
+/// Where a command stopped. This is part of the signed receipt so an operator
+/// can distinguish a rejected policy gate from an endpoint execution failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(rename_all = "snake_case")]
+pub enum CommandFailureStage {
+    Resolve,
+    Gate,
+    Dispatch,
+    Execute,
+    Report,
+}
+
+/// Server-signed recovery point for an endpoint that has lost only its local
+/// outcome-chain cursor. It preserves every accepted record: the next receipt
+/// continues from `previous_hash` at `next_sequence`, rather than replacing or
+/// deleting the existing chain.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct ActionOutcomeRecoveryCheckpoint {
+    pub checkpoint_id: String,
+    pub org_id: OrgId,
+    pub device_id: DeviceId,
+    pub next_sequence: u64,
+    pub previous_hash: Option<String>,
+    pub issued_at: String,
+    pub signature: String,
+    pub signer_key: String,
+}
+
+pub fn action_outcome_recovery_checkpoint_preimage(
+    checkpoint: &ActionOutcomeRecoveryCheckpoint,
+) -> Vec<u8> {
+    let envelope = serde_json::json!({
+        "checkpoint_id": checkpoint.checkpoint_id,
+        "device_id": checkpoint.device_id.0,
+        "issued_at": checkpoint.issued_at,
+        "next_sequence": checkpoint.next_sequence,
+        "org_id": checkpoint.org_id.0,
+        "previous_hash": checkpoint.previous_hash,
+    });
+    let mut canonical = String::new();
+    write_canonical(&envelope, &mut canonical);
+    canonical.into_bytes()
+}
+
+pub fn verify_action_outcome_recovery_checkpoint(
+    checkpoint: &ActionOutcomeRecoveryCheckpoint,
+    public_key_b64: &str,
+) -> bool {
+    if checkpoint.signer_key != public_key_b64 || checkpoint.next_sequence == 0 {
+        return false;
+    }
+    crate::verify_signature_b64(
+        public_key_b64,
+        &action_outcome_recovery_checkpoint_preimage(checkpoint),
+        &checkpoint.signature,
+    )
 }
 
 /// Per-step status for a non-destructive readiness self-test.
@@ -94,6 +160,13 @@ pub fn canonical_action_outcome_bytes(outcome: &ActionOutcome) -> Vec<u8> {
             ActionOutcomeState::Fail => "fail",
             ActionOutcomeState::Unknown => "unknown",
         },
+        "failure_stage": outcome.failure_stage.map(|stage| match stage {
+            CommandFailureStage::Resolve => "resolve",
+            CommandFailureStage::Gate => "gate",
+            CommandFailureStage::Dispatch => "dispatch",
+            CommandFailureStage::Execute => "execute",
+            CommandFailureStage::Report => "report",
+        }),
         "observed_at": outcome.observed_at,
         "result_digest": outcome.result_digest,
     });
