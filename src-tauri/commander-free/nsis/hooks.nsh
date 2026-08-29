@@ -445,10 +445,11 @@ FunctionEnd
       Abort "WinCommander encryption driver could not be inspected."
     ${EndIf}
 
-  ; Pass the kernel image as one quoted SCM argument so its fixed path cannot
-  ; be interpreted as multiple tokens.
+  ; A kernel service's ImagePath is resolved through the NT object namespace,
+  ; so it must be the unquoted `\??\` form — quotes become part of the name
+  ; and every StartService fails with ERROR_INVALID_NAME (123).
     StrCpy $R3 "encvol-create"
-    nsExec::ExecToStack 'sc.exe create WinCommanderEncVol type= kernel binPath= "\$\"${WC_ENCVOL_DRIVER}\$\"" start= system'
+    nsExec::ExecToStack 'sc.exe create WinCommanderEncVol type= kernel binPath= \??\${WC_ENCVOL_DRIVER} start= system'
     Pop $R8
     Pop $R9
     ${If} $R8 != 0
@@ -457,7 +458,7 @@ FunctionEnd
       Goto wc_encvol_driver_rollback
     ${EndIf}
     StrCpy $R3 "encvol-config"
-    nsExec::ExecToStack 'sc.exe config WinCommanderEncVol type= kernel binPath= "\$\"${WC_ENCVOL_DRIVER}\$\"" start= system'
+    nsExec::ExecToStack 'sc.exe config WinCommanderEncVol type= kernel binPath= \??\${WC_ENCVOL_DRIVER} start= system'
     Pop $R8
     Pop $R9
     ${If} $R8 != 0

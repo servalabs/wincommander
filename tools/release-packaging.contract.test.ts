@@ -126,8 +126,8 @@ describe("public service release packaging", () => {
     expect(hooks).toContain(`sc.exe config WinCommanderSvc binPath= ${scmImagePathArgument} start= auto obj= LocalSystem`);
     expect(hooks).toContain('${If} $R8 == 1073');
     expect(hooks).toContain('${AndIf} $R6 == 0');
-    expect(hooks).toContain('sc.exe create WinCommanderEncVol type= kernel binPath= "\\$\\"${WC_ENCVOL_DRIVER}\\$\\"" start= system');
-    expect(hooks).toContain('sc.exe config WinCommanderEncVol type= kernel binPath= "\\$\\"${WC_ENCVOL_DRIVER}\\$\\"" start= system');
+    expect(hooks).toContain('sc.exe create WinCommanderEncVol type= kernel binPath= \\??\\${WC_ENCVOL_DRIVER} start= system');
+    expect(hooks).toContain('sc.exe config WinCommanderEncVol type= kernel binPath= \\??\\${WC_ENCVOL_DRIVER} start= system');
     expect(hooks).toContain("sc failure WinCommanderSvc reset= 86400 actions= restart/5000/restart/5000/none/0");
     expect(hooks).toContain("sc start WinCommanderSvc");
     expect(hooks).toContain("sc delete WinCommanderSvc");
@@ -152,14 +152,18 @@ describe("public service release packaging", () => {
   });
 
   test("repairs only the fixed owned encryption driver on install or update", () => {
-    const quotedDriverArgument = String.raw`"\$\"` + '${WC_ENCVOL_DRIVER}' + String.raw`\$\""`;
+    // A kernel service's ImagePath is an NT object name, so it must be the
+    // unquoted `\??\` form. Quoting it made every StartService fail with
+    // ERROR_INVALID_NAME (123).
+    const ntDriverArgument = '\\??\\' + '${WC_ENCVOL_DRIVER}';
 
     expect(hooks).toContain('!define WC_ENCVOL_DRIVER "$PROGRAMDATA\\WinCommander\\bin\\engine\\EncVolKm.sys"');
     expect(hooks).toContain('IfFileExists "${WC_ENCVOL_DRIVER}" wc_encvol_driver_present wc_encvol_driver_ready');
     expect(hooks).toContain("sc query WinCommanderEncVol");
     expect(hooks).toContain('sc qc WinCommanderEncVol | findstr /I /C:"${WC_ENCVOL_DRIVER}"');
-    expect(hooks).toContain(`sc.exe create WinCommanderEncVol type= kernel binPath= ${quotedDriverArgument} start= system`);
-    expect(hooks).toContain(`sc.exe config WinCommanderEncVol type= kernel binPath= ${quotedDriverArgument} start= system`);
+    expect(hooks).toContain(`sc.exe create WinCommanderEncVol type= kernel binPath= ${ntDriverArgument} start= system`);
+    expect(hooks).toContain(`sc.exe config WinCommanderEncVol type= kernel binPath= ${ntDriverArgument} start= system`);
+    expect(hooks).not.toContain('binPath= "\\$\\"' + '${WC_ENCVOL_DRIVER}');
     expect(hooks).toContain("sc start WinCommanderEncVol");
     expect(hooks).toContain("wc_encvol_driver_rollback:");
     expect(hooks).not.toContain("sc create veracrypt");

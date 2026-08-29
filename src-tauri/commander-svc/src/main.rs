@@ -321,6 +321,14 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
     // Poll only the fixed payload: the helper is private, accepts no renderer
     // arguments, and fails closed until its signer/ownership/ACL checks pass.
     tokio::spawn(async {
+        // A permanently-failing ensure (bad service record, unloadable driver)
+        // used to retry every 5s forever, writing an SCM error to the System
+        // log each time — 17k entries a day, drowning the signal it was trying
+        // to raise. Give up after a bounded burst and report once; the mount
+        // path in `pipe.rs` still calls `ensure_for_vault_mount` on demand, so
+        // a later fix is picked up without this loop.
+        const MAX_ENSURE_ATTEMPTS: u32 = 5;
+        let mut attempts = 0;
         loop {
             let delay = if !encvol_driver::fixed_payload_present() {
                 // Pro's extraction window is short; observe it quickly without
@@ -332,6 +340,14 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
                     .map(|result| result.is_ok())
                     .unwrap_or(false);
                 if ensured {
+                    break;
+                }
+                attempts += 1;
+                if attempts >= MAX_ENSURE_ATTEMPTS {
+                    eprintln!(
+                        "[wincommander-svc] encryption driver could not be prepared after \
+                         {MAX_ENSURE_ATTEMPTS} attempts; leaving it to the vault-mount path"
+                    );
                     break;
                 }
                 std::time::Duration::from_secs(5)

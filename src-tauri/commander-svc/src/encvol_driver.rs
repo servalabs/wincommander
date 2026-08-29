@@ -11,7 +11,13 @@ use std::sync::{Mutex, OnceLock};
 
 const SERVICE_NAME: &str = "WinCommanderEncVol";
 const DRIVER_PATH: &str = r"C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys";
-const QUOTED_DRIVER_PATH: &str = r#""C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys""#;
+// SCM stores `binPath=` verbatim into ImagePath, and a *kernel* service's
+// ImagePath is resolved through the NT object namespace, not the Win32 path
+// parser. It must therefore be the unquoted `\??\` form: surrounding quotes
+// are part of the name, so the object manager rejects it and StartService
+// fails with ERROR_INVALID_NAME (123) on every attempt. Only user-mode
+// service ImagePaths (which are command lines) may be quoted.
+const NT_DRIVER_PATH: &str = r"\??\C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys";
 const DRIVER_SHA256: &str = "1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6";
 const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
 const ERROR_SERVICE_EXISTS: i32 = 1073;
@@ -86,7 +92,7 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
                 "start=",
                 "system",
                 "binPath=",
-                QUOTED_DRIVER_PATH,
+                NT_DRIVER_PATH,
             ])
             .map_err(|_| EnsureDriverError::ServiceCreate)?;
             if !create.status.success() && create.status.code() != Some(ERROR_SERVICE_EXISTS) {
@@ -105,7 +111,7 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
         "start=",
         "system",
         "binPath=",
-        QUOTED_DRIVER_PATH,
+        NT_DRIVER_PATH,
     ])
     .map_err(|_| EnsureDriverError::ServiceConfigure)?;
     if !configure.status.success() {
@@ -245,14 +251,26 @@ mod tests {
 
     #[test]
     fn accepts_only_the_fixed_driver_image_path() {
-        assert!(fixed_image_path(QUOTED_DRIVER_PATH));
+        assert!(fixed_image_path(NT_DRIVER_PATH));
+        // SCM keeps reporting the pre-fix quoted form on machines registered by
+        // an older build, so ownership must still recognise it.
         assert!(fixed_image_path(
-            r"\??\C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys"
+            r#""C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys""#
         ));
         assert!(!fixed_image_path(r"C:\Temp\EncVolKm.sys"));
         assert!(!fixed_image_path(
             r"C:\ProgramData\WinCommander\bin\engine\other.sys"
         ));
+    }
+
+    /// Regression: a quoted `binPath=` lands in ImagePath verbatim, and the
+    /// object manager cannot parse a kernel image name wrapped in quotes —
+    /// every StartService then fails with ERROR_INVALID_NAME (123).
+    #[test]
+    fn kernel_image_path_is_registered_unquoted_in_nt_form() {
+        assert!(NT_DRIVER_PATH.starts_with(r"\??\"));
+        assert!(!NT_DRIVER_PATH.contains('"'));
+        assert_eq!(NT_DRIVER_PATH.trim_start_matches(r"\??\"), DRIVER_PATH);
     }
 
     #[test]
