@@ -29,6 +29,17 @@ fn main() {
 
 mod settings_host;
 
+// G-1 ownership split: endpoint background loops live with their future
+// owners; this root remains process composition only.
+#[cfg(windows)]
+mod command_worker;
+
+#[cfg(windows)]
+mod fleet_transport;
+
+#[cfg(windows)]
+mod reconciler;
+
 // Cross-platform by design (C2): the generic verify/version-guard/compile
 // engine and every test in this module compile and run on Linux CI too;
 // only its internal `WindowsPolicyFs`/`windows_acl` submodule is
@@ -303,9 +314,9 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
         Arc::clone(&policy_store),
         Arc::clone(&clipboard_state),
     ));
-    tokio::spawn(reconciler_loop());
-    tokio::spawn(command_worker_loop());
-    tokio::spawn(fleet_conn_loop());
+    tokio::spawn(reconciler::run());
+    tokio::spawn(command_worker::run());
+    tokio::spawn(fleet_transport::run());
     // Pro can extract the engine after this service has already started.
     // Poll only the fixed payload: the helper is private, accepts no renderer
     // arguments, and fails closed until its signer/ownership/ACL checks pass.
@@ -423,30 +434,6 @@ async fn enforcement_loop(
         run_iteration_catching_panics("enforcement_loop", move || {
             pipe::enforcement_tick(&ps, &state, std::time::Instant::now());
         });
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-    }
-}
-
-/// Phase 3 fills this in — settings reconciler (drift detection, repair).
-#[cfg(windows)]
-async fn reconciler_loop() {
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-    }
-}
-
-/// Phase 3 fills this in — command worker (dequeue + execute fleet commands).
-#[cfg(windows)]
-async fn command_worker_loop() {
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-    }
-}
-
-/// Phase 3 fills this in — fleet connection (heartbeat + telemetry upload).
-#[cfg(windows)]
-async fn fleet_conn_loop() {
-    loop {
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
     }
 }
