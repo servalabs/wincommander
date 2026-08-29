@@ -1,4 +1,4 @@
-name: Generate EULA v1.11 installer artifact
+name: Stage verified EULA v1.11 update
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
       - ".github/workflows/update-assets-eula-once.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   generate:
@@ -29,9 +29,12 @@ jobs:
           grep -F "Version 1.11" src-tauri/commander-free/nsis/LICENSE.rtf
           grep -F "not exceeding INR 2,00,00,000" src-tauri/commander-free/nsis/LICENSE.rtf
           ! grep -F "requires its resellers to register each end customer" src-tauri/commander-free/nsis/LICENSE.rtf
-      - uses: actions/upload-artifact@v4
-        with:
-          name: eula-v1.11-installer-rtf
-          path: src-tauri/commander-free/nsis/LICENSE.rtf
-          if-no-files-found: error
-          retention-days: 1
+          git diff --check
+      - name: Commit exact generated output to staging branch
+        run: |
+          rm .github/workflows/update-assets-eula-once.yml
+          git config user.name "servalabs-legal-bot"
+          git config user.email "166895751+servalabs@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: update assets and installer EULA to v1.11"
+          git push --force origin HEAD:refs/heads/automation/eula-v1.11-assets
