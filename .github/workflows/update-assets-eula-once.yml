@@ -1,0 +1,37 @@
+name: Generate EULA v1.11 installer artifact
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/update-assets-eula-once.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: oven-sh/setup-bun@v2
+      - name: Advance assets to approved EULA v1.11
+        run: |
+          git -C assets fetch origin 097145adf03561c3826b6481b7beb92731c0b81f
+          git -C assets checkout 097145adf03561c3826b6481b7beb92731c0b81f
+      - name: Generate and verify installer licence
+        run: |
+          bun run gen:eula-rtf
+          bun run gen:eula-rtf --check
+          grep -F "Version 1.11" src-tauri/commander-free/nsis/LICENSE.rtf
+          grep -F "not exceeding INR 2,00,00,000" src-tauri/commander-free/nsis/LICENSE.rtf
+          ! grep -F "requires its resellers to register each end customer" src-tauri/commander-free/nsis/LICENSE.rtf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eula-v1.11-installer-rtf
+          path: src-tauri/commander-free/nsis/LICENSE.rtf
+          if-no-files-found: error
+          retention-days: 1
