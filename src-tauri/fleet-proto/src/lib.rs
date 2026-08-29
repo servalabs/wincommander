@@ -11,7 +11,14 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+
+pub mod events;
+pub mod outcomes;
+pub mod policy;
+
+pub use events::*;
+pub use outcomes::*;
+pub use policy::*;
 
 /// Re-exported from `wincmd-clip-rules`, the clipboard-guard rule engine's
 /// SSOT for policy types (plan §4.1). This crate deliberately does NOT
@@ -742,70 +749,6 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
     // Do not advertise endpoint commands until matching, audited handlers exist.
 ];
 
-/// A signed, versioned configuration snapshot. Append-only and monotonic per
-/// org; agents reject any epoch whose `version` is <= the one they hold
-/// (anti-rollback). `config_json` is `AppSettings`-shaped policy.
-///
-/// Fleet Control Plane P2 adds **targeting** + **locks**: an epoch is scoped to
-/// a target (org / group / device) and carries the settings paths the device
-/// must not let the local user change (`locked_paths`). The signature binds ALL
-/// of these via [`epoch_signing_envelope`] so a device cannot replay another
-/// scope's policy (target spoofing) or strip the locks (downgrade).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-pub struct ConfigEpoch {
-    pub org_id: OrgId,
-    pub version: i64,
-    pub config_json: Value,
-    /// Scope this epoch applies to: "org" | "group" | "device". Defaults to
-    /// "org" for epochs published before targeting existed.
-    #[serde(default = "default_target_kind")]
-    pub target_kind: String,
-    /// Target id within the kind (group_id / device_id). `None` for org-wide.
-    #[serde(default)]
-    pub target_id: Option<String>,
-    /// Settings dot-paths the device must keep at the published value — locked
-    /// against local edits while the device is fleet-managed.
-    #[serde(default)]
-    pub locked_paths: Vec<String>,
-    /// P5 enrollment lock: when true the device should refuse a local unenroll
-    /// without admin approval. Carried here (signed) so it can't be spoofed.
-    #[serde(default)]
-    pub managed: bool,
-    /// Base64 Ed25519 signature over [`canonical_epoch_bytes`]`(version,
-    /// epoch_signing_envelope(config_json, locked_paths, managed, target))`.
-    pub signature: String,
-    /// Base64 of the public key that produced `signature` (lets agents pin the
-    /// fleet signing key and detect rotation).
-    pub signer_key: String,
-}
-
-fn default_target_kind() -> String {
-    "org".to_string()
-}
-
-/// Admin request to publish new policy. The server assigns the next monotonic
-/// version and signs it; the admin never supplies version or signature.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-pub struct ConfigPushRequest {
-    pub config_json: Value,
-    /// Scope: "org" (default) | "group" | "device".
-    #[serde(default = "default_target_kind")]
-    pub target_kind: String,
-    /// group_id / device_id for a scoped push; ignored for "org".
-    #[serde(default)]
-    pub target_id: Option<String>,
-    /// Settings dot-paths to lock on the targeted devices.
-    #[serde(default)]
-    pub locked_paths: Vec<String>,
-    /// Mark the targeted devices enrollment-locked (P5).
-    #[serde(default)]
-    pub managed: bool,
-}
-
 /// Lifecycle of a remote command. `pending` awaits multi-party approval;
 /// `approved` is signed and pollable; `dispatched` was handed to the agent;
 /// `acked` proves only that the agent responded; `applied` requires an
@@ -921,77 +864,6 @@ pub struct SignedCommand {
     pub epoch_version: i64,
     pub signature: String,
     pub signer_key: String,
-}
-
-/// A device-signed, hash-chained record of an action outcome. These records
-/// travel only inside the authenticated check-in envelope; `device_id` is
-/// nevertheless signed so a captured record cannot be replayed for another
-/// device.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-#[serde(deny_unknown_fields)]
-pub struct ActionOutcome {
-    #[serde(default = "default_action_outcome_version")]
-    pub version: u16,
-    pub receipt_id: String,
-    pub device_id: DeviceId,
-    pub sequence: u64,
-    #[serde(default)]
-    pub previous_hash: Option<String>,
-    #[serde(default)]
-    pub command_id: Option<String>,
-    pub catalog_id: String,
-    pub action_class: ActionClass,
-    pub outcome: ActionOutcomeState,
-    pub observed_at: String,
-    /// Bounded structured data interpreted by the catalog-specific result
-    /// seam. The server validates its size and readiness-self-test shape.
-    pub result_digest: Value,
-    /// Lowercase SHA-256 hex of [`canonical_action_outcome_bytes`].
-    pub record_hash: String,
-    /// Base64 Ed25519 signature over the 32 raw bytes of `record_hash`.
-    pub signature: String,
-}
-
-fn default_action_outcome_version() -> u16 {
-    1
-}
-
-/// Factual outcome state. `Unknown` is deliberately distinct from a success.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-#[serde(rename_all = "snake_case")]
-pub enum ActionOutcomeState {
-    Pass,
-    Fail,
-    Unknown,
-}
-
-/// Per-step status for a non-destructive readiness self-test.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-#[serde(rename_all = "snake_case")]
-pub enum ReadinessState {
-    Pass,
-    Fail,
-    Unknown,
-}
-
-/// Structured result required for the `readiness.self_test` outcome catalog.
-/// It documents verification only; it never authorizes a destructive action.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-#[serde(deny_unknown_fields)]
-pub struct ReadinessSelfTestResult {
-    pub arm_predicate: ReadinessState,
-    pub signed_dispatch: ReadinessState,
-    pub simulate_branch: ReadinessState,
-    pub recovery_path: ReadinessState,
-    pub observed_at: String,
 }
 
 /// Request a single-use confirmation token for an irreversible action.
@@ -1725,57 +1597,6 @@ pub struct PostureReport {
     pub shield_running: Option<bool>,
 }
 
-/// Privacy Shield's admin-desired on/off + mode, resolved device > group > org
-/// (same precedence as `ConfigEpoch`) but stored and versioned SEPARATELY from
-/// the policy `config_epochs` chain. Toggling the shield from the console
-/// must NEVER advance `ConfigEpoch.version` — that chain is for actual policy
-/// edits, and every version bump makes every OTHER device look momentarily
-/// "behind" in `routes::posture::drift` (which compares against the org's
-/// single highest version regardless of target). Delivered to the agent on
-/// the same fast `/v1/agents/checkin` round-trip as `config_epoch`, via
-/// `CheckinResponse.shield_state`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-pub struct ShieldDesiredState {
-    pub enabled: bool,
-    /// `"blur_notify"` (blur/black-out the screen AND notify) | `"notify_only"`
-    /// (notification only, no visual blur). Mutually exclusive — see the
-    /// Privacy Shield card's segmented toggle.
-    pub mode: String,
-    /// RFC3339, set by the server when this desired state was last written.
-    /// Informational only (no anti-rollback gate — latest write always wins,
-    /// unlike `ConfigEpoch`).
-    pub updated_at: String,
-    /// The durable per-device command that caused this desired state, when
-    /// this is a device-scoped Start/Stop request. The endpoint echoes this
-    /// identifier only in lifecycle receipts; it never carries camera media
-    /// or application details. Org/group defaults have no command id.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command_id: Option<String>,
-}
-
-/// Agent → server report of ONE local Windows monitor alert the agent already
-/// showed the user (screen capture, CPU/RAM/network threshold, ransomware,
-/// remote access, driver, Wi-Fi, network honeypot, VPN kill switch, USB
-/// security, or a content-free clipboard class). The per-alert setting or Fleet's signed master policy gates the
-/// forwarding. `detail` is a closed, Pro-normalized summary: class/severity,
-/// bounded counters, or aggregate metric values only—never clipboard text,
-/// process names, paths, peers, SSIDs, window titles, or other free text.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-pub struct LocalAlertReport {
-    /// Closed allowlist enforced by Pro's `normalize_local_alert`.
-    pub alert_type: String,
-    /// e.g. `{"detected":"OBS Studio","process":"obs64.exe"}` or
-    /// `{"metric":"cpu","value_pct":94,"threshold_pct":85,"duration_s":300}`.
-    pub detail: Value,
-    /// RFC3339, set by the agent at the moment the local notification fired.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub occurred_at: Option<String>,
-}
-
 // ── Clipboard Guard + Ink Receipt device reports (plan §4.4, §5.6) ───────
 // Both types below ride `CheckinRequest` as a new batched `Vec<_>` field —
 // `local_alerts: Vec<LocalAlertReport>` above is the batching precedent
@@ -1955,47 +1776,6 @@ pub struct DeviceResourceSample {
     pub sampled_at: String,
 }
 
-/// One admin-facing notification (P3). Currently emitted for config DRIFT — a
-/// device running behind its resolved policy epoch (and, when the device reports
-/// `toggle_states`, the specific toggles that diverged). `detail` is PII-free.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-pub struct FleetNotification {
-    pub id: i64,
-    /// Notification class — "drift" (config drift) or "insider_risk" (a critical
-    /// Argus DLP/tamper/tripwire signal); extensible (e.g. "device_dark").
-    pub kind: String,
-    /// "info" | "warn" | "critical".
-    pub severity: String,
-    /// One-line human summary (no PII).
-    pub summary: String,
-    /// Structured PII-free detail (e.g. drifted toggle paths + desired values).
-    pub detail: Value,
-    #[serde(default)]
-    pub device_id: Option<DeviceId>,
-    #[serde(default)]
-    pub hostname: Option<String>,
-    pub read: bool,
-    pub created_at: String,
-    /// Number of identical events folded into this notification during its
-    /// cooldown window. A value above one means Fleet suppressed duplicate
-    /// paging while retaining occurrence evidence.
-    #[serde(default = "default_notification_occurrence_count")]
-    pub occurrence_count: u32,
-    /// Most recent occurrence, distinct from when this incident card started.
-    #[serde(default)]
-    pub latest_at: String,
-    /// Bounded, safe correlation/request IDs for this incident. Never carries
-    /// device content, camera data, clipboard data, or free-form text.
-    #[serde(default)]
-    pub correlation_ids: Vec<String>,
-}
-
-fn default_notification_occurrence_count() -> u32 {
-    1
-}
-
 /// Per-device drift view (F7): how the device's applied epoch compares to the
 /// org's latest published policy epoch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2084,171 +1864,11 @@ pub struct UpdateAdminRoleRequest {
     pub role: AdminRole,
 }
 
-// ── PKM-1 / Policy types ─────────────────────────────────────────────────
-// Three-layer policy model (org → group → device). The fleet server resolves
-// all applicable layers into a per-device `ResolvedPolicy` and signs it with
-// `policy_preimage`; the agent verifies the signature and applies the intents.
-//
-// Layer priority (higher wins):
-//   org < group < device
-//
-// Intent modes:
-//   "off"       — feature is disabled; no enforcement.
-//   "report"    — observe and audit but do not block.
-//   "heal"      — detect divergence and automatically remediate.
-//   "hard-lock" — enforce and block any local override.
-
-/// The per-key intent published within one policy layer.  Each intent binds
-/// a policy key to a desired value, an enforcement mode, and an optional TTL.
-/// The server normalises and signs an ordered slice of these in
-/// [`ResolvedPolicy`]; the agent enforces them in `mode` order.
-///
-/// Wire type — shared with the fleet server and the admin panel.  All fields
-/// are serialised; none are optional except `ttl_secs` (absent = no expiry).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-pub struct PolicyIntent {
-    /// Dot-path policy key, e.g. `"privacy.telemetry"` or `"fleet.enabled"`.
-    pub key: String,
-    /// Desired value — matches the AppSettings field type on the wire.
-    pub value: serde_json::Value,
-    /// Enforcement mode: `"off"` | `"report"` | `"heal"` | `"hard-lock"`.
-    /// Unknown modes are treated as `"off"` by the agent (fail-safe).
-    pub mode: String,
-    /// How long (seconds) this intent is valid for.  `None` = no expiry.
-    /// The agent re-fetches policy before acting on an expired intent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ttl_secs: Option<u64>,
-}
-
-/// One layer of the policy stack as stored and served by the fleet server.
-/// Layers are merged by the server (priority ascending) into a
-/// [`ResolvedPolicy`] that is signed and handed to the agent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-pub struct PolicyLayer {
-    /// Scope of this layer: `"org"` | `"group"` | `"device"`.
-    pub layer_kind: String,
-    /// Scope identifier within the kind (group_id / device_id). `None` for
-    /// org-wide layers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub layer_id: Option<String>,
-    /// Priority used when merging layers.  Higher priority wins on conflict.
-    /// Conventional values: org=0, group=100, device=200.
-    pub priority: i64,
-    /// The intents this layer declares.  The server deduplicates by `key`
-    /// (highest-priority wins) before producing [`ResolvedPolicy`].
-    pub intents: Vec<PolicyIntent>,
-}
-
-/// The signed, per-device policy projection delivered to the agent.  Produced
-/// by the fleet server after merging all applicable [`PolicyLayer`]s.
-///
-/// The agent verifies the signature over [`policy_preimage`]`(version, org_id,
-/// device_id, intents)` using the fleet signing key pinned at enroll time, then
-/// applies the intents in priority order.
-///
-/// `version` is monotonically increasing per org (same anti-rollback rule as
-/// [`ConfigEpoch`]).  Agents reject any `ResolvedPolicy` whose `version` is ≤
-/// the last applied version.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
-pub struct ResolvedPolicy {
-    /// Monotonically increasing policy version for this org.
-    pub version: i64,
-    pub org_id: OrgId,
-    pub device_id: DeviceId,
-    /// Merged, deduplicated intents (sorted by `key` in the preimage — see
-    /// [`policy_preimage`]).
-    pub intents: Vec<PolicyIntent>,
-}
-
 // ── Canonical signing preimages (SSOT) ──────────────────────────────────
 // The fleet server signs with these; the agent (and Free's policy-apply path)
 // rebuild the same bytes to verify. Object keys are sorted recursively so
 // semantically-equal JSON always produces identical bytes regardless of map
 // ordering (serde_json's order is NOT guaranteed across the workspace).
-
-/// All inputs that bind into a config-epoch signature. Every call site must
-/// construct this struct explicitly so adding a field later causes a compile
-/// error at every site rather than silently falling out of the preimage.
-// KT: Typed struct is the SSOT entry point. `epoch_preimage` owns the byte
-// layout. Nothing else should call `canonical_epoch_bytes` + `epoch_signing_envelope`
-// by hand for an epoch — use `epoch_preimage(EpochSigningInput { … })` instead.
-#[derive(Debug, Clone)]
-pub struct EpochSigningInput<'a> {
-    pub version: i64,
-    pub config: &'a Value,
-    pub locked_paths: &'a [String],
-    pub managed: bool,
-    pub target_kind: &'a str,
-    pub target_id: Option<&'a str>,
-}
-
-/// The single function that owns the epoch signing preimage. All signers and
-/// verifiers must call this — never assemble the bytes by hand.
-///
-/// Byte layout (stable): 8-byte big-endian `version`, then canonical JSON of the
-/// signing envelope `{config, locked_paths, managed, target_id, target_kind}`.
-/// `locked_paths` is sorted+deduped so semantically-equal lock sets are
-/// byte-identical. Object keys are recursively sorted for the same reason.
-pub fn epoch_preimage(input: &EpochSigningInput<'_>) -> Vec<u8> {
-    let envelope = epoch_signing_envelope(
-        input.config,
-        input.locked_paths,
-        input.managed,
-        input.target_kind,
-        input.target_id,
-    );
-    canonical_epoch_bytes(input.version, &envelope)
-}
-
-/// Preimage for a config epoch: 8-byte big-endian version, then canonical JSON.
-/// The `config` argument is the *signed object* — for a targeted/locked epoch
-/// that is the envelope produced by [`epoch_signing_envelope`], NOT the bare
-/// `config_json`. Keeping this function payload-agnostic means the targeting +
-/// lock fields (P2) bind into the signature with no change to this primitive.
-// KT: This is a low-level primitive kept `pub` for tests. Production paths must
-// go through `epoch_preimage(EpochSigningInput { … })` to avoid missing fields.
-pub fn canonical_epoch_bytes(version: i64, config: &Value) -> Vec<u8> {
-    let mut buf = version.to_be_bytes().to_vec();
-    let mut json = String::new();
-    write_canonical(config, &mut json);
-    buf.extend_from_slice(json.as_bytes());
-    buf
-}
-
-/// Build the canonical *signed envelope* for a Fleet Control Plane epoch. The
-/// server signs `canonical_epoch_bytes(version, &envelope)`; the agent and
-/// Free's policy-apply path rebuild the identical envelope to verify. Binding
-/// the target + locks into the preimage is security-critical:
-///   - `target_kind`/`target_id` stop a device replaying another scope's epoch.
-///   - `locked_paths`/`managed` stop a tampered pull from stripping locks.
-///
-/// `locked_paths` is sorted so semantically-equal lock sets sign identically.
-// KT: This is the building block for `epoch_preimage`. Call `epoch_preimage`
-// in production; this is exposed for low-level testing only.
-pub fn epoch_signing_envelope(
-    config: &Value,
-    locked_paths: &[String],
-    managed: bool,
-    target_kind: &str,
-    target_id: Option<&str>,
-) -> Value {
-    let mut locks: Vec<String> = locked_paths.to_vec();
-    locks.sort();
-    locks.dedup();
-    serde_json::json!({
-        "config": config,
-        "locked_paths": locks,
-        "managed": managed,
-        "target_kind": target_kind,
-        "target_id": target_id,
-    })
-}
 
 /// Preimage for a remote command. The agent rebuilds this from the
 /// `SignedCommand` fields and verifies before executing.
@@ -2278,145 +1898,6 @@ pub fn canonical_command_bytes(
     let mut out = String::new();
     write_canonical(&envelope, &mut out);
     out.into_bytes()
-}
-
-/// Canonical bytes whose SHA-256 becomes an action outcome's `record_hash`.
-/// This is intentionally independent of serde's map ordering and excludes the
-/// derived hash/signature fields, so every endpoint implementation signs the
-/// same record.
-pub fn canonical_action_outcome_bytes(outcome: &ActionOutcome) -> Vec<u8> {
-    let envelope = serde_json::json!({
-        "version": outcome.version,
-        "receipt_id": outcome.receipt_id,
-        "device_id": outcome.device_id.0,
-        "sequence": outcome.sequence,
-        "previous_hash": outcome.previous_hash,
-        "command_id": outcome.command_id,
-        "catalog_id": outcome.catalog_id,
-        "action_class": outcome.action_class.as_wire_str(),
-        "outcome": match outcome.outcome {
-            ActionOutcomeState::Pass => "pass",
-            ActionOutcomeState::Fail => "fail",
-            ActionOutcomeState::Unknown => "unknown",
-        },
-        "observed_at": outcome.observed_at,
-        "result_digest": outcome.result_digest,
-    });
-    let mut canonical = String::new();
-    write_canonical(&envelope, &mut canonical);
-    canonical.into_bytes()
-}
-
-/// SHA-256 hex digest for an action outcome's canonical bytes.
-pub fn action_outcome_hash(outcome: &ActionOutcome) -> String {
-    let digest = Sha256::digest(canonical_action_outcome_bytes(outcome));
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-/// SHA-256 of a JSON value after the Fleet canonical encoder has sorted every
-/// object key. Action outcomes use this to bind their device signature to the
-/// complete typed command result which travels in the HMAC-authenticated ack.
-/// It deliberately hashes `null` too: absent evidence is an explicit state,
-/// never an implicit success.
-pub fn canonical_json_sha256(value: &Value) -> String {
-    let mut canonical = String::new();
-    write_canonical(value, &mut canonical);
-    let digest = Sha256::digest(canonical.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-/// Verify both the canonical record hash and its device outcome-key signature.
-/// Invalid encoding, an invalid key, or an invalid signature all fail closed.
-pub fn verify_action_outcome(outcome: &ActionOutcome, public_key_b64: &str) -> bool {
-    if outcome.version != 1 || outcome.record_hash != action_outcome_hash(outcome) {
-        return false;
-    }
-    let Ok(hash) = hex_to_32_bytes(&outcome.record_hash) else {
-        return false;
-    };
-    let Ok(key_bytes) = B64.decode(public_key_b64) else {
-        return false;
-    };
-    let Ok(key_array) = <[u8; 32]>::try_from(key_bytes.as_slice()) else {
-        return false;
-    };
-    let Ok(verifying_key) = VerifyingKey::from_bytes(&key_array) else {
-        return false;
-    };
-    let Ok(signature_bytes) = B64.decode(&outcome.signature) else {
-        return false;
-    };
-    let Ok(signature) = Signature::from_slice(&signature_bytes) else {
-        return false;
-    };
-    verifying_key.verify(&hash, &signature).is_ok()
-}
-
-fn hex_to_32_bytes(input: &str) -> Result<[u8; 32], ()> {
-    if input.len() != 64 || !input.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(());
-    }
-    let mut bytes = [0u8; 32];
-    for (index, chunk) in input.as_bytes().chunks_exact(2).enumerate() {
-        bytes[index] = std::str::from_utf8(chunk)
-            .ok()
-            .and_then(|hex| u8::from_str_radix(hex, 16).ok())
-            .ok_or(())?;
-    }
-    Ok(bytes)
-}
-
-/// Canonical signing preimage for a [`ResolvedPolicy`].  The fleet server
-/// signs this; the agent rebuilds the identical bytes to verify before applying
-/// the policy.
-///
-/// Byte layout (stable): 8-byte big-endian `version`, then canonical JSON of
-/// `{"device_id": …, "intents": […], "org_id": …, "version": …}`.
-///
-/// **Security-critical bindings** — mirrors the rationale in `epoch_signing_envelope`:
-///   - `version` (prefix + JSON field) prevents rollback to a superseded policy.
-///   - `org_id` prevents cross-org replay (a policy signed for org A cannot
-///     be presented to org B's fleet server as valid).
-///   - `device_id` prevents cross-device replay (a policy resolved for device D1
-///     cannot be replayed onto device D2 — the preimage would not match).
-///
-/// `intents` is sorted by `key` ascending so the projection is
-/// order-independent: publishing the same logical intents in any order always
-/// produces the same bytes.
-///
-/// Reuses [`canonical_epoch_bytes`] + [`write_canonical`] — no hand-rolled
-/// byte logic here.
-// KT: SSOT for policy preimage. Signers and verifiers must call this;
-// never assemble the bytes by hand at call sites.
-pub fn policy_preimage(
-    version: i64,
-    org_id: &str,
-    device_id: &str,
-    intents: &[PolicyIntent],
-) -> Vec<u8> {
-    // Sort intents by key so the preimage is order-independent.
-    let mut sorted: Vec<&PolicyIntent> = intents.iter().collect();
-    sorted.sort_by(|a, b| a.key.cmp(&b.key));
-
-    // Serialise each intent to a serde_json::Value for canonical encoding.
-    // The intents array preserves the key-sorted order established above.
-    let intents_value: serde_json::Value = sorted
-        .iter()
-        .map(|i| serde_json::to_value(i).expect("PolicyIntent serialises infallibly"))
-        .collect::<Vec<_>>()
-        .into();
-
-    // Envelope keys (device_id, intents, org_id, version) are already
-    // alphabetically ordered here; write_canonical sorts them recursively
-    // regardless, so this is just for readability at the call site.
-    let envelope = serde_json::json!({
-        "device_id": device_id,
-        "intents":   intents_value,
-        "org_id":    org_id,
-        "version":   version,
-    });
-
-    canonical_epoch_bytes(version, &envelope)
 }
 
 /// All inputs that bind into an Ink Receipt ticket's signature (plan §5.4).
@@ -2525,7 +2006,7 @@ pub fn verify_signature_b64(public_key_b64: &str, msg: &[u8], signature_b64: &st
 // arbitrary_precision is ever switched on and a non-finite Number sneaks through.
 // In release builds the assert compiles away; the boundary validations upstream
 // are the runtime guard.
-fn write_canonical(v: &Value, out: &mut String) {
+pub(crate) fn write_canonical(v: &Value, out: &mut String) {
     match v {
         Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();
