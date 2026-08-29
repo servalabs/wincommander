@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use fleet_proto::{verify_signature_b64, PolicyEnvelope};
 use serde::Serialize;
 use tracing::{debug, info, warn};
 
@@ -488,12 +489,13 @@ pub async fn run_checkin_cycle_inner(
     //    local, so the server can never forge an operator command and an
     //    operator-signed blob can't masquerade as an ordinary one.
     let operator_key = config.cmd_pubkey;
-    let server_key = {
+    let pinned_server_key_b64 = {
         let s = fleet_state.lock().unwrap();
-        s.pinned_server_key_b64
-            .as_deref()
-            .and_then(|b| decode_verifying_key(b).ok())
+        s.pinned_server_key_b64.clone()
     };
+    let server_key = pinned_server_key_b64
+        .as_deref()
+        .and_then(|b| decode_verifying_key(b).ok());
     let mut seen_nonces = {
         let s = fleet_state.lock().unwrap();
         s.seen_nonces.clone()
@@ -512,10 +514,19 @@ pub async fn run_checkin_cycle_inner(
         s.seen_nonces = seen_nonces;
     }
 
-    // 4b. Surface the resolved config epoch (server-signed policy snapshot), if
-    //     any, to the platform for verify + apply. Duress-only agents no-op it.
-    if let Some(ref epoch) = resp.config_epoch {
-        dispatch.on_config_epoch(epoch);
+    // 4b. Verify the one signed policy envelope before exposing either
+    // section to a platform.  The signer is the enrollment-pinned key, never
+    // a key merely supplied inside the received packet.
+    match serde_json::from_value::<PolicyEnvelope>(resp.policy.clone()) {
+        Ok(policy)
+            if pinned_server_key_b64.as_deref() == Some(policy.signer_key.as_str())
+                && verify_signature_b64(
+                    &policy.signer_key,
+                    &policy.preimage(),
+                    &policy.signature,
+                ) => dispatch.on_policy_envelope(&resp.policy),
+        Ok(_) => warn!("fleet: rejected policy envelope signed by an unpinned or invalid key"),
+        Err(error) => warn!("fleet: rejected malformed policy envelope: {error}"),
     }
 
     // 4c. Execute any on-device content-search jobs this check-in handed us,

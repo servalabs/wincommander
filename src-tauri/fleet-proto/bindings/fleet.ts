@@ -22,7 +22,11 @@ export type ActionClass = "safe" | "destructive" | "irreversible";
  * nevertheless signed so a captured record cannot be replayed for another
  * device.
  */
-export type ActionOutcome = { version: number, receipt_id: string, device_id: DeviceId, sequence: bigint, previous_hash: string | null, command_id: string | null, catalog_id: string, action_class: ActionClass, outcome: ActionOutcomeState, observed_at: string,
+export type ActionOutcome = { version: number, receipt_id: string, device_id: DeviceId, sequence: bigint, previous_hash: string | null, command_id: string | null, catalog_id: string, action_class: ActionClass, outcome: ActionOutcomeState,
+/**
+ * Required for failed/unknown records; absent only for a confirmed pass.
+ */
+failure_stage: CommandFailureStage | null, observed_at: string,
 /**
  * Bounded structured data interpreted by the catalog-specific result
  * seam. The server validates its size and readiness-self-test shape.
@@ -36,6 +40,14 @@ record_hash: string,
  * Base64 Ed25519 signature over the 32 raw bytes of `record_hash`.
  */
 signature: string, };
+
+/**
+ * Server-signed recovery point for an endpoint that has lost only its local
+ * outcome-chain cursor. It preserves every accepted record: the next receipt
+ * continues from `previous_hash` at `next_sequence`, rather than replacing or
+ * deleting the existing chain.
+ */
+export type ActionOutcomeRecoveryCheckpoint = { checkpoint_id: string, org_id: OrgId, device_id: DeviceId, next_sequence: bigint, previous_hash: string | null, issued_at: string, signature: string, signer_key: string, };
 
 /**
  * Factual outcome state. `Unknown` is deliberately distinct from a success.
@@ -184,6 +196,12 @@ occurred_at: string, policy_version: bigint,
  * String form of a `wincmd_clip_rules::RuleId` — see the struct doc.
  */
 rule_id: string, rule_revision: number, severity: Severity, actions_attempted: Array<Action>, actions_succeeded: Array<Action>, suppressed_count: number, };
+
+/**
+ * Where a command stopped. This is part of the signed receipt so an operator
+ * can distinguish a rejected policy gate from an endpoint execution failure.
+ */
+export type CommandFailureStage = "resolve" | "gate" | "dispatch" | "execute" | "report";
 
 /**
  * Discoverable, AV-safe catalog metadata for one remote command. Mirrors an
@@ -636,6 +654,12 @@ export type ListDirResult = { ok: boolean, path: string, detail: string | null, 
  */
 export type LocalAlertReport = {
 /**
+ * Endpoint-minted UUID. It is stable across an outbox retry, so the
+ * server can retain a repeated check-in as one occurrence rather than
+ * creating a second alert or second external notification.
+ */
+event_id: string,
+/**
  * Closed allowlist enforced by Pro's `normalize_local_alert`.
  */
 alert_type: string,
@@ -666,6 +690,27 @@ export type LoginResponse = { token: string, role: AdminRole, expires_at: string
  * org slugs once multi-tenancy is enabled.
  */
 export type OrgId = string;
+
+/**
+ * The only policy payload sent by a check-in response.  It carries separate
+ * independently-revised sections in one server-signed envelope so every
+ * agent receives the same policy decision atomically.
+ */
+export type PolicyEnvelope = { org_id: OrgId, device_id: DeviceId, config: ConfigEpoch | null, shield: ShieldDesiredState | null,
+/**
+ * Latest independent Shield revision for the organisation, including a
+ * tombstone/empty shield section.  This prevents replaying an older
+ * signed empty section to erase a newer Shield policy.
+ */
+shield_revision: bigint,
+/**
+ * Base64 Ed25519 signature over [`policy_envelope_preimage`].
+ */
+signature: string,
+/**
+ * Base64 public key expected to match the key pinned at enrollment.
+ */
+signer_key: string, };
 
 /**
  * The per-key intent published within one policy layer.  Each intent binds
@@ -966,34 +1011,26 @@ export type SecuritySnapshotService = { name: string, start_type: string, status
 export type Severity = "info" | "warn" | "high" | "critical";
 
 /**
- * Privacy Shield's admin-desired on/off + mode, resolved device > group > org
- * (same precedence as `ConfigEpoch`) but stored and versioned SEPARATELY from
- * the policy `config_epochs` chain. Toggling the shield from the console
- * must NEVER advance `ConfigEpoch.version` — that chain is for actual policy
- * edits, and every version bump makes every OTHER device look momentarily
- * "behind" in `routes::posture::drift` (which compares against the org's
- * single highest version regardless of target). Delivered to the agent on
- * the same fast `/v1/agents/checkin` round-trip as `config_epoch`, via
- * `CheckinResponse.shield_state`.
+ * Privacy Shield's resolved desired state.  Its revision is deliberately
+ * independent from [`ConfigEpoch::version`]: changing the shield must not
+ * make ordinary configuration appear behind.
  */
 export type ShieldDesiredState = { enabled: boolean,
 /**
- * `"blur_notify"` (blur/black-out the screen AND notify) | `"notify_only"`
- * (notification only, no visual blur). Mutually exclusive — see the
- * Privacy Shield card's segmented toggle.
+ * `"blur_notify"` | `"notify_only"`.
  */
 mode: string,
 /**
- * RFC3339, set by the server when this desired state was last written.
- * Informational only (no anti-rollback gate — latest write always wins,
- * unlike `ConfigEpoch`).
+ * Monotonic only for this resolved Shield policy domain.
+ */
+revision: bigint,
+/**
+ * RFC3339 server write time, useful for display but never used as the
+ * anti-rollback guard.
  */
 updated_at: string,
 /**
- * The durable per-device command that caused this desired state, when
- * this is a device-scoped Start/Stop request. The endpoint echoes this
- * identifier only in lifecycle receipts; it never carries camera media
- * or application details. Org/group defaults have no command id.
+ * Device-scoped Start/Stop command that caused this state, if any.
  */
 command_id: string | null, };
 
