@@ -1304,9 +1304,9 @@ pub struct FileOpResult {
 
 /// Aggregate productivity sample sent by an agent. Carries NO raw titles, URLs,
 /// or keystrokes — only scalars + category scores (raw signals stay AES-GCM
-/// encrypted on the device). Ingest is rejected unless `consent_version` matches
-/// `disclosure_version` (the monitored user's consent must match the active
-/// disclosure). Disclosed/consent-gated — never coupled to covert features.
+/// encrypted on the device). `consent_version` remains a legacy wire field for
+/// compatibility; ingest records the active `disclosure_version` and does not
+/// treat either version as a consent gate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
@@ -1341,6 +1341,33 @@ pub struct DeviceProductivity {
     pub category_totals: Value,
 }
 
+/// Admin-authored rule that maps an app/title to a category path and optional
+/// display color. Validation belongs to the Fleet server; this is only the
+/// shared wire shape used by the server and its console.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct ProductivityCategoryRule {
+    pub name: Vec<String>,
+    pub regex: String,
+    pub ignore_case: bool,
+    /// Empty means no display color has been set.
+    pub color: String,
+}
+
+/// Fully resolved organization branding returned to the Fleet console. The
+/// server supplies its defaults, so `display_name` and `accent_color` are
+/// always present while `logo_url` remains optional.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
+pub struct BrandingView {
+    pub org_id: String,
+    pub display_name: String,
+    pub logo_url: Option<String>,
+    pub accent_color: String,
+}
+
 /// Typed failure surface shared with the admin panel so the UI can branch on
 /// the kind rather than parsing error strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1352,7 +1379,7 @@ pub enum FleetError {
     /// A config epoch (or command) was rejected as older than the current one.
     StaleEpoch,
     BadSignature,
-    /// Malformed input (bad timestamps, negative counts, consent mismatch).
+    /// Malformed input (bad timestamps or negative counts).
     BadRequest,
     /// A uniqueness constraint was violated (duplicate version / idempotency key).
     Conflict,
@@ -1453,8 +1480,8 @@ pub struct AssignGroupRequest {
 /// Argus security-signal sample sent by an agent. Carries NO filenames, paths,
 /// URLs, printer names, document names, or usernames — only kind + class +
 /// magnitude + severity + a disclosure-notice version. `consent_version` is
-/// vestigial (hardcoded `1`, never read) — there is no consent gate; ingest is
-/// never refused for a disclosure_version mismatch, only recorded as one.
+/// retained for wire compatibility (hardcoded `1`, never read); there is no
+/// consent gate and a disclosure-version mismatch is recorded, not refused.
 /// kind ∈ {"dlp_exfil","tamper","print","removable_media"}.
 /// class = sub-type label (e.g. "usb_large_transfer", "log_cleared").
 /// magnitude = aggregate scalar (bytes / pages / count).
@@ -1542,7 +1569,7 @@ pub struct DeviceArgusCoverage {
     /// RFC 3339 window_end of the most recent ingested signal, else `None`.
     pub last_signal_at: Option<String>,
     /// Disclosure version of the most recent ingested signal, else `None`.
-    /// (Ingested signals always satisfy consent_version == disclosure_version.)
+    /// (A mismatch is retained as disclosure evidence rather than rejected.)
     pub disclosure_version: Option<i32>,
     /// Distinct signal kinds observed for this device in the window, sorted asc.
     pub kinds_observed: Vec<String>,

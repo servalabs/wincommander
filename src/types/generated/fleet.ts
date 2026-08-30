@@ -113,8 +113,8 @@ max_severity: string, };
  * Argus security-signal sample sent by an agent. Carries NO filenames, paths,
  * URLs, printer names, document names, or usernames — only kind + class +
  * magnitude + severity + a disclosure-notice version. `consent_version` is
- * vestigial (hardcoded `1`, never read) — there is no consent gate; ingest is
- * never refused for a disclosure_version mismatch, only recorded as one.
+ * retained for wire compatibility (hardcoded `1`, never read); there is no
+ * consent gate and a disclosure-version mismatch is recorded, not refused.
  * kind ∈ {"dlp_exfil","tamper","print","removable_media"}.
  * class = sub-type label (e.g. "usb_large_transfer", "log_cleared").
  * magnitude = aggregate scalar (bytes / pages / count).
@@ -158,6 +158,13 @@ export type AssignGroupRequest = { group_id: string | null, };
  * the panel agree on the shape (SSOT) — RFC 3339 `at`.
  */
 export type AuditEntry = { actor: string, action: string, target: string | null, outcome: string, detail: JsonValue, at: string, };
+
+/**
+ * Fully resolved organization branding returned to the Fleet console. The
+ * server supplies its defaults, so `display_name` and `accent_color` are
+ * always present while `logo_url` remains optional.
+ */
+export type BrandingView = { org_id: string, display_name: string, logo_url: string | null, accent_color: string, };
 
 /**
  * One of the individually-named patterns migrated from the free-tier
@@ -366,7 +373,7 @@ monitoring_active: boolean,
 last_signal_at: string | null,
 /**
  * Disclosure version of the most recent ingested signal, else `None`.
- * (Ingested signals always satisfy consent_version == disclosure_version.)
+ * (A mismatch is retained as disclosure evidence rather than rejected.)
  */
 disclosure_version: number | null,
 /**
@@ -814,11 +821,22 @@ shield_running: boolean | null, };
 export type PrinterClass = "pdf" | "secure_physical";
 
 /**
+ * Admin-authored rule that maps an app/title to a category path and optional
+ * display color. Validation belongs to the Fleet server; this is only the
+ * shared wire shape used by the server and its console.
+ */
+export type ProductivityCategoryRule = { name: Array<string>, regex: string, ignore_case: boolean,
+/**
+ * Empty means no display color has been set.
+ */
+color: string, };
+
+/**
  * Aggregate productivity sample sent by an agent. Carries NO raw titles, URLs,
  * or keystrokes — only scalars + category scores (raw signals stay AES-GCM
- * encrypted on the device). Ingest is rejected unless `consent_version` matches
- * `disclosure_version` (the monitored user's consent must match the active
- * disclosure). Disclosed/consent-gated — never coupled to covert features.
+ * encrypted on the device). `consent_version` remains a legacy wire field for
+ * compatibility; ingest records the active `disclosure_version` and does not
+ * treat either version as a consent gate.
  */
 export type ProductivitySample = { window_start: string, window_end: string, active_seconds: number, idle_seconds: number,
 /**
