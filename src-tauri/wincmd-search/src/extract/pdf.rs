@@ -225,9 +225,10 @@ fn read_info_props(doc: &Document) -> DocProps {
 /// or UTF-16BE with a leading FE FF BOM — decode both rather than assume one.
 fn decode_pdf_string(bytes: &[u8]) -> String {
     if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
-        let units: Vec<u16> = rest
-            .chunks_exact(2)
-            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+        let (pairs, _) = rest.as_chunks::<2>();
+        let units: Vec<u16> = pairs
+            .iter()
+            .map(|pair| u16::from_be_bytes(*pair))
             .collect();
         String::from_utf16_lossy(&units)
     } else {

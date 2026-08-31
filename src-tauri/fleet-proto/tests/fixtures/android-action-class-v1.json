@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "commands": [
+    { "catalog_id": "duress_seal", "action_class": "destructive" },
+    { "catalog_id": "raise_posture", "action_class": "destructive" },
+    { "catalog_id": "duress_wipe", "action_class": "irreversible" },
+    { "catalog_id": "all_clear_revoke", "action_class": "irreversible" },
+    { "catalog_id": "duress_unseal", "action_class": "safe" },
+    { "catalog_id": "all_clear", "action_class": "safe" },
+    { "catalog_id": "rotate_key", "action_class": "safe" },
+    { "catalog_id": "unenroll", "action_class": "destructive" },
+    { "catalog_id": "suspend_deadman", "action_class": "safe" },
+    { "catalog_id": "set_deadman_policy", "action_class": "safe" },
+    { "catalog_id": "set_posture_policy", "action_class": "safe" }
+  ]
+}

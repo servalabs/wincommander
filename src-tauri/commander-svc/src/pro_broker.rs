@@ -343,6 +343,7 @@ fn hash_matches_fixed_pro(reported: &str) -> bool {
 }
 
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 fn spawn_pro_for_presentation(
     session_id: u32,
     caller_sid: &str,

@@ -576,10 +576,8 @@ pub fn log_encrypt_line(date: &str, body: &str) -> String {
 pub fn log_decrypt_line(line: &str) -> Option<(String, String)> {
     let (rest, uses_aad) = if let Some(value) = line.strip_prefix("L2:") {
         (value, true)
-    } else if let Some(value) = line.strip_prefix("L:") {
-        (value, false)
     } else {
-        return None;
+        (line.strip_prefix("L:")?, false)
     };
     let colon_pos = rest.find(':')?;
     let date = &rest[..colon_pos];

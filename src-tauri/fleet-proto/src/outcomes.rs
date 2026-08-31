@@ -217,7 +217,7 @@ pub(crate) fn hex_to_32_bytes(input: &str) -> Result<[u8; 32], ()> {
         return Err(());
     }
     let mut bytes = [0u8; 32];
-    for (index, chunk) in input.as_bytes().chunks_exact(2).enumerate() {
+    for (index, chunk) in input.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         bytes[index] = std::str::from_utf8(chunk)
             .ok()
             .and_then(|hex| u8::from_str_radix(hex, 16).ok())

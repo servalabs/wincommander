@@ -280,6 +280,7 @@ impl VaultMountBroker {
 
     /// Called only after the captured named-pipe peer token was revalidated
     /// against this entry's grants.
+    #[allow(clippy::too_many_arguments)]
     pub fn mount_authorized(
         &self,
         store: &VaultAccessStore,
@@ -309,6 +310,7 @@ impl VaultMountBroker {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn mount_authorized_locked(
         &self,
         store: &VaultAccessStore,
@@ -618,7 +620,7 @@ impl VaultMountBroker {
             // operator of another member's live mount. The mounter alone may
             // close it; an administrator can still apply a policy, whose
             // serialized cleanup is service-owned and closes all mounts.
-            if !same_mount_owner(&active, caller_session, &caller_sid) {
+            if !same_mount_owner(&active, caller_session, caller_sid) {
                 return denied(entry_id, VaultMountReason::NotAuthorized);
             }
         }

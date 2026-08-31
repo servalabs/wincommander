@@ -796,23 +796,22 @@ fn get_primary_disk_serial() -> String {
 fn read_device_identity() -> DeviceIdentity {
     let portable = is_portable_os();
     #[cfg(windows)]
-    if portable {
-        return DeviceIdentity {
-            portable,
-            motherboard_uuid: String::new(),
-            primary_disk_serial: String::new(),
-            system_drive_serial: get_system_drive_serial(),
-        };
-    }
-
-    #[cfg(windows)]
     {
-        return DeviceIdentity {
-            portable,
-            motherboard_uuid: get_motherboard_uuid(),
-            primary_disk_serial: get_primary_disk_serial(),
-            system_drive_serial: None,
-        };
+        if portable {
+            DeviceIdentity {
+                portable,
+                motherboard_uuid: String::new(),
+                primary_disk_serial: String::new(),
+                system_drive_serial: get_system_drive_serial(),
+            }
+        } else {
+            DeviceIdentity {
+                portable,
+                motherboard_uuid: get_motherboard_uuid(),
+                primary_disk_serial: get_primary_disk_serial(),
+                system_drive_serial: None,
+            }
+        }
     }
 
     #[cfg(not(windows))]

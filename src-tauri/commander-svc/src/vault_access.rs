@@ -650,12 +650,11 @@ impl VaultAccessStore {
         else {
             return denied(VaultMountDenial::NotAuthorized);
         };
-        if self
+        if !self
             .fs
             .stable_file_identity(Path::new(&entry.container_path))
             .map(|identity| identity == resolved.identity)
             .unwrap_or(false)
-            == false
         {
             return denied(VaultMountDenial::NotAuthorized);
         }
@@ -2148,6 +2147,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 pub fn test_store() -> std::sync::Arc<VaultAccessStore> {
     struct EmptyFs;
     impl VaultFs for EmptyFs {

@@ -212,6 +212,7 @@ pub async fn serve(
 
 // ── Per-connection handler ───────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_connection(
     mut conn: tokio::net::windows::named_pipe::NamedPipeServer,
     caller_privileged: bool,
@@ -465,6 +466,7 @@ impl VerbError {
 /// Compute the reply for an already-authorized request. `trust_origin` is
 /// `Some` only for `SessionHelper`-class verbs (see [`authorize`]);
 /// `ReadOnly`/`Privileged` verbs always see `None`.
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_verb(
     req: Request,
     trust_origin: Option<TrustOrigin>,
@@ -508,9 +510,9 @@ async fn dispatch_verb(
             "svc.clipboard.set_enabled" => handle_set_enabled(clipboard_state, args),
 
             "svc.vault.get_policy" => Ok(serde_json::to_value(vault_access.policy())
-                .unwrap_or_else(|_| serde_json::Value::Null)),
+                .unwrap_or(serde_json::Value::Null)),
             "svc.vault.get_status" => Ok(serde_json::to_value(vault_access.status())
-                .unwrap_or_else(|_| serde_json::Value::Null)),
+                .unwrap_or(serde_json::Value::Null)),
             "svc.vault.apply_policy" => {
                 handle_vault_apply_and_cleanup(vault_access, vault_mount, args)
             }

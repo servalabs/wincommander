@@ -549,8 +549,8 @@ mod tests {
         }
         assert_eq!(INDEX_PROCESS_LOCK_NAME, "WinCommander_ContentIndex_lock");
         assert!(!INDEX_PROCESS_LOCK_NAME.starts_with("Global\\"));
-        assert!(INDEX_READ_LOCK_TIMEOUT_MS > 0);
-        assert!(INDEX_REPLACEMENT_LOCK_TIMEOUT_MS >= INDEX_READ_LOCK_TIMEOUT_MS);
+        const { assert!(INDEX_READ_LOCK_TIMEOUT_MS > 0) };
+        const { assert!(INDEX_REPLACEMENT_LOCK_TIMEOUT_MS >= INDEX_READ_LOCK_TIMEOUT_MS) };
         assert!(abandoned_index_lock_error().contains("repair or rescan"));
         assert!(source.contains("WAIT_ABANDONED => {"));
         assert!(source.contains("ReleaseMutex(handle);"));

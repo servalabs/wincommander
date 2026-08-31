@@ -61,6 +61,7 @@ fn supports(capabilities: &DriveCapabilities, operation: SanitizeOperation) -> b
 
 /// Build a per-device, per-disk plan only after re-observed hardware facts and
 /// an F6 Ed25519 approval token have passed. The plan intentionally cannot run.
+#[allow(clippy::too_many_arguments)]
 pub fn build_plan<'a>(
     fleet_device_id: &'a str,
     target: DiskIdentity<'a>,
