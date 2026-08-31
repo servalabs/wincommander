@@ -59,6 +59,30 @@ export async function runCleanupWorkers<T>(
     ));
 }
 
+export type CleanupClearResult = 'cleared' | 'reduced' | 'unchanged' | 'failed';
+
+export interface CleanupClearReconciliation {
+    result: CleanupClearResult;
+    removed: number;
+}
+
+/**
+ * The post-clear scan is the authoritative result. Several Windows cleaners
+ * can remove entries and still return a non-critical backend error while
+ * closing an optional handle, so reporting that response alone as a failure
+ * contradicted the count displayed on the card.
+ */
+export function reconcileCleanupClear(
+    before: number,
+    after: number,
+    backendSucceeded: boolean,
+): CleanupClearReconciliation {
+    const removed = Math.max(0, before - after);
+    if (after === 0) return { result: 'cleared', removed };
+    if (removed > 0) return { result: 'reduced', removed };
+    return { result: backendSucceeded ? 'unchanged' : 'failed', removed };
+}
+
 // Sentinel "account" for the combined All-Users view (#7).
 export const ALL_USERS_KEY = '__all__';
 // Must match the allowlist implemented by Get-CleanupSummaryAllUsers and
@@ -757,30 +781,32 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // Clear a category for the CURRENT user (in-process single-user clear).
     // `onDriveWipe` opens the drive-wipe selector dialog (owned by the caller)
     // instead of running the generic confirm+clear flow.
-    type ClearResult = 'cleared' | 'reduced' | 'unchanged' | 'failed';
-
     const clearAndReconcile = async (cat: CleanupCategory): Promise<{
-        result: ClearResult;
+        result: CleanupClearResult;
         before: number;
         after: number;
+        removed: number;
+        error?: string;
     }> => {
         const before = Math.max(0, _cleanupCache[cat.id]?.count ?? cardDataMap[cat.id]?.count ?? 0);
         const clearer = clearerMap[cat.id];
-        if (!clearer) return { result: 'failed', before, after: before };
+        if (!clearer) return { result: 'failed', before, after: before, removed: 0 };
 
         updateCacheEntry(cat.id, { ...(_cleanupCache[cat.id] || { count: before, items: [] }), clearing: true, loading: false });
+        let backendSucceeded = false;
+        let error: string | undefined;
         try {
             const res = await clearer();
+            backendSucceeded = !!res.success;
+            error = res.error;
             await loadSingleCategory(cat);
             const after = Math.max(0, _cleanupCache[cat.id]?.count ?? before);
-            if (!res.success && !res.data) return { result: 'failed', before, after };
-            if (after === 0) return { result: 'cleared', before, after };
-            if (after < before) return { result: 'reduced', before, after };
-            return { result: 'unchanged', before, after };
-        } catch {
+            return { ...reconcileCleanupClear(before, after, backendSucceeded), before, after, error };
+        } catch (cause) {
             await loadSingleCategory(cat);
             const after = Math.max(0, _cleanupCache[cat.id]?.count ?? before);
-            return { result: 'failed', before, after };
+            error = String(cause);
+            return { ...reconcileCleanupClear(before, after, false), before, after, error };
         }
     };
 
@@ -820,13 +846,13 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
         const outcome = await clearAndReconcile(cat);
         if (outcome.result === 'cleared') {
-            showSuccess(`${cat.label} cleared.`);
+            showSuccess(`${cat.label}: removed ${outcome.removed} record${outcome.removed === 1 ? '' : 's'}; ${outcome.after} remain.`);
         } else if (outcome.result === 'reduced') {
-            showSuccess(`${cat.label} reduced from ${outcome.before} to ${outcome.after}.`);
+            showSuccess(`${cat.label}: removed ${outcome.removed} record${outcome.removed === 1 ? '' : 's'}; reduced from ${outcome.before} to ${outcome.after}.`);
         } else if (outcome.result === 'unchanged') {
-            showError(`${cat.label} still reports ${outcome.after} traces after cleanup.`);
+            showError(`${cat.label} still reports ${outcome.after} traces after cleanup.${outcome.error ? ` ${outcome.error}` : ''}`);
         } else {
-            showError(`Failed to clear ${cat.label}.`);
+            showError(outcome.error || `Failed to clear ${cat.label}.`);
         }
     };
 
@@ -855,20 +881,21 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             confirmLabel: "Clear categories",
         });
         if (!accepted) return;
-        const results = new Map<string, ClearResult>();
+        const results = new Map<string, CleanupClearReconciliation>();
         await runCleanupWorkers(withFindings, async cat => {
-            results.set(cat.id, (await clearAndReconcile(cat)).result);
+            results.set(cat.id, await clearAndReconcile(cat));
         });
-        const cleared = withFindings.filter(cat => results.get(cat.id) === 'cleared');
-        const reduced = withFindings.filter(cat => results.get(cat.id) === 'reduced');
-        const unchanged = withFindings.filter(cat => results.get(cat.id) === 'unchanged');
-        const failed = withFindings.filter(cat => results.get(cat.id) === 'failed');
+        const cleared = withFindings.filter(cat => results.get(cat.id)?.result === 'cleared');
+        const reduced = withFindings.filter(cat => results.get(cat.id)?.result === 'reduced');
+        const unchanged = withFindings.filter(cat => results.get(cat.id)?.result === 'unchanged');
+        const failed = withFindings.filter(cat => results.get(cat.id)?.result === 'failed');
+        const removed = Array.from(results.values()).reduce((total, outcome) => total + outcome.removed, 0);
         if (cleared.length || reduced.length) {
             const summary = [
                 cleared.length ? `${cleared.length} cleared` : '',
                 reduced.length ? `${reduced.length} reduced` : '',
             ].filter(Boolean).join(', ');
-            showSuccess(`${label}: ${summary}.`);
+            showSuccess(`${label}: ${summary}; ${removed} record${removed === 1 ? '' : 's'} removed.`);
         }
         if (unchanged.length || failed.length) {
             const unchangedLabels = unchanged.map(cat => cat.label);

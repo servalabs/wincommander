@@ -4,7 +4,11 @@ import {
   DEEP_DFIR_CATEGORIES,
   STANDARD_CATEGORIES,
 } from "./cleanupCategories";
-import { getCleanupScanConcurrency, runCleanupWorkers } from "./useCleanupScan";
+import {
+  getCleanupScanConcurrency,
+  reconcileCleanupClear,
+  runCleanupWorkers,
+} from "./useCleanupScan";
 
 describe("System Cleanup usability tiers", () => {
   test("assigns every scan category to one impact tier", () => {
@@ -37,5 +41,23 @@ describe("System Cleanup usability tiers", () => {
 
     expect(peak).toBe(2);
     expect(completed.sort()).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test("reports observed cleanup progress even when a cleaner returns a late error", () => {
+    expect(reconcileCleanupClear(12, 0, false)).toEqual({
+      result: "cleared",
+      removed: 12,
+    });
+    expect(reconcileCleanupClear(12, 5, false)).toEqual({
+      result: "reduced",
+      removed: 7,
+    });
+  });
+
+  test("keeps an unchanged failed cleanup as a failure", () => {
+    expect(reconcileCleanupClear(12, 12, false)).toEqual({
+      result: "failed",
+      removed: 0,
+    });
   });
 });

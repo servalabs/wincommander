@@ -1719,6 +1719,11 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Set-PowerPlan" => Some("tweaks/maintenance"),
 
         "Restart-Explorer" => Some("core/utils"),
+        // Explorer's direct secure-delete verb executes this backend command
+        // without mounting the frontend. Keep it registered with the shared
+        // erase implementation so file and folder context-menu actions do
+        // not fail before PowerShell is launched.
+        "Invoke-7Erase" => Some("core/utils"),
         // Feature 1: shred policy (free; writes $script:WC_SHRED_PASSES + $script:WC_SHRED_MEDIA_AWARE)
         "Set-ShredPolicy" => Some("core/utils"),
 
@@ -3546,6 +3551,11 @@ mod module_dependency_tests {
             None,
             "the paid action must route through the Pro dispatcher, not Free PowerShell"
         );
+    }
+
+    #[test]
+    fn explorer_context_shred_uses_the_local_secure_erase_module() {
+        assert_eq!(get_module_for_command("Invoke-7Erase"), Some("core/utils"));
     }
 }
 
