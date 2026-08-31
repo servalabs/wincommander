@@ -44,6 +44,7 @@ fn show_custom_notification(
     );
 
     ensure_notification_window(app)?;
+    promote_notification_window(app)?;
 
     let toast_id = TOAST_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
     let payload = CustomNotificationPayload {
@@ -56,6 +57,48 @@ fn show_custom_notification(
 
     app.emit("wc-native-notification", payload)
         .map_err(|error| format!("could not emit external notification: {error}"))
+}
+
+/// Privacy Shield uses a separate topmost overlay. Re-promote the alert window
+/// for every delivery so a detection alert is visible above that overlay instead
+/// of appearing only after the shield is disabled. `SWP_NOACTIVATE` preserves
+/// the user's current focus and keeps the alert click-through until its renderer
+/// decides it has content to show.
+fn promote_notification_window(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("notification-alerts")
+        .ok_or_else(|| "notification window was not created".to_string())?;
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        };
+
+        let raw = window
+            .hwnd()
+            .map_err(|error| format!("notification hwnd: {error}"))?;
+        let promoted = unsafe {
+            SetWindowPos(
+                raw.0 as HWND,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        };
+        if promoted == 0 {
+            return Err("could not promote notification window above Privacy Shield".to_string());
+        }
+    }
+
+    #[cfg(not(windows))]
+    let _ = window;
+
+    Ok(())
 }
 
 fn ensure_notification_window(app: &AppHandle) -> Result<(), String> {
@@ -210,7 +253,7 @@ pub fn show_rdp_idle_warning_native(
 
 #[cfg(test)]
 mod tests {
-    use super::infer_presentation;
+    use super::{infer_presentation, promote_notification_window};
 
     #[test]
     fn ransomware_alerts_have_danger_presentation() {
@@ -226,5 +269,19 @@ mod tests {
             infer_presentation("Update available", "A new build is ready."),
             ("info", "WinCommander")
         );
+    }
+
+    #[test]
+    fn custom_notifications_are_promoted_above_privacy_shield_without_activation() {
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/native_notify.rs"));
+        let start = source
+            .find("fn show_custom_notification")
+            .expect("custom notification path must exist");
+        let body = &source[start..start + 900.min(source.len() - start)];
+        assert!(body.contains("ensure_notification_window(app)?;"));
+        assert!(body.contains("promote_notification_window(app)?;"));
+        assert!(source.contains("HWND_TOPMOST"));
+        assert!(source.contains("SWP_NOACTIVATE"));
+        let _ = promote_notification_window as fn(&tauri::AppHandle) -> Result<(), String>;
     }
 }

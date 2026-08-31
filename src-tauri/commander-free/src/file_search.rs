@@ -19,12 +19,12 @@
 // open; content_index_configure, content_rescan, and content_reindex drop it
 // to force re-creation (rescan reopens the same dir; reindex deletes it first).
 //
-// Lock discipline: every read/replacement first acquires a bounded, session-
-// local Windows named mutex shared by the GUI and headless process. It then takes the
-// in-process RwLock: reads retain its shared guard for the engine call, while
-// configure/rescan/reindex hold the writer guard while they stop or replace
-// the engine and, for a full reindex, remove its directory. A replacement
-// therefore cannot delete files beneath an active reader in either process.
+// Lock discipline: ordinary searches use Tantivy's concurrent reader/writer
+// model and only take the in-process RwLock. The old cross-process mutex was
+// exclusive even for two readers, so one slow search made another search fail
+// after five seconds. The named mutex now serializes only replacement work
+// (configure/rescan/reindex), while the in-process RwLock keeps a replacement
+// from stopping or deleting the local engine beneath an active reader.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -48,49 +48,25 @@ static ENGINE: OnceCell<RwLock<Option<Arc<SearchEngine>>>> = OnceCell::new();
 // ownership boundary with an unprefixed/session-local mutex, rather than a
 // Global namespace object that could create cross-user contention or DACL
 // surprises. The GUI and its headless invocation run in the same session.
-const INDEX_PROCESS_LOCK_NAME: &str = "WinCommander_ContentIndex_lock";
-const INDEX_READ_LOCK_TIMEOUT_MS: u32 = 5_000;
+const INDEX_REPLACEMENT_LOCK_NAME: &str = "WinCommander_ContentIndex_replacement_lock";
 const INDEX_REPLACEMENT_LOCK_TIMEOUT_MS: u32 = 15_000;
-
-#[derive(Clone, Copy)]
-enum IndexLockMode {
-    Read,
-    Replacement,
-}
-
-impl IndexLockMode {
-    fn timeout_ms(self) -> u32 {
-        match self {
-            Self::Read => INDEX_READ_LOCK_TIMEOUT_MS,
-            Self::Replacement => INDEX_REPLACEMENT_LOCK_TIMEOUT_MS,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Read => "read",
-            Self::Replacement => "replacement",
-        }
-    }
-}
 
 fn abandoned_index_lock_error() -> String {
     "content index lock was abandoned; repair or rescan is required before reading the index"
         .to_string()
 }
 
-/// Cross-process gate for the session-local index directory. A Windows mutex is
-/// deliberately exclusive (rather than a faux reader/writer protocol): it
-/// gives a crash-safe, fail-closed boundary between GUI and CLI without
-/// introducing an unaudited shared-memory state machine.
-struct IndexProcessLock {
+/// Cross-process gate for destructive index replacement. Searches do not use
+/// this mutex: Tantivy readers are safe while the normal index writer commits,
+/// and serializing readers made the search UI fail under ordinary concurrency.
+struct IndexReplacementLock {
     #[cfg(windows)]
     handle: isize,
 }
 
-impl IndexProcessLock {
+impl IndexReplacementLock {
     #[cfg(windows)]
-    fn acquire(mode: IndexLockMode) -> Result<Self, String> {
+    fn acquire() -> Result<Self, String> {
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::Threading::{
             CreateMutexW, ReleaseMutex, WaitForSingleObject,
@@ -100,14 +76,14 @@ impl IndexProcessLock {
         const WAIT_ABANDONED: u32 = 0x80;
         const WAIT_TIMEOUT: u32 = 0x102;
 
-        let name: Vec<u16> = format!("{INDEX_PROCESS_LOCK_NAME}\0")
+        let name: Vec<u16> = format!("{INDEX_REPLACEMENT_LOCK_NAME}\0")
             .encode_utf16()
             .collect();
         let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
         if handle.is_null() {
             return Err("content index lock is unavailable; refusing the operation".to_string());
         }
-        match unsafe { WaitForSingleObject(handle, mode.timeout_ms()) } {
+        match unsafe { WaitForSingleObject(handle, INDEX_REPLACEMENT_LOCK_TIMEOUT_MS) } {
             WAIT_OBJECT_0 => Ok(Self {
                 handle: handle as isize,
             }),
@@ -125,9 +101,8 @@ impl IndexProcessLock {
             WAIT_TIMEOUT => {
                 unsafe { CloseHandle(handle) };
                 Err(format!(
-                    "content index {} lock is busy; refusing after {} ms",
-                    mode.label(),
-                    mode.timeout_ms()
+                    "content index replacement is already running; try again after it finishes ({} ms timeout)",
+                    INDEX_REPLACEMENT_LOCK_TIMEOUT_MS
                 ))
             }
             _ => {
@@ -138,14 +113,14 @@ impl IndexProcessLock {
     }
 
     #[cfg(not(windows))]
-    fn acquire(_mode: IndexLockMode) -> Result<Self, String> {
+    fn acquire() -> Result<Self, String> {
         // The Windows-only index directory is only enforced on Windows; this
         // keeps compile-only non-Windows targets from claiming runtime safety.
         Ok(Self {})
     }
 }
 
-impl Drop for IndexProcessLock {
+impl Drop for IndexReplacementLock {
     fn drop(&mut self) {
         #[cfg(windows)]
         if self.handle != 0 {
@@ -370,7 +345,6 @@ pub async fn search_content(
     scope_path: Option<String>,
 ) -> Result<Vec<ContentHit>, String> {
     tokio::task::spawn_blocking(move || {
-        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Read)?;
         let settings = ensure_initialized(read_settings()?)?;
         let fs = settings.app.file_search;
         let config = build_index_config(&fs)?;
@@ -393,7 +367,6 @@ pub async fn search_content(
 #[tauri::command]
 pub async fn content_index_status() -> Result<IndexStatus, String> {
     tokio::task::spawn_blocking(move || {
-        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Read)?;
         let settings = ensure_initialized(read_settings()?)?;
         let fs = settings.app.file_search;
         let config = build_index_config(&fs)?;
@@ -416,7 +389,7 @@ pub async fn content_index_configure(
     exclusions: Vec<String>,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Replacement)?;
+        let _replacement_lock = IndexReplacementLock::acquire()?;
         // Persist into the encrypted settings store (app.fileSearch.*).
         let settings = {
             let mut settings = read_settings()?;
@@ -452,7 +425,7 @@ pub async fn content_index_configure(
 #[tauri::command]
 pub async fn content_rescan() -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Replacement)?;
+        let _replacement_lock = IndexReplacementLock::acquire()?;
         // Stop + join the old worker so its watcher/writer are released before a
         // new engine opens on the same dir (tantivy permits one writer at a
         // time). The index dir is deliberately left in place — the reopened
@@ -474,7 +447,7 @@ pub async fn content_rescan() -> Result<(), String> {
 #[tauri::command]
 pub async fn content_reindex() -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Replacement)?;
+        let _replacement_lock = IndexReplacementLock::acquire()?;
         // Stop + join the old worker BEFORE deleting the index dir so the running
         // crawl never hits a directory that was removed under it.
         let mut guard = engine_cell().write().map_err(|e| e.to_string())?;
@@ -505,7 +478,6 @@ pub async fn content_reindex() -> Result<(), String> {
 #[tauri::command]
 pub async fn content_get_doc(doc_id: String) -> Result<Vec<Chunk>, String> {
     tokio::task::spawn_blocking(move || {
-        let _process_lock = IndexProcessLock::acquire(IndexLockMode::Read)?;
         let id: u64 = doc_id.parse().map_err(|_| "invalid doc_id".to_string())?;
 
         let guard = engine_cell().read().map_err(|e| e.to_string())?;
@@ -527,15 +499,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_content_index_read_and_replacement_uses_the_named_process_lock() {
+    fn replacement_operations_are_serialized_without_blocking_searches() {
         let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/file_search.rs"));
-        for (operation, mode) in [
-            ("search_content", "IndexLockMode::Read"),
-            ("content_index_status", "IndexLockMode::Read"),
-            ("content_get_doc", "IndexLockMode::Read"),
-            ("content_index_configure", "IndexLockMode::Replacement"),
-            ("content_rescan", "IndexLockMode::Replacement"),
-            ("content_reindex", "IndexLockMode::Replacement"),
+        for operation in [
+            "content_index_configure",
+            "content_rescan",
+            "content_reindex",
         ] {
             let signature = format!("pub async fn {operation}");
             let start = source
@@ -543,14 +512,27 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {operation}"));
             let body = &source[start..start + 700.min(source.len() - start)];
             assert!(
-                body.contains(&format!("IndexProcessLock::acquire({mode})")),
-                "{operation} must take the cross-process lock"
+                body.contains("IndexReplacementLock::acquire()?"),
+                "{operation} must serialize destructive replacement work"
             );
         }
-        assert_eq!(INDEX_PROCESS_LOCK_NAME, "WinCommander_ContentIndex_lock");
-        assert!(!INDEX_PROCESS_LOCK_NAME.starts_with("Global\\"));
-        const { assert!(INDEX_READ_LOCK_TIMEOUT_MS > 0) };
-        const { assert!(INDEX_REPLACEMENT_LOCK_TIMEOUT_MS >= INDEX_READ_LOCK_TIMEOUT_MS) };
+        for operation in ["search_content", "content_index_status", "content_get_doc"] {
+            let signature = format!("pub async fn {operation}");
+            let start = source
+                .find(&signature)
+                .unwrap_or_else(|| panic!("missing {operation}"));
+            let body = &source[start..start + 700.min(source.len() - start)];
+            assert!(
+                !body.contains("IndexReplacementLock::acquire"),
+                "{operation} must allow concurrent content-index reads"
+            );
+        }
+        assert_eq!(
+            INDEX_REPLACEMENT_LOCK_NAME,
+            "WinCommander_ContentIndex_replacement_lock"
+        );
+        assert!(!INDEX_REPLACEMENT_LOCK_NAME.starts_with("Global\\"));
+        const { assert!(INDEX_REPLACEMENT_LOCK_TIMEOUT_MS > 0) };
         assert!(abandoned_index_lock_error().contains("repair or rescan"));
         assert!(source.contains("WAIT_ABANDONED => {"));
         assert!(source.contains("ReleaseMutex(handle);"));
