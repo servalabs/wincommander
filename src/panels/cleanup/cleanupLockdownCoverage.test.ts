@@ -31,6 +31,10 @@ const FORENSIC_TRACE_SCHEDULE_IDS = [
   "explorerSearchHistory", "searchPersonalization",
 ];
 
+async function readProCleanupSteps() {
+  return Bun.file("../wincommander-pro/commander-pro/src/handlers/cleanup_steps.rs").text();
+}
+
 describe("System Cleanup lockdown coverage", () => {
   test("all scanable cleanup categories use the shared details viewer by default", async () => {
     const panel = await Bun.file("src/panels/cleanup/SystemCleanupPanel.tsx").text();
@@ -54,7 +58,7 @@ describe("System Cleanup lockdown coverage", () => {
   test("every expanded cleanup category is configurable and dispatched through the guarded lockdown path", async () => {
     const frontend = await Bun.file("src/types/lockdownSteps.ts").text();
     const free = await Bun.file("src-tauri/commander-free/src/action_steps.rs").text();
-    const pro = await Bun.file("../wincommander-pro/commander-pro/src/handlers.rs").text();
+    const pro = await readProCleanupSteps();
 
     for (const id of EXPANDED_CATEGORY_IDS) {
       expect(frontend).toContain(`id: "${id}"`);
@@ -66,7 +70,7 @@ describe("System Cleanup lockdown coverage", () => {
   test("all high-value forensic trace stores are exposed in lockdown and the scheduler", async () => {
     const frontend = await Bun.file("src/types/lockdownSteps.ts").text();
     const free = await Bun.file("src-tauri/commander-free/src/action_steps.rs").text();
-    const pro = await Bun.file("../wincommander-pro/commander-pro/src/handlers.rs").text();
+    const pro = await readProCleanupSteps();
     const categories = await Bun.file("src/panels/cleanup/cleanupCategories.ts").text();
     const scheduler = await Bun.file("src-tauri/wincmd-shared/scripts/auto-erase.ps1").text();
 

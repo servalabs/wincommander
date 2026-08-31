@@ -52,7 +52,7 @@ describe("deep panel control accessibility", () => {
     expect(vault).toContain('" type-badge--hidden"');
     expect(vault).not.toContain('" hidden"');
     expect(volumeActions).toContain('const driveLabel = letter.endsWith(":") ? letter : `${letter}:`;');
-    expect(volumeActions).toContain("aria-label={`Open ${driveLabel} in Explorer`}");
+    expect(volumeActions).toContain('aria-label={accessible ? `Open ${driveLabel} in Explorer` : `${driveLabel} is unavailable in this Windows sign-in`}');
     expect(volumeActions).toContain("aria-label={`Dismount ${driveLabel}`}");
     expect(ramDisks).toContain('aria-label="Auto-create RAM disk on startup"');
     expect(ramDisks).toContain("aria-label={`Open ${d.letter} in Explorer`}");
