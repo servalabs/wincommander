@@ -34,7 +34,7 @@ function folderAliases(folder: KnownSearchFolder): string[] {
   for (const name of [...names]) {
     if (/s$/i.test(name)) names.push(name.slice(0, -1));
   }
-  return names;
+  return names.flatMap((name) => [name, `${name} folder`]);
 }
 
 function folderForLabel(label: string, folders: readonly KnownSearchFolder[]): KnownSearchFolder | null {
@@ -104,7 +104,9 @@ export function parseKnownFolderScope(
  */
 export function parseSearchStorageLocation(text: string): SearchStorageLocation | null {
   const source = text.trim();
-  const drive = /^([a-z]):$/i.exec(source) ?? /^:([a-z])$/i.exec(source);
+  const drive = /^([a-z]):$/i.exec(source)
+    ?? /^:([a-z])$/i.exec(source)
+    ?? /^([a-z])\s+(?:drive|disk)$/i.exec(source);
   if (drive) return { path: `${drive[1].toUpperCase()}:\\`, source };
 
   const absolutePath = /^([a-z]):([\\/].*)$/i.exec(source);

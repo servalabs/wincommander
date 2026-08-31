@@ -84,7 +84,6 @@ html.light .splash-screen {
     flex-direction: column;
     align-items: center;
     gap: 0;
-    animation: sp-fade-in 0.5s ease-out both;
 }
 
 @keyframes sp-fade-in {
@@ -138,17 +137,20 @@ html.light .splash-screen {
     object-fit: contain;
     position: relative;
     z-index: 2;
-    /* Pulse oscillates opacity between 0.85 and 1 — keeps the logo
-       visible at all times. sp-fade-in is the 400ms entry only. */
-    animation: sp-pulse 2.8s ease-in-out infinite, sp-fade-in 0.4s ease-out both;
+    /* Pulse oscillates opacity between 0.85 and 1 after the browser has
+       decoded the preloaded product mark. */
+    animation: none;
     filter: drop-shadow(0 0 28px color-mix(in srgb, var(--color-accent) 55%, transparent));
     will-change: opacity;
-    /* Defensive: the preloaded /Logo.png in index.html should hit the
-       cache instantly, but if a downstream theme accidentally sets
-       visibility:hidden on .sp-logo-* we want the splash to still show
-       *something* — the fallback below also stays styled even if the
-       img element ends up not rendering. */
+    /* The first-frame WC mark remains behind this image until its decoded
+       pixels are ready, so a cold WebView never shows an empty splash. */
     display: block;
+    opacity: 0;
+}
+
+.sp-logo-img.is-loaded {
+    opacity: 1;
+    animation: sp-pulse 2.8s ease-in-out infinite;
 }
 
 /* Brand-mark fallback shown when the inlined logo errors or takes too
@@ -168,7 +170,7 @@ html.light .splash-screen {
     border-radius: 14px;
     position: relative;
     z-index: 2;
-    animation: sp-pulse 2.8s ease-in-out infinite, sp-fade-in 0.4s ease-out both;
+    animation: sp-pulse 2.8s ease-in-out infinite;
 }
 
 .sp-logo-fallback span {
@@ -210,8 +212,8 @@ html.light .sp-logo-fallback span {
     }
 }
 
-html.light .sp-logo-img {
-    animation: sp-pulse-light 2.8s ease-in-out infinite, sp-fade-in 0.4s ease-out both;
+html.light .sp-logo-img.is-loaded {
+    animation: sp-pulse-light 2.8s ease-in-out infinite;
     filter: drop-shadow(0 0 20px color-mix(in srgb, var(--color-accent) 50%, transparent));
 }
 

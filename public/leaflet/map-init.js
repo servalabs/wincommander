@@ -10,6 +10,7 @@
 
   var map = L.map("m", { zoomControl: true }).setView([20, 0], 2);
   var markerLayer = L.layerGroup().addTo(map);
+  var viewportKey = null;
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "© OpenStreetMap",
     maxZoom: 18,
@@ -40,6 +41,14 @@
         .bindPopup(mk.popup)
         .addTo(markerLayer);
     });
+
+    // The dialog can re-send its map data as surrounding preview state updates.
+    // Re-applying the same viewport after a user zooms or pans makes Leaflet
+    // snap back to the GPS point. Marker content can refresh independently;
+    // only newly changed coordinates are allowed to choose a new viewport.
+    var nextViewportKey = JSON.stringify({ center: data.center || null, points: points });
+    if (nextViewportKey === viewportKey) return;
+    viewportKey = nextViewportKey;
 
     if (isPoint(data.center)) {
       map.setView([data.center.lat, data.center.lon], 13);

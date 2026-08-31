@@ -291,6 +291,23 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     }).catch(() => {});
     invoke<KnownSearchFolder[]>("list_search_known_folders").then(setKnownFolders).catch(() => {});
   }, [visible]);
+  // Known folders arrive asynchronously from Windows. If the user types a
+  // valid `in Desktop` / `on Pictures folder` scope before that request
+  // returns, promote it once the authoritative folder list is available.
+  useEffect(() => {
+    if (!visible || knownFolders.length === 0) return;
+    setQuery((previous) => {
+      if (previous.chips.some((chip) => chip.kind === "in")) return previous;
+      const folderScope = parseKnownFolderScope(previous.text, knownFolders);
+      if (!folderScope) return previous;
+      autoStorageUndoRef.current = folderScope.source;
+      return addChip({ chips: previous.chips, text: folderScope.query }, "in", {
+        path: folderScope.folder.path,
+        pathLabel: folderScope.folder.label,
+        source: folderScope.source,
+      });
+    });
+  }, [knownFolders, setQuery, visible]);
 
   // KT: depend on `resetSearch` (a stable useCallback), never on the whole
   // `search` object — that gets a new identity every render, and resetState

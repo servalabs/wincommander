@@ -7,6 +7,8 @@ describe("parseSearchStorageLocation", () => {
   it("recognises drive tokens in either supported order", () => {
     expect(parseSearchStorageLocation("D:")).toEqual({ path: "D:\\", source: "D:" });
     expect(parseSearchStorageLocation(":d")).toEqual({ path: "D:\\", source: ":d" });
+    expect(parseSearchStorageLocation("D drive")).toEqual({ path: "D:\\", source: "D drive" });
+    expect(parseSearchStorageLocation("e disk")).toEqual({ path: "E:\\", source: "e disk" });
   });
 
   it("recognises full Windows paths and normalises slash direction", () => {
@@ -56,6 +58,36 @@ describe("parseSearchStorageLocation", () => {
       query: "part",
       source: "on download",
       folder: folders[0],
+    });
+  });
+
+  it("recognises Desktop and Pictures folder scopes", () => {
+    const folders = [
+      { label: "Desktop", path: "C:\\Users\\Admin\\Desktop" },
+      { label: "Pictures", path: "D:\\Photos" },
+    ];
+    expect(parseKnownFolderScope("invoice on Desktop folder", folders)).toEqual({
+      query: "invoice",
+      source: "on Desktop folder",
+      folder: folders[0],
+    });
+    expect(parseKnownFolderScope("portrait in pictures", folders)).toEqual({
+      query: "portrait",
+      source: "in pictures",
+      folder: folders[1],
+    });
+  });
+
+  it("recognises D and E drive scopes after in or on", () => {
+    expect(parseKnownFolderScope("archive on D drive", [])).toEqual({
+      query: "archive",
+      source: "on D drive",
+      folder: { label: "D:\\", path: "D:\\" },
+    });
+    expect(parseKnownFolderScope("photos in e disk", [])).toEqual({
+      query: "photos",
+      source: "in e disk",
+      folder: { label: "E:\\", path: "E:\\" },
     });
   });
 

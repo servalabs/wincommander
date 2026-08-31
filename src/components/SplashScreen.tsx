@@ -66,7 +66,8 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
     const animRef = useRef<number>(0);
     const branding = getDisplayBranding(appSettings);
     const [logoFailed, setLogoFailed] = useState(false);
-    const [logoReady, setLogoReady] = useState(false);
+    const [logoLoaded, setLogoLoaded] = useState(false);
+    const [logoReady] = useState(true);
     const [scrambleText, setScrambleText] = useState(() => scrambleWord(branding.companyLabel, 0));
     const [animDone, setAnimDone] = useState(false);
 
@@ -225,16 +226,6 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
         return () => cancelAnimationFrame(animRef.current);
     }, [isLight, reducedMotion]);
 
-    // Let the real product mark finish loading on a cold first start. The old
-    // 1.5-second timer permanently replaced it with the generic "WC" fallback
-    // while Defender/WebView2 was still reading the packaged image.
-    useEffect(() => {
-        const readyTimer = setTimeout(() => setLogoReady(true), 2500);
-        return () => {
-            clearTimeout(readyTimer);
-        };
-    }, []);
-
     // Mark animation complete only AFTER the intro animation has had time to
     // finish, so the splash never cuts to the dashboard mid-animation. The
     // letter-scramble is the longest piece (label length × hold-ticks × tick),
@@ -307,18 +298,18 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
                             <circle cx="69" cy="69" r="60" stroke="currentColor" strokeWidth="1" strokeDasharray="5 9" className="sp-ring-circle-inner" />
                         </svg>
                         <div className="sp-logo-plate" aria-hidden="true">
-                            {!logoFailed ? (
+                            <div className="sp-logo-fallback" aria-hidden={!logoFailed && logoLoaded}>
+                                <span>WC</span>
+                            </div>
+                            {!logoFailed && (
                                 <img
                                     src={LOGO_URL}
                                     alt={branding.productLabel}
-                                    className="sp-logo-img"
-                                    onLoad={() => setLogoReady(true)}
-                                    onError={() => { setLogoFailed(true); setLogoReady(true); }}
+                                    className={`sp-logo-img${logoLoaded ? " is-loaded" : ""}`}
+                                    fetchPriority="high"
+                                    onLoad={() => setLogoLoaded(true)}
+                                    onError={() => setLogoFailed(true)}
                                 />
-                            ) : (
-                                <div className="sp-logo-fallback" aria-label={branding.productLabel}>
-                                    <span>WC</span>
-                                </div>
                             )}
                         </div>
                     </div>

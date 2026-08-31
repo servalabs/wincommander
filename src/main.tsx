@@ -8,10 +8,12 @@ import "@fontsource/space-grotesk/600.css";
 import "@fontsource/space-grotesk/700.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { applyMotionClass } from "./lib/motionPolicy";
+import { preloadAppLogo } from "./assets/logoUrl";
 
 const hasNativeBackend = Boolean((window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
 applyMotionClass();
+preloadAppLogo();
 
 const windowLabel = (() => {
   try {
