@@ -318,8 +318,11 @@ public static class VcMountQuery {
         foreach ($ln in $mounted) {
             $parts = $ln -split "`t", 2
             $vpath = if ($parts.Count -ge 2 -and $parts[1].Trim() -ne '') { $parts[1] } else { 'Encrypted Volume' }
-            $volumes += @{ letter = $parts[0]; path = $vpath; type = 'Mounted' }
-            [void]$debug.Add("driver MATCH $($parts[0]) -> $vpath")
+            # The driver list is machine-wide. A slot can still exist while this
+            # signed-in desktop session has no usable DOS-device presentation.
+            $accessible = Test-Path -LiteralPath ("{0}\" -f $parts[0])
+            $volumes += @{ letter = $parts[0]; path = $vpath; type = 'Mounted'; accessible = [bool]$accessible }
+            [void]$debug.Add("driver MATCH $($parts[0]) accessible=$accessible -> $vpath")
         }
     } catch {
         [void]$debug.Add("driver IOCTL ERROR: $($_.Exception.Message)")
@@ -378,7 +381,8 @@ public class VcDosDevices {
                         $lds = Get-CimAssociatedInstance -InputObject $p -ResultClassName Win32_LogicalDisk -ErrorAction SilentlyContinue
                         foreach ($ld in $lds) {
                             if ($ld.DeviceID) {
-                                $volumes += @{ letter = $ld.DeviceID; path = "Encrypted Volume"; type = "Mounted" }
+                                $accessible = Test-Path -LiteralPath ("{0}\" -f $ld.DeviceID)
+                                $volumes += @{ letter = $ld.DeviceID; path = "Encrypted Volume"; type = "Mounted"; accessible = [bool]$accessible }
                             }
                         }
                     }

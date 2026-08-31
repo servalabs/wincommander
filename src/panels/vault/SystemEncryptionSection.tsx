@@ -1,4 +1,4 @@
-import { Icon } from "@/components/ui/bp";
+import { Icon, Tooltip } from "@/components/ui/bp";
 
 /**
  * Free cannot attest VeraCrypt pre-boot encryption from install artefacts.
@@ -7,12 +7,13 @@ import { Icon } from "@/components/ui/bp";
  */
 function SystemEncryptionSection() {
   return (
-    <div className="vault-sys-enc-row is-unknown" role="status">
-      <Icon icon="help" size={12} />
-      <span className="vault-sys-enc-label">System drive</span>
-      <span>·</span>
-      <span>Verification unavailable</span>
-    </div>
+    <Tooltip content="System-drive encryption cannot be verified from this Secure Storage screen." position="top">
+      <span className="vault-sys-enc-row is-unknown" role="status">
+        <Icon icon="help" size={12} />
+        <span className="vault-sys-enc-label">System encryption</span>
+        <span className="vault-sys-enc-detail">Not verified</span>
+      </span>
+    </Tooltip>
   );
 }
 

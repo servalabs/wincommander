@@ -28,6 +28,12 @@ const MOUNT_ERROR_MAX_LENGTH = 300;
 const boundedMountError = (error: unknown) => {
   const message = error instanceof Error ? error.message : "Failed to mount volume.";
   const normalized = message.replace(/\s+/g, " ").trim();
+  if (normalized.includes("vault_engine_unlock_failed")) {
+    return "WinCommander could not unlock this volume. Check that you selected the correct file and entered its original password, PIM, and keyfile.";
+  }
+  if (normalized.includes("vault_engine_drive_letter_unavailable")) {
+    return "That drive letter is already in use. Choose a free drive letter, then try again.";
+  }
   return normalized.length > MOUNT_ERROR_MAX_LENGTH
     ? `${normalized.slice(0, MOUNT_ERROR_MAX_LENGTH - 1)}…`
     : normalized;
@@ -95,8 +101,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [mountType, setMountType] = useState<'file' | 'partition'>('file');
   const [partitions, setPartitions] = useState<EncryptionPartition[]>([]);
   const [mountDetailsLoading, setMountDetailsLoading] = useState(false);
-  const [backupTargetBound, setBackupTargetBound] = useState<boolean | null>(null);
-  const [backupTargetBusy, setBackupTargetBusy] = useState(false);
   const [mountedVolume, setMountedVolume] = useState<MountVolumeResult | null>(null);
   const [openingMountedVolume, setOpeningMountedVolume] = useState(false);
   const [mountFailure, setMountFailure] = useState("");
@@ -107,13 +111,11 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     openEncryptionVolume,
     getAvailableDriveLetters,
     getEncryptionPartitions,
-    getEncryptedBackupTargetStatus,
-    provisionEncryptedBackupTarget,
-    clearEncryptedBackupTarget,
     error
   } = useBackend();
   const { canUse } = useEntitlements();
-  const paid = canUse("paid");
+  const accessibleVolumes = volumes.filter((volume) => volume.accessible !== false);
+  const unavailableVolumes = volumes.filter((volume) => volume.accessible === false);
 
   const [mounting, setMounting] = useState(false);
   const isDualVolume = volumeKind === "dual";
@@ -246,6 +248,10 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     setMounting(true);
     setMountFailure("");
     try {
+      const letters = await getAvailableDriveLetters();
+      if (letters.success && letters.data && !letters.data.letters.includes(mountLetter)) {
+        throw new Error(`Drive ${mountLetter}: is already in use. Dismount it first or choose a free drive letter.`);
+      }
       const mountRequest = mountVolume({
         volumePath: mountPath,
         driveLetter: mountLetter,
@@ -292,7 +298,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       setHiddenPassword("");
       setMounting(false);
     }
-  }, [hiddenKeyfile, hiddenPassword, hiddenPim, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, protectHidden, refreshVault, requiresHiddenProtection, resetMountForm, verifyVaultDrive, volumeKind, volumeRole]);
+  }, [getAvailableDriveLetters, hiddenKeyfile, hiddenPassword, hiddenPim, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, protectHidden, refreshVault, requiresHiddenProtection, resetMountForm, verifyVaultDrive, volumeKind, volumeRole]);
 
   const handleOpenMountedVolume = useCallback(async () => {
     if (!mountedVolume) return;
@@ -331,59 +337,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     if (error) showError(error);
   }, [error]);
 
-  useEffect(() => {
-    if (!paid) {
-      setBackupTargetBound(null);
-      return;
-    }
-    let cancelled = false;
-    void getEncryptedBackupTargetStatus().then((result) => {
-      if (!cancelled && result.success && result.data) {
-        setBackupTargetBound(result.data.bound);
-      }
-    });
-    return () => { cancelled = true; };
-    // The backend function is a thin command wrapper recreated by useBackend.
-    // Re-check only when entitlement changes; provision/clear update state directly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paid]);
-
-  const handleProvisionBackupTarget = useCallback(async () => {
-    if (volumes.length !== 1) {
-      showError("Mount exactly one encrypted file container before registering it.");
-      return;
-    }
-    setBackupTargetBusy(true);
-    try {
-      const result = await provisionEncryptedBackupTarget();
-      if (!result.success || !result.data?.bound) {
-        throw new Error(result.error || "The encrypted backup target could not be registered.");
-      }
-      setBackupTargetBound(true);
-      showSuccess("Emergency backup target registered. Its identity will be checked again before use.");
-    } catch (e) {
-      showError(e instanceof Error ? e.message : "The encrypted backup target could not be registered.");
-    } finally {
-      setBackupTargetBusy(false);
-    }
-  }, [provisionEncryptedBackupTarget, volumes.length]);
-
-  const handleClearBackupTarget = useCallback(async () => {
-    setBackupTargetBusy(true);
-    try {
-      const result = await clearEncryptedBackupTarget();
-      if (!result.success || !result.data?.cleared) {
-        throw new Error(result.error || "The encrypted backup target registration could not be cleared.");
-      }
-      setBackupTargetBound(false);
-      showSuccess("Emergency backup registration cleared. No files were deleted.");
-    } catch (e) {
-      showError(e instanceof Error ? e.message : "The encrypted backup target registration could not be cleared.");
-    } finally {
-      setBackupTargetBusy(false);
-    }
-  }, [clearEncryptedBackupTarget]);
-
   return (
     <>
       <SectionCard
@@ -391,9 +344,14 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         icon="lock"
         headerRight={
           <div className="flex items-center gap-2">
-            {volumes.length > 0 && (
+            {accessibleVolumes.length > 0 && (
               <span className="vault-status-badge vault-status-badge--mounted">
-                <i />{volumes.length} mounted
+                <i />{accessibleVolumes.length} mounted
+              </span>
+            )}
+            {unavailableVolumes.length > 0 && (
+              <span className="vault-status-badge vault-status-badge--unavailable">
+                {unavailableVolumes.length} needs attention
               </span>
             )}
             <SystemEncryptionSection />
@@ -439,38 +397,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
           </TierGate>
         </div>
 
-        {paid && volumes.length === 1 && (
-          <div className="vault-backup-target" role="group" aria-label="Emergency encrypted backup target">
-            <div>
-              <strong>Emergency backup target</strong>
-              <span role="status">
-                {backupTargetBound === null ? "Checking…" : backupTargetBound ? "Registered" : "Not registered"}
-              </span>
-              <p>
-                Uses the only mounted encrypted file container. This screen accepts no path;
-                raw partitions and ambiguous mounts are refused by the backend.
-              </p>
-            </div>
-            <div className="vault-backup-target__actions">
-              <Button
-                small
-                icon="endorsed"
-                text={backupTargetBusy ? "Working…" : "Use mounted container"}
-                disabled={backupTargetBusy || volumes.length !== 1}
-                onClick={() => void handleProvisionBackupTarget()}
-              />
-              <Button
-                small
-                minimal
-                icon="cross"
-                text="Clear registration"
-                disabled={backupTargetBusy || backupTargetBound !== true}
-                onClick={() => void handleClearBackupTarget()}
-              />
-            </div>
-          </div>
-        )}
-
         <div className={`vault-content ${volumes.length === 0 ? "vault-content--empty" : ""}`}>
           {initialLoading ? (
             <div className="empty-state" role="status" aria-busy="true">
@@ -511,12 +437,13 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
                         {/* Active-mount indicator — pulsing green dot makes
                             live volumes obvious at a glance, matching the
                             status-badge styling above. */}
-                        <span className="vault-active-dot" aria-hidden />
+                        <span className={`vault-active-dot${vol.accessible === false ? " vault-active-dot--unavailable" : ""}`} aria-hidden />
                         <strong>{vol.letter}</strong>
                       </td>
-                      <td><span className={`type-badge${vol.type === "Hidden" ? " type-badge--hidden" : ""}`}>{vol.type}</span></td>
+                      <td><span className={`type-badge${vol.type === "Hidden" ? " type-badge--hidden" : ""}`}>{vol.accessible === false ? "Unavailable" : vol.type}</span></td>
                       <td className="path-cell">
                         <span className="truncate-path" title={vol.path}>{vol.path}</span>
+                        {vol.accessible === false && <span className="vault-volume-unavailable">Not available in this Windows sign-in. Dismount, then mount it again.</span>}
                       </td>
                       <td className="actions-cell">
                         <VolumeActionsMenu
@@ -524,6 +451,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
                           path={vol.path}
                           type={vol.type}
                           internalDrive={vol.internalDrive}
+                          accessible={vol.accessible !== false}
                           onDismounted={() => refreshVault(true)}
                         />
                       </td>
@@ -546,7 +474,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         onClose={() => setCreateWizardOpen(false)}
         onCreated={() => { setCreateWizardOpen(false); refreshVault(true); }}
       />
-
       <Dialog
         isOpen={mountDialogOpen}
         onClose={() => {
@@ -732,14 +659,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               letters={availableLetters}
             />
           </FormGroup>
-
-          <div className="mount-privacy-note" role="status">
-            <Icon icon="lock" size={14} />
-            <div>
-              <strong>Only this Windows account</strong>
-              <span>The drive will not appear in other users’ File Explorer sessions.</span>
-            </div>
-          </div>
 
           <FormGroup
             label={volumeRole === "hidden" ? "Hidden volume password" : "Password"}

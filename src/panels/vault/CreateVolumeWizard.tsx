@@ -111,7 +111,6 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
     const [targetKind, setTargetKind] = useState<"file" | "device">("file");
     const [partitions, setPartitions] = useState<EncryptionPartition[]>([]);
     const [selectedDevicePath, setSelectedDevicePath] = useState("");
-    const [deviceConfirmation, setDeviceConfirmation] = useState("");
 
     // Form state
     const [volumeFolder, setVolumeFolder] = useState("");
@@ -176,7 +175,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
         switch (currentStep?.id) {
             case "location": return targetKind === "file"
                 ? volumeFolder.trim().length > 0 && volumeName.trim().length > 0
-                : Boolean(selectedPartition?.safeForCreation && deviceConfirmation === selectedPartition.confirmationToken);
+                : Boolean(selectedPartition?.safeForCreation);
             case "size": {
                 if (targetKind === "file") return sizeValue > 0 && (!isDual || (secondSizeValue > 0 && secondSizeValue < sizeValue));
                 if (!isDual) return true;
@@ -199,7 +198,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
             case "summary": return false;
             default: return false;
         }
-    }, [currentStep, deviceConfirmation, hashAlgo, keyfile, password, passwordConfirm, pim, secondKeyfile, secondPim, selectedPartition, sizeUnit, sizeValue, targetKind, volumeFolder, volumeName, isDual, secondSizeValue, secondPassword, secondPasswordConfirm]);
+    }, [currentStep, hashAlgo, keyfile, password, passwordConfirm, pim, secondKeyfile, secondPim, selectedPartition, sizeUnit, sizeValue, targetKind, volumeFolder, volumeName, isDual, secondSizeValue, secondPassword, secondPasswordConfirm]);
 
     const handleBrowse = async () => {
         try {
@@ -256,7 +255,6 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                 sizeBytes: selectedPartition.sizeBytes,
                 diskUniqueId: selectedPartition.diskUniqueId,
                 label: selectedPartition.label,
-                confirmation: deviceConfirmation,
             } : undefined;
             const res = isDual
                 ? await createDualVolume({
@@ -319,7 +317,6 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
         filesystem,
         hashAlgo,
         isDual,
-        deviceConfirmation,
         dynamicFormat,
         secondPassword,
         secondKeyfile,
@@ -347,7 +344,6 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
         setVolumeName("");
         setTargetKind("file");
         setSelectedDevicePath("");
-        setDeviceConfirmation("");
         setSizeValue(500);
         setSizeUnit("M");
         setEncAlgo("AES");
@@ -412,7 +408,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                             <FormGroup label="Partition" labelFor="create-device">
                                 <div className="partition-list" id="create-device" role="listbox" aria-label="Partition to erase and encrypt">
                                     {partitions.filter(partition => partition.safeForCreation).map(partition => (
-                                        <button type="button" key={partition.devicePath} role="option" aria-selected={selectedDevicePath === partition.devicePath} className={`partition-row${selectedDevicePath === partition.devicePath ? " is-selected" : ""}`} onClick={() => { setSelectedDevicePath(partition.devicePath); setDeviceConfirmation(""); }}>
+                                        <button type="button" key={partition.devicePath} role="option" aria-selected={selectedDevicePath === partition.devicePath} className={`partition-row${selectedDevicePath === partition.devicePath ? " is-selected" : ""}`} onClick={() => setSelectedDevicePath(partition.devicePath)}>
                                             <span className="partition-row-main">
                                                 <span className="partition-row-title">{partition.label || "Unlabeled partition"}<span className="partition-row-size">{partition.size}</span></span>
                                                 <span className="partition-row-sub">{partition.model} · Disk {partition.diskNumber} · Part {partition.partitionNumber} · {partition.filesystem || "Raw"}</span>
@@ -421,11 +417,6 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                     ))}
                                 </div>
                             </FormGroup>
-                            {selectedPartition && (
-                                <FormGroup label="Destructive confirmation" labelFor="device-confirmation" helperText={`Type exactly: ${selectedPartition.confirmationToken}`}>
-                                    <InputGroup id="device-confirmation" value={deviceConfirmation} autoComplete="off" onChange={event => setDeviceConfirmation(event.target.value)} />
-                                </FormGroup>
-                            )}
                         </>)}
                     </div>
                 );

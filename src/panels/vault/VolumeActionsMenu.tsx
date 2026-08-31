@@ -11,10 +11,11 @@ interface VolumeActionsMenuProps {
   path: string | null;
   type: string;
   internalDrive?: number;
+  accessible?: boolean;
   onDismounted: () => void;
 }
 
-function VolumeActionsMenu({ letter, path, type, internalDrive, onDismounted }: VolumeActionsMenuProps) {
+function VolumeActionsMenu({ letter, path, type, internalDrive, accessible = true, onDismounted }: VolumeActionsMenuProps) {
   const { dismountVolume, getEncryptedVolumeStatus, openEncryptionVolume } = useBackend();
 
   const [dismounting, setDismounting] = useState(false);
@@ -107,8 +108,9 @@ function VolumeActionsMenu({ letter, path, type, internalDrive, onDismounted }: 
           minimal
           small
           onClick={handleOpen}
+          disabled={!accessible}
           className="vol-inline-btn"
-          aria-label={`Open ${driveLabel} in Explorer`}
+          aria-label={accessible ? `Open ${driveLabel} in Explorer` : `${driveLabel} is unavailable in this Windows sign-in`}
         />
       </Tooltip>
 

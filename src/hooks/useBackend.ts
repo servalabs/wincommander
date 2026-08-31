@@ -486,6 +486,8 @@ export interface EncryptionStatus {
     /** Driver slot returned by the Pro engine. Passing it back makes a
      * per-user dismount reliable even when no machine-wide letter exists. */
     internalDrive?: number;
+    /** The current signed-in Windows session can open the drive root. */
+    accessible?: boolean;
   }>;
 }
 
@@ -564,7 +566,6 @@ export interface DeviceCreateTarget {
   sizeBytes: number;
   diskUniqueId: string;
   label: string;
-  confirmation: string;
 }
 
 export interface MountVolumeParams {
@@ -1811,6 +1812,7 @@ export function useBackend() {
     dismountVolume: (letter: string, force = false, internalDrive?: number) =>
       execute("Dismount-EncryptionVolume", {
         DriveLetter: letter,
+        PresentedLetter: letter,
         Force: force,
         ...(internalDrive !== undefined ? { InternalDrive: internalDrive } : {}),
       }),
@@ -1839,7 +1841,6 @@ export function useBackend() {
           DeviceSizeBytes: params.Device.sizeBytes,
           DeviceDiskUniqueId: params.Device.diskUniqueId,
           DeviceLabel: params.Device.label,
-          DeviceConfirmation: params.Device.confirmation,
         } : {}),
       }),
     createDualVolume: (params: CreateDualVolumeParams) =>
@@ -1868,7 +1869,6 @@ export function useBackend() {
           DeviceSizeBytes: params.Device.sizeBytes,
           DeviceDiskUniqueId: params.Device.diskUniqueId,
           DeviceLabel: params.Device.label,
-          DeviceConfirmation: params.Device.confirmation,
         } : {}),
       }),
     createStegoMp4: (params: CreateStegoMp4Params) =>

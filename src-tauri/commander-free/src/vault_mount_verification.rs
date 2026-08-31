@@ -41,6 +41,17 @@ pub fn verify_vault_drive(drive: String) -> Result<VaultDriveVerification, Strin
             "Drive {letter}: is not available as an encrypted-volume root in this signed-in Windows session"
         ));
     }
+    // Metadata can still be returned for a stale driver slot. Opening the
+    // directory is the minimum operation File Explorer needs before it can
+    // show the mounted container's contents.
+    let mut entries = std::fs::read_dir(Path::new(&root)).map_err(|error| {
+        format!("Drive {letter}: cannot be opened in this signed-in Windows session: {error}")
+    })?;
+    if let Some(entry) = entries.next() {
+        entry.map_err(|error| {
+            format!("Drive {letter}: cannot be read in this signed-in Windows session: {error}")
+        })?;
+    }
     Ok(VaultDriveVerification {
         drive: format!("{letter}:"),
         accessible: true,

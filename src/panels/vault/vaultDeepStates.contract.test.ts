@@ -12,6 +12,7 @@ const mountHandlerSource = vaultSource.slice(
   vaultSource.indexOf("const handleOpenMountedVolume"),
 );
 const systemEncryptionSource = readFileSync("src/panels/vault/SystemEncryptionSection.tsx", "utf8");
+const createVolumeWizardSource = readFileSync("src/panels/vault/CreateVolumeWizard.tsx", "utf8");
 
 describe("secure storage deep-state contracts", () => {
   test("distinguishes initial loading from a confirmed empty volume list", () => {
@@ -37,6 +38,10 @@ describe("secure storage deep-state contracts", () => {
     expect(mountHandlerSource).toContain("const mountRequest = mountVolume({");
     expect(mountHandlerSource).toContain("setMountPassword(\"\");");
     expect(mountHandlerSource).toContain("setHiddenPassword(\"\");");
+    expect(mountHandlerSource).toContain("getAvailableDriveLetters()");
+    expect(mountHandlerSource).toContain("is already in use. Dismount it first or choose a free drive letter.");
+    expect(vaultSource).toContain("vault_engine_unlock_failed");
+    expect(vaultSource).toContain("entered its original password, PIM, and keyfile");
     const failureBranch = mountHandlerSource.slice(
       mountHandlerSource.indexOf("} catch"),
       mountHandlerSource.indexOf("} finally"),
@@ -62,20 +67,10 @@ describe("secure storage deep-state contracts", () => {
     expect(backendSource).toContain("VolumeRole: params.volumeRole");
   });
 
-  test("emergency backup registration is paid, no-path, and one-mount only", () => {
-    expect(vaultSource).toContain('{paid && volumes.length === 1 && (');
-    expect(vaultSource).toContain('getEncryptedBackupTargetStatus');
-    expect(vaultSource).toContain('provisionEncryptedBackupTarget()');
-    expect(vaultSource).toContain('clearEncryptedBackupTarget()');
-    expect(vaultSource).toContain('volumes.length !== 1');
-    expect(vaultSource).toContain('This screen accepts no path');
-    expect(vaultSource).not.toContain('provisionEncryptedBackupTarget(' + 'mountPath');
-    expect(backendSource).toContain(
-      'execute<{ ok: boolean; bound: boolean; version: number }>("Provision-EncryptedBackupTarget")',
-    );
-    expect(backendSource).toContain(
-      'execute<{ ok: boolean; cleared: boolean }>("Clear-EncryptedBackupTarget")',
-    );
+  test("separates driver-only mounts from drives this Windows session can open", () => {
+    expect(vaultSource).toContain('volume.accessible !== false');
+    expect(vaultSource).toContain("needs attention");
+    expect(vaultSource).toContain("Not available in this Windows sign-in");
   });
 
   test("every interactive mount is private and verifies the Explorer-facing drive", () => {
@@ -89,13 +84,23 @@ describe("secure storage deep-state contracts", () => {
     expect(sidebarSource).toContain("await verifyVaultDrive(r.data.drive)");
     expect(backendSource).toContain('invoke<{ drive: string; accessible: boolean }>("verify_vault_drive"');
     expect(appContextSource).toContain("setEncryptionStatus(null);");
+    expect(vaultSource).not.toContain("Only this Windows account");
+    expect(vaultSource).not.toContain("The drive will not appear in other users’ File Explorer sessions.");
+    expect(backendSource).toContain("PresentedLetter: letter");
   });
 
   test("does not spawn an unsupported system-encryption probe when Secure Storage opens", () => {
     expect(vaultSource).toContain("<SystemEncryptionSection />");
-    expect(systemEncryptionSource).toContain("Verification unavailable");
+    expect(systemEncryptionSource).toContain("Not verified");
     expect(systemEncryptionSource).not.toContain("useBackend");
     expect(systemEncryptionSource).not.toContain("Get-SystemEncryptionStatus");
     expect(systemEncryptionSource).not.toContain("useEffect");
+  });
+
+  test("allows a reviewed safe partition to continue without a typed erase phrase", () => {
+    expect(createVolumeWizardSource).toContain("Boolean(selectedPartition?.safeForCreation)");
+    expect(createVolumeWizardSource).not.toContain("deviceConfirmation");
+    expect(createVolumeWizardSource).not.toContain("Destructive confirmation");
+    expect(backendSource).not.toContain("DeviceConfirmation: params.Device.confirmation");
   });
 });
