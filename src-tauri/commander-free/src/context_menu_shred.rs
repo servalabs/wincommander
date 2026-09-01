@@ -472,4 +472,79 @@ mod tests {
             .unwrap_err()
             .contains("linked or reparse-point"));
     }
+
+    /// `accepts_a_mixed_file_and_folder_selection` only proves
+    /// `validate_selection` accepts a mixed batch; it never proves the
+    /// batch is actually destroyed. This exercises the real Explorer entry
+    /// point end to end, the way a manual multi-select "Delete" invocation
+    /// was verified by hand before this test existed.
+    #[test]
+    fn execute_cli_erases_every_target_in_a_mixed_batch() {
+        let directory = tempfile::tempdir().unwrap();
+        let file_a = directory.path().join("erase-me-a.txt");
+        let file_b = directory.path().join("erase-me-b.txt");
+        let folder = directory.path().join("erase-me-folder");
+        let nested = folder.join("nested");
+        fs::write(&file_a, b"a").unwrap();
+        fs::write(&file_b, b"b").unwrap();
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("c.txt"), b"c").unwrap();
+
+        let raw_paths = vec![
+            file_a.to_string_lossy().into_owned(),
+            file_b.to_string_lossy().into_owned(),
+            folder.to_string_lossy().into_owned(),
+        ];
+
+        execute_cli(raw_paths).unwrap();
+
+        assert!(!file_a.exists());
+        assert!(!file_b.exists());
+        assert!(!folder.exists());
+        assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
+    }
+
+    /// `validate_selection`'s doc comment claims a malformed or protected
+    /// item "rejects the batch before destruction begins". Prove that at
+    /// the `execute_cli` level: mix valid throwaway targets with one item
+    /// under the running executable's own directory (unconditionally
+    /// protected by `protected_roots`/`system_roots`, same as
+    /// `rejects_files_inside_system_locations` covers in isolation) and
+    /// confirm every valid target survives untouched.
+    #[test]
+    fn execute_cli_rejects_the_whole_batch_before_erasing_anything() {
+        let directory = tempfile::tempdir().unwrap();
+        let file_a = directory.path().join("keep-me-a.txt");
+        let file_b = directory.path().join("keep-me-b.txt");
+        let folder = directory.path().join("keep-me-folder");
+        fs::write(&file_a, b"a").unwrap();
+        fs::write(&file_b, b"b").unwrap();
+        fs::create_dir(&folder).unwrap();
+
+        let exe_parent = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let protected_dir = tempfile::Builder::new()
+            .tempdir_in(&exe_parent)
+            .expect("executable directory must be writable for this fixture");
+        let protected_target = protected_dir.path().join("should-not-be-erased.txt");
+        fs::write(&protected_target, b"protected").unwrap();
+
+        let raw_paths = vec![
+            file_a.to_string_lossy().into_owned(),
+            file_b.to_string_lossy().into_owned(),
+            protected_target.to_string_lossy().into_owned(),
+            folder.to_string_lossy().into_owned(),
+        ];
+
+        let result = execute_cli(raw_paths);
+
+        assert!(result.is_err());
+        assert!(file_a.exists());
+        assert!(file_b.exists());
+        assert!(folder.exists());
+        assert!(protected_target.exists());
+    }
 }
