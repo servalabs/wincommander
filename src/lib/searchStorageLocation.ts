@@ -21,6 +21,36 @@ export interface KnownFolderScope {
   folder: KnownSearchFolder;
 }
 
+/**
+ * The user-facing error for a storage phrase that names a drive Windows does
+ * not currently expose. This deliberately checks the mounted roots supplied
+ * by the backend, rather than treating every A-Z letter as a valid drive.
+ */
+export function unavailableSearchDriveMessage(
+  text: string,
+  mountedRoots: readonly string[],
+): string | null {
+  const source = text.trim();
+  if (!source) return null;
+
+  // "XZR drive" is an explicit drive request, but cannot ever name a Windows
+  // drive. Surface that instead of silently treating it as ordinary search
+  // text and returning unrelated results.
+  const namedDrive = /^([a-z]+)\s+(?:drive|disk)$/i.exec(source);
+  if (namedDrive && namedDrive[1].length !== 1) {
+    return `No such drive exists: ${namedDrive[1].toUpperCase()}. Windows drive letters use one character, such as C:.`;
+  }
+
+  const location = parseSearchStorageLocation(source);
+  if (!location) return null;
+  const requestedRoot = `${location.path[0].toUpperCase()}:`;
+  const mounted = mountedRoots.some((root) => {
+    const rootLetter = /^([a-z]):(?:[\\/]|$)/i.exec(root.trim())?.[1];
+    return rootLetter?.toUpperCase() === requestedRoot[0];
+  });
+  return mounted ? null : `No such drive exists: ${requestedRoot}. Choose a drive that is currently connected.`;
+}
+
 function folderName(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
   const segment = /[^\\/]+$/.exec(trimmed)?.[0];

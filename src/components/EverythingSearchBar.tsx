@@ -32,7 +32,7 @@ import { fileSearchDiagnostic } from "@/lib/fileSearchDiagnostics";
 import type { SearchResult } from "@/lib/fileNameSearch";
 import { recordOpen, topPaths } from "@/lib/frecency";
 import { describeQuery, isDriveRootPath, splitScopePaths } from "@/lib/searchQueryPlan";
-import { parseKnownFolderScope, parseSearchStorageLocation, recentSearchFolders } from "@/lib/searchStorageLocation";
+import { parseKnownFolderScope, parseSearchStorageLocation, recentSearchFolders, unavailableSearchDriveMessage } from "@/lib/searchStorageLocation";
 import { addChip, CHIP_DEFS, chipDef, cycleChipStrict, demoteLastChip, promoteChip, removeChipAt, suggestChip } from "@/lib/searchTokens";
 import type { Chip, ChipKind, QueryState } from "@/lib/searchTokens";
 import { nextAppendType, TAB_TYPE_CYCLE, TYPE_DROPDOWN_ORDER, visibleSelectedTypes } from "@/lib/searchTypeCycle";
@@ -71,8 +71,6 @@ const ALL_TYPE_FILTERS: readonly { kind: ChipKind; label: string }[] = [
   ...CYCLE_TYPE_FILTERS,
   ...TYPE_FILTERS.map((type) => ({ kind: type.kind, label: type.label })),
 ];
-const STORAGE_ROOTS = ["C:\\", "D:\\", "E:\\"];
-
 function isTypeFilterKind(kind: ChipKind): boolean {
   return (TAB_TYPE_CYCLE as readonly ChipKind[]).includes(kind) || TYPE_FILTERS.some((type) => type.kind === kind);
 }
@@ -87,6 +85,10 @@ function driveIconName(label: string): "hard-drive" | "disc" {
 
 function sameStoragePath(a: string, b: string): boolean {
   return driveRootLabel(a).toLocaleLowerCase() === driveRootLabel(b).toLocaleLowerCase();
+}
+
+function storageTargetFromText(text: string): string {
+  return /(?:^|\s)(?:in|on)\s+(.+?)\s*$/i.exec(text)?.[1] ?? text;
 }
 
 type KnownSearchFolder = { label: string; path: string };
@@ -224,12 +226,20 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [inputKey, setInputKey] = useState(0);
   const [resultTab, setResultTab] = useState<ResultTab>("files");
-  const [storageRoots, setStorageRoots] = useState<string[]>(STORAGE_ROOTS);
+  // Do not invent C/D/E as fallback drives: a user can search a phrase before
+  // the async probe returns, and fictional roots turn a missing-drive request
+  // into a misleading empty result.
+  const [storageRoots, setStorageRoots] = useState<string[]>([]);
+  const [storageRootsResolved, setStorageRootsResolved] = useState(false);
   const [knownFolders, setKnownFolders] = useState<KnownSearchFolder[]>([]);
   const [typeMenuOpen, setTypeMenuOpen] = useState(false);
   const [typeMenuArmed, setTypeMenuArmed] = useState(false);
 
-  const search = useChipSearch(visible);
+  const blockUnavailableDriveSearch = useCallback((state: QueryState) => {
+    if (!storageRootsResolved) return null;
+    return unavailableSearchDriveMessage(storageTargetFromText(state.text), storageRoots);
+  }, [storageRoots, storageRootsResolved]);
+  const search = useChipSearch(visible, blockUnavailableDriveSearch);
   const {
     query, setQuery, suggestion,
     primary, contentRows, reset: resetSearch, setError,
@@ -261,7 +271,14 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
   const chipCountRef = useRef(0);
   useEffect(() => { chipCountRef.current = query.chips.length; }, [query.chips.length]);
   useEffect(() => { queryTextRef.current = query.text; }, [query.text]);
+
+  const typedDriveError = useMemo(() => {
+    if (!storageRootsResolved) return null;
+    return unavailableSearchDriveMessage(storageTargetFromText(query.text), storageRoots);
+  }, [query.text, storageRoots, storageRootsResolved]);
+
   useEffect(() => {
+    if (!storageRootsResolved || typedDriveError) return;
     const location = parseSearchStorageLocation(query.text);
     if (!location) return;
     if (skipStoragePromotionRef.current === query.text) {
@@ -283,19 +300,20 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
       });
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [query.text, setQuery]);
+  }, [query.text, setQuery, storageRootsResolved, typedDriveError]);
   useEffect(() => {
     if (!visible) return;
     invoke<string[]>("list_search_storage_roots").then((roots) => {
-      if (roots.length > 0) setStorageRoots(roots);
-    }).catch(() => {});
+      setStorageRoots(roots);
+      setStorageRootsResolved(true);
+    }).catch(() => setStorageRootsResolved(true));
     invoke<KnownSearchFolder[]>("list_search_known_folders").then(setKnownFolders).catch(() => {});
   }, [visible]);
   // Known folders arrive asynchronously from Windows. If the user types a
   // valid `in Desktop` / `on Pictures folder` scope before that request
   // returns, promote it once the authoritative folder list is available.
   useEffect(() => {
-    if (!visible || knownFolders.length === 0) return;
+    if (!visible || !storageRootsResolved || knownFolders.length === 0 || typedDriveError) return;
     setQuery((previous) => {
       if (previous.chips.some((chip) => chip.kind === "in")) return previous;
       const folderScope = parseKnownFolderScope(previous.text, knownFolders);
@@ -307,7 +325,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         source: folderScope.source,
       });
     });
-  }, [knownFolders, setQuery, visible]);
+  }, [knownFolders, setQuery, storageRootsResolved, typedDriveError, visible]);
 
   // KT: depend on `resetSearch` (a stable useCallback), never on the whole
   // `search` object — that gets a new identity every render, and resetState
@@ -812,8 +830,13 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
     setTypeMenuArmed(false);
     setTypeMenuOpen(false);
     setSelectedIndex(0);
+    const scopeTarget = storageTargetFromText(text);
+    const unavailableDrive = storageRootsResolved
+      ? unavailableSearchDriveMessage(scopeTarget, storageRoots)
+      : null;
     setQuery((previous) => {
       let next: QueryState = { chips: previous.chips, text };
+      if (unavailableDrive) return next;
       const folderScope = parseKnownFolderScope(next.text, storageFolders);
       if (folderScope) {
         autoStorageUndoRef.current = folderScope.source;
@@ -829,7 +852,7 @@ export default function EverythingSearchBar({ overlayMode = false }: { overlayMo
         ? promoteChip(next, recognized)
         : next;
     });
-  }, [setQuery, storageFolders]);
+  }, [setQuery, storageFolders, storageRoots, storageRootsResolved]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {

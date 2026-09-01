@@ -6604,7 +6604,31 @@ fn validate_es_scope_path(scope: &str) -> Result<String, String> {
             "Invalid search folder '{scope}': quotes and control characters are not allowed."
         ));
     }
+    // The renderer normally checks this against list_search_storage_roots
+    // before it builds a chip. Keep the same protection at the command
+    // boundary: requests can race the initial drive probe or come from another
+    // caller, and es.exe otherwise treats a missing root as an opaque query.
+    #[cfg(windows)]
+    if let Some(drive_root) = search_scope_drive_root(trimmed) {
+        if !std::path::Path::new(&drive_root).is_dir() {
+            return Err(format!(
+                "No such drive exists: {}. Choose a drive that is currently connected.",
+                &drive_root[..2],
+            ));
+        }
+    }
     Ok(trimmed.to_string())
+}
+
+/// Extract the Windows volume root from a drive-qualified search scope. UNC
+/// paths intentionally return None: their server/share availability belongs to
+/// the normal search error path rather than a local drive-letter message.
+fn search_scope_drive_root(scope: &str) -> Option<String> {
+    let bytes = scope.as_bytes();
+    if bytes.len() < 2 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
+        return None;
+    }
+    Some(format!("{}:\\", (bytes[0] as char).to_ascii_uppercase()))
 }
 
 /// Build the argv for a result-listing es.exe run.
@@ -7043,7 +7067,7 @@ fn locate_es_exe_uncached() -> Option<std::path::PathBuf> {
 mod es_query_tests {
     use super::{
         build_es_count_args, build_es_search_args, parse_es_count, tokenize_es_query,
-        validate_es_scope_path, validate_es_sort, validate_es_tokens,
+        search_scope_drive_root, validate_es_scope_path, validate_es_sort, validate_es_tokens,
     };
 
     // ── Tokenizer: one argv entry per term, or es.exe silently returns nothing ──
@@ -7172,6 +7196,14 @@ mod es_query_tests {
         for bad in ["", "   ", "-path", "/etc", "D:\\a\"b", "D:\\a\nb"] {
             assert!(validate_es_scope_path(bad).is_err(), "accepted {bad:?}");
         }
+    }
+
+    #[test]
+    fn scope_drive_root_extracts_only_windows_drive_scopes() {
+        assert_eq!(search_scope_drive_root(r"d:\\Work"), Some("D:\\".to_string()));
+        assert_eq!(search_scope_drive_root("E:"), Some("E:\\".to_string()));
+        assert_eq!(search_scope_drive_root(r"\\server\\share"), None);
+        assert_eq!(search_scope_drive_root("Downloads"), None);
     }
 
     // ── Arg building ──

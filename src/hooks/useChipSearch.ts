@@ -407,7 +407,10 @@ export interface ChipSearchApi {
   reset: () => void;
 }
 
-export function useChipSearch(active: boolean): ChipSearchApi {
+/** Return a user-facing reason to suppress a query before it reaches either index. */
+export type ChipSearchBlocker = (state: QueryState) => string | null;
+
+export function useChipSearch(active: boolean, blockSearch?: ChipSearchBlocker): ChipSearchApi {
   const [query, setQuery] = useState<QueryState>(EMPTY_QUERY);
   const [primary, setPrimary] = useState<BrowseResult[]>([]);
   // Tracks what the CURRENT rows are, not what the pending plan wants. Reading
@@ -436,6 +439,10 @@ export function useChipSearch(active: boolean): ChipSearchApi {
 
   const plan = useMemo(() => buildEverythingPlan(searchState), [searchState]);
   const suggestion = useMemo(() => suggestChip(query), [query]);
+  const blockedReason = useMemo(
+    () => blockSearch?.(searchState) ?? null,
+    [blockSearch, searchState],
+  );
 
   const reset = useCallback(() => {
     runIdRef.current += 1; // orphan any in-flight response
@@ -448,12 +455,31 @@ export function useChipSearch(active: boolean): ChipSearchApi {
     setIsSearching(false);
   }, []);
 
+  // A corrected drive request is a new query, not a failed retry. Remove the
+  // previous scope message immediately while the normal debounced search runs.
+  useEffect(() => {
+    if (!blockedReason) setError(null);
+  }, [blockedReason]);
+
   // ── Filename / browse pass ──
   useEffect(() => {
     if (nameTimerRef.current) clearTimeout(nameTimerRef.current);
     if (!active) return;
     const runId = ++runIdRef.current;
     const live = () => runIdRef.current === runId;
+
+    // A missing drive is not a query with zero results. Suppress it before
+    // either engine sees its words, or unrelated matches make the storage
+    // request look as though it was ignored.
+    if (blockedReason) {
+      setPrimary([]);
+      setShowingBrowse(false);
+      setContentRows([]);
+      setTotalCount(null);
+      setError(blockedReason);
+      setIsSearching(false);
+      return;
+    }
 
     nameTimerRef.current = setTimeout(() => {
       // A too-short term is refused before it ever reaches es.exe — see
@@ -508,13 +534,13 @@ export function useChipSearch(active: boolean): ChipSearchApi {
     return () => {
       if (nameTimerRef.current) clearTimeout(nameTimerRef.current);
     };
-  }, [active, plan, searchState, jump.term]);
+  }, [active, blockedReason, plan, searchState, jump.term]);
 
   // ── Content pass (best-effort, silent on failure) ──
   useEffect(() => {
     if (contentTimerRef.current) clearTimeout(contentTimerRef.current);
     if (!active) return;
-    if (jump.term.length < 2 || !contentSearchApplies(searchState)) {
+    if (blockedReason || jump.term.length < 2 || !contentSearchApplies(searchState)) {
       setContentRows([]);
       return;
     }
@@ -544,7 +570,7 @@ export function useChipSearch(active: boolean): ChipSearchApi {
       cancelled = true;
       if (contentTimerRef.current) clearTimeout(contentTimerRef.current);
     };
-  }, [active, jump.term, searchState]);
+  }, [active, blockedReason, jump.term, searchState]);
 
   return {
     query, setQuery, suggestion,

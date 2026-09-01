@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "bun:test";
-import { parseKnownFolderScope, parseSearchStorageLocation, recentSearchFolders } from "./searchStorageLocation";
+import { parseKnownFolderScope, parseSearchStorageLocation, recentSearchFolders, unavailableSearchDriveMessage } from "./searchStorageLocation";
 import { addChip, demoteLastChip } from "./searchTokens";
 
 describe("parseSearchStorageLocation", () => {
@@ -89,6 +89,17 @@ describe("parseSearchStorageLocation", () => {
       source: "in e disk",
       folder: { label: "E:\\", path: "E:\\" },
     });
+  });
+
+  it("reports an unavailable or malformed explicit drive instead of treating it as a search", () => {
+    const mounted = ["C:\\", "D:\\"];
+    expect(unavailableSearchDriveMessage("F drive", mounted)).toBe(
+      "No such drive exists: F:. Choose a drive that is currently connected.",
+    );
+    expect(unavailableSearchDriveMessage("XZR drive", mounted)).toBe(
+      "No such drive exists: XZR. Windows drive letters use one character, such as C:.",
+    );
+    expect(unavailableSearchDriveMessage("D:\\Projects", mounted)).toBeNull();
   });
 
   it("undoes a typed storage scope without restoring deleted query text", () => {
