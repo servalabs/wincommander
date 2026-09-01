@@ -29,6 +29,21 @@ describe("Vault Access service intent", () => {
     expect(validateVaultAccessIntent(policy)).toBeNull();
   });
 
+  test("rejects a Shared vault left with only the owner's default grant", () => {
+    // newVaultEntry("shared") is the app's own starter shape: machine
+    // presentation with exactly one grant. The service rejects that
+    // combination outright, so the draft must be caught before Apply.
+    const policy = newVaultPolicy();
+    const entry = policy.entries[0]!;
+    policy.entries = [entry];
+    entry.container_path = "C:\\Vaults\\shared\\vault.hc";
+    expect(entry.mount.presentation).toBe("machine");
+    expect(entry.grants).toHaveLength(1);
+    expect(validateVaultAccessIntent(policy)).toBe(
+      "A Shared vault needs at least two named grants — add a second person or group, or switch it to Personal vault.",
+    );
+  });
+
   test("rejects whitespace and case insensitive duplicate grants", () => {
     const policy = newVaultPolicy();
     const entry = policy.entries[0]!;
@@ -56,6 +71,10 @@ describe("Vault Access service intent", () => {
 
   test("rejects two managed containers in one parent folder", () => {
     const policy = newVaultPolicy();
+    // entries[0] is the machine-presentation "shared" starter; give it a
+    // second grant so this test isolates the parent-folder collision it
+    // targets, rather than tripping the separate too-few-grants check.
+    policy.entries[0]!.grants.push({ principal_name: "Partner", access: "read" });
     policy.entries.forEach((entry, index) => { entry.container_path = `C:\\Vaults\\vault-${index}.hc`; });
     expect(validateVaultAccessIntent(policy)).toBe(
       "Each managed container needs its own dedicated parent folder; vaults cannot share a parent.",

@@ -179,6 +179,12 @@ export function validateVaultAccessIntent(policy: VaultAccessPolicy): string | n
   if (policy.entries.some(entry => entry.grants.length === 0 || entry.grants.some(grant => !grant.principal_name.trim()))) {
     return "Every vault needs at least one named grant.";
   }
+  // The service requires two or more grants for a machine-presented ("Shared")
+  // vault — a single grant there is indistinguishable from a private vault and
+  // is rejected server-side. Catch it here so Apply doesn't round-trip for it.
+  if (policy.entries.some(entry => entry.mount.presentation === "machine" && entry.grants.length < 2)) {
+    return "A Shared vault needs at least two named grants — add a second person or group, or switch it to Personal vault.";
+  }
   if (policy.entries.some(entry => {
     const principals = entry.grants.map(grant => grant.principal_name.trim().toLocaleLowerCase());
     return new Set(principals).size !== principals.length;
