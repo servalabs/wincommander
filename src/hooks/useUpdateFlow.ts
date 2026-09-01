@@ -170,8 +170,16 @@ export function useUpdateFlow(hasPaid: boolean, automaticProInstallConsent: bool
             setPhase("done"); // Pro already current — nothing to do
             return;
         }
+        // Background automatic updates must never perform the first Pro
+        // install: it requires the one-time Defender consent shown in the
+        // visible install dialog. They may, however, replace an already
+        // installed sidecar without altering Defender configuration.
+        if (!pro.status.installed && automaticProInstallConsent === false) {
+            setPhase("done");
+            return;
+        }
         setPhase("pro-step");
-    }, [phase, pro.manifest, pro.manifestError, pro.status, targetFreeVersion]);
+    }, [phase, pro.manifest, pro.manifestError, pro.status, targetFreeVersion, automaticProInstallConsent]);
 
     // The visible flow supplies true after consent; the background coordinator
     // supplies false and can therefore update only an existing approved install.

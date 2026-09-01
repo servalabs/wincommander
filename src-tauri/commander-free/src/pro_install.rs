@@ -868,7 +868,13 @@ pub async fn install_pro_binary(
     #[cfg(not(windows))]
     let exclusion_already_set = false;
 
-    if !consent_defender_exclusion && !exclusion_already_set {
+    let install_path = pro_install_path().map_err(|e| format!("validation:{}", e))?;
+    let replacing_existing_install = install_path.exists();
+    // An automatic update is allowed to replace an existing Pro sidecar
+    // without creating or changing any Defender exclusion. A first install
+    // still requires the explicit consent that the visible install dialog
+    // collects before it can alter Defender configuration.
+    if !consent_defender_exclusion && !exclusion_already_set && !replacing_existing_install {
         return Err(
             "consent:Pro install requires explicit consent to add a Defender exclusion. \
              Confirm via the install modal first."
@@ -892,7 +898,6 @@ pub async fn install_pro_binary(
         check_pro_version_not_newer(ver)?;
     }
 
-    let install_path = pro_install_path().map_err(|e| format!("validation:{}", e))?;
     let parent = install_path
         .parent()
         .ok_or_else(|| "validation:install path has no parent".to_string())?;
@@ -935,7 +940,7 @@ pub async fn install_pro_binary(
     //    get_defender_status pre-flight, but we tag the error so the
     //    dialog can still highlight the right next step.
     #[cfg(windows)]
-    if !exclusion_already_set {
+    if !exclusion_already_set && consent_defender_exclusion {
         add_defender_exclusion(true).map_err(|e| format!("defender_exclusion:{}", e))?;
     }
 
