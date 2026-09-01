@@ -549,7 +549,7 @@ pub fn log_encrypt_line(date: &str, body: &str) -> String {
         Ok(k) => k,
         Err(_) => return format!("[ENCRYPT_FAIL] {}", body),
     };
-    let cipher = Aes256Gcm::new(key.as_ref().into());
+    let cipher = Aes256Gcm::new((&key).into());
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -588,7 +588,7 @@ pub fn log_decrypt_line(line: &str) -> Option<(String, String)> {
     }
     let (nonce_bytes, ct) = payload.split_at(12);
     let key = cached_log_key().ok()?;
-    let cipher = Aes256Gcm::new(key.as_ref().into());
+    let cipher = Aes256Gcm::new((&key).into());
     let nonce = Nonce::from_slice(nonce_bytes);
     let aad = section_aad(&format!("log:{date}"));
     let plaintext = if uses_aad {
