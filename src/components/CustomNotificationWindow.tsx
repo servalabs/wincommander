@@ -146,6 +146,11 @@ export default function CustomNotificationWindow() {
         return;
       }
       disposers.push(...registered);
+      // This direct acknowledgement is the delivery guarantee for alerts that
+      // arrive while Privacy Shield is starting. Emit the legacy ready event
+      // as well because the main-window bridge uses it to coordinate ordinary
+      // local notifications.
+      await invoke("notification_renderer_ready");
       await emit(READY_EVENT);
     };
 

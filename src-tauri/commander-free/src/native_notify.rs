@@ -1,13 +1,12 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, Once, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use tauri::{
-    AppHandle, Emitter, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
 static TOAST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const NOTIFICATION_WINDOW_LABEL: &str = "notification-alerts";
-const NOTIFICATION_READY_EVENT: &str = "wc-custom-notification-ready";
 const NOTIFICATION_DELIVERY_EVENT: &str = "wc-custom-notification";
 const MAX_PENDING_NOTIFICATIONS: usize = 32;
 
@@ -41,39 +40,6 @@ fn enqueue_pending_notification(
     state.pending.push_back(payload);
 }
 
-/// The alert renderer is a separate hidden webview. A global event sent via
-/// the main window can arrive before that renderer installs its listener; the
-/// Shield event then looks delayed or is dropped. The native side owns the
-/// readiness acknowledgement and sends queued payloads directly to the alert
-/// window only after its renderer confirms it is listening.
-fn install_notification_ready_listener(app: &AppHandle) {
-    static LISTENER: Once = Once::new();
-    let app = app.clone();
-    LISTENER.call_once(move || {
-        let ready_app = app.clone();
-        app.listen_any(NOTIFICATION_READY_EVENT, move |_| {
-            let pending = {
-                let Ok(mut state) = notification_delivery_state().lock() else {
-                    return;
-                };
-                state.renderer_ready = true;
-                state.pending.drain(..).collect::<Vec<_>>()
-            };
-            let Some(window) = ready_app.get_webview_window(NOTIFICATION_WINDOW_LABEL) else {
-                return;
-            };
-            for payload in pending {
-                if let Err(error) = window.emit(NOTIFICATION_DELIVERY_EVENT, payload) {
-                    crate::log_message(
-                        "warn",
-                        &format!("[Notify] could not deliver queued alert: {error}"),
-                    );
-                }
-            }
-        });
-    });
-}
-
 fn queue_or_deliver_notification(
     window: &WebviewWindow,
     payload: CustomNotificationPayload,
@@ -94,6 +60,31 @@ fn queue_or_deliver_notification(
         window
             .emit(NOTIFICATION_DELIVERY_EVENT, payload)
             .map_err(|error| format!("could not deliver notification: {error}"))?;
+    }
+    Ok(())
+}
+
+/// The notification renderer invokes this only after its local event listener
+/// has been installed. A Tauri command is a point-to-point acknowledgement;
+/// unlike a broadcast ready event, it cannot be lost when the app shell and
+/// the hidden alert window are starting at the same time.
+#[tauri::command]
+pub fn notification_renderer_ready(app: AppHandle) -> Result<(), String> {
+    let pending = {
+        let mut state = notification_delivery_state()
+            .lock()
+            .map_err(|_| "notification delivery state is unavailable".to_string())?;
+        state.renderer_ready = true;
+        state.pending.drain(..).collect::<Vec<_>>()
+    };
+
+    let window = app
+        .get_webview_window(NOTIFICATION_WINDOW_LABEL)
+        .ok_or_else(|| "notification window was not created".to_string())?;
+    for payload in pending {
+        window
+            .emit(NOTIFICATION_DELIVERY_EVENT, payload)
+            .map_err(|error| format!("could not deliver queued notification: {error}"))?;
     }
     Ok(())
 }
@@ -129,7 +120,6 @@ fn show_custom_notification(
         ),
     );
 
-    install_notification_ready_listener(app);
     let window = ensure_notification_window(app)?;
 
     let toast_id = TOAST_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
@@ -375,10 +365,9 @@ mod tests {
         let body = &source[start..start + 900.min(source.len() - start)];
         assert!(body.contains("ensure_notification_window(app)?;"));
         assert!(!body.contains("promote_notification_window(app)?;"));
-        assert!(body.contains("install_notification_ready_listener(app);"));
         assert!(body.contains("queue_or_deliver_notification(&window, payload)"));
         assert!(!body.contains("app.emit(\"wc-native-notification\", payload)"));
-        assert!(source.contains("app.listen_any(NOTIFICATION_READY_EVENT"));
+        assert!(source.contains("pub fn notification_renderer_ready"));
         assert!(source.contains("pub fn present_notification_window"));
         assert!(source.contains("HWND_TOPMOST"));
         assert!(source.contains("SWP_NOACTIVATE"));

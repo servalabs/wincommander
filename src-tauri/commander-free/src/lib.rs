@@ -2507,6 +2507,7 @@ pub fn run() {
             log::get_log_records,
             log::clear_log_records,
             native_notify::show_native_test_notification,
+            native_notify::notification_renderer_ready,
             native_notify::present_notification_window,
             native_notify::dismiss_notification_toast,
             native_notify::dismiss_notification_toast_id,

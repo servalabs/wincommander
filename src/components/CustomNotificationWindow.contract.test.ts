@@ -16,7 +16,9 @@ describe("Privacy Shield notification presentation", () => {
     expect(showIndex).toBeGreaterThan(-1);
     expect(presentIndex).toBeGreaterThan(showIndex);
     expect(renderer).toContain("requestAnimationFrame");
+    expect(renderer).toContain('invoke("notification_renderer_ready")');
     expect(native).toContain("pub fn present_notification_window");
+    expect(native).toContain("pub fn notification_renderer_ready");
     expect(native).toContain("SWP_SHOWWINDOW");
     expect(native).toContain("SWP_NOACTIVATE");
   });
