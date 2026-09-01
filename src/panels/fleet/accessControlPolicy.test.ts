@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
-  mergeAccessUsers, reconcileAccessDirectoryUsers, validateAccessDirectory,
+  buildAccessGroupReconcilePlan, describeReconcileFailure, mergeAccessUsers,
+  reconcileAccessDirectoryUsers, summarizeReconcileResults, validateAccessDirectory,
 } from "./accessControlPolicy";
-import type { FleetAccessDirectory } from "./accessControlTypes";
+import type { AccessGroupReconcileResult, FleetAccessDirectory } from "./accessControlTypes";
 
 describe("Fleet universal access groups", () => {
   test("allows one Windows user in several groups", () => {
@@ -118,4 +119,77 @@ describe("Fleet universal access groups", () => {
     expect(validateAccessDirectory(reconciled)).toContain("A group contains a Windows account that is disabled or deleted.");
   });
 
+});
+
+describe("buildAccessGroupReconcilePlan — SID collection for the Windows group reconcile request", () => {
+  const directory: FleetAccessDirectory = {
+    schema: 1,
+    users: [
+      { id: "sid:s-1-1", username: "Alex", sid: "S-1-1" },
+      { id: "sid:s-1-2", username: "Sam", sid: "S-1-2" },
+      { id: "legacy:pat", username: "Pat" }, // no SID — never discovered, or discovery failed
+    ],
+    groups: [
+      { id: "sales", name: "Sales", localGroup: "WC_Sales", userIds: ["sid:s-1-1", "sid:s-1-2"] },
+      { id: "ops", name: "Ops", localGroup: "WC_Ops", userIds: ["legacy:pat"] },
+      { id: "empty", name: "Empty", localGroup: "WC_Empty", userIds: [] },
+    ],
+  };
+
+  test("sends each group's Windows local group name with its members' SIDs", () => {
+    const plan = buildAccessGroupReconcilePlan(directory);
+    expect(plan.requests).toEqual([
+      { local_group: "WC_Sales", member_sids: ["S-1-1", "S-1-2"] },
+      { local_group: "WC_Ops", member_sids: [] },
+      { local_group: "WC_Empty", member_sids: [] },
+    ]);
+  });
+
+  test("skips and flags a member with no SID rather than sending a name", () => {
+    const plan = buildAccessGroupReconcilePlan(directory);
+    expect(plan.skippedMembers).toEqual([{ groupName: "Ops", count: 1 }]);
+    expect(plan.requests.find(request => request.local_group === "WC_Ops")?.member_sids).not.toContain("Pat");
+  });
+});
+
+describe("summarizeReconcileResults — honest per-group reporting", () => {
+  test("reports success only when every group succeeded", () => {
+    const results: AccessGroupReconcileResult[] = [
+      { local_group: "WC_Sales", state: "created", error: null },
+      { local_group: "WC_Ops", state: "unchanged", error: null },
+    ];
+    const outcome = summarizeReconcileResults(results);
+    expect(outcome.intent).toBe("success");
+  });
+
+  test("a single failed group is never hidden behind a blanket success toast", () => {
+    const results: AccessGroupReconcileResult[] = [
+      { local_group: "WC_Sales", state: "created", error: null },
+      { local_group: "WC_Ops", state: "failed", error: "access denied creating local group" },
+    ];
+    const outcome = summarizeReconcileResults(results);
+    expect(outcome.intent).toBe("danger");
+    expect(outcome.message).toContain("WC_Ops");
+    expect(outcome.message).toContain("access denied creating local group");
+    expect(outcome.message).toContain("1 of 2");
+  });
+});
+
+describe("describeReconcileFailure — unprivileged-caller and unreachable-service paths", () => {
+  test("a forbidden rejection from an unprivileged caller reads as needing an administrator", () => {
+    // Matches svc_client::call's `format!("service rejected request: {}", error.kind)`
+    // for the service's `kind: "forbidden"` ErrorReply on a non-admin caller.
+    const message = describeReconcileFailure(new Error("service rejected request: forbidden"));
+    expect(message).toContain("needs an administrator");
+  });
+
+  test("a transport failure reads as the service being unreachable, not a silent failure", () => {
+    const message = describeReconcileFailure(new Error("service connect failed: The system cannot find the file specified."));
+    expect(message).toContain("were not created");
+    expect(message).not.toContain("needs an administrator");
+  });
+
+  test("handles a plain string rejection the same as an Error", () => {
+    expect(describeReconcileFailure("service rejected request: forbidden")).toContain("needs an administrator");
+  });
 });

@@ -23,3 +23,21 @@ export interface FleetAccessDirectory {
   users: FleetAccessUser[];
   groups: FleetAccessGroup[];
 }
+
+/** Frozen `svc.vault.reconcile_access_groups` wire shape — one row per Windows local group. */
+export interface AccessGroupReconcileRequest {
+  local_group: string;
+  member_sids: string[];
+}
+
+export type AccessGroupReconcileState = "created" | "updated" | "unchanged" | "failed";
+
+export interface AccessGroupReconcileResult {
+  local_group: string;
+  state: AccessGroupReconcileState;
+  error: string | null;
+}
+
+export interface AccessGroupReconcileResponse {
+  results: AccessGroupReconcileResult[];
+}

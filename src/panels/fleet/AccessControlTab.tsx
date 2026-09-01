@@ -8,9 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import useBackend from "@/hooks/useBackend";
+import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
 import {
-  createAccessGroup, membershipCount, reconcileAccessDirectoryUsers, validateAccessDirectory,
+  buildAccessGroupReconcilePlan, createAccessGroup, describeReconcileFailure, membershipCount,
+  reconcileAccessDirectoryUsers, summarizeReconcileResults, validateAccessDirectory,
 } from "./accessControlPolicy";
 import type { FleetAccessDirectory, FleetAccessGroup } from "./accessControlTypes";
 import FleetField from "./FleetField";
@@ -30,6 +32,7 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
   const [discovering, setDiscovering] = useState(false);
   const discoveredOnce = useRef(false);
   const { getFleetAccessUsers } = useBackend();
+  const { reconcileAccessGroups } = useVaultAccess<never, never>();
   const errors = useMemo(() => validateAccessDirectory(directory), [directory]);
   const selectedGroup = directory.groups.find(group => group.id === selectedGroupId);
 
@@ -67,17 +70,20 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
   });
 
   const addGroup = () => {
+    // Functional form: a discovery response landing after this must not
+    // clobber it (and vice versa) — both update from the latest state.
     const group = createAccessGroup(directory.groups);
-    onChange({ ...directory, groups: [...directory.groups, group] });
+    onChange(current => ({ ...current, groups: [...current.groups, group] }));
     setSelectedGroupId(group.id);
   };
 
   const updateGroup = (patch: Partial<FleetAccessGroup>) => {
     if (!selectedGroup) return;
-    onChange({
-      ...directory,
-      groups: directory.groups.map(group => group.id === selectedGroup.id ? { ...group, ...patch } : group),
-    });
+    const groupId = selectedGroup.id;
+    onChange(current => ({
+      ...current,
+      groups: current.groups.map(group => group.id === groupId ? { ...group, ...patch } : group),
+    }));
   };
 
   const toggleUser = (id: string, checked: boolean) => {
@@ -91,7 +97,8 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
 
   const deleteGroup = () => {
     if (!pendingDelete) return;
-    onChange({ ...directory, groups: directory.groups.filter(group => group.id !== pendingDelete.id) });
+    const deletedId = pendingDelete.id;
+    onChange(current => ({ ...current, groups: current.groups.filter(group => group.id !== deletedId) }));
     setPendingDelete(undefined);
   };
 
@@ -107,10 +114,27 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
       })
     : [];
 
+  const reconcileGroups = async () => {
+    const { requests, skippedMembers } = buildAccessGroupReconcilePlan(directory);
+    const skippedNote = skippedMembers
+      .map(entry => `${entry.count} member${entry.count === 1 ? "" : "s"} of ${entry.groupName} skipped (no Windows SID)`)
+      .join("; ");
+    try {
+      const { results } = await reconcileAccessGroups(requests);
+      const outcome = summarizeReconcileResults(results);
+      const message = skippedNote ? `${outcome.message} ${skippedNote}.` : outcome.message;
+      if (outcome.intent === "danger") void showError(message);
+      else void showSuccess(message);
+    } catch (cause) {
+      const message = describeReconcileFailure(cause);
+      void showError(skippedNote ? `${message} ${skippedNote}.` : message);
+    }
+  };
+
   const save = () => {
     if (errors.length) return void showError(errors[0]);
     onSave();
-    void showSuccess("Access groups saved on this administrator workstation.");
+    void reconcileGroups();
   };
 
   return (

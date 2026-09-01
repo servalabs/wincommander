@@ -13,6 +13,7 @@ const GET_STATUS: &str = "svc.vault.get_status";
 const UNMOUNT: &str = "svc.vault.unmount";
 const LIST_AUTHORIZED: &str = "svc.vault.list_authorized";
 const CAPABILITIES: &str = "svc.vault.capabilities";
+const RECONCILE_ACCESS_GROUPS: &str = "svc.vault.reconcile_access_groups";
 
 #[tauri::command]
 pub async fn get_vault_access_policy() -> Result<Value, String> {
@@ -78,6 +79,22 @@ pub async fn get_vault_access_capabilities() -> Result<Value, String> {
     crate::svc_client::call(CAPABILITIES, json!({})).await
 }
 
+/// Wrap the renderer-supplied group list into the frozen
+/// `svc.vault.reconcile_access_groups` request shape.
+fn reconcile_access_groups_payload(groups: Value) -> Value {
+    json!({ "groups": groups })
+}
+
+/// Reconcile Windows local groups (create/update membership) for the given
+/// access-control groups. Privileged: the service rejects an unprivileged
+/// caller. The bridge passes the `groups` array through untouched and
+/// returns the service's per-group result verbatim; it does not add or
+/// observe any container path/SID/ACL data of its own.
+#[tauri::command]
+pub async fn reconcile_vault_access_groups(groups: Value) -> Result<Value, String> {
+    crate::svc_client::call(RECONCILE_ACCESS_GROUPS, reconcile_access_groups_payload(groups)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,6 +107,7 @@ mod tests {
         assert_eq!(UNMOUNT, "svc.vault.unmount");
         assert_eq!(LIST_AUTHORIZED, "svc.vault.list_authorized");
         assert_eq!(CAPABILITIES, "svc.vault.capabilities");
+        assert_eq!(RECONCILE_ACCESS_GROUPS, "svc.vault.reconcile_access_groups");
     }
 
     #[test]
@@ -108,5 +126,15 @@ mod tests {
             value.get("volume_role"),
             Some(&serde_json::Value::String("outer".into()))
         );
+    }
+
+    #[test]
+    fn reconcile_access_groups_payload_matches_the_frozen_wire_shape() {
+        let groups = json!([
+            { "local_group": "WC_Sales", "member_sids": ["S-1-5-21-1", "S-1-5-21-2"] }
+        ]);
+        let payload = reconcile_access_groups_payload(groups.clone());
+        assert_eq!(payload, json!({ "groups": groups }));
+        assert_eq!(payload.as_object().unwrap().len(), 1);
     }
 }

@@ -18,11 +18,32 @@ const ACTIVE_MOUNTS_FILE: &str = "vault-active-mounts-v1.json";
 const MAX_ENTRIES: usize = 64;
 const MAX_GRANTS: usize = 32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// ── `svc.vault.reconcile_access_groups` bounds (Task B) ──────────────────
+// Mirrors the MAX_ENTRIES / MAX_GRANTS style above: bounded batch and
+// per-group member counts so an admin-authored request can't be used to
+// exhaust the service.
+const MAX_RECONCILE_GROUPS: usize = 64;
+const MAX_RECONCILE_GROUP_MEMBERS: usize = 512;
+const MAX_GROUP_NAME_LEN: usize = 64;
+/// Case-insensitive prefix reserved for deterministic service-owned groups
+/// (see [`managed_group_name`]). An admin-authored group must never collide
+/// with it: `reconcile_access_groups` only ever creates-if-absent and syncs
+/// membership, so a colliding name would let an admin request silently
+/// absorb (and later have its membership overwritten by) a policy-owned
+/// group, or vice versa.
+const RESERVED_GROUP_PREFIX: &str = "wc-vault-";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultError {
     Validation,
     VersionConflict,
-    PrincipalResolution,
+    /// The rejected principal or Windows local-group name, exactly as the
+    /// admin supplied it (a grant/owner account name, or a managed/admin
+    /// local-group name). Never a SID, container path, or ACL/SDDL detail —
+    /// this payload is echoed straight into an `ErrorReply.message` by
+    /// `pipe.rs`'s `vault_error_message`, and only the admin-typed name is
+    /// in scope for that (see this crate's vault privacy boundary).
+    PrincipalResolution(String),
     ContainerIdentity,
     AclApply,
     AclReadback,
@@ -348,16 +369,23 @@ impl VaultAccessStore {
                 return Err(VaultError::ContainerIdentity);
             }
             let group_snapshots = self.groups.snapshot(&plan.managed_groups)?;
-            if group_snapshots.len() != plan.managed_groups.len()
-                || group_snapshots.iter().any(|snapshot| {
+            // The specific drifted group (if any) makes a better admin-facing
+            // name than the entry id; fall back to the entry id only in the
+            // defensive length-mismatch case where no single group snapshot
+            // can be blamed.
+            let drifted_group = group_snapshots
+                .iter()
+                .find(|snapshot| {
                     plan.managed_groups
                         .iter()
                         .find(|plan| plan.group == snapshot.group)
                         .map(|plan| plan.members.as_slice() == snapshot.members.as_slice())
                         != Some(true)
                 })
-            {
-                return Err(VaultError::PrincipalResolution);
+                .map(|snapshot| snapshot.group.clone());
+            if group_snapshots.len() != plan.managed_groups.len() || drifted_group.is_some() {
+                let name = drifted_group.unwrap_or_else(|| entry.id.clone());
+                return Err(VaultError::PrincipalResolution(name));
             }
             self.hydrate_managed_group_sids(&mut plan)?;
             let mut derived = plan
@@ -373,7 +401,9 @@ impl VaultAccessStore {
             derived.sort_by(|left, right| left.0.cmp(right.0));
             stored_grants.sort_by(|left, right| left.0.cmp(right.0));
             if derived != stored_grants {
-                return Err(VaultError::PrincipalResolution);
+                // A grant-set mismatch spans potentially many principals, so
+                // the entry id (not any single SID) is the admin-facing name.
+                return Err(VaultError::PrincipalResolution(entry.id.clone()));
             }
             let mut derived_authorization = plan
                 .authorization_grants
@@ -388,7 +418,7 @@ impl VaultAccessStore {
             derived_authorization.sort_by(|left, right| left.0.cmp(right.0));
             stored_authorization.sort_by(|left, right| left.0.cmp(right.0));
             if derived_authorization != stored_authorization {
-                return Err(VaultError::PrincipalResolution);
+                return Err(VaultError::PrincipalResolution(entry.id.clone()));
             }
             self.acls.verify_exact(&plan)?;
         }
@@ -784,6 +814,114 @@ impl VaultAccessStore {
         Ok(())
     }
 
+    /// Backs `svc.vault.reconcile_access_groups` (Privileged / SYSTEM-Admin
+    /// only — see `pipe.rs`'s `classify_verb`/`authorize` gate). Creates
+    /// each admin-authored Windows local group if absent and sets its
+    /// membership to EXACTLY the supplied SIDs, reusing the same
+    /// [`LocalGroupReconciler`] seam the policy-apply path uses for its own
+    /// deterministic `WC-Vault-*` groups. A pre-existing group is never
+    /// deleted or renamed — only created-if-absent and membership-synced —
+    /// and a group whose name collides with the reserved `WC-Vault-*`
+    /// prefix is rejected rather than silently reconciled, so an admin
+    /// request can never absorb or corrupt a policy-owned group.
+    ///
+    /// One group's failure never aborts the batch: it is reported as that
+    /// group's own `Failed` result. The only whole-request rejection is an
+    /// oversized batch (`Err(VaultError::Validation)`), mirroring
+    /// `validate_policy`'s `MAX_ENTRIES` check.
+    pub fn reconcile_access_groups(
+        &self,
+        groups: &[wincmd_shared::vault_access::VaultAccessGroupInput],
+    ) -> Result<Vec<wincmd_shared::vault_access::VaultAccessGroupResult>, VaultError> {
+        if groups.len() > MAX_RECONCILE_GROUPS {
+            return Err(VaultError::Validation);
+        }
+        Ok(groups
+            .iter()
+            .map(|group| self.reconcile_one_access_group(group))
+            .collect())
+    }
+
+    fn reconcile_one_access_group(
+        &self,
+        group: &wincmd_shared::vault_access::VaultAccessGroupInput,
+    ) -> wincmd_shared::vault_access::VaultAccessGroupResult {
+        use wincmd_shared::vault_access::{VaultAccessGroupResult, VaultAccessGroupState};
+
+        if !valid_admin_group_name(&group.local_group) {
+            return VaultAccessGroupResult {
+                local_group: group.local_group.clone(),
+                state: VaultAccessGroupState::Failed,
+                error: Some("invalid local group name".to_string()),
+            };
+        }
+        if group.member_sids.len() > MAX_RECONCILE_GROUP_MEMBERS {
+            return VaultAccessGroupResult {
+                local_group: group.local_group.clone(),
+                state: VaultAccessGroupState::Failed,
+                error: Some("too many members".to_string()),
+            };
+        }
+
+        let mut members = group.member_sids.clone();
+        members.sort();
+        members.dedup();
+
+        // A before-snapshot is the only way to tell "just created" and
+        // "already exact" apart from "membership changed" — reconciliation
+        // alone only proves the post-state is exact.
+        let plan = GroupMembershipPlan {
+            group: group.local_group.clone(),
+            members: members.clone(),
+            // `access` is unused by the snapshot/reconcile seam below (it
+            // only matters for the vault-policy managed-group path); this
+            // admin-group batch has no read/write concept of its own.
+            access: VaultAccess::Read,
+        };
+        let before = match self.groups.snapshot(std::slice::from_ref(&plan)) {
+            Ok(snapshots) => snapshots.into_iter().next(),
+            Err(error) => {
+                return VaultAccessGroupResult {
+                    local_group: group.local_group.clone(),
+                    state: VaultAccessGroupState::Failed,
+                    error: Some(group_error_reason(error)),
+                };
+            }
+        };
+
+        if let Err(error) = self
+            .groups
+            .reconcile_exact_members(&group.local_group, &members)
+        {
+            return VaultAccessGroupResult {
+                local_group: group.local_group.clone(),
+                state: VaultAccessGroupState::Failed,
+                error: Some(group_error_reason(error)),
+            };
+        }
+
+        let state = match before {
+            Some(snapshot) if !snapshot.existed => VaultAccessGroupState::Created,
+            Some(mut snapshot) => {
+                snapshot.members.sort();
+                if snapshot.members == members {
+                    VaultAccessGroupState::Unchanged
+                } else {
+                    VaultAccessGroupState::Updated
+                }
+            }
+            // Defensive: `snapshot()` returns one entry per plan by
+            // contract, so this should be unreachable in practice.
+            None => VaultAccessGroupState::Updated,
+        };
+
+        VaultAccessGroupResult {
+            local_group: group.local_group.clone(),
+            state,
+            error: None,
+        }
+    }
+
     fn rollback_after_apply(&self, state: &mut State, snapshots: &[AclSnapshot]) {
         let result = self.acls.restore(snapshots);
         state.status = match state.active.as_ref() {
@@ -921,6 +1059,7 @@ fn lookup_account(
     name: &str,
 ) -> Result<(String, windows_sys::Win32::Security::SID_NAME_USE), VaultError> {
     use windows_sys::Win32::Security::{LookupAccountNameW, PSID, SID_NAME_USE};
+    let original_name = name.to_string();
     let name = wide(std::ffi::OsStr::new(name));
     let mut sid_len = 0u32;
     let mut domain_len = 0u32;
@@ -937,7 +1076,7 @@ fn lookup_account(
         );
     }
     if sid_len == 0 {
-        return Err(VaultError::PrincipalResolution);
+        return Err(VaultError::PrincipalResolution(original_name));
     }
     let mut sid = vec![0u8; sid_len as usize];
     let mut domain = vec![0u16; domain_len as usize + 1];
@@ -953,11 +1092,29 @@ fn lookup_account(
         )
     } == 0
     {
-        return Err(VaultError::PrincipalResolution);
+        return Err(VaultError::PrincipalResolution(original_name));
     }
     sid_to_string(sid.as_mut_ptr() as PSID)
         .map(|sid| (sid, use_type))
-        .ok_or(VaultError::PrincipalResolution)
+        .ok_or(VaultError::PrincipalResolution(original_name))
+}
+
+/// `NetLocalGroupAdd` reports an existing *local* group as
+/// `ERROR_ALIAS_EXISTS`; `NERR_GroupExists` is what the *global* group API
+/// returns. Both mean "already there", which is success for us: the caller
+/// owns the group — a deterministic `WC-Vault-*` name or an
+/// administrator-authored access group — and its membership is exactly
+/// reconciled immediately afterwards.
+///
+/// Accepting only `NERR_GroupExists` made every reconcile after the very
+/// first one fail and leave membership silently unchanged, which unit tests
+/// could not catch because they run against a fake reconciler. Kept as a
+/// pure function so that regression stays covered.
+const ERROR_ALIAS_EXISTS: u32 = 1379;
+const NERR_GROUP_EXISTS: u32 = 2223;
+
+fn local_group_add_status_is_ok(status: u32) -> bool {
+    status == 0 || status == ERROR_ALIAS_EXISTS || status == NERR_GROUP_EXISTS
 }
 
 #[cfg(windows)]
@@ -971,7 +1128,8 @@ impl LocalGroupReconciler for WindowsLocalGroupReconciler {
         member_sids: &[String],
     ) -> Result<(), VaultError> {
         ensure_local_group(group)?;
-        let current = local_group_members(group)?.ok_or(VaultError::PrincipalResolution)?;
+        let current = local_group_members(group)?
+            .ok_or_else(|| VaultError::PrincipalResolution(group.to_string()))?;
         let desired: std::collections::HashSet<_> = member_sids.iter().cloned().collect();
         let remove = current.difference(&desired).cloned().collect::<Vec<_>>();
         let add = desired.difference(&current).cloned().collect::<Vec<_>>();
@@ -982,7 +1140,7 @@ impl LocalGroupReconciler for WindowsLocalGroupReconciler {
             set_local_group_members(group, &add, true)?;
         }
         if local_group_members(group)? != Some(desired) {
-            return Err(VaultError::PrincipalResolution);
+            return Err(VaultError::PrincipalResolution(group.to_string()));
         }
         Ok(())
     }
@@ -1042,12 +1200,10 @@ fn ensure_local_group(group: &str) -> Result<(), VaultError> {
             std::ptr::null_mut(),
         )
     };
-    // NERR_GroupExists is deliberately accepted: the group is service-owned
-    // by its opaque deterministic name and will be exactly reconciled below.
-    if status == 0 || status == 2223 {
+    if local_group_add_status_is_ok(status) {
         Ok(())
     } else {
-        Err(VaultError::PrincipalResolution)
+        Err(VaultError::PrincipalResolution(group.to_string()))
     }
 }
 
@@ -1080,7 +1236,7 @@ fn local_group_members(
         return Ok(None);
     }
     if status != 0 || (read != 0 && buffer.is_null()) {
-        return Err(VaultError::PrincipalResolution);
+        return Err(VaultError::PrincipalResolution(group.to_string()));
     }
     let mut members = std::collections::HashSet::new();
     if !buffer.is_null() {
@@ -1088,7 +1244,10 @@ fn local_group_members(
             std::slice::from_raw_parts(buffer as *const LOCALGROUP_MEMBERS_INFO_0, read as usize)
         };
         for row in rows {
-            members.insert(sid_to_string(row.lgrmi0_sid).ok_or(VaultError::PrincipalResolution)?);
+            members.insert(
+                sid_to_string(row.lgrmi0_sid)
+                    .ok_or_else(|| VaultError::PrincipalResolution(group.to_string()))?,
+            );
         }
         unsafe {
             NetApiBufferFree(buffer as _);
@@ -1105,7 +1264,7 @@ fn delete_local_group(group: &str) -> Result<(), VaultError> {
     if status == 0 || status == 2220 {
         Ok(())
     } else {
-        Err(VaultError::PrincipalResolution)
+        Err(VaultError::PrincipalResolution(group.to_string()))
     }
 }
 
@@ -1121,8 +1280,11 @@ fn set_local_group_members(group: &str, sids: &[String], add: bool) -> Result<()
     for value in sids {
         let text = wide(std::ffi::OsStr::new(value));
         let mut sid = std::ptr::null_mut();
+        // A malformed member SID string is never surfaced itself (it is
+        // caller/service-derived, not admin-typed); attribute the failure to
+        // the group being reconciled instead.
         if unsafe { ConvertStringSidToSidW(text.as_ptr(), &mut sid) } == 0 {
-            return Err(VaultError::PrincipalResolution);
+            return Err(VaultError::PrincipalResolution(group.to_string()));
         }
         allocated.push(sid);
     }
@@ -1157,7 +1319,7 @@ fn set_local_group_members(group: &str, sids: &[String], add: bool) -> Result<()
     if status == 0 {
         Ok(())
     } else {
-        Err(VaultError::PrincipalResolution)
+        Err(VaultError::PrincipalResolution(group.to_string()))
     }
 }
 
@@ -1674,6 +1836,30 @@ fn managed_group_name(entry_id: &str, access: VaultAccess) -> String {
     )
 }
 
+/// An admin-authored `svc.vault.reconcile_access_groups` group name must be
+/// non-empty, bounded, and must never collide with the reserved
+/// `WC-Vault-*` prefix [`managed_group_name`] derives — see
+/// [`RESERVED_GROUP_PREFIX`]'s doc comment for why that collision matters.
+fn valid_admin_group_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_GROUP_NAME_LEN
+        && !name.to_ascii_lowercase().starts_with(RESERVED_GROUP_PREFIX)
+}
+
+/// A short, content-free reason for one group's `svc.vault
+/// .reconcile_access_groups` failure. `PrincipalResolution`'s payload here
+/// is always the admin-supplied `local_group` name (never a member SID),
+/// so it is safe to include — same privacy boundary as `pipe.rs`'s
+/// `vault_error_message`.
+fn group_error_reason(error: VaultError) -> String {
+    match error {
+        VaultError::PrincipalResolution(name) => {
+            format!("windows local group operation failed for '{name}'")
+        }
+        _ => "local group reconciliation failed".to_string(),
+    }
+}
+
 fn empty_status() -> VaultPolicyStatus {
     VaultPolicyStatus {
         policy_id: None,
@@ -2144,6 +2330,269 @@ mod tests {
         assert_eq!(store.apply(policy(1, 0), 7), Err(VaultError::AclApply));
         assert!(membership.lock().unwrap().is_empty());
     }
+
+    // ── Task A: PrincipalResolution carries the rejected principal name ───
+
+    #[test]
+    fn principal_resolution_error_carries_the_rejected_principal_name() {
+        struct RejectingResolver;
+        impl PrincipalResolver for RejectingResolver {
+            fn resolve_sid(&self, name: &str) -> Result<String, VaultError> {
+                Err(VaultError::PrincipalResolution(name.to_string()))
+            }
+        }
+        let s = VaultAccessStore::open(
+            Box::new(Fs(Arc::new(Mutex::new(HashMap::new())))),
+            Box::new(RejectingResolver),
+            Box::new(Acl),
+            PathBuf::from("/policy"),
+        );
+        // `policy()`'s owner_account is "Admin" and is resolved first.
+        assert_eq!(
+            s.apply(policy(1, 0), 7),
+            Err(VaultError::PrincipalResolution("Admin".to_string()))
+        );
+    }
+
+    #[test]
+    fn principal_resolution_error_names_the_rejected_grant_not_just_the_owner() {
+        struct RejectingResolver;
+        impl PrincipalResolver for RejectingResolver {
+            fn resolve_sid(&self, name: &str) -> Result<String, VaultError> {
+                if name == "Partner" {
+                    Err(VaultError::PrincipalResolution(name.to_string()))
+                } else {
+                    Ok(format!("S-1-test-{name}"))
+                }
+            }
+        }
+        let s = VaultAccessStore::open(
+            Box::new(Fs(Arc::new(Mutex::new(HashMap::new())))),
+            Box::new(RejectingResolver),
+            Box::new(Acl),
+            PathBuf::from("/policy"),
+        );
+        assert_eq!(
+            s.apply(policy(1, 0), 7),
+            Err(VaultError::PrincipalResolution("Partner".to_string()))
+        );
+    }
+
+    // ── Task B: svc.vault.reconcile_access_groups ──────────────────────────
+
+    use wincmd_shared::vault_access::{VaultAccessGroupInput, VaultAccessGroupState};
+
+    #[test]
+    fn reconcile_access_groups_creates_then_reports_unchanged_then_updates_exactly() {
+        let groups = Groups::default();
+        let membership = Arc::clone(&groups.0);
+        let s = store_with_groups(Arc::new(Mutex::new(HashMap::new())), groups);
+
+        // First call: the group does not exist yet -> Created, and the
+        // supplied members land sorted+deduped exactly as given.
+        let created = s
+            .reconcile_access_groups(&[VaultAccessGroupInput {
+                local_group: "WC_Sales".into(),
+                member_sids: vec![
+                    "S-1-5-21-2".into(),
+                    "S-1-5-21-1".into(),
+                    "S-1-5-21-1".into(),
+                ],
+            }])
+            .unwrap();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].local_group, "WC_Sales");
+        assert_eq!(created[0].state, VaultAccessGroupState::Created);
+        assert_eq!(created[0].error, None);
+        assert_eq!(
+            membership.lock().unwrap().get("WC_Sales").unwrap(),
+            &vec!["S-1-5-21-1".to_string(), "S-1-5-21-2".to_string()]
+        );
+
+        // Same members again -> Unchanged, exact membership untouched.
+        let unchanged = s
+            .reconcile_access_groups(&[VaultAccessGroupInput {
+                local_group: "WC_Sales".into(),
+                member_sids: vec!["S-1-5-21-1".into(), "S-1-5-21-2".into()],
+            }])
+            .unwrap();
+        assert_eq!(unchanged[0].state, VaultAccessGroupState::Unchanged);
+
+        // A different member set -> Updated, and membership becomes EXACTLY
+        // the new set (the old member is gone, not merely appended to).
+        let updated = s
+            .reconcile_access_groups(&[VaultAccessGroupInput {
+                local_group: "WC_Sales".into(),
+                member_sids: vec!["S-1-5-21-3".into()],
+            }])
+            .unwrap();
+        assert_eq!(updated[0].state, VaultAccessGroupState::Updated);
+        assert_eq!(
+            membership.lock().unwrap().get("WC_Sales").unwrap(),
+            &vec!["S-1-5-21-3".to_string()]
+        );
+    }
+
+    #[test]
+    /// Regression: reconciling an existing group must not be treated as a
+    /// failure. `NetLocalGroupAdd` returns ERROR_ALIAS_EXISTS (not
+    /// NERR_GroupExists) for a local group that is already there, and
+    /// rejecting it made every save after the first one silently leave
+    /// Windows group membership unchanged. Found only by running against
+    /// real Windows — the fake reconciler these tests use cannot reach it.
+    #[test]
+    fn an_already_existing_local_group_counts_as_created_ok() {
+        assert!(local_group_add_status_is_ok(0), "fresh create must succeed");
+        assert!(
+            local_group_add_status_is_ok(ERROR_ALIAS_EXISTS),
+            "an existing local group must be accepted, not reported as failed",
+        );
+        assert!(
+            local_group_add_status_is_ok(NERR_GROUP_EXISTS),
+            "the global-group 'already exists' code must stay accepted too",
+        );
+        assert!(!local_group_add_status_is_ok(5), "access denied must fail");
+    }
+
+    #[test]
+    fn reconcile_access_groups_rejects_reserved_prefix_and_shape_violations() {
+        let s = store_with_groups(Arc::new(Mutex::new(HashMap::new())), Groups::default());
+        let results = s
+            .reconcile_access_groups(&[
+                // Collides with the service-owned WC-Vault-* namespace.
+                VaultAccessGroupInput {
+                    local_group: "WC-Vault-deadbeef-W".into(),
+                    member_sids: vec![],
+                },
+                // Same collision check must be case-insensitive.
+                VaultAccessGroupInput {
+                    local_group: "wc-vault-deadbeef-w".into(),
+                    member_sids: vec![],
+                },
+                VaultAccessGroupInput {
+                    local_group: "".into(),
+                    member_sids: vec![],
+                },
+                VaultAccessGroupInput {
+                    local_group: "x".repeat(MAX_GROUP_NAME_LEN + 1),
+                    member_sids: vec![],
+                },
+            ])
+            .unwrap();
+        assert!(results
+            .iter()
+            .all(|r| r.state == VaultAccessGroupState::Failed && r.error.is_some()));
+    }
+
+    #[test]
+    fn reconcile_access_groups_reports_per_group_failure_without_aborting_batch() {
+        struct FailsForOneGroup {
+            fail_for: String,
+        }
+        impl LocalGroupReconciler for FailsForOneGroup {
+            fn reconcile_exact_members(
+                &self,
+                group: &str,
+                _: &[String],
+            ) -> Result<(), VaultError> {
+                if group == self.fail_for {
+                    Err(VaultError::PrincipalResolution(group.to_string()))
+                } else {
+                    Ok(())
+                }
+            }
+            fn snapshot(
+                &self,
+                plans: &[GroupMembershipPlan],
+            ) -> Result<Vec<GroupMembershipSnapshot>, VaultError> {
+                Ok(plans
+                    .iter()
+                    .map(|plan| GroupMembershipSnapshot {
+                        group: plan.group.clone(),
+                        members: vec![],
+                        existed: false,
+                    })
+                    .collect())
+            }
+            fn restore(&self, _: &[GroupMembershipSnapshot]) -> Result<(), VaultError> {
+                Ok(())
+            }
+        }
+        let s = VaultAccessStore::open_with_groups(
+            Box::new(Fs(Arc::new(Mutex::new(HashMap::new())))),
+            Box::new(Resolver),
+            Box::new(Acl),
+            Box::new(FailsForOneGroup {
+                fail_for: "WC_Bad".into(),
+            }),
+            PathBuf::from("/policy"),
+        );
+        let results = s
+            .reconcile_access_groups(&[
+                VaultAccessGroupInput {
+                    local_group: "WC_Sales".into(),
+                    member_sids: vec!["S-1-5-21-1".into()],
+                },
+                VaultAccessGroupInput {
+                    local_group: "WC_Bad".into(),
+                    member_sids: vec!["S-1-5-21-2".into()],
+                },
+                VaultAccessGroupInput {
+                    local_group: "WC_Support".into(),
+                    member_sids: vec!["S-1-5-21-3".into()],
+                },
+            ])
+            .unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].state, VaultAccessGroupState::Created);
+        assert_eq!(results[0].error, None);
+        assert_eq!(results[1].state, VaultAccessGroupState::Failed);
+        assert!(results[1].error.is_some());
+        // The batch continues past the failing group.
+        assert_eq!(results[2].state, VaultAccessGroupState::Created);
+        assert_eq!(results[2].error, None);
+    }
+
+    #[test]
+    fn reconcile_access_groups_rejects_an_oversized_batch() {
+        let s = store_with_groups(Arc::new(Mutex::new(HashMap::new())), Groups::default());
+        let groups: Vec<_> = (0..=MAX_RECONCILE_GROUPS)
+            .map(|i| VaultAccessGroupInput {
+                local_group: format!("WC_Group{i}"),
+                member_sids: vec![],
+            })
+            .collect();
+        assert_eq!(
+            s.reconcile_access_groups(&groups),
+            Err(VaultError::Validation)
+        );
+    }
+
+    #[test]
+    fn reconcile_access_groups_never_deletes_or_renames_a_pre_existing_group() {
+        // Seed a group as if an admin had already created it out-of-band,
+        // then reconcile it with a shrunk member set. The group must still
+        // be present afterward (create-if-absent + exact-membership only,
+        // never delete/rename).
+        let groups = Groups::default();
+        groups
+            .0
+            .lock()
+            .unwrap()
+            .insert("WC_Existing".to_string(), vec!["S-1-5-21-9".to_string()]);
+        let membership = Arc::clone(&groups.0);
+        let s = store_with_groups(Arc::new(Mutex::new(HashMap::new())), groups);
+        let results = s
+            .reconcile_access_groups(&[VaultAccessGroupInput {
+                local_group: "WC_Existing".into(),
+                member_sids: vec![],
+            }])
+            .unwrap();
+        assert_eq!(results[0].state, VaultAccessGroupState::Updated);
+        let locked = membership.lock().unwrap();
+        assert!(locked.contains_key("WC_Existing"), "group must not be deleted");
+        assert_eq!(locked.get("WC_Existing").unwrap(), &Vec::<String>::new());
+    }
 }
 
 #[cfg(test)]
@@ -2166,8 +2615,8 @@ pub fn test_store() -> std::sync::Arc<VaultAccessStore> {
     }
     struct NoPrincipal;
     impl PrincipalResolver for NoPrincipal {
-        fn resolve_sid(&self, _: &str) -> Result<String, VaultError> {
-            Err(VaultError::PrincipalResolution)
+        fn resolve_sid(&self, name: &str) -> Result<String, VaultError> {
+            Err(VaultError::PrincipalResolution(name.to_string()))
         }
     }
     struct NoAcl;

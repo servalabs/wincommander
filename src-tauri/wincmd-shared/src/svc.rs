@@ -193,6 +193,19 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.list_authorized"
         | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
 
+        // Creates/updates a Windows local group and sets its EXACT
+        // membership from admin-supplied SIDs (the Access control UI's
+        // group editor). Unlike the vault mount verbs above — which only
+        // ever act on facts the service itself derives from the caller's
+        // token — this mutates real Windows local-group state from
+        // caller-supplied SIDs, so it stays on the same fail-closed
+        // Privileged (SYSTEM/Admin only) footing as `svc.vault.apply_policy`
+        // rather than being added to the ReadOnly list above. Listed
+        // explicitly (the wildcard arm below would already classify it
+        // Privileged) so it reads alongside the rest of the vault verb
+        // table.
+        "svc.vault.reconcile_access_groups" => CapabilityClass::Privileged,
+
         // All other verbs — including mutations, dispatches, fleet toggles,
         // and any future verb not yet added above — are Privileged.
         _ => CapabilityClass::Privileged,
@@ -244,6 +257,7 @@ mod tests {
             "svc.patch_settings",
             "svc.dispatch",
             "svc.set_fleet_enabled",
+            "svc.vault.reconcile_access_groups",
         ] {
             assert_eq!(
                 classify_verb(verb),

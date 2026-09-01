@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback } from "react";
+import type { AccessGroupReconcileRequest, AccessGroupReconcileResponse } from "@/panels/fleet/accessControlTypes";
 import type { VaultAccessCapabilities, VaultAuthorizedEntry, VaultMountEntryResult, VaultVolumeRole } from "@/panels/fleet/vaultAccessTypes";
 
 /** Typed renderer boundary for the service-owned Vault Access policy. */
@@ -33,6 +34,14 @@ export default function useVaultAccess<Policy, Status>() {
     () => invoke<VaultAccessCapabilities>("get_vault_access_capabilities"),
     [],
   );
+  const reconcileAccessGroups = useCallback(
+    (groups: AccessGroupReconcileRequest[]) =>
+      invoke<AccessGroupReconcileResponse>("reconcile_vault_access_groups", { groups }),
+    [],
+  );
 
-  return { getPolicy, getStatus, applyPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities };
+  return {
+    getPolicy, getStatus, applyPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities,
+    reconcileAccessGroups,
+  };
 }

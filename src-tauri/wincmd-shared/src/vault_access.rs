@@ -232,6 +232,57 @@ pub enum VaultMountDenial {
     MountBrokerUnavailable,
 }
 
+/// One Windows local group to reconcile via
+/// `svc.vault.reconcile_access_groups`. `local_group` is an admin-chosen
+/// Windows local-group name (e.g. `WC_Sales`) from the Access control UI —
+/// never one of the deterministic `WC-Vault-*` names the policy-apply path
+/// derives for its own per-entry groups.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultAccessGroupInput {
+    pub local_group: String,
+    pub member_sids: Vec<String>,
+}
+
+/// `svc.vault.reconcile_access_groups` request. Frozen wire shape:
+/// `{ "groups": [ { "local_group": "...", "member_sids": ["..."] } ] }`.
+/// Privileged (SYSTEM/Admin only, like `svc.vault.apply_policy`) — the
+/// service mutates real Windows local-group state on behalf of this call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultReconcileAccessGroupsRequest {
+    pub groups: Vec<VaultAccessGroupInput>,
+}
+
+/// Per-group outcome of a `svc.vault.reconcile_access_groups` call. A single
+/// group's failure is reported here and must never abort the rest of the
+/// batch — see that verb's handler in `commander-svc::pipe`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultAccessGroupState {
+    Created,
+    Updated,
+    Unchanged,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultAccessGroupResult {
+    pub local_group: String,
+    pub state: VaultAccessGroupState,
+    pub error: Option<String>,
+}
+
+/// `svc.vault.reconcile_access_groups` response. Frozen wire shape:
+/// `{ "results": [ { "local_group": "...", "state": "created" | "updated" |
+/// "unchanged" | "failed", "error": null | "<short reason>" } ] }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultReconcileAccessGroupsResponse {
+    pub results: Vec<VaultAccessGroupResult>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,5 +364,57 @@ mod tests {
         assert!(!serde_json::to_string(&result)
             .unwrap()
             .contains("canary-password"));
+    }
+
+    #[test]
+    fn reconcile_access_groups_request_matches_the_frozen_wire_shape() {
+        let request = VaultReconcileAccessGroupsRequest {
+            groups: vec![VaultAccessGroupInput {
+                local_group: "WC_Sales".into(),
+                member_sids: vec!["S-1-5-21-1".into(), "S-1-5-21-2".into()],
+            }],
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "groups": [
+                    { "local_group": "WC_Sales", "member_sids": ["S-1-5-21-1", "S-1-5-21-2"] }
+                ]
+            })
+        );
+        // Round-trips through the exact shape the bridge (commander-free)
+        // sends untouched from the renderer.
+        let round_tripped: VaultReconcileAccessGroupsRequest =
+            serde_json::from_value(json).unwrap();
+        assert_eq!(round_tripped, request);
+    }
+
+    #[test]
+    fn reconcile_access_groups_response_matches_the_frozen_wire_shape() {
+        let response = VaultReconcileAccessGroupsResponse {
+            results: vec![
+                VaultAccessGroupResult {
+                    local_group: "WC_Sales".into(),
+                    state: VaultAccessGroupState::Created,
+                    error: None,
+                },
+                VaultAccessGroupResult {
+                    local_group: "WC_Bad".into(),
+                    state: VaultAccessGroupState::Failed,
+                    error: Some("invalid local group name".into()),
+                },
+            ],
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "results": [
+                    { "local_group": "WC_Sales", "state": "created", "error": null },
+                    { "local_group": "WC_Bad", "state": "failed", "error": "invalid local group name" }
+                ]
+            })
+        );
     }
 }

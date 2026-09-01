@@ -17,6 +17,21 @@ const DEGRADED_DETAIL: Record<VaultEntryResult, string> = {
   acl_readback_failed: "Windows couldn't confirm the saved file permissions. Mounting is unavailable until this is fixed. Check the container folders and Windows accounts, then save again.",
 };
 
+const ENTRY_RESULT_LABEL: Record<VaultEntryResult, string> = {
+  applied: "Applied",
+  pending_mount_broker: "Waiting for the mount broker to confirm this vault",
+  validation_failed: "Saved details for this vault are invalid",
+  principal_resolution_failed: "A named Windows user or group could not be resolved",
+  container_identity_failed: "The container file could not be verified",
+  acl_apply_failed: "Windows couldn't apply file permissions for this vault",
+  acl_readback_failed: "Windows couldn't confirm file permissions for this vault",
+};
+
+/** One entry's apply result in plain administrator-facing language, never the raw enum. */
+export function vaultEntryResultLabel(result: VaultEntryResult): string {
+  return ENTRY_RESULT_LABEL[result];
+}
+
 export function vaultPolicyVerification(status: VaultPolicyStatus | null): VaultPolicyVerification | null {
   if (!status || status.validation_state === "never_applied") return null;
   if (status.validation_state === "current") {

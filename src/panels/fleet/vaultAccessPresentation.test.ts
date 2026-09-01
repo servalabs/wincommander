@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { vaultPolicyVerification } from "./vaultAccessPresentation";
-import type { VaultPolicyStatus } from "./vaultAccessTypes";
+import { vaultEntryResultLabel, vaultPolicyVerification } from "./vaultAccessPresentation";
+import type { VaultEntryResult, VaultPolicyStatus } from "./vaultAccessTypes";
 
 function status(
   validation_state: VaultPolicyStatus["validation_state"],
@@ -45,5 +45,26 @@ describe("Vault policy verification presentation", () => {
     expect(message?.detail).not.toContain("principal_resolution_failed");
     expect(JSON.stringify(message)).not.toContain("opaque-policy-id");
     expect(JSON.stringify(message)).not.toContain('"version":12');
+  });
+});
+
+describe("vaultEntryResultLabel", () => {
+  test("maps every per-entry result to plain administrator-facing text, never the raw enum", () => {
+    const results: VaultEntryResult[] = [
+      "applied", "pending_mount_broker", "validation_failed", "principal_resolution_failed",
+      "container_identity_failed", "acl_apply_failed", "acl_readback_failed",
+    ];
+    for (const result of results) {
+      const label = vaultEntryResultLabel(result);
+      expect(label.length).toBeGreaterThan(0);
+      expect(label).not.toBe(result);
+      expect(label).not.toContain("_");
+    }
+  });
+
+  test("names the specific failure instead of a generic message", () => {
+    expect(vaultEntryResultLabel("principal_resolution_failed"))
+      .toBe("A named Windows user or group could not be resolved");
+    expect(vaultEntryResultLabel("applied")).toBe("Applied");
   });
 });
