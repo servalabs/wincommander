@@ -1,7 +1,15 @@
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use std::sync::{Mutex, Once, OnceLock};
+use tauri::{
+    AppHandle, Emitter, Listener, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+};
 
 static TOAST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const NOTIFICATION_WINDOW_LABEL: &str = "notification-alerts";
+const NOTIFICATION_READY_EVENT: &str = "wc-custom-notification-ready";
+const NOTIFICATION_DELIVERY_EVENT: &str = "wc-custom-notification";
+const MAX_PENDING_NOTIFICATIONS: usize = 32;
 
 #[derive(Clone, serde::Serialize)]
 struct CustomNotificationPayload {
@@ -10,6 +18,84 @@ struct CustomNotificationPayload {
     body: String,
     severity: String,
     source: String,
+}
+
+#[derive(Default)]
+struct NotificationDeliveryState {
+    renderer_ready: bool,
+    pending: VecDeque<CustomNotificationPayload>,
+}
+
+fn notification_delivery_state() -> &'static Mutex<NotificationDeliveryState> {
+    static STATE: OnceLock<Mutex<NotificationDeliveryState>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(NotificationDeliveryState::default()))
+}
+
+fn enqueue_pending_notification(
+    state: &mut NotificationDeliveryState,
+    payload: CustomNotificationPayload,
+) {
+    if state.pending.len() == MAX_PENDING_NOTIFICATIONS {
+        state.pending.pop_front();
+    }
+    state.pending.push_back(payload);
+}
+
+/// The alert renderer is a separate hidden webview. A global event sent via
+/// the main window can arrive before that renderer installs its listener; the
+/// Shield event then looks delayed or is dropped. The native side owns the
+/// readiness acknowledgement and sends queued payloads directly to the alert
+/// window only after its renderer confirms it is listening.
+fn install_notification_ready_listener(app: &AppHandle) {
+    static LISTENER: Once = Once::new();
+    let app = app.clone();
+    LISTENER.call_once(move || {
+        let ready_app = app.clone();
+        app.listen_any(NOTIFICATION_READY_EVENT, move |_| {
+            let pending = {
+                let Ok(mut state) = notification_delivery_state().lock() else {
+                    return;
+                };
+                state.renderer_ready = true;
+                state.pending.drain(..).collect::<Vec<_>>()
+            };
+            let Some(window) = ready_app.get_webview_window(NOTIFICATION_WINDOW_LABEL) else {
+                return;
+            };
+            for payload in pending {
+                if let Err(error) = window.emit(NOTIFICATION_DELIVERY_EVENT, payload) {
+                    crate::log_message(
+                        "warn",
+                        &format!("[Notify] could not deliver queued alert: {error}"),
+                    );
+                }
+            }
+        });
+    });
+}
+
+fn queue_or_deliver_notification(
+    window: &WebviewWindow,
+    payload: CustomNotificationPayload,
+) -> Result<(), String> {
+    let renderer_ready = {
+        let mut state = notification_delivery_state()
+            .lock()
+            .map_err(|_| "notification delivery state is unavailable".to_string())?;
+        if state.renderer_ready {
+            true
+        } else {
+            enqueue_pending_notification(&mut state, payload.clone());
+            false
+        }
+    };
+
+    if renderer_ready {
+        window
+            .emit(NOTIFICATION_DELIVERY_EVENT, payload)
+            .map_err(|error| format!("could not deliver notification: {error}"))?;
+    }
+    Ok(())
 }
 
 pub fn show_native_notification(app: &AppHandle, title: &str, body: &str) -> Result<(), String> {
@@ -43,8 +129,8 @@ fn show_custom_notification(
         ),
     );
 
-    ensure_notification_window(app)?;
-    promote_notification_window(app)?;
+    install_notification_ready_listener(app);
+    let window = ensure_notification_window(app)?;
 
     let toast_id = TOAST_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
     let payload = CustomNotificationPayload {
@@ -55,15 +141,14 @@ fn show_custom_notification(
         source: source.to_string(),
     };
 
-    app.emit("wc-native-notification", payload)
-        .map_err(|error| format!("could not emit external notification: {error}"))
+    queue_or_deliver_notification(&window, payload)
 }
 
-/// Privacy Shield uses a separate topmost overlay. Re-promote the alert window
-/// for every delivery so a detection alert is visible above that overlay instead
-/// of appearing only after the shield is disabled. `SWP_NOACTIVATE` preserves
-/// the user's current focus and keeps the alert click-through until its renderer
-/// decides it has content to show.
+/// Privacy Shield uses a separate topmost overlay. This must run after the
+/// alert renderer has shown its window: promoting an invisible HWND leaves the
+/// shield above it when it later becomes visible. `SWP_NOACTIVATE` preserves
+/// the user's current focus while `SWP_SHOWWINDOW` puts the visible alert above
+/// the shield.
 fn promote_notification_window(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("notification-alerts")
@@ -73,7 +158,7 @@ fn promote_notification_window(app: &AppHandle) -> Result<(), String> {
     {
         use windows_sys::Win32::Foundation::HWND;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
         };
 
         let raw = window
@@ -87,7 +172,7 @@ fn promote_notification_window(app: &AppHandle) -> Result<(), String> {
                 0,
                 0,
                 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
         };
         if promoted == 0 {
@@ -101,14 +186,22 @@ fn promote_notification_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_notification_window(app: &AppHandle) -> Result<(), String> {
-    if app.get_webview_window("notification-alerts").is_some() {
-        return Ok(());
+/// Called by the notification renderer after it has received and shown a toast.
+/// Keeping this as a renderer acknowledgement prevents Privacy Shield's PyQt
+/// overlay from taking the topmost slot during the hidden-window hand-off.
+#[tauri::command]
+pub fn present_notification_window(app: AppHandle) -> Result<(), String> {
+    promote_notification_window(&app)
+}
+
+fn ensure_notification_window(app: &AppHandle) -> Result<WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window(NOTIFICATION_WINDOW_LABEL) {
+        return Ok(window);
     }
 
     WebviewWindowBuilder::new(
         app,
-        "notification-alerts",
+        NOTIFICATION_WINDOW_LABEL,
         WebviewUrl::App("index.html".into()),
     )
     .title("WinCommander Alerts")
@@ -122,7 +215,6 @@ fn ensure_notification_window(app: &AppHandle) -> Result<(), String> {
     .visible(false)
     .inner_size(440.0, 520.0)
     .build()
-    .map(|_| ())
     .map_err(|error| format!("could not create notification window: {error}"))
 }
 
@@ -253,7 +345,10 @@ pub fn show_rdp_idle_warning_native(
 
 #[cfg(test)]
 mod tests {
-    use super::{infer_presentation, promote_notification_window};
+    use super::{
+        enqueue_pending_notification, infer_presentation, promote_notification_window,
+        CustomNotificationPayload, NotificationDeliveryState, MAX_PENDING_NOTIFICATIONS,
+    };
 
     #[test]
     fn ransomware_alerts_have_danger_presentation() {
@@ -272,16 +367,48 @@ mod tests {
     }
 
     #[test]
-    fn custom_notifications_are_promoted_above_privacy_shield_without_activation() {
+    fn custom_notifications_are_promoted_after_the_renderer_shows_them() {
         let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/native_notify.rs"));
         let start = source
             .find("fn show_custom_notification")
             .expect("custom notification path must exist");
         let body = &source[start..start + 900.min(source.len() - start)];
         assert!(body.contains("ensure_notification_window(app)?;"));
-        assert!(body.contains("promote_notification_window(app)?;"));
+        assert!(!body.contains("promote_notification_window(app)?;"));
+        assert!(body.contains("install_notification_ready_listener(app);"));
+        assert!(body.contains("queue_or_deliver_notification(&window, payload)"));
+        assert!(!body.contains("app.emit(\"wc-native-notification\", payload)"));
+        assert!(source.contains("app.listen_any(NOTIFICATION_READY_EVENT"));
+        assert!(source.contains("pub fn present_notification_window"));
         assert!(source.contains("HWND_TOPMOST"));
         assert!(source.contains("SWP_NOACTIVATE"));
+        assert!(source.contains("SWP_SHOWWINDOW"));
         let _ = promote_notification_window as fn(&tauri::AppHandle) -> Result<(), String>;
+    }
+
+    #[test]
+    fn pending_alerts_are_retained_until_the_notification_renderer_is_ready() {
+        let mut state = NotificationDeliveryState::default();
+        for id in 0..=MAX_PENDING_NOTIFICATIONS {
+            enqueue_pending_notification(
+                &mut state,
+                CustomNotificationPayload {
+                    id: id as u64,
+                    title: "Privacy Shield".to_string(),
+                    body: "Look away".to_string(),
+                    severity: "info".to_string(),
+                    source: "WinCommander".to_string(),
+                },
+            );
+        }
+        assert!(!state.renderer_ready);
+        assert_eq!(state.pending.len(), MAX_PENDING_NOTIFICATIONS);
+        assert_eq!(state.pending.front().map(|payload| payload.id), Some(1));
+
+        state.renderer_ready = true;
+        let ready_delivery: Vec<_> = state.pending.drain(..).collect();
+        assert_eq!(ready_delivery.len(), MAX_PENDING_NOTIFICATIONS);
+        assert_eq!(ready_delivery[0].id, 1);
+        assert!(state.pending.is_empty());
     }
 }

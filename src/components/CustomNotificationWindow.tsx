@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
+import {
+  currentMonitor,
+  cursorPosition,
+  getCurrentWindow,
+  monitorFromPoint,
+  primaryMonitor,
+  type Monitor,
+} from "@tauri-apps/api/window";
 import { Icon } from "@/components/ui/bp";
+import { getNotificationWindowBounds } from "@/lib/notificationWindowPosition";
 
 interface NotificationPayload {
   id: number;
@@ -15,6 +25,24 @@ const MAX_VISIBLE_NOTIFICATIONS = 3;
 const DUPLICATE_SUPPRESS_MS = 8_000;
 const DISPLAY_DURATION_MS = 8_000;
 const READY_EVENT = "wc-custom-notification-ready";
+
+async function positionNotificationWindow() {
+  const windowRef = getCurrentWindow();
+  let monitor: Monitor | null = null;
+  try {
+    const cursor = await cursorPosition();
+    monitor = await monitorFromPoint(cursor.x, cursor.y);
+  } catch {
+    // Use the current or primary monitor when cursor lookup is unavailable.
+  }
+  monitor ??= (await currentMonitor().catch(() => null))
+    ?? (await primaryMonitor().catch(() => null));
+  if (!monitor) return;
+
+  const bounds = getNotificationWindowBounds(monitor.workArea, monitor.scaleFactor);
+  await windowRef.setSize(new PhysicalSize(bounds.width, bounds.height));
+  await windowRef.setPosition(new PhysicalPosition(bounds.x, bounds.y));
+}
 
 function getDedupeKey(payload: NotificationPayload) {
   return [
@@ -77,11 +105,19 @@ export default function CustomNotificationWindow() {
         const withoutSameId = current.filter((item) => item.id !== payload.id);
         return [...withoutSameId, payload].slice(-MAX_VISIBLE_NOTIFICATIONS);
       });
-      windowRef.setIgnoreCursorEvents(false)
-        .then(() => windowRef.show())
-        .catch((error) => {
-          console.warn("[Notify] could not show notification window", error);
-        });
+      void (async () => {
+        try {
+          await positionNotificationWindow();
+          await windowRef.setIgnoreCursorEvents(false);
+          await windowRef.show();
+          // Let React commit the alert content, then raise the now-visible HWND
+          // above Privacy Shield's independently topmost PyQt overlay.
+          await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+          await invoke("present_notification_window");
+        } catch (error) {
+          console.warn("[Notify] could not present notification window", error);
+        }
+      })();
 
       const existingTimer = timers.get(payload.id);
       if (existingTimer !== undefined) window.clearTimeout(existingTimer);
