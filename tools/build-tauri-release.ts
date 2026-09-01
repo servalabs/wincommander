@@ -5,7 +5,13 @@ const root = resolve(import.meta.dirname, "..");
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const serviceBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-svc.exe");
-const stagedServicePath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-svc.exe");
+// Tauri resolves bundle-resource sources from the repository root, then places
+// them below the installer's `resources` directory. Stage the file at that
+// root so the installed path is exactly
+// `$INSTDIR\\resources\\wincommander-svc.exe`, which is where the NSIS hooks
+// load it from. Staging it under a source `resources/` folder would instead
+// create a nested `resources\\resources\\...` path and abort installation.
+const stagedServicePath = resolve(root, "wincommander-svc.exe");
 // Release installers must run on a clean Windows machine. Link the MSVC C
 // runtime into both the service and the Tauri application so they do not
 // require a separately installed VCRUNTIME140.dll.
@@ -30,7 +36,7 @@ run(
 const config = JSON.parse(readFileSync(configPath, "utf8")) as {
   bundle: { resources: string[]; targets: string | string[] };
 };
-const serviceResource = "resources/wincommander-svc.exe";
+const serviceResource = "wincommander-svc.exe";
 config.bundle.resources = [...config.bundle.resources.filter(resource => resource !== serviceResource), serviceResource];
 // Only NSIS executes the service lifecycle hooks. Emitting an MSI here would
 // produce a package that installs the UI but silently omits WinCommanderSvc.
