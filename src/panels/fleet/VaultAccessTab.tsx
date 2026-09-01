@@ -182,7 +182,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         showSuccess("Vault settings saved. Future mounts only need the password.");
       }
     } catch (cause) {
-      showError(cause instanceof Error ? cause.message : "Vault policy was not applied.");
+      showError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setSaving(false);
     }

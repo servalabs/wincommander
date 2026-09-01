@@ -158,7 +158,16 @@ async fn call_via_with_timeout(
             Err("service reply did not match the request".to_string())
         }
         wincmd_shared::Envelope::Error(error) => {
-            Err(format!("service rejected request: {}", error.kind))
+            // `error.message` already respects the service's privacy boundary
+            // (admin-typed principal names only — never a SID, path, or ACL
+            // detail; see `vault_error_message`'s doc comment), so it is safe
+            // to surface here. `error.kind` stays in the string too so
+            // substring checks like `describeReconcileFailure`'s `"forbidden"`
+            // match keep working unchanged.
+            Err(format!(
+                "service rejected request: {} ({})",
+                error.kind, error.message
+            ))
         }
         _ => Err("service returned an unexpected reply".to_string()),
     }

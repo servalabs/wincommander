@@ -7215,6 +7215,7 @@ version = "0.1.0"
 dependencies = [
  "calamine",
  "globset",
+ "hex",
  "lopdf",
  "notify",
  "once_cell",
