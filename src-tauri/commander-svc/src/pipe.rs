@@ -525,6 +525,9 @@ async fn dispatch_verb(
             "svc.vault.capabilities" => {
                 Ok(serde_json::json!({ "can_manage_policy": caller_privileged }))
             }
+            "svc.vault.reconcile_access_groups" => {
+                handle_vault_reconcile_access_groups(vault_access, args)
+            }
 
             // Every other verb (ink_receipt.* and anything privileged/unknown)
             // is still a stub — out of this task's scope. `authorize()` above
@@ -611,6 +614,45 @@ fn handle_vault_apply_and_cleanup(
             )
         })?;
         handle_vault_apply(vault_access, args)
+    })
+}
+
+/// Backs `svc.vault.reconcile_access_groups` — Privileged (SYSTEM/Admin
+/// only, gated identically to `svc.vault.apply_policy`; see `classify_verb`
+/// and this file's `authorize`/`is_vault_management_verb`). The Access
+/// control UI defines admin-authored Windows local groups (friendly name +
+/// `local_group`) and ticks users into them; the UI itself is unprivileged
+/// and cannot create/mutate a real Windows group, so this SYSTEM-service
+/// verb does it on the UI's behalf. `args`/response shape is the frozen
+/// contract `commander-free::vault_access::reconcile_vault_access_groups`
+/// already sends: `{"groups":[{"local_group":"...","member_sids":[...]}]}`
+/// in, `{"results":[{"local_group","state","error"}]}` out. A malformed
+/// request or an oversized batch fails the whole call; a single group's
+/// reconciliation failure is instead reported in that group's own `result`
+/// entry (see `VaultAccessStore::reconcile_access_groups`'s doc comment) so
+/// it never aborts the rest of the batch.
+fn handle_vault_reconcile_access_groups(
+    vault_access: &VaultAccessStore,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, VerbError> {
+    let request: wincmd_shared::vault_access::VaultReconcileAccessGroupsRequest =
+        serde_json::from_value(args).map_err(|_| {
+            VerbError::new(
+                "vault_validation_failed",
+                "access group reconciliation request is invalid",
+            )
+        })?;
+    let results = vault_access
+        .reconcile_access_groups(&request.groups)
+        .map_err(|error| VerbError::new("vault_validation_failed", vault_error_message(error)))?;
+    serde_json::to_value(wincmd_shared::vault_access::VaultReconcileAccessGroupsResponse {
+        results,
+    })
+    .map_err(|_| {
+        VerbError::new(
+            "vault_internal_error",
+            "access group reconciliation response could not be created",
+        )
     })
 }
 
@@ -915,17 +957,33 @@ fn handle_vault_list_authorized(
     })
 }
 
-fn vault_error_message(error: crate::vault_access::VaultError) -> &'static str {
+/// Renders a [`crate::vault_access::VaultError`] for an `ErrorReply.message`.
+///
+/// PRIVACY BOUNDARY: `PrincipalResolution`'s payload is the admin-supplied
+/// principal or local-group name — the admin typed it, so echoing it back is
+/// in scope. No other variant carries, and this function must never format
+/// in, a resolved SID, a container path, or ACL/SDDL detail.
+fn vault_error_message(error: crate::vault_access::VaultError) -> String {
     match error {
         crate::vault_access::VaultError::Validation
-        | crate::vault_access::VaultError::VersionConflict => "vault policy validation failed",
-        crate::vault_access::VaultError::PrincipalResolution => "vault principal resolution failed",
-        crate::vault_access::VaultError::ContainerIdentity => {
-            "vault container identity validation failed"
+        | crate::vault_access::VaultError::VersionConflict => {
+            "vault policy validation failed".to_string()
         }
-        crate::vault_access::VaultError::AclApply => "vault access plan could not be applied",
-        crate::vault_access::VaultError::AclReadback => "vault access plan read-back failed",
-        crate::vault_access::VaultError::Persistence => "vault policy could not be persisted",
+        crate::vault_access::VaultError::PrincipalResolution(name) => {
+            format!("vault principal resolution failed for '{name}'")
+        }
+        crate::vault_access::VaultError::ContainerIdentity => {
+            "vault container identity validation failed".to_string()
+        }
+        crate::vault_access::VaultError::AclApply => {
+            "vault access plan could not be applied".to_string()
+        }
+        crate::vault_access::VaultError::AclReadback => {
+            "vault access plan read-back failed".to_string()
+        }
+        crate::vault_access::VaultError::Persistence => {
+            "vault policy could not be persisted".to_string()
+        }
     }
 }
 
@@ -1873,6 +1931,37 @@ mod tests {
         assert!(is_vault_management_verb("svc.vault.get_policy"));
         assert!(is_vault_management_verb("svc.vault.get_status"));
         assert!(is_vault_management_verb("svc.vault.apply_policy"));
+        // Task B: reconcile_access_groups is gated exactly like
+        // apply_policy (Privileged / SYSTEM-Admin only) but is deliberately
+        // NOT a "Vault Policy Administrator" capability-token verb — only
+        // an actual SYSTEM/Admin caller may mutate real Windows local
+        // groups, unlike the policy-document verbs above.
+        assert!(!is_vault_management_verb(
+            "svc.vault.reconcile_access_groups"
+        ));
+    }
+
+    #[tokio::test]
+    async fn vault_reconcile_access_groups_from_unprivileged_caller_is_denied() {
+        let gate = passing_gate();
+        let result = authorize(
+            "svc.vault.reconcile_access_groups",
+            false,
+            1234,
+            &gate,
+        )
+        .await;
+        assert_eq!(
+            result,
+            Err("privileged verb requires SYSTEM/Admin caller".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn vault_reconcile_access_groups_from_privileged_caller_is_allowed() {
+        let gate = passing_gate();
+        let result = authorize("svc.vault.reconcile_access_groups", true, 1234, &gate).await;
+        assert_eq!(result, Ok(None));
     }
 
     #[tokio::test]
@@ -2376,6 +2465,52 @@ mod integration {
                 assert_eq!(r.result["pong"], true);
             }
             other => panic!("expected Envelope::Response, got {:?}", other),
+        }
+    }
+
+    // ── Task B: svc.vault.reconcile_access_groups end-to-end gate ─────────
+
+    #[tokio::test]
+    async fn vault_reconcile_access_groups_with_forced_unprivileged_returns_forbidden() {
+        let reply = run_one_request(
+            "vault-reconcile-forbidden",
+            "svc.vault.reconcile_access_groups",
+            false,
+            false,
+        )
+        .await;
+        match reply {
+            Envelope::Error(ErrorReply { kind, .. }) => {
+                assert_eq!(kind, "forbidden", "expected kind=forbidden, got {:?}", kind);
+            }
+            other => panic!("expected Envelope::Error, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn vault_reconcile_access_groups_with_forced_privileged_reaches_handler() {
+        // `run_one_request` always sends `{}` as args, which is not a valid
+        // `VaultReconcileAccessGroupsRequest` — so this still errors, but
+        // with a DIFFERENT kind than "forbidden". That difference is exactly
+        // what proves a privileged caller cleared the gate and reached
+        // `handle_vault_reconcile_access_groups` rather than being denied by
+        // `authorize`/`is_vault_management_verb`.
+        let reply = run_one_request(
+            "vault-reconcile-priv",
+            "svc.vault.reconcile_access_groups",
+            true,
+            false,
+        )
+        .await;
+        match reply {
+            Envelope::Error(ErrorReply { kind, .. }) => {
+                assert_ne!(
+                    kind, "forbidden",
+                    "a privileged caller must pass the gate and reach the handler"
+                );
+            }
+            Envelope::Response(_) => {}
+            other => panic!("unexpected reply: {:?}", other),
         }
     }
 

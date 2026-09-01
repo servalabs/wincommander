@@ -19,8 +19,9 @@ import {
 } from "./vaultAccessTypes";
 import { applyVaultAccessPreset, VAULT_ACCESS_PRESETS, vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
 import VaultAccessPatternPicker from "./VaultAccessPatternPicker";
+import VaultPrincipalPicker from "./VaultPrincipalPicker";
 import { vaultPolicyVerification } from "./vaultAccessPresentation";
-import { patchAuthorizedEntriesFromMountResult } from "./vaultAccessUiState";
+import { patchAuthorizedEntriesFromMountResult, vaultMountGate } from "./vaultAccessUiState";
 
 function appliedAt(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleString();
@@ -395,6 +396,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             const isMounted = mountResult?.state === "mounted" || authorized?.mount_state === "mounted";
             const accessPreset = vaultAccessPreset(entry);
             const isDualContainer = entry.container_kind === "dual";
+            const entryResult = status?.entries.find(item => item.id === entry.id)?.result;
+            const mountGate = vaultMountGate({ authorized, entryResult, draftDirty });
             return <div className="fleet-vault-workspace" key={entry.id}>
               <div className="fleet-vault-workspace-header">
                 <div><span className="fleet-vault-step">1. Vault details</span><strong>Vault {entryIndex + 1}</strong></div>
@@ -414,7 +417,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 {accessPreset === "private"
                   ? <p className="fleet-field-hint">Only the primary owner can mount or edit this vault. Its drive appears only in that Windows session.</p>
                   : entry.grants.map((grant, grantIndex) => <div className="fleet-vault-grant-row" key={`${entry.id}-${grantIndex}`}>
-                    <label className="fleet-field"><span>Windows user or group</span><Input aria-label={`Grant ${grantIndex + 1} principal`} value={grant.principal_name} placeholder="SERVER\\Admins" onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, principal_name: event.target.value } : current) })} /><small>{accessPreset === "custom" ? "This person has the level selected beside them." : VAULT_ACCESS_PRESETS[accessPreset].label}</small></label>
+                    <label className="fleet-field"><span>Windows user or group</span><VaultPrincipalPicker ariaLabel={`Grant ${grantIndex + 1} principal`} value={grant.principal_name} directory={directory} onChange={value => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, principal_name: value } : current) })} /><small>{accessPreset === "custom" ? "This person has the level selected beside them." : VAULT_ACCESS_PRESETS[accessPreset].label}</small></label>
                     {accessPreset === "custom" && <label className="fleet-field"><span>Access</span><select aria-label={`Grant ${grantIndex + 1} access`} value={grant.access} onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, access: event.target.value as "read" | "write" } : current) })}><option value="write">Can edit</option><option value="read">View only</option></select></label>}
                     <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: entry.grants.filter((_, index) => index !== grantIndex) })}>Remove</Button>
                   </div>)}
@@ -430,11 +433,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                         ? `Mounted at ${authorized.drive_letter}`
                         : authorized?.mount_state === "mounted"
                           ? "Mounted for this Windows session"
-                          : authorized
-                            ? "Ready to mount when needed"
-                            : status?.validation_state === "degraded"
-                              ? "Mounting is unavailable until the saved access settings are fixed."
-                              : "Mount access is checked for the signed-in Windows account."}
+                          : mountGate.disabledReason ?? "Ready to mount when needed"}
                   </p>
                 </div>
                 {isMounted ? (
@@ -442,7 +441,13 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                     {unmountingEntryId === entry.id ? "Unmounting…" : "Unmount"}
                   </Button>
                 ) : (
-                  <Button variant="primary" size="sm" disabled={mountingEntryId === entry.id} onClick={() => openMountPrompt({ ...entry, access: authorized?.access })}>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={mountingEntryId === entry.id || !mountGate.canMount}
+                    title={mountGate.disabledReason ?? undefined}
+                    onClick={() => openMountPrompt({ ...entry, access: authorized?.access })}
+                  >
                     {mountingEntryId === entry.id ? "Mounting…" : "Mount"}
                   </Button>
                 )}

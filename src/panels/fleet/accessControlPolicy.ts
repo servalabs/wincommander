@@ -1,4 +1,5 @@
 import type {
+  AccessGroupReconcileRequest, AccessGroupReconcileResult,
   FleetAccessDirectory, FleetAccessGroup, FleetAccessUser,
 } from "./accessControlTypes";
 
@@ -174,4 +175,62 @@ export function createAccessGroup(groups: FleetAccessGroup[]): FleetAccessGroup 
 
 export function membershipCount(groups: FleetAccessGroup[], userIdToFind: string) {
   return groups.reduce((count, group) => count + Number(group.userIds.includes(userIdToFind)), 0);
+}
+
+export interface AccessGroupReconcilePlan {
+  requests: AccessGroupReconcileRequest[];
+  /** Selected members the service cannot resolve — no SID, so never sent by name. */
+  skippedMembers: { groupName: string; count: number }[];
+}
+
+/** Build the `svc.vault.reconcile_access_groups` request from the local directory. */
+export function buildAccessGroupReconcilePlan(directory: FleetAccessDirectory): AccessGroupReconcilePlan {
+  const skippedMembers: AccessGroupReconcilePlan["skippedMembers"] = [];
+  const requests = directory.groups.map(group => {
+    let skipped = 0;
+    const member_sids = group.userIds.reduce<string[]>((sids, id) => {
+      const sid = directory.users.find(user => user.id === id)?.sid;
+      if (sid) sids.push(sid);
+      else skipped += 1;
+      return sids;
+    }, []);
+    if (skipped > 0) skippedMembers.push({ groupName: group.name, count: skipped });
+    return { local_group: group.localGroup, member_sids };
+  });
+  return { requests, skippedMembers };
+}
+
+export interface ReconcileOutcome {
+  intent: "success" | "danger";
+  message: string;
+}
+
+/** Turn the service's per-group results into one honest toast. A failed
+ * group must stay visible with its reason — never collapse into a blanket
+ * "saved" message when any group failed. */
+export function summarizeReconcileResults(results: AccessGroupReconcileResult[]): ReconcileOutcome {
+  const failed = results.filter(result => result.state === "failed");
+  if (failed.length > 0) {
+    const detail = failed.map(result => `${result.local_group}: ${result.error ?? "unknown error"}`).join("; ");
+    return {
+      intent: "danger",
+      message: `Windows group update failed for ${failed.length} of ${results.length} group${results.length === 1 ? "" : "s"} — ${detail}`,
+    };
+  }
+  return { intent: "success", message: "Access groups saved, and the matching Windows groups were created or updated." };
+}
+
+/**
+ * Classify a rejected `reconcile_vault_access_groups` call. The service
+ * rejects a non-admin caller with error_kind "forbidden" (commander-svc's
+ * `authorize()`), which `svc_client::call` formats as
+ * "service rejected request: forbidden". Any other failure means the
+ * service could not be reached at all — the local save still succeeded.
+ */
+export function describeReconcileFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.toLocaleLowerCase().includes("forbidden")) {
+    return "Access groups saved on this administrator workstation. Creating the matching Windows groups needs an administrator — run WinCommander elevated to finish it.";
+  }
+  return "Access groups saved on this administrator workstation, but the Windows groups were not created — the local security service could not be reached.";
 }
