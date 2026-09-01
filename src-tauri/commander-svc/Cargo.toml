@@ -40,7 +40,7 @@ sha2 = "0.11"
 
 [target.'cfg(windows)'.dependencies]
 # Windows service registration / dispatcher (SCM integration).
-windows-service = "0.7"
+windows-service = "0.8"
 # Low-level Windows APIs: security, pipes, tokens.
 # Match the MAJOR version already in Cargo.lock (0.61.x) so no duplicate.
 windows-sys = { version = "0.61", features = [
