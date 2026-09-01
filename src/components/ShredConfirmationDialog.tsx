@@ -15,6 +15,23 @@ interface ShredTarget {
     isDir: boolean;
 }
 
+function targetPathKey(path: string): string {
+    return path.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+}
+
+export function mergeShredTargets(
+    current: ShredTarget[],
+    additions: ShredTarget[],
+): ShredTarget[] {
+    const seen = new Set(current.map(target => targetPathKey(target.path)));
+    return [...current, ...additions.filter(target => {
+        const key = targetPathKey(target.path);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    })];
+}
+
 interface ShredConfirmationDialogProps {
     isOpen: boolean;
     paths: string[];
@@ -37,20 +54,24 @@ export default function ShredConfirmationDialog({ isOpen, paths, onClose }: Shre
         if (!isOpen || paths.length === 0) { setTargets([]); return; }
         let cancelled = false;
         setResolving(true);
+        setTargets([]);
         Promise.all(
             paths.map(async (p) => {
                 const isDir = await invoke<boolean>("is_path_dir", { path: p }).catch(() => false);
                 return { path: p, name: p.split(/[\\/]/).pop() ?? p, isDir };
             })
         ).then(resolved => {
-            if (!cancelled) setTargets(resolved);
+            // Keep targets selected through either picker while the initial
+            // Explorer paths are still resolving; a slow directory probe must
+            // never replace a newer mixed selection.
+            if (!cancelled) setTargets(current => mergeShredTargets(current, resolved));
         }).finally(() => {
             if (!cancelled) setResolving(false);
         });
         return () => { cancelled = true; };
     }, [isOpen, paths]);
 
-    // Sequence counter for the in-dialog Add files / Add folder
+    // Sequence counter for the in-dialog Add files / Add folders
     // pickers. Each picker click bumps the seq; only the latest click's
     // result is allowed to mutate state. Stops a slow OS picker from
     // leaking its old selection over a newer one when the user clicks
@@ -69,21 +90,20 @@ export default function ShredConfirmationDialog({ isOpen, paths, onClose }: Shre
             name: p.split(/[\\/]/).pop() ?? p,
             isDir: false,
         }));
-        setTargets(prev => {
-            const existing = new Set(prev.map(t => t.path));
-            return [...prev, ...resolved.filter(t => !existing.has(t.path))];
-        });
+        setTargets(current => mergeShredTargets(current, resolved));
     };
 
     const addFolder = async () => {
         const seq = ++addSeqRef.current;
-        const selected = await openFilePicker({ directory: true }).catch(() => null);
+        const selected = await openFilePicker({ directory: true, multiple: true }).catch(() => null);
         if (seq !== addSeqRef.current) return;
-        if (!selected || Array.isArray(selected)) return;
-        setTargets(prev => {
-            if (prev.some(t => t.path === selected)) return prev;
-            return [...prev, { path: selected, name: selected.split(/[\\/]/).pop() ?? selected, isDir: true }];
-        });
+        if (!selected) return;
+        const newPaths = Array.isArray(selected) ? selected : [selected];
+        setTargets(current => mergeShredTargets(current, newPaths.map(path => ({
+            path,
+            name: path.split(/[\\/]/).pop() ?? path,
+            isDir: true,
+        }))));
     };
 
     const remove = (path: string) => setTargets(prev => prev.filter(t => t.path !== path));
@@ -145,7 +165,7 @@ export default function ShredConfirmationDialog({ isOpen, paths, onClose }: Shre
                             Add files
                         </Button>
                         <Button minimal small icon="folder-close" onClick={addFolder} className="shred-add-btn">
-                            Add folder
+                            Add folders
                         </Button>
                     </div>
                 </div>

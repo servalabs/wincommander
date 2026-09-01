@@ -1568,6 +1568,23 @@ pub fn run() {
             safe_clip::handle_safe_copy_cli(&cli_args);
             std::process::exit(0);
         }
+        // Explorer secure-delete is another GUI-free operation, but unlike
+        // Safe Copy it is destructive and must report a non-zero process exit
+        // code when no verified erase occurred. Execute it before the
+        // single-instance guard: forwarding it into a dev instance could make
+        // a cold Tauri setup call `app.exit(0)`, taking down the user's local
+        // dev session instead of deleting the selected item.
+        if cli_args.iter().any(|a| a == "--context-shred") {
+            let paths = cli_args
+                .iter()
+                .skip(1)
+                .filter(|arg| !arg.starts_with("--"))
+                .cloned()
+                .collect();
+            let result = context_menu_shred::execute_cli(paths);
+            context_menu_shred::log_result(result.clone());
+            std::process::exit(if result.is_ok() { 0 } else { 1 });
+        }
     }
 
     // Create the kill-on-close Job Object as early as possible so any
@@ -1967,14 +1984,13 @@ pub fn run() {
                 // the toast in RightSidebar.tsx's safe-paste-requested listener
                 // (success/error), neither of which needs the window shown.
                 let is_safe_paste = args.iter().any(|a| a == "--safe-paste");
-                let is_direct_context_shred = args.iter().any(|a| a == "--context-shred");
                 // Only set skip_taskbar for hidden-mode non-calculator launches; the
                 // calculator block below explicitly resets it to false, so setting it
                 // here would be immediately undone and leaves the window in a bad state.
                 if hidden_mode && !calculator_mode_on_startup {
                     let _ = window.set_skip_taskbar(true);
                 }
-                if is_safe_paste || is_direct_context_shred {
+                if is_safe_paste {
                     // Skip every window-reveal call below entirely — the window
                     // must stay hidden/backgrounded for the whole Safe Paste
                     // operation, success or failure.
@@ -2030,15 +2046,7 @@ pub fn run() {
                     .filter(|p| !p.starts_with("--"))
                     .cloned()
                     .collect();
-                if is_direct_context_shred {
-                    let app_handle = app.handle().clone();
-                    tauri::async_runtime::spawn(async move {
-                        context_menu_shred::log_result(
-                            context_menu_shred::execute(app_handle.clone(), menu_paths).await,
-                        );
-                        app_handle.exit(0);
-                    });
-                } else if !menu_paths.is_empty() {
+                if !menu_paths.is_empty() {
                     let event = session_instance::resolve_context_menu_event(|flag| {
                         args.iter().any(|a| a == flag)
                     });

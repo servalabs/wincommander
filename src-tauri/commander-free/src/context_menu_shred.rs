@@ -261,31 +261,32 @@ fn secure_erase_path(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("cannot delete file '{}': {error}", path.display()))
 }
 
-/// Runs only for direct shred entry points: the Explorer `--context-shred`
-/// verb and the in-app search result menu. No path is sent through the
-/// frontend confirmation flow: every target is re-resolved immediately before
-/// the existing secure-erase backend command runs.
-pub(crate) async fn execute(app: AppHandle, raw_paths: Vec<String>) -> Result<(), String> {
+/// Synchronous, GUI-free Explorer entry point. This intentionally runs before
+/// the Tauri single-instance guard: a context-menu process must not take over,
+/// exit, or otherwise disturb an already-running local/dev WinCommander.
+pub(crate) fn execute_cli(raw_paths: Vec<String>) -> Result<(), String> {
     let targets = validate_selection(&raw_paths)?;
     for initially_validated_target in targets {
         // Re-resolve immediately before destruction: Explorer can leave a
         // menu open while another process replaces a selected item.
         let target = validate_target(&initially_validated_target.to_string_lossy())?;
         let target_display = target.to_string_lossy().into_owned();
-        let target_for_worker = target.clone();
-        tokio::task::spawn_blocking(move || secure_erase_target(target_for_worker))
-            .await
-            .map_err(|error| format!("secure erase worker failed: {error}"))??;
+        secure_erase_target(target)?;
         crate::log_message_src(
             "info",
             "core",
             &format!("[ContextShred] securely erased {target_display}"),
         );
     }
-    // Keep the AppHandle in this API: its callers are both Tauri entry points,
-    // and using the same signature prevents an unsafe future frontend bridge.
-    let _ = app;
     Ok(())
+}
+
+/// In-app callers (currently the search-results context menu) use the same
+/// secure implementation, off Tauri's async runtime thread.
+pub(crate) async fn execute(_app: AppHandle, raw_paths: Vec<String>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || execute_cli(raw_paths))
+        .await
+        .map_err(|error| format!("secure erase worker failed: {error}"))?
 }
 
 /// The direct-shell launch paths have no webview to return an error to, so
@@ -410,6 +411,36 @@ mod tests {
 
         assert!(!target.exists());
         assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn explorer_shred_is_handled_before_single_instance_forwarding() {
+        let app_startup = include_str!("lib.rs");
+        let direct_runner = app_startup
+            .find("context_menu_shred::execute_cli(paths)")
+            .expect("Explorer shred must have a standalone runner");
+        let instance_guard = app_startup
+            .find("session_instance::acquire(&cli_args)")
+            .expect("single-instance guard must remain present");
+
+        assert!(direct_runner < instance_guard);
+        assert!(!app_startup.contains("app_handle.exit(0);"));
+    }
+
+    #[test]
+    fn direct_shred_does_not_route_back_to_powershell() {
+        let source = include_str!("context_menu_shred.rs");
+        let start = source
+            .find("pub(crate) fn execute_cli")
+            .expect("standalone Explorer runner");
+        let end = source[start..]
+            .find("/// In-app callers")
+            .map(|offset| start + offset)
+            .expect("async in-app wrapper");
+        let direct_runner = &source[start..end];
+
+        assert!(!direct_runner.contains("run_backend_script"));
+        assert!(!direct_runner.contains("Invoke-7Erase"));
     }
 
     #[cfg(windows)]
