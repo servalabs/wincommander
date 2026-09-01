@@ -148,7 +148,9 @@ UI_problem/
 # Local Superdesign working files and drafts must never be committed.
 /.superdesign/
 # Release-only service staging payload (created and removed by build-tauri-release.ts)
-/src-tauri/commander-free/resources/wincommander-svc.exe
+/wincommander-svc.exe
 
 target-cmd-alert-check
 target-commander-free-shield
+target-autonomous-adapter
+target-autonomy-lab
