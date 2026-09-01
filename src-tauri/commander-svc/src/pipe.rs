@@ -965,9 +965,11 @@ fn handle_vault_list_authorized(
 /// in, a resolved SID, a container path, or ACL/SDDL detail.
 fn vault_error_message(error: crate::vault_access::VaultError) -> String {
     match error {
-        crate::vault_access::VaultError::Validation
-        | crate::vault_access::VaultError::VersionConflict => {
-            "vault policy validation failed".to_string()
+        crate::vault_access::VaultError::Validation => {
+            "vault policy failed validation — check drive letters, container paths, and duplicate entries".to_string()
+        }
+        crate::vault_access::VaultError::VersionConflict => {
+            "vault policy was changed elsewhere since this draft was loaded — reload the Vault tab and reapply".to_string()
         }
         crate::vault_access::VaultError::PrincipalResolution(name) => {
             format!("vault principal resolution failed for '{name}'")
