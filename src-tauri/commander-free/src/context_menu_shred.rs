@@ -3,11 +3,16 @@
 //! so this module validates and executes it before it can reach the webview.
 
 use std::{
-    collections::HashMap,
+    collections::HashSet,
     fs,
+    fs::OpenOptions,
+    io::{self, Write},
     path::{Path, PathBuf},
+    thread,
+    time::Duration,
 };
 
+use rand::{rngs::OsRng, RngCore};
 use tauri::AppHandle;
 
 fn normalized(path: &Path) -> String {
@@ -118,22 +123,169 @@ fn validate_target(raw_path: &str) -> Result<PathBuf, String> {
     Ok(target)
 }
 
+/// Explorer's legacy `Player` verb model accepts up to 100 selected items.
+/// Keep the same bound here so a malformed direct invocation cannot turn one
+/// context-menu action into an unbounded destructive batch.
+const MAX_CONTEXT_TARGETS: usize = 100;
+
+/// Validate the complete Explorer selection before starting any erase. A
+/// malformed or protected item rejects the batch before destruction begins.
+fn validate_selection(raw_paths: &[String]) -> Result<Vec<PathBuf>, String> {
+    if raw_paths.is_empty() {
+        return Err("refused missing Explorer target".into());
+    }
+    if raw_paths.len() > MAX_CONTEXT_TARGETS {
+        return Err(format!(
+            "refused Explorer selection larger than {MAX_CONTEXT_TARGETS} items"
+        ));
+    }
+
+    let mut seen = HashSet::new();
+    let mut targets = Vec::with_capacity(raw_paths.len());
+    for raw_path in raw_paths {
+        let target = validate_target(raw_path)?;
+        if seen.insert(normalized(&target)) {
+            targets.push(target);
+        }
+    }
+    Ok(targets)
+}
+
+/// Explorer launches must not depend on PowerShell. Apart from making a
+/// context-menu action visibly flash a console in local/debug builds, the
+/// PowerShell implementation renamed a folder before its last delete fallback.
+/// A failed fallback therefore left a GUID-named directory behind, which is not
+/// an acceptable outcome for a command labelled "Delete".
+///
+/// This direct path is deliberately small and self-contained: overwrite every
+/// regular file with OS-random bytes, flush it, then remove it. Directories are
+/// traversed without following reparse points and are removed only after all
+/// children have been erased. Every final remove is verified before success is
+/// returned to Explorer's background invocation.
+fn secure_erase_target(target: PathBuf) -> Result<(), String> {
+    secure_erase_path(&target)?;
+    match fs::symlink_metadata(&target) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(format!(
+            "target still exists after secure erase: {}",
+            target.display()
+        )),
+        Err(error) => Err(format!(
+            "cannot verify secure erase for '{}': {error}",
+            target.display()
+        )),
+    }
+}
+
+fn remove_with_retries(path: &Path, directory: bool) -> io::Result<()> {
+    let mut last_error = None;
+    for _ in 0..4 {
+        let result = if directory {
+            fs::remove_dir(path)
+        } else {
+            fs::remove_file(path)
+        };
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        thread::sleep(Duration::from_millis(150));
+    }
+    Err(last_error.unwrap_or_else(|| io::Error::other("erase removal failed")))
+}
+
+fn make_writable(path: &Path) -> io::Result<()> {
+    let metadata = fs::metadata(path)?;
+    let mut permissions = metadata.permissions();
+    if permissions.readonly() {
+        permissions.set_readonly(false);
+        fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
+fn overwrite_file(path: &Path) -> Result<(), String> {
+    make_writable(path).map_err(|error| format!("cannot make file writable: {error}"))?;
+    let length = fs::metadata(path)
+        .map_err(|error| format!("cannot inspect file: {error}"))?
+        .len();
+    if length == 0 {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| format!("cannot open file for overwrite: {error}"))?;
+    let mut remaining = length;
+    let mut buffer = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let bytes = remaining.min(buffer.len() as u64) as usize;
+        OsRng.fill_bytes(&mut buffer[..bytes]);
+        file.write_all(&buffer[..bytes])
+            .map_err(|error| format!("cannot overwrite file: {error}"))?;
+        remaining -= bytes as u64;
+    }
+    file.sync_all()
+        .map_err(|error| format!("cannot flush overwritten file: {error}"))?;
+    Ok(())
+}
+
+fn secure_erase_path(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot inspect erase target '{}': {error}", path.display()))?;
+
+    // A junction/symlink must never be traversed. Removing the link itself is
+    // safe; following it could erase a location outside the user selection.
+    if has_reparse_point(path)? {
+        return remove_with_retries(path, metadata.is_dir())
+            .map_err(|error| format!("cannot remove linked target '{}': {error}", path.display()));
+    }
+
+    if metadata.is_dir() {
+        let entries = fs::read_dir(path)
+            .map_err(|error| format!("cannot enumerate folder '{}': {error}", path.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("cannot read folder entry: {error}"))?;
+            secure_erase_path(&entry.path())?;
+        }
+        make_writable(path).map_err(|error| format!("cannot make folder writable: {error}"))?;
+        return remove_with_retries(path, true)
+            .map_err(|error| format!("cannot delete folder '{}': {error}", path.display()));
+    }
+
+    overwrite_file(path)?;
+    remove_with_retries(path, false)
+        .map_err(|error| format!("cannot delete file '{}': {error}", path.display()))
+}
+
 /// Runs only for direct shred entry points: the Explorer `--context-shred`
 /// verb and the in-app search result menu. No path is sent through the
 /// frontend confirmation flow: every target is re-resolved immediately before
 /// the existing secure-erase backend command runs.
 pub(crate) async fn execute(app: AppHandle, raw_paths: Vec<String>) -> Result<(), String> {
-    if raw_paths.len() != 1 {
-        return Err("refused unexpected target count".into());
+    let targets = validate_selection(&raw_paths)?;
+    for initially_validated_target in targets {
+        // Re-resolve immediately before destruction: Explorer can leave a
+        // menu open while another process replaces a selected item.
+        let target = validate_target(&initially_validated_target.to_string_lossy())?;
+        let target_display = target.to_string_lossy().into_owned();
+        let target_for_worker = target.clone();
+        tokio::task::spawn_blocking(move || secure_erase_target(target_for_worker))
+            .await
+            .map_err(|error| format!("secure erase worker failed: {error}"))??;
+        crate::log_message_src(
+            "info",
+            "core",
+            &format!("[ContextShred] securely erased {target_display}"),
+        );
     }
-    let target = validate_target(&raw_paths[0])?;
-    let mut params = HashMap::new();
-    params.insert("Path".to_string(), target.to_string_lossy().into_owned());
-    params.insert("Type".to_string(), "File".to_string());
-    crate::backend::run_backend_script(app, "Invoke-7Erase".to_string(), params)
-        .await
-        .map(|_| ())
-        .map_err(|error| format!("secure erase failed: {error}"))
+    // Keep the AppHandle in this API: its callers are both Tauri entry points,
+    // and using the same signature prevents an unsafe future frontend bridge.
+    let _ = app;
+    Ok(())
 }
 
 /// The direct-shell launch paths have no webview to return an error to, so
@@ -196,6 +348,68 @@ mod tests {
             validate_target(target.to_str().unwrap()).unwrap(),
             fs::canonicalize(target).unwrap()
         );
+    }
+
+    #[test]
+    fn accepts_a_mixed_file_and_folder_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("context-shred-file.txt");
+        let folder = directory.path().join("context-shred-folder");
+        fs::write(&file, b"test target").unwrap();
+        fs::create_dir(&folder).unwrap();
+
+        let targets = validate_selection(&[
+            file.to_string_lossy().into_owned(),
+            folder.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            targets,
+            vec![
+                fs::canonicalize(file).unwrap(),
+                fs::canonicalize(folder).unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_or_oversized_selection() {
+        assert!(validate_selection(&[])
+            .unwrap_err()
+            .contains("missing Explorer target"));
+
+        let oversized = vec!["C:\\does-not-matter".to_string(); MAX_CONTEXT_TARGETS + 1];
+        assert!(validate_selection(&oversized)
+            .unwrap_err()
+            .contains("larger than"));
+    }
+
+    #[test]
+    fn securely_erases_a_file_instead_of_only_renaming_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("erase-me.txt");
+        fs::write(&target, b"sensitive test data").unwrap();
+
+        secure_erase_target(target.clone()).unwrap();
+
+        assert!(!target.exists());
+        assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn securely_erases_nested_folder_contents_and_the_folder() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("erase-me");
+        let nested = target.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("a.txt"), b"a").unwrap();
+        fs::write(target.join("b.txt"), b"b").unwrap();
+
+        secure_erase_target(target.clone()).unwrap();
+
+        assert!(!target.exists());
+        assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
     }
 
     #[cfg(windows)]

@@ -1,8 +1,8 @@
-// Keep shipped builds windowless so Explorer/context-menu launches never
-// flash a console. Development builds retain their parent console: `tauri dev`
-// must show the startup trace and panic output instead of only returning the
-// opaque Windows exit code `0xFFFFFFFF`.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Every GUI invocation, including a local/debug Explorer context-menu launch,
+// must be windowless. CLI mode below explicitly attaches to the caller's
+// terminal, so diagnostics remain available without a PowerShell/WinCommander
+// console flashing when someone securely deletes a file.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

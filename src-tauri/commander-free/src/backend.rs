@@ -4194,6 +4194,29 @@ fn run_reg(args: &[&str]) -> Result<(), String> {
     }
 }
 
+// Legacy shell verbs otherwise use the `Document` model and receive only one
+// selection. `Player` lets a single invocation receive the complete Explorer
+// selection, and `%*` expands to one argv value per selected item.
+const CONTEXT_SHRED_SELECTION_MODEL: &str = "Player";
+
+fn context_shred_command(exe_path: &str) -> String {
+    format!("\"{}\" --context-shred %*", exe_path)
+}
+
+#[cfg(test)]
+mod context_shred_verb_tests {
+    use super::*;
+
+    #[test]
+    fn context_shred_uses_explorer_player_model_and_full_selection_placeholder() {
+        assert_eq!(CONTEXT_SHRED_SELECTION_MODEL, "Player");
+        assert_eq!(
+            context_shred_command(r"C:\Program Files\WinCommander\WinCommander.exe"),
+            r#""C:\Program Files\WinCommander\WinCommander.exe" --context-shred %*"#
+        );
+    }
+}
+
 #[tauri::command]
 pub async fn toggle_context_menu(enable: bool) -> Result<(), String> {
     // File context menu (*\shell)
@@ -4217,26 +4240,74 @@ pub async fn toggle_context_menu(enable: bool) -> Result<(), String> {
         let exe_str = exe_path
             .to_str()
             .ok_or("Failed to convert exe path to string")?;
-        // %1 = selected item path (works for both files and folders via Directory\shell)
+        // %* = every selected path (files and folders). Explorer supplies its
+        // own quoting for each argument, so do not add a second pair here.
         // %V = current folder path (only available for Directory\Background\shell)
         // Explorer's secure-delete verb is intentionally backend-only. The
         // explicit flag prevents it from falling into the normal frontend
         // confirmation flow used by in-app shred operations.
-        let command_value_file = format!("\"{}\" --context-shred \"%1\"", exe_str);
-        let command_value_dir = format!("\"{}\" --context-shred \"%1\"", exe_str);
+        let command_value_selection = context_shred_command(exe_str);
         let command_value_bg = format!("\"{}\" --context-shred \"%V\"", exe_str);
 
         // --- File (*) ---
         run_reg(&["add", KEY_FILE, "/ve", "/d", "Delete", "/f"])?;
-        run_reg(&["add", CMD_KEY_FILE, "/ve", "/d", &command_value_file, "/f"])?;
+        run_reg(&[
+            "add",
+            KEY_FILE,
+            "/v",
+            "MultiSelectModel",
+            "/d",
+            CONTEXT_SHRED_SELECTION_MODEL,
+            "/f",
+        ])?;
+        run_reg(&[
+            "add",
+            CMD_KEY_FILE,
+            "/ve",
+            "/d",
+            &command_value_selection,
+            "/f",
+        ])?;
 
         // --- Directory (folder right-click) ---
         run_reg(&["add", KEY_DIR, "/ve", "/d", "Delete", "/f"])?;
-        run_reg(&["add", CMD_KEY_DIR, "/ve", "/d", &command_value_dir, "/f"])?;
+        run_reg(&[
+            "add",
+            KEY_DIR,
+            "/v",
+            "MultiSelectModel",
+            "/d",
+            CONTEXT_SHRED_SELECTION_MODEL,
+            "/f",
+        ])?;
+        run_reg(&[
+            "add",
+            CMD_KEY_DIR,
+            "/ve",
+            "/d",
+            &command_value_selection,
+            "/f",
+        ])?;
 
         // --- AllFilesystemObjects (mixed file + folder right-click) ---
         run_reg(&["add", KEY_MIXED, "/ve", "/d", "Delete", "/f"])?;
-        run_reg(&["add", CMD_KEY_MIXED, "/ve", "/d", &command_value_file, "/f"])?;
+        run_reg(&[
+            "add",
+            KEY_MIXED,
+            "/v",
+            "MultiSelectModel",
+            "/d",
+            CONTEXT_SHRED_SELECTION_MODEL,
+            "/f",
+        ])?;
+        run_reg(&[
+            "add",
+            CMD_KEY_MIXED,
+            "/ve",
+            "/d",
+            &command_value_selection,
+            "/f",
+        ])?;
 
         // --- Directory\Background (right-click inside a folder) ---
         run_reg(&["add", KEY_BG, "/ve", "/d", "Delete", "/f"])?;
