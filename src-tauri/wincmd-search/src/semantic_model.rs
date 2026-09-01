@@ -26,7 +26,7 @@ pub fn verify_packaged_model(
     let Ok(bytes) = std::fs::read(&path) else {
         return SemanticModelState::Unavailable;
     };
-    let hash = format!("{:x}", Sha256::digest(bytes));
+    let hash = hex::encode(Sha256::digest(bytes));
     if hash != manifest.sha256 || manifest.dimensions == 0 || manifest.max_input_chars == 0 {
         return SemanticModelState::Unavailable;
     }
@@ -87,7 +87,7 @@ mod tests {
         let path = packaged_resource_path(&root);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"model").unwrap();
-        let digest = Box::leak(format!("{:x}", Sha256::digest(b"model")).into_boxed_str());
+        let digest = Box::leak(hex::encode(Sha256::digest(b"model")).into_boxed_str());
         match verify_packaged_model(&Fake(Some(path)), manifest(digest)) {
             SemanticModelState::Ready(m) => {
                 assert_eq!(m.version, "v1");
