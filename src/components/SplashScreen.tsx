@@ -65,8 +65,6 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const animRef = useRef<number>(0);
     const branding = getDisplayBranding(appSettings);
-    const [logoFailed, setLogoFailed] = useState(false);
-    const [logoLoaded, setLogoLoaded] = useState(false);
     const [logoReady] = useState(true);
     const [scrambleText, setScrambleText] = useState(() => scrambleWord(branding.companyLabel, 0));
     const [animDone, setAnimDone] = useState(false);
@@ -298,19 +296,11 @@ export default function SplashScreen({ onComplete, isAppReady }: SplashScreenPro
                             <circle cx="69" cy="69" r="60" stroke="currentColor" strokeWidth="1" strokeDasharray="5 9" className="sp-ring-circle-inner" />
                         </svg>
                         <div className="sp-logo-plate" aria-hidden="true">
-                            <div className="sp-logo-fallback" aria-hidden={!logoFailed && logoLoaded}>
-                                <span>WC</span>
-                            </div>
-                            {!logoFailed && (
-                                <img
-                                    src={LOGO_URL}
-                                    alt={branding.productLabel}
-                                    className={`sp-logo-img${logoLoaded ? " is-loaded" : ""}`}
-                                    fetchPriority="high"
-                                    onLoad={() => setLogoLoaded(true)}
-                                    onError={() => setLogoFailed(true)}
-                                />
-                            )}
+                            <img
+                                src={LOGO_URL}
+                                alt={branding.productLabel}
+                                className="sp-logo-img"
+                            />
                         </div>
                     </div>
                 </div>

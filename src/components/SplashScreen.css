@@ -137,62 +137,11 @@ html.light .splash-screen {
     object-fit: contain;
     position: relative;
     z-index: 2;
-    /* Pulse oscillates opacity between 0.85 and 1 after the browser has
-       decoded the preloaded product mark. */
-    animation: none;
+    /* The genuine bundled product logo is ready on the first splash frame. */
+    animation: sp-pulse 2.8s ease-in-out infinite;
     filter: drop-shadow(0 0 28px color-mix(in srgb, var(--color-accent) 55%, transparent));
     will-change: opacity;
-    /* The first-frame WC mark remains behind this image until its decoded
-       pixels are ready, so a cold WebView never shows an empty splash. */
     display: block;
-    opacity: 0;
-}
-
-.sp-logo-img.is-loaded {
-    opacity: 1;
-    animation: sp-pulse 2.8s ease-in-out infinite;
-}
-
-/* Brand-mark fallback shown when the inlined logo errors or takes too
-   long to load (cold-disk first-run). Styled as a deliberate monogram
-   with the same cyan glow + pulse as the real logo. */
-.sp-logo-fallback {
-    width: 120px;
-    height: 120px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 2px solid var(--color-accent);
-    background: radial-gradient(circle at 50% 35%, var(--color-accent-dim), var(--color-accent-subtle) 60%, transparent 100%);
-    box-shadow:
-        0 0 28px color-mix(in srgb, var(--color-accent) 45%, transparent),
-        inset 0 0 18px var(--color-accent-dim);
-    border-radius: 14px;
-    position: relative;
-    z-index: 2;
-    animation: sp-pulse 2.8s ease-in-out infinite;
-}
-
-.sp-logo-fallback span {
-    font-size: 32px;
-    font-weight: 900;
-    letter-spacing: 0.18em;
-    color: #e8fbff;
-    text-shadow: 0 0 22px color-mix(in srgb, var(--color-accent) 55%, transparent);
-    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
-}
-
-html.light .sp-logo-fallback {
-    border-color: var(--color-accent);
-    background: radial-gradient(circle at 50% 35%, var(--color-accent-dim), var(--color-accent-subtle) 60%, transparent 100%);
-    box-shadow:
-        0 0 18px color-mix(in srgb, var(--color-accent) 35%, transparent),
-        inset 0 0 12px var(--color-accent-dim);
-}
-
-html.light .sp-logo-fallback span {
-    color: #0a1424;
-    text-shadow: 0 0 12px color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
 
 @keyframes sp-plate-float {
@@ -212,7 +161,7 @@ html.light .sp-logo-fallback span {
     }
 }
 
-html.light .sp-logo-img.is-loaded {
+html.light .sp-logo-img {
     animation: sp-pulse-light 2.8s ease-in-out infinite;
     filter: drop-shadow(0 0 20px color-mix(in srgb, var(--color-accent) 50%, transparent));
 }
@@ -452,8 +401,7 @@ html.light .sp-matrix-canvas {
     .sp-ring-outer,
     .sp-ring-inner,
     .sp-logo-plate,
-    .sp-logo-img,
-    .sp-logo-fallback {
+    .sp-logo-img {
         animation-play-state: running !important;
     }
 }
@@ -464,8 +412,7 @@ html.light .sp-matrix-canvas {
 html.wc-no-motion .splash-screen .sp-content,
 html.wc-no-motion .splash-screen .sp-brand,
 html.wc-no-motion .splash-screen .sp-sub,
-html.wc-no-motion .splash-screen .sp-logo-img,
-html.wc-no-motion .splash-screen .sp-logo-fallback {
+html.wc-no-motion .splash-screen .sp-logo-img {
     opacity: 1 !important;
     transform: none !important;
     animation: none !important;

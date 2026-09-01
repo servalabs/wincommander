@@ -5,7 +5,7 @@ declare const Bun: {
 };
 
 describe("startup logo", () => {
-  test("preloads the packaged asset before the main window entry and keeps a first-frame fallback", async () => {
+  test("embeds the existing product logo for the first splash frame", async () => {
     const [entry, asset, splash, styles] = await Promise.all([
       Bun.file("src/main.tsx").text(),
       Bun.file("src/assets/logoUrl.ts").text(),
@@ -13,12 +13,11 @@ describe("startup logo", () => {
       Bun.file("src/components/SplashScreen.css").text(),
     ]);
 
-    expect(entry).toContain("preloadAppLogo();");
-    expect(asset).toContain('link.rel = "preload";');
-    expect(asset).toContain('link.as = "image";');
+    expect(entry).not.toContain("preloadAppLogo");
+    expect(asset).toContain('logo.png?inline');
     expect(splash).toContain('const [logoReady] = useState(true);');
-    expect(splash).toContain('fetchPriority="high"');
-    expect(splash).toContain('className="sp-logo-fallback"');
+    expect(splash).not.toContain('sp-logo-fallback');
+    expect(styles).not.toContain('sp-logo-fallback');
     expect(styles).not.toContain("animation: sp-fade-in 0.5s ease-out both;");
   });
 });
