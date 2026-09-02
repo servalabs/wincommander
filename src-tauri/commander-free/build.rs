@@ -63,6 +63,9 @@ fn main() {
         "the release manifest must retain requestedExecutionLevel=highestAvailable"
     );
     let is_development_profile = std::env::var("PROFILE").as_deref() == Ok("debug");
+    if std::env::var_os("CARGO_FEATURE_AUTONOMOUS_TEST").is_some() && !is_development_profile {
+        panic!("the autonomous-test feature is restricted to debug test artifacts");
+    }
     println!("cargo:rustc-check-cfg=cfg(wincommander_dev_profile)");
     if is_development_profile {
         println!("cargo:rustc-cfg=wincommander_dev_profile");

@@ -32,6 +32,9 @@ test = false
 # nothing to farm) and packaging differences. Persistent state is already
 # machine-wide (%ProgramData%) regardless of this flag.
 portable = []
+# Closed lab controls for debug artifacts only. This intentionally adds no
+# generic command dispatcher and never appears in a release artifact.
+autonomous-test = ["dep:fleet-proto", "fleet-proto/autonomous-test"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -109,6 +112,7 @@ hmac = "0.13"
 # Tauri uses tokio internally but doesn't re-export time/rt features.
 tokio = { version = "1", features = ["time", "rt", "process", "io-util", "sync", "net", "macros"] }
 wincmd-shared = { path = "../wincmd-shared" }
+fleet-proto = { path = "../fleet-proto", optional = true }
 wincmd-search = { path = "../wincmd-search" }
 commander-context-shred = { path = "../commander-context-shred" }
 # Clipboard Guard's rule engine (plan §4.1): the same pure matcher/compiler

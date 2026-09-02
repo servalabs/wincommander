@@ -39,3 +39,6 @@ ts-codegen = ["dep:ts-rs", "wincmd-clip-rules/ts-codegen"]
 # table out of the AV-scanned Free binary's dependency closure. Enable only in
 # consumers that need catalog discovery (fleet-server, commander-pro).
 command-metadata = []
+# Debug-only autonomous test wire contracts. Consumers must additionally gate
+# their handlers and routes; this feature alone grants no executable action.
+autonomous-test = []
