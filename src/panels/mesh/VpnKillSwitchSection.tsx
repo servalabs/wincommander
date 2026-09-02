@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { Icon, Tooltip } from "@/components/ui/bp";
 import { useAppState } from "../../context/AppContext";
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import { showError } from "../../utils/toast";
 import "./VpnKillSwitchSection.css";
 
@@ -42,7 +43,8 @@ const STATE_LABEL: Record<TunnelState, string> = {
 };
 
 export default function VpnKillSwitchSection() {
-  const { appSettings, patchAppSettings } = useAppState();
+  const { appSettings, patchAppSettings, systemInfo } = useAppState();
+  const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
   const cfg = appSettings?.ideal?.network?.vpnKillSwitch;
   const armed = cfg?.armed ?? false;
   const provider = cfg?.provider ?? "auto";
@@ -73,6 +75,7 @@ export default function VpnKillSwitchSection() {
 
   const setArmed = useCallback(
     async (next: boolean) => {
+      if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
       setBusy(true);
       try {
         await patchAppSettings({
@@ -86,11 +89,12 @@ export default function VpnKillSwitchSection() {
         setBusy(false);
       }
     },
-    [patchAppSettings, provider, refresh],
+    [patchAppSettings, provider, refresh, needsElevation],
   );
 
   const changeProvider = useCallback(
     async (next: string) => {
+      if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
       try {
         await patchAppSettings({
           ideal: { network: { vpnKillSwitch: { provider: next, armed } } },
@@ -105,7 +109,7 @@ export default function VpnKillSwitchSection() {
         showError(String(e));
       }
     },
-    [patchAppSettings, armed, refresh],
+    [patchAppSettings, armed, refresh, needsElevation],
   );
 
   const tunnel = status?.tunnelState ?? "unknown";
@@ -123,7 +127,7 @@ export default function VpnKillSwitchSection() {
           </span>
         </div>
         <span className="vpn-ks-toggle-cluster">
-          <Select value={provider} onValueChange={(v) => void changeProvider(v)}>
+          <Select value={provider} onValueChange={(v) => void changeProvider(v)} disabled={needsElevation}>
             <SelectTrigger className="vpn-ks-select" aria-label="VPN provider to watch">
               <SelectValue />
             </SelectTrigger>
@@ -140,12 +144,13 @@ export default function VpnKillSwitchSection() {
           </span>
           <Switch
             checked={armed}
-            disabled={busy}
+            disabled={busy || needsElevation}
             onCheckedChange={(v) => void setArmed(v)}
             aria-label="Block internet if VPN drops"
           />
         </span>
       </div>
+      {needsElevation && <p role="alert" className="text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
       <div className="vpn-ks-controls">
         <span className={`vpn-ks-state-chip vpn-ks-state-chip--${tunnel}`}>{STATE_LABEL[tunnel]}</span>
         {status?.fired && <span className="vpn-ks-fired">internet currently cut</span>}

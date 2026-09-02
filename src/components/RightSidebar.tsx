@@ -2,6 +2,8 @@ import { Icon } from "./ui/icon";
 import { Spinner } from "./ui/spinner";
 import { cn } from "../lib/utils";
 import { useAppState } from "../context/AppContext";
+import { reportSettingsWriteFailure } from "../lib/settingsWriteRecovery";
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../lib/machineScopeElevation";
 import { getDisplayBranding } from "../lib/branding";
 import useBackend, { type EncryptionPartition } from "../hooks/useBackend";
 import type { QuickMountSlot } from "../types/settings";
@@ -99,7 +101,9 @@ export default function RightSidebar() {
         refreshVault,
         appSettings,
         patchAppSettings,
+        systemInfo,
     } = useAppState();
+    const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
     const { productName } = getDisplayBranding(appSettings);
 
     // The 17-task parallel orchestration was replaced by the universal
@@ -364,6 +368,7 @@ export default function RightSidebar() {
     // through with `ok: false` so the overlay shows them as errored
     // rather than silently swallowing them.
     const fireSelfDestruct = useCallback(async () => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         setLoadingAction('selfDestruct');
 
         // When the user has opted to hide the destruction sequence overlay,
@@ -513,7 +518,7 @@ export default function RightSidebar() {
         // settings before firing so the next launch won't recreate it.
         const ramdiskCfg = appSettings?.app?.vault?.ramdiskAutostart;
         if (ramdiskCfg?.skipAfterLockdown && ramdiskCfg?.enabled) {
-            void patchAppSettings({ app: { vault: { ramdiskAutostart: { ...ramdiskCfg, enabled: false } } } } as any);
+            void patchAppSettings({ app: { vault: { ramdiskAutostart: { ...ramdiskCfg, enabled: false } } } } as any).catch(reportSettingsWriteFailure);
         }
 
         // Kick off the universal destruct. Don't await — the include_app
@@ -565,6 +570,7 @@ export default function RightSidebar() {
         appSettings?.app?.vault?.ramdiskAutostart,
         patchAppSettings,
         productName,
+        needsElevation,
     ]);
 
     const lockdownTimerSeconds = Math.min(
@@ -599,6 +605,7 @@ export default function RightSidebar() {
 
     // Manual self-destruct: arm the countdown, or abort if already counting.
     const handleSelfDestructClick = () => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         if (loadingAction === 'selfDestruct') return;
         if (sdCountdown !== null) {
             if (sdIntervalRef.current) clearInterval(sdIntervalRef.current);
@@ -877,13 +884,14 @@ export default function RightSidebar() {
                     <div
                         className="action-item"
                         data-tour="right-sidebar-lockdown"
-                        onClick={handleSelfDestructClick}
+                        onClick={needsElevation ? undefined : handleSelfDestructClick}
                         data-tip={sdCountdown !== null ? "Click again to abort" : "Lockdown — runs your configured steps (edit in Secret Settings → Lockdown)"}
                         data-tip-intent="danger"
                     >
                         <ActionBtn
                             className="action-btn"
                             icon="warning-sign"
+                            disabled={needsElevation}
                             intent="danger"
                             minimal
                             large
@@ -897,6 +905,7 @@ export default function RightSidebar() {
                                     ? "PURGING"
                                     : "Lockdown"}
                         </span>
+                        {needsElevation && <span className="text-[10px] text-[var(--warn)]">Requires an administrator</span>}
                     </div>
                 </div>
                 )}

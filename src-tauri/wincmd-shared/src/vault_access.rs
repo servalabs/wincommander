@@ -140,6 +140,63 @@ pub struct VaultMountRequest {
     pub hidden_protection_password: Option<String>,
 }
 
+/// A personal container request is deliberately separate from the managed
+/// access-policy wire.  The service derives the owner SID, session, mounted
+/// root DACL and presentation; the caller may only name the backing file and
+/// supply credentials/options for its own registered container.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalVaultMountRequest {
+    pub container_path: String,
+    pub password: String,
+    pub volume_kind: VaultContainerKind,
+    pub volume_role: VaultVolumeRole,
+    #[serde(default)]
+    pub preferred_letter: Option<String>,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default)]
+    pub pim: Option<u32>,
+    #[serde(default)]
+    pub keyfiles: Vec<String>,
+    #[serde(default)]
+    pub hidden_protection_password: Option<String>,
+    #[serde(default)]
+    pub hidden_keyfiles: Vec<String>,
+    #[serde(default)]
+    pub hidden_pim: Option<u32>,
+    #[serde(default)]
+    pub removable: bool,
+}
+
+impl std::fmt::Debug for PersonalVaultMountRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PersonalVaultMountRequest")
+            .field("container_path", &self.container_path)
+            .field("volume_kind", &self.volume_kind)
+            .field("volume_role", &self.volume_role)
+            .field("preferred_letter", &self.preferred_letter)
+            .field("read_only", &self.read_only)
+            .field("pim", &self.pim)
+            .field("keyfiles", &self.keyfiles)
+            .field("hidden_protection_password", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Persisted only by the SYSTEM service after it has applied and read back the
+/// container DACL.  This is not a renderer authority claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalVaultRecord {
+    pub container_path: String,
+    pub container_identity: String,
+    pub owner_sid: String,
+    pub scope: VaultPresentation,
+    pub created_by_session: u32,
+}
+
 impl std::fmt::Debug for VaultMountRequest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -180,6 +237,9 @@ pub enum VaultMountReason {
     BrokerUnavailable,
     BrokerRejected,
     SessionUnavailable,
+    EngineUnlockFailed,
+    EngineDriveLetterUnavailable,
+    EngineMountFailed,
     AclApplyFailed,
     AclReadbackFailed,
     DismountFailed,
@@ -361,9 +421,11 @@ mod tests {
             drive_letter: None,
             reason: Some(VaultMountReason::NotAuthorized),
         };
-        assert!(!serde_json::to_string(&result)
-            .unwrap()
-            .contains("canary-password"));
+        assert!(
+            !serde_json::to_string(&result)
+                .unwrap()
+                .contains("canary-password")
+        );
     }
 
     #[test]

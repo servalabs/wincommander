@@ -271,6 +271,9 @@ fn process_broker_reply(
             let error = match error.kind.as_str() {
                 "vault_acl_readback_failed" => "vault_acl_readback_failed",
                 "vault_acl_apply_failed" => "vault_acl_apply_failed",
+                "vault_engine_unlock_failed" => "vault_engine_unlock_failed",
+                "vault_engine_drive_letter_unavailable" => "vault_engine_drive_letter_unavailable",
+                "vault_engine_mount_failed" => "vault_engine_mount_failed",
                 _ => "broker_rejected",
             };
             Ok(BrokerReply::Finished(Err(error)))
@@ -725,6 +728,29 @@ mod tests {
             process_broker_reply(error, token, REQUEST_ID, &mut notifications),
             Err("broker_rejected")
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn broker_preserves_personal_vault_native_terminal_codes() {
+        let token = "broker-test-token";
+        for expected in [
+            "vault_engine_unlock_failed",
+            "vault_engine_drive_letter_unavailable",
+            "vault_engine_mount_failed",
+        ] {
+            let reply = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
+                request_id: REQUEST_ID,
+                kind: expected.to_string(),
+                message: "bounded failure".to_string(),
+            })
+            .sign(token);
+            let mut notifications = 0;
+            assert!(matches!(
+                process_broker_reply(reply, token, REQUEST_ID, &mut notifications),
+                Ok(BrokerReply::Finished(Err(actual))) if actual == expected
+            ));
+        }
     }
 
     #[test]

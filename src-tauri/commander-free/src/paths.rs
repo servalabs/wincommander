@@ -20,6 +20,7 @@ const APP_DISPLAY_NAME: &str = match option_env!("WINCMD_APP_NAME") {
 
 const MACHINE_STATE_SUBDIR: &str = "machine-state";
 static MACHINE_STATE_ACL_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+static MACHINE_DATA_ACL_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 const MACHINE_STATE_LOCK_TIMEOUT_MS: u32 = 5_000;
 
 /// The base display name (e.g. "WinCommander").
@@ -149,7 +150,66 @@ pub fn machine_data_dir() -> Result<PathBuf, String> {
     let dir = base.join(APP_DIR_NAME);
     fs::create_dir_all(&dir)
         .map_err(|e| format!("Failed to create machine data directory: {}", e))?;
+    // This directory stores device security policy (including Startup PIN
+    // material). Interactive users may read it, but must never inherit write
+    // access from ProgramData. The one-shot call also repairs installations
+    // created before this policy existed. Failure is load-bearing: accepting a
+    // newly-created writable ProgramData directory would let a standard user
+    // alter machine policy and Startup PIN material.
+    if MACHINE_DATA_ACL_INITIALIZED.get().is_none() {
+        harden_machine_data_dir_acl(&dir)?;
+        let _ = MACHINE_DATA_ACL_INITIALIZED.set(());
+    }
     Ok(dir)
+}
+
+const MACHINE_DATA_ACL_GRANTS: [&str; 3] = [
+    "*S-1-5-18:(OI)(CI)F",
+    "*S-1-5-32-544:(OI)(CI)F",
+    "*S-1-5-32-545:(OI)(CI)RX",
+];
+
+#[cfg(windows)]
+fn require_machine_data_acl_success(output: std::process::Output) -> Result<(), String> {
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "Failed to harden machine data directory ACL (icacls exit {}): {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
+/// ACL for the device-owned ProgramData root. Unlike `harden_dir_acl`, Users
+/// deliberately receive only read/execute access.
+fn harden_machine_data_dir_acl(dir: &std::path::Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let dir_str = dir.to_string_lossy();
+        let output = std::process::Command::new("icacls")
+            .args([
+                dir_str.as_ref(),
+                "/inheritance:r",
+                "/grant:r",
+                MACHINE_DATA_ACL_GRANTS[0],
+                MACHINE_DATA_ACL_GRANTS[1],
+                MACHINE_DATA_ACL_GRANTS[2],
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|error| {
+                format!("Failed to launch icacls for machine data directory: {error}")
+            })?;
+        require_machine_data_acl_success(output)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = dir;
+        Ok(())
+    }
 }
 
 fn is_valid_state_filename(filename: &str) -> bool {
@@ -423,7 +483,29 @@ pub fn migrate_user_data_layout() -> Result<(), String> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{is_valid_machine_state_resource, is_valid_state_filename, state_file_from_dir};
+    use super::{
+        is_valid_machine_state_resource, is_valid_state_filename, state_file_from_dir,
+        MACHINE_DATA_ACL_GRANTS,
+    };
+
+    #[test]
+    fn machine_data_acl_keeps_users_read_only() {
+        assert_eq!(MACHINE_DATA_ACL_GRANTS[0], "*S-1-5-18:(OI)(CI)F");
+        assert_eq!(MACHINE_DATA_ACL_GRANTS[1], "*S-1-5-32-544:(OI)(CI)F");
+        assert_eq!(MACHINE_DATA_ACL_GRANTS[2], "*S-1-5-32-545:(OI)(CI)RX");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn machine_data_acl_hardening_failure_is_returned() {
+        let output = std::process::Command::new("cmd")
+            .args(["/c", "echo denied 1>&2 & exit 7"])
+            .output()
+            .unwrap();
+        let error = super::require_machine_data_acl_success(output).unwrap_err();
+        assert!(error.contains("icacls exit"));
+        assert!(error.contains("denied"));
+    }
 
     #[test]
     fn machine_state_filenames_cannot_escape_programdata() {

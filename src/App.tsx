@@ -16,6 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { motion, MotionConfig } from "framer-motion";
 import { showError, showInfo, showWarning } from "./utils/toast";
+import { reportSettingsWriteFailure } from "./lib/settingsWriteRecovery";
 import useMotionPreference, { MotionPreferenceProvider } from "./hooks/useMotionPreference";
 import useLowPerformanceMode from "./hooks/useLowPerformanceMode";
 import { panelVariants, panelTransition } from "./components/shared/motion";
@@ -429,7 +430,7 @@ function AppContent() {
       if (!freeKey || freeKey !== lastAnnouncedUpdateVersion) {
         updateFlowAutoPromptedRef.current = true;
         updateFlowIsStartupNagRef.current = false;
-        if (freeKey) patchAppSettings({ app: { lastAnnouncedUpdateVersion: freeKey } }).catch(() => {});
+        if (freeKey) patchAppSettings({ app: { lastAnnouncedUpdateVersion: freeKey } }).catch(reportSettingsWriteFailure);
         setUpdateFlowOpen(true);
         return;
       }
@@ -480,7 +481,7 @@ function AppContent() {
       }
       updateFlowAutoPromptedRef.current = true;
       updateFlowIsStartupNagRef.current = true;
-      patchAppSettings({ app: { lastAnnouncedUpdateVersion: proKey } }).catch(() => {});
+      patchAppSettings({ app: { lastAnnouncedUpdateVersion: proKey } }).catch(reportSettingsWriteFailure);
       setUpdateFlowOpen(true);
       return;
     }
@@ -525,7 +526,7 @@ function AppContent() {
     console.log(`[ProAutoUpdate] Prompting Pro update/repair ${s.local_version ?? "unknown"} -> ${manifest.version}`);
     updateFlowAutoPromptedRef.current = true;
     updateFlowIsStartupNagRef.current = false;
-    patchAppSettings({ app: { lastAnnouncedUpdateVersion: proKey } }).catch(() => {});
+    patchAppSettings({ app: { lastAnnouncedUpdateVersion: proKey } }).catch(reportSettingsWriteFailure);
     setUpdateFlowOpen(true);
   }, [
     updaterSnapshot.phase,
@@ -820,7 +821,7 @@ function AppContent() {
     ?? DEFAULT_WIFI_GUARD_ALERT_DEBOUNCE_SECS;
   const wifiGuardBaseline = wifiGuard?.baseline ?? [];
   const persistWifiGuardBaseline = useCallback((baseline: WifiGuardBaselineEntry[], learningUntil: string | null) => {
-    patchAppSettings({ ideal: { network: { wifiGuard: { baseline, learningUntil } } } }).catch(() => {});
+    patchAppSettings({ ideal: { network: { wifiGuard: { baseline, learningUntil } } } }).catch(reportSettingsWriteFailure);
   }, [patchAppSettings]);
   useWifiGuardMonitor(
     wifiGuardEnabled,
@@ -1207,7 +1208,7 @@ function AppContent() {
     }
     setActivePanel(panel);
     // KT: Persist to settings.json so next session resumes on the same panel
-    patchAppSettings({ app: { lastPanel: panel } }).catch(() => { });
+    patchAppSettings({ app: { lastPanel: panel } }).catch(reportSettingsWriteFailure);
   }, [activePanel, patchAppSettings, appSettings?.app?.modules, canUseDevTools, preloadDiskCleanup]);
 
   useEffect(() => {
@@ -1253,7 +1254,7 @@ function AppContent() {
         return;
       }
       setActivePanel("dashboard");
-      patchAppSettings({ app: { lastPanel: "dashboard" } }).catch(() => { });
+      patchAppSettings({ app: { lastPanel: "dashboard" } }).catch(reportSettingsWriteFailure);
     };
     window.addEventListener("navigate-dashboard-view", handleDashboardViewNavigation as EventListener);
     return () => window.removeEventListener("navigate-dashboard-view", handleDashboardViewNavigation as EventListener);
@@ -1447,7 +1448,7 @@ function AppContent() {
         onNotNow={proInstallIsStartupNagRef.current
           ? () => {
               setProInstallOpen(false);
-              patchAppSettings({ app: { proInstallPromptDismissed: true } }).catch(() => {});
+              patchAppSettings({ app: { proInstallPromptDismissed: true } }).catch(reportSettingsWriteFailure);
             }
           : undefined}
       />
@@ -1479,7 +1480,7 @@ function AppContent() {
         onNotNow={updateFlowIsStartupNagRef.current
           ? () => {
               setUpdateFlowOpen(false);
-              patchAppSettings({ app: { proInstallPromptDismissed: true } }).catch(() => {});
+              patchAppSettings({ app: { proInstallPromptDismissed: true } }).catch(reportSettingsWriteFailure);
             }
           : undefined}
       />

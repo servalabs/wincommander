@@ -1286,7 +1286,7 @@ export const TWEAKS_TOGGLES: ToggleDef[] = [
 
   {
     tier: "free",
-    needsAdmin: false,
+    needsAdmin: true,
     irreversible: false,
     reducesSecurity: false,
     defenderFlagged: false,

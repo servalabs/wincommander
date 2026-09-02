@@ -23,6 +23,42 @@ interface CleanupCategory {
     SizeMb: number;
 }
 
+interface AutoEraseSchedule {
+    categoryId: string;
+    taskName: string;
+    enabled: boolean;
+    intervalMinutes: number;
+    targetUser: string | null;
+    ownerAccount?: string | null;
+    lastRun: string | null;
+    lastResult: number | null;
+}
+
+interface WindowsAccount {
+    name: string;
+    displayName?: string;
+    sid?: string;
+    isCurrent?: boolean;
+}
+
+/**
+ * A scheduled cleanup is per-user. Its task name is only a label: the
+ * Scheduler principal (`ownerAccount`) is the identity Windows will actually
+ * use when it runs the task. Do not infer coverage from an unsuffixed task
+ * name, because that task can belong to another signed-in account.
+ */
+export function isSignedInAccountCovered(
+    entry: Pick<AutoEraseSchedule, "taskName" | "ownerAccount">,
+    account: Pick<WindowsAccount, "name" | "displayName" | "sid"> | undefined,
+): boolean {
+    const owner = entry.ownerAccount?.trim();
+    if (!owner || !account) return false;
+
+    return [account.name, account.displayName, account.sid]
+        .filter((identity): identity is string => Boolean(identity?.trim()))
+        .some((identity) => identity.trim().localeCompare(owner, undefined, { sensitivity: "accent" }) === 0);
+}
+
 // Auto-clean presets. 60 minutes is the floor the scheduler enforces — a
 // cleanmgr sweep is too heavy to run more often than hourly.
 const SCHEDULE_PRESETS = [
@@ -103,7 +139,18 @@ export default function DiskCleanupGranular() {
     const [selected, setSelected] = useState<Set<string>>(() => _diskCleanupCache ? defaultSelection(_diskCleanupCache) : new Set());
     const [scheduleMinutes, setScheduleMinutes] = useState<number | null>(null);
     const [scheduleBusy, setScheduleBusy] = useState(false);
-    const { invokeDiskCleanup, setAutoEraseSchedule, removeAutoEraseSchedule, getAutoEraseSchedules } = useBackend();
+    const [scheduleError, setScheduleError] = useState<string | null>(null);
+    const [scheduleEntries, setScheduleEntries] = useState<AutoEraseSchedule[]>([]);
+    const [accounts, setAccounts] = useState<WindowsAccount[]>([]);
+    const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set());
+    const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+    const {
+        invokeDiskCleanup,
+        getAutoEraseSchedules,
+        getUserProfiles,
+        removeMultiUserAutoEraseSchedule,
+        setMultiUserAutoEraseSchedule,
+    } = useBackend();
     const { appSettings, patchAppSettings } = useAppState();
     // Scheduling is a paid capability everywhere else (System Cleanup gates it
     // on `hasPaid && !isInvestigator`). This surface writes the SAME
@@ -135,13 +182,40 @@ export default function DiskCleanupGranular() {
         return () => { _diskCleanupSubscriber = null; };
     }, []);
 
-    // Load the existing schedule for the diskCleanup category on mount.
+    const refreshSchedules = useCallback(async () => {
+        const res = await getAutoEraseSchedules();
+        if (!res.success || !res.data?.schedules) {
+            setScheduleError(res.error || "Unable to read auto-clean task status");
+            return;
+        }
+        const entries = res.data.schedules.filter((entry) => entry.categoryId === "diskCleanup") as AutoEraseSchedule[];
+        setScheduleEntries(entries);
+        const enabled = entries.find((entry) => entry.enabled && entry.intervalMinutes > 0);
+        setScheduleMinutes(enabled ? enabled.intervalMinutes : null);
+    // useBackend returns stable command references for the component lifetime.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Load the existing schedule and the accounts that can own its per-user tasks.
     useEffect(() => {
         (async () => {
-            const res = await getAutoEraseSchedules();
-            if (!res.success || !res.data?.schedules) return;
-            const existing = res.data.schedules.find((entry) => entry.categoryId === "diskCleanup");
-            setScheduleMinutes(existing ? existing.intervalMinutes : null);
+            const profiles = await getUserProfiles();
+            if (profiles.success && profiles.data) {
+                const visible = profiles.data.profiles
+                    .filter((account) => account.name && account.name !== "Default" && account.name !== "Public")
+                    .map((account) => ({
+                        name: account.name,
+                        displayName: account.displayName,
+                        sid: account.sid,
+                        isCurrent: account.isCurrent || account.name === profiles.data?.currentUser,
+                    }));
+                setAccounts(visible);
+                setIsAdmin(profiles.data.isAdmin);
+                setSelectedAccounts(new Set(visible.filter((account) => account.isCurrent).map((account) => account.name)));
+            } else {
+                setScheduleError(profiles.error || "Unable to identify the signed-in Windows account");
+            }
+            await refreshSchedules();
         })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -212,20 +286,40 @@ export default function DiskCleanupGranular() {
     }, [requestConfirm, selected, refresh]);
 
     const changeSchedule = async (value: string) => {
+        if (isAdmin === false) {
+            setScheduleError("Blocked: needs-elevation. Requires an administrator to create or remove Windows Scheduled Tasks.");
+            return;
+        }
+        const targetUsers = Array.from(selectedAccounts);
+        if (targetUsers.length === 0) {
+            setScheduleError("Select at least one Windows account for this scheduled cleanup.");
+            return;
+        }
         setScheduleBusy(true);
+        setScheduleError(null);
         try {
             if (value === SCHEDULE_OFF) {
-                const res = await removeAutoEraseSchedule("diskCleanup");
-                if (!res.success) { showError(res.error || "Failed to remove schedule"); return; }
-                setScheduleMinutes(null);
-                showSuccess("Disk cleanup schedule removed");
+                const res = await removeMultiUserAutoEraseSchedule("diskCleanup", targetUsers);
+                if (!res.success) {
+                    const message = res.error || "Failed to remove schedule";
+                    setScheduleError(message);
+                    showError(message);
+                    return;
+                }
+                await refreshSchedules();
+                showSuccess(`Disk cleanup schedule removed for ${targetUsers.join(", ")}`);
                 return;
             }
             const minutes = Math.max(60, Number.parseInt(value, 10));
-            const res = await setAutoEraseSchedule("diskCleanup", minutes, false);
-            if (!res.success) { showError(res.error || "Failed to set schedule"); return; }
-            setScheduleMinutes(minutes);
-            showSuccess(`Disk cleanup scheduled every ${formatInterval(minutes)}`);
+            const res = await setMultiUserAutoEraseSchedule("diskCleanup", minutes, targetUsers, false);
+            if (!res.success) {
+                const message = res.error || "Failed to set schedule";
+                setScheduleError(message);
+                showError(message);
+                return;
+            }
+            await refreshSchedules();
+            showSuccess(`Disk cleanup scheduled every ${formatInterval(minutes)} for ${targetUsers.join(", ")}`);
         } finally {
             setScheduleBusy(false);
         }
@@ -251,13 +345,30 @@ export default function DiskCleanupGranular() {
                     {schedulesEnabled ? (
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                                <Button size="icon" variant="outline" disabled={scheduleBusy} aria-label="Auto-clean schedule"
+                                <Button size="icon" variant="outline" disabled={scheduleBusy || isAdmin === false} aria-label="Auto-clean schedule"
                                     title={scheduleMinutes === null ? "Schedule auto-clean" : `Auto-clean every ${formatInterval(scheduleMinutes)}`}>
                                     <Icon icon="time" className={scheduleMinutes === null ? "text-[var(--text-mute)]" : "text-[var(--accent)]"} />
                                 </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                                 <DropdownMenuLabel>Auto-clean interval</DropdownMenuLabel>
+                                <div className="border-b border-[var(--border)] px-2 py-2">
+                                    <p className="mb-1 text-[10px] font-mono uppercase tracking-wide text-[var(--text-mute)]">Accounts covered</p>
+                                    {accounts.map((account) => (
+                                        <label key={account.name} className="flex cursor-pointer items-center gap-2 py-1 text-xs">
+                                            <CheckboxControl
+                                                checked={selectedAccounts.has(account.name)}
+                                                ariaLabel={`Schedule cleanup for ${account.displayName ?? account.name}`}
+                                                onChange={(event) => setSelectedAccounts((previous) => {
+                                                    const next = new Set(previous);
+                                                    if (event.currentTarget.checked) next.add(account.name); else next.delete(account.name);
+                                                    return next;
+                                                })}
+                                            />
+                                            <span>{account.displayName ?? account.name}{account.isCurrent ? " (signed in)" : ""}</span>
+                                        </label>
+                                    ))}
+                                </div>
                                 <DropdownMenuRadioGroup value={scheduleMinutes === null ? SCHEDULE_OFF : String(scheduleMinutes)} onValueChange={(value) => void changeSchedule(value)}>
                                     <DropdownMenuRadioItem value={SCHEDULE_OFF}>Auto-clean off</DropdownMenuRadioItem>
                                     {SCHEDULE_PRESETS.map(preset => <DropdownMenuRadioItem key={preset.minutes} value={String(preset.minutes)}>{preset.label}</DropdownMenuRadioItem>)}
@@ -280,6 +391,22 @@ export default function DiskCleanupGranular() {
                 </div>
             </div>
             {showStorageInfo && <p className="text-xs text-[var(--text-mute)]">Windows storage shows safe-to-review system categories. Selected items are only removed when you choose Clean selected.</p>}
+            {isAdmin === false && (
+                <p role="alert" className="text-xs text-[var(--warn)]">Blocked: needs-elevation. Requires an administrator to schedule cleanup for Windows accounts.</p>
+            )}
+            {scheduleError && <p role="alert" className="text-xs text-[var(--danger)]">{scheduleError}</p>}
+            {scheduleEntries.length > 0 && (
+                <div className="rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs">
+                    <p className="mb-1 font-semibold text-[var(--text)]">Disk cleanup task status</p>
+                    {scheduleEntries.map((entry) => {
+                        const currentAccount = accounts.find((account) => account.isCurrent);
+                        const covered = isSignedInAccountCovered(entry, currentAccount);
+                        return <p key={entry.taskName} className="font-mono text-[10.5px] text-[var(--text-mute)]">
+                            {entry.taskName} · owner {entry.ownerAccount ?? entry.targetUser ?? "unknown"} · last {entry.lastRun ?? "never"} · result {entry.lastResult ?? "not available"} · {covered ? "signed-in account covered" : "signed-in account not covered"}
+                        </p>;
+                    })}
+                </div>
+            )}
 
             {loading && cats.length === 0 && <div className="flex justify-center py-6"><Spinner size={20} className="text-[var(--accent)]" /></div>}
             <div className="grid gap-2 sm:grid-cols-2">

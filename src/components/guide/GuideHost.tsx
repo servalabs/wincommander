@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppState } from "../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import SpotlightTour from "./SpotlightTour";
 import { GUIDE_TOPICS } from "../../content/guide";
 import { resolveTourSteps } from "../../lib/tour";
@@ -117,7 +118,7 @@ export default function GuideHost() {
     // (for future dismissability) and resolves first-run, since the old
     // Setup Wizard was the only other thing that used to set it.
     if (mandatory && completed) {
-      void patchAppSettings({ app: { firstRunComplete: true, hasSeenMandatoryTour: true } });
+      void patchAppSettings({ app: { firstRunComplete: true, hasSeenMandatoryTour: true } }).catch(reportSettingsWriteFailure);
     }
     setSteps(null);
     setMandatory(false);

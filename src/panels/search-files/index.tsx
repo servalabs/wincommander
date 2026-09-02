@@ -17,6 +17,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { motion, AnimatePresence } from "framer-motion";
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useAppState } from "@/context/AppContext";
+import { reportSettingsWriteFailure } from "@/lib/settingsWriteRecovery";
 import { fileSearchDiagnostic } from "@/lib/fileSearchDiagnostics";
 import { useContentIndex } from "@/hooks/useContentIndex";
 import { useSearchHotkey } from "@/hooks/useSearchHotkey";
@@ -143,7 +144,7 @@ export default function SearchFilesPanel() {
           resultLimit: next,
         },
       },
-    });
+    }).catch(reportSettingsWriteFailure);
   }, [appSettings?.app?.fileSearch, patchAppSettings, setResultLimit]);
 
   // New query text = new list; drop the old selection.

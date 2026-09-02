@@ -49,6 +49,7 @@ import {
 } from "../../types/lockdownSteps";
 import type { SelfDestructSettings } from "../../types/settings";
 import { useAppState } from "../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import { getDisplayBranding } from "../../lib/branding";
 import "./LockdownConfigSection.css";
 
@@ -83,7 +84,7 @@ export default function LockdownConfigSection(props: Props = {}) {
   const internalConfig = appSettings?.ideal?.privacy?.selfDestruct;
   const internalOnPatch = useCallback(
     (patch: SelfDestructSettings) =>
-      patchAppSettings({ ideal: { privacy: { selfDestruct: patch } } } as any).catch(() => {}),
+      patchAppSettings({ ideal: { privacy: { selfDestruct: patch } } } as any).catch(reportSettingsWriteFailure),
     [patchAppSettings],
   );
   const config = props.config !== undefined ? props.config : internalConfig;
@@ -424,7 +425,7 @@ export default function LockdownConfigSection(props: Props = {}) {
                 label="Disable RAM disk autostart"
                 checked={skipRamdiskAfterLockdown}
                 onToggle={(v) =>
-                  patchAppSettings({ app: { vault: { ramdiskAutostart: { ...(ramdiskAutostart ?? {}), skipAfterLockdown: v } } } } as any).catch(() => {})
+                  patchAppSettings({ app: { vault: { ramdiskAutostart: { ...(ramdiskAutostart ?? {}), skipAfterLockdown: v } } } } as any).catch(reportSettingsWriteFailure)
                 }
               />
             </div>

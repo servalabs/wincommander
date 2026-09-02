@@ -3,6 +3,8 @@ import { useMemo, useState, useEffect, useCallback, useRef, type ReactNode } fro
 import { motion } from "framer-motion";
 import useBackend from "../../../hooks/useBackend";
 import { useAppState } from "../../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../../lib/settingsWriteRecovery";
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../../lib/machineScopeElevation";
 import { beginOperation, runOperation } from "../../../context/OperationContext";
 import { claimFreeAppUpdates, clearAppUpdatesQueued, isAppUpdateQueued } from "../../../lib/appUpdateQueue";
 import { releasePackageOperation, tryAcquirePackageOperation, waitForPackageOperation } from "../../../lib/packageOperationLock";
@@ -115,7 +117,8 @@ function AppInstallerPanel({
   updatesTools?: ReactNode;
   onStatusChange?: (status: AppInstallerStatus) => void;
 }) {
-  const { appInventory, runAppInventoryScan, loading: contextLoading, patchAppSettings, forceRefreshDeps } = useAppState();
+  const { appInventory, runAppInventoryScan, loading: contextLoading, patchAppSettings, forceRefreshDeps, systemInfo } = useAppState();
+  const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const appsGridRef = useRef<HTMLDivElement>(null);
@@ -187,6 +190,7 @@ function AppInstallerPanel({
   }, [testEdgeInstalled, testOneDriveInstalled, getTeamsStatus]);
 
   const handleUpdateAll = async () => {
+    if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     // LEGACY IMPLEMENTATION (commented for visibility/collaboration):
     // setLocalLoadingMap(prev => ({ ...prev, "updateAll": true }));
     // try {
@@ -364,6 +368,7 @@ function AppInstallerPanel({
   }, [installWinget, runAppInventoryScan, testWingetInstalled, upgradeApp]);
 
   const runRemoval = async (key: string, fn: () => Promise<any>) => {
+    if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     const name = key === "removeEdge" ? "Edge" : key === "removeTeams" ? "Teams" : "OneDrive";
     setLocalLoadingMap(prev => ({ ...prev, [key]: true }));
     try {
@@ -378,15 +383,15 @@ function AppInstallerPanel({
       ], { mode: 'sequential', accent: 'neutral' });
       if (key === "removeEdge") {
         setEdgeInstalled(false);
-        patchAppSettings({ ideal: { apps: { edgeRemoved: true } } }).catch(() => { });
+        patchAppSettings({ ideal: { apps: { edgeRemoved: true } } }).catch(reportSettingsWriteFailure);
       }
       if (key === "removeOneDrive") {
         setOneDriveInstalled(false);
-        patchAppSettings({ ideal: { apps: { onedriveRemoved: true } } }).catch(() => { });
+        patchAppSettings({ ideal: { apps: { onedriveRemoved: true } } }).catch(reportSettingsWriteFailure);
       }
       if (key === "removeTeams") {
         setTeamsInstalled(false);
-        patchAppSettings({ ideal: { apps: { teamsRemoved: true } } }).catch(() => { });
+        patchAppSettings({ ideal: { apps: { teamsRemoved: true } } }).catch(reportSettingsWriteFailure);
       }
       // Reconcile the catalog with Windows after a successful removal. This
       // moves a removed curated package back to Not Installed without
@@ -656,6 +661,7 @@ function AppInstallerPanel({
   // already has this id". installingIds is state and two clicks landing in the
   // same tick would both read its pre-click value, enqueueing the app twice.
   const installApps = useCallback(async (appIds: string[]) => {
+    if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     const uniqueIds = Array.from(new Set(appIds))
       .filter(id => !installedApps.has(id) && !coveredInstallIds.has(id));
     if (uniqueIds.length === 0) {
@@ -788,7 +794,7 @@ function AppInstallerPanel({
       coveredInstallIds.clear();
       releasePackageOperation();
     }
-  }, [ensureWinget, installWingetApps, installedApps, runAppInventoryScan, forceRefreshDeps, apps]);
+  }, [ensureWinget, installWingetApps, installedApps, runAppInventoryScan, forceRefreshDeps, apps, needsElevation]);
 
   const handleInstall = async () => {
     await installApps(Array.from(selectedApps).filter(id => !installedApps.has(id)));
@@ -796,6 +802,7 @@ function AppInstallerPanel({
 
   const handleUpgradeSingle = async (appId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     if (!tryAcquirePackageOperation()) {
       showWarning("Another package-manager operation is already running.");
       return;
@@ -857,6 +864,7 @@ function AppInstallerPanel({
   const otherUpgradeIds = new Set(otherUpgrades.map(u => u.id));
   const selectedInstallIds = Array.from(selectedApps).filter(id => !installedApps.has(id) && !otherUpgradeIds.has(id));
   const handleUpdateSelected = () => {
+    if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     const entries = selectedUpdateIds.map(id => {
       const app = apps.find(item => item.id === id);
       const other = otherUpgrades.find(item => item.id === id);
@@ -969,7 +977,7 @@ function AppInstallerPanel({
           intent="warning"
           className="app-update-btn app-card-action--update"
           onClick={(e) => handleUpgradeSingle(app.id, e)}
-          disabled={upgradingApp !== null || installing}
+          disabled={upgradingApp !== null || installing || needsElevation}
           aria-label={`Update ${app.name}`}
           title={`Update ${app.name}`}
         >
@@ -989,7 +997,7 @@ function AppInstallerPanel({
             intent="success"
             className="app-update-btn app-card-action--download"
             onClick={(e) => { e.stopPropagation(); void installApps([app.id]); }}
-            disabled={isThisInstalling || wingetStatus === "failed"}
+          disabled={isThisInstalling || wingetStatus === "failed" || needsElevation}
             loading={isThisInstalling}
             aria-label={`Install ${app.name}`}
             title={`Install ${app.name}`}
@@ -1035,7 +1043,7 @@ function AppInstallerPanel({
         intent="warning"
         className="app-update-btn app-card-action--update"
         onClick={(e) => handleUpgradeSingle(item.id, e)}
-        disabled={upgradingApp !== null || installing}
+        disabled={upgradingApp !== null || installing || needsElevation}
         aria-label={`Update ${item.name || item.id}`}
         title={`Update ${item.name || item.id}`}
       >
@@ -1046,6 +1054,7 @@ function AppInstallerPanel({
 
   return (
     <div className="app-installer-panel">
+      {needsElevation && <p role="alert" className="text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
       <Card className="installer-card">
         <div className="installer-toolbar-layout">
           <div className="installer-toolbar-search">
@@ -1158,7 +1167,7 @@ function AppInstallerPanel({
                   minimal
                   className="app-update-all-btn font-mono text-[11px]!"
                   onClick={handleUpdateAll}
-                  disabled={localLoadingMap["updateAll"] || appsLoading}
+                  disabled={localLoadingMap["updateAll"] || appsLoading || needsElevation}
                   loading={localLoadingMap["updateAll"]}
                 />
               ) : (
@@ -1179,7 +1188,7 @@ function AppInstallerPanel({
                   className="app-update-selected-btn font-mono text-[10px]! tracking-wide"
                   onClick={handleUpdateSelected}
                   loading={localLoadingMap["updateSelected"]}
-                  disabled={localLoadingMap["updateSelected"] || localLoadingMap["updateAll"] || appsLoading}
+                  disabled={localLoadingMap["updateSelected"] || localLoadingMap["updateAll"] || appsLoading || needsElevation}
                 />
               )}
               </div>
@@ -1190,7 +1199,7 @@ function AppInstallerPanel({
                 minimal
                 className="installer-toolbar-btn installer-toolbar-btn--danger font-mono text-[11px]!"
                 onClick={() => runRemoval("removeEdge", removeEdge)}
-                disabled={localLoadingMap["removeEdge"] || appsLoading}
+                disabled={localLoadingMap["removeEdge"] || appsLoading || needsElevation}
                 loading={localLoadingMap["removeEdge"]}
                 />
               )}
@@ -1201,7 +1210,7 @@ function AppInstallerPanel({
                 minimal
                 className="installer-toolbar-btn installer-toolbar-btn--danger font-mono text-[11px]!"
                 onClick={() => runRemoval("removeOneDrive", removeOneDrive)}
-                disabled={localLoadingMap["removeOneDrive"] || appsLoading}
+                disabled={localLoadingMap["removeOneDrive"] || appsLoading || needsElevation}
                 loading={localLoadingMap["removeOneDrive"]}
                 />
               )}
@@ -1212,7 +1221,7 @@ function AppInstallerPanel({
                 minimal
                 className="installer-toolbar-btn installer-toolbar-btn--danger font-mono text-[11px]!"
                 onClick={() => runRemoval("removeTeams", removeTeams)}
-                disabled={localLoadingMap["removeTeams"] || appsLoading}
+                disabled={localLoadingMap["removeTeams"] || appsLoading || needsElevation}
                 loading={localLoadingMap["removeTeams"]}
                 />
               )}
@@ -1231,7 +1240,7 @@ function AppInstallerPanel({
                   small
                   className="app-install-btn font-mono text-[10px]! tracking-wide"
                   onClick={handleInstall}
-                  disabled={wingetStatus === "failed" || appsLoading}
+                  disabled={wingetStatus === "failed" || appsLoading || needsElevation}
                 />
               )}
               </div>

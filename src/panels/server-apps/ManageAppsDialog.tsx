@@ -9,6 +9,8 @@ import {
 import type { IconName } from '@/components/ui/bp';
 import type { ServerAppConfig } from '../../types/settings';
 import { useTheme } from '../../context/ThemeContext';
+import { useAppState } from '../../context/AppContext';
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from '../../lib/machineScopeElevation';
 
 // ── Icon options available in this picker ─────────────────────────────────
 const ICON_OPTIONS: { value: string; label: string }[] = [
@@ -80,6 +82,8 @@ interface Props {
 
 export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Props) {
     const { theme } = useTheme();
+    const { systemInfo } = useAppState();
+    const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
     const [rows, setRows] = useState<AppRow[]>([]);
     const [saving, setSaving] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
@@ -126,6 +130,7 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
     }, []);
 
     const handleSave = useCallback(async () => {
+        if (needsElevation) { setSaveError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         setSaveError(null);
         setSaving(true);
         try {
@@ -136,7 +141,7 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
         } finally {
             setSaving(false);
         }
-    }, [rows, onSave, onClose]);
+    }, [rows, onSave, onClose, needsElevation]);
 
     // Sync id from name when name changes (only if id still matches the auto-slug pattern)
     const handleNameChange = useCallback((idx: number, name: string) => {
@@ -162,6 +167,7 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
             style={{ width: 620, maxHeight: '85vh' }}
         >
             <DialogBody>
+                {needsElevation && <p role="alert" className="manage-apps-error">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
                 {rows.length === 0 && (
                     <div className="manage-apps-empty">
                         <Icon icon="applications" size={32} color="var(--color-text-secondary)" />
@@ -293,6 +299,7 @@ export default function ManageAppsDialog({ isOpen, onClose, apps, onSave }: Prop
                             intent="primary"
                             onClick={handleSave}
                             loading={saving}
+                            disabled={saving || needsElevation}
                         />
                     </>
                 }

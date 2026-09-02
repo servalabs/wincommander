@@ -10,12 +10,13 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
+use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use crate::vault_access::{ResolvedGrant, VaultAccessStore};
 use wincmd_shared::vault_access::{
-    VaultContainerKind, VaultMountReason, VaultMountResult, VaultMountState, VaultPresentation,
-    VaultVolumeRole,
+    PersonalVaultMountRequest, PersonalVaultRecord, VaultContainerKind, VaultMountReason,
+    VaultMountResult, VaultMountState, VaultPresentation, VaultVolumeRole,
 };
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -90,6 +91,11 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
             "session_unavailable" => VaultMountReason::SessionUnavailable,
             "vault_acl_apply_failed" => VaultMountReason::AclApplyFailed,
             "vault_acl_readback_failed" => VaultMountReason::AclReadbackFailed,
+            "vault_engine_unlock_failed" => VaultMountReason::EngineUnlockFailed,
+            "vault_engine_drive_letter_unavailable" => {
+                VaultMountReason::EngineDriveLetterUnavailable
+            }
+            "vault_engine_mount_failed" => VaultMountReason::EngineMountFailed,
             "broker_handshake" | "broker_hmac" | "broker_rejected" => {
                 VaultMountReason::BrokerRejected
             }
@@ -185,6 +191,11 @@ struct InternalMountRequest {
     volume_kind: &'static str,
     volume_role: &'static str,
     read_only: bool,
+    pim: Option<u32>,
+    keyfiles: Vec<String>,
+    hidden_keyfiles: Vec<String>,
+    hidden_pim: Option<u32>,
+    removable: bool,
     presentation: VaultPresentation,
     preferred_letter: Option<String>,
     target_session_id: u32,
@@ -207,6 +218,11 @@ fn broker_mount_args(request: &InternalMountRequest) -> serde_json::Value {
         "presentation": request.presentation,
         "preferred_letter": &request.preferred_letter,
         "read_only": request.read_only,
+        "pim": request.pim,
+        "keyfiles": &request.keyfiles,
+        "hidden_keyfiles": &request.hidden_keyfiles,
+        "hidden_pim": request.hidden_pim,
+        "removable": request.removable,
         "target_session_id": request.target_session_id,
     });
     if let Some(hidden_protection_password) = &request.hidden_protection_password {
@@ -257,6 +273,27 @@ struct RecoveryState {
 }
 
 impl VaultMountBroker {
+    /// Stable terminal codes for the personal-vault caller. These are the only
+    /// engine details released through the service; all unrecognised broker
+    /// failures stay generic.
+    pub(crate) fn personal_mount_failure_code(reason: VaultMountReason) -> &'static str {
+        match reason {
+            VaultMountReason::NotAuthorized => "vault_not_authorized",
+            VaultMountReason::SessionUnavailable => "vault_session_unavailable",
+            VaultMountReason::EngineUnlockFailed => "vault_engine_unlock_failed",
+            VaultMountReason::EngineDriveLetterUnavailable => {
+                "vault_engine_drive_letter_unavailable"
+            }
+            VaultMountReason::EngineMountFailed => "vault_engine_mount_failed",
+            VaultMountReason::AclApplyFailed => "vault_acl_apply_failed",
+            VaultMountReason::AclReadbackFailed => "vault_acl_readback_failed",
+            VaultMountReason::InvalidRequest => "vault_validation_failed",
+            VaultMountReason::BrokerUnavailable
+            | VaultMountReason::BrokerRejected
+            | VaultMountReason::DismountFailed => "vault_broker_failed",
+        }
+    }
+
     pub fn new() -> Self {
         Self::with_broker(Box::new(ProEnvelopeBroker))
     }
@@ -308,6 +345,184 @@ impl VaultMountBroker {
                 effective_access,
             )
         })
+    }
+
+    /// Mount a service-registered personal container.  Unlike a managed
+    /// policy mount this has no shared policy entry: its owner and per-user
+    /// scope were fixed when the service created the backing file.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mount_personal_authorized(
+        &self,
+        store: &VaultAccessStore,
+        record: &PersonalVaultRecord,
+        request: &mut PersonalVaultMountRequest,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        session_id: u32,
+        caller_sid: &str,
+        caller_authentication_id: (u32, i32),
+    ) -> Result<(String, u8), VaultMountReason> {
+        self.with_exclusive_operation(|| {
+            self.mount_personal_authorized_locked(
+                store,
+                record,
+                request,
+                caller_token,
+                session_id,
+                caller_sid,
+                caller_authentication_id,
+            )
+        })
+    }
+
+    /// The pipe keeps drive-letter inspection and the broker call inside the
+    /// same operation gate, so a second mount cannot invalidate preflight in
+    /// the gap before the encrypted driver receives the request.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mount_personal_authorized_locked(
+        &self,
+        store: &VaultAccessStore,
+        record: &PersonalVaultRecord,
+        request: &mut PersonalVaultMountRequest,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        session_id: u32,
+        caller_sid: &str,
+        caller_authentication_id: (u32, i32),
+    ) -> Result<(String, u8), VaultMountReason> {
+        if record.owner_sid != caller_sid
+            || record.scope != VaultPresentation::PerUser
+            || session_id == 0
+            || caller_sid.is_empty()
+        {
+            request.password.zeroize();
+            if let Some(password) = &mut request.hidden_protection_password {
+                password.zeroize();
+            }
+            return Err(VaultMountReason::NotAuthorized);
+        }
+        let entry_id = personal_mount_entry_id(record);
+        if !self.recovery_allows_entry(&entry_id, store) {
+            request.password.zeroize();
+            if let Some(password) = &mut request.hidden_protection_password {
+                password.zeroize();
+            }
+            return Err(VaultMountReason::DismountFailed);
+        }
+        let access = if request.read_only {
+            wincmd_shared::vault_access::VaultAccess::Read
+        } else {
+            wincmd_shared::vault_access::VaultAccess::Write
+        };
+        let profile = mount_profile(
+            request.volume_kind,
+            request.volume_role,
+            access,
+            request.hidden_protection_password.as_deref(),
+        )?;
+        if !profile.requires_hidden_protection && request.hidden_protection_password.is_some() {
+            request.password.zeroize();
+            if let Some(password) = &mut request.hidden_protection_password {
+                password.zeroize();
+            }
+            return Err(VaultMountReason::InvalidRequest);
+        }
+        if let Some(existing) = self
+            .active
+            .lock()
+            .ok()
+            .and_then(|active| active.get(&entry_id).cloned())
+        {
+            if !same_mount_owner(&existing, session_id, caller_sid) {
+                request.password.zeroize();
+                if let Some(password) = &mut request.hidden_protection_password {
+                    password.zeroize();
+                }
+                return Err(VaultMountReason::NotAuthorized);
+            }
+            if self
+                .dismount_entry_locked_for_client(store, &entry_id, Some(caller_token))
+                .state
+                != VaultMountState::Unmounted
+            {
+                request.password.zeroize();
+                if let Some(password) = &mut request.hidden_protection_password {
+                    password.zeroize();
+                }
+                return Err(VaultMountReason::DismountFailed);
+            }
+        }
+        let mut internal = InternalMountRequest {
+            container_path: record.container_path.clone(),
+            mount_mode: profile.mount_mode,
+            volume_kind: profile.container_kind,
+            volume_role: profile.volume_role,
+            read_only: request.read_only,
+            pim: request.pim,
+            keyfiles: request.keyfiles.clone(),
+            hidden_keyfiles: request.hidden_keyfiles.clone(),
+            hidden_pim: request.hidden_pim,
+            removable: request.removable,
+            presentation: VaultPresentation::PerUser,
+            preferred_letter: request.preferred_letter.clone(),
+            target_session_id: session_id,
+            caller_sid: caller_sid.to_string(),
+            caller_token,
+            caller_authentication_id,
+            mounted_root_acl_sddl: mounted_root_acl_sddl(&[ResolvedGrant {
+                sid: record.owner_sid.clone(),
+                access: wincmd_shared::vault_access::VaultAccess::Write,
+            }]),
+            password: std::mem::take(&mut request.password),
+            hidden_protection_password: std::mem::take(&mut request.hidden_protection_password),
+        };
+        let result = self.broker.mount(&mut internal);
+        internal.zeroize_secrets();
+        let reply = result?;
+        if !reply.acl_attested
+            || !valid_drive_letter(&reply.drive_letter)
+            || reply.internal_drive > 25
+        {
+            let _ = self.broker.dismount(
+                reply.internal_drive,
+                None,
+                VaultPresentation::PerUser,
+                session_id,
+                caller_sid,
+                Some(caller_token),
+            );
+            return Err(VaultMountReason::AclReadbackFailed);
+        }
+        let mounted_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_secs())
+            .unwrap_or(0);
+        let active = ActiveMount {
+            drive_letter: reply.drive_letter.clone(),
+            internal_drive: reply.internal_drive,
+            presentation: VaultPresentation::PerUser,
+            session_id,
+            caller_sid: caller_sid.to_owned(),
+            policy_id: "personal".into(),
+            policy_version: 1,
+            container_identity: record.container_identity.clone(),
+            access,
+            mounted_at,
+        };
+        if let Ok(mut mounts) = self.active.lock() {
+            mounts.insert(entry_id.clone(), active.clone());
+            if self.persist_active(store, &mounts).is_ok() {
+                return Ok((reply.drive_letter, reply.internal_drive));
+            }
+            mounts.remove(&entry_id);
+        }
+        let _ = self.broker.dismount(
+            active.internal_drive,
+            per_user_presented_drive_letter(active.presentation, active.drive_letter.as_str()),
+            active.presentation,
+            active.session_id,
+            &active.caller_sid,
+            Some(caller_token),
+        );
+        Err(VaultMountReason::DismountFailed)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -393,6 +608,11 @@ impl VaultMountBroker {
             volume_kind: profile.container_kind,
             volume_role: profile.volume_role,
             read_only: false,
+            pim: None,
+            keyfiles: Vec::new(),
+            hidden_keyfiles: Vec::new(),
+            hidden_pim: None,
+            removable: false,
             presentation,
             preferred_letter,
             target_session_id: session_id,
@@ -800,6 +1020,20 @@ fn valid_durable_mount(entry_id: &str, mount: &ActiveMount) -> bool {
         && mount.mounted_at > 0
 }
 
+fn personal_mount_entry_id(record: &PersonalVaultRecord) -> String {
+    let mut digest = Sha256::new();
+    digest.update(record.owner_sid.as_bytes());
+    digest.update([0]);
+    digest.update(record.container_identity.as_bytes());
+    format!(
+        "personal-{}",
+        digest.finalize()[..24]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
 fn mounted_root_acl_sddl(grants: &[ResolvedGrant]) -> MountedRootAclSddl {
     // OI+CI makes the proven root policy flow to files and directories
     // created after mount. Without it, a Partner-created file receives the
@@ -910,6 +1144,142 @@ fn failed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vault_access::{AclApplier, AclSnapshot, PrincipalResolver, VaultAclPlan, VaultFs};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    struct MountFs {
+        files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
+        fail_next_active_write: Arc<AtomicBool>,
+    }
+    impl VaultFs for MountFs {
+        fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
+        fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+            if path.file_name().and_then(|name| name.to_str())
+                == Some("vault-active-mounts-v1.json")
+                && self.fail_next_active_write.swap(false, Ordering::SeqCst)
+            {
+                return Err(std::io::Error::from(std::io::ErrorKind::Other));
+            }
+            self.files.lock().unwrap().insert(path.into(), bytes.into());
+            Ok(())
+        }
+        fn stable_file_identity(&self, _: &Path) -> Result<String, crate::vault_access::VaultError> {
+            Ok("v:1:i:2".into())
+        }
+        fn validate_dedicated_parent(
+            &self,
+            _: &Path,
+            _: &Path,
+        ) -> Result<(), crate::vault_access::VaultError> {
+            Ok(())
+        }
+    }
+    struct MountResolver;
+    impl PrincipalResolver for MountResolver {
+        fn resolve_sid(&self, _: &str) -> Result<String, crate::vault_access::VaultError> {
+            Ok("S-1-5-21-owner".into())
+        }
+    }
+    struct MountAcl;
+    impl AclApplier for MountAcl {
+        fn apply_and_verify(&self, _: &VaultAclPlan) -> Result<(), crate::vault_access::VaultError> {
+            Ok(())
+        }
+        fn snapshot(&self, _: &VaultAclPlan) -> Result<Vec<AclSnapshot>, crate::vault_access::VaultError> {
+            Ok(vec![])
+        }
+        fn restore(&self, _: &[AclSnapshot]) -> Result<(), crate::vault_access::VaultError> {
+            Ok(())
+        }
+    }
+    #[derive(Default)]
+    struct BrokerEvents {
+        dismounted: Vec<u8>,
+        recovered: Vec<u8>,
+    }
+    struct MountBroker(Arc<Mutex<BrokerEvents>>);
+    impl AuthenticatedVaultBroker for MountBroker {
+        fn mount(
+            &self,
+            _: &mut InternalMountRequest,
+        ) -> Result<InternalMountReply, VaultMountReason> {
+            Ok(InternalMountReply {
+                drive_letter: "P:".into(),
+                internal_drive: 12,
+                acl_attested: true,
+            })
+        }
+        fn dismount(
+            &self,
+            internal_drive: u8,
+            _: Option<&str>,
+            _: VaultPresentation,
+            _: u32,
+            _: &str,
+            _: Option<windows_sys::Win32::Foundation::HANDLE>,
+        ) -> Result<(), VaultMountReason> {
+            self.0.lock().unwrap().dismounted.push(internal_drive);
+            Ok(())
+        }
+        fn cleanup_orphans(&self) -> Result<(), VaultMountReason> {
+            Ok(())
+        }
+        fn recover_dismount(&self, internal_drive: u8) -> Result<(), VaultMountReason> {
+            self.0.lock().unwrap().recovered.push(internal_drive);
+            Ok(())
+        }
+    }
+
+    fn mount_store(
+        files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
+        fail_next_active_write: Arc<AtomicBool>,
+    ) -> VaultAccessStore {
+        VaultAccessStore::open(
+            Box::new(MountFs {
+                files,
+                fail_next_active_write,
+            }),
+            Box::new(MountResolver),
+            Box::new(MountAcl),
+            PathBuf::from("/policy"),
+        )
+    }
+
+    fn personal_record() -> PersonalVaultRecord {
+        PersonalVaultRecord {
+            container_path: "C:\\vaults\\personal.hc".into(),
+            container_identity: "v:1:i:2".into(),
+            owner_sid: "S-1-5-21-owner".into(),
+            scope: VaultPresentation::PerUser,
+            created_by_session: 7,
+        }
+    }
+
+    fn personal_request() -> PersonalVaultMountRequest {
+        PersonalVaultMountRequest {
+            container_path: "C:\\vaults\\personal.hc".into(),
+            password: "secret".into(),
+            volume_kind: VaultContainerKind::Standard,
+            volume_role: VaultVolumeRole::Outer,
+            preferred_letter: Some("P".into()),
+            read_only: false,
+            pim: None,
+            keyfiles: vec![],
+            hidden_protection_password: None,
+            hidden_keyfiles: vec![],
+            hidden_pim: None,
+            removable: false,
+        }
+    }
 
     fn active_mount_for_owner(session_id: u32, caller_sid: &str) -> ActiveMount {
         ActiveMount {
@@ -941,6 +1311,116 @@ mod tests {
         assert!(valid_drive_letter("V"));
         assert!(valid_drive_letter("V:"));
         assert!(!valid_drive_letter("V:\\private"));
+    }
+
+    #[test]
+    fn personal_mount_terminal_reasons_keep_their_exact_codes() {
+        for (reason, expected) in [
+            (VaultMountReason::NotAuthorized, "vault_not_authorized"),
+            (
+                VaultMountReason::SessionUnavailable,
+                "vault_session_unavailable",
+            ),
+            (
+                VaultMountReason::EngineUnlockFailed,
+                "vault_engine_unlock_failed",
+            ),
+            (
+                VaultMountReason::EngineDriveLetterUnavailable,
+                "vault_engine_drive_letter_unavailable",
+            ),
+            (
+                VaultMountReason::EngineMountFailed,
+                "vault_engine_mount_failed",
+            ),
+        ] {
+            assert_eq!(
+                VaultMountBroker::personal_mount_failure_code(reason),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn personal_mount_uses_durable_registry_and_session_cleanup() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = mount_store(files, Arc::new(AtomicBool::new(false)));
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        let record = personal_record();
+        let entry_id = personal_mount_entry_id(&record);
+        let mut request = personal_request();
+
+        assert_eq!(
+            broker.mount_personal_authorized(
+                &store,
+                &record,
+                &mut request,
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-owner",
+                (0, 0),
+            ),
+            Ok(("P:".into(), 12))
+        );
+        assert_eq!(broker.projection(&entry_id).0, VaultMountState::Mounted);
+        assert!(store.read_active_mounts().unwrap().windows(8).any(|window| window == b"personal"));
+
+        broker.dismount_session(&store, 7);
+        assert_eq!(broker.projection(&entry_id).0, VaultMountState::Unmounted);
+        assert_eq!(events.lock().unwrap().dismounted, vec![12]);
+    }
+
+    #[test]
+    fn personal_mount_recovers_after_service_restart() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = mount_store(files, Arc::new(AtomicBool::new(false)));
+        let initial_events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let initial = VaultMountBroker::with_broker(Box::new(MountBroker(initial_events)));
+        let record = personal_record();
+        let mut request = personal_request();
+        initial
+            .mount_personal_authorized(
+                &store,
+                &record,
+                &mut request,
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-owner",
+                (0, 0),
+            )
+            .unwrap();
+
+        let recovery_events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let restarted = VaultMountBroker::with_broker(Box::new(MountBroker(recovery_events.clone())));
+        restarted.load_and_cleanup(&store).unwrap();
+        assert_eq!(recovery_events.lock().unwrap().recovered, vec![12]);
+        assert!(store.read_active_mounts().unwrap().windows(11).any(|window| window == b"\"mounts\":{}"));
+    }
+
+    #[test]
+    fn personal_mount_rolls_back_when_active_registry_write_fails() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let fail_active_write = Arc::new(AtomicBool::new(true));
+        let store = mount_store(files, fail_active_write);
+        let events = Arc::new(Mutex::new(BrokerEvents::default()));
+        let broker = VaultMountBroker::with_broker(Box::new(MountBroker(events.clone())));
+        let record = personal_record();
+        let mut request = personal_request();
+
+        assert_eq!(
+            broker.mount_personal_authorized(
+                &store,
+                &record,
+                &mut request,
+                std::ptr::null_mut(),
+                7,
+                "S-1-5-21-owner",
+                (0, 0),
+            ),
+            Err(VaultMountReason::DismountFailed)
+        );
+        assert_eq!(events.lock().unwrap().dismounted, vec![12]);
     }
 
     #[test]
@@ -1053,6 +1533,11 @@ mod tests {
                 volume_kind: container_kind,
                 volume_role,
                 read_only: false,
+                pim: None,
+                keyfiles: Vec::new(),
+                hidden_keyfiles: Vec::new(),
+                hidden_pim: None,
+                removable: false,
                 presentation: VaultPresentation::Machine,
                 preferred_letter: Some("V".into()),
                 target_session_id: 7,

@@ -925,7 +925,11 @@ function Get-AutoEraseSchedules {
             # usernames don't get mis-parsed.
             $tail = $t.TaskName.Substring($prefix.Length)  # e.g. "rdpHistory" or "rdpHistory_Bob"
             $categoryId = $tail
-            $targetUser = $t.Principal.UserId
+            # `ownerAccount` comes from Task Scheduler rather than the task
+            # name. The suffix is only the selected-account label and can be
+            # ambiguous for domain-qualified or underscore-containing users.
+            $ownerAccount = $t.Principal.UserId
+            $targetUser = $ownerAccount
             foreach ($knownCat in $script:AutoEraseScripts.Keys) {
                 if ($tail -eq $knownCat) {
                     $categoryId = $knownCat; $targetUser = $t.Principal.UserId; break
@@ -941,6 +945,7 @@ function Get-AutoEraseSchedules {
                 enabled         = ($t.State -ne 'Disabled')
                 intervalMinutes = $minutes
                 targetUser      = $targetUser
+                ownerAccount    = $ownerAccount
                 lastRun         = if ($info) { [string]$info.LastRunTime } else { $null }
                 nextRun         = if ($info) { [string]$info.NextRunTime } else { $null }
                 lastResult      = if ($info) { $info.LastTaskResult } else { $null }

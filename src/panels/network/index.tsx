@@ -2,6 +2,8 @@ import { Icon, Dialog, FormGroup, InputGroup, Button, Classes, HTMLSelect, type 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import useBackend, { BlocklistStatus, type MacRandomizerMode, type PhysicalNetworkAdapter } from "../../hooks/useBackend";
 import { useAppState } from "../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import useVisibility from "../../hooks/useVisibility";
 import useEntitlements from "../../hooks/useEntitlements";
 import SectionCard from "../../components/shared/SectionCard";
@@ -219,10 +221,10 @@ function BlocklistItem({ name, description, entryCount, isApplied, onToggle, loa
 }
 
 function DnsCategoryCard({
-    id, label, description, icon, active, isAtLimit, onToggle,
+    id, label, description, icon, active, isAtLimit, disabled = false, onToggle,
 }: {
     id: string; label: string; description: string; icon: IconName;
-    active: boolean; isAtLimit: boolean; onToggle: () => void;
+    active: boolean; isAtLimit: boolean; disabled?: boolean; onToggle: () => void;
 }) {
     const logos = DNS_CATEGORY_LOGOS[id];
     return (
@@ -232,7 +234,7 @@ function DnsCategoryCard({
             style={{ cursor: isAtLimit ? 'not-allowed' : 'pointer', opacity: isAtLimit ? 0.45 : 1 }}
             aria-pressed={active}
             aria-label={`${active ? 'Disable' : 'Enable'} ${label} DNS category`}
-            disabled={isAtLimit}
+            disabled={isAtLimit || disabled}
             onClick={onToggle}
         >
             <div className="bbc-top">
@@ -296,6 +298,7 @@ interface AdaptersListProps {
     showInactiveAdapters: boolean;
     onModeChange: (adapter: PhysicalNetworkAdapter, mode: AdapterMode) => void;
     onShowInactiveToggle: (show: boolean) => void;
+    writesBlocked?: boolean;
     /** When true, render contents without an outer SectionCard so it can sit
      *  inside another card alongside another sub-section. */
     embedded?: boolean;
@@ -309,6 +312,7 @@ function AdaptersList({
     showInactiveAdapters,
     onModeChange,
     onShowInactiveToggle,
+    writesBlocked = false,
     embedded = false,
 }: AdaptersListProps) {
     const activeAdapters = useMemo(() => (adapters ?? []).filter(a => a.status === "Up"), [adapters]);
@@ -357,7 +361,7 @@ function AdaptersList({
                                 <HTMLSelect
                                     value={selectedMode}
                                     onChange={e => onModeChange(a, e.currentTarget.value as AdapterMode)}
-                                    disabled={isBusy}
+                                    disabled={isBusy || writesBlocked}
                                     options={[
                                         { value: "off", label: "Factory MAC" },
                                         { value: "static-random", label: "Random (static)" },
@@ -369,7 +373,7 @@ function AdaptersList({
                                     <Button
                                         small minimal icon="refresh"
                                         title="Re-roll random MAC"
-                                        disabled={isBusy}
+                                        disabled={isBusy || writesBlocked}
                                         onClick={() => onModeChange(a, selectedMode as MacRandomizerMode)}
                                     />
                                 )}
@@ -429,7 +433,8 @@ function AutoApplyPill({ status, secsLeft }: { status: string; secsLeft: number 
 // ─── DNS card ────────────────────────────────────────────────────────────────
 
 function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) {
-    const { networkDnsStatus, refreshNetwork, patchAppSettings, appSettings } = useAppState();
+    const { networkDnsStatus, refreshNetwork, patchAppSettings, appSettings, systemInfo } = useAppState();
+    const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
     const { canUse: canUseTier } = useEntitlements();
     const isPaid = canUseTier('paid');
     const {
@@ -543,6 +548,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
     // pushes the encrypted filter slug. Called by the debounced inline toggles
     // AND by the main toggle's auto-select-defaults path below.
     const applyControldSet = useCallback(async (nextSet: Set<string>) => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         // Free tier is capped at FREE_CONTROLD_LIMIT categories. The per-category
         // toggle enforces this, but the main-toggle auto-default path applies the
         // full 7-category default set; clamp here (preserving DNS_CATEGORIES
@@ -566,11 +572,12 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
             refreshNetwork(true, true);
             patchAppSettings({
                 ideal: { network: { dns: { provider: 'controld', controlDFilterSlug: slug || null } } },
-            }).catch(() => { });
+            }).catch(reportSettingsWriteFailure);
         }
-    }, [applySecureDNS, refreshNetwork, patchAppSettings, isPaid]);
+    }, [applySecureDNS, refreshNetwork, patchAppSettings, isPaid, needsElevation]);
 
     const handleDnsToggle = useCallback(async (checked: boolean) => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         if (secureDNS === null || dnsBusy) return;
         // Cancel any pending category-set apply first: the main toggle is a
         // more recent, more sweeping user action and must win. Without this,
@@ -615,7 +622,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                     setDnsProvider("custom");
                     setControldFilters(new Set());
                     refreshNetwork(true, true);
-                    patchAppSettings({ ideal: { network: { dns: { provider: null, censorshipProtection: censorshipDisabled ? false : censorshipProtectionRef.current, controlDFilterSlug: null } } } }).catch(() => { });
+                    patchAppSettings({ ideal: { network: { dns: { provider: null, censorshipProtection: censorshipDisabled ? false : censorshipProtectionRef.current, controlDFilterSlug: null } } } }).catch(reportSettingsWriteFailure);
                 }
             } else if (dnsProviderRef.current === 'controld' || dnsProviderRef.current === 'custom' || !dnsProviderRef.current) {
                 // ControlD is the primary flow: turning the main toggle on with no
@@ -640,7 +647,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                     setSecureDNS(true);
                     setDnsProvider(provider);
                     refreshNetwork(true, true);
-                    patchAppSettings({ ideal: { network: { dns: { provider } } } }).catch(() => { });
+                    patchAppSettings({ ideal: { network: { dns: { provider } } } }).catch(reportSettingsWriteFailure);
                 } else {
                     setOptimisticDns(false);
                     setSecureDNS(false);
@@ -648,7 +655,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
             }
         });
     }, [secureDNS, dnsBusy, disableDnsCensorshipProtection, clearSecureDNS, applySecureDNS,
-        applyControldSet, refreshNetwork, patchAppSettings, scheduleDns, cancelControld]);
+        applyControldSet, refreshNetwork, patchAppSettings, scheduleDns, cancelControld, needsElevation]);
 
     const openDnsProGate = useCallback(() => {
         window.dispatchEvent(new CustomEvent("license-gate-open", {
@@ -676,11 +683,12 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
             setSecureDNS(false);
             setDnsProvider("custom");
             refreshNetwork(true, true);
-            patchAppSettings({ ideal: { network: { dns: { provider: null, censorshipProtection: censorshipDisabled ? false : censorshipProtectionRef.current, controlDFilterSlug: null } } } }).catch(() => { });
+            patchAppSettings({ ideal: { network: { dns: { provider: null, censorshipProtection: censorshipDisabled ? false : censorshipProtectionRef.current, controlDFilterSlug: null } } } }).catch(reportSettingsWriteFailure);
         }
     }, [clearSecureDNS, disableDnsCensorshipProtection, refreshNetwork, patchAppSettings]);
 
     const toggleControldCategory = (catId: string) => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         if (dnsBusy) return;
         const willAdd = !controldFilters.has(catId);
         if (willAdd && !isPaid && controldFilters.size >= FREE_CONTROLD_LIMIT) {
@@ -703,6 +711,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
     };
 
     const applySwissFirewall = async () => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         setDnsProvider("swiss-firewall");
         setSwissDialogOpen(false);
         setDnsBusy(true);
@@ -718,7 +727,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
             setSecureDNS(true);
             setDohGuide({ provider: 'swiss-firewall' });
             refreshNetwork(true, true);
-            patchAppSettings({ ideal: { network: { dns: { provider: 'swiss-firewall' } } } }).catch(() => { });
+            patchAppSettings({ ideal: { network: { dns: { provider: 'swiss-firewall' } } } }).catch(reportSettingsWriteFailure);
         } else {
             setDnsProvider(previousProvider);
         }
@@ -739,6 +748,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
     // Selecting AdGuard queues through the same 5s auto-apply lane as the main
     // DNS switch. Enterprise Firewall still uses its explicit dialog Apply.
     const handleSelectAdvancedProvider = useCallback((provider: string) => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         if (dnsBusy) return;
         // Cancel any pending category-set apply first: this newer provider
         // selection must win after the shared DNS debounce fires.
@@ -776,7 +786,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                                 },
                             },
                         },
-                    }).catch(() => { });
+                    }).catch(reportSettingsWriteFailure);
                 }
             });
             return;
@@ -796,13 +806,13 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                 refreshNetwork(true, true);
                 patchAppSettings({
                     ideal: { network: { dns: { provider, controlDFilterSlug: null } } },
-                }).catch(() => { });
+                }).catch(reportSettingsWriteFailure);
             } else {
                 setDnsProvider(previousProvider);
                 setOptimisticDns(null);
             }
         });
-    }, [dnsBusy, effectiveDns, dnsProvider, disableDnsCensorshipProtection, clearSecureDNS, applySecureDNS, previousProvider, refreshNetwork, patchAppSettings, scheduleDns, cancelDns, cancelControld]);
+    }, [dnsBusy, effectiveDns, dnsProvider, disableDnsCensorshipProtection, clearSecureDNS, applySecureDNS, previousProvider, refreshNetwork, patchAppSettings, scheduleDns, cancelDns, cancelControld, needsElevation]);
 
     // An Advanced provider is "active" only once it's actually applied
     // (dnsProvider reflects backend state) — not merely selected in the UI.
@@ -854,11 +864,12 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                     <div className="dns-header-right">
                         <AutoApplyPill status={dnsDebounce.status} secsLeft={dnsDebounce.secsLeft} />
                         <span className="dns-toggle-cluster">
+                            {needsElevation && <span className="text-[10px] text-[var(--warn)]">Requires an administrator</span>}
                             <span className="recommended-pill__label">Recommended</span>
                             <WCSwitch
                                 checked={effectiveDns}
                                 onChange={(next) => handleDnsToggle(next)}
-                                disabled={secureDNS === null || dnsBusy}
+                                disabled={secureDNS === null || dnsBusy || needsElevation}
                                 size="sm"
                                 label="Encrypted DNS"
                             />
@@ -943,6 +954,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                                                 icon={cat.icon}
                                                 active={active}
                                                 isAtLimit={isAtLimit}
+                                                disabled={needsElevation}
                                                 onToggle={() => toggleControldCategory(cat.id)}
                                             />
                                         );
@@ -974,6 +986,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                                                 icon={cat.icon}
                                                 active={active}
                                                 isAtLimit={isAtLimit}
+                                                disabled={needsElevation}
                                                 onToggle={() => toggleControldCategory(cat.id)}
                                             />
                                         );
@@ -1008,7 +1021,7 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                                         <button
                                             type="button"
                                             className={`advanced-dns-option${dnsProvider === 'adguard' ? ' advanced-dns-option--active' : ''}`}
-                                            disabled={dnsBusy}
+                                            disabled={dnsBusy || needsElevation}
                                             onClick={() => { void handleSelectAdvancedProvider('adguard'); }}
                                         >
                                             <Icon icon="shield" size={14} />
@@ -1021,8 +1034,8 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
                                         <button
                                             type="button"
                                             className={`advanced-dns-option${dnsProvider === 'swiss-firewall' ? ' advanced-dns-option--active' : ''}`}
-                                            disabled={dnsBusy}
-                                            onClick={() => { setSwissDialogOpen(true); }}
+                                            disabled={dnsBusy || needsElevation}
+                                            onClick={() => { if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; } setSwissDialogOpen(true); }}
                                         >
                                             <Icon icon="endorsed" size={14} />
                                             <div className="advanced-dns-option__text">
@@ -1170,7 +1183,8 @@ function NetworkAdaptersCard({ embedded = false }: { embedded?: boolean } = {}) 
 // ─── Hosts Protection (blocklists only) ──────────────────────────────────────
 
 function NetworkSecurityControls() {
-    const { networkBlocklistStatus, refreshNetwork } = useAppState();
+    const { networkBlocklistStatus, refreshNetwork, systemInfo } = useAppState();
+    const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
     const visibility = useVisibility();
     const {
         getBlocklistStatus,
@@ -1215,6 +1229,7 @@ function NetworkSecurityControls() {
     }, [getBlocklistStatus]);
 
     const handleToggle = async (name: string, enabled: boolean) => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         setActionLoading(name);
         try {
             const result = enabled
@@ -1237,6 +1252,7 @@ function NetworkSecurityControls() {
     const group2 = status?.available?.filter(item => group2Names.includes(item.name)) || [];
 
     const handleSelectAll = async (enabled: boolean) => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         setActionLoading('all');
         try {
             for (const item of group1) {
@@ -1278,7 +1294,7 @@ function NetworkSecurityControls() {
                                         checked={allApplied}
                                         onChange={(next) => handleSelectAll(next)}
                                         size="sm"
-                                        disabled={isScanning || anyLoading}
+                                        disabled={isScanning || anyLoading || needsElevation}
                                         label="Apply recommended protection"
                                     />
                                 </div>
@@ -1296,6 +1312,7 @@ function NetworkSecurityControls() {
                     </div>
                 )}
             >
+                {needsElevation && <p role="alert" className="text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
                 <div className="blocklists-container">
                         {isScanning ? (
                             <div className="scanning-overlay"><div className="loader-spinner" /></div>
@@ -1319,7 +1336,7 @@ function NetworkSecurityControls() {
                                                     isApplied={status?.applied?.includes(item.name) || false}
                                                     onToggle={(enabled) => handleToggle(item.name, enabled)}
                                                     loading={actionLoading === item.name}
-                                                    disabled={anyLoading}
+                                                    disabled={anyLoading || needsElevation}
                                                     logos={BRAND_LOGOS[item.name]}
                                                 />
                                             ))}
@@ -1343,7 +1360,7 @@ function NetworkSecurityControls() {
                                                     isApplied={status?.applied?.includes(item.name) || false}
                                                     onToggle={(enabled) => handleToggle(item.name, enabled)}
                                                     loading={actionLoading === item.name}
-                                                    disabled={anyLoading}
+                                                    disabled={anyLoading || needsElevation}
                                                     logos={BRAND_LOGOS[item.name]}
                                                 />
                                             ))}
@@ -1387,6 +1404,8 @@ function PortsAndConnectionsTab() {
 
 function AdaptersWifiGuardDiagnosticsTab() {
     const { getPhysicalNetworkAdapters, setAdapterRandomMAC, restoreAdapterMAC } = useBackend();
+    const { systemInfo } = useAppState();
+    const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
 
     // Adapter state — lives here (not at the panel level) since nothing outside
     // this tab needs it.
@@ -1410,6 +1429,7 @@ function AdaptersWifiGuardDiagnosticsTab() {
     useEffect(() => { refreshAdapters(); }, [refreshAdapters]);
 
     const handleAdapterModeChange = useCallback(async (adapter: PhysicalNetworkAdapter, nextMode: AdapterMode) => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         setAdapterBusyId(adapter.id);
         setModeOverrides(m => ({ ...m, [adapter.id]: nextMode }));
         try {
@@ -1427,7 +1447,7 @@ function AdaptersWifiGuardDiagnosticsTab() {
         } finally {
             setAdapterBusyId(null);
         }
-    }, [restoreAdapterMAC, setAdapterRandomMAC, refreshAdapters]);
+    }, [restoreAdapterMAC, setAdapterRandomMAC, refreshAdapters, needsElevation]);
 
     return (
         <div className="network-panel-sections">
@@ -1463,6 +1483,7 @@ function AdaptersWifiGuardDiagnosticsTab() {
                                                 modeOverrides={modeOverrides}
                                                 showInactiveAdapters={showInactiveAdapters}
                                                 onModeChange={handleAdapterModeChange}
+                                                writesBlocked={needsElevation}
                                                 onShowInactiveToggle={setShowInactiveAdapters}
                                                 embedded
                                             />

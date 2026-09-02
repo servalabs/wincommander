@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppState } from "../context/AppContext";
+import { reportSettingsWriteFailure } from "../lib/settingsWriteRecovery";
 
 export interface SearchHotkeyState {
   hotkey: string;
@@ -42,7 +43,7 @@ export function useSearchHotkey(): SearchHotkeyState {
     setHotkey(combo);
     // Same shape the panel always sent — the settings patch type is wider
     // than this partial, matching the original call site.
-    patchAppSettings({ app: { searchHotkey: combo } } as Parameters<typeof patchAppSettings>[0]).catch(console.error);
+    patchAppSettings({ app: { searchHotkey: combo } } as Parameters<typeof patchAppSettings>[0]).catch(reportSettingsWriteFailure);
     invoke("update_search_hotkey", { hotkey: combo }).catch(console.error);
   }, [patchAppSettings]);
 

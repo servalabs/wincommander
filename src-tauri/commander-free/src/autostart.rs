@@ -34,6 +34,26 @@ fn covered_identity_active() -> bool {
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+#[cfg(windows)]
+const AUTOSTART_POWERSHELL: &str = "powershell.exe";
+
+/// The app manifest uses `highestAvailable`. A Scheduled Task cannot display
+/// the corresponding consent prompt, so an administrator's logon task exits
+/// with 0x800702E4 before the app starts. Preserve the limited group task and
+/// force this launch to use the interactive user's normal token instead.
+///
+/// Task Scheduler discards a child process's stderr. Keep that evidence in the
+/// relevant profile rather than ProgramData, which a standard user cannot
+/// write. The file is overwritten on each autostart attempt so it stays useful
+/// for the latest failure and cannot grow without bound.
+#[cfg(windows)]
+fn autostart_action_args(exe: &str) -> String {
+    let exe_ps = exe.replace('\'', "''");
+    format!(
+        "-NoProfile -NonInteractive -WindowStyle Hidden -Command \"$ErrorActionPreference='Stop'; $dir=Join-Path $env:LOCALAPPDATA 'WinCommander'; New-Item -ItemType Directory -Path $dir -Force | Out-Null; $log=Join-Path $dir 'autostart.stderr.log'; $env:__COMPAT_LAYER='RunAsInvoker'; & '{exe_ps}' --autostart 2> $log; exit $LASTEXITCODE\""
+    )
+}
+
 /// Repair the machine-wide logon autostart task only when its identity or
 /// execution contract has drifted. A correct task is left untouched, avoiding
 /// a Scheduled Tasks write on every packaged launch.
@@ -52,26 +72,35 @@ fn ensure_autostart_task_named(covered: bool) -> Result<(), String> {
         .to_string_lossy()
         .to_string();
     // PowerShell single-quoted literals: double any embedded single quote.
-    let exe_ps = exe.replace('\'', "''");
     let name_ps = task_name(covered).replace('\'', "''");
     let stale_name_ps = task_name(!covered).replace('\'', "''");
     let run_value = crate::paths::app_display_name().replace('\'', "''");
+    let action_args = autostart_action_args(&exe);
+    let action_args_b64 = {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        let utf16: Vec<u8> = action_args
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        STANDARD.encode(utf16)
+    };
 
     let script = format!(
         "$ErrorActionPreference='Stop'
+$actionArgs = [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{action_args_b64}'))
 $task = Get-ScheduledTask -TaskName '{name}' -ErrorAction SilentlyContinue
 $needsRepair = $null -eq $task
 if (-not $needsRepair) {{
   $action = @($task.Actions)
   $logonTrigger = @($task.Triggers | Where-Object {{ $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }})
-  $needsRepair = $action.Count -ne 1 -or $action[0].Execute -ne '{exe}' -or $action[0].Arguments -ne '--autostart' -or $logonTrigger.Count -ne 1 -or $task.Principal.GroupId -ne 'S-1-5-32-545' -or $task.Principal.RunLevel -ne 'Limited' -or $task.Settings.MultipleInstances -ne 'IgnoreNew' -or $task.Settings.ExecutionTimeLimit -ne 'PT0S'
+  $needsRepair = $action.Count -ne 1 -or $action[0].Execute -ne '{powershell}' -or $action[0].Arguments -ne $actionArgs -or $logonTrigger.Count -ne 1 -or $task.Principal.GroupId -ne 'S-1-5-32-545' -or $task.Principal.RunLevel -ne 'Limited' -or $task.Settings.MultipleInstances -ne 'IgnoreNew' -or $task.Settings.ExecutionTimeLimit -ne 'PT0S'
 }}
 $staleTask = Get-ScheduledTask -TaskName '{stale_name}' -ErrorAction SilentlyContinue
 $legacyTasks = @('Sys Health Checker', 'WinCommander Input Service') | Where-Object {{ Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue }}
 $legacyRun = Get-ItemPropertyValue -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{run}' -ErrorAction SilentlyContinue
 if ($staleTask -or $legacyTasks.Count -gt 0 -or $null -ne $legacyRun -or (Test-Path -LiteralPath \"$env:ProgramData\\WinCommander\\reopen.cfg\")) {{ $needsRepair = $true }}
 if ($needsRepair) {{
-$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '--autostart'
+$a = New-ScheduledTaskAction -Execute '{powershell}' -Argument $actionArgs
 $t = New-ScheduledTaskTrigger -AtLogOn
 $p = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
 $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
@@ -82,10 +111,11 @@ Unregister-ScheduledTask -TaskName 'WinCommander Input Service' -Confirm:$false 
 Remove-Item -LiteralPath \"$env:ProgramData\\WinCommander\\reopen.cfg\" -Force -ErrorAction SilentlyContinue
 Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{run}' -ErrorAction SilentlyContinue
 }}",
-        exe = exe_ps,
         name = name_ps,
         stale_name = stale_name_ps,
         run = run_value,
+        action_args_b64 = action_args_b64,
+        powershell = AUTOSTART_POWERSHELL,
     );
 
     let out = std::process::Command::new("powershell")

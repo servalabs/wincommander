@@ -23,9 +23,11 @@
 import { Switch, Icon, Button, Tag } from "@/components/ui/bp";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
-import { showError } from "../../utils/toast";
+import { showError, showSuccess } from "../../utils/toast";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
+import { useAppState } from "../../context/AppContext";
+import { applyMachineSetting } from "../../lib/machineSettingsClient";
 import PrivacyEventTable from './PrivacyEventTable';
 
 interface ToolEntry {
@@ -74,6 +76,7 @@ export default function RemoteAccessMonitorSection({
   onExpandedChange,
 }: Props) {
   const requestConfirm = useAppConfirm();
+  const { systemInfo } = useAppState();
   const [expandedLocal, setExpandedLocal] = useState(false);
   const isControlled = expandedProp !== undefined && onExpandedChange !== undefined;
   const expanded = isControlled ? expandedProp! : expandedLocal;
@@ -85,6 +88,10 @@ export default function RemoteAccessMonitorSection({
   const [tools, setTools] = useState<ToolEntry[]>([]);
   const [recent, setRecent] = useState<RemoteAccessHit[]>([]);
   const [status, setStatus] = useState<RemoteAccessStatus | null>(null);
+  const [rdpLockObserved, setRdpLockObserved] = useState<boolean | null>(null);
+  const [applyingRdpLock, setApplyingRdpLock] = useState(false);
+  const [rdpLockError, setRdpLockError] = useState<string | null>(null);
+  const needsElevation = systemInfo?.isAdmin !== true;
 
   const refreshTools = useCallback(async () => {
     try {
@@ -167,6 +174,41 @@ export default function RemoteAccessMonitorSection({
     refreshStatus();
   };
 
+  const applyRdpLock = async (locked: boolean) => {
+    if (needsElevation) {
+      setRdpLockError("Blocked: needs-elevation. Requires an administrator to change the machine-wide RDP lock.");
+      return;
+    }
+    if (locked) {
+      const accepted = await requestConfirm({
+        title: "Block incoming Remote Desktop?",
+        description: "This blocks incoming RDP connections for every Windows account on this PC. You can restore access here later.",
+        confirmLabel: "Block Remote Desktop",
+      });
+      if (!accepted) return;
+    }
+
+    setApplyingRdpLock(true);
+    setRdpLockError(null);
+    try {
+      const observed = await applyMachineSetting({
+        setting: "rdp_lock",
+        value: { kind: "rdp_lock", locked },
+      });
+      const readBackMatches = observed.kind === "rdp_lock" && observed.locked === locked;
+      if (!readBackMatches) {
+        setRdpLockError("Failed: service read-back did not match the requested RDP lock state.");
+        return;
+      }
+      setRdpLockObserved(observed.locked);
+      showSuccess(observed.locked ? "Incoming Remote Desktop blocked" : "Incoming Remote Desktop restored");
+    } catch (error) {
+      setRdpLockError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setApplyingRdpLock(false);
+    }
+  };
+
   // Header status tag: idle / watching N / triggered (any high-confidence hit).
   const hasHighTrip = recent.some((r) => r.confidence === "high");
   const watching = status?.watchingTools ?? tools.filter((t) => t.enabled).length;
@@ -204,6 +246,34 @@ export default function RemoteAccessMonitorSection({
             onChange={(e) => onPatch({ enabled: e.currentTarget.checked })}
             aria-label="Enable remote access monitoring"
           />
+        </div>
+
+        <div className="mt-4 border-t border-[var(--shield-inner-border)] pt-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex flex-col gap-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-semibold text-[var(--shield-text-primary)]">Incoming RDP access</span>
+                <Tag minimal intent={rdpLockObserved === true ? "danger" : "none"} className="font-mono">
+                  {rdpLockObserved === true ? "BLOCKED" : rdpLockObserved === false ? "RESTORED" : "NOT CHECKED"}
+                </Tag>
+                <span className="text-[10px] text-[var(--shield-text-muted)]">Machine only</span>
+                {needsElevation && <span className="text-[10px] text-[var(--warn)]">Requires an administrator</span>}
+              </div>
+              <p className="text-xs text-[var(--shield-text-subtle)] text-pretty max-w-[420px]">
+                Block or restore incoming Remote Desktop for this PC. The result is confirmed from the privileged Windows service after it applies the firewall rule.
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <Button small intent="danger" disabled={applyingRdpLock || needsElevation} onClick={() => void applyRdpLock(true)} aria-label="Block incoming Remote Desktop">
+                {applyingRdpLock ? "Applying…" : "Block RDP"}
+              </Button>
+              <Button small disabled={applyingRdpLock || needsElevation} onClick={() => void applyRdpLock(false)} aria-label="Restore incoming Remote Desktop">
+                Restore
+              </Button>
+            </div>
+          </div>
+          {needsElevation && <p role="alert" className="mt-2 text-xs text-[var(--warn)]">Blocked: needs-elevation. Requires an administrator to change the machine-wide RDP lock.</p>}
+          {rdpLockError && <p role="alert" className="mt-2 text-xs text-[var(--danger)]">{rdpLockError}</p>}
         </div>
 
         {enabled && (

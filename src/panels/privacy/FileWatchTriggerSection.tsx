@@ -7,6 +7,7 @@ interface Props {
     settings: FileWatchTriggerSettings | null | undefined;
     onPatch: (patch: Partial<FileWatchTriggerSettings>) => void;
     bare?: boolean;
+    disabled?: boolean;
 }
 
 const EMPTY_FORM: Omit<FileWatchRule, 'id'> = {
@@ -20,7 +21,7 @@ function nanoid() {
     return Math.random().toString(36).slice(2, 10);
 }
 
-export default function FileWatchTriggerSection({ settings, onPatch, bare = false }: Props) {
+export default function FileWatchTriggerSection({ settings, onPatch, bare = false, disabled = false }: Props) {
     const enabled = settings?.enabled ?? false;
     const rules = useMemo(() => settings?.rules ?? [], [settings?.rules]);
     const [showAdd, setShowAdd] = useState(false);
@@ -28,24 +29,27 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
     const [formError, setFormError] = useState('');
 
     const syncWatcher = useCallback((nextEnabled: boolean, nextRules: FileWatchRule[]) => {
+        if (disabled) return;
         if (nextEnabled && nextRules.some(r => r.enabled)) {
             invoke('start_file_watch_triggers', { rules: nextRules.filter(r => r.enabled) }).catch(() => {});
         } else {
             invoke('stop_file_watch_triggers').catch(() => {});
         }
-    }, []);
+    }, [disabled]);
 
     useEffect(() => {
         syncWatcher(enabled, rules);
     }, [enabled, rules, syncWatcher]);
 
     const toggleEnabled = () => {
+        if (disabled) return;
         const next = !enabled;
         onPatch({ enabled: next });
         syncWatcher(next, rules);
     };
 
     const addRule = () => {
+        if (disabled) return;
         if (!form.path.trim()) { setFormError('Path is required'); return; }
         if (!form.namePattern.trim()) { setFormError('Name pattern is required'); return; }
         const rule: FileWatchRule = { ...form, id: nanoid(), path: form.path.trim(), namePattern: form.namePattern.trim() };
@@ -58,12 +62,14 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
     };
 
     const removeRule = (id: string) => {
+        if (disabled) return;
         const next = rules.filter(r => r.id !== id);
         onPatch({ rules: next });
         syncWatcher(enabled, next);
     };
 
     const toggleRule = (id: string) => {
+        if (disabled) return;
         const next = rules.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r);
         onPatch({ rules: next });
         syncWatcher(enabled, next);
@@ -83,6 +89,7 @@ export default function FileWatchTriggerSection({ settings, onPatch, bare = fals
                     type="button"
                     role="switch"
                     aria-checked={enabled}
+                    disabled={disabled}
                     className={`lockdown-trigger-toggle ${enabled ? 'is-on' : ''}`}
                     onClick={toggleEnabled}
                 />

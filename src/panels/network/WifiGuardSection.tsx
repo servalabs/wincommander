@@ -16,6 +16,8 @@ import { Button, Icon, InputGroup, Spinner, Switch, Tag } from '@/components/ui/
 import SectionCard from '../../components/shared/SectionCard';
 import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
 import { useAppState } from '../../context/AppContext';
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from '../../lib/machineScopeElevation';
+import { reportSettingsWriteFailure } from '../../lib/settingsWriteRecovery';
 import {
   DEFAULT_WIFI_GUARD_ALERT_DEBOUNCE_SECS,
   DEFAULT_WIFI_GUARD_LEARNING_WINDOW_SECS,
@@ -250,7 +252,8 @@ export default function WifiGuardSection({
   embedded?: boolean;
 } = {}) {
   const requestConfirm = useAppConfirm();
-  const { appSettings, patchAppSettings } = useAppState();
+  const { appSettings, patchAppSettings, systemInfo } = useAppState();
+  const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
   const persisted = appSettings?.ideal?.network?.wifiGuard;
   const configuredEnabled = persisted?.enabled ?? false;
   const learningWindowSecs = persisted?.learningWindowSecs ?? DEFAULT_WIFI_GUARD_LEARNING_WINDOW_SECS;
@@ -280,7 +283,7 @@ export default function WifiGuardSection({
     baseline?: WifiGuardBaselineEntry[];
     reportToFleet?: boolean;
   }) => {
-    void patchAppSettings({ ideal: { network: { wifiGuard: patch } } });
+    void patchAppSettings({ ideal: { network: { wifiGuard: patch } } }).catch(reportSettingsWriteFailure);
   }, [patchAppSettings]);
 
   const persistRuntimeBaseline = useCallback(async () => {
@@ -335,6 +338,7 @@ export default function WifiGuardSection({
 
   const handleToggle = useCallback(
     async (next: boolean) => {
+      if (needsElevation) { setError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
       setToggling(true);
       setError(null);
       try {
@@ -358,10 +362,11 @@ export default function WifiGuardSection({
         setToggling(false);
       }
     },
-    [refresh, patchWifiGuard],
+    [refresh, patchWifiGuard, needsElevation],
   );
 
   const handleAddSsid = useCallback(async () => {
+    if (needsElevation) { setError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     const ssid = addSsid.trim();
     if (!ssid) {
       setError('SSID name is required.');
@@ -387,9 +392,10 @@ export default function WifiGuardSection({
     } finally {
       setAddingSsid(false);
     }
-  }, [addSsid, addBssid, refresh, persistRuntimeBaseline]);
+  }, [addSsid, addBssid, refresh, persistRuntimeBaseline, needsElevation]);
 
   const handleClearKnown = useCallback(async () => {
+    if (needsElevation) { setError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     const accepted = await requestConfirm({
       title: 'Forget learned Wi-Fi identities?',
       description: 'All learned SSID/BSSID associations will be removed. Wi-Fi Guard will re-enter learning mode for 24 hours.',
@@ -403,7 +409,7 @@ export default function WifiGuardSection({
     } catch (err) {
       setError(String(err));
     }
-  }, [refresh, requestConfirm, persistRuntimeBaseline]);
+  }, [refresh, requestConfirm, persistRuntimeBaseline, needsElevation]);
 
   const handleClearRecent = useCallback(async () => {
     const accepted = await requestConfirm({
@@ -444,12 +450,13 @@ export default function WifiGuardSection({
           <Switch
             checked={running}
             onChange={(e) => handleToggle((e.target as HTMLInputElement).checked)}
-            disabled={toggling}
+            disabled={toggling || needsElevation}
             label={running ? 'Detector running' : 'Arm detector'}
             large
             style={{ marginBottom: 0 }}
           />
           {statusTag}
+          {needsElevation && <span className="text-[10px] text-[var(--warn)]">Requires an administrator</span>}
           {toggling && <Spinner size={14} />}
           <Button icon="refresh" minimal small onClick={refresh}>
             Refresh
@@ -552,7 +559,7 @@ export default function WifiGuardSection({
             intent="primary"
             onClick={handleAddSsid}
             loading={addingSsid}
-            disabled={!addSsid.trim() || addingSsid}
+            disabled={!addSsid.trim() || addingSsid || needsElevation}
             small
           >
             Trust SSID
@@ -591,7 +598,7 @@ export default function WifiGuardSection({
                 {showKnown ? 'Hide' : 'Show'}
               </Button>
               {known.length > 0 && (
-                <Button icon="reset" minimal small onClick={handleClearKnown}>
+                <Button icon="reset" minimal small onClick={handleClearKnown} disabled={needsElevation}>
                   Reset
                 </Button>
               )}
@@ -755,7 +762,7 @@ export default function WifiGuardSection({
           <Switch
             checked={running}
             onChange={(e) => handleToggle((e.target as HTMLInputElement).checked)}
-            disabled={toggling}
+            disabled={toggling || needsElevation}
             label={running ? 'On' : 'Off'}
             style={{ marginBottom: 0 }}
           />
@@ -799,7 +806,7 @@ export default function WifiGuardSection({
             intent="primary"
             onClick={handleAddSsid}
             loading={addingSsid}
-            disabled={!addSsid.trim() || addingSsid}
+            disabled={!addSsid.trim() || addingSsid || needsElevation}
             small
           >
             Trust

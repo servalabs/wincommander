@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppState } from "../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import useEntitlements from "../../hooks/useEntitlements";
 import { Icon } from "@/components/ui/bp";
 import { PANEL_MANIFESTS, NAV_GROUP_ORDER, navGroupFor, type PanelId } from "../../types/panels";
@@ -163,7 +164,7 @@ export default function VisibilityTable() {
             if (vis === "borrowed") nextLocked.push(id);
             if (vis === "always") nextPerm.push(id);
             return { app: { lockedPanelIds: nextLocked, permanentlyHiddenPanels: nextPerm } };
-        }).catch(() => {});
+        }).catch(reportSettingsWriteFailure);
     }, [patchAppSettings]);
 
     const toggleNotif = useCallback((vis: VisState) => {
@@ -172,7 +173,7 @@ export default function VisibilityTable() {
                 hideNotificationBell: vis === "always",
                 borrowedHidden: withBorrowed((latest?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS) as string[], "notif-bell", vis === "borrowed"),
             },
-        })).catch(() => {});
+        })).catch(reportSettingsWriteFailure);
     }, [patchAppSettings]);
 
     const toggleRiskMatrix = useCallback((vis: VisState) => {
@@ -180,14 +181,14 @@ export default function VisibilityTable() {
         patchAppSettings((latest) => ({
             ideal: { identity: { riskMatrixEnabled: vis !== "always" } },
             app: { borrowedHidden: withBorrowed((latest?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS) as string[], "risk-matrix", vis === "borrowed") },
-        })).catch(() => {});
+        })).catch(reportSettingsWriteFailure);
     }, [hasPaid, patchAppSettings]);
 
     const toggleMoreProds = useCallback((vis: VisState) => {
         patchAppSettings((latest) => ({
             ideal: { identity: { moreProductsEnabled: vis !== "always" } },
             app: { borrowedHidden: withBorrowed((latest?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS) as string[], "more-products", vis === "borrowed") },
-        })).catch(() => {});
+        })).catch(reportSettingsWriteFailure);
     }, [patchAppSettings]);
 
     const toggleSidebarAction = useCallback((key: string, vis: VisState) => {
@@ -201,14 +202,14 @@ export default function VisibilityTable() {
                     borrowedHidden: withBorrowed((latest?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS) as string[], `action:${key}`, vis === "borrowed"),
                 },
             };
-        }).catch(() => {});
+        }).catch(reportSettingsWriteFailure);
     }, [patchAppSettings]);
 
     const togglePopupAlerts = useCallback((vis: VisState) => {
         setPopupAlertsEnabled(vis !== "always");
         patchAppSettings((latest) => ({
             app: { borrowedHidden: withBorrowed((latest?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS) as string[], "popup-alerts", vis === "borrowed") },
-        })).catch(() => {});
+        })).catch(reportSettingsWriteFailure);
     }, [patchAppSettings]);
 
     const toggleDesktopAlerts = useCallback((vis: VisState) => {
@@ -217,7 +218,7 @@ export default function VisibilityTable() {
                 disableNativeNotifications: vis === "always",
                 borrowedHidden: withBorrowed((latest?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS) as string[], "desktop-alerts", vis === "borrowed"),
             },
-        } as any)).catch(() => {});
+        } as any)).catch(reportSettingsWriteFailure);
     }, [patchAppSettings]);
 
     const toggleEnginesSection = useCallback((vis: VisState) => {
@@ -226,7 +227,7 @@ export default function VisibilityTable() {
                 hideEnginesSection: vis === "always",
                 borrowedHidden: withBorrowed((latest?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS) as string[], "engines-section", vis === "borrowed"),
             },
-        } as any)).catch(() => {});
+        } as any)).catch(reportSettingsWriteFailure);
     }, [patchAppSettings]);
 
     const toggleSidebarPreferencesAndLicense = useCallback((vis: VisState) => {
@@ -244,7 +245,7 @@ export default function VisibilityTable() {
                     vis === "borrowed",
                 ),
             },
-        } as any)).catch(() => {});
+        } as any)).catch(reportSettingsWriteFailure);
     }, [patchAppSettings]);
 
     const toggleTour = useCallback((vis: VisState) => {
@@ -253,7 +254,7 @@ export default function VisibilityTable() {
                 hideTour: vis === "always",
                 borrowedHidden: withBorrowed((latest?.app?.borrowedHidden ?? DEFAULT_BORROWED_EXTRAS) as string[], "tour", vis === "borrowed"),
             },
-        } as any)).catch(() => {});
+        } as any)).catch(reportSettingsWriteFailure);
     }, [patchAppSettings]);
 
     return (

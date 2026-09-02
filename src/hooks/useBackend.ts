@@ -1517,6 +1517,7 @@ export function useBackend() {
           enabled: boolean;
           intervalMinutes: number;
           targetUser: string | null;
+          ownerAccount?: string | null;
           lastRun: string | null;
           nextRun: string | null;
           lastResult: number | null;

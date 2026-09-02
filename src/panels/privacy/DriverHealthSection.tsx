@@ -28,6 +28,8 @@ import { Button, Spinner, Switch, Tag } from '@/components/ui/bp';
 import type { Intent } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
 import { useAppState } from '../../context/AppContext';
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from '../../lib/machineScopeElevation';
+import { reportSettingsWriteFailure } from '../../lib/settingsWriteRecovery';
 import {
   driverHealthIgnoreId,
   ignoredDriverFindingCount,
@@ -117,7 +119,8 @@ function remediation(d: DriverProblem): string {
 }
 
 export default function DriverHealthSection({ isAdvanced = false, embedded = false, scanKey = 0, hideActions = false }: DriverHealthSectionProps) {
-  const { appSettings, patchAppSettings } = useAppState();
+  const { appSettings, patchAppSettings, systemInfo } = useAppState();
+  const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
   const watchEnabled = appSettings?.ideal?.security?.drivers?.watchEnabled ?? false;
   const watchIntervalSecs = appSettings?.ideal?.security?.drivers?.watchIntervalSecs ?? 60;
   const ignoredFindingIds = appSettings?.app?.ignoredFindingIds ?? [];
@@ -179,6 +182,7 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
 
   const handleWatchToggle = useCallback(
     async (next: boolean) => {
+      if (needsElevation) { setError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
       setWatchBusy(true);
       setError(null);
       try {
@@ -189,27 +193,28 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
         }
         await patchAppSettings({
           ideal: { security: { drivers: { watchEnabled: next } } },
-        }).catch(() => {});
+        }).catch(reportSettingsWriteFailure);
       } catch (err) {
         setError(String(err));
       } finally {
         setWatchBusy(false);
       }
     },
-    [patchAppSettings, watchIntervalSecs],
+    [patchAppSettings, watchIntervalSecs, needsElevation],
   );
 
   const handleWatchIntervalChange = useCallback(async (next: number) => {
+    if (needsElevation) { setError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     const bounded = Math.max(30, Math.min(3600, next));
     await patchAppSettings({
       ideal: { security: { drivers: { watchIntervalSecs: bounded } } },
-    }).catch(() => {});
+    }).catch(reportSettingsWriteFailure);
     if (watchEnabled) {
       await invoke('start_driver_watch', { intervalSecs: bounded }).catch((err) => {
         setError(String(err));
       });
     }
-  }, [patchAppSettings, watchEnabled]);
+  }, [patchAppSettings, watchEnabled, needsElevation]);
 
   const summary = report?.summary;
   const sortedDevices = report
@@ -226,7 +231,7 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
   const ignoreDriverFinding = useCallback((id: string) => {
     void patchAppSettings((latest) => ({
       app: { ignoredFindingIds: [...new Set([...(latest?.app?.ignoredFindingIds ?? []), id])] },
-    })).catch(() => {});
+    })).catch(reportSettingsWriteFailure);
   }, [patchAppSettings]);
 
   const restoreDriverFindings = useCallback(() => {
@@ -236,7 +241,7 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
           (id) => !id.startsWith('driver-health:') && !id.startsWith('driver-byovd:'),
         ),
       },
-    })).catch(() => {});
+    })).catch(reportSettingsWriteFailure);
   }, [patchAppSettings]);
 
   const headerTag = summary ? (
@@ -266,7 +271,7 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
           {isAdvanced && (
             <Switch
               checked={watchEnabled}
-              disabled={watchBusy}
+              disabled={watchBusy || needsElevation}
               onChange={(e) => handleWatchToggle((e.target as HTMLInputElement).checked)}
               label="Watch for new driver problems"
               className="driver-health-watch-switch"
@@ -279,6 +284,7 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
                 value={watchIntervalSecs}
                 onChange={(e) => void handleWatchIntervalChange(Number(e.currentTarget.value))}
                 aria-label="Driver health watch interval"
+                disabled={needsElevation}
                 className="rounded border border-[var(--shield-inner-border)] bg-[var(--color-bg-secondary)] px-2 py-1"
               >
                 <option value={30}>30 seconds</option>
@@ -291,6 +297,8 @@ export default function DriverHealthSection({ isAdvanced = false, embedded = fal
           )}
           {ignoredDriverCount > 0 && <Button icon="reset" minimal small onClick={restoreDriverFindings}>Restore ignored ({ignoredDriverCount})</Button>}
         </div>
+
+        {needsElevation && isAdvanced && <div role="alert" className="driver-health-error">{MACHINE_SCOPE_ELEVATION_MESSAGE}</div>}
 
         {error && <div role="alert" className="driver-health-error">{error}</div>}
 

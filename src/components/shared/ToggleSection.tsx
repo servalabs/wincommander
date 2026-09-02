@@ -15,6 +15,7 @@ import { resolveToggleText } from "../../types/toggles";
 import { ALL_TOGGLES } from "../../registry";
 import { resolveToggleIcon } from "../../registry/toggleIcons";
 import { useManagedPolicy, isToggleLocked } from "../../hooks/useManagedPolicy";
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import type { ExperienceLevel } from "../../types/settings";
 import type { ToggleDef, SectionDef } from "../../types/toggles";
 
@@ -84,7 +85,7 @@ export default function ToggleSection({
 
   // ── Settings from React Query (Database Ground Truth) ──────────────
   const { data: appSettings } = useSettingsQuery();
-  const { refreshSettings } = useAppState();
+  const { refreshSettings, systemInfo } = useAppState();
 
   // ── Admin policy lock: settings whose ideal path is in policy.lockedPaths
   //    are pushed by the org's master config and cannot be changed locally.
@@ -185,6 +186,10 @@ export default function ToggleSection({
    */
   const applyToggle = useCallback(
     async (toggle: ToggleDef, checked: boolean, extraParams?: Record<string, string | number | boolean>): Promise<boolean> => {
+      if (isPrivilegedWriteBlocked(toggle.needsAdmin, systemInfo?.isAdmin)) {
+        showError(MACHINE_SCOPE_ELEVATION_MESSAGE);
+        return false;
+      }
       setPendingMap((prev) => ({ ...prev, [toggle.id]: true }));
 
       try {
@@ -222,7 +227,7 @@ export default function ToggleSection({
         });
       }
     },
-    [onToggled, refreshSettings]
+    [onToggled, refreshSettings, systemInfo?.isAdmin]
   );
 
   // ── Conflict confirmation: pending toggle awaiting user decision ────
@@ -341,38 +346,42 @@ export default function ToggleSection({
         }
 
         const orgLocked = isLocked(toggle.settingsPath) || isPolicyLocked(toggle.id);
+        const needsElevation = isPrivilegedWriteBlocked(toggle.needsAdmin, systemInfo?.isAdmin);
 
         return (
-          <UniversalToggle
-            key={toggle.id}
-            label={wording.label}
-            description={wording.description}
-            checked={getChecked(toggle)}
-            onChange={(checked) => handleToggle(toggle, checked)}
-            loading={pendingMap[toggle.id]}
-            disabled={
-              pendingMap[toggle.id] ||
-              orgLocked ||
-              (resolveDisabled ? resolveDisabled(toggle) : false)
-            }
-            managedByOrg={orgLocked}
-            riskLevel={
-              toggle.irreversible || toggle.reducesSecurity || toggle.defenderFlagged
-                ? "high"
-                : "low"
-            }
-            requiresRestart={toggle.requiresRestart}
-            icon={resolveToggleIcon(toggle)}
-            severity={toggle.severity}
-            domain={toggle.domain as any}
-            size="compact"
-            riskFlags={{
-              needsAdmin: toggle.needsAdmin,
-              irreversible: toggle.irreversible,
-              reducesSecurity: toggle.reducesSecurity,
-              defenderFlagged: toggle.defenderFlagged,
-            }}
-          />
+          <div key={toggle.id}>
+            <UniversalToggle
+              label={wording.label}
+              description={needsElevation ? `${wording.description} Requires an administrator.` : wording.description}
+              checked={getChecked(toggle)}
+              onChange={(checked) => handleToggle(toggle, checked)}
+              loading={pendingMap[toggle.id]}
+              disabled={
+                pendingMap[toggle.id] ||
+                orgLocked ||
+                needsElevation ||
+                (resolveDisabled ? resolveDisabled(toggle) : false)
+              }
+              managedByOrg={orgLocked}
+              riskLevel={
+                toggle.irreversible || toggle.reducesSecurity || toggle.defenderFlagged
+                  ? "high"
+                  : "low"
+              }
+              requiresRestart={toggle.requiresRestart}
+              icon={resolveToggleIcon(toggle)}
+              severity={toggle.severity}
+              domain={toggle.domain as any}
+              size="compact"
+              riskFlags={{
+                needsAdmin: toggle.needsAdmin,
+                irreversible: toggle.irreversible,
+                reducesSecurity: toggle.reducesSecurity,
+                defenderFlagged: toggle.defenderFlagged,
+              }}
+            />
+            {needsElevation && <p role="alert" className="mt-1 text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
+          </div>
         );
       })}
     </div>

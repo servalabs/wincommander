@@ -29,6 +29,9 @@ fn main() {
 
 mod settings_host;
 
+#[cfg(windows)]
+mod machine_settings;
+
 // G-1 ownership split: endpoint background loops live with their future
 // owners; this root remains process composition only.
 #[cfg(windows)]

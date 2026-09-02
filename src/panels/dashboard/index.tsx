@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppState } from "../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import { useLiveMetrics } from "../../context/LiveMetricsContext";
 import useVisibility from "../../hooks/useVisibility";
 import { executeBackendCommand, useBackend } from "../../hooks/useBackend";
@@ -32,9 +33,10 @@ import { getRadarDriftToggles, getToggleById } from "../../registry";
 import { getByPath, getToggleVisibility, resolveToggleText } from "../../types/toggles";
 import { getToggleDrift } from "../../lib/toggleDrift";
 import { getDisplayBranding } from "../../lib/branding";
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import { useTaskStatus } from "../../context/TaskStatusContext";
 import { Icon } from "../../components/ui/icon";
-import { showWarning } from "../../utils/toast";
+import { showError, showWarning } from "../../utils/toast";
 // Motion SSOT — never hardcode durations or curves directly in JSX.
 import { DURATION_S, EASE } from "../../components/shared/motion";
 import './index.css';
@@ -104,6 +106,7 @@ export default function DashboardPanel() {
       })),
     };
   }, [systemInfo, liveMetrics]);
+  const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
 
   const {
     toggleContextMenu,
@@ -164,7 +167,7 @@ export default function DashboardPanel() {
   const setViewMode = useCallback((mode: "dashboard" | "risk" | "products") => {
     setViewModeState(mode);
     window.sessionStorage.setItem(DASHBOARD_VIEW_STORAGE_KEY, mode);
-    patchAppSettings({ app: { dashboardViewMode: mode } }).catch(() => { });
+    patchAppSettings({ app: { dashboardViewMode: mode } }).catch(reportSettingsWriteFailure);
   }, [patchAppSettings]);
   useEffect(() => {
     const handleDashboardView = (event: Event) => {
@@ -195,7 +198,7 @@ export default function DashboardPanel() {
     } else {
       next = [...current, id];                         // open new
     }
-    patchAppSettings({ app: { dashboardOpenCards: next } });
+    patchAppSettings({ app: { dashboardOpenCards: next } }).catch(reportSettingsWriteFailure);
   }, [appSettings?.app?.dashboardOpenCards, patchAppSettings]);
   // Alert drawers are transient controls (not a saved dashboard preference).
   // Keep their state together so System Info and Network Traffic behave as one
@@ -584,6 +587,10 @@ export default function DashboardPanel() {
   // directly, instead of only through the TaskStatusContext-derived
   // isFixEverythingRunning (see fixAllInProgress, above).
   const fixFindings = useCallback((targets: ScanFinding[], title: string) => {
+    if (needsElevation) {
+      showError(MACHINE_SCOPE_ELEVATION_MESSAGE);
+      return Promise.resolve();
+    }
     const opSteps = targets
       .map(buildFindingOp)
       .filter((s): s is { label: string; fn: () => Promise<any> } => s !== null);
@@ -626,7 +633,7 @@ export default function DashboardPanel() {
         if (hasAppUpdates) clearAppUpdatesQueued(appUpdateIds);
         if (hasAppUpdates) releasePackageOperation();
       });
-  }, [buildFindingOp, refreshSettings, refreshNetwork]);
+  }, [buildFindingOp, refreshSettings, refreshNetwork, needsElevation]);
 
   // Also broadcast as a window event so Sidebar (a sibling, not a child of
   // this component) can blur in sync without going through TaskStatusContext.
@@ -649,7 +656,7 @@ export default function DashboardPanel() {
   }, [busyIds.size, fixFindings, isAppUpdateTaskRunning, fixAllInProgress]);
   const handleIgnoreFinding = useCallback((f: ScanFinding) => {
     const next = [...new Set([...ignoredFindingIds, f.id])];
-    void patchAppSettings({ app: { ignoredFindingIds: next } }).catch(() => {});
+    void patchAppSettings({ app: { ignoredFindingIds: next } }).catch(reportSettingsWriteFailure);
   }, [ignoredFindingIds, patchAppSettings]);
 
   // KT: Use data availability instead of loading flags for the scrambler.
@@ -684,6 +691,7 @@ export default function DashboardPanel() {
   }, [appSettings?.app?.internetKillSwitch]);
 
   const handleToggleInternet = useCallback(async (cut: boolean) => {
+    if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     setInternetPending(true);
     try {
       const result = await invoke<boolean>("internet_kill_switch_set", { enable: cut });
@@ -694,7 +702,7 @@ export default function DashboardPanel() {
     } finally {
       setInternetPending(false);
     }
-  }, [patchAppSettings]);
+  }, [patchAppSettings, needsElevation]);
 
   // Calculator lock button — visible only when a Real PIN is configured,
   // the startup-pin gate is not explicitly disabled, AND the session is not
@@ -714,6 +722,7 @@ export default function DashboardPanel() {
   const missingEngineCount = activeFindings.filter((f) => f.category === "engines").length;
 
   const handleCapabilityToggle = useCallback(async (capability: "webcam" | "microphone", blocked: boolean) => {
+    if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     setCapabilityPending(capability);
     try {
       await executeBackendCommand("Set-AppCapabilityAccess", {
@@ -724,7 +733,7 @@ export default function DashboardPanel() {
     } finally {
       setCapabilityPending(null);
     }
-  }, [refreshSettings]);
+  }, [refreshSettings, needsElevation]);
 
   // Ambient backdrop glow tracks the health BAND as a peripheral-vision cue:
   // calm green when strong, amber as it slips, red at risk — driven by the

@@ -3,11 +3,14 @@ import { useEffect, useState } from "react";
 import SectionCard from "../../components/shared/SectionCard";
 import { Button, FormGroup, InputGroup } from "@/components/ui/bp";
 import { useAppState } from "../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import useBackend from "../../hooks/useBackend";
 import { showError, showSuccess } from "../../utils/toast";
 
 export default function BrandingLicensingSection() {
-    const { appSettings, patchAppSettings, refreshHardening } = useAppState();
+    const { appSettings, patchAppSettings, refreshHardening, systemInfo } = useAppState();
+    const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
     const { setOEMInformation, setAppBranding, renameComputer } = useBackend();
 
     const [computerName, setComputerNameInput] = useState("SovereignOS");
@@ -55,6 +58,7 @@ export default function BrandingLicensingSection() {
     };
 
     const handleRename = async () => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         await runWithLoading("rename", async () => {
             const pcName = computerName.trim();
             const renameResult = await renameComputer(pcName);
@@ -76,7 +80,7 @@ export default function BrandingLicensingSection() {
                             branding: { pcName: computerName, manufacturer, supportUrl },
                         },
                     },
-                }).catch(() => {});
+                }).catch(reportSettingsWriteFailure);
             } else if (!result.success) {
                 showError(result.error || "PC renamed, but failed to update OEM information.");
             }
@@ -84,6 +88,7 @@ export default function BrandingLicensingSection() {
     };
 
     const handleApplyAppBranding = async () => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         await runWithLoading("appBranding", async () => {
             const result = await setAppBranding(appCompany, appProduct);
             if (result.success) {
@@ -96,7 +101,7 @@ export default function BrandingLicensingSection() {
                             },
                         },
                     },
-                }).catch(() => {});
+                }).catch(reportSettingsWriteFailure);
                 showSuccess("App branding updated. Title bar now shows the new name.");
             } else {
                 showError(result.error || "Failed to apply app branding.");
@@ -106,6 +111,7 @@ export default function BrandingLicensingSection() {
 
     return (
         <SectionCard title="OS Personalization & App Whitelabeling" icon="id-number">
+            {needsElevation && <p role="alert" className="text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
             <div className="secret-form-grid mb-5">
                 <FormGroup label="PC Name" labelFor="pc-name" className="compact-form">
                     <InputGroup id="pc-name" placeholder="WORK-LAPTOP" maxLength={15} value={computerName} onChange={(e) => setComputerNameInput(e.target.value)} />
@@ -138,7 +144,7 @@ export default function BrandingLicensingSection() {
                 />
             </FormGroup>
             <div className="flex justify-end">
-                <Button text="Apply PC Name & OEM Branding" icon="id-number" onClick={handleRename} loading={loadingMap.rename} className="compact-action-btn" />
+                <Button text="Apply PC Name & OEM Branding" icon="id-number" onClick={handleRename} loading={loadingMap.rename} disabled={loadingMap.rename || needsElevation} className="compact-action-btn" />
             </div>
 
             <div className="sec-divider" />
@@ -152,7 +158,7 @@ export default function BrandingLicensingSection() {
                 </FormGroup>
             </div>
             <div className="flex justify-end">
-                <Button text="Apply App Branding" icon="edit" onClick={handleApplyAppBranding} loading={loadingMap.appBranding} className="compact-action-btn" />
+                <Button text="Apply App Branding" icon="edit" onClick={handleApplyAppBranding} loading={loadingMap.appBranding} disabled={loadingMap.appBranding || needsElevation} className="compact-action-btn" />
             </div>
         </SectionCard>
     );

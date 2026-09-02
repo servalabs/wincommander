@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useAppState } from "../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import useBackend from "../../hooks/useBackend";
 import SectionCard from "../../components/shared/SectionCard";
 import VersionManagementCard from "../../components/settings/VersionManagementCard";
@@ -170,7 +171,7 @@ export default function IdentityPanel() {
                         checked={appSettings?.app?.loggingEnabled !== false}
                         onChange={() => {
                             const current = appSettings?.app?.loggingEnabled !== false;
-                            patchAppSettings({ app: { loggingEnabled: !current } });
+                            patchAppSettings({ app: { loggingEnabled: !current } }).catch(reportSettingsWriteFailure);
                         }}
                         severity="none"
                         icon="document"
@@ -191,7 +192,7 @@ export default function IdentityPanel() {
                             checked={appSettings?.app?.disableUpdates === true}
                             onChange={() => {
                                 const current = appSettings?.app?.disableUpdates === true;
-                                patchAppSettings({ app: { disableUpdates: !current } });
+                                patchAppSettings({ app: { disableUpdates: !current } }).catch(reportSettingsWriteFailure);
                             }}
                             severity="none"
                             icon="cloud-off"
@@ -202,7 +203,7 @@ export default function IdentityPanel() {
                             checked={appSettings?.app?.autoHeal === true}
                             onChange={() => {
                                 const current = appSettings?.app?.autoHeal === true;
-                                patchAppSettings({ app: { autoHeal: !current } });
+                                patchAppSettings({ app: { autoHeal: !current } }).catch(reportSettingsWriteFailure);
                             }}
                             severity="none"
                             icon="refresh"

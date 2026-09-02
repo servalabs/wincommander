@@ -66,6 +66,20 @@ pub async fn call_vault_mount(args: Value) -> Result<Value, String> {
     .await
 }
 
+/// Apply a typed, service-owned machine setting and return Windows' observed
+/// read-back.  The shared request type cannot carry a registry path, command,
+/// firewall rule, SDDL, or arbitrary JSON object.
+pub async fn apply_machine_setting(
+    request: wincmd_shared::svc::ApplyMachineSettingRequest,
+) -> Result<wincmd_shared::svc::MachineSettingObserved, String> {
+    request.validate().map_err(|message| message.to_string())?;
+    let args = serde_json::to_value(request)
+        .map_err(|_| "machine setting request could not be encoded".to_string())?;
+    let observed = call(wincmd_shared::svc::APPLY_MACHINE_SETTING_VERB, args).await?;
+    serde_json::from_value(observed)
+        .map_err(|_| "service returned an invalid machine-setting read-back".to_string())
+}
+
 /// Same as [`call`], with an injectable pipe solely for focused protocol tests.
 ///
 /// A fresh connection token authenticates post-handshake frames. It is not an
@@ -250,6 +264,14 @@ mod tests {
         assert!(may_still_be_completing("svc.vault.unmount"));
         assert!(may_still_be_completing("svc.vault.mount"));
         assert!(!may_still_be_completing("svc.vault.get_status"));
+    }
+
+    #[test]
+    fn machine_setting_uses_the_standard_service_deadline() {
+        assert_eq!(
+            request_timeout_for(wincmd_shared::svc::APPLY_MACHINE_SETTING_VERB),
+            SVC_TRANSPORT_TIMEOUT
+        );
     }
 }
 

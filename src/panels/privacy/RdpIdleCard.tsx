@@ -7,7 +7,19 @@ import useEntitlements from "../../hooks/useEntitlements";
 import useVisibility from "../../hooks/useVisibility";
 import SectionCard from "../../components/shared/SectionCard";
 import ConflictToggleDialog from "../../components/shared/ConflictToggleDialog";
-import { executeBackendCommand } from "../../hooks/useBackend";
+import useBackend, { executeBackendCommand } from "../../hooks/useBackend";
+import { getControlLifecycle } from "../../hooks/queries/useSettingsQuery";
+import { applyMachineSetting } from "../../lib/machineSettingsClient";
+
+interface RdpIncomingReadBack {
+    enabled: boolean;
+    seconds: number | null;
+    maxIdleTimeMs?: number | null;
+    maxDisconnectionTimeMs?: number | null;
+    maxConnectionTimeMs?: number | null;
+    fResetBroken?: number | null;
+    fDenyTSConnections?: number | null;
+}
 
 function supportsRdpHost(osName?: string | null): boolean {
     if (!osName) return false;
@@ -52,6 +64,7 @@ const RDP_WARNING_PRESETS = [
 export default function RdpIdleCard() {
     const { appSettings, patchAppSettings, refreshSettings, systemInfo } = useAppState();
     const { hasPaid } = useEntitlements();
+    const { getUserProfiles } = useBackend();
 
     const { density } = useVisibility();
     const isAdvanced = density === 'expert';
@@ -113,7 +126,34 @@ export default function RdpIdleCard() {
     const [incomingCustomSecs, setIncomingCustomSecs] = useState<string>(String(rdpIncomingSeconds));
     const [applyingIncoming, setApplyingIncoming] = useState(false);
     const [incomingError, setIncomingError] = useState<string | null>(null);
+    const [trackingError, setTrackingError] = useState<string | null>(null);
+    const [incomingObserved, setIncomingObserved] = useState<boolean | null>(null);
+    const [currentAccount, setCurrentAccount] = useState<string>("this Windows account");
     const [pendingIncomingConflict, setPendingIncomingConflict] = useState(false);
+    const needsElevation = systemInfo?.isAdmin !== true;
+
+    const readIncomingStatus = useCallback(async (): Promise<RdpIncomingReadBack | null> => {
+        const result = await executeBackendCommand<RdpIncomingReadBack>("Get-RdpIncomingIdleStatus");
+        if (!result.success || !result.data) {
+            setIncomingError(result.error || "Unable to read back the RDP Incoming policy from Windows.");
+            return null;
+        }
+        setIncomingObserved(result.data.enabled === true);
+        return result.data;
+    }, []);
+
+    useEffect(() => {
+        void readIncomingStatus();
+        void (async () => {
+            const profiles = await getUserProfiles();
+            if (!profiles.success || !profiles.data) return;
+            const current = profiles.data.profiles.find((profile) => profile.isCurrent)
+                ?? profiles.data.profiles.find((profile) => profile.name === profiles.data?.currentUser);
+            if (current?.displayName || current?.name) setCurrentAccount(current.displayName ?? current.name);
+        })();
+    // The backend hook exposes stable command functions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const disableRdpNoTimeouts = useCallback(async () => {
         const res = await executeBackendCommand("Disable-RdpNoTimeouts");
@@ -124,18 +164,38 @@ export default function RdpIdleCard() {
     }, [refreshSettings]);
 
     const applyIncoming = async (enabled: boolean, seconds: number) => {
+        if (needsElevation) {
+            setIncomingError("Blocked: needs-elevation. Requires an administrator to change the machine-wide RDP Incoming policy.");
+            return;
+        }
         setApplyingIncoming(true);
         setIncomingError(null);
         try {
-            const res = enabled
-                ? await executeBackendCommand("Enable-RdpIncomingIdleTimeout", { Seconds: String(seconds) })
-                : await executeBackendCommand("Disable-RdpIncomingIdleTimeout");
-            if (!res.success) { setIncomingError(res.error ?? "Command failed"); return; }
-            await patchAppSettings({ ideal: { tweaks: { rdp: {
-                incomingIdleTimeoutEnabled: enabled,
-                incomingIdleTimeoutSeconds: enabled ? seconds : null,
-            } } } } as any).catch(() => {});
-            await refreshSettings().catch(() => {});
+            const observed = await applyMachineSetting({
+                setting: "rdp_incoming",
+                value: {
+                    kind: "rdp_incoming",
+                    enabled,
+                    idle_timeout_seconds: seconds,
+                },
+            });
+            const readBackMatches = observed.kind === "rdp_incoming"
+                && observed.enabled === enabled
+                && (!enabled || observed.idle_timeout_seconds === seconds);
+            setIncomingObserved(observed.kind === "rdp_incoming" ? observed.enabled : null);
+            if (!readBackMatches) {
+                setIncomingError("Failed: service read-back did not match the requested RDP Incoming policy.");
+                return;
+            }
+            try {
+                await patchAppSettings({ ideal: { tweaks: { rdp: {
+                    incomingIdleTimeoutEnabled: enabled,
+                    incomingIdleTimeoutSeconds: enabled ? seconds : null,
+                } } } } as any);
+                await refreshSettings();
+            } catch (error) {
+                setIncomingError(`Failed to save the verified RDP Incoming state: ${error instanceof Error ? error.message : String(error)}`);
+            }
         } catch (e) {
             setIncomingError(e instanceof Error ? e.message : String(e));
         } finally {
@@ -164,15 +224,23 @@ export default function RdpIdleCard() {
         }
     };
 
-    const patchRdpTracking = (patch: Record<string, unknown>) =>
-        patchAppSettings({ ideal: { privacy: { tracking: patch } } } as any).catch(() => {});
+    const patchRdpTracking = async (patch: Record<string, unknown>): Promise<boolean> => {
+        try {
+            await patchAppSettings({ ideal: { privacy: { tracking: patch } } } as any);
+            setTrackingError(null);
+            return true;
+        } catch (error) {
+            setTrackingError(`Failed to save this RDP preference: ${error instanceof Error ? error.message : String(error)}`);
+            return false;
+        }
+    };
 
     const patchRdpDismountVaults = (next: boolean) => {
         setRdpDismountDraft(next);
         patchAppSettings({ ideal: { privacy: { tracking: { rdpDismountVaultsOnDisconnect: next } } } } as any)
             .catch((err) => {
                 setRdpDismountDraft(rdpDismountVaults);
-                console.error("[RdpIdle] Dismount checkbox save failed:", err);
+                setTrackingError(`Failed to save this RDP preference: ${err instanceof Error ? err.message : String(err)}`);
             });
     };
 
@@ -181,7 +249,7 @@ export default function RdpIdleCard() {
         patchAppSettings({ ideal: { tweaks: { rdp: { incomingDismountOnEmpty: next } } } } as any)
             .catch((err) => {
                 setIncomingDismountDraft(rdpIncomingDismount);
-                console.error("[RdpIdle] Incoming dismount checkbox save failed:", err);
+                setIncomingError(`Failed to save the RDP Incoming preference: ${err instanceof Error ? err.message : String(err)}`);
             });
     };
 
@@ -190,7 +258,7 @@ export default function RdpIdleCard() {
         patchAppSettings({ ideal: { tweaks: { rdp: { incomingSignOffOnDisconnect: next } } } } as any)
             .catch((err) => {
                 setIncomingSignOffDraft(rdpIncomingSignOffOnDisconnect);
-                console.error("[RdpIdle] Incoming sign-off-on-disconnect checkbox save failed:", err);
+                setIncomingError(`Failed to save the RDP Incoming preference: ${err instanceof Error ? err.message : String(err)}`);
             });
     };
 
@@ -198,6 +266,14 @@ export default function RdpIdleCard() {
     if (!canHostRdp && !hasPaid) return null;
 
     const rdpActiveCount = (hasPaid && rdpIdleEnabled ? 1 : 0) + (hasPaid && rdpIncomingEnabled ? 1 : 0);
+    const incomingLifecycle = getControlLifecycle({
+        applying: applyingIncoming,
+        failureReason: incomingError,
+        needsElevation,
+        supported: canHostRdp,
+        desired: rdpIncomingEnabled,
+        observed: incomingObserved,
+    });
     const headerRight = canHostRdp ? (
         <Tag minimal intent={rdpActiveCount > 0 ? "success" : "none"} className="font-mono">
             {rdpActiveCount > 0 ? `${rdpActiveCount} ACTIVE` : "OFF"}
@@ -259,11 +335,7 @@ export default function RdpIdleCard() {
                                     </div>
                                     <Switch checked={hasPaid && rdpIdleEnabled} disabled={rdpIdleLocked} aria-label="Close outgoing RDP sessions after idle timeout" onChange={(e) => {
                                         if (!hasPaid) { window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Idle Session Monitor" } })); return; }
-                                        const next = e.currentTarget.checked;
-                                        console.log("[RdpIdle] Toggle requested:", next);
-                                        patchAppSettings({ ideal: { privacy: { tracking: { rdpIdleDisconnectEnabled: next } } } } as any)
-                                            .then(() => console.log("[RdpIdle] Toggle saved:", next))
-                                            .catch((err) => console.error("[RdpIdle] Toggle save failed:", err));
+                                        void patchRdpTracking({ rdpIdleDisconnectEnabled: e.currentTarget.checked });
                                     }} />
                                 </div>
 
@@ -369,13 +441,17 @@ export default function RdpIdleCard() {
                         <div className="flex flex-col gap-4">
                             <div className="flex items-start justify-between gap-4">
                                 <div className="flex flex-col gap-1 min-w-0">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        <div className={`size-2 rounded-full flex-shrink-0 ${(hasPaid && rdpIncomingEnabled) ? 'bg-[var(--color-success)]' : 'bg-[var(--color-text-muted)]'}`} />
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                        <div className={`size-2 rounded-full flex-shrink-0 ${(hasPaid && incomingObserved) ? 'bg-[var(--color-success)]' : 'bg-[var(--color-text-muted)]'}`} />
                                         <span className="text-sm font-semibold text-[var(--shield-text-primary)]">
                                             RDP Incoming
                                         </span>
-                                        {hasPaid && rdpIncomingEnabled && (
-                                            <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-success)]/15 text-[var(--color-success)] border border-[var(--color-success)]/30 flex-shrink-0">Active</span>
+                                        <span className={`text-[10px] px-2 py-0.5 rounded border flex-shrink-0 ${incomingLifecycle.state === "Applied" ? "bg-[var(--color-success)]/15 text-[var(--color-success)] border-[var(--color-success)]/30" : "bg-[var(--surface-2)] text-[var(--color-text-muted)] border-[var(--color-border)]"}`}>
+                                            {incomingLifecycle.state}{incomingLifecycle.reason ? `: ${incomingLifecycle.reason}` : ""}
+                                        </span>
+                                        <span className="text-[10px] text-[var(--shield-text-muted)]">Machine only · Windows account: {currentAccount}</span>
+                                        {needsElevation && (
+                                            <span className="text-[10px] text-[var(--warn)]">Requires an administrator</span>
                                         )}
                                         {!hasPaid && (
                                             <button type="button" aria-label="Upgrade to unlock Incoming Idle Sign-Out" onClick={() => window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Incoming Idle Sign-Out" } }))}
@@ -396,8 +472,8 @@ export default function RdpIdleCard() {
                                     {applyingIncoming && <Spinner size={14} />}
                                     <Switch
                                         aria-label="Sign out idle incoming RDP sessions"
-                                        checked={hasPaid && rdpIncomingEnabled}
-                                        disabled={applyingIncoming}
+                                        checked={hasPaid && incomingObserved === true}
+                                        disabled={applyingIncoming || needsElevation}
                                         onChange={(e) => {
                                             if (!hasPaid) { window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Incoming Idle Sign-Out" } })); return; }
                                             if (e.currentTarget.checked) enableIncomingWithConflictCheck();
@@ -407,7 +483,7 @@ export default function RdpIdleCard() {
                                 </div>
                             </div>
 
-                            {hasPaid && rdpIncomingEnabled && (
+                            {hasPaid && incomingObserved === true && !needsElevation && (
                                 <div className="rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] p-4 flex flex-col gap-3">
                                     <div className="flex items-center justify-between gap-3">
                                         <span className="text-xs font-mono text-[var(--shield-text-subtle)]">Sign out after idle</span>
@@ -457,6 +533,12 @@ export default function RdpIdleCard() {
                                 <div role="alert" className="flex items-center gap-2 text-[var(--color-danger)] text-xs">
                                     <Icon icon="warning-sign" size={12} />
                                     <span>{incomingError}</span>
+                                </div>
+                            )}
+                            {trackingError && (
+                                <div role="alert" className="flex items-center gap-2 text-[var(--color-danger)] text-xs">
+                                    <Icon icon="warning-sign" size={12} />
+                                    <span>{trackingError}</span>
                                 </div>
                             )}
                         </div>

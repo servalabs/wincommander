@@ -2,6 +2,7 @@ import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "rea
 import { Bell, BellOff, Lock } from "lucide-react";
 import { useMetricAlerts, type MetricKey } from "../../hooks/useMetricAlerts";
 import { useAppState } from "../../context/AppContext";
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 
 /** Fleet settings dot-path per metric, matching the fleet-server contract
  *  ("upload"/"download" both collapse to the server's single networkUsage
@@ -54,7 +55,8 @@ export default function MetricAlertRow({
   showReportToFleet = true,
 }: MetricAlertRowProps) {
   const { config, update, updateMetrics } = useMetricAlerts();
-  const { appSettings } = useAppState();
+  const { appSettings, systemInfo } = useAppState();
+  const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
   const m = config?.[metric];
   const [draft, setDraft] = useState<string>("");
   const [secDraft, setSecDraft] = useState<string>("");
@@ -96,6 +98,7 @@ export default function MetricAlertRow({
   if (!m) return null;
 
   const commit = async (patch: Parameters<typeof update>[1]) => {
+    if (needsElevation) return;
     setBusy(true);
     try { await update(metric, patch); } finally { setBusy(false); }
   };
@@ -145,8 +148,9 @@ export default function MetricAlertRow({
       <input
         type="checkbox"
         checked={reportToFleetEnabled}
-        disabled={busy || reportToFleetLocked}
+        disabled={busy || reportToFleetLocked || needsElevation}
         onChange={(e) => {
+          if (needsElevation) return;
           setBusy(true);
           void updateMetrics(reportingMetrics, { reportToFleet: e.target.checked })
             .finally(() => setBusy(false));
@@ -165,7 +169,7 @@ export default function MetricAlertRow({
         className={`metric-alert-bell ${m.enabled ? "on" : "off"} ${isShaking ? "is-shaking" : ""}`}
         onAnimationEnd={() => setIsShaking(false)}
         onClick={() => void commit({ enabled: !m.enabled })}
-        disabled={busy}
+        disabled={busy || needsElevation}
         title={m.enabled
           ? `${label} alert on — click to mute`
           : `${label} alert off — click to enable`}
@@ -174,6 +178,7 @@ export default function MetricAlertRow({
         {m.enabled ? <Bell size={12} /> : <BellOff size={12} />}
       </button>
       <span className="metric-alert-label">{label}</span>
+      {needsElevation && <span role="alert" className="text-[10px] text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</span>}
       {reportToFleetOnLabelRow && fleetReportControl}
       <div className="metric-alert-controls">
       <span className="metric-alert-over">over</span>
@@ -184,7 +189,7 @@ export default function MetricAlertRow({
           max={metric === "cpu" ? 100 : undefined}
           step={metric === "cpu" ? 1 : 0.5}
           value={draft}
-          disabled={busy || !m.enabled}
+          disabled={busy || !m.enabled || needsElevation}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commitThreshold}
           onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
@@ -200,7 +205,7 @@ export default function MetricAlertRow({
           max={600}
           step={1}
           value={secDraft}
-          disabled={busy || !m.enabled}
+          disabled={busy || !m.enabled || needsElevation}
           onChange={(e) => setSecDraft(e.target.value)}
           onBlur={commitSeconds}
           onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}

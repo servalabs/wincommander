@@ -2,7 +2,9 @@
 //
 // Unified Settings Manager for WinCommander
 // ──────────────────────────────────────────
-// settings.json is the SINGLE SOURCE OF TRUTH for desired system state.
+// The Rust settings aggregate is the source of truth for desired system state.
+// Machine policy is encrypted in ProgramData; user intent is encrypted in the
+// current profile's LocalAppData overlay.
 // Windows Registry is the enforcement layer (applied state).
 // This module handles read/write/migrate/diff for the admin architecture.
 
@@ -19,7 +21,27 @@ use uuid::Uuid;
 pub const SETTINGS_VERSION: u32 = 2;
 
 const DEFAULT_PERMANENTLY_HIDDEN_PANELS: &[&str] = &["productivity", "server-apps", "flows"];
+const USER_SETTINGS_FILENAME: &str = "user-settings.dat";
+const USER_SETTINGS_MAX_PLAINTEXT_BYTES: usize = 1_048_576;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum SettingsScope {
+    Machine,
+    User,
+}
+
+#[path = "settings_scope.rs"]
+mod settings_scope;
+
+const ROOT_SETTINGS_SCOPE_TABLE: &[(&str, SettingsScope)] = &[
+    ("settingsVersion", SettingsScope::Machine),
+    ("appVersion", SettingsScope::Machine),
+    ("deviceId", SettingsScope::Machine),
+    ("createdAt", SettingsScope::Machine),
+    ("lastSeenAt", SettingsScope::User),
+    ("app", SettingsScope::User),
+    ("policy", SettingsScope::Machine),
+];
 // ── Device Identifiers ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -586,7 +608,6 @@ impl Default for FileSearchSettings {
         }
     }
 }
-
 /// Fleet agent connection config — persisted to settings.json, read at Pro
 /// spawn time to seed the IPC args for the runtime-configurable agent.
 /// Mirrors FleetSettings in src/types/settings.ts (camelCase via serde rename).
@@ -2329,6 +2350,123 @@ fn parse_and_migrate_json_val(json: serde_json::Value) -> Result<AppSettings, St
     Ok(settings)
 }
 
+fn scope_for_path(path: &str) -> Result<Option<SettingsScope>, String> {
+    if let Some((_, scope)) = ROOT_SETTINGS_SCOPE_TABLE
+        .iter()
+        .find(|(root_path, _)| *root_path == path)
+    {
+        return Ok(Some(*scope));
+    }
+
+    let Some((_, system_path)) = path.split_once('.') else {
+        return Ok(None);
+    };
+    if !matches!(path.split('.').next(), Some("ideal") | Some("current")) {
+        return Err(format!("Unclassified settings path: {path}"));
+    }
+
+    if let Some(rule) = settings_scope::SYSTEM_STATE_SCOPE_TABLE
+        .iter()
+        .find(|rule| rule.path == system_path)
+    {
+        return Ok(Some(rule.scope));
+    }
+    let descendant_scopes: std::collections::HashSet<_> = settings_scope::SYSTEM_STATE_SCOPE_TABLE
+        .iter()
+        .filter(|rule| rule.path.starts_with(&format!("{system_path}.")))
+        .map(|rule| rule.scope)
+        .collect();
+    if descendant_scopes.len() == 1 {
+        return Ok(descendant_scopes.into_iter().next());
+    }
+    if !descendant_scopes.is_empty() {
+        return Ok(None);
+    }
+    Err(format!("Unclassified SystemState leaf: {system_path}"))
+}
+
+fn split_settings_value(
+    value: serde_json::Value,
+) -> Result<(serde_json::Value, serde_json::Value), String> {
+    fn split(
+        value: serde_json::Value,
+        path: &str,
+    ) -> Result<(Option<serde_json::Value>, Option<serde_json::Value>), String> {
+        match (value, scope_for_path(path)?) {
+            (value, Some(SettingsScope::Machine)) => Ok((Some(value), None)),
+            (value, Some(SettingsScope::User)) => Ok((None, Some(value))),
+            (serde_json::Value::Object(entries), None) => {
+                let mut machine = serde_json::Map::new();
+                let mut user = serde_json::Map::new();
+                for (key, child) in entries {
+                    let child_path = if path.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    let (machine_child, user_child) = split(child, &child_path)?;
+                    if let Some(value) = machine_child {
+                        machine.insert(key.clone(), value);
+                    }
+                    if let Some(value) = user_child {
+                        user.insert(key, value);
+                    }
+                }
+                Ok((
+                    (!machine.is_empty()).then_some(serde_json::Value::Object(machine)),
+                    (!user.is_empty()).then_some(serde_json::Value::Object(user)),
+                ))
+            }
+            (_, None) => Err(format!("Unclassified settings object: {path}")),
+        }
+    }
+
+    let mut machine = serde_json::Map::new();
+    let mut user = serde_json::Map::new();
+    let serde_json::Value::Object(entries) = value else {
+        return Ok((
+            serde_json::Value::Object(machine),
+            serde_json::Value::Object(user),
+        ));
+    };
+    for (key, child) in entries {
+        let (machine_child, user_child) = split(child, &key)?;
+        if let Some(value) = machine_child {
+            machine.insert(key.clone(), value);
+        }
+        if let Some(value) = user_child {
+            user.insert(key, value);
+        }
+    }
+    Ok((
+        serde_json::Value::Object(machine),
+        serde_json::Value::Object(user),
+    ))
+}
+
+fn merge_user_overlay(
+    machine: AppSettings,
+    overlay: serde_json::Value,
+) -> Result<AppSettings, String> {
+    let mut merged = serde_json::to_value(machine)
+        .map_err(|error| format!("Failed to serialize machine settings: {error}"))?;
+    merge_json(&mut merged, &overlay);
+    parse_and_migrate_json_val(merged)
+}
+
+fn load_user_settings_overlay() -> Result<Option<serde_json::Value>, String> {
+    let Some(bytes) = crate::datastore::load_user_blob(
+        USER_SETTINGS_FILENAME,
+        USER_SETTINGS_MAX_PLAINTEXT_BYTES,
+    )?
+    else {
+        return Ok(None);
+    };
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|error| format!("Failed to parse per-user settings: {error}"))
+}
+
 /// Some released v2 settings used `decoyTripwire`. Settings-version did not
 /// change for that rename, so it must be normalized even for current-version
 /// files before serde drops the unknown legacy field.
@@ -2355,8 +2493,14 @@ fn migrate_legacy_monitor_names(root: &mut serde_json::Value) {
 fn load_settings_from_store() -> Result<AppSettings, String> {
     crate::paths::migrate_user_data_layout()?;
     let stored = crate::datastore::load("settings")?;
+    let defaults = create_default_settings();
+    let (default_machine, default_user_overlay) = split_settings_value(
+        serde_json::to_value(&defaults)
+            .map_err(|error| format!("Failed to serialize default settings: {error}"))?,
+    )?;
+    let mut legacy_user_overlay = None;
     // Empty object = section file does not yet exist.
-    if stored.as_object().map(|m| m.is_empty()).unwrap_or(false) {
+    let machine_value = if stored.as_object().map(|m| m.is_empty()).unwrap_or(false) {
         let legacy = crate::paths::user_settings_path()?;
         if legacy.exists() {
             let raw = fs::read_to_string(&legacy)
@@ -2368,21 +2512,37 @@ fn load_settings_from_store() -> Result<AppSettings, String> {
                     "info",
                     "[Settings] Migrating plaintext settings.json to encoded store",
                 );
-                let result = parse_and_migrate_json_val(json);
+                let settings = parse_and_migrate_json_val(json)?;
+                let (machine, user) =
+                    split_settings_value(serde_json::to_value(settings).map_err(|error| {
+                        format!("Failed to serialize legacy settings: {error}")
+                    })?)?;
+                legacy_user_overlay = Some(user);
                 // Delete the plaintext file now that migration is complete.
                 let _ = fs::remove_file(&legacy);
-                return result;
+                machine
+            } else {
+                default_machine.clone()
             }
+        } else {
+            default_machine
         }
-        return Ok(create_default_settings());
-    }
-    // Encrypted store is active — remove any stale plaintext file.
+    } else {
+        // A pre-F1 machine blob contains every account's old preferences. Keep
+        // only its machine partition; the user overlay below is defaults unless
+        // this Windows profile already owns user-settings.dat.
+        split_settings_value(stored)?.0
+    };
     if let Ok(legacy) = crate::paths::user_settings_path() {
         if legacy.exists() {
             let _ = fs::remove_file(&legacy);
         }
     }
-    parse_and_migrate_json_val(stored)
+    let machine = parse_and_migrate_json_val(machine_value)?;
+    let user_overlay = load_user_settings_overlay()?
+        .or(legacy_user_overlay)
+        .unwrap_or(default_user_overlay);
+    merge_user_overlay(machine, user_overlay)
 }
 
 /// Read settings from disk, or create defaults if file doesn't exist.
@@ -2445,7 +2605,26 @@ fn write_settings_internal(settings: &AppSettings) -> Result<(), String> {
     }
     let value = serde_json::to_value(settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    let res = crate::datastore::save("settings", &value);
+    let (machine, user) = split_settings_value(value)?;
+    let user_bytes = serde_json::to_vec(&user)
+        .map_err(|error| format!("Failed to serialize per-user settings: {error}"))?;
+    crate::datastore::save_user_blob(
+        USER_SETTINGS_FILENAME,
+        &user_bytes,
+        USER_SETTINGS_MAX_PLAINTEXT_BYTES,
+    )?;
+
+    // A standard account must be able to persist its own overlay, but never
+    // needs to rewrite the read-only machine blob when no device policy changed.
+    // Compare partitions so user writes do not fail merely because ProgramData
+    // is (correctly) protected.
+    let stored_machine = split_settings_value(crate::datastore::load("settings")?)?.0;
+    let res = if stored_machine == machine {
+        Ok(())
+    } else {
+        crate::datastore::save("settings", &machine)
+            .map_err(|error| format!("Failed to persist machine-scoped settings: {error}"))
+    };
     if let Err(ref e) = res {
         crate::log_message(
             "error",
@@ -3891,6 +4070,116 @@ mod tests {
             settings.app.permanently_hidden_panels,
             Some(vec!["productivity".to_string()])
         );
+    }
+
+    #[test]
+    fn per_user_overlay_never_inherits_shared_user_intent() {
+        let mut account_a = serde_json::to_value(create_default_settings()).unwrap();
+        account_a["app"]["theme"] = serde_json::json!("light");
+        account_a["ideal"]["privacy"]["clipboard"]["cloudClipboardDisabled"] =
+            serde_json::json!(true);
+        account_a["ideal"]["privacy"]["startupPin"]["enabled"] = serde_json::json!(true);
+
+        let (machine, account_a_overlay) = split_settings_value(account_a).unwrap();
+        assert!(machine.pointer("/ideal/privacy/clipboard").is_none());
+        assert_eq!(
+            machine.pointer("/ideal/privacy/startupPin/enabled"),
+            Some(&serde_json::json!(true)),
+            "Startup PIN remains machine scoped"
+        );
+
+        let (_, fresh_account_overlay) =
+            split_settings_value(serde_json::to_value(create_default_settings()).unwrap()).unwrap();
+        let mut account_a_view = machine.clone();
+        merge_json(&mut account_a_view, &account_a_overlay);
+        let mut fresh_account_view = machine;
+        merge_json(&mut fresh_account_view, &fresh_account_overlay);
+
+        assert_eq!(
+            account_a_view.pointer("/app/theme"),
+            Some(&serde_json::json!("light"))
+        );
+        assert_ne!(
+            fresh_account_view.pointer("/app/theme"),
+            Some(&serde_json::json!("light")),
+            "a profile without user-settings.dat must use defaults"
+        );
+        assert_eq!(
+            account_a_view.pointer("/ideal/privacy/clipboard/cloudClipboardDisabled"),
+            Some(&serde_json::json!(true))
+        );
+        assert_ne!(
+            fresh_account_view.pointer("/ideal/privacy/clipboard/cloudClipboardDisabled"),
+            Some(&serde_json::json!(true)),
+            "fresh user scope must not import the shared blob"
+        );
+        assert_eq!(
+            fresh_account_view.pointer("/ideal/privacy/startupPin/enabled"),
+            Some(&serde_json::json!(true)),
+            "machine policy is shared with every account"
+        );
+    }
+
+    #[test]
+    fn every_system_state_leaf_has_one_explicit_scope() {
+        fn collect_paths(value: &serde_json::Value, path: &str, paths: &mut Vec<String>) {
+            if settings_scope::SYSTEM_STATE_SCOPE_TABLE
+                .iter()
+                .any(|rule| rule.path == path)
+            {
+                paths.push(path.to_string());
+                return;
+            }
+            let serde_json::Value::Object(entries) = value else {
+                let descendants: Vec<_> = settings_scope::SYSTEM_STATE_SCOPE_TABLE
+                    .iter()
+                    .filter_map(|rule| rule.path.strip_prefix(&format!("{path}.")))
+                    .collect();
+                assert!(
+                    !descendants.is_empty(),
+                    "unclassified SystemState leaf: {path}"
+                );
+                paths.extend(
+                    descendants
+                        .into_iter()
+                        .map(|suffix| format!("{path}.{suffix}")),
+                );
+                return;
+            };
+            for (key, child) in entries {
+                let child_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                collect_paths(child, &child_path, paths);
+            }
+        }
+
+        let state = serde_json::to_value(SystemState::default()).unwrap();
+        let mut serialized_paths = Vec::new();
+        collect_paths(&state, "", &mut serialized_paths);
+        let table_paths: std::collections::HashSet<_> = settings_scope::SYSTEM_STATE_SCOPE_TABLE
+            .iter()
+            .map(|rule| rule.path)
+            .collect();
+        let serialized_paths: std::collections::HashSet<_> =
+            serialized_paths.iter().map(String::as_str).collect();
+
+        assert_eq!(
+            settings_scope::SYSTEM_STATE_SCOPE_TABLE.len(),
+            table_paths.len(),
+            "SystemState scope entries must be unique"
+        );
+        assert_eq!(
+            table_paths, serialized_paths,
+            "every SystemState leaf must have exactly one explicit scope"
+        );
+        assert_eq!(
+            scope_for_path("ideal.privacy.telemetry.activityHistoryDisabled").unwrap(),
+            Some(SettingsScope::User)
+        );
+        assert!(scope_for_path("ideal.privacy.unknown").is_err());
     }
 
     #[test]

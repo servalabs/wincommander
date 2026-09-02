@@ -19,6 +19,15 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings, SettingsPatch } from "../../types/settings";
 import { useAuthMode } from "../../context/AuthModeContext";
+import { recoverSettingsWrite } from "../../lib/settingsWriteRecovery";
+export {
+  getControlLifecycle,
+  getControlLifecycleTone,
+  type ControlAccountIdentity,
+  type ControlLifecycle,
+  type ControlLifecycleInput,
+  type ControlLifecycleState,
+} from "../../lib/settingsControlLifecycle";
 
 // ── Query Keys ──────────────────────────────────────────────────────
 export const settingsKeys = {
@@ -49,7 +58,11 @@ export function usePatchSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (patch: SettingsPatch) =>
-      invoke<AppSettings>("patch_settings_cmd", { patch }),
+      recoverSettingsWrite(
+        () => invoke<AppSettings>("patch_settings_cmd", { patch }),
+        () => invoke<AppSettings>("get_settings"),
+        (restored) => qc.setQueryData(settingsKeys.detail(), restored),
+      ),
     onSuccess: (updated) => {
       qc.setQueryData(settingsKeys.detail(), updated);
     },
@@ -61,7 +74,11 @@ export function useSetSettings() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (settings: AppSettings) =>
-      invoke<AppSettings>("set_settings", { settings }),
+      recoverSettingsWrite(
+        () => invoke<AppSettings>("set_settings", { settings }),
+        () => invoke<AppSettings>("get_settings"),
+        (restored) => qc.setQueryData(settingsKeys.detail(), restored),
+      ),
     onSuccess: (updated) => {
       qc.setQueryData(settingsKeys.detail(), updated);
     },

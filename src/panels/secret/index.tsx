@@ -14,6 +14,8 @@ import SectionCard from "../../components/shared/SectionCard";
 import TierGate from "../../components/shared/TierGate";
 import UniversalCallout from "../../components/shared/UniversalCallout";
 import { useAppState } from "../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
+import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import useBackend from "../../hooks/useBackend";
 import useVisibility from "../../hooks/useVisibility";
 import useEntitlements from "../../hooks/useEntitlements";
@@ -61,13 +63,14 @@ const BACKEND_EXE_NAMES = [
 // PIN lock, the cover name it shows to onlookers, and hiding the app entirely.
 
 /** A single concealment toggle rendered as an icon tile (new console look). */
-function DgzTile({ icon, title, desc, checked, warn, loading, onChange, children }: {
+function DgzTile({ icon, title, desc, checked, warn, loading, disabled, onChange, children }: {
     icon: IconName;
     title: string;
     desc: string;
     checked: boolean;
     warn?: boolean;
     loading?: boolean;
+    disabled?: boolean;
     onChange: (v: boolean) => void;
     children?: ReactNode;
 }) {
@@ -81,7 +84,7 @@ function DgzTile({ icon, title, desc, checked, warn, loading, onChange, children
                 </div>
                 <Switch
                     checked={checked}
-                    disabled={loading}
+                    disabled={loading || disabled}
                     onCheckedChange={onChange}
                     aria-label={title}
                     title={title}
@@ -93,7 +96,8 @@ function DgzTile({ icon, title, desc, checked, warn, loading, onChange, children
 }
 
 function LockDisguiseSection() {
-    const { appSettings, patchAppSettings, refreshSettings, refreshHardening } = useAppState();
+    const { appSettings, patchAppSettings, refreshSettings, refreshHardening, systemInfo } = useAppState();
+    const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
     const { setWinCommanderVisibility, setWinCommanderCalculatorShortcuts, restartExplorer } = useBackend();
 
     // Reconcile the Hide toggles with the ACTUAL machine state once on mount.
@@ -109,14 +113,14 @@ function LockDisguiseSection() {
             try {
                 const actualWcHidden = await invoke<boolean>("wincommander_hidden_status");
                 if (actualWcHidden !== (appSettings.ideal?.identity?.hideWinCommander === true)) {
-                    patchAppSettings({ ideal: { identity: { hideWinCommander: actualWcHidden } } }).catch(() => {});
+                    patchAppSettings({ ideal: { identity: { hideWinCommander: actualWcHidden } } }).catch(reportSettingsWriteFailure);
                 }
                 const rv = await invoke<{ state?: { entries?: Array<{ key: string; applied: boolean }> } }>("runtime_visibility_state");
                 const hiddenKeys = new Set((rv?.state?.entries ?? []).filter(e => e.applied).map(e => e.key.toLowerCase()));
                 const actualBackendHidden = BACKEND_EXE_NAMES.some(exe => hiddenKeys.has(exe.toLowerCase()));
                 const flagBackendHidden = (appSettings.ideal?.identity?.hideBackendAppsList?.length ?? 0) > 0;
                 if (actualBackendHidden !== flagBackendHidden) {
-                    patchAppSettings({ ideal: { identity: { hideBackendAppsList: actualBackendHidden ? BACKEND_ALL_APP_IDS : [] } } }).catch(() => {});
+                    patchAppSettings({ ideal: { identity: { hideBackendAppsList: actualBackendHidden ? BACKEND_ALL_APP_IDS : [] } } }).catch(reportSettingsWriteFailure);
                 }
             } catch { /* best-effort reconcile */ }
         })();
@@ -187,7 +191,7 @@ function LockDisguiseSection() {
         parts.push(e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key);
         const combo = parts.join("+");
         setRecordingHotkey(false);
-        patchAppSettings({ ideal: { identity: { hideWinCommanderHotkey: combo } } }).catch(() => {});
+        patchAppSettings({ ideal: { identity: { hideWinCommanderHotkey: combo } } }).catch(reportSettingsWriteFailure);
         invoke("update_hide_hotkey", { hotkey: combo }).catch(() => {});
     }, [patchAppSettings]);
 
@@ -271,6 +275,7 @@ function LockDisguiseSection() {
     const [backendBusy, setBackendBusy] = useState(false);
 
     const handleToggleWc = useCallback(async (hidden: boolean) => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         setWcBusy(true);
         try {
             const result = await setWinCommanderVisibility(hidden);
@@ -278,7 +283,7 @@ function LockDisguiseSection() {
                 await restartExplorer().catch(() => {});
                 await invoke("apply_wincommander_hide_mode", { hidden }).catch(() => {});
                 await invoke("update_autostart_task_identity", { covered: hidden || lockArmed }).catch(() => {});
-                patchAppSettings({ ideal: { identity: { hideWinCommander: hidden } } }).catch(() => {});
+                patchAppSettings({ ideal: { identity: { hideWinCommander: hidden } } }).catch(reportSettingsWriteFailure);
                 await refreshHardening();
                 showSuccess(hidden ? "WinCommander hidden — window and tray removed." : "WinCommander visible — window and tray restored.");
             } else if (!result.success) {
@@ -287,12 +292,13 @@ function LockDisguiseSection() {
         } finally {
             setWcBusy(false);
         }
-    }, [setWinCommanderVisibility, restartExplorer, lockArmed, patchAppSettings, refreshHardening]);
+    }, [setWinCommanderVisibility, restartExplorer, lockArmed, patchAppSettings, refreshHardening, needsElevation]);
 
     const savedHideList: string[] = appSettings?.ideal?.identity?.hideBackendAppsList ?? [];
     const allBackendHidden = BACKEND_ALL_APP_IDS.every(id => savedHideList.includes(id));
 
     const handleToggleBackend = useCallback(async () => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         setBackendBusy(true);
         try {
             if (!allBackendHidden) {
@@ -311,7 +317,7 @@ function LockDisguiseSection() {
         } finally {
             setBackendBusy(false);
         }
-    }, [allBackendHidden, patchAppSettings, refreshHardening]);
+    }, [allBackendHidden, patchAppSettings, refreshHardening, needsElevation]);
 
     const wcHidden = appSettings?.ideal?.identity?.hideWinCommander === true;
 
@@ -335,6 +341,7 @@ function LockDisguiseSection() {
                     </span>
                 </div>
             </div>
+            {needsElevation && <p role="alert" className="text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
 
             {/* Calculator lock + triggers, side by side */}
             <div className="dgz-split">
@@ -396,7 +403,7 @@ function LockDisguiseSection() {
                                 : "Set a Real PIN to enable calculator-on-close; closing currently hides to the tray."}
                             checked={lockOnCloseChecked}
                             loading={!lockArmed}
-                            onChange={(v) => patchAppSettings({ app: { lockPanelOnClose: v } }).catch(() => {})}
+                            onChange={(v) => patchAppSettings({ app: { lockPanelOnClose: v } }).catch(reportSettingsWriteFailure)}
                         />
                         <TierGate tier="paid" featureLabel="Cover Identity">
                             <DgzTile
@@ -439,6 +446,7 @@ function LockDisguiseSection() {
                             warn
                             loading={wcBusy}
                             onChange={handleToggleWc}
+                            disabled={wcBusy || needsElevation}
                         />
                         <DgzTile
                             icon="application"
@@ -447,6 +455,7 @@ function LockDisguiseSection() {
                             checked={allBackendHidden}
                             loading={backendBusy}
                             onChange={handleToggleBackend}
+                            disabled={backendBusy || needsElevation}
                         />
                     </div>
                 </div>
@@ -541,7 +550,7 @@ function LockdownTimerRow() {
         setTimerSec(v); // instant visual feedback, no IPC
         if (debounceRef.current) clearTimeout(debounceRef.current);
         debounceRef.current = setTimeout(() => {
-            patchAppSettings({ app: { lockdownTimerSec: v } } as any).catch(() => {});
+            patchAppSettings({ app: { lockdownTimerSec: v } } as any).catch(reportSettingsWriteFailure);
         }, 250);
     }, [patchAppSettings]);
     useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
@@ -573,7 +582,8 @@ function LockdownTimerRow() {
 // ── 5. SELF-DESTRUCT ──────────────────────────────────────────────────────────
 
 function SelfDestructSection() {
-    const { appSettings, patchAppSettings } = useAppState();
+    const { appSettings, patchAppSettings, systemInfo } = useAppState();
+    const needsElevation = isPrivilegedWriteBlocked(true, systemInfo?.isAdmin);
     const visibility = useVisibility();
     const [phraseOpen, setPhraseOpen] = useState(false);
 
@@ -585,17 +595,20 @@ function SelfDestructSection() {
     // useCallback: keeps StepRow's memoized rows (LockdownConfigSection) from
     // re-rendering on every appSettings change — they only skip re-render if
     // the onToggle reference they receive is stable across renders.
-    const patchSelfDestruct = useCallback((patch: any) =>
-        patchAppSettings({ ideal: { privacy: { selfDestruct: patch } } } as any).catch(() => {}), [patchAppSettings]);
+    const patchSelfDestruct = useCallback((patch: any) => {
+        if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
+        patchAppSettings({ ideal: { privacy: { selfDestruct: patch } } } as any).catch(reportSettingsWriteFailure);
+    }, [patchAppSettings, needsElevation]);
     const patchCoercion = (patch: Record<string, unknown>) =>
-        patchAppSettings({ ideal: { privacy: { coercionPhrase: patch } } } as any).catch(() => {});
+        patchAppSettings({ ideal: { privacy: { coercionPhrase: patch } } } as any).catch(reportSettingsWriteFailure);
     const patchFileWatch = (patch: Record<string, unknown>) =>
-        patchAppSettings({ ideal: { privacy: { fileWatchTrigger: patch } } } as any).catch(() => {});
+        patchAppSettings({ ideal: { privacy: { fileWatchTrigger: patch } } } as any).catch(reportSettingsWriteFailure);
     const savePanicHotkey = (combo: string) =>
-        patchAppSettings({ app: { panicHotkey: combo } } as any).catch(() => {});
+        patchAppSettings({ app: { panicHotkey: combo } } as any).catch(reportSettingsWriteFailure);
 
     return (
         <SectionCard title="Lockdown" icon="warning-sign" className="secret-grid__wide">
+            {needsElevation && <p role="alert" className="text-xs text-[var(--warn)]">{MACHINE_SCOPE_ELEVATION_MESSAGE}</p>}
             <p className="sec-hint">
                 Armed by: the Destroy PIN on the calculator, any trigger below, or the Lockdown button in the sidebar.
                 Before shutting down, WinCommander restores the genuine Windows calculator so no trace of the disguise remains.
@@ -613,6 +626,7 @@ function SelfDestructSection() {
                 <Switch
                     checked={sdEnabled}
                     onCheckedChange={(v) => patchSelfDestruct({ enabled: v })}
+                    disabled={needsElevation}
                     aria-label="Enable self-destruct"
                 />
             </div>
@@ -629,6 +643,7 @@ function SelfDestructSection() {
                     <FileWatchTriggerSection
                         settings={appSettings?.ideal?.privacy?.fileWatchTrigger}
                         onPatch={patchFileWatch}
+                        disabled={needsElevation}
                         bare
                     />
                 </div>

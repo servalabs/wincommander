@@ -58,6 +58,7 @@ mod license;
 mod local_clipboard_rules;
 mod log;
 mod malware_scan;
+mod machine_settings;
 mod monitoring;
 mod monitoring_catalog;
 mod monitoring_local;
@@ -2522,6 +2523,7 @@ pub fn run() {
             update_tray_shield_label,
             set_app_display_label,
             backend::run_backend_script,
+            machine_settings::apply_machine_setting,
             vault_mount_verification::verify_vault_drive,
             activity_watch_autostart::activity_watch_request,
             activity_watch_autostart::activity_watch_ensure_started,

@@ -69,6 +69,82 @@ pub const SVC_PIPE_NAME: &str = r"\\.\pipe\wincmd-svc";
 /// incompatible wire-format changes only (not on every new `svc.*` verb).
 pub const SVC_PROTOCOL_VERSION: &str = "wincmd-svc-v1";
 
+/// Privileged RPC for the small, typed machine-setting allow-list.  This is
+/// deliberately not a generic "apply tweak" endpoint: callers cannot supply
+/// registry paths, shell commands, firewall rules, ACLs, or arbitrary JSON.
+pub const APPLY_MACHINE_SETTING_VERB: &str = "svc.apply.machine_setting";
+
+/// A machine-owned Windows setting the service may change.
+///
+/// This enum is the allow-list. Adding a setting requires an explicit shared
+/// contract change plus a service-side implementation and read-back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineSettingId {
+    RdpIncoming,
+    RdpLock,
+}
+
+/// Typed desired value for one [`MachineSettingId`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MachineSettingValue {
+    /// Enables/disables incoming RDP and sets its idle timeout in seconds.
+    RdpIncoming {
+        enabled: bool,
+        idle_timeout_seconds: u32,
+    },
+    /// Adds/removes the service-owned inbound TCP/3389 block rule.
+    RdpLock { locked: bool },
+}
+
+/// The only accepted payload for [`APPLY_MACHINE_SETTING_VERB`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyMachineSettingRequest {
+    pub setting: MachineSettingId,
+    pub value: MachineSettingValue,
+}
+
+impl ApplyMachineSettingRequest {
+    /// Reject a mismatched setting/value pair and values outside the bounded
+    /// RDP policy range before any Windows command is attempted.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match (self.setting, &self.value) {
+            (
+                MachineSettingId::RdpIncoming,
+                MachineSettingValue::RdpIncoming {
+                    enabled: true,
+                    idle_timeout_seconds,
+                },
+            ) if !(10..=86_400).contains(idle_timeout_seconds) => {
+                Err("RDP incoming idle timeout must be between 10 and 86400 seconds")
+            }
+            (MachineSettingId::RdpIncoming, MachineSettingValue::RdpIncoming { .. })
+            | (MachineSettingId::RdpLock, MachineSettingValue::RdpLock { .. }) => Ok(()),
+            _ => Err("machine setting identifier and value kind do not match"),
+        }
+    }
+}
+
+/// Read-back result from Windows after a machine-setting request.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MachineSettingObserved {
+    RdpIncoming {
+        enabled: bool,
+        deny_connections: Option<bool>,
+        idle_timeout_seconds: Option<u32>,
+        max_idle_time_ms: Option<u32>,
+        max_disconnection_time_ms: Option<u32>,
+        max_connection_time_ms: Option<u32>,
+        reset_broken: Option<bool>,
+    },
+    RdpLock {
+        locked: bool,
+    },
+}
+
 /// Capability class of a `svc.*` verb — drives the service-side peer gate.
 ///
 /// The service enforces this at the pipe connection layer after establishing
@@ -189,6 +265,7 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // client cannot provide a path, SID, ACL, or presentation decision.
         "svc.vault.authorize_mount"
         | "svc.vault.mount"
+        | "svc.vault.create_personal"
         | "svc.vault.unmount"
         | "svc.vault.list_authorized"
         | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
@@ -258,6 +335,7 @@ mod tests {
             "svc.dispatch",
             "svc.set_fleet_enabled",
             "svc.vault.reconcile_access_groups",
+            APPLY_MACHINE_SETTING_VERB,
         ] {
             assert_eq!(
                 classify_verb(verb),
@@ -294,6 +372,53 @@ mod tests {
                 verb
             );
         }
+    }
+
+    #[test]
+    fn machine_setting_contract_rejects_mismatched_or_unbounded_values() {
+        assert!(
+            ApplyMachineSettingRequest {
+                setting: MachineSettingId::RdpIncoming,
+                value: MachineSettingValue::RdpIncoming {
+                    enabled: true,
+                    idle_timeout_seconds: 900,
+                },
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            ApplyMachineSettingRequest {
+                setting: MachineSettingId::RdpIncoming,
+                value: MachineSettingValue::RdpIncoming {
+                    enabled: true,
+                    idle_timeout_seconds: 9,
+                },
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ApplyMachineSettingRequest {
+                setting: MachineSettingId::RdpLock,
+                value: MachineSettingValue::RdpIncoming {
+                    enabled: true,
+                    idle_timeout_seconds: 900,
+                },
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn machine_setting_wire_rejects_raw_execution_fields() {
+        let raw = serde_json::json!({
+            "setting": "rdp_lock",
+            "value": { "kind": "rdp_lock", "locked": true, "command": "netsh ..." },
+            "registry_path": "HKLM\\Software"
+        });
+        assert!(serde_json::from_value::<ApplyMachineSettingRequest>(raw).is_err());
     }
 
     // ── classify_verb: Clipboard Guard verbs (D-2 / plan §4.3) ───────────────

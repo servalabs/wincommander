@@ -466,7 +466,7 @@ pub fn save(section: &str, data: &Value) -> Result<(), String> {
 
 /// Reads one bounded, encrypted blob owned by the interactive Windows user.
 /// This is intentionally crate-private: services must not gain a generic path
-/// to user-owned clipboard rules.
+/// to user-owned state such as clipboard rules or the per-user settings overlay.
 pub(crate) fn load_user_blob(
     filename: &str,
     max_plaintext_bytes: usize,
@@ -480,18 +480,18 @@ pub(crate) fn load_user_blob(
         .and_then(|n| n.checked_add(128))
         .ok_or_else(|| "per-user store size limit is invalid".to_string())?;
     let size = fs::metadata(&path)
-        .map_err(|_| "could not inspect per-user rules".to_string())?
+        .map_err(|_| "could not inspect per-user data".to_string())?
         .len();
     if size as usize > max_encoded_bytes {
-        return Err("per-user rules exceed the size limit".to_string());
+        return Err("per-user data exceed the size limit".to_string());
     }
     let encoded =
-        fs::read_to_string(&path).map_err(|_| "could not read per-user rules".to_string())?;
+        fs::read_to_string(&path).map_err(|_| "could not read per-user data".to_string())?;
     let key = derive_section_key(&user_material()?, None)?;
     let plaintext = decode_section(&key, encoded.trim(), &format!("user:{filename}"))
-        .map_err(|_| "per-user rules could not be decoded".to_string())?;
+        .map_err(|_| "per-user data could not be decoded".to_string())?;
     if plaintext.len() > max_plaintext_bytes {
-        return Err("per-user rules exceed the size limit".to_string());
+        return Err("per-user data exceed the size limit".to_string());
     }
     Ok(Some(plaintext))
 }
@@ -503,13 +503,13 @@ pub(crate) fn save_user_blob(
     max_plaintext_bytes: usize,
 ) -> Result<(), String> {
     if plaintext.len() > max_plaintext_bytes {
-        return Err("per-user rules exceed the size limit".to_string());
+        return Err("per-user data exceed the size limit".to_string());
     }
     let path = user_file_path(filename)?;
     let key = derive_section_key(&user_material()?, None)?;
     let encoded = encode_section(&key, plaintext, &format!("user:{filename}"))?;
     atomic_write_bytes(&path, encoded.as_bytes())
-        .map_err(|_| "could not persist per-user rules".to_string())
+        .map_err(|_| "could not persist per-user data".to_string())
 }
 
 // ── Log-record encryption ─────────────────────────────────────────────────────

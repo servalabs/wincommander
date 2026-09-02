@@ -30,6 +30,7 @@ import { createStartupProbeStore } from '../services/startupProbeStore';
 import { useLicenseQuery } from '../hooks/queries/useLicenseQuery';
 import { createTauriStartupReporter } from '../events/startup';
 import { reportStartupPhase } from '../hooks/startupTrace';
+import { recoverSettingsWrite } from '../lib/settingsWriteRecovery';
 
 interface AppState {
     systemInfo: SystemInfo | null;
@@ -1043,12 +1044,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // KT: decoy guard — writes in decoy mode must never reach the backend;
         // the Rust backstop also blocks them, but preventing the invoke here
         // ensures no observable round-trip that an examiner could log.
-        if (authMode === 'decoy') return;
+        if (authMode === 'decoy') {
+            await recoverSettingsWrite(
+                async () => { throw new Error('Decoy mode blocks settings changes'); },
+                async () => appSettingsRef.current ?? await invoke<AppSettings>('get_settings'),
+                () => {},
+            );
+            return;
+        }
         // Serialize overlapping writes so two rapid toggles can't both read the same
         // stale base and clobber each other; read the latest settings from a ref so
         // module normalization sees the freshest value, not the closure snapshot.
         const run = patchChainRef.current.then(async () => {
-          try {
+          return recoverSettingsWrite(async () => {
             const latest = appSettingsRef.current;
             // Resolve function-form patches here, at this write's turn in the
             // chain, instead of at call time — so callers deriving a next value
@@ -1086,10 +1094,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             // settings.json after every write. Without this, hardeningStatus,
             // telemetryBlocked etc. stay stale until the next background probe.
             seedFromCachedSettings(updated);
-          } catch (err) {
-            console.error('Failed to patch settings:', err);
-            throw err;
-          }
+          },
+          () => invoke<AppSettings>('get_settings'),
+          (restored) => {
+            appSettingsRef.current = restored;
+            setAppSettings(restored);
+            queryClient.setQueryData(settingsKeys.detail(), restored);
+            seedFromCachedSettings(restored);
+          });
         });
         // keep the chain alive even if one write throws
         patchChainRef.current = run.catch(() => {});

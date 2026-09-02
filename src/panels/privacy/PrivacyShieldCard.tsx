@@ -9,6 +9,7 @@ import { showSuccess, showError } from "../../utils/toast";
 import AIRuntimeInstaller from "./AIRuntimeInstaller";
 import useBackend, { executeBackendCommand } from "../../hooks/useBackend";
 import { useAppState } from "../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import useEntitlements from "../../hooks/useEntitlements";
 import useVisibility from "../../hooks/useVisibility";
 import { useShieldQuotaQuery, useShieldQuotaTicker, useInvalidateShieldQuota } from "../../hooks/useShieldQuota";
@@ -260,7 +261,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 modelSize: privacyConfig.modelLevel as any,
                 detectionBufferFrames: privacyConfig.bufferFrames,
                 autostart,
-            } } } }).catch(() => {});
+            } } } }).catch(reportSettingsWriteFailure);
         }, 400);
         return () => clearTimeout(t);
     }, [
@@ -499,7 +500,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                         wakeDelaySeconds: Math.round(privacyConfig.wakeDelayMs),
                         modelSize: privacyConfig.modelLevel as any,
                         detectionBufferFrames: privacyConfig.bufferFrames,
-                    } } } }).catch(() => {});
+                    } } } }).catch(reportSettingsWriteFailure);
                 } else {
                     const err = (res.error || "").toLowerCase();
                     if (err.includes("python is required") || err.includes("missing python dependency")) setAiRuntimeInstalled(false);
@@ -711,7 +712,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                     value={resolvedShieldMode}
                                     onValueChange={(v) => {
                                         if (privacyShieldRunning === true || fleetPolicyManaged) return;
-                                        patchAppSettings({ ideal: { privacy: { privacyShield: { notifyMode: v as 'blur_notify' | 'notify_only' } } } }).catch(() => {});
+                                        patchAppSettings({ ideal: { privacy: { privacyShield: { notifyMode: v as 'blur_notify' | 'notify_only' } } } }).catch(reportSettingsWriteFailure);
                                     }}
                                     options={[
                                         { value: 'blur_notify', label: 'Blur + Notify' },

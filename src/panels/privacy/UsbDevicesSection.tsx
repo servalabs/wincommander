@@ -26,6 +26,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Button, Spinner, Switch, Tag } from '@/components/ui/bp';
+import { reportSettingsWriteFailure } from '../../lib/settingsWriteRecovery';
 import type { Intent } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
 import { formatTrustScore, trustScoreTone } from '../../lib/usbTrust';
@@ -545,7 +546,7 @@ export default function UsbDevicesSection() {
       setError(null);
       try {
         await invoke(on ? 'start_usb_monitor' : 'stop_usb_monitor');
-        await patchAppSettings({ ideal: { privacy: { usbSecurity: { monitorEnabled: on } } } }).catch(() => {});
+        await patchAppSettings({ ideal: { privacy: { usbSecurity: { monitorEnabled: on } } } }).catch(reportSettingsWriteFailure);
         await refresh();
       } catch (e) {
         setError(String(e));
@@ -564,7 +565,7 @@ export default function UsbDevicesSection() {
       try {
         if (on) await invoke('start_usb_monitor');
         await invoke(on ? 'start_usb_hid_guard' : 'stop_usb_hid_guard');
-        await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidGuardEnabled: on } } } }).catch(() => {});
+        await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidGuardEnabled: on } } } }).catch(reportSettingsWriteFailure);
         setHidGuardRunning(on);
         await refresh();
       } catch (e) {
@@ -632,7 +633,7 @@ export default function UsbDevicesSection() {
       try {
         if (on) await invoke('start_usb_monitor');
         await invoke(on ? 'start_usb_metering' : 'stop_usb_metering');
-        await patchAppSettings({ ideal: { privacy: { usbSecurity: { meteringEnabled: on } } } }).catch(() => {});
+        await patchAppSettings({ ideal: { privacy: { usbSecurity: { meteringEnabled: on } } } }).catch(reportSettingsWriteFailure);
         setMetering(on);
         await refresh();
       } catch (e) {
@@ -792,7 +793,7 @@ export default function UsbDevicesSection() {
       try {
         if (on) await invoke('start_usb_monitor');
         await invoke(on ? 'start_usb_autosandbox' : 'stop_usb_autosandbox');
-        await patchAppSettings({ ideal: { privacy: { usbSecurity: { autoSandboxEnabled: on } } } }).catch(() => {});
+        await patchAppSettings({ ideal: { privacy: { usbSecurity: { autoSandboxEnabled: on } } } }).catch(reportSettingsWriteFailure);
         setAutoSandboxRunning(on);
         await refresh();
       } catch (e) {

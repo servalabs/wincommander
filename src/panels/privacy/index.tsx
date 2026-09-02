@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useSearchQuery } from "../../context/SearchContext";
 import { useAppState } from "../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import useVisibility from "../../hooks/useVisibility";
 import { useTourActive } from "../../lib/tourActive";
 import useMonitoringOverview from "../../hooks/useMonitoringOverview";
@@ -88,14 +89,14 @@ export default function PrivacyPanel() {
     const pasteAutoClearOnLock = appSettings?.ideal?.privacy?.clipboard?.pasteMonitorAutoClearOnLock ?? null;
     const { localRules, fleetRules, saveLocalRules } = useClipboardGuardRules();
     const patchClipboard = (patch: Record<string, unknown>) =>
-        patchAppSettings({ ideal: { privacy: { clipboard: patch } } } as any).catch(() => {});
+        patchAppSettings({ ideal: { privacy: { clipboard: patch } } } as any).catch(reportSettingsWriteFailure);
 
     const decoyEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.enabled ?? false;
     const decoyEnrolledPaths = appSettings?.ideal?.privacy?.decoyMonitor?.enrolledPaths ?? [];
     const decoyReadAuditEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.readAuditEnabled ?? false;
     const decoyFleetAlertEnabled = appSettings?.ideal?.privacy?.decoyMonitor?.fleetAlertEnabled ?? false;
     const patchDecoy = (patch: { enabled?: boolean; enrolledPaths?: string[]; readAuditEnabled?: boolean; fleetAlertEnabled?: boolean }) =>
-        patchAppSettings({ ideal: { privacy: { decoyMonitor: patch } } } as any).catch(() => {});
+        patchAppSettings({ ideal: { privacy: { decoyMonitor: patch } } } as any).catch(reportSettingsWriteFailure);
 
     const allDeviceAlertsRequired = appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true;
     const ransomwareEnabled = appSettings?.ideal?.privacy?.ransomwareMonitor?.enabled ?? false;
@@ -117,12 +118,12 @@ export default function PrivacyPanel() {
         action?: RansomwareAction;
         reportToFleet?: boolean;
     }) =>
-        patchAppSettings({ ideal: { privacy: { ransomwareMonitor: patch } } } as any).catch(() => {});
+        patchAppSettings({ ideal: { privacy: { ransomwareMonitor: patch } } } as any).catch(reportSettingsWriteFailure);
 
     const remoteAccessEnabled = appSettings?.ideal?.privacy?.remoteAccessMonitor?.enabled ?? false;
     const remoteAccessTools = appSettings?.ideal?.privacy?.remoteAccessMonitor?.tools ?? null;
     const patchRemoteAccess = (patch: { enabled?: boolean; tools?: Record<string, boolean> }) =>
-        patchAppSettings({ ideal: { privacy: { remoteAccessMonitor: patch } } } as any).catch(() => {});
+        patchAppSettings({ ideal: { privacy: { remoteAccessMonitor: patch } } } as any).catch(reportSettingsWriteFailure);
 
     const authAnomaly = appSettings?.ideal?.privacy?.authAnomalyMonitor;
     const authAnomalyEnabled = authAnomaly?.enabled ?? false;
@@ -140,14 +141,14 @@ export default function PrivacyPanel() {
         reportToFleet: allDeviceAlertsRequired || authAnomaly?.reportToFleet !== false,
     };
     const patchAuthAnomaly = (patch: Partial<typeof authAnomalyPolicy> & { enabled?: boolean }) =>
-        patchAppSettings({ ideal: { privacy: { authAnomalyMonitor: patch } } } as any).catch(() => {});
+        patchAppSettings({ ideal: { privacy: { authAnomalyMonitor: patch } } } as any).catch(reportSettingsWriteFailure);
 
     const screenCaptureDetectionEnabled = appSettings?.ideal?.privacy?.screenCapture?.detectionEnabled ?? false;
     const screenCaptureProtectWindow = appSettings?.ideal?.privacy?.screenCapture?.protectWindow ?? false;
     const screenCaptureReportToFleet = allDeviceAlertsRequired
         || appSettings?.ideal?.privacy?.screenCapture?.reportToFleet === true;
     const patchScreenCapture = (patch: { detectionEnabled?: boolean; protectWindow?: boolean; reportToFleet?: boolean }) =>
-        patchAppSettings({ ideal: { privacy: { screenCapture: patch } } } as any).catch(() => {});
+        patchAppSettings({ ideal: { privacy: { screenCapture: patch } } } as any).catch(reportSettingsWriteFailure);
     const fleetEnabled = appSettings?.app?.fleet?.enabled === true;
     const fleetLockedPaths = appSettings?.policy?.lockedPaths ?? [];
     const masterFleetAlertsLocked = fleetLockedPaths.some((p) =>

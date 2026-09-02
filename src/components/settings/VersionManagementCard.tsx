@@ -9,6 +9,7 @@ import useEntitlements from "../../hooks/useEntitlements";
 import useProInstall from "../../hooks/useProInstall";
 import { showError, showSuccess, showWarning } from "../../utils/toast";
 import { useAppState } from "../../context/AppContext";
+import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import "./VersionManagementCard.css";
 
 interface FreeUpdateInfo {
@@ -138,7 +139,7 @@ export default function VersionManagementCard() {
                     <Switch
                         checked={automaticUpdatesEnabled}
                         onChange={(event) => {
-                            void patchAppSettings({ app: { autoUpdate: event.currentTarget.checked } });
+                            void patchAppSettings({ app: { autoUpdate: event.currentTarget.checked } }).catch(reportSettingsWriteFailure);
                         }}
                         aria-label="Automatically update WinCommander"
                     />
