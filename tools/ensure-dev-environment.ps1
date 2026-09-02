@@ -191,3 +191,14 @@ foreach ($requiredAsset in $requiredAssets) {
         throw "The assets submodule is missing required file: $requiredAsset"
     }
 }
+
+# Explorer's secure-delete verb uses a small asInvoker helper instead of the
+# main Tauri executable. Build it during every developer bootstrap so a
+# running `tauri dev` instance can enable and test the context menu without
+# falling back to an installed/release EXE (which could prompt for UAC).
+$contextShredManifest = Join-Path $repoRoot "src-tauri\Cargo.toml"
+Write-Host "Building the development context-delete helper..."
+& $rustup run $channel cargo build --manifest-path $contextShredManifest -p commander-context-shred
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to build the WinCommander development context-delete helper."
+}

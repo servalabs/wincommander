@@ -12,6 +12,9 @@
 ; ──────────────────────────────────────────────────────────────────────────────
 !define WC_INSTALL_DIR "$PROGRAMFILES64\WinCommander"
 !define WC_SERVICE_EXE "${WC_INSTALL_DIR}\wincommander-svc.exe"
+; The release build stages the service under `resources/`, which Tauri bundles
+; as this separate payload. Keep it apart from the running root service until
+; the post-install rollback safeguard has taken its backup.
 !define WC_BUNDLED_SERVICE "$INSTDIR\resources\wincommander-svc.exe"
 !define WC_SERVICE_BACKUP "${WC_INSTALL_DIR}\wincommander-svc.exe.wc-backup"
 !define WC_SERVICE_CONFIG_BACKUP "$PLUGINSDIR\WinCommanderSvc-before.reg"
@@ -283,8 +286,8 @@ FunctionEnd
 ;      RunOnce (step 3) remains as a belt-and-suspenders fallback.
 ; ──────────────────────────────────────────────────────────────────────────────
 !macro NSIS_HOOK_POSTINSTALL
-  ; Tauri stages resources below $INSTDIR\resources. Copy the service to the
-  ; fixed root before configuring SCM, so ImagePath is always the quoted
+  ; The Tauri release bundle places the staged service below `resources`.
+  ; Verify it before configuring SCM, so ImagePath is always the fixed quoted
   ; Program Files executable rather than a bundler implementation detail.
   IfFileExists "${WC_BUNDLED_SERVICE}" wc_service_payload_ready 0
     StrCpy $R3 "service-payload"

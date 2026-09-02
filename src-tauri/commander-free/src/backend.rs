@@ -4198,9 +4198,52 @@ fn run_reg(args: &[&str]) -> Result<(), String> {
 // selection. `Player` lets a single invocation receive the complete Explorer
 // selection, and `%*` expands to one argv value per selected item.
 const CONTEXT_SHRED_SELECTION_MODEL: &str = "Player";
+const CONTEXT_SHRED_HELPER: &str = "wincommander-context-shred.exe";
+const CONTEXT_SHRED_VERB_LABEL: &str = "Secure shred with WinCommander";
 
 fn context_shred_command(exe_path: &str) -> String {
     format!("\"{}\" --context-shred %*", exe_path)
+}
+
+/// The primary desktop executable deliberately has a highestAvailable
+/// manifest for its administrative features. Explorer must not launch it for
+/// a normal user-owned delete: that would produce a UAC consent request even
+/// though the native erase needs no extra privilege. The bundled helper has an
+/// explicit asInvoker manifest and lives in Tauri's stable resources directory.
+/// During `tauri dev`, the helper is built beside the debug desktop executable
+/// instead. Keeping this resolution local avoids pointing a developer's
+/// Explorer verb at an old installed build (or at the elevated release EXE).
+fn context_shred_helper_path(app_exe: &std::path::Path) -> Result<PathBuf, String> {
+    let install_directory = app_exe
+        .parent()
+        .ok_or("Cannot determine the WinCommander install directory")?;
+
+    // A development build must never reuse an installed/package resource. It
+    // has its own helper beside `wincommander-free.exe`, built by setup:dev.
+    // Check this first: Tauri can leave resource folders from another build in
+    // a target directory, and choosing one would make Explorer test stale code.
+    if cfg!(debug_assertions) {
+        let dev_helper = install_directory.join(CONTEXT_SHRED_HELPER);
+        if dev_helper.is_file() {
+            return Ok(dev_helper);
+        }
+        return Err(format!(
+            "WinCommander context-delete helper is missing: {}. Run `bun run build:context-shred:debug` before enabling the Explorer Delete integration.",
+            dev_helper.display()
+        ));
+    }
+
+    let packaged_helper = install_directory
+        .join("resources")
+        .join(CONTEXT_SHRED_HELPER);
+    if packaged_helper.is_file() {
+        return Ok(packaged_helper);
+    }
+
+    Err(format!(
+        "WinCommander context-delete helper is missing: {}",
+        packaged_helper.display()
+    ))
 }
 
 #[cfg(test)]
@@ -4210,10 +4253,50 @@ mod context_shred_verb_tests {
     #[test]
     fn context_shred_uses_explorer_player_model_and_full_selection_placeholder() {
         assert_eq!(CONTEXT_SHRED_SELECTION_MODEL, "Player");
+        assert_eq!(CONTEXT_SHRED_VERB_LABEL, "Secure shred with WinCommander");
         assert_eq!(
-            context_shred_command(r"C:\Program Files\WinCommander\WinCommander.exe"),
-            r#""C:\Program Files\WinCommander\WinCommander.exe" --context-shred %*"#
+            context_shred_command(
+                r"C:\Program Files\WinCommander\resources\wincommander-context-shred.exe"
+            ),
+            r#""C:\Program Files\WinCommander\resources\wincommander-context-shred.exe" --context-shred %*"#
         );
+    }
+
+    #[test]
+    fn context_shred_helper_has_a_stable_resource_location() {
+        let temporary = tempfile::tempdir().unwrap();
+        let app = temporary.path().join("wincommander-free.exe");
+        let resources = temporary.path().join("resources");
+        std::fs::create_dir(&resources).unwrap();
+        let helper = resources.join(CONTEXT_SHRED_HELPER);
+        std::fs::write(&helper, b"helper").unwrap();
+
+        assert_eq!(context_shred_helper_path(&app).unwrap(), helper);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn context_shred_helper_uses_the_debug_sibling_when_not_packaged() {
+        let temporary = tempfile::tempdir().unwrap();
+        let app = temporary.path().join("wincommander-free.exe");
+        let helper = temporary.path().join(CONTEXT_SHRED_HELPER);
+        std::fs::write(&helper, b"helper").unwrap();
+
+        assert_eq!(context_shred_helper_path(&app).unwrap(), helper);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn context_shred_helper_never_uses_a_packaged_resource_in_debug() {
+        let temporary = tempfile::tempdir().unwrap();
+        let app = temporary.path().join("wincommander-free.exe");
+        let debug_helper = temporary.path().join(CONTEXT_SHRED_HELPER);
+        let resources = temporary.path().join("resources");
+        std::fs::create_dir(&resources).unwrap();
+        std::fs::write(&debug_helper, b"debug helper").unwrap();
+        std::fs::write(resources.join(CONTEXT_SHRED_HELPER), b"stale packaged helper").unwrap();
+
+        assert_eq!(context_shred_helper_path(&app).unwrap(), debug_helper);
     }
 }
 
@@ -4229,28 +4312,28 @@ pub async fn toggle_context_menu(enable: bool) -> Result<(), String> {
     const KEY_MIXED: &str = r"HKCU\Software\Classes\AllFilesystemObjects\shell\WinCommanderShred";
     const CMD_KEY_MIXED: &str =
         r"HKCU\Software\Classes\AllFilesystemObjects\shell\WinCommanderShred\command";
-    // Folder background context menu (Directory\Background\shell)
+    // This verb intentionally applies only to selected items. Registering it
+    // on Directory\Background would pass the current folder rather than a
+    // selection, which is both surprising and unsafe for a secure-delete
+    // command.
     const KEY_BG: &str = r"HKCU\Software\Classes\Directory\Background\shell\WinCommanderShred";
-    const CMD_KEY_BG: &str =
-        r"HKCU\Software\Classes\Directory\Background\shell\WinCommanderShred\command";
 
     if enable {
         let exe_path = std::env::current_exe()
             .map_err(|e| format!("Failed to get current executable path: {}", e))?;
-        let exe_str = exe_path
+        let helper_path = context_shred_helper_path(&exe_path)?;
+        let helper_str = helper_path
             .to_str()
-            .ok_or("Failed to convert exe path to string")?;
+            .ok_or("Failed to convert context-delete helper path to string")?;
         // %* = every selected path (files and folders). Explorer supplies its
         // own quoting for each argument, so do not add a second pair here.
-        // %V = current folder path (only available for Directory\Background\shell)
         // Explorer's secure-delete verb is intentionally backend-only. The
         // explicit flag prevents it from falling into the normal frontend
         // confirmation flow used by in-app shred operations.
-        let command_value_selection = context_shred_command(exe_str);
-        let command_value_bg = format!("\"{}\" --context-shred \"%V\"", exe_str);
+        let command_value_selection = context_shred_command(helper_str);
 
         // --- File (*) ---
-        run_reg(&["add", KEY_FILE, "/ve", "/d", "Delete", "/f"])?;
+        run_reg(&["add", KEY_FILE, "/ve", "/d", CONTEXT_SHRED_VERB_LABEL, "/f"])?;
         run_reg(&[
             "add",
             KEY_FILE,
@@ -4270,7 +4353,7 @@ pub async fn toggle_context_menu(enable: bool) -> Result<(), String> {
         ])?;
 
         // --- Directory (folder right-click) ---
-        run_reg(&["add", KEY_DIR, "/ve", "/d", "Delete", "/f"])?;
+        run_reg(&["add", KEY_DIR, "/ve", "/d", CONTEXT_SHRED_VERB_LABEL, "/f"])?;
         run_reg(&[
             "add",
             KEY_DIR,
@@ -4290,7 +4373,7 @@ pub async fn toggle_context_menu(enable: bool) -> Result<(), String> {
         ])?;
 
         // --- AllFilesystemObjects (mixed file + folder right-click) ---
-        run_reg(&["add", KEY_MIXED, "/ve", "/d", "Delete", "/f"])?;
+        run_reg(&["add", KEY_MIXED, "/ve", "/d", CONTEXT_SHRED_VERB_LABEL, "/f"])?;
         run_reg(&[
             "add",
             KEY_MIXED,
@@ -4309,9 +4392,10 @@ pub async fn toggle_context_menu(enable: bool) -> Result<(), String> {
             "/f",
         ])?;
 
-        // --- Directory\Background (right-click inside a folder) ---
-        run_reg(&["add", KEY_BG, "/ve", "/d", "Delete", "/f"])?;
-        run_reg(&["add", CMD_KEY_BG, "/ve", "/d", &command_value_bg, "/f"])?;
+        // Remove the legacy background verb if a prior version created it.
+        // Background clicks have no selected target and must never shred the
+        // containing folder.
+        let _ = run_reg(&["delete", KEY_BG, "/f"]);
     } else {
         // /f = no confirmation prompt; ignore errors (key may not exist)
         let _ = run_reg(&["delete", KEY_FILE, "/f"]);

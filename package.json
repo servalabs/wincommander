@@ -12,6 +12,7 @@
     "build:pro": "bun run tools/build-pro.ts",
     "build:pro:release": "bun run tools/build-pro.ts --release",
     "build:service:release": "cargo build --manifest-path src-tauri/Cargo.toml -p commander-svc --release",
+    "build:context-shred:debug": "cargo build --manifest-path src-tauri/Cargo.toml -p commander-context-shred",
     "setup:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/ensure-dev-environment.ps1",
     "dev": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/dev.ps1",
     "dev:server": "bun run tools/dev-server.ts",

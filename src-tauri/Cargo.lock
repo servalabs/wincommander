@@ -865,6 +865,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "commander-context-shred"
+version = "3.5.1"
+dependencies = [
+ "embed-resource",
+ "rand 0.8.7",
+ "tempfile",
+]
+
+[[package]]
 name = "commander-free"
 version = "3.5.1"
 dependencies = [
@@ -874,6 +883,7 @@ dependencies = [
  "chrono",
  "clipboard-guard-helper",
  "clipboard-win",
+ "commander-context-shred",
  "cron",
  "dotenvy",
  "ed25519-dalek",

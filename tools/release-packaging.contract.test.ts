@@ -52,16 +52,19 @@ describe("public service release packaging", () => {
   test("keeps raw Cargo checks independent of a release-only service artifact", () => {
     expect(baseConfig.bundle.resources).not.toContain("../target/release/wincommander-svc.exe");
     expect(releaseTool).toContain('["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"]');
-    expect(releaseTool).toContain('const serviceResource = "wincommander-svc.exe"');
-    expect(releaseTool).toContain('const stagedServicePath = resolve(root, "wincommander-svc.exe")');
-    expect(releaseTool).not.toContain('const serviceResource = "resources/wincommander-svc.exe"');
+    expect(releaseTool).toContain('const serviceResource = "resources/wincommander-svc.exe"');
+    expect(releaseTool).toContain('const contextShredResource = "resources/wincommander-context-shred.exe"');
+    expect(releaseTool).toContain('const stagedServicePath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-svc.exe")');
+    expect(releaseTool).toContain('const stagedContextShredPath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-context-shred.exe")');
     expect(releaseTool).toContain('const staticCrtFlags = "-C target-feature=+crt-static"');
     expect(releaseTool).toContain("RUSTFLAGS: rustflags");
     expect(releaseTool).toContain("copyFileSync(serviceBuildPath, stagedServicePath)");
+    expect(releaseTool).toContain("copyFileSync(contextShredBuildPath, stagedContextShredPath)");
     expect(releaseTool).toContain('config.bundle.targets = ["nsis"]');
-    expect(releaseTool).toContain('config.bundle.resources = [...config.bundle.resources.filter');
+    expect(releaseTool).toContain('config.bundle.resources = [');
     expect(releaseTool).toContain('rmSync(generatedConfigPath, { force: true })');
     expect(releaseTool).toContain('rmSync(stagedServicePath, { force: true })');
+    expect(releaseTool).toContain('rmSync(stagedContextShredPath, { force: true })');
     expect(packageJson.scripts["build:free:release-installer"]).toContain("bun run tools/build-tauri-release.ts");
     expect(packageJson.scripts["build:free:release-installer"]).not.toContain("build:pro");
     expect(packageJson.scripts.build).toContain("bun run build:service:release");
@@ -98,6 +101,8 @@ describe("public service release packaging", () => {
     const scmImagePathArgument = String.raw`"\$\"` + '${WC_SERVICE_EXE}' + String.raw`\$\""`;
 
     expect(hooks).toContain('!define WC_SERVICE_EXE "${WC_INSTALL_DIR}\\wincommander-svc.exe"');
+    expect(hooks).toContain('!define WC_BUNDLED_SERVICE "$INSTDIR\\resources\\wincommander-svc.exe"');
+    expect(hooks).not.toContain('!define WC_BUNDLED_SERVICE "$INSTDIR\\wincommander-svc.exe"');
     expect(hooks).toContain('StrCpy $INSTDIR "${WC_INSTALL_DIR}"');
     expect(hooks).toContain("${If} $R6 == 1");
     expect(hooks).toContain("sc stop WinCommanderSvc");
@@ -178,5 +183,19 @@ describe("public service release packaging", () => {
     expect(buildScript).toContain('const HIGHEST_AVAILABLE_LEVEL: &str = r#"level="highestAvailable""#;');
     expect(buildScript).toContain('replacen(HIGHEST_AVAILABLE_LEVEL, r#"level="asInvoker""#, 1)');
     expect(hooks).toContain("-RunLevel Limited");
+  });
+
+  test("bundles the non-elevating Explorer helper separately from the primary app", () => {
+    const helperManifest = readFileSync("src-tauri/commander-context-shred/app.manifest", "utf8");
+    const helperEntry = readFileSync("src-tauri/commander-context-shred/src/main.rs", "utf8");
+    const contextMenu = readFileSync("src-tauri/commander-free/src/backend.rs", "utf8");
+
+    expect(helperManifest).toContain('requestedExecutionLevel level="asInvoker"');
+    expect(helperManifest).not.toContain("highestAvailable");
+    expect(helperEntry).toContain('windows_subsystem = "windows"');
+    expect(contextMenu).toContain('const CONTEXT_SHRED_HELPER: &str = "wincommander-context-shred.exe"');
+    expect(contextMenu).toContain('join("resources")');
+    expect(contextMenu).toContain('join(CONTEXT_SHRED_HELPER)');
+    expect(contextMenu).not.toContain('context_shred_command(exe_str)');
   });
 });

@@ -22,7 +22,7 @@
 # Build it with `cargo check --workspace` or `cargo build -p <crate>`.
 
 [workspace]
-members = ["commander-free", "wincmd-shared", "fleet-proto", "fleet-agent-core", "wci-verify", "wincmd-search", "commander-svc", "wincmd-clip-rules", "clipboard-guard-helper"]
+members = ["commander-free", "commander-context-shred", "wincmd-shared", "fleet-proto", "fleet-agent-core", "wci-verify", "wincmd-search", "commander-svc", "wincmd-clip-rules", "clipboard-guard-helper"]
 resolver = "2"
 
 # KT: Profile settings live at the workspace root so all three crates

@@ -148,8 +148,8 @@ export default function ContextMenuIntegrationCard({
                 </div>
                 {showShred && (
                     <UniversalToggle
-                        label="Delete"
-                        description="Add 'Delete' to right-click on files + folders. Permanent secure deletion."
+                        label="Secure shred with WinCommander"
+                        description="Add a separate secure-shred action to right-click on selected files and folders. It permanently deletes the selected items; Windows' normal Delete remains unchanged."
                         icon="trash"
                         checked={contextMenuEnabled}
                         onChange={handleShredToggle}
