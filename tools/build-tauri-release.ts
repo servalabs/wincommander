@@ -6,6 +6,13 @@ const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const serviceBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-svc.exe");
 const contextShredBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-context-shred.exe");
+const contextDeleteIconPath = resolve(
+  root,
+  "src-tauri",
+  "commander-free",
+  "icons",
+  "context-delete.ico",
+);
 // Tauri validates resource paths relative to the application directory. Stage
 // the service in that `resources/` folder, therefore producing
 // `$INSTDIR\\resources\\wincommander-svc.exe`. The NSIS hook uses that separate
@@ -16,6 +23,13 @@ const stagedServicePath = resolve(root, "src-tauri", "commander-free", "resource
 // Tauri executable intentionally keeps its highestAvailable manifest for
 // privileged features, which would otherwise show UAC for every selected item.
 const stagedContextShredPath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-context-shred.exe");
+const stagedContextDeleteIconPath = resolve(
+  root,
+  "src-tauri",
+  "commander-free",
+  "resources",
+  "context-delete.ico",
+);
 // Release installers must run on a clean Windows machine. Link the MSVC C
 // runtime into both the service and the Tauri application so they do not
 // require a separately installed VCRUNTIME140.dll.
@@ -46,10 +60,17 @@ const config = JSON.parse(readFileSync(configPath, "utf8")) as {
 };
 const serviceResource = "resources/wincommander-svc.exe";
 const contextShredResource = "resources/wincommander-context-shred.exe";
+const contextDeleteIconResource = "resources/context-delete.ico";
 config.bundle.resources = [
-  ...config.bundle.resources.filter(resource => resource !== serviceResource && resource !== contextShredResource),
+  ...config.bundle.resources.filter(
+    resource =>
+      resource !== serviceResource &&
+      resource !== contextShredResource &&
+      resource !== contextDeleteIconResource,
+  ),
   serviceResource,
   contextShredResource,
+  contextDeleteIconResource,
 ];
 // Only NSIS executes the service lifecycle hooks. Emitting an MSI here would
 // produce a package that installs the UI but silently omits WinCommanderSvc.
@@ -57,6 +78,7 @@ config.bundle.targets = ["nsis"];
 
 copyFileSync(serviceBuildPath, stagedServicePath);
 copyFileSync(contextShredBuildPath, stagedContextShredPath);
+copyFileSync(contextDeleteIconPath, stagedContextDeleteIconPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
   run(["bun", "x", "tauri", "build", "--config", generatedConfigPath], "Tauri release bundle");
@@ -64,4 +86,5 @@ try {
   rmSync(generatedConfigPath, { force: true });
   rmSync(stagedServicePath, { force: true });
   rmSync(stagedContextShredPath, { force: true });
+  rmSync(stagedContextDeleteIconPath, { force: true });
 }

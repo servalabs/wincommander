@@ -4195,14 +4195,53 @@ fn run_reg(args: &[&str]) -> Result<(), String> {
 }
 
 // Legacy shell verbs otherwise use the `Document` model and receive only one
-// selection. `Player` lets a single invocation receive the complete Explorer
-// selection, and `%*` expands to one argv value per selected item.
+// selection. `Player` lets Explorer offer this verb for a multi-selection.
+// `%1` is the documented static-verb placeholder for the selected path; `%*`
+// is not expanded by Explorer and arrives at the helper as a literal string.
 const CONTEXT_SHRED_SELECTION_MODEL: &str = "Player";
 const CONTEXT_SHRED_HELPER: &str = "wincommander-context-shred.exe";
-const CONTEXT_SHRED_VERB_LABEL: &str = "Secure shred with WinCommander";
+// A bundled trash-can glyph. This deliberately does not use the Windows
+// Recycle Bin icon: Secure Delete permanently removes the item instead of
+// moving it to the Recycle Bin.
+const CONTEXT_SHRED_ICON: &str = "context-delete.ico";
+// Keep the Explorer wording short and explicit.  This is intentionally not
+// branded as a second, ambiguous "shred" action: it permanently removes the
+// selected items, whereas the separate Scrub verb only strips metadata.
+const CONTEXT_SHRED_VERB_LABEL: &str = "Secure Delete";
 
 fn context_shred_command(exe_path: &str) -> String {
-    format!("\"{}\" --context-shred %*", exe_path)
+    format!("\"{}\" --context-shred \"%1\"", exe_path)
+}
+
+fn context_shred_icon_path_for_mode(
+    app_exe: &std::path::Path,
+    is_debug_build: bool,
+) -> Result<PathBuf, String> {
+    let icon_path = if is_debug_build {
+        // Development builds keep the source asset in the crate so Explorer
+        // does not accidentally display an icon from a previous installation.
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("icons")
+            .join(CONTEXT_SHRED_ICON)
+    } else {
+        app_exe
+            .parent()
+            .ok_or("Cannot determine the WinCommander install directory")?
+            .join("resources")
+            .join(CONTEXT_SHRED_ICON)
+    };
+
+    icon_path.is_file().then_some(icon_path.clone()).ok_or_else(|| {
+        format!(
+            "WinCommander context-delete icon is missing: {}",
+            icon_path.display()
+        )
+    })
+}
+
+fn context_shred_icon_value(app_exe: &std::path::Path) -> Result<String, String> {
+    let icon_path = context_shred_icon_path_for_mode(app_exe, cfg!(debug_assertions))?;
+    Ok(format!("\"{}\",0", icon_path.display()))
 }
 
 /// The primary desktop executable deliberately has a highestAvailable
@@ -4213,7 +4252,10 @@ fn context_shred_command(exe_path: &str) -> String {
 /// During `tauri dev`, the helper is built beside the debug desktop executable
 /// instead. Keeping this resolution local avoids pointing a developer's
 /// Explorer verb at an old installed build (or at the elevated release EXE).
-fn context_shred_helper_path(app_exe: &std::path::Path) -> Result<PathBuf, String> {
+fn context_shred_helper_path_for_mode(
+    app_exe: &std::path::Path,
+    is_debug_build: bool,
+) -> Result<PathBuf, String> {
     let install_directory = app_exe
         .parent()
         .ok_or("Cannot determine the WinCommander install directory")?;
@@ -4222,7 +4264,7 @@ fn context_shred_helper_path(app_exe: &std::path::Path) -> Result<PathBuf, Strin
     // has its own helper beside `wincommander-free.exe`, built by setup:dev.
     // Check this first: Tauri can leave resource folders from another build in
     // a target directory, and choosing one would make Explorer test stale code.
-    if cfg!(debug_assertions) {
+    if is_debug_build {
         let dev_helper = install_directory.join(CONTEXT_SHRED_HELPER);
         if dev_helper.is_file() {
             return Ok(dev_helper);
@@ -4246,20 +4288,25 @@ fn context_shred_helper_path(app_exe: &std::path::Path) -> Result<PathBuf, Strin
     ))
 }
 
+fn context_shred_helper_path(app_exe: &std::path::Path) -> Result<PathBuf, String> {
+    context_shred_helper_path_for_mode(app_exe, cfg!(debug_assertions))
+}
+
 #[cfg(test)]
 mod context_shred_verb_tests {
     use super::*;
 
     #[test]
-    fn context_shred_uses_explorer_player_model_and_full_selection_placeholder() {
+    fn context_shred_uses_explorer_player_model_and_documented_path_placeholder() {
         assert_eq!(CONTEXT_SHRED_SELECTION_MODEL, "Player");
-        assert_eq!(CONTEXT_SHRED_VERB_LABEL, "Secure shred with WinCommander");
+        assert_eq!(CONTEXT_SHRED_VERB_LABEL, "Secure Delete");
         assert_eq!(
             context_shred_command(
                 r"C:\Program Files\WinCommander\resources\wincommander-context-shred.exe"
             ),
-            r#""C:\Program Files\WinCommander\resources\wincommander-context-shred.exe" --context-shred %*"#
+            r#""C:\Program Files\WinCommander\resources\wincommander-context-shred.exe" --context-shred "%1""#
         );
+        assert_eq!(CONTEXT_SHRED_ICON, "context-delete.ico");
     }
 
     #[test]
@@ -4271,7 +4318,22 @@ mod context_shred_verb_tests {
         let helper = resources.join(CONTEXT_SHRED_HELPER);
         std::fs::write(&helper, b"helper").unwrap();
 
-        assert_eq!(context_shred_helper_path(&app).unwrap(), helper);
+        assert_eq!(
+            context_shred_helper_path_for_mode(&app, false).unwrap(),
+            helper
+        );
+    }
+
+    #[test]
+    fn context_shred_icon_has_a_stable_packaged_location() {
+        let temporary = tempfile::tempdir().unwrap();
+        let app = temporary.path().join("wincommander-free.exe");
+        let resources = temporary.path().join("resources");
+        std::fs::create_dir(&resources).unwrap();
+        let icon = resources.join(CONTEXT_SHRED_ICON);
+        std::fs::write(&icon, b"icon").unwrap();
+
+        assert_eq!(context_shred_icon_path_for_mode(&app, false).unwrap(), icon);
     }
 
     #[cfg(debug_assertions)]
@@ -4282,7 +4344,7 @@ mod context_shred_verb_tests {
         let helper = temporary.path().join(CONTEXT_SHRED_HELPER);
         std::fs::write(&helper, b"helper").unwrap();
 
-        assert_eq!(context_shred_helper_path(&app).unwrap(), helper);
+        assert_eq!(context_shred_helper_path_for_mode(&app, true).unwrap(), helper);
     }
 
     #[cfg(debug_assertions)]
@@ -4296,7 +4358,10 @@ mod context_shred_verb_tests {
         std::fs::write(&debug_helper, b"debug helper").unwrap();
         std::fs::write(resources.join(CONTEXT_SHRED_HELPER), b"stale packaged helper").unwrap();
 
-        assert_eq!(context_shred_helper_path(&app).unwrap(), debug_helper);
+        assert_eq!(
+            context_shred_helper_path_for_mode(&app, true).unwrap(),
+            debug_helper
+        );
     }
 }
 
@@ -4325,15 +4390,18 @@ pub async fn toggle_context_menu(enable: bool) -> Result<(), String> {
         let helper_str = helper_path
             .to_str()
             .ok_or("Failed to convert context-delete helper path to string")?;
-        // %* = every selected path (files and folders). Explorer supplies its
-        // own quoting for each argument, so do not add a second pair here.
+        // `%1` is Explorer's documented static-verb placeholder. The Player
+        // model keeps the verb available for a multi-selection; unlike `%*`,
+        // `%1` is expanded to an actual path by Explorer.
         // Explorer's secure-delete verb is intentionally backend-only. The
         // explicit flag prevents it from falling into the normal frontend
         // confirmation flow used by in-app shred operations.
         let command_value_selection = context_shred_command(helper_str);
+        let icon_value = context_shred_icon_value(&exe_path)?;
 
         // --- File (*) ---
         run_reg(&["add", KEY_FILE, "/ve", "/d", CONTEXT_SHRED_VERB_LABEL, "/f"])?;
+        run_reg(&["add", KEY_FILE, "/v", "Icon", "/d", &icon_value, "/f"])?;
         run_reg(&[
             "add",
             KEY_FILE,
@@ -4354,6 +4422,7 @@ pub async fn toggle_context_menu(enable: bool) -> Result<(), String> {
 
         // --- Directory (folder right-click) ---
         run_reg(&["add", KEY_DIR, "/ve", "/d", CONTEXT_SHRED_VERB_LABEL, "/f"])?;
+        run_reg(&["add", KEY_DIR, "/v", "Icon", "/d", &icon_value, "/f"])?;
         run_reg(&[
             "add",
             KEY_DIR,
@@ -4373,7 +4442,15 @@ pub async fn toggle_context_menu(enable: bool) -> Result<(), String> {
         ])?;
 
         // --- AllFilesystemObjects (mixed file + folder right-click) ---
-        run_reg(&["add", KEY_MIXED, "/ve", "/d", CONTEXT_SHRED_VERB_LABEL, "/f"])?;
+        run_reg(&[
+            "add",
+            KEY_MIXED,
+            "/ve",
+            "/d",
+            CONTEXT_SHRED_VERB_LABEL,
+            "/f",
+        ])?;
+        run_reg(&["add", KEY_MIXED, "/v", "Icon", "/d", &icon_value, "/f"])?;
         run_reg(&[
             "add",
             KEY_MIXED,
@@ -4455,17 +4532,17 @@ pub async fn toggle_scrub_context_menu(enable: bool) -> Result<(), String> {
         };
 
         // Files
-        run_reg(&["add", KEY_FILE, "/ve", "/d", "Scrub", "/f"])?;
+        run_reg(&["add", KEY_FILE, "/ve", "/d", "Scrub metadata", "/f"])?;
         run_reg(&["add", KEY_FILE, "/v", "Icon", "/d", &icon_value, "/f"])?;
         run_reg(&["add", CMD_KEY_FILE, "/ve", "/d", &cmd_value, "/f"])?;
 
         // Folders
-        run_reg(&["add", KEY_DIR, "/ve", "/d", "Scrub", "/f"])?;
+        run_reg(&["add", KEY_DIR, "/ve", "/d", "Scrub metadata", "/f"])?;
         run_reg(&["add", KEY_DIR, "/v", "Icon", "/d", &icon_value, "/f"])?;
         run_reg(&["add", CMD_KEY_DIR, "/ve", "/d", &cmd_value, "/f"])?;
 
         // Mixed (multi-select with both files + folders)
-        run_reg(&["add", KEY_MIXED, "/ve", "/d", "Scrub", "/f"])?;
+        run_reg(&["add", KEY_MIXED, "/ve", "/d", "Scrub metadata", "/f"])?;
         run_reg(&["add", KEY_MIXED, "/v", "Icon", "/d", &icon_value, "/f"])?;
         run_reg(&["add", CMD_KEY_MIXED, "/ve", "/d", &cmd_value, "/f"])?;
     } else {

@@ -148,7 +148,7 @@ export default function ContextMenuIntegrationCard({
                 </div>
                 {showShred && (
                     <UniversalToggle
-                        label="Secure shred with WinCommander"
+                        label="Secure Delete"
                         description="Add a separate secure-shred action to right-click on selected files and folders. It permanently deletes the selected items; Windows' normal Delete remains unchanged."
                         icon="trash"
                         checked={contextMenuEnabled}
@@ -158,7 +158,7 @@ export default function ContextMenuIntegrationCard({
                 )}
                 {showScrub && (
                     <UniversalToggle
-                        label="Scrub"
+                        label="Scrub metadata"
                         description="Add 'Scrub metadata' to right-click. Strips EXIF / GPS / author info before sharing photos, videos, and documents."
                         icon="eraser"
                         checked={scrubContextMenuEnabled}

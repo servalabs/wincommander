@@ -43,9 +43,9 @@ describe("Windows Settings layout contracts", () => {
     const contextMenu = await read("src/components/tweaks/ContextMenuIntegrationCard.tsx");
     const registry = await read("src/registry/tweaks.toggles.ts");
 
-    expect(contextMenu).toContain('label="Delete"');
+    expect(contextMenu).toContain('label="Secure Delete"');
     expect(contextMenu).toContain('icon="trash"');
-    expect(contextMenu).toContain('label="Scrub"');
+    expect(contextMenu).toContain('label="Scrub metadata"');
     expect(contextMenu).toContain('icon="eraser"');
     expect(contextMenu).toContain('label="Safe Copy / Safe Paste"');
     expect(contextMenu).toContain('icon="clipboard"');
