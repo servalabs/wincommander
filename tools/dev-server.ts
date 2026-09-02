@@ -39,6 +39,9 @@ import { resolve } from "node:path";
 const ROOT = resolve(import.meta.dir, "..");
 const FREE_ONLY = process.argv.includes("--free");
 const MULTI_USER = process.argv.includes("--multi-user");
+// Tauri runs this script as its beforeDevCommand.  It must release only stale
+// processes, not the desktop process whose startup is waiting for this server.
+const PRESERVE_WINCOMMANDER = MULTI_USER || process.argv.includes("--preserve-wincommander");
 
 function run(tag: string, cmd: string, args: string[]): Promise<number> {
   return new Promise((resolvePromise, reject) => {
@@ -82,7 +85,7 @@ async function main(): Promise<void> {
       name: "kill:dev",
       promise: run("[kill]", "powershell", [
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools/kill-dev.ps1",
-        ...(MULTI_USER ? ["-PreserveWinCommander"] : []),
+        ...(PRESERVE_WINCOMMANDER ? ["-PreserveWinCommander"] : []),
       ]),
     },
     { name: "bun install", promise: run("[install]", "bun", ["install", "--frozen-lockfile"]) },

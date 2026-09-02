@@ -30,6 +30,10 @@ try {
     if ($ServerOnly) {
         & $bun run dev:server
     } else {
+        # Release an old debug executable before Tauri starts its build.  The
+        # beforeDevCommand intentionally preserves the new app startup, so
+        # this outer entry point owns stale-window cleanup.
+        & (Join-Path $PSScriptRoot "kill-dev.ps1")
         & $bun x tauri dev --config src-tauri/commander-free/tauri.conf.json
     }
     $exitCode = $LASTEXITCODE

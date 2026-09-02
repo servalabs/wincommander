@@ -34,6 +34,21 @@ const boundedMountError = (error: unknown) => {
   if (normalized.includes("vault_engine_drive_letter_unavailable")) {
     return "That drive letter is already in use. Choose a free drive letter, then try again.";
   }
+  if (normalized.includes("vault_acl_apply_failed") || normalized.includes("vault_acl_readback_failed")) {
+    return "WinCommander mounted the volume but could not verify its private Windows permissions, so it safely unmounted it. Use an NTFS-formatted container; FAT/exFAT volumes cannot carry private Windows permissions.";
+  }
+  if (normalized.includes("vault_not_authorized")) {
+    return "This Windows account is not authorized to mount that container. Select the original container and use its original account, password, PIM, and keyfile.";
+  }
+  if (normalized.includes("vault_driver_unavailable")) {
+    return "The encrypted-volume driver is unavailable. Open Settings and repair WinCommander, then retry.";
+  }
+  if (normalized.includes("vault_session_unavailable")) {
+    return "WinCommander could not access your interactive Windows session. Sign out and back in, then retry.";
+  }
+  if (normalized.includes("vault_broker_failed")) {
+    return "WinCommander's secure mount helper did not complete. The volume was not left mounted; check the driver status and retry after restarting WinCommander.";
+  }
   return normalized.length > MOUNT_ERROR_MAX_LENGTH
     ? `${normalized.slice(0, MOUNT_ERROR_MAX_LENGTH - 1)}…`
     : normalized;

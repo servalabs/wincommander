@@ -110,6 +110,9 @@ pub async fn vault_call(
         .first_pipe_instance(true)
         .create(&pipe_name)
         .map_err(|_| "broker_unavailable")?;
+    eprintln!(
+        "[wincommander-svc] vault_call({feature_id}): spawning broker helper on pipe {pipe_name}"
+    );
     let process = spawn_pro_for_presentation(
         target_session_id,
         caller_sid,
@@ -120,11 +123,13 @@ pub async fn vault_call(
         &pipe_name,
         &session_token,
     )?;
+    eprintln!("[wincommander-svc] vault_call({feature_id}): spawn returned handle {:?}, waiting for connect", process);
     let result = async {
         timeout_at(deadline, pipe.connect())
             .await
             .map_err(|_| "broker_timeout")?
             .map_err(|_| "broker_io")?;
+        eprintln!("[wincommander-svc] vault_call({feature_id}): pipe connected, sending hello");
         let hello = Envelope::Hello(Hello {
             protocol_version: PROTOCOL_VERSION.into(),
             session_token: session_token.clone(),
@@ -140,6 +145,7 @@ pub async fn vault_call(
             .await
             .map_err(|_| "broker_timeout")?
             .map_err(|_| "broker_io")?;
+        eprintln!("[wincommander-svc] vault_call({feature_id}): hello ack received: {:?}", ack);
         let Envelope::Hello(Hello {
             protocol_version,
             session_token: echoed,
@@ -153,8 +159,10 @@ pub async fn vault_call(
             || echoed != session_token
             || !hash_matches_fixed_pro(&hash)
         {
+            eprintln!("[wincommander-svc] vault_call({feature_id}): handshake mismatch (protocol_version={protocol_version}, echoed_token_matches={}, hash_matches={})", echoed == session_token, hash_matches_fixed_pro(&hash));
             return Err("broker_handshake");
         }
+        eprintln!("[wincommander-svc] vault_call({feature_id}): handshake ok, sending request");
         let mut request = Envelope::Request(Request {
             request_id: REQUEST_ID,
             feature_id: feature_id.into(),
@@ -167,6 +175,7 @@ pub async fn vault_call(
             .and_then(|result| result.map_err(|_| "broker_io"));
         zeroize_broker_request(&mut request);
         write_result?;
+        eprintln!("[wincommander-svc] vault_call({feature_id}): request sent, awaiting reply");
         let mut notification_count = 0;
         let result = loop {
             let reply = timeout_at(deadline, read_envelope(&mut pipe))
@@ -179,6 +188,7 @@ pub async fn vault_call(
                 BrokerReply::Finished(result) => break result,
             }
         };
+        eprintln!("[wincommander-svc] vault_call({feature_id}): finished with {:?}", result);
         let _ = timeout_at(deadline, write_envelope(&mut pipe, &Envelope::Bye)).await;
         result
     }
@@ -274,6 +284,14 @@ fn process_broker_reply(
                 "vault_engine_unlock_failed" => "vault_engine_unlock_failed",
                 "vault_engine_drive_letter_unavailable" => "vault_engine_drive_letter_unavailable",
                 "vault_engine_mount_failed" => "vault_engine_mount_failed",
+                // These are the deliberately bounded, renderer-safe personal-vault
+                // terminal codes.  Do not turn them into `broker_rejected`: doing
+                // so makes a real driver/session/ownership failure indistinguishable
+                // from a broker transport fault in the desktop UI.
+                "vault_not_authorized" => "vault_not_authorized",
+                "vault_drive_letter_unavailable" => "vault_drive_letter_unavailable",
+                "vault_driver_unavailable" => "vault_driver_unavailable",
+                "vault_session_unavailable" => "vault_session_unavailable",
                 _ => "broker_rejected",
             };
             Ok(BrokerReply::Finished(Err(error)))
@@ -289,12 +307,21 @@ fn process_broker_reply(
 
 #[cfg(windows)]
 fn fixed_pro_path() -> std::path::PathBuf {
-    std::env::var_os("ProgramData")
+    let bin = std::env::var_os("ProgramData")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| r"C:\ProgramData".into())
         .join("WinCommander")
-        .join("bin")
-        .join("wincommander-pro.exe")
+        .join("bin");
+
+    // A debug service must never borrow the production sidecar name: the
+    // release updater is allowed to replace that file while the developer is
+    // rebuilding.  Keeping a dedicated payload makes the service and the
+    // debug UI deterministic without changing the installed-release path.
+    if cfg!(debug_assertions) {
+        bin.join("wincommander-pro.dev.exe")
+    } else {
+        bin.join("wincommander-pro.exe")
+    }
 }
 
 #[cfg(windows)]
@@ -382,7 +409,10 @@ fn spawn_pro_for_presentation(
             None if per_user_wts_fallback_allowed(feature_id) => {
                 spawn_pro_as_session_user(session_id, caller_sid, pipe, token)
             }
-            None => Err("broker_rejected"),
+            None => {
+                eprintln!("[wincommander-svc] spawn_pro_for_presentation({feature_id}): caller_token is None and WTS fallback not allowed for this verb");
+                Err("broker_rejected")
+            }
         },
     }
 }
@@ -487,15 +517,26 @@ fn spawn_pro_with_user_token(
 
     let exe = fixed_pro_path();
     if !exe.is_file() {
+        eprintln!(
+            "[wincommander-svc] spawn_pro_with_user_token: exe not found at {}",
+            exe.display()
+        );
         return Err("broker_unavailable");
     }
     if !token_matches_authenticated_client(user_token, session_id, caller_sid) {
+        eprintln!("[wincommander-svc] spawn_pro_with_user_token: token_matches_authenticated_client failed (session_id={session_id}, caller_sid={caller_sid})");
         return Err("broker_rejected");
     }
-    let source_authentication_id = token_authentication_id(user_token).ok_or("broker_rejected")?;
+    let Some(source_authentication_id) = token_authentication_id(user_token) else {
+        eprintln!(
+            "[wincommander-svc] spawn_pro_with_user_token: token_authentication_id returned None"
+        );
+        return Err("broker_rejected");
+    };
     if expected_authentication_id.is_some()
         && !same_authentication_id(Some(source_authentication_id), expected_authentication_id)
     {
+        eprintln!("[wincommander-svc] spawn_pro_with_user_token: authentication_id mismatch (source={:?}, expected={:?})", source_authentication_id, expected_authentication_id);
         return Err("broker_rejected");
     }
     let command = format!(
@@ -517,15 +558,18 @@ fn spawn_pro_with_user_token(
             &mut primary_token,
         ) == 0
         {
+            eprintln!("[wincommander-svc] spawn_pro_with_user_token: DuplicateTokenEx failed, GetLastError={}", std::io::Error::last_os_error());
             return Err("broker_unavailable");
         }
         let primary_authentication_id = token_authentication_id(primary_token);
         if !same_authentication_id(primary_authentication_id, Some(source_authentication_id)) {
+            eprintln!("[wincommander-svc] spawn_pro_with_user_token: primary token authentication_id mismatch after duplicate (primary={:?}, source={:?})", primary_authentication_id, source_authentication_id);
             CloseHandle(primary_token);
             return Err("broker_rejected");
         }
         let mut environment = std::ptr::null_mut();
         if CreateEnvironmentBlock(&mut environment, primary_token, 0) == 0 {
+            eprintln!("[wincommander-svc] spawn_pro_with_user_token: CreateEnvironmentBlock failed, GetLastError={}", std::io::Error::last_os_error());
             CloseHandle(primary_token);
             return Err("broker_unavailable");
         }
@@ -551,8 +595,13 @@ fn spawn_pro_with_user_token(
         DestroyEnvironmentBlock(environment);
         CloseHandle(primary_token);
         if ok == 0 {
+            eprintln!("[wincommander-svc] spawn_pro_with_user_token: CreateProcessAsUserW failed, GetLastError={}, command={}", std::io::Error::last_os_error(), command);
             return Err("broker_unavailable");
         }
+        eprintln!(
+            "[wincommander-svc] spawn_pro_with_user_token: CreateProcessAsUserW ok, pid={}",
+            process.dwProcessId
+        );
         CloseHandle(process.hThread);
         Ok(process.hProcess)
     }
@@ -735,9 +784,15 @@ mod tests {
     fn broker_preserves_personal_vault_native_terminal_codes() {
         let token = "broker-test-token";
         for expected in [
+            "vault_acl_readback_failed",
+            "vault_acl_apply_failed",
             "vault_engine_unlock_failed",
             "vault_engine_drive_letter_unavailable",
             "vault_engine_mount_failed",
+            "vault_not_authorized",
+            "vault_drive_letter_unavailable",
+            "vault_driver_unavailable",
+            "vault_session_unavailable",
         ] {
             let reply = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
                 request_id: REQUEST_ID,

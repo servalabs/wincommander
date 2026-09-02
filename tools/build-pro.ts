@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, renameSync } from "node:fs";
 import { resolve } from "node:path";
 import { getProManifestPath } from "./pro-workspace";
 
@@ -24,4 +25,27 @@ const result = spawnSync(
 );
 
 if (result.error) throw result.error;
-process.exit(result.status ?? 1);
+if (result.status !== 0) process.exit(result.status ?? 1);
+
+// The development Free app starts Pro from target/debug, while the debug
+// SYSTEM service starts the dedicated ProgramData `.dev` sidecar. Keep those
+// endpoints on the same build without touching the production sidecar or its
+// signed metadata, which an installed update is allowed to replace.
+if (!extraArgs.includes("--release")) {
+  const proBinary = resolve(TARGET_DIR, "debug", "wincommander-pro.exe");
+  const managedDir = "C:\\ProgramData\\WinCommander\\bin";
+  const managedBinary = resolve(managedDir, "wincommander-pro.dev.exe");
+  const temporaryBinary = `${managedBinary}.dev-sync`;
+
+  try {
+    mkdirSync(managedDir, { recursive: true });
+    copyFileSync(proBinary, temporaryBinary);
+    renameSync(temporaryBinary, managedBinary);
+    console.log("[build:pro] synced the isolated dev Pro sidecar for the SYSTEM service.");
+  } catch (error) {
+    console.warn(
+      "[build:pro] could not sync the dev Pro sidecar for the SYSTEM service; vault broker tests require an elevated development terminal:",
+      error,
+    );
+  }
+}

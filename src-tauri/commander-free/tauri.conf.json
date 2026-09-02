@@ -4,7 +4,7 @@
   "version": "3.5.1",
   "identifier": "com.servalabs.wincommander",
   "build": {
-    "beforeDevCommand": "bun run setup:dev && bun run fetch-icons && bun run dev:server",
+    "beforeDevCommand": "bun run setup:dev && bun run fetch-icons && bun run dev:server --preserve-wincommander",
     "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "bun install --frozen-lockfile && bun run encrypt-backend && bun x tsc && bun x vite build",
     "frontendDist": "../../dist"

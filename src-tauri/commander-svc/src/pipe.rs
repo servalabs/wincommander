@@ -37,11 +37,11 @@ use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
 
 use wincmd_shared::fleet::{Action, ClipboardEventReport};
 use wincmd_shared::svc::{
-    APPLY_MACHINE_SETTING_VERB, ApplyMachineSettingRequest, CapabilityClass, SVC_PIPE_NAME,
-    SVC_PROTOCOL_VERSION, classify_verb,
+    classify_verb, ApplyMachineSettingRequest, CapabilityClass, APPLY_MACHINE_SETTING_VERB,
+    SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
 };
 use wincmd_shared::{
-    Envelope, ErrorReply, Hello, Request, Response, read_envelope, write_envelope,
+    read_envelope, write_envelope, Envelope, ErrorReply, Hello, Request, Response,
 };
 
 use crate::peer_auth::{SessionHelperGate, TrustOrigin};
@@ -57,14 +57,14 @@ use crate::vault_access::VaultAccessStore;
 use crate::vault_mount::VaultMountBroker;
 
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, GetLastError, HANDLE, LocalFree},
+    Foundation::{CloseHandle, LocalFree, HANDLE},
     Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
     Security::{
         AllocateAndInitializeSid, CheckTokenMembership, DuplicateToken, EqualSid, FreeSid,
-        GetTokenInformation, ImpersonateLoggedOnUser, LookupAccountNameW, PSECURITY_DESCRIPTOR,
-        PSID, RevertToSelf, SECURITY_NT_AUTHORITY, SID_NAME_USE, SecurityIdentification,
-        TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_STATISTICS, TOKEN_USER, TokenSessionId,
-        TokenStatistics, TokenUser,
+        GetTokenInformation, LookupAccountNameW, RevertToSelf,
+        SecurityIdentification, TokenSessionId, TokenStatistics, TokenUser,
+        PSECURITY_DESCRIPTOR, PSID, SECURITY_NT_AUTHORITY, SID_NAME_USE, TOKEN_DUPLICATE,
+        TOKEN_QUERY, TOKEN_STATISTICS, TOKEN_USER,
     },
     System::{
         Pipes::{GetNamedPipeClientProcessId, ImpersonateNamedPipeClient},
@@ -93,7 +93,6 @@ use windows_sys::Win32::{
 const PIPE_SDDL: &str = "D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x12019b;;;BU)";
 const VAULT_POLICY_ADMIN_GROUP: &str = "WinCommander Vault Policy Administrators";
 const PERSONAL_VAULT_CONTAINER_UNWRITABLE: &str = "vault_container_not_writable";
-const PERSONAL_VAULT_DRIVE_BUSY: &str = "vault_drive_letter_unavailable";
 const PERSONAL_VAULT_SESSION_ABSENT: &str = "vault_session_unavailable";
 const PERSONAL_VAULT_DRIVER_STOPPED: &str = "vault_driver_unavailable";
 const PERSONAL_VAULT_UNAUTHORIZED: &str = "vault_not_authorized";
@@ -838,6 +837,33 @@ fn handle_personal_vault_create(
     Ok(result)
 }
 
+/// Promotes a legacy container only after the native engine accepted the
+/// caller's existing credential. That credential check prevents a readable
+/// Administrator-owned file from being claimed by a different Windows user.
+fn register_legacy_personal_vault(
+    vault_access: &VaultAccessStore,
+    path: &str,
+    peer: &AuthenticatedPipePeer,
+) -> Result<wincmd_shared::vault_access::PersonalVaultRecord, VerbError> {
+    vault_access
+        .begin_personal_registration(path, peer.caller_sid(), peer.session_id())
+        .map_err(|_| {
+            VerbError::new(
+                "vault_owner_record_failed",
+                "this container is already registered, or the path is invalid",
+            )
+        })?;
+    vault_access
+        .complete_personal_registration(path, peer.caller_sid(), peer.session_id())
+        .map_err(|_| {
+            vault_access.cancel_personal_registration(path, peer.caller_sid(), peer.session_id());
+            VerbError::new(
+                "vault_owner_record_failed",
+                "personal vault ownership could not be recorded",
+            )
+        })
+}
+
 /// Pre-flight failures are intentionally separate from native-engine failures:
 /// operators can fix an owner ACL, a busy letter, a missing user session, or a
 /// stopped driver without losing the generic engine diagnostic.
@@ -881,27 +907,32 @@ async fn handle_personal_vault_mount(
             "no interactive Windows session",
         ));
     }
-    let record = vault_access
-        .personal_for_owner(&request.container_path, peer.caller_sid())
-        .map_err(|_| {
-            VerbError::new(
+    let (record, is_legacy) = match vault_access.personal_for_owner(&request.container_path, peer.caller_sid()) {
+        Ok(Some(record)) => (record, false),
+        Ok(None) => {
+            match vault_access.legacy_personal_record(
+                &request.container_path,
+                peer.caller_sid(),
+                peer.session_id(),
+            ) {
+                Ok(record) => (record, true),
+                Err(_) => {
+                    zeroize_personal_mount(&mut request);
+                    return Err(VerbError::new(
+                        PERSONAL_VAULT_UNAUTHORIZED,
+                        "caller is not authorized for this personal vault",
+                    ));
+                }
+            }
+        }
+        Err(_) => {
+            zeroize_personal_mount(&mut request);
+            return Err(VerbError::new(
                 PERSONAL_VAULT_UNAUTHORIZED,
                 "caller is not authorized for this personal vault",
-            )
-        })?
-        .ok_or_else(|| {
-            VerbError::new(
-                PERSONAL_VAULT_UNAUTHORIZED,
-                "caller is not authorized for this personal vault",
-            )
-        })?;
-    if !caller_can_write_container(peer.token(), Path::new(&record.container_path)) {
-        zeroize_personal_mount(&mut request);
-        return Err(VerbError::new(
-            PERSONAL_VAULT_CONTAINER_UNWRITABLE,
-            "personal vault container is not writable by this Windows user",
-        ));
-    }
+            ));
+        }
+    };
     let driver = tokio::task::spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)
         .await
         .unwrap_or(Err(
@@ -914,16 +945,27 @@ async fn handle_personal_vault_mount(
             error.public_message(),
         ));
     }
-    let (drive_letter, internal_drive) = vault_mount.with_exclusive_operation(|| {
-        if let Some(letter) = request.preferred_letter.as_deref() {
-            if !target_session_drive_is_free(peer.token(), letter) {
+    let legacy_acl = if is_legacy {
+        match vault_access.prepare_legacy_personal_mount(&record) {
+            Ok(snapshot) => Some(snapshot),
+            Err(_) => {
                 zeroize_personal_mount(&mut request);
                 return Err(VerbError::new(
-                    PERSONAL_VAULT_DRIVE_BUSY,
-                    "requested drive letter is already in use in this Windows session",
+                    PERSONAL_VAULT_CONTAINER_UNWRITABLE,
+                    "personal vault container could not be prepared for legacy recovery",
                 ));
             }
         }
+    } else {
+        None
+    };
+    let mount_result = vault_mount.with_exclusive_operation(|| {
+        // The service runs in Session 0, where a DOS-device query cannot
+        // authoritatively describe the caller's per-user device namespace. The
+        // authenticated broker and native engine run in the requested desktop
+        // session and reject an occupied presentation letter immediately before
+        // linking it. Do not turn a Session-0 lookup failure into a false
+        // "drive letter unavailable" result for a genuinely free letter.
         vault_mount
             .mount_personal_authorized_locked(
                 vault_access,
@@ -940,7 +982,46 @@ async fn handle_personal_vault_mount(
                     "personal vault mount failed",
                 )
             })
-    })?;
+    });
+    let (drive_letter, internal_drive) = match mount_result {
+        Ok(result) => result,
+        Err(error) => {
+            if let Some(snapshot) = &legacy_acl {
+                vault_access.restore_legacy_personal_mount(snapshot);
+            }
+            return Err(error);
+        }
+    };
+    if is_legacy {
+        match register_legacy_personal_vault(vault_access, &record.container_path, peer) {
+            Ok(registered) if registered.container_identity == record.container_identity => {}
+            Ok(_) => {
+                vault_mount.dismount_personal_registration_failure(
+                    vault_access,
+                    &record,
+                    peer.token(),
+                );
+                if let Some(snapshot) = &legacy_acl {
+                    vault_access.restore_legacy_personal_mount(snapshot);
+                }
+                return Err(VerbError::new(
+                    "vault_owner_record_failed",
+                    "personal vault changed before ownership could be recorded",
+                ));
+            }
+            Err(error) => {
+                vault_mount.dismount_personal_registration_failure(
+                    vault_access,
+                    &record,
+                    peer.token(),
+                );
+                if let Some(snapshot) = &legacy_acl {
+                    vault_access.restore_legacy_personal_mount(snapshot);
+                }
+                return Err(error);
+            }
+        }
+    }
     Ok(serde_json::json!({
         "status": "mounted",
         "drive": drive_letter,
@@ -992,39 +1073,6 @@ fn wts_connect_state(session_id: u32) -> Option<WTS_CONNECTSTATE_CLASS> {
         let state = (buffer as *const WTS_CONNECTSTATE_CLASS).read();
         WTSFreeMemory(buffer.cast());
         Some(state)
-    }
-}
-
-fn caller_can_write_container(token: HANDLE, path: &Path) -> bool {
-    unsafe {
-        if ImpersonateLoggedOnUser(token) == 0 {
-            return false;
-        }
-        let writable = std::fs::OpenOptions::new().write(true).open(path).is_ok();
-        let _ = RevertToSelf();
-        writable
-    }
-}
-
-fn target_session_drive_is_free(token: HANDLE, letter: &str) -> bool {
-    if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() {
-        return false;
-    }
-    unsafe {
-        if ImpersonateLoggedOnUser(token) == 0 {
-            return false;
-        }
-        use windows_sys::Win32::Storage::FileSystem::QueryDosDeviceW;
-        let name = [
-            letter.as_bytes()[0].to_ascii_uppercase() as u16,
-            b':' as u16,
-            0,
-        ];
-        let mut target = [0u16; 1024];
-        let present = QueryDosDeviceW(name.as_ptr(), target.as_mut_ptr(), target.len() as u32) != 0;
-        let missing = !present && GetLastError() == 2;
-        let _ = RevertToSelf();
-        missing
     }
 }
 
@@ -2265,7 +2313,6 @@ mod tests {
     fn personal_mount_preflight_failures_are_distinct_from_native_engine_failure() {
         let failures = [
             PERSONAL_VAULT_CONTAINER_UNWRITABLE,
-            PERSONAL_VAULT_DRIVE_BUSY,
             PERSONAL_VAULT_SESSION_ABSENT,
             PERSONAL_VAULT_DRIVER_STOPPED,
             PERSONAL_VAULT_UNAUTHORIZED,
@@ -2277,11 +2324,9 @@ mod tests {
                 .len(),
             failures.len()
         );
-        assert!(
-            failures
-                .iter()
-                .all(|failure| *failure != "vault_engine_mount_failed")
-        );
+        assert!(failures
+            .iter()
+            .all(|failure| *failure != "vault_engine_mount_failed"));
     }
 
     #[test]
@@ -2724,10 +2769,10 @@ mod tests {
 mod integration {
     use tokio::net::windows::named_pipe::{ClientOptions, PipeMode, ServerOptions};
     use wincmd_shared::svc::hello_from_ui;
-    use wincmd_shared::{Envelope, ErrorReply, Request, read_envelope, write_envelope};
+    use wincmd_shared::{read_envelope, write_envelope, Envelope, ErrorReply, Request};
 
     use super::test_support;
-    use super::{ClipboardGuardState, handle_connection};
+    use super::{handle_connection, ClipboardGuardState};
     use std::sync::Arc;
 
     /// Spin up one server instance on a uniquely-named test pipe, inject
