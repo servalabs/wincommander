@@ -15,10 +15,14 @@ use serde_json::Value;
 pub mod events;
 pub mod outcomes;
 pub mod policy;
+#[cfg(feature = "autonomous-test")]
+pub mod autonomous_test;
 
 pub use events::*;
 pub use outcomes::*;
 pub use policy::*;
+#[cfg(feature = "autonomous-test")]
+pub use autonomous_test::*;
 
 /// Re-exported from `wincmd-clip-rules`, the clipboard-guard rule engine's
 /// SSOT for policy types (plan §4.1). This crate deliberately does NOT

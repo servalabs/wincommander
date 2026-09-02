@@ -877,6 +877,7 @@ dependencies = [
  "cron",
  "dotenvy",
  "ed25519-dalek",
+ "fleet-proto",
  "futures",
  "hex",
  "hickory-resolver",
