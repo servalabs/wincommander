@@ -1,392 +1,249 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Closed autonomous-test adapter for the isolated Fleet lab.
+//! Closed Fleet-lab controls for a disposable debug artifact.
 //!
-//! This is intentionally separate from the generated GUI CLI catalog: callers
-//! select a fixed scenario, never a handler, shell command, path, or URL.
+//! This module deliberately does not contact Fleet. Joining and leaving require
+//! a server-verified, one-time capability that is implemented by the paired
+//! Fleet and Pro feature. Until that contract is present, every mutation fails
+//! closed rather than falling back to the GUI or a broad local dispatcher.
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use serde::Deserialize;
+use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
-const RESULT_SCHEMA: &str = "wincommander-autonomous-test-result/v1";
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
-const TEST_ISSUER_KEY_ID: &str = "autonomy-lab-1";
+const MAX_CAPABILITY_BYTES: usize = 4096;
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-enum Scenario {
-    #[serde(rename = "fleet.preflight")]
-    FleetPreflight,
-    #[serde(rename = "fleet.checkin.readback")]
-    FleetCheckinReadback,
-    #[serde(rename = "clipboard_guard.synthetic_marker")]
-    ClipboardGuardSyntheticMarker,
-    #[serde(rename = "privacy_shield.status")]
-    PrivacyShieldStatus,
-    #[serde(rename = "privacy_shield.start_stop")]
-    PrivacyShieldStartStop,
-}
-
-impl Scenario {
-    fn id(self) -> &'static str {
-        match self {
-            Self::FleetPreflight => "fleet.preflight",
-            Self::FleetCheckinReadback => "fleet.checkin.readback",
-            Self::ClipboardGuardSyntheticMarker => "clipboard_guard.synthetic_marker",
-            Self::PrivacyShieldStatus => "privacy_shield.status",
-            Self::PrivacyShieldStartStop => "privacy_shield.start_stop",
-        }
-    }
-
-    fn command_binding(self) -> (&'static str, fleet_proto::ActionClass) {
-        match self {
-            Self::FleetPreflight | Self::FleetCheckinReadback => {
-                ("mesh.status", fleet_proto::ActionClass::Safe)
-            }
-            Self::ClipboardGuardSyntheticMarker => {
-                ("ink_receipt.status", fleet_proto::ActionClass::Safe)
-            }
-            Self::PrivacyShieldStatus => {
-                ("endpoint.security_snapshot", fleet_proto::ActionClass::Safe)
-            }
-            Self::PrivacyShieldStartStop => ("policy.reapply", fleet_proto::ActionClass::Safe),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Request {
+struct JoinRequest {
+    schema: String,
     run_id: String,
-    scenario: Scenario,
-    fixture_id: String,
+    capability: String,
     deadline_ms: u64,
-    capability: fleet_proto::AutonomousTestCapability,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ResultEnvelope {
-    schema: &'static str,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CleanupRequest {
+    schema: String,
     run_id: String,
-    scenario: Scenario,
-    phase: &'static str,
-    outcome: &'static str,
-    observed_at: String,
-    facts: Value,
-    failure_code: Option<&'static str>,
-    redacted_evidence_hash: String,
+    capability: String,
 }
 
 pub fn is_invocation(args: &[String]) -> bool {
-    matches!(args.first().map(String::as_str), Some("agent-test"))
+    matches!(args.first().map(String::as_str), Some("fleet-lab"))
 }
 
 pub fn main(args: Vec<String>) -> i32 {
-    let request = match parse_request(&args) {
-        Ok(request) => request,
-        Err(error) => return fail("invalid_request", error),
-    };
-    if let Err(error) = validate_capability(&request) {
-        return fail("capability_rejected", error);
+    match args.as_slice() {
+        [verb, action] if verb == "fleet-lab" && action == "preflight" => preflight(),
+        [verb, action] if verb == "fleet-lab" && action == "enrollment-request" => enrollment_request(),
+        [verb, action] if verb == "fleet-lab" && action == "status" => status(),
+        [verb, action, flag, raw]
+            if verb == "fleet-lab" && action == "join" && flag == "--request" =>
+        {
+            join(raw)
+        }
+        [verb, action, flag, raw]
+            if verb == "fleet-lab" && action == "leave-and-cleanup" && flag == "--request" =>
+        {
+            leave_and_cleanup(raw)
+        }
+        _ => fail(
+            "invalid_request",
+            "usage: fleet-lab <preflight|enrollment-request|status> | fleet-lab join --request <json> | fleet-lab leave-and-cleanup --request <json>",
+        ),
     }
-    run_in_tauri(request)
 }
 
-fn parse_request(args: &[String]) -> Result<Request, String> {
-    let [verb, action, flag, raw] = args else {
-        return Err("usage: agent-test run --request <json>".into());
+fn preflight() -> i32 {
+    let settings = match crate::settings::read_settings() {
+        Ok(settings) => settings,
+        Err(_) => return fail("settings_unavailable", "settings could not be read"),
     };
-    if verb != "agent-test" || action != "run" || flag != "--request" {
-        return Err("usage: agent-test run --request <json>".into());
-    }
-    if raw.len() > MAX_REQUEST_BYTES || raw.starts_with('@') || raw == "-" {
-        return Err("request must be bounded inline JSON, not a file or stdin reference".into());
-    }
-    let request: Request =
-        serde_json::from_str(raw).map_err(|_| "request must match the fixed schema".to_string())?;
-    if uuid::Uuid::parse_str(&request.run_id).is_err() {
-        return Err("runId must be a UUID".into());
-    }
-    if !valid_fixture_id(&request.fixture_id) {
-        return Err(
-            "fixtureId must use the wc-test- namespace and safe lowercase characters".into(),
+    print_json(json!({
+        "ok": true,
+        "schema": "wincommander-fleet-lab-preflight/v1",
+        "debugBuild": cfg!(debug_assertions),
+        "deviceIdHash": sha256(&settings.device_id),
+        "fleetConfigured": settings.app.fleet.enabled && !settings.app.fleet.server_url.is_empty(),
+        "pinnedSigningKey": settings.policy.fleet_signing_key.is_some(),
+    }));
+    0
+}
+
+/// Returns the stable local identity that Fleet must bind into a one-use lab
+/// admission pass. This is debug-build-only together with the whole command
+/// surface; joining never changes the client's identity.
+fn enrollment_request() -> i32 {
+    let settings = match crate::settings::read_settings() {
+        Ok(settings) => settings,
+        Err(_) => return fail("settings_unavailable", "settings could not be read"),
+    };
+    if uuid::Uuid::parse_str(&settings.device_id).is_err() {
+        return fail(
+            "invalid_device_identity",
+            "local device identity is invalid",
         );
     }
+    print_json(json!({
+        "ok": true,
+        "schema": "wincommander-fleet-lab-enrollment-request/v1",
+        "deviceId": settings.device_id,
+    }));
+    0
+}
+
+fn status() -> i32 {
+    let settings = match crate::settings::read_settings() {
+        Ok(settings) => settings,
+        Err(_) => return fail("settings_unavailable", "settings could not be read"),
+    };
+    let configured = settings.app.fleet.enabled && !settings.app.fleet.server_url.is_empty();
+    print_json(json!({
+        "ok": true,
+        "schema": "wincommander-fleet-lab-status/v1",
+        "deviceIdHash": sha256(&settings.device_id),
+        "fleetConfigured": configured,
+        "originHash": configured.then(|| sha256(&settings.app.fleet.server_url)),
+        "signerFingerprint": settings.policy.fleet_signing_key.as_deref().map(sha256),
+        "authoritativeFleetState": "unavailable",
+    }));
+    0
+}
+
+fn join(raw: &str) -> i32 {
+    let request = match parse_join(raw) {
+        Ok(request) => request,
+        Err(message) => return fail("invalid_request", &message),
+    };
+    let capability = match decode_enrollment_capability(&request.capability) {
+        Ok(capability) => capability,
+        Err(message) => return fail("invalid_request", &message),
+    };
+    let settings = match crate::settings::read_settings() {
+        Ok(settings) => settings,
+        Err(_) => return fail("settings_unavailable", "settings could not be read"),
+    };
+    if capability.device_id.0 != settings.device_id {
+        return fail(
+            "device_identity_mismatch",
+            "Fleet lab capability is not bound to this client",
+        );
+    }
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(_) => return fail("runtime_unavailable", "could not start bounded lab bridge"),
+    };
+    match runtime.block_on(crate::sidecar::dispatch_paid_command(
+        "fleet_lab_join",
+        json!({ "schema": request.schema, "runId": request.run_id, "capability": request.capability }),
+    )) {
+        Ok(response) => { print_json(json!({ "ok": true, "result": response })); 0 }
+        Err(_) => fail("lab_join_rejected", "Fleet lab enrollment was rejected or the Pro sidecar is unavailable"),
+    }
+}
+
+fn leave_and_cleanup(raw: &str) -> i32 {
+    let request = match parse_cleanup(raw) {
+        Ok(request) => request,
+        Err(message) => return fail("invalid_request", &message),
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            return fail(
+                "runtime_unavailable",
+                "could not start bounded cleanup bridge",
+            )
+        }
+    };
+    match runtime.block_on(crate::sidecar::dispatch_paid_command(
+        "fleet_lab_cleanup",
+        json!({ "schema": request.schema, "runId": request.run_id, "capability": request.capability }),
+    )) {
+        Ok(response) => { print_json(json!({ "ok": true, "result": response })); 0 }
+        Err(_) => fail("lab_cleanup_rejected", "Fleet lab cleanup was rejected or the Pro sidecar is unavailable"),
+    }
+}
+
+fn parse_join(raw: &str) -> Result<JoinRequest, String> {
+    let request: JoinRequest = parse_inline(raw)?;
+    if request.schema != "wincommander-fleet-lab-join/v1" {
+        return Err("schema must be wincommander-fleet-lab-join/v1".into());
+    }
+    validate_run_and_capability(&request.run_id, &request.capability)?;
     if !(1_000..=300_000).contains(&request.deadline_ms) {
         return Err("deadlineMs must be between 1000 and 300000".into());
     }
     Ok(request)
 }
 
-fn valid_fixture_id(value: &str) -> bool {
-    value.len() <= 96
-        && value.starts_with("wc-test-")
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+fn parse_cleanup(raw: &str) -> Result<CleanupRequest, String> {
+    let request: CleanupRequest = parse_inline(raw)?;
+    if request.schema != "wincommander-fleet-lab-cleanup/v1" {
+        return Err("schema must be wincommander-fleet-lab-cleanup/v1".into());
+    }
+    validate_run_and_capability(&request.run_id, &request.capability)?;
+    Ok(request)
 }
 
-fn validate_capability(request: &Request) -> Result<(), String> {
-    let settings = crate::settings::read_settings()?;
-    let capability = &request.capability;
-    if capability.run_id != request.run_id {
-        return Err("capability run binding is invalid".into());
+fn parse_inline<T: for<'a> Deserialize<'a>>(raw: &str) -> Result<T, String> {
+    if raw.len() > MAX_REQUEST_BYTES || raw.starts_with('@') || raw == "-" {
+        return Err("request must be bounded inline JSON, not a file or stdin reference".into());
     }
-    if capability.device_id.0 != settings.device_id
+    serde_json::from_str(raw).map_err(|_| "request must match the fixed schema".into())
+}
+
+fn validate_run_and_capability(run_id: &str, capability: &str) -> Result<(), String> {
+    if uuid::Uuid::parse_str(run_id).is_err() {
+        return Err("runId must be a UUID".into());
+    }
+    if capability.is_empty()
+        || capability.len() > MAX_CAPABILITY_BYTES
         || !capability
-            .scenarios
-            .iter()
-            .any(|id| id == request.scenario.id())
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
     {
-        return Err("capability is not bound to this device and scenario".into());
-    }
-    let (expected_catalog_id, expected_action_class) = request.scenario.command_binding();
-    if uuid::Uuid::parse_str(&capability.command_id).is_err()
-        || capability.catalog_id != expected_catalog_id
-        || capability.action_class != expected_action_class
-    {
-        return Err("capability command binding is invalid".into());
-    }
-    let not_before = DateTime::parse_from_rfc3339(&capability.not_before)
-        .map_err(|_| "capability notBefore is invalid")?
-        .with_timezone(&Utc);
-    let expires_at = DateTime::parse_from_rfc3339(&capability.expires_at)
-        .map_err(|_| "capability expiresAt is invalid")?
-        .with_timezone(&Utc);
-    let now = Utc::now();
-    if now < not_before || now >= expires_at {
-        return Err("capability is not currently valid".into());
-    }
-    let key = settings
-        .policy
-        .fleet_signing_key
-        .ok_or_else(|| "device has no pinned Fleet signing key".to_string())?;
-    if !fleet_proto::verify_autonomous_test_capability(capability, TEST_ISSUER_KEY_ID, &key) {
-        return Err("capability signature is invalid".into());
+        return Err("capability must be a bounded base64url value".into());
     }
     Ok(())
 }
 
-fn run_in_tauri(request: Request) -> i32 {
-    let result = Arc::new(Mutex::new(None));
-    let result_for_setup = result.clone();
-    let mut context = tauri::generate_context!();
-    context.config_mut().app.windows.clear();
-    context.config_mut().build.dev_url = None;
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_dialog::init())
-        .setup(move |app| {
-            let app_handle = app.handle().clone();
-            let result = result_for_setup.clone();
-            tauri::async_runtime::spawn(async move {
-                let envelope = execute(app_handle.clone(), &request).await;
-                let outcome = submit_result(&request.capability, &envelope)
-                    .await
-                    .map(|_| envelope);
-                if let Ok(mut slot) = result.lock() {
-                    *slot = Some(outcome);
-                }
-                app_handle.exit(0);
-            });
-            Ok(())
-        });
-    if let Err(error) = builder.run(context) {
-        return fail("runtime_error", format!("test runtime failed: {error}"));
+fn decode_enrollment_capability(
+    encoded: &str,
+) -> Result<fleet_proto::FleetLabEnrollmentCapability, String> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| "capability must be valid base64url".to_string())?;
+    let capability = serde_json::from_slice::<fleet_proto::FleetLabEnrollmentCapability>(&bytes)
+        .map_err(|_| "capability must match the Fleet lab enrollment schema".to_string())?;
+    if uuid::Uuid::parse_str(&capability.device_id.0).is_err() {
+        return Err("capability deviceId must be a UUID".into());
     }
-    match result.lock().ok().and_then(|mut slot| slot.take()) {
-        Some(Ok(envelope)) => {
-            let exit_code = if envelope.outcome == "passed" { 0 } else { 8 };
-            print_json(&envelope);
-            exit_code
-        }
-        Some(Err((code, message))) => fail(code, message),
-        None => fail(
-            "runtime_error",
-            "test runtime exited without a result".into(),
-        ),
-    }
-}
-
-async fn execute(
-    app: tauri::AppHandle,
-    request: &Request,
-) -> ResultEnvelope {
-    let facts = match request.scenario {
-        Scenario::FleetPreflight => fleet_preflight(),
-        Scenario::FleetCheckinReadback => fleet_checkin_readback().await,
-        Scenario::ClipboardGuardSyntheticMarker => clipboard_marker(app, request).await,
-        Scenario::PrivacyShieldStatus => privacy_status(app).await,
-        Scenario::PrivacyShieldStartStop => privacy_start_stop(app).await,
-    };
-    match facts {
-        Ok(facts) => pass(request, facts),
-        Err((code, _)) => failed(request, code),
-    }
-}
-
-fn fleet_preflight() -> Result<Value, (&'static str, String)> {
-    let settings = crate::settings::read_settings().map_err(|e| ("settings_unavailable", e))?;
-    Ok(json!({
-        "fleetConfigured": settings.app.fleet.enabled && !settings.app.fleet.server_url.is_empty(),
-        "pinnedSigningKey": settings.policy.fleet_signing_key.is_some(),
-        "deviceIdHash": sha256(&settings.device_id),
-    }))
-}
-
-async fn fleet_checkin_readback() -> Result<Value, (&'static str, String)> {
-    let status = crate::fleet_agent::fleet_status()
-        .await
-        .map_err(|e| ("fleet_status_unavailable", e))?;
-    Ok(json!({
-        "connected": status.get("connected").and_then(Value::as_bool).unwrap_or(false),
-        "pendingApproval": status.get("pendingApproval").and_then(Value::as_bool).unwrap_or(false),
-        "hasEnrollmentTimestamp": status.get("lastEnrollAt").and_then(Value::as_str).is_some(),
-        "hasTerminalError": status.get("lastError").and_then(Value::as_str).is_some(),
-    }))
-}
-
-async fn clipboard_marker(
-    app: tauri::AppHandle,
-    request: &Request,
-) -> Result<Value, (&'static str, String)> {
-    let before = crate::paste_monitor::get_paste_monitor_recent()
-        .await
-        .map_err(|e| ("clipboard_observe_failed", e))?
-        .len();
-    crate::paste_monitor::start_paste_monitor(app)
-        .await
-        .map_err(|e| ("clipboard_start_failed", e))?;
-    let marker = format!(
-        "AKIA{}",
-        sha256(&format!("{}:{}", request.run_id, request.fixture_id))[..16].to_ascii_uppercase()
-    );
-    #[cfg(windows)]
-    clipboard_win::set_clipboard_string(&marker).map_err(|_| {
-        (
-            "clipboard_fixture_write_failed",
-            "synthetic marker could not be written".into(),
-        )
-    })?;
-    #[cfg(not(windows))]
-    return Err((
-        "platform_unsupported",
-        "clipboard scenario requires Windows".into(),
-    ));
-    tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
-    let after = crate::paste_monitor::get_paste_monitor_recent()
-        .await
-        .map_err(|e| ("clipboard_observe_failed", e))?
-        .len();
-    let health = crate::paste_monitor::get_paste_monitor_health()
-        .await
-        .map_err(|e| ("clipboard_observe_failed", e))?;
-    if after <= before {
-        return Err((
-            "clipboard_marker_not_observed",
-            "the production listener did not record the synthetic marker".into(),
-        ));
-    }
-    Ok(json!({
-        "markerDigest": sha256(&marker),
-        "detectionCountDelta": after - before,
-        "listenerRegistered": health.listener_registered,
-        "rulesCompiled": health.rules_compiled,
-        "clearFailing": health.clear_failing,
-    }))
-}
-
-async fn privacy_status(app: tauri::AppHandle) -> Result<Value, (&'static str, String)> {
-    let result = run_privacy_command(app, "Get-PrivacyShieldStatus").await?;
-    Ok(json!({ "statusObserved": true, "statusHash": sha256(&result.to_string()) }))
-}
-
-async fn privacy_start_stop(app: tauri::AppHandle) -> Result<Value, (&'static str, String)> {
-    run_privacy_command(app.clone(), "Start-PrivacyShield").await?;
-    let status = run_privacy_command(app.clone(), "Get-PrivacyShieldStatus").await?;
-    run_privacy_command(app, "Stop-PrivacyShield").await?;
-    Ok(json!({ "startStopObserved": true, "runningStatusHash": sha256(&status.to_string()) }))
-}
-
-async fn run_privacy_command(
-    app: tauri::AppHandle,
-    command: &str,
-) -> Result<Value, (&'static str, String)> {
-    crate::backend::run_backend_script(app, command.to_string(), HashMap::new())
-        .await
-        .map_err(|e| ("privacy_handler_failed", e))
-}
-
-fn pass(request: &Request, facts: Value) -> ResultEnvelope {
-    let evidence = facts.to_string();
-    ResultEnvelope {
-        schema: RESULT_SCHEMA,
-        run_id: request.run_id.clone(),
-        scenario: request.scenario,
-        phase: "observe",
-        outcome: "passed",
-        observed_at: Utc::now().to_rfc3339(),
-        facts,
-        failure_code: None,
-        redacted_evidence_hash: sha256(&evidence),
-    }
-}
-
-fn failed(request: &Request, code: &'static str) -> ResultEnvelope {
-    let failure_code = "TEST_ACTION_FAILED";
-    ResultEnvelope {
-        schema: RESULT_SCHEMA,
-        run_id: request.run_id.clone(),
-        scenario: request.scenario,
-        phase: "report",
-        outcome: "failed",
-        observed_at: Utc::now().to_rfc3339(),
-        facts: json!({}),
-        failure_code: Some(failure_code),
-        redacted_evidence_hash: sha256(code),
-    }
-}
-
-/// Queue the closed result with the existing Pro Fleet agent. Pro owns the
-/// durable device signing key and the single check-in loop; the Free test CLI
-/// must never sign or post Fleet results itself.
-async fn submit_result(
-    capability: &fleet_proto::AutonomousTestCapability,
-    result: &ResultEnvelope,
-) -> Result<(), (&'static str, String)> {
-    let response = crate::sidecar::dispatch_paid_command(
-        "fleet_agent_autonomous_test_result",
-        json!({ "capability": capability, "result": result }),
-    )
-    .await
-    .map_err(|error| ("report_queue_failed", error))?;
-    if response.get("queued").and_then(Value::as_bool) != Some(true) {
-        return Err((
-            "report_queue_failed",
-            "Pro did not confirm the autonomous-test report queue".into(),
-        ));
-    }
-    Ok(())
+    Ok(capability)
 }
 
 fn sha256(value: &str) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(value.as_bytes())))
 }
 
-fn fail(code: &'static str, message: String) -> i32 {
-    print_json(&json!({ "ok": false, "error": code, "message": message }));
+fn fail(code: &str, message: &str) -> i32 {
+    print_json(json!({ "ok": false, "error": code, "message": message }));
     8
 }
 
-fn print_json(value: &impl Serialize) {
+fn print_json(value: serde_json::Value) {
     println!(
         "{}",
-        serde_json::to_string(value)
-            .unwrap_or_else(|_| "{\"ok\":false,\"error\":\"serialization_failed\"}".into())
+        serde_json::to_string(&value).unwrap_or_else(|_| "{\"ok\":false}".into())
     );
 }
 
@@ -394,77 +251,55 @@ fn print_json(value: &impl Serialize) {
 mod tests {
     use super::*;
 
+    const RUN_ID: &str = "00000000-0000-4000-8000-000000000001";
+
     #[test]
-    fn closed_catalog_rejects_unknown_scenarios() {
-        let raw = r#"{"runId":"00000000-0000-4000-8000-000000000001","scenario":"shell","fixtureId":"00000000-0000-4000-8000-000000000002","deadlineMs":1000,"capability":{"version":2,"runId":"00000000-0000-4000-8000-000000000001","deviceId":"00000000-0000-4000-8000-000000000003","commandId":"00000000-0000-4000-8000-000000000004","catalogId":"mesh.status","actionClass":"safe","scenarios":[],"notBefore":"2026-01-01T00:00:00Z","expiresAt":"2027-01-01T00:00:00Z","issuerKeyId":"autonomy-lab-1","nonce":"x","signature":"x"}}"#;
-        assert!(parse_request(&[
-            "agent-test".into(),
-            "run".into(),
-            "--request".into(),
-            raw.into()
-        ])
+    fn join_refuses_unknown_fields_and_file_indirection() {
+        assert!(parse_join("@request.json").is_err());
+        assert!(parse_join(&format!(r#"{{"schema":"wincommander-fleet-lab-join/v1","runId":"{RUN_ID}","capability":"abc","deadlineMs":1000,"url":"https://bad"}}"#)).is_err());
+    }
+
+    #[test]
+    fn join_requires_expected_schema_uuid_capability_and_deadline() {
+        assert!(parse_join(&format!(
+            r#"{{"schema":"wrong","runId":"{RUN_ID}","capability":"abc","deadlineMs":1000}}"#
+        ))
+        .is_err());
+        assert!(parse_join(r#"{"schema":"wincommander-fleet-lab-join/v1","runId":"bad","capability":"abc","deadlineMs":1000}"#).is_err());
+        assert!(parse_join(&format!(r#"{{"schema":"wincommander-fleet-lab-join/v1","runId":"{RUN_ID}","capability":"abc","deadlineMs":999}}"#)).is_err());
+    }
+
+    #[test]
+    fn cleanup_accepts_only_its_fixed_contract() {
+        assert!(parse_cleanup(&format!(r#"{{"schema":"wincommander-fleet-lab-cleanup/v1","runId":"{RUN_ID}","capability":"a-b_C"}}"#)).is_ok());
+        assert!(parse_cleanup(&format!(
+            r#"{{"schema":"wincommander-fleet-lab-join/v1","runId":"{RUN_ID}","capability":"abc"}}"#
+        ))
         .is_err());
     }
 
     #[test]
-    fn request_refuses_file_and_stdin_indirection() {
-        for raw in ["@request.json", "-"] {
-            assert!(parse_request(&[
-                "agent-test".into(),
-                "run".into(),
-                "--request".into(),
-                raw.into()
-            ])
-            .is_err());
-        }
-    }
+    fn join_capability_requires_a_real_device_uuid() {
+        let capability = json!({
+            "version": 1,
+            "capabilityId": "00000000-0000-4000-8000-000000000010",
+            "orgId": "local",
+            "deviceId": "00000000-0000-4000-8000-000000000011",
+            "fleetOrigin": "http://127.0.0.1:8788",
+            "notBefore": "2026-01-01T00:00:00Z",
+            "expiresAt": "2026-01-01T00:05:00Z",
+            "issuerKeyId": "fleet-lab-enrollment-1",
+            "nonce": "n",
+            "signature": "s",
+        });
+        let encoded = URL_SAFE_NO_PAD.encode(capability.to_string());
+        assert!(decode_enrollment_capability(&encoded).is_ok());
 
-    #[test]
-    fn request_requires_the_disposable_fixture_namespace() {
-        let raw = r#"{"runId":"00000000-0000-4000-8000-000000000001","scenario":"fleet.preflight","fixtureId":"C:/temp","deadlineMs":1000,"capability":{"version":2,"runId":"00000000-0000-4000-8000-000000000001","deviceId":"00000000-0000-4000-8000-000000000003","commandId":"00000000-0000-4000-8000-000000000004","catalogId":"mesh.status","actionClass":"safe","scenarios":["fleet.preflight"],"notBefore":"2026-01-01T00:00:00Z","expiresAt":"2027-01-01T00:00:00Z","issuerKeyId":"autonomy-lab-1","nonce":"x","signature":"x"}}"#;
-        assert!(parse_request(&[
-            "agent-test".into(),
-            "run".into(),
-            "--request".into(),
-            raw.into()
-        ])
-        .is_err());
-    }
-
-    #[test]
-    fn capability_preimage_binds_every_authority_field() {
-        let base = fleet_proto::AutonomousTestCapability {
-            version: 2,
-            run_id: "r".into(),
-            device_id: fleet_proto::DeviceId("d".into()),
-            command_id: "c".into(),
-            catalog_id: "mesh.status".into(),
-            action_class: fleet_proto::ActionClass::Safe,
-            scenarios: vec![Scenario::FleetPreflight.id().into()],
-            not_before: "2026-01-01T00:00:00Z".into(),
-            expires_at: "2027-01-01T00:00:00Z".into(),
-            issuer_key_id: TEST_ISSUER_KEY_ID.into(),
-            nonce: "n".into(),
-            signature: "x".into(),
-        };
-        let changed = fleet_proto::AutonomousTestCapability {
-            scenarios: vec![Scenario::PrivacyShieldStatus.id().into()],
-            ..base
-        };
-        assert_ne!(
-            fleet_proto::autonomous_test_capability_preimage(&changed),
-            fleet_proto::autonomous_test_capability_preimage(
-                &fleet_proto::AutonomousTestCapability {
-                    scenarios: vec![Scenario::FleetPreflight.id().into()],
-                    ..changed
-                }
-            )
+        let malformed = URL_SAFE_NO_PAD.encode(
+            capability
+                .to_string()
+                .replace("00000000-0000-4000-8000-000000000011", "not-a-uuid"),
         );
-    }
-
-    #[test]
-    fn synthetic_marker_digest_does_not_contain_marker_text() {
-        let marker = "AKIA0123456789ABCDEF";
-        assert!(!sha256(marker).contains(marker));
+        assert!(decode_enrollment_capability(&malformed).is_err());
     }
 }

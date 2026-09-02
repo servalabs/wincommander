@@ -32,9 +32,8 @@ test = false
 # nothing to farm) and packaging differences. Persistent state is already
 # machine-wide (%ProgramData%) regardless of this flag.
 portable = []
-# Deliberately unavailable to release artifacts. This closed, scenario-based
-# adapter is for the isolated Fleet autonomy lab; it is never a general CLI or
-# WebView command surface.
+# Closed lab controls for debug artifacts only. This intentionally adds no
+# generic command dispatcher and never appears in a release artifact.
 autonomous-test = ["dep:fleet-proto", "fleet-proto/autonomous-test"]
 
 [build-dependencies]

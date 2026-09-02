@@ -13,16 +13,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod events;
-pub mod outcomes;
-pub mod policy;
 #[cfg(feature = "autonomous-test")]
 pub mod autonomous_test;
+pub mod outcomes;
+pub mod policy;
 
 pub use events::*;
-pub use outcomes::*;
-pub use policy::*;
 #[cfg(feature = "autonomous-test")]
 pub use autonomous_test::*;
+pub use outcomes::*;
+pub use policy::*;
 
 /// Re-exported from `wincmd-clip-rules`, the clipboard-guard rule engine's
 /// SSOT for policy types (plan §4.1). This crate deliberately does NOT
@@ -2081,6 +2081,15 @@ pub(crate) fn write_canonical(v: &Value, out: &mut String) {
                 .expect("scalar serializes — arbitrary_precision must be OFF; boundary validation must reject non-serializable input upstream"),
         ),
     }
+}
+
+/// Canonical JSON bytes used by detached signatures over protocol extensions.
+/// This exposes the one existing encoder instead of allowing consumers to
+/// duplicate a subtly different key-ordering implementation.
+pub fn canonical_json_bytes(value: &Value) -> Vec<u8> {
+    let mut canonical = String::new();
+    write_canonical(value, &mut canonical);
+    canonical.into_bytes()
 }
 
 #[cfg(test)]

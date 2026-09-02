@@ -11,6 +11,11 @@ fn main() {
         attach_parent_console();
         std::process::exit(wincommander_lib::autonomous_test::main(args));
     }
+    #[cfg(all(feature = "autonomous-test", debug_assertions))]
+    if wincommander_lib::autonomous_agent_test::is_invocation(&args) {
+        attach_parent_console();
+        std::process::exit(wincommander_lib::autonomous_agent_test::main(args));
+    }
     if wincommander_lib::cli::is_cli_invocation(&args) {
         attach_parent_console();
         std::process::exit(wincommander_lib::cli::main(args));
