@@ -374,6 +374,25 @@ impl VaultMountBroker {
         })
     }
 
+    /// A legacy container is only promoted into the durable personal registry
+    /// after its existing credential mounted successfully. If that promotion
+    /// fails, close the just-created presentation before returning failure so
+    /// an unregistered mount is never left accessible.
+    pub(crate) fn dismount_personal_registration_failure(
+        &self,
+        store: &VaultAccessStore,
+        record: &PersonalVaultRecord,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+    ) {
+        self.with_exclusive_operation(|| {
+            let _ = self.dismount_entry_locked_for_client(
+                store,
+                &personal_mount_entry_id(record),
+                Some(caller_token),
+            );
+        });
+    }
+
     /// The pipe keeps drive-letter inspection and the broker call inside the
     /// same operation gate, so a second mount cannot invalidate preflight in
     /// the gap before the encrypted driver receives the request.

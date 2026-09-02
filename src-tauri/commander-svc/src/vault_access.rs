@@ -539,6 +539,71 @@ impl VaultAccessStore {
         Ok((identity == record.container_identity).then_some(record))
     }
 
+    /// Builds a non-durable personal record for a container that predates the
+    /// personal registry. The caller is not trusted by this method: the pipe
+    /// permits use only after the native engine has accepted that caller's
+    /// existing credential, then promotes the same identity to a durable
+    /// record before returning a successful mount response.
+    pub fn legacy_personal_record(
+        &self,
+        container_path: &str,
+        owner_sid: &str,
+        created_by_session: u32,
+    ) -> Result<PersonalVaultRecord, VaultError> {
+        if container_path.is_empty()
+            || owner_sid.is_empty()
+            || created_by_session == 0
+            || !Path::new(container_path).is_absolute()
+        {
+            return Err(VaultError::Validation);
+        }
+        Ok(PersonalVaultRecord {
+            container_path: container_path.to_owned(),
+            container_identity: self.fs.stable_file_identity(Path::new(container_path))?,
+            owner_sid: owner_sid.to_owned(),
+            scope: VaultPresentation::PerUser,
+            created_by_session,
+        })
+    }
+
+    /// Gives a legacy container's interactive caller a temporary, exact write
+    /// DACL while its pre-existing credential is verified by the native
+    /// engine. The original ACL snapshot is restored on every failed mount;
+    /// a successful mount is immediately promoted through
+    /// [`complete_personal_registration`], which replaces this temporary ACL
+    /// with the normal durable personal-vault ACL.
+    pub fn prepare_legacy_personal_mount(
+        &self,
+        record: &PersonalVaultRecord,
+    ) -> Result<Vec<AclSnapshot>, VaultError> {
+        let container = PathBuf::from(&record.container_path);
+        let parent = container.parent().ok_or(VaultError::Validation)?.to_path_buf();
+        let plan = VaultAclPlan {
+            parent,
+            container: container.clone(),
+            grants: vec![ResolvedGrant {
+                sid: record.owner_sid.clone(),
+                access: VaultAccess::Write,
+            }],
+            authorization_grants: Vec::new(),
+            managed_groups: Vec::new(),
+        };
+        let snapshots = self.acls.snapshot(&plan)?;
+        if self
+            .acls
+            .apply_container_and_verify(&container, &plan.grants)
+            .is_err()
+        {
+            let _ = self.acls.restore(&snapshots);
+            return Err(VaultError::AclApply);
+        }
+        Ok(snapshots)
+    }
+
+    pub fn restore_legacy_personal_mount(&self, snapshots: &[AclSnapshot]) {
+        let _ = self.acls.restore(snapshots);
+    }
+
     fn persist_personal(
         &self,
         records: &HashMap<String, PersonalVaultRecord>,

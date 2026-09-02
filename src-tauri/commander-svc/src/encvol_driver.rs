@@ -78,9 +78,22 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
         Some(0) => {
             let config =
                 run_sc(&["qc", SERVICE_NAME]).map_err(|_| EnsureDriverError::ServiceInspection)?;
-            if !config.status.success() || !service_config_is_fixed(&config) {
-                return Err(EnsureDriverError::ServiceOwnership);
+            if !config.status.success() {
+                return Err(EnsureDriverError::ServiceInspection);
             }
+            // A development service can run under the interactive user while
+            // the installed kernel driver is already running under SCM. Do
+            // not demand SERVICE_CHANGE_CONFIG merely to reconfirm that known
+            // good state: normal users are correctly denied that right.
+            if service_config_is_fixed(&config) && service_is_running(&query) {
+                cache_identity(&READY_DRIVER, identity);
+                return Ok(());
+            }
+            // Older builds registered the same fixed service name with a
+            // build-tree path.  The fixed payload has already passed hash,
+            // signer, ownership, and ACL validation above, so repair that
+            // stale SCM record below instead of making every mount fail.
+            // Nothing from the caller determines the replacement path.
             false
         }
         Some(ERROR_SERVICE_DOES_NOT_EXIST) => {
@@ -117,6 +130,16 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
     if !configure.status.success() {
         rollback_new_service(created);
         return Err(EnsureDriverError::ServiceConfigure);
+    }
+
+    // `sc config` reports command acceptance, not the final registry value.
+    // Read it back before starting anything so a blocked or rewritten service
+    // record cannot make the mount path trust a different driver image.
+    let repaired =
+        run_sc(&["qc", SERVICE_NAME]).map_err(|_| EnsureDriverError::ServiceInspection)?;
+    if !repaired.status.success() || !service_config_is_fixed(&repaired) {
+        rollback_new_service(created);
+        return Err(EnsureDriverError::ServiceOwnership);
     }
 
     let start = run_sc(&["start", SERVICE_NAME]).map_err(|_| EnsureDriverError::ServiceStart)?;
@@ -186,6 +209,13 @@ fn service_config_is_fixed(output: &Output) -> bool {
         trimmed.starts_with("BINARY_PATH_NAME")
             && fixed_image_path(trimmed.split_once(':').map_or("", |(_, value)| value))
     })
+}
+
+fn service_is_running(output: &Output) -> bool {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .any(|line| line.starts_with("STATE") && line.contains("4") && line.contains("RUNNING"))
 }
 
 fn fixed_image_path(value: &str) -> bool {
@@ -261,6 +291,20 @@ mod tests {
         assert!(!fixed_image_path(
             r"C:\ProgramData\WinCommander\bin\engine\other.sys"
         ));
+    }
+
+    #[test]
+    fn recognises_only_a_running_driver_service() {
+        let running = Command::new("cmd")
+            .args(["/c", "echo STATE : 4 RUNNING"])
+            .output()
+            .unwrap();
+        let stopped = Command::new("cmd")
+            .args(["/c", "echo STATE : 1 STOPPED"])
+            .output()
+            .unwrap();
+        assert!(service_is_running(&running));
+        assert!(!service_is_running(&stopped));
     }
 
     /// Regression: a quoted `binPath=` lands in ImagePath verbatim, and the
