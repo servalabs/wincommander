@@ -122,6 +122,13 @@ access control, and retention policy.
 
 ## Current limits and technical references
 
+Post-quantum cryptography is not a shipped capability in current releases.
+Classical public-key trust and external transport/platform dependencies remain,
+so roadmap work, source scaffolding, or one migrated component must not be
+listed as a product feature. The public status and the evidence required before
+any scoped quantum-resistant claim are in
+[SECURITY.md](SECURITY.md#cryptography-and-post-quantum-status).
+
 Current operational limits that qualify these capabilities are in
 [SECURITY.md](SECURITY.md). Deliberate product exclusions are in
 [NON-GOALS.md](NON-GOALS.md); source ownership and technical interfaces are in
