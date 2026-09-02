@@ -37,7 +37,6 @@ function Get-ProductivityStatus {
         return @{ error = $true; message = $_.Exception.Message }
     }
 }
-
 function Start-ProductivityTracker {
     try {
         $status = Get-ProductivityStatus
@@ -158,28 +157,6 @@ function Stop-ProductivityTracker {
         # Brief wait for port 5600 to be released before allowing restart
         Start-Sleep -Seconds 1.5
         return @{ success = $true; message = "Tracking session terminated." }
-    }
-    catch {
-        return @{ error = $true; message = $_.Exception.Message }
-    }
-}
-
-function Invoke-ProductivityEngineMaintenance {
-    try {
-        $stealthEnabled = Get-WCSetting -Path "productivity.productivityEngineStealthEnabled"
-        if ($stealthEnabled -ne $true) {
-            return @{ success = $true; message = "Productivity Engine stealth mode is not enabled." }
-        }
-
-        # Ensure aw-qt is NOT running
-        $qt = Get-Process -Name "aw-qt" -ErrorAction SilentlyContinue
-        if ($qt) {
-            Stop-Process -Name "aw-qt" -Force -ErrorAction SilentlyContinue
-        }
-
-        # Reuse the authoritative launcher so maintenance and normal
-        # autostart use the same discovery rules and never duplicate aw-server.
-        return Start-ProductivityTracker
     }
     catch {
         return @{ error = $true; message = $_.Exception.Message }

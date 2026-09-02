@@ -1549,12 +1549,15 @@ $script:RdpWinStationPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Ser
 function Get-RdpIncomingIdleStatus {
     $tsPath  = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
     $maxIdle = (Get-ItemProperty -Path $tsPath -Name 'MaxIdleTime'   -ErrorAction SilentlyContinue).MaxIdleTime
+    $maxDisc = (Get-ItemProperty -Path $tsPath -Name 'MaxDisconnectionTime' -ErrorAction SilentlyContinue).MaxDisconnectionTime
+    $maxConn = (Get-ItemProperty -Path $tsPath -Name 'MaxConnectionTime' -ErrorAction SilentlyContinue).MaxConnectionTime
     $resetBr = (Get-ItemProperty -Path $tsPath -Name 'fResetBroken'  -ErrorAction SilentlyContinue).fResetBroken
+    $denyRdp = (Get-ItemProperty -Path $tsPath -Name 'fDenyTSConnections' -ErrorAction SilentlyContinue).fDenyTSConnections
     $warn    = (Get-ItemProperty -Path $script:RdpWinStationPath -Name 'fEnableTimeoutWarning' -ErrorAction SilentlyContinue).fEnableTimeoutWarning
-    if ($maxIdle -gt 0 -and $resetBr -eq 1) {
-        @{ enabled = $true;  seconds = [math]::Round($maxIdle / 1000); minutes = [math]::Round($maxIdle / 60000); maxIdleTimeMs = $maxIdle; fResetBroken = $resetBr; warningEnabled = ($warn -ne 0) }
+    if ($maxIdle -gt 0 -and $maxDisc -gt 0 -and $maxConn -gt 0 -and $resetBr -eq 1 -and $denyRdp -eq 0) {
+        @{ enabled = $true;  seconds = [math]::Round($maxIdle / 1000); minutes = [math]::Round($maxIdle / 60000); maxIdleTimeMs = $maxIdle; maxDisconnectionTimeMs = $maxDisc; maxConnectionTimeMs = $maxConn; fResetBroken = $resetBr; fDenyTSConnections = $denyRdp; warningEnabled = ($warn -ne 0) }
     } else {
-        @{ enabled = $false; seconds = $null; minutes = $null;        maxIdleTimeMs = $maxIdle; fResetBroken = $resetBr; warningEnabled = ($warn -ne 0) }
+        @{ enabled = $false; seconds = $null; minutes = $null;        maxIdleTimeMs = $maxIdle; maxDisconnectionTimeMs = $maxDisc; maxConnectionTimeMs = $maxConn; fResetBroken = $resetBr; fDenyTSConnections = $denyRdp; warningEnabled = ($warn -ne 0) }
     }
 }
 
@@ -1568,12 +1571,16 @@ function Enable-RdpIncomingIdleTimeout {
         $ms     = $Seconds * 1000
         $tsPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
         if (!(Test-Path $tsPath)) { New-Item -Path $tsPath -Force | Out-Null }
+        Set-ItemProperty -Path $tsPath -Name 'fDenyTSConnections'    -Value 0  -Type DWord -Force
         Set-ItemProperty -Path $tsPath -Name 'MaxIdleTime'          -Value $ms -Type DWord -Force
         Set-ItemProperty -Path $tsPath -Name 'fResetBroken'         -Value 1  -Type DWord -Force
         Set-ItemProperty -Path $tsPath -Name 'MaxDisconnectionTime' -Value $ms -Type DWord -Force
+        Set-ItemProperty -Path $tsPath -Name 'MaxConnectionTime'    -Value $ms -Type DWord -Force
         if (Test-Path $script:RdpWinStationPath) { Set-ItemProperty -Path $script:RdpWinStationPath -Name 'fEnableTimeoutWarning' -Value 0 -Type DWord -Force }
         & gpupdate /force /target:computer 2>&1 | Out-Null
-        @{ status = "enabled"; seconds = $Seconds; minutes = [math]::Ceiling($Seconds / 60); maxIdleTimeMs = $ms }
+        $observed = Get-RdpIncomingIdleStatus
+        if (-not $observed.enabled -or $observed.seconds -ne $Seconds) { throw 'Windows read-back did not match the requested RDP Incoming policy' }
+        $observed
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }
@@ -1583,14 +1590,18 @@ function Disable-RdpIncomingIdleTimeout {
     try {
         $tsPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
         if (Test-Path $tsPath) {
+            Remove-ItemProperty -Path $tsPath -Name 'fDenyTSConnections'    -ErrorAction SilentlyContinue
             Remove-ItemProperty -Path $tsPath -Name 'MaxIdleTime'          -ErrorAction SilentlyContinue
             Remove-ItemProperty -Path $tsPath -Name 'fResetBroken'         -ErrorAction SilentlyContinue
             Remove-ItemProperty -Path $tsPath -Name 'MaxDisconnectionTime' -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path $tsPath -Name 'MaxConnectionTime'    -ErrorAction SilentlyContinue
         }
         # Restore Windows' default (warning on) so removing the feature is a clean revert.
         if (Test-Path $script:RdpWinStationPath) { Set-ItemProperty -Path $script:RdpWinStationPath -Name 'fEnableTimeoutWarning' -Value 1 -Type DWord -Force }
         & gpupdate /force /target:computer 2>&1 | Out-Null
-        @{ status = "disabled" }
+        $observed = Get-RdpIncomingIdleStatus
+        if ($observed.enabled) { throw 'Windows read-back still reports an active RDP Incoming policy' }
+        $observed
     }
     catch { @{ error = $true; message = $_.Exception.Message } }
 }

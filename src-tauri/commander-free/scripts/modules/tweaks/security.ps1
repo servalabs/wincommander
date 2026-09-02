@@ -340,10 +340,9 @@ $script:FirefoxExtensions = @(
 )
 
 # Filters a master extension list (ChromiumExtensionsBase / FirefoxExtensions)
-# down to what the user actually wants installed. Entries with no ToggleKey
-# (uBlock) always pass through. Absent settings, or a slug missing from
-# settings, defaults to enabled — matches the pre-existing force-install-all
-# behaviour so nobody's hardened browsers change until they flip a toggle.
+# down to what the command is allowed to install. Per-user preferences are
+# encrypted in Rust and are not readable from PowerShell; absent a typed policy
+# passed by Rust, preserve the safe historical default of enabling every entry.
 function Get-BrowserExtensionSettingKey {
     param(
         [string]$BrowserName,
@@ -357,7 +356,7 @@ function Get-EnabledBrowserExtensions {
         [array]$MasterList,
         [string]$BrowserName
     )
-    $toggles = Get-WCSetting -Path "privacy.browserExtensions"
+    $toggles = $null
     return @($MasterList | Where-Object {
         if (-not $_.ToggleKey) { return $true }
         if ($null -eq $toggles) { return $true }
@@ -376,7 +375,7 @@ function Get-DisabledBrowserExtensions {
         [array]$MasterList,
         [string]$BrowserName
     )
-    $toggles = Get-WCSetting -Path "privacy.browserExtensions"
+    $toggles = $null
     if ($null -eq $toggles) { return @() }
     return @($MasterList | Where-Object {
         if (-not $_.ToggleKey) { return $false }

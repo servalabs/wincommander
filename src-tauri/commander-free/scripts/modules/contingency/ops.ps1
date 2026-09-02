@@ -363,19 +363,30 @@ function Disconnect-RDPClientIdle {
 # ── RDP Access Control (Windows Firewall) ────────────────────────────────────
 
 function Lock-RDPAccess {
+    Assert-IsAdmin
     try {
-        Remove-NetFirewallRule -DisplayName "WC-RDP-Lock" -EA SilentlyContinue
-        New-NetFirewallRule -DisplayName "WC-RDP-Lock" -Direction Inbound `
+        $ruleName = 'WC-LockRDP'
+        Remove-NetFirewallRule -DisplayName $ruleName -EA SilentlyContinue
+        Remove-NetFirewallRule -DisplayName 'WC-RDP-Lock' -EA SilentlyContinue
+        New-NetFirewallRule -DisplayName $ruleName -Direction Inbound `
             -LocalPort 3389 -Protocol TCP -Action Block -Profile Any -Enabled True | Out-Null
-        return @{ success = $true; locked = $true }
+        $rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction Stop | Select-Object -First 1
+        if ($null -eq $rule -or $rule.Direction -ne 'Inbound' -or $rule.Action -ne 'Block' -or $rule.Enabled -ne 'True') {
+            throw 'Firewall read-back did not match the requested RDP lock rule'
+        }
+        return @{ success = $true; locked = $true; ruleName = $ruleName; observed = $true }
     }
     catch { return @{ success = $false; error = $_.Exception.Message } }
 }
 
 function Unlock-RDPAccess {
+    Assert-IsAdmin
     try {
-        Remove-NetFirewallRule -DisplayName "WC-RDP-Lock" -EA SilentlyContinue
-        return @{ success = $true; locked = $false }
+        Remove-NetFirewallRule -DisplayName 'WC-LockRDP' -EA SilentlyContinue
+        Remove-NetFirewallRule -DisplayName 'WC-RDP-Lock' -EA SilentlyContinue
+        $remaining = Get-NetFirewallRule -DisplayName 'WC-LockRDP' -ErrorAction SilentlyContinue
+        if ($remaining) { throw 'Firewall read-back still found the WC-LockRDP rule' }
+        return @{ success = $true; locked = $false; ruleName = 'WC-LockRDP'; observed = $false }
     }
     catch { return @{ success = $false; error = $_.Exception.Message } }
 }

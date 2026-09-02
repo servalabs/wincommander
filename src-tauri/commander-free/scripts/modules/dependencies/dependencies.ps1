@@ -1424,14 +1424,6 @@ function Hide-ProductivityEngine {
     if ($awProcesses) {
         try {
             Stop-Process -Name "aw-qt" -Force -ErrorAction SilentlyContinue
-            # Persist stealth mode state
-            if (Get-Command "Set-WCSetting" -EA SilentlyContinue) {
-                Set-WCSetting -Path "productivity.productivityEngineStealthEnabled" -Value $true
-            }
-            # Trigger maintenance to ensure backends are running hidden
-            if (Get-Command "Invoke-ProductivityEngineMaintenance" -EA SilentlyContinue) {
-                Invoke-ProductivityEngineMaintenance | Out-Null
-            }
             $itemsRemoved++
         }
         catch { $errors += "ActivityWatch tray hide: $($_.Exception.Message)" }
@@ -2786,12 +2778,6 @@ function Set-BackendAppsVisibility {
         try {
             if ($Hidden) {
                 Stop-Process -Name "aw-qt" -Force -ErrorAction SilentlyContinue
-                if (Get-Command "Set-WCSetting" -EA SilentlyContinue) {
-                    Set-WCSetting -Path "productivity.productivityEngineStealthEnabled" -Value $true
-                }
-                if (Get-Command "Invoke-ProductivityEngineMaintenance" -EA SilentlyContinue) {
-                    Invoke-ProductivityEngineMaintenance | Out-Null
-                }
             } else {
                 if (Get-Command "Stop-ProductivityTracker" -EA SilentlyContinue) {
                     Stop-ProductivityTracker | Out-Null
@@ -2808,9 +2794,6 @@ function Set-BackendAppsVisibility {
                         Start-Process -FilePath $p -WorkingDirectory (Split-Path $p -Parent) -ErrorAction SilentlyContinue
                         break
                     }
-                }
-                if (Get-Command "Set-WCSetting" -EA SilentlyContinue) {
-                    Set-WCSetting -Path "productivity.productivityEngineStealthEnabled" -Value $false
                 }
             }
         } catch { }
