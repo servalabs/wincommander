@@ -127,12 +127,44 @@ authoritative statement of what WinCommander does not claim to defend against.
 
 ## Cryptography and post-quantum status
 
-WinCommander uses established classical signatures, authenticated encryption,
-password derivation, HMAC, and TLS through maintained implementations. It does
-**not** claim to be post-quantum safe today. A future post-quantum claim requires
-coordinated migration of every trust root and peer, downgrade protection,
-rotation, interoperability testing, and release-chain verification—not a
-client-only setting.
+**Current releases are not quantum-resistant end to end.** WinCommander uses
+maintained implementations of classical signatures, authenticated encryption,
+password derivation, HMAC, and TLS. Protected application state uses 256-bit
+symmetric encryption where implemented, but symmetric encryption alone does not
+make licences, updates, Fleet identity/commands, evidence, recovery objects, or
+network peer authentication post-quantum.
+
+A supportable current statement is:
+
+> WinCommander uses AES-256 authenticated encryption for protected application
+> state and has a documented migration programme for standardized post-quantum
+> key establishment and signatures. Current releases are not quantum-resistant
+> end to end.
+
+Any future protection claim must be scoped to WinCommander-controlled trust
+paths and requires all of the following before publication:
+
+- standardized post-quantum key establishment and signatures through reviewed
+  implementations;
+- explicit, versioned algorithm and key identifiers rather than inference from
+  key or signature size;
+- downgrade-resistant hybrid verification during migration, with every required
+  component verified rather than accepting either one;
+- key generation, custody, rotation, revocation, recovery, and bounded legacy
+  verification;
+- shared known-answer, interoperability, malformed-input, replay, rollback, and
+  mixed-version tests across every issuer and verifier;
+- an application-level release-verification path that does not rely only on
+  classical platform signatures; and
+- separate disclosure of Windows, firmware, DPAPI/CNG internals, Authenticode,
+  TPM, public TLS, Tailscale, VeraCrypt, identity providers, timestamp
+  authorities, and other external dependencies.
+
+Do not describe WinCommander as **“quantum-proof,” “unbreakable,”
+“future-proof,” “quantum key cryptography,”** or broadly **“post-quantum
+secure.”** WinCommander is pursuing standardized post-quantum cryptography, not
+quantum key distribution. A compiled PQC library, one migrated feature, or an
+AES-256 badge is not sufficient evidence for a product-wide claim.
 
 ## Reporting non-security defects
 
