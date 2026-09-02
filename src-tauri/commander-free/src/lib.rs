@@ -95,6 +95,7 @@ mod search_actions;
 mod security_data;
 mod selective_erase;
 mod server_apps;
+mod service_repair;
 mod services;
 mod session_assurance;
 #[cfg(windows)]
@@ -2528,6 +2529,7 @@ pub fn run() {
             set_app_display_label,
             backend::run_backend_script,
             machine_settings::apply_machine_setting,
+            service_repair::repair_commander_service,
             vault_mount_verification::verify_vault_drive,
             activity_watch_autostart::activity_watch_request,
             activity_watch_autostart::activity_watch_ensure_started,

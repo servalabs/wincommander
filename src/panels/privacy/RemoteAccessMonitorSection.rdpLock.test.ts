@@ -22,4 +22,15 @@ describe("incoming RDP lock control", () => {
     expect(source).toContain("Requires an administrator");
     expect(source).toContain("disabled={applyingRdpLock || needsElevation}");
   });
+
+  test("a stopped/unregistered WinCommanderSvc offers repair instead of the raw pipe error", async () => {
+    const source = await Bun.file("src/panels/privacy/RemoteAccessMonitorSection.tsx").text();
+
+    // Matches svc_client::call's `format!("service connect failed: {e}")`
+    // thrown when the named pipe has no listening service (e.g. "os error 2").
+    expect(source).toContain('message.toLowerCase().includes("service connect failed")');
+    expect(source).toContain("The WinCommander system service isn't running");
+    expect(source).toContain('invoke<string>("repair_commander_service")');
+    expect(source).toContain("rdpLockServiceDown && !needsElevation");
+  });
 });

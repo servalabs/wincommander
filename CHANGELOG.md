@@ -5,6 +5,12 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- The Incoming RDP access control in Privacy → Remote Access Monitor no
+  longer surfaces a raw OS error when the WinCommander system service is
+  stopped or unregistered. It now shows a plain-language message and, for
+  an already-elevated session, a "Repair service" action that re-registers
+  and starts the service from the app's own trusted binary — recovering a
+  machine left in that state without a full reinstall.
 - Added a Monitor Operations Center that combines the local and Pro monitor
   families into one privacy-safe snapshot. It shows useful counts, check
   cadence, stale/degraded/unavailable states, Pro locks, coverage filters, and

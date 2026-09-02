@@ -91,6 +91,8 @@ export default function RemoteAccessMonitorSection({
   const [rdpLockObserved, setRdpLockObserved] = useState<boolean | null>(null);
   const [applyingRdpLock, setApplyingRdpLock] = useState(false);
   const [rdpLockError, setRdpLockError] = useState<string | null>(null);
+  const [rdpLockServiceDown, setRdpLockServiceDown] = useState(false);
+  const [repairingService, setRepairingService] = useState(false);
   const needsElevation = systemInfo?.isAdmin !== true;
 
   const refreshTools = useCallback(async () => {
@@ -190,6 +192,7 @@ export default function RemoteAccessMonitorSection({
 
     setApplyingRdpLock(true);
     setRdpLockError(null);
+    setRdpLockServiceDown(false);
     try {
       const observed = await applyMachineSetting({
         setting: "rdp_lock",
@@ -203,9 +206,33 @@ export default function RemoteAccessMonitorSection({
       setRdpLockObserved(observed.locked);
       showSuccess(observed.locked ? "Incoming Remote Desktop blocked" : "Incoming Remote Desktop restored");
     } catch (error) {
-      setRdpLockError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      // `svc_client::call`'s pipe-open step throws exactly this prefix when
+      // WinCommanderSvc isn't installed or isn't running — offer a repair
+      // path instead of surfacing the raw OS error (e.g. "os error 2").
+      const serviceDown = message.toLowerCase().includes("service connect failed");
+      setRdpLockServiceDown(serviceDown);
+      setRdpLockError(
+        serviceDown
+          ? "The WinCommander system service isn't running, so this couldn't be applied."
+          : message
+      );
     } finally {
       setApplyingRdpLock(false);
+    }
+  };
+
+  const handleRepairService = async () => {
+    setRepairingService(true);
+    try {
+      await invoke<string>("repair_commander_service");
+      setRdpLockError(null);
+      setRdpLockServiceDown(false);
+      showSuccess("WinCommander service repaired. Try Block/Restore again.");
+    } catch (error) {
+      setRdpLockError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRepairingService(false);
     }
   };
 
@@ -274,6 +301,17 @@ export default function RemoteAccessMonitorSection({
           </div>
           {needsElevation && <p role="alert" className="mt-2 text-xs text-[var(--warn)]">Blocked: needs-elevation. Requires an administrator to change the machine-wide RDP lock.</p>}
           {rdpLockError && <p role="alert" className="mt-2 text-xs text-[var(--danger)]">{rdpLockError}</p>}
+          {rdpLockServiceDown && !needsElevation && (
+            <Button
+              small
+              className="mt-2"
+              disabled={repairingService}
+              onClick={() => void handleRepairService()}
+              aria-label="Repair WinCommander service"
+            >
+              {repairingService ? "Repairing…" : "Repair service"}
+            </Button>
+          )}
         </div>
 
         {enabled && (
