@@ -21,6 +21,10 @@ mod child_jobs;
 pub mod cli;
 pub use wincmd_shared::command_strings;
 mod auth_anomaly;
+#[cfg(all(feature = "autonomous-test", debug_assertions))]
+pub mod autonomous_agent_test;
+#[cfg(all(feature = "autonomous-test", debug_assertions))]
+pub mod autonomous_test;
 mod canary_tokens;
 mod context_menu_shred;
 mod datastore;

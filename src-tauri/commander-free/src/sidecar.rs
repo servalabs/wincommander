@@ -97,12 +97,15 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// (deadlock, blocked PowerShell child, OS swap-storm) as an error
 /// within a reasonable wall-clock for the user.
 const SESSION_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// A Fleet-lab enrollment pass is one-use.  Bound its IPC wait more tightly
+/// than a normal GUI operation and never replay it after a timeout.
+const FLEET_LAB_JOIN_TIMEOUT: Duration = Duration::from_secs(45);
 
 fn request_timeout_for(feature_id: &str) -> Option<Duration> {
-    if feature_id == "Mount-EncryptionVolume" {
-        None
-    } else {
-        Some(SESSION_REQUEST_TIMEOUT)
+    match feature_id {
+        "Mount-EncryptionVolume" => None,
+        "fleet_lab_join" => Some(FLEET_LAB_JOIN_TIMEOUT),
+        _ => Some(SESSION_REQUEST_TIMEOUT),
     }
 }
 
@@ -1233,7 +1236,9 @@ async fn dispatch_request(
                 Ok(None) => "Pro is still running but its IPC pipe closed".to_string(),
                 Err(error) => format!("could not inspect Pro exit status: {error}"),
             };
-            Err(format!("Pro reader exited before responding ({child_state})"))
+            Err(format!(
+                "Pro reader exited before responding ({child_state})"
+            ))
         }
     }
 }
@@ -1254,6 +1259,11 @@ async fn dispatch_request(
 /// serialises one extra light command — neither breaks anything.
 fn is_agent_affine(feature_id: &str) -> bool {
     feature_id.starts_with("fleet_agent_")
+        // The closed autonomous lab bridge creates and clears the durable
+        // Fleet-agent session.  Sending either half through an ordinary pool
+        // worker can leave the CLI waiting behind unrelated GUI work and can
+        // split lifecycle state across Pro processes.
+        || matches!(feature_id, "fleet_lab_join" | "fleet_lab_cleanup")
         || feature_id.contains("argus")
         || feature_id.starts_with("start_session_monitor")
         || feature_id.starts_with("stop_session_monitor")
@@ -1453,7 +1463,9 @@ async fn try_dispatch_via_agent(
                 return Some(Err(e));
             }
             Err(transport_err) => {
-                if attempt == 0 {
+                // A one-time lab enrollment capability must not be replayed
+                // after any ambiguous transport failure or timeout.
+                if attempt == 0 && feature_id != "fleet_lab_join" {
                     crate::log_message(
                         "warn",
                         &format!(
@@ -1470,7 +1482,12 @@ async fn try_dispatch_via_agent(
                     };
                     continue;
                 }
-                return Some(Err(format!("agent transport error: {transport_err}")));
+                let prefix = if feature_id == "fleet_lab_join" {
+                    "Fleet lab join failed without retry"
+                } else {
+                    "agent transport error"
+                };
+                return Some(Err(format!("{prefix}: {transport_err}")));
             }
         }
     }
@@ -1757,6 +1774,14 @@ mod tests {
     }
 
     #[test]
+    fn fleet_lab_join_has_a_bounded_one_use_request_timeout() {
+        assert_eq!(
+            request_timeout_for("fleet_lab_join"),
+            Some(Duration::from_secs(45))
+        );
+    }
+
+    #[test]
     fn ordinary_pro_requests_keep_the_standard_timeout() {
         for feature_id in [
             "Create-EncryptionVolume",
@@ -1820,6 +1845,8 @@ mod tests {
             "decoy_monitor_status",
             "enroll_decoy",
             "set_decoy_read_audit_enabled",
+            "fleet_lab_join",
+            "fleet_lab_cleanup",
         ] {
             assert!(is_agent_affine(id), "{id} should be agent-affine");
         }
