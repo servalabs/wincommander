@@ -131,6 +131,7 @@ export interface DefenderStatus {
 
 /** Stages match the prefixes Rust prepends in install_pro_binary's Err strings. */
 export type InstallStage =
+    | "entitlement"
     | "consent"
     | "validation"
     | "defender_exclusion"
@@ -146,6 +147,7 @@ export type InstallState =
     | { kind: "error"; stage: InstallStage; message: string };
 
 const KNOWN_STAGES: InstallStage[] = [
+    "entitlement",
     "consent",
     "validation",
     "defender_exclusion",

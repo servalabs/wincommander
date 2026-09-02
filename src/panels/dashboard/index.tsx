@@ -122,10 +122,10 @@ export default function DashboardPanel() {
 
 
   const visibility = useVisibility();
-  const { hasPaid, canUse } = useEntitlements();
+  const { hasPaid, canUpdatePro, canUse } = useEntitlements();
   const pro = useProInstall({
-    status: hasPaid,
-    manifest: hasPaid,
+    status: canUpdatePro,
+    manifest: canUpdatePro,
     defender: false,
   });
   const updater = useUpdater();
@@ -289,7 +289,7 @@ export default function DashboardPanel() {
   // (which stay a distinct pro-sidecar finding below) because an upgrade folds
   // into the single combined WinCommander update — Free and Pro ship lockstep.
   const proUpdateAvailable = useMemo(() => {
-    if (!hasPaid || !pro.status || pro.manifestError || !pro.status.installed) return false;
+    if (!canUpdatePro || !pro.status || pro.manifestError || !pro.status.installed) return false;
     const hashMatchesLatest = !!(
       pro.manifest?.sha256
       && pro.status.local_sha256
@@ -298,7 +298,7 @@ export default function DashboardPanel() {
     if (hashMatchesLatest) return false;
     const proCompare = compareVersions(pro.manifest?.version, pro.status.local_version);
     return !!pro.status.local_sha256 && !!pro.status.local_version && proCompare === 1;
-  }, [hasPaid, pro.manifest?.sha256, pro.manifest?.version, pro.manifestError, pro.status]);
+  }, [canUpdatePro, pro.manifest?.sha256, pro.manifest?.version, pro.manifestError, pro.status]);
   const freeUpdatePending =
     updater.phase === "available" || updater.phase === "staged" || updater.phase === "ready";
   // ONE combined "WinCommander update" finding. Free (app updater) and Pro
@@ -322,7 +322,7 @@ export default function DashboardPanel() {
   // pro-sidecar now covers ONLY not-installed / unverifiable-repair — an actual
   // Pro version upgrade is represented by combinedUpdateFinding above.
   const proFinding = useMemo<ScanFinding | null>(() => {
-    if (!hasPaid || !pro.status || pro.manifestError) return null;
+    if (!canUpdatePro || !pro.status || pro.manifestError) return null;
     if (!pro.status.installed) {
       return {
         id: "pro-sidecar",
@@ -351,7 +351,7 @@ export default function DashboardPanel() {
       };
     }
     return null;
-  }, [hasPaid, pro.manifest?.sha256, pro.manifestError, pro.status]);
+  }, [canUpdatePro, pro.manifest?.sha256, pro.manifestError, pro.status]);
   const registryDriftFindings = useMemo<ScanFinding[]>(() => {
     if (!appSettings) return [];
     const level = visibility.density === "expert" ? "advanced" : "standard";
@@ -958,6 +958,7 @@ export default function DashboardPanel() {
         isOpen={updateFlowOpen}
         onClose={() => setUpdateFlowOpen(false)}
         hasPaid={hasPaid}
+        canUpdatePro={canUpdatePro}
         updateAvailable
       />
     </div>

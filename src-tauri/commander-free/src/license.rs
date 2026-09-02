@@ -93,6 +93,10 @@ struct LicenseClaims {
     service_features: Vec<String>,
     #[serde(default)]
     service_exp: Option<u64>,
+    /// Last Unix second at which a paid Pro build may be delivered. `None`
+    /// preserves lifetime and pre-claim entitlements.
+    #[serde(default)]
+    updates_entitled_until: Option<u64>,
     /// Legacy combined vector. New claims use the split vectors above.
     #[serde(default)]
     features: Vec<String>,
@@ -119,6 +123,8 @@ struct LicenseStatus {
     entitlement_expires_at: Option<u64>,
     /// Hosted/specialist service end, independent of retained Pro rights.
     service_expires_at: Option<u64>,
+    updates_entitled_until: Option<u64>,
+    update_entitled: bool,
     expires_at: Option<u64>,
     last_verified_at: Option<u64>,
     grace_until: Option<u64>,
@@ -337,6 +343,46 @@ pub fn require_paid(feature: &str) -> Result<(), String> {
             "WinCommander Pro entitlement required for: {}. Activate a license or start the 16-day free trial.",
             feature
         ))
+    }
+}
+
+fn claims_allow_paid_update(claims: &LicenseClaims, now: u64) -> bool {
+    if claims.plan == "trial" {
+        return claims.exp > now;
+    }
+    claims
+        .updates_entitled_until
+        .map_or(true, |updates_entitled_until| updates_entitled_until > now)
+}
+
+/// Backend authority for downloading or installing a paid build. Keeping
+/// normal Pro unlocked after a membership lapses does not grant future builds.
+pub fn has_update_entitlement() -> bool {
+    let Ok((_, public_key_b64)) = get_config() else {
+        return false;
+    };
+    let Ok(Some(cached)) = load_cached_license() else {
+        return false;
+    };
+    let Ok(claims) = parse_and_verify_claims(
+        &cached.token.payload,
+        &cached.token.signature,
+        &public_key_b64,
+    ) else {
+        return false;
+    };
+    device_hash_matches(&claims.device_hash)
+        && features_from_verified_claims(&claims, cached.last_verified_at, now_unix())
+            .iter()
+            .any(|feature| feature == "paid")
+        && claims_allow_paid_update(&claims, now_unix())
+}
+
+pub fn require_update_entitlement() -> Result<(), String> {
+    if has_update_entitlement() {
+        Ok(())
+    } else {
+        Err("Your Pro update entitlement has ended. The installed eligible Pro version remains usable; renew to install a later paid build.".to_string())
     }
 }
 
@@ -1034,6 +1080,8 @@ fn status_from_cached(
         active_service_features,
         entitlement_expires_at: claims.license_exp,
         service_expires_at: claims.service_exp,
+        updates_entitled_until: claims.updates_entitled_until,
+        update_entitled: device_bound && valid && claims_allow_paid_update(claims, now),
         expires_at: Some(display_exp),
         last_verified_at: Some(cached.last_verified_at),
         grace_until: Some(grace_until),
@@ -1077,6 +1125,8 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
             active_service_features: vec![],
             entitlement_expires_at: None,
             service_expires_at: None,
+            updates_entitled_until: None,
+            update_entitled: false,
             expires_at: None,
             last_verified_at: None,
             grace_until: None,
@@ -1112,6 +1162,8 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
             active_service_features: vec![],
             entitlement_expires_at: None,
             service_expires_at: None,
+            updates_entitled_until: None,
+            update_entitled: false,
             expires_at: None,
             last_verified_at: None,
             grace_until: None,
@@ -1151,6 +1203,8 @@ async fn get_license_status_inner() -> Result<serde_json::Value, String> {
                 active_service_features: vec![],
                 entitlement_expires_at: None,
                 service_expires_at: None,
+                updates_entitled_until: None,
+                update_entitled: false,
                 expires_at: None,
                 last_verified_at: None,
                 grace_until: None,
@@ -1859,6 +1913,7 @@ mod tests {
             base_features: vec![],
             service_features: vec!["paid".to_string()],
             service_exp: Some(exp),
+            updates_entitled_until: Some(exp),
             features: vec!["paid".to_string()],
             iat: exp.saturating_sub(TRIAL_DURATION_SECONDS),
             exp,
@@ -1923,6 +1978,7 @@ mod tests {
             base_features: vec!["paid".to_string()],
             service_features: vec![],
             service_exp: None,
+            updates_entitled_until: None,
             features: vec![],
             iat: 1,
             exp: 2,
@@ -1945,6 +2001,7 @@ mod tests {
             base_features: vec!["paid".to_string()],
             service_features: vec!["advanced".to_string(), "netwall".to_string()],
             service_exp: Some(2_000),
+            updates_entitled_until: Some(2_000),
             features: vec![],
             iat: 1,
             exp: 2,
@@ -1956,6 +2013,26 @@ mod tests {
             features_from_verified_claims(&claims, 2, 2_001),
             vec!["paid".to_string()]
         );
+    }
+
+    #[test]
+    fn paid_update_coverage_honours_lifetime_and_exact_expiry() {
+        let mut claims = trial_claims(2_000);
+        claims.plan = "pro_lifetime".to_string();
+        claims.updates_entitled_until = None;
+        assert!(claims_allow_paid_update(&claims, 9_999_999));
+
+        claims.plan = "pro_membership".to_string();
+        claims.updates_entitled_until = Some(2_000);
+        assert!(claims_allow_paid_update(&claims, 1_999));
+        assert!(!claims_allow_paid_update(&claims, 2_000));
+    }
+
+    #[test]
+    fn trial_update_coverage_never_outlives_the_signed_trial() {
+        let claims = trial_claims(2_000);
+        assert!(claims_allow_paid_update(&claims, 1_999));
+        assert!(!claims_allow_paid_update(&claims, 2_000));
     }
 
     #[test]

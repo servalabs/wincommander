@@ -841,6 +841,10 @@ export interface AppLicenseStatus {
   active_service_features?: string[];
   entitlement_expires_at?: number | null;
   service_expires_at?: number | null;
+  /** Last Unix timestamp covered for paid Pro builds; null means no update end date. */
+  updates_entitled_until?: number | null;
+  /** Server-signed update coverage, rechecked by Rust before every Pro install. */
+  update_entitled?: boolean;
   expires_at?: number | null;
   last_verified_at?: number | null;
   grace_until?: number | null;

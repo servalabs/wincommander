@@ -78,7 +78,7 @@ export default function VersionManagementCard() {
     const [freeLatest, setFreeLatest] = useState<string | null>(null);
     const [freeChecking, setFreeChecking] = useState(false);
     const [updateFlowOpen, setUpdateFlowOpen] = useState(false);
-    const { hasPaid } = useEntitlements();
+    const { hasPaid, canUpdatePro } = useEntitlements();
     const { appSettings, patchAppSettings } = useAppState();
     const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
 
@@ -121,7 +121,7 @@ export default function VersionManagementCard() {
                     minimal
                     icon="refresh"
                     onClick={() => setUpdateFlowOpen(true)}
-                    title={hasPaid
+                    title={canUpdatePro
                         ? "Check for Updates — checks Free first, then Pro automatically if you're entitled — one dialog, one restart at the end."
                         : "Check for Updates"}
                     aria-label="Check for Updates"
@@ -131,9 +131,9 @@ export default function VersionManagementCard() {
             <div className="version-stack">
                 <div className="version-auto-update">
                     <div>
-                        <div className="version-auto-update__title">Automatically update WinCommander{hasPaid ? " and Pro" : ""}</div>
+                        <div className="version-auto-update__title">Automatically update WinCommander{canUpdatePro ? " and Pro" : ""}</div>
                         <div className="version-auto-update__description">
-                            Downloads and installs updates in the background, then restarts WinCommander when Free changes. Pro updates automatically after its one-time Defender approval. Turn this off to review each update first.
+                            Downloads and installs covered updates in the background, then restarts WinCommander when Free changes. {canUpdatePro ? "Pro updates automatically after its one-time Defender approval." : "Your installed Pro build is not changed when paid-update coverage has ended."} Turn this off to review each update first.
                         </div>
                     </div>
                     <Switch
@@ -182,10 +182,10 @@ export default function VersionManagementCard() {
                         </>
                     }
                 />
-                {hasPaid && <ProVersionRow freeNeedsUpdate={freeNeedsUpdate} />}
+                {hasPaid && <ProVersionRow freeNeedsUpdate={freeNeedsUpdate} canUpdatePro={canUpdatePro} />}
             </div>
 
-            {hasPaid && <ProVersionNotices freeNeedsUpdate={freeNeedsUpdate} />}
+            {hasPaid && <ProVersionNotices freeNeedsUpdate={freeNeedsUpdate} canUpdatePro={canUpdatePro} />}
 
             <UpdateFlowDialog
                 isOpen={updateFlowOpen}
@@ -200,15 +200,16 @@ export default function VersionManagementCard() {
                     void refreshVersions();
                 }}
                 hasPaid={hasPaid}
+                canUpdatePro={canUpdatePro}
             />
         </SectionCard>
     );
 }
 
-function useProVersionState() {
+function useProVersionState(canUpdatePro = true) {
     // This hook is only mounted by paid Pro rows inside the explicit Version
     // Management surface, so all three integrity probes are relevant here.
-    const pro = useProInstall({ status: true, manifest: true, defender: true });
+    const pro = useProInstall({ status: true, manifest: canUpdatePro, defender: canUpdatePro });
     const proCompare = compareVersions(pro.manifest?.version, pro.status?.local_version);
     const hashMatchesLatest = !!(
         pro.manifest?.sha256
@@ -231,8 +232,8 @@ function useProVersionState() {
     return { ...pro, proCompare, proState, hashMatchesLatest, needsRepair, proActionLabel };
 }
 
-function ProVersionRow({ freeNeedsUpdate }: { freeNeedsUpdate: boolean }) {
-    const { manifest, status, proState, hashMatchesLatest, needsRepair } = useProVersionState();
+function ProVersionRow({ freeNeedsUpdate, canUpdatePro }: { freeNeedsUpdate: boolean; canUpdatePro: boolean }) {
+    const { manifest, status, proState, hashMatchesLatest, needsRepair } = useProVersionState(canUpdatePro);
     const currentVersion = status?.local_version
         ?? (
             status?.installed
@@ -247,22 +248,27 @@ function ProVersionRow({ freeNeedsUpdate }: { freeNeedsUpdate: boolean }) {
         <VersionRow
             label="Pro"
             current={currentVersion}
-            latest={manifest?.version ?? "checking"}
-            status={needsRepair ? "Repair" : status?.installed ? "Installed" : "Not installed"}
-            tone={status?.installed ? proState : "update"}
-            actions={<ProVersionActions freeNeedsUpdate={freeNeedsUpdate} />}
+            latest={canUpdatePro ? manifest?.version ?? "checking" : "not covered"}
+            status={!canUpdatePro ? "Coverage ended" : needsRepair ? "Repair" : status?.installed ? "Installed" : "Not installed"}
+            tone={!canUpdatePro ? "muted" : status?.installed ? proState : "update"}
+            actions={<ProVersionActions freeNeedsUpdate={freeNeedsUpdate} canUpdatePro={canUpdatePro} />}
         />
     );
 }
 
-function ProVersionNotices({ freeNeedsUpdate }: { freeNeedsUpdate: boolean }) {
-    const { manifestError } = useProVersionState();
+function ProVersionNotices({ freeNeedsUpdate, canUpdatePro }: { freeNeedsUpdate: boolean; canUpdatePro: boolean }) {
+    const { manifestError } = useProVersionState(canUpdatePro);
     return (
         <>
-            {freeNeedsUpdate && (
+            {canUpdatePro && freeNeedsUpdate && (
                 <div className="version-notice">
                     <Icon icon="warning-sign" size={14} />
                     Free must be updated before Pro install or reinstall.
+                </div>
+            )}
+            {!canUpdatePro && (
+                <div className="version-notice version-notice--muted">
+                    Your installed Pro version keeps working, but this licence does not cover downloading a newer Pro build.
                 </div>
             )}
             {manifestError && (
@@ -274,10 +280,10 @@ function ProVersionNotices({ freeNeedsUpdate }: { freeNeedsUpdate: boolean }) {
     );
 }
 
-function ProVersionActions({ freeNeedsUpdate }: { freeNeedsUpdate: boolean }) {
+function ProVersionActions({ freeNeedsUpdate, canUpdatePro }: { freeNeedsUpdate: boolean; canUpdatePro: boolean }) {
     const confirmAction = useAppConfirm();
     const [deletingPro, setDeletingPro] = useState(false);
-    const { manifestError, status, installState, refresh, proActionLabel, proCompare, needsRepair } = useProVersionState();
+    const { manifestError, status, installState, refresh, proActionLabel, proCompare, needsRepair } = useProVersionState(canUpdatePro);
     const proBusy = installState.kind === "installing" || deletingPro;
     const proAttentionNeeded = !status?.installed || needsRepair || proCompare === 1;
 
@@ -320,8 +326,8 @@ function ProVersionActions({ freeNeedsUpdate }: { freeNeedsUpdate: boolean }) {
                 intent={proAttentionNeeded ? "primary" : undefined}
                 icon="cloud-download"
                 loading={installState.kind === "installing"}
-                disabled={freeNeedsUpdate || proBusy || !!manifestError}
-                title={freeNeedsUpdate ? "Update Free first" : proActionLabel}
+                disabled={!canUpdatePro || freeNeedsUpdate || proBusy || !!manifestError}
+                title={!canUpdatePro ? "Paid-update coverage has ended" : freeNeedsUpdate ? "Update Free first" : proActionLabel}
                 aria-label={proActionLabel}
                 onClick={openProInstaller}
             />

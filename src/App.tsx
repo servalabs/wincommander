@@ -214,7 +214,7 @@ function AppContent() {
   const [hiddenPanelsUnlocked, setHiddenPanelsUnlocked] = useState(false);
   const [shredPaths, setShredPaths] = useState<string[]>([]);
   const [isShredDialogOpen, setIsShredDialogOpen] = useState(false);
-  const { hasPaid, isLoading: entitlementLoading } = useEntitlements();
+  const { hasPaid, canUpdatePro, isLoading: entitlementLoading } = useEntitlements();
 
   const canUseDevTools = entitlementLoading || hasPaid;
   // Free-side signal for the combined UpdateFlowDialog auto-trigger below.
@@ -237,7 +237,7 @@ function AppContent() {
   const { productivityStatus, appSettings, patchAppSettings, startupComplete, startupDataState, runStartupJob } = appState;
   const panelPrefetchRef = useRef<PanelPrefetchQueue | null>(null);
   const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
-  useAutomaticUpdate(automaticUpdatesEnabled, hasPaid);
+  useAutomaticUpdate(automaticUpdatesEnabled, canUpdatePro);
 
   const lockHiddenPanels = useCallback(() => {
     setHiddenPanelsUnlocked(false);
@@ -399,6 +399,7 @@ function AppContent() {
     !automaticUpdatesEnabled &&
     licenseChecked &&
     hasStartupProEntitlement &&
+    canUpdatePro &&
     !import.meta.env.DEV &&
     !proInstallPromptDismissed;
   const proInstall = useProInstall({
@@ -441,6 +442,10 @@ function AppContent() {
     if (updateFlowAutoPromptedRef.current) return;
     if (!licenseChecked || !licenseStatus) return;
     if (!hasStartupProEntitlement) return;
+    if (!canUpdatePro) {
+      updateFlowAutoPromptedRef.current = true;
+      return;
+    }
     // Dev builds must run only against the local repo-built Pro binary. Do not
     // fetch the manifest or prompt update/repair from the public manifest.
     if (import.meta.env.DEV) {
@@ -534,6 +539,7 @@ function AppContent() {
     licenseChecked,
     licenseStatus,
     hasStartupProEntitlement,
+    canUpdatePro,
     proInstallPromptDismissed,
     proInstall.status,
     proInstall.manifest,
@@ -1473,6 +1479,7 @@ function AppContent() {
         isOpen={updateFlowOpen}
         onClose={() => setUpdateFlowOpen(false)}
         hasPaid={hasPaid}
+        canUpdatePro={canUpdatePro}
         // The auto-trigger above only opens this dialog when a Free/Pro update
         // or Pro install is actually pending, so an open dialog always has an
         // update available — this drives the paid-user upfront confirm.

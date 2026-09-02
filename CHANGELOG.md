@@ -5,6 +5,13 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Paid Pro update installation now requires the signed
+  `updates_entitled_until` entitlement in both the interface and the Rust
+  installer. When coverage ends, the installed normal-Pro build keeps working
+  but automatic, combined, dashboard, Settings, repair, and direct invoke paths
+  cannot install a newer paid build. Checkout now sends the app version,
+  explains manual-review offers, and can cancel an active subscription renewal
+  at the end of its paid cycle through the saved recovery credential.
 - The Incoming RDP access control in Privacy → Remote Access Monitor no
   longer surfaces a raw OS error when the WinCommander system service is
   stopped or unregistered. It now shows a plain-language message and, for

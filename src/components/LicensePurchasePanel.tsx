@@ -134,6 +134,11 @@ export default function LicensePurchasePanel({
 
       {/* The selected plan's terms appear exactly once, here. */}
       {selected && !purchase.pending && <LicenseOfferPoints offer={selected} />}
+      {selected && !purchase.pending && !selected.checkoutEligible && (
+        <div className="license-gate-message">
+          {selected.checkoutMessage ?? "This offer requires a reviewed written order. Contact legal@servalabs.com."}
+        </div>
+      )}
 
       {!purchase.pending && selected?.sku === "fleet" && selected.minSeats != null && selected.maxSeats != null && (
         <div className="license-gate-config-row">
@@ -225,7 +230,13 @@ export default function LicensePurchasePanel({
           disabled={!emailOk || purchase.isStarting || !selected || !selected.checkoutEligible}
           onClick={() => void startCheckout()}
         >
-          {purchase.isStarting ? "Creating secure checkout…" : selected ? `Continue with ${selected.name}` : "Offers unavailable"}
+          {purchase.isStarting
+            ? "Creating secure checkout…"
+            : selected?.checkoutEligible
+              ? `Continue with ${selected.name}`
+              : selected
+                ? "Contact ServaLabs for review"
+                : "Offers unavailable"}
         </Button>
       )}
     </div>

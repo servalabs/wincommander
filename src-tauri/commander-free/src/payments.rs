@@ -68,6 +68,7 @@ pub struct CatalogOffer {
     pub detail: String,
     pub device_rule: String,
     pub checkout_eligible: bool,
+    pub checkout_message: Option<String>,
     pub min_seats: Option<u16>,
     pub max_seats: Option<u16>,
     pub seat_pricing_label: Option<String>,
@@ -90,6 +91,15 @@ struct StatusResponse {
     license_key: Option<String>,
     amount: Option<u64>,
     currency: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CancelSubscriptionResponse {
+    ok: bool,
+    cancel_at_period_end: Option<bool>,
+    effective_at: Option<u64>,
     error: Option<String>,
 }
 
@@ -281,7 +291,13 @@ async fn request_checkout(mut pending: PendingPurchase) -> Result<PendingPurchas
     let response = client
         .post(format!("{}/v1/purchases", api_base))
         .header("x-idempotency-key", &pending.idempotency_key)
-        .json(&pending.input)
+        .json(&serde_json::json!({
+            "sku": &pending.input.sku,
+            "seats": pending.input.seats,
+            "email": &pending.input.email,
+            "phone": &pending.input.phone,
+            "appVersion": env!("CARGO_PKG_VERSION"),
+        }))
         .send()
         .await
         .map_err(|_| "Couldn't reach the secure checkout service.".to_string())?;
@@ -427,6 +443,39 @@ pub async fn resend_purchase_license() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn cancel_purchase_subscription() -> Result<Option<u64>, String> {
+    let pending =
+        load_pending()?.ok_or_else(|| "No purchase is available to cancel.".to_string())?;
+    let purchase_id = pending
+        .purchase_id
+        .as_deref()
+        .ok_or_else(|| "Checkout hasn't started yet.".to_string())?;
+    let recovery_token = pending
+        .recovery_token
+        .as_deref()
+        .ok_or_else(|| "Purchase recovery is unavailable.".to_string())?;
+    let client = crate::net::doh_http_client()?;
+    let response = client
+        .post(format!(
+            "{}/v1/purchases/{}/subscription/cancel",
+            crate::license::license_api_base()?,
+            purchase_id
+        ))
+        .bearer_auth(recovery_token)
+        .send()
+        .await
+        .map_err(|_| "Couldn't reach the subscription service.".to_string())?;
+    let body: CancelSubscriptionResponse = parse_json(response).await?;
+    if body.ok && body.cancel_at_period_end == Some(true) {
+        Ok(body.effective_at)
+    } else {
+        Err(body
+            .error
+            .unwrap_or_else(|| "The subscription could not be cancelled.".to_string()))
+    }
+}
+
+#[tauri::command]
 pub fn forget_pending_purchase() -> Result<(), String> {
     crate::datastore::save(STORE_SECTION, &serde_json::json!({}))
 }
@@ -486,6 +535,7 @@ mod tests {
             detail: "Managed Windows endpoints and Netwall.".into(),
             device_rule: "One device per seat.".into(),
             checkout_eligible: true,
+            checkout_message: None,
             min_seats: Some(1),
             max_seats: Some(50),
             seat_pricing_label: Some("Server-calculated by device count.".into()),
@@ -507,6 +557,7 @@ mod tests {
             detail: "Current WinCommander offer.".into(),
             device_rule: "Server-calculated device allowance.".into(),
             checkout_eligible: true,
+            checkout_message: None,
             min_seats: None,
             max_seats: None,
             seat_pricing_label: None,
@@ -542,6 +593,7 @@ mod tests {
             detail: "Current WinCommander offer.".into(),
             device_rule: "Server-calculated device allowance.".into(),
             checkout_eligible: true,
+            checkout_message: None,
             min_seats: None,
             max_seats: None,
             seat_pricing_label: None,

@@ -31,6 +31,9 @@ export interface Entitlements {
   /** True if the user has any paid entitlement (including 16-day trial). */
   hasPaid: boolean;
 
+  /** True only while the signed licence covers downloading/installing a Pro build. */
+  canUpdatePro: boolean;
+
   /** True if the user is currently in a free trial (subset of hasPaid). */
   isTrial: boolean;
 
@@ -80,6 +83,10 @@ export default function useEntitlements(): Entitlements {
   }, [license]);
 
   const isTrial = !!license?.trial_active && hasPaid;
+  // Feature access and update access are deliberately separate. A perpetual
+  // licence may keep using an installed Pro build after update coverage ends;
+  // Rust rechecks this signed flag before any new Pro binary is installed.
+  const canUpdatePro = hasPaid && license?.update_entitled === true;
 
   // Investigator mode -- requires BOTH (a) a valid licence whose features
   // include the literal "advanced" string AND (b) the user's
@@ -115,5 +122,5 @@ export default function useEntitlements(): Entitlements {
     };
   }, [hasPaid, isLoading]);
 
-  return { hasPaid, isTrial, isInvestigator, investigatorEligible, canUse, isLoading };
+  return { hasPaid, canUpdatePro, isTrial, isInvestigator, investigatorEligible, canUse, isLoading };
 }

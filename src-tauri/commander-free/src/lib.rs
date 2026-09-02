@@ -2560,6 +2560,7 @@ pub fn run() {
             payments::poll_purchase_status,
             payments::reconcile_purchase_status,
             payments::resend_purchase_license,
+            payments::cancel_purchase_subscription,
             payments::forget_pending_purchase,
             // ── Privacy Shield Quota (15 min/day for free tier) ──
             shield_quota::get_shield_quota,

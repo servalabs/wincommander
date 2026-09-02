@@ -14,7 +14,7 @@ describe("automatic Pro updates", () => {
         expect(canAutomaticallyUpdatePro(true, true)).toBe(true);
     });
 
-    test("never auto-installs Pro for an unpaid user or a missing sidecar", () => {
+    test("never auto-installs Pro without update coverage or with a missing sidecar", () => {
         expect(canAutomaticallyUpdatePro(false, true)).toBe(false);
         expect(canAutomaticallyUpdatePro(true, false)).toBe(false);
         expect(canAutomaticallyUpdatePro(true, null)).toBe(false);

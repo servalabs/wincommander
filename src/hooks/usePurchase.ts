@@ -10,6 +10,7 @@ export interface CatalogOffer {
   detail: string;
   deviceRule: string;
   checkoutEligible: boolean;
+  checkoutMessage?: string | null;
   minSeats?: number | null;
   maxSeats?: number | null;
   seatPricingLabel?: string | null;
@@ -71,6 +72,8 @@ export function usePurchase(onActivated: () => void) {
   const [status, setStatus] = useState<PurchaseStatus | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [cancellationEffectiveAt, setCancellationEffectiveAt] = useState<number | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const onActivatedRef = useRef(onActivated);
   onActivatedRef.current = onActivated;
@@ -165,5 +168,20 @@ export function usePurchase(onActivated: () => void) {
     setError(null);
   }, []);
 
-  return { pending, status, isStarting, isOpening, error, start, resume, poll, reconcile, resend, forget };
+  const cancelSubscription = useCallback(async () => {
+    setIsCancelling(true);
+    setError(null);
+    try {
+      const effectiveAt = await invoke<number | null>("cancel_purchase_subscription");
+      setCancellationEffectiveAt(effectiveAt);
+      return effectiveAt;
+    } catch (cause) {
+      setError(String(cause));
+      throw cause;
+    } finally {
+      setIsCancelling(false);
+    }
+  }, []);
+
+  return { pending, status, isStarting, isOpening, isCancelling, cancellationEffectiveAt, error, start, resume, poll, reconcile, resend, forget, cancelSubscription };
 }

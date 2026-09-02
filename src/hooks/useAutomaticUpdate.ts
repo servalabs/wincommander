@@ -23,28 +23,28 @@ export function proNeedsUpdate(
  * still needs the one-time Defender consent shown in the install dialog.
  */
 export function canAutomaticallyUpdatePro(
-    hasPaid: boolean,
+    updateEntitled: boolean,
     installed: boolean | null | undefined,
 ): boolean {
-    return hasPaid && installed === true;
+    return updateEntitled && installed === true;
 }
 
 /** Runs a no-dialog update only after the user chose automatic updates. */
-export default function useAutomaticUpdate(enabled: boolean, hasPaid: boolean) {
+export default function useAutomaticUpdate(enabled: boolean, canUpdatePaidBuilds: boolean) {
     const updater = useUpdater();
     const pro = useProInstall({
-        status: enabled && hasPaid,
-        manifest: enabled && hasPaid,
+        status: enabled && canUpdatePaidBuilds,
+        manifest: enabled && canUpdatePaidBuilds,
         // Updating an existing Pro copy does not need a Defender probe or a
         // new exclusion. The Rust command preserves the first-install consent
         // boundary and only replaces an already installed sidecar here.
         defender: false,
     });
-    const canUpdatePro = canAutomaticallyUpdatePro(hasPaid, pro.status?.installed);
+    const canUpdatePro = canAutomaticallyUpdatePro(canUpdatePaidBuilds, pro.status?.installed);
     // Keep the paid leg enabled even while the status probe is in flight. This
     // lets a Free update and an installed Pro update complete in one cycle;
     // useUpdateFlow skips only a missing first-time Pro installation.
-    const flow = useUpdateFlow(hasPaid, false);
+    const flow = useUpdateFlow(canUpdatePaidBuilds, false);
     const { start, phase, freeError, needsRestart, pro: flowPro } = flow;
     const startedRef = useRef(false);
     const completedRef = useRef(false);

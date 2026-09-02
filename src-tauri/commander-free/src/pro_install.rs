@@ -856,6 +856,7 @@ pub async fn install_pro_binary(
 ) -> Result<serde_json::Value, String> {
     // Errors are stage-prefixed so the frontend dialog can render an
     // actionable message per failure mode:
+    //   "entitlement:..."         -- paid build delivery period ended
     //   "consent:..."             -- the consent flag wasn't set
     //   "validation:..."          -- bad sha256 / bad path / etc.
     //   "defender_exclusion:..."  -- Add-MpPreference failed (often
@@ -863,6 +864,8 @@ pub async fn install_pro_binary(
     //   "download:..."            -- HTTP fetch failed
     //   "sha256_mismatch:..."     -- byte hash didn't match the manifest
     //   "disk:..."                -- tmp create / write / fsync / rename
+    crate::license::require_update_entitlement().map_err(|error| format!("entitlement:{error}"))?;
+
     #[cfg(windows)]
     let exclusion_already_set = defender_exclusion_already_set();
     #[cfg(not(windows))]

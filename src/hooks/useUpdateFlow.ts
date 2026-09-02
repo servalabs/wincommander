@@ -10,7 +10,7 @@
 //      binary to disk WITHOUT relaunching — the running process keeps
 //      executing the old code in memory until relaunch() is explicitly
 //      called, so it's safe to keep going.
-//   2. If the user isn't paid, stop here.
+//   2. If the signed licence does not cover paid updates, stop here.
 //   3. Pro: reuse useProInstall's existing manifest/status/consent/install
 //      state machine (same one InstallProDialog already drives) — this step
 //      renders inline via renderProInstallStep, not a second dialog.
@@ -59,12 +59,12 @@ interface DohUpdateInfo {
  * - `false`: background updates may replace an already-approved Pro install,
  *   but Rust refuses to create a new Defender exclusion.
  */
-export function useUpdateFlow(hasPaid: boolean, automaticProInstallConsent: boolean | null = null) {
+export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent: boolean | null = null) {
     const updater = useUpdater();
     const pro = useProInstall({
-        status: hasPaid,
-        manifest: hasPaid,
-        defender: hasPaid,
+        status: canUpdatePro,
+        manifest: canUpdatePro,
+        defender: canUpdatePro,
     });
     const { refreshForFreeVersion } = pro;
     const [phase, setPhase] = useState<UpdateFlowPhase>("idle");
@@ -120,14 +120,14 @@ export function useUpdateFlow(hasPaid: boolean, automaticProInstallConsent: bool
                 // invalidateManifestCache's doc comment in useProInstall.ts).
                 await refreshForFreeVersion(targetVersion);
             }
-            setPhase(hasPaid ? "checking-pro" : "done");
+            setPhase(canUpdatePro ? "checking-pro" : "done");
         } catch (err) {
             setFreeError(err instanceof Error ? err.message : String(err));
             setPhase("free-error");
         } finally {
             runningRef.current = false;
         }
-    }, [runFreeStep, hasPaid, refreshForFreeVersion]);
+    }, [runFreeStep, canUpdatePro, refreshForFreeVersion]);
 
     const retryFree = useCallback(() => { void start(); }, [start]);
 

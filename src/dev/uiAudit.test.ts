@@ -356,15 +356,25 @@ describe("UI audit fixture", () => {
     expect(uiAuditDirectResponse("content_index_status")).toMatchObject({ indexed_docs: 428, pending_docs: 0, is_indexing: false });
     expect(drives.some((drive) => drive.isSystem)).toBe(true);
     expect(drives.some((drive) => drive.isRemovable)).toBe(true);
-    expect(offers.some((offer) => offer.sku === "fleet" && offer.checkoutEligible)).toBe(true);
-    expect(createUiAuditPendingPurchase({ sku: "fleet", seats: 1 })).toMatchObject({
+    expect(offers.some((offer) => offer.sku === "fleet" && !offer.checkoutEligible)).toBe(true);
+    expect(offers.filter((offer) => offer.checkoutEligible).map((offer) => offer.sku)).toEqual([
+      "pro_lifetime",
+      "pro_membership",
+    ]);
+    expect(createUiAuditPendingPurchase({ sku: "pro_membership" })).toMatchObject({
       purchaseId: "audit-purchase-001",
-      sku: "fleet",
-      seats: 5,
+      sku: "pro_membership",
+      seats: null,
       amount: 3_000,
       currency: "USD",
     });
-    expect(createUiAuditPendingPurchase({ sku: "fleet", seats: 6 })).toMatchObject({ seats: 6, amount: 3_600 });
+    let blockedReviewedOffer = false;
+    try {
+      createUiAuditPendingPurchase({ sku: "fleet", seats: 6 });
+    } catch (error) {
+      blockedReviewedOffer = String(error).includes("reviewed order");
+    }
+    expect(blockedReviewedOffer).toBe(true);
     expect((uiAuditDirectResponse("get_drift_report") as unknown[]).length).toBeGreaterThan(1);
     expect(settings.app.fileSearch?.roots).toEqual(["C:\\Audit\\Cases", "C:\\Audit\\Evidence"]);
     expect(settings.app.fileSearch?.exclusions).toEqual(["*.tmp", "node_modules"]);

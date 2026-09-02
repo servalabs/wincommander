@@ -36,6 +36,7 @@ interface UpdateFlowDialogProps {
     isOpen: boolean;
     onClose: () => void;
     hasPaid: boolean;
+    canUpdatePro: boolean;
     /** True when the caller already knows an update/install is pending. Paid
      *  users then see an upfront confirm (covering the Free+Pro update AND the
      *  one-time Defender exclusion) before anything runs. Everyone else — and
@@ -65,16 +66,16 @@ function CenteredStatus({ title, sub }: { title: string; sub?: string }) {
     );
 }
 
-export default function UpdateFlowDialog({ isOpen, onClose, hasPaid, updateAvailable = false, onNotNow }: UpdateFlowDialogProps) {
+export default function UpdateFlowDialog({ isOpen, onClose, hasPaid, canUpdatePro, updateAvailable = false, onNotNow }: UpdateFlowDialogProps) {
     // True once the user OKs the upfront confirm — collects the Defender-exclusion
     // consent for the whole Free+Pro update, so the Pro leg installs plainly
     // (no second consent gate) via useUpdateFlow's auto path.
     const [autoConsented, setAutoConsented] = useState(false);
-    const flow = useUpdateFlow(hasPaid, autoConsented ? true : null);
+    const flow = useUpdateFlow(canUpdatePro, autoConsented ? true : null);
     const { phase, freeOutcome, freeError, proMismatch, pro, start, retryFree, finishAndRestart, reset, needsRestart } = flow;
     const [consent, setConsent] = useState(false);
 
-    const showConfirm = hasPaid && updateAvailable && !autoConsented;
+    const showConfirm = canUpdatePro && updateAvailable && !autoConsented;
 
     // Kick off the sequence as soon as the dialog opens — unless a paid user
     // needs to OK the upfront confirm first. Reset when it closes so reopening
@@ -210,6 +211,8 @@ export default function UpdateFlowDialog({ isOpen, onClose, hasPaid, updateAvail
             null;
         const proLine = !hasPaid
             ? null
+            : !canUpdatePro
+                ? "Your installed Pro version remains usable; this licence does not cover newer Pro builds."
             : proMismatch
                 ? "A newer Pro release is available but needs a newer WinCommander version first — nothing to do right now."
                 : pro.installState.kind === "installed"

@@ -1,5 +1,6 @@
 import LicenseOfferPoints from "./LicenseOfferPoints";
 import type { CatalogOffer, usePurchase } from "../hooks/usePurchase";
+import { useAppConfirm } from "./shared/AppConfirmDialog";
 
 interface Props {
   purchase: ReturnType<typeof usePurchase>;
@@ -17,6 +18,7 @@ export default function LicensePendingPurchase({
   hasInvestigatorEntitlement,
   onReopenCheckout,
 }: Props) {
+  const confirmAction = useAppConfirm();
   const state = purchase.status?.state;
 
   return (
@@ -67,6 +69,29 @@ export default function LicensePendingPurchase({
             <button className="license-gate-btn-retry" onClick={() => void navigator.clipboard.writeText(purchase.status!.licenseKey!)}>Copy key</button>
             <button className="license-gate-btn-retry" onClick={() => void purchase.resend()}>Resend email</button>
           </>
+        )}
+        {purchase.status?.activated && offer?.sku !== "pro_lifetime" && purchase.cancellationEffectiveAt === undefined && (
+          <button
+            className="license-gate-btn-retry"
+            disabled={purchase.isCancelling}
+            onClick={() => void (async () => {
+              const accepted = await confirmAction({
+                title: "Cancel subscription renewal?",
+                description: "Renewal will stop at the end of the current paid billing cycle. This does not refund the current cycle.",
+                confirmLabel: "Cancel renewal",
+              });
+              if (accepted) await purchase.cancelSubscription();
+            })()}
+          >
+            {purchase.isCancelling ? "Cancelling renewal..." : "Cancel subscription renewal"}
+          </button>
+        )}
+        {purchase.cancellationEffectiveAt !== undefined && (
+          <div className="license-gate-purchase-state-hint">
+            Renewal is cancelled. Access continues {purchase.cancellationEffectiveAt
+              ? `until ${new Date(purchase.cancellationEffectiveAt * 1000).toLocaleDateString()}`
+              : "through the current paid billing cycle"}.
+          </div>
         )}
         <button
           className="license-gate-btn-retry"

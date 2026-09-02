@@ -43,16 +43,16 @@ export function createUiAuditLicenseStatus(mode?: string | null) {
 }
 
 export function createUiAuditPendingPurchase(input?: { sku?: string; seats?: number | null }) {
-  const sku = input?.sku === "pro_membership" || input?.sku === "fleet"
-    ? input.sku
-    : "pro_lifetime";
-  const fleetSeatCount = Math.max(5, Math.min(500, Number(input?.seats ?? 5)));
-  const seats = sku === "fleet" ? fleetSeatCount : null;
-  const amount = sku === "fleet" ? fleetSeatCount * 600 : sku === "pro_membership" ? 2_900 : 7_900;
+  const requestedSku = input?.sku ?? "pro_lifetime";
+  if (requestedSku !== "pro_lifetime" && requestedSku !== "pro_membership") {
+    throw new Error("This offer requires a reviewed order and is unavailable in direct checkout.");
+  }
+  const sku = requestedSku;
+  const amount = sku === "pro_membership" ? 3_000 : 33_000;
   return {
     purchaseId: "audit-purchase-001",
     sku,
-    seats,
+    seats: null,
     checkoutUrl: "https://checkout.example.invalid/audit-purchase-001",
     amount,
     currency: "USD",
@@ -857,9 +857,10 @@ export function uiAuditDirectResponse(command: string): unknown {
       ];
     case "get_purchase_catalog":
       return [
-        { sku: "pro_lifetime", name: "WinCommander Pro Lifetime", priceLabel: "$79 one-time", detail: "All Pro tools on one registered device.", deviceRule: "Lifetime access for one device; transfer subject to the service policy.", checkoutEligible: true },
-        { sku: "pro_membership", name: "WinCommander Pro Membership", priceLabel: "$29/year", detail: "Pro tools with active service updates.", deviceRule: "One registered device while membership is active.", checkoutEligible: true },
-        { sku: "fleet", name: "WinCommander Fleet", priceLabel: "$6/device/month", detail: "Central policy and device coordination.", deviceRule: "Five-device minimum with per-seat billing.", checkoutEligible: true, minSeats: 5, maxSeats: 500, seatPricingLabel: "$6 per device / month" },
+        { sku: "pro_lifetime", name: "Pro Lifetime", priceLabel: "$330 once", detail: "Pro forever with lifetime updates.", deviceRule: "3 transferable active activation/update/service slots; a released PC keeps its last signed normal-Pro fallback", checkoutEligible: true },
+        { sku: "pro_membership", name: "Pro Membership", priceLabel: "$30/month", detail: "Pro updates and Netwall included.", deviceRule: "3 transferable active activation/update/service slots; a released PC keeps its last signed normal-Pro fallback", checkoutEligible: true },
+        { sku: "investigator", name: "Investigator", priceLabel: "Contact ServaLabs", detail: "Pro, Investigator Mode, and Netwall included.", deviceRule: "3 transferable active activation/update/service slots; a released PC keeps its last signed normal-Pro fallback", checkoutEligible: false, checkoutMessage: "Investigator requires identity, authority, territory, and end-use review before quotation." },
+        { sku: "fleet", name: "Fleet", priceLabel: "Contact ServaLabs", detail: "Pro, Fleet management, and Netwall. Investigator is not included.", deviceRule: "one managed Windows endpoint per paid Fleet seat", checkoutEligible: false, checkoutMessage: "Fleet requires an organization, deployment, territory, and end-use review before quotation.", minSeats: 1, maxSeats: 50, seatPricingLabel: "1-15: $25/seat/month. 16-50: $17/additional seat/month. 51+: contact sales." },
       ];
     case "get_drift_report":
       return [
@@ -897,6 +898,8 @@ export function uiAuditDirectResponse(command: string): unknown {
     case "poll_purchase_status":
     case "reconcile_purchase_status":
       return { state: "checkout_pending", providerStatus: "created", amount: 7_900, currency: "USD", activated: false };
+    case "cancel_purchase_subscription":
+      return Date.parse("2026-09-01T00:00:00Z") / 1000;
     case "vpn_kill_switch_status":
       return { armed: false, fired: false, tunnelState: "up", lastFiredAt: 0 };
     case "usb_monitor_status":
@@ -1210,6 +1213,9 @@ export function installUiAuditMocks(): void {
         currency: pendingPurchase?.currency ?? "USD",
         activated: false,
       };
+    }
+    if (command === "cancel_purchase_subscription") {
+      return Date.parse("2026-09-01T00:00:00Z") / 1000;
     }
     if (command === "resend_purchase_license") return null;
     if (command === "forget_pending_purchase") {
