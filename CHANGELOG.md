@@ -12,6 +12,14 @@ Public release notes are published with each versioned
   builds fail when the salt or encrypted modules are missing, corrupt, or stale,
   and the final executable is scanned for protected plaintext.
 
+- Vault service requests now fail closed for unknown operations, use a strict
+  service-produced mount plan and shared bounded error vocabulary, preserve the
+  original request identifier across the service and Pro broker, and redact
+  credentials and transient security data from diagnostics. Personal Vault
+  creation now uses a durable request-bound reservation with stable file
+  identity checks; it remains administrator-only pending installed multi-user
+  Windows acceptance.
+
 - Paid Pro update installation now requires the signed
   `updates_entitled_until` entitlement in both the interface and the Rust
   installer. When coverage ends, the installed normal-Pro build keeps working
