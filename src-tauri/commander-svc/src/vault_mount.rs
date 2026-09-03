@@ -1247,6 +1247,18 @@ mod tests {
         ) -> Result<String, crate::vault_access::VaultError> {
             Ok("v:1:i:2".into())
         }
+        fn normalize_personal_creation_path(
+            &self,
+            path: &Path,
+        ) -> Result<PathBuf, crate::vault_access::VaultError> {
+            Ok(path.to_path_buf())
+        }
+        fn personal_creation_target_exists(
+            &self,
+            path: &Path,
+        ) -> Result<bool, crate::vault_access::VaultError> {
+            Ok(self.files.lock().unwrap().contains_key(path))
+        }
         fn validate_dedicated_parent(
             &self,
             _: &Path,

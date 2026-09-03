@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use wincmd_shared::vault_access::{
     PersonalVaultRecord, VaultAccess, VaultAccessEntry, VaultAccessPolicy,
@@ -18,6 +19,7 @@ const ACTIVE_MOUNTS_FILE: &str = "vault-active-mounts-v1.json";
 const PERSONAL_VAULTS_FILE: &str = "vault-personal-v1.json";
 const MAX_ENTRIES: usize = 64;
 const MAX_GRANTS: usize = 32;
+const PERSONAL_CREATION_TTL_SECS: i64 = 10 * 60;
 
 // ── `svc.vault.reconcile_access_groups` bounds (Task B) ──────────────────
 // Mirrors the MAX_ENTRIES / MAX_GRANTS style above: bounded batch and
@@ -55,6 +57,11 @@ pub trait VaultFs: Send + Sync {
     fn read(&self, path: &Path) -> std::io::Result<Vec<u8>>;
     fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()>;
     fn stable_file_identity(&self, path: &Path) -> Result<String, VaultError>;
+    fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError>;
+    fn personal_creation_target_exists(&self, path: &Path) -> Result<bool, VaultError>;
+    fn personal_creation_target_identity(&self, path: &Path) -> Result<String, VaultError> {
+        self.stable_file_identity(path)
+    }
     fn validate_dedicated_parent(&self, parent: &Path, container: &Path) -> Result<(), VaultError>;
 }
 
@@ -152,6 +159,24 @@ fn personal_key(path: &str) -> String {
     path.trim().replace('/', "\\").to_ascii_lowercase()
 }
 
+fn valid_creation_path(path: &Path) -> bool {
+    path.is_absolute()
+        && path.file_name().is_some()
+        && !path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+}
+
+fn lexical_normalize_creation_path(path: &Path) -> Result<PathBuf, VaultError> {
+    if !valid_creation_path(path) {
+        return Err(VaultError::Validation);
+    }
+    Ok(path.components().collect())
+}
+
 fn valid_personal_record(record: &PersonalVaultRecord) -> bool {
     record.scope == VaultPresentation::PerUser
         && !record.owner_sid.is_empty()
@@ -162,8 +187,17 @@ fn valid_personal_record(record: &PersonalVaultRecord) -> bool {
 
 fn valid_pending_personal(pending: &PendingPersonalVault) -> bool {
     !pending.owner_sid.is_empty()
-        && Path::new(&pending.container_path).is_absolute()
+        && valid_creation_path(Path::new(&pending.container_path))
         && pending.created_by_session != 0
+        && pending.client_pid != 0
+        && pending.operation_id != 0
+        && pending.reservation_nonce.len() == 32
+        && pending.reservation_nonce.iter().any(|byte| *byte != 0)
+        && pending.reserved_at > 0
+        && pending.expires_at
+            == pending
+                .reserved_at
+                .saturating_add(PERSONAL_CREATION_TTL_SECS)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,12 +284,38 @@ struct State {
     personal_pending: HashMap<String, PendingPersonalVault>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PendingPersonalVault {
     container_path: String,
     owner_sid: String,
     created_by_session: u32,
+    #[serde(default)]
+    client_pid: u32,
+    #[serde(default)]
+    authentication_id_high: u32,
+    #[serde(default)]
+    authentication_id_low: i32,
+    #[serde(default)]
+    operation_id: u64,
+    #[serde(default)]
+    reservation_nonce: Vec<u8>,
+    #[serde(default)]
+    reserved_at: i64,
+    #[serde(default)]
+    expires_at: i64,
+    #[serde(default)]
+    lifecycle: PersonalCreationLifecycle,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PersonalCreationLifecycle {
+    #[default]
+    Reserved,
+    BrokerCreated {
+        container_identity: String,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -267,10 +327,52 @@ struct PersonalVaultRegistry {
     pending: Vec<PendingPersonalVault>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PersonalRegistrationReservation {
-    New,
-    Pending,
+#[derive(Clone)]
+pub struct PersonalCreationReservation {
+    normalized_path: String,
+    owner_sid: String,
+    created_by_session: u32,
+    client_pid: u32,
+    authentication_id: (u32, i32),
+    operation_id: u64,
+    reservation_nonce: [u8; 32],
+}
+
+impl PersonalCreationReservation {
+    pub fn normalized_path(&self) -> &str {
+        &self.normalized_path
+    }
+}
+
+fn reservation_matches_without_time(
+    pending: &PendingPersonalVault,
+    reservation: &PersonalCreationReservation,
+) -> bool {
+    pending.container_path == reservation.normalized_path
+        && pending.owner_sid == reservation.owner_sid
+        && pending.created_by_session == reservation.created_by_session
+        && pending.client_pid == reservation.client_pid
+        && pending.authentication_id_high == reservation.authentication_id.0
+        && pending.authentication_id_low == reservation.authentication_id.1
+        && pending.operation_id == reservation.operation_id
+        && pending.reservation_nonce.as_slice() == reservation.reservation_nonce.as_slice()
+}
+
+fn reservation_matches(
+    pending: &PendingPersonalVault,
+    reservation: &PersonalCreationReservation,
+    now: i64,
+) -> bool {
+    now >= pending.reserved_at
+        && now < pending.expires_at
+        && reservation_matches_without_time(pending, reservation)
+}
+
+pub(crate) fn unix_time_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 pub struct VaultAccessStore {
@@ -392,6 +494,7 @@ impl VaultAccessStore {
                     .pending
                     .into_iter()
                     .filter(valid_pending_personal)
+                    .filter(|pending| pending.expires_at > unix_time_seconds())
                     .filter(|pending| {
                         !state
                             .personal
@@ -411,32 +514,70 @@ impl VaultAccessStore {
         container_path: &str,
         owner_sid: &str,
         created_by_session: u32,
-    ) -> Result<PersonalRegistrationReservation, VaultError> {
+        client_pid: u32,
+        authentication_id: (u32, i32),
+        operation_id: u64,
+        now: i64,
+    ) -> Result<PersonalCreationReservation, VaultError> {
         if owner_sid.is_empty()
             || created_by_session == 0
-            || !Path::new(container_path).is_absolute()
+            || client_pid == 0
+            || operation_id == 0
+            || now <= 0
+            || !valid_creation_path(Path::new(container_path))
         {
             return Err(VaultError::Validation);
         }
+        let normalized = self
+            .fs
+            .normalize_personal_creation_path(Path::new(container_path))?;
+        if !valid_creation_path(&normalized)
+            || self.fs.personal_creation_target_exists(&normalized)?
+        {
+            return Err(VaultError::Validation);
+        }
+        let normalized_path = normalized.to_string_lossy().into_owned();
+        let mut reservation_nonce = [0u8; 32];
+        OsRng
+            .try_fill_bytes(&mut reservation_nonce)
+            .map_err(|_| VaultError::Persistence)?;
         let pending = PendingPersonalVault {
-            container_path: PathBuf::from(container_path).to_string_lossy().into_owned(),
+            container_path: normalized_path.clone(),
             owner_sid: owner_sid.to_string(),
             created_by_session,
+            client_pid,
+            authentication_id_high: authentication_id.0,
+            authentication_id_low: authentication_id.1,
+            operation_id,
+            reservation_nonce: reservation_nonce.to_vec(),
+            reserved_at: now,
+            expires_at: now.saturating_add(PERSONAL_CREATION_TTL_SECS),
+            lifecycle: PersonalCreationLifecycle::Reserved,
         };
         let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
         let key = personal_key(&pending.container_path);
         if state.personal.contains_key(&key) {
             return Err(VaultError::Validation);
         }
-        if let Some(existing) = state.personal_pending.get(&key) {
-            return if existing.owner_sid == pending.owner_sid
-                && existing.created_by_session == pending.created_by_session
-            {
-                Ok(PersonalRegistrationReservation::Pending)
-            } else {
-                Err(VaultError::Validation)
-            };
+        if state
+            .personal_pending
+            .get(&key)
+            .is_some_and(|existing| existing.expires_at > now)
+        {
+            return Err(VaultError::Validation);
         }
+        if state.personal_pending.values().any(|existing| {
+            existing.expires_at > now
+                && existing.owner_sid == owner_sid
+                && existing.created_by_session == created_by_session
+                && existing.client_pid == client_pid
+                && existing.authentication_id_high == authentication_id.0
+                && existing.authentication_id_low == authentication_id.1
+                && existing.operation_id == operation_id
+        }) {
+            return Err(VaultError::Validation);
+        }
+        state.personal_pending.remove(&key);
         state.personal_pending.insert(key.clone(), pending);
         if self
             .persist_personal(&state.personal, &state.personal_pending)
@@ -445,31 +586,86 @@ impl VaultAccessStore {
             state.personal_pending.remove(&key);
             return Err(VaultError::Persistence);
         }
-        Ok(PersonalRegistrationReservation::New)
+        Ok(PersonalCreationReservation {
+            normalized_path,
+            owner_sid: owner_sid.to_string(),
+            created_by_session,
+            client_pid,
+            authentication_id,
+            operation_id,
+            reservation_nonce,
+        })
     }
 
-    /// Verifies the newly created container, hardens its file DACL, then
-    /// promotes its pre-existing pending record in one durable write.
+    pub fn record_personal_broker_completion(
+        &self,
+        reservation: &PersonalCreationReservation,
+        broker_path: &str,
+        now: i64,
+    ) -> Result<(), VaultError> {
+        let normalized_broker_path = self
+            .fs
+            .normalize_personal_creation_path(Path::new(broker_path))?;
+        if personal_key(&normalized_broker_path.to_string_lossy())
+            != personal_key(&reservation.normalized_path)
+        {
+            return Err(VaultError::Validation);
+        }
+        let container = PathBuf::from(&reservation.normalized_path);
+        let identity = self.fs.personal_creation_target_identity(&container)?;
+        let key = personal_key(&reservation.normalized_path);
+        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        let pending = state
+            .personal_pending
+            .get_mut(&key)
+            .ok_or(VaultError::Validation)?;
+        if !reservation_matches(pending, reservation, now)
+            || pending.lifecycle != PersonalCreationLifecycle::Reserved
+        {
+            return Err(VaultError::Validation);
+        }
+        pending.lifecycle = PersonalCreationLifecycle::BrokerCreated {
+            container_identity: identity,
+        };
+        if self
+            .persist_personal(&state.personal, &state.personal_pending)
+            .is_err()
+        {
+            if let Some(pending) = state.personal_pending.get_mut(&key) {
+                pending.lifecycle = PersonalCreationLifecycle::Reserved;
+            }
+            return Err(VaultError::Persistence);
+        }
+        Ok(())
+    }
+
+    /// Promotes only the exact live reservation whose broker-created file was
+    /// identity-bound by [`record_personal_broker_completion`].
     pub fn complete_personal_registration(
         &self,
-        container_path: &str,
-        owner_sid: &str,
-        created_by_session: u32,
+        reservation: &PersonalCreationReservation,
+        now: i64,
     ) -> Result<PersonalVaultRecord, VaultError> {
-        let key = personal_key(container_path);
+        let key = personal_key(&reservation.normalized_path);
         let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
         let pending = state
             .personal_pending
             .get(&key)
             .cloned()
             .ok_or(VaultError::Validation)?;
-        if pending.owner_sid != owner_sid || pending.created_by_session != created_by_session {
+        if !reservation_matches(&pending, reservation, now) {
             return Err(VaultError::Validation);
         }
+        let PersonalCreationLifecycle::BrokerCreated { container_identity } = &pending.lifecycle
+        else {
+            return Err(VaultError::Validation);
+        };
         let container = PathBuf::from(&pending.container_path);
-        let identity = self.fs.stable_file_identity(&container)?;
+        if self.fs.personal_creation_target_identity(&container)? != *container_identity {
+            return Err(VaultError::ContainerIdentity);
+        }
         let grants = vec![ResolvedGrant {
-            sid: owner_sid.to_string(),
+            sid: pending.owner_sid.clone(),
             access: VaultAccess::Write,
         }];
         let acl_plan = VaultAclPlan {
@@ -487,13 +683,19 @@ impl VaultAccessStore {
             let _ = self.acls.restore(&snapshots);
             return Err(error);
         }
-        if self.fs.stable_file_identity(&container).ok().as_deref() != Some(identity.as_str()) {
+        if self
+            .fs
+            .personal_creation_target_identity(&container)
+            .ok()
+            .as_deref()
+            != Some(container_identity.as_str())
+        {
             let _ = self.acls.restore(&snapshots);
             return Err(VaultError::ContainerIdentity);
         }
         let record = PersonalVaultRecord {
             container_path: pending.container_path.clone(),
-            container_identity: identity,
+            container_identity: container_identity.clone(),
             owner_sid: pending.owner_sid.clone(),
             scope: VaultPresentation::PerUser,
             created_by_session: pending.created_by_session,
@@ -506,25 +708,21 @@ impl VaultAccessStore {
         {
             state.personal.remove(&key);
             state.personal_pending.insert(key, pending);
+            let _ = self.acls.restore(&snapshots);
             return Err(VaultError::Persistence);
         }
         Ok(record)
     }
 
-    pub fn cancel_personal_registration(
-        &self,
-        container_path: &str,
-        owner_sid: &str,
-        created_by_session: u32,
-    ) {
-        let key = personal_key(container_path);
+    pub fn cancel_personal_registration(&self, reservation: &PersonalCreationReservation) {
+        let key = personal_key(&reservation.normalized_path);
         let Ok(mut state) = self.state.lock() else {
             return;
         };
         let Some(pending) = state.personal_pending.get(&key) else {
             return;
         };
-        if pending.owner_sid != owner_sid || pending.created_by_session != created_by_session {
+        if !reservation_matches_without_time(pending, reservation) {
             return;
         }
         let pending = state.personal_pending.remove(&key);
@@ -1344,6 +1542,36 @@ impl VaultFs for WindowsVaultFs {
             info.dwVolumeSerialNumber,
             ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64
         ))
+    }
+    fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+        if !valid_creation_path(path) {
+            return Err(VaultError::Validation);
+        }
+        let parent = path.parent().ok_or(VaultError::Validation)?;
+        let parent = std::fs::canonicalize(parent).map_err(|_| VaultError::Validation)?;
+        let file_name = path.file_name().ok_or(VaultError::Validation)?;
+        if file_name.to_string_lossy().contains(':') {
+            return Err(VaultError::Validation);
+        }
+        Ok(parent.join(file_name))
+    }
+    fn personal_creation_target_exists(&self, path: &Path) -> Result<bool, VaultError> {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(VaultError::Validation),
+        }
+    }
+    fn personal_creation_target_identity(&self, path: &Path) -> Result<String, VaultError> {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+        let metadata =
+            std::fs::symlink_metadata(path).map_err(|_| VaultError::ContainerIdentity)?;
+        if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(VaultError::ContainerIdentity);
+        }
+        self.stable_file_identity(path)
     }
     fn validate_dedicated_parent(&self, parent: &Path, container: &Path) -> Result<(), VaultError> {
         let parent = std::fs::canonicalize(parent).map_err(|_| VaultError::Validation)?;
@@ -2278,6 +2506,12 @@ mod tests {
         fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
             Ok("volume:1:file:2".into())
         }
+        fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+            lexical_normalize_creation_path(path)
+        }
+        fn personal_creation_target_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            Ok(self.0.lock().unwrap().contains_key(path))
+        }
         fn validate_dedicated_parent(&self, _: &Path, _: &Path) -> Result<(), VaultError> {
             Ok(())
         }
@@ -2429,6 +2663,19 @@ mod tests {
         fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
             Ok("v:1:i:2".into())
         }
+        fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+            lexical_normalize_creation_path(path)
+        }
+        fn personal_creation_target_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            Ok(self.files.lock().unwrap().contains_key(path))
+        }
+        fn personal_creation_target_identity(&self, path: &Path) -> Result<String, VaultError> {
+            if self.files.lock().unwrap().contains_key(path) {
+                Ok("v:1:i:2".into())
+            } else {
+                Err(VaultError::ContainerIdentity)
+            }
+        }
         fn validate_dedicated_parent(&self, _: &Path, _: &Path) -> Result<(), VaultError> {
             Ok(())
         }
@@ -2492,6 +2739,12 @@ mod tests {
         fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
             let read = self.identity_reads.fetch_add(1, Ordering::SeqCst);
             Ok(if read < 2 { "v:1:i:2" } else { "v:1:i:99" }.into())
+        }
+        fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+            lexical_normalize_creation_path(path)
+        }
+        fn personal_creation_target_exists(&self, _: &Path) -> Result<bool, VaultError> {
+            Ok(false)
         }
         fn validate_dedicated_parent(&self, _: &Path, _: &Path) -> Result<(), VaultError> {
             Ok(())
@@ -2557,65 +2810,255 @@ mod tests {
     }
 
     #[test]
-    fn personal_acl_failure_stays_pending_and_recovers_after_service_restart() {
+    fn personal_creation_requires_the_bound_broker_lifecycle_before_acl() {
         let files = Arc::new(Mutex::new(HashMap::new()));
-        let fail_write = Arc::new(AtomicBool::new(false));
-        let fail_acl = Arc::new(AtomicBool::new(true));
-        let store = personal_store(files.clone(), fail_write.clone(), fail_acl.clone());
-        store
-            .begin_personal_registration("C:\\vaults\\personal.hc", "S-1-5-21-owner", 7)
-            .unwrap();
-        assert_eq!(
-            store.complete_personal_registration("C:\\vaults\\personal.hc", "S-1-5-21-owner", 7,),
-            Err(VaultError::AclApply)
+        let store = personal_store(
+            files.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
         );
+        let reservation = store
+            .begin_personal_registration(
+                "C:\\vaults\\personal.hc",
+                "S-1-5-21-owner",
+                7,
+                1_001,
+                (55, -66),
+                41,
+                100,
+            )
+            .unwrap();
+        assert!(matches!(
+            store.complete_personal_registration(&reservation, 101),
+            Err(VaultError::Validation)
+        ));
+
+        files.lock().unwrap().insert(
+            PathBuf::from("C:\\vaults\\personal.hc"),
+            b"created vault".to_vec(),
+        );
+        store
+            .record_personal_broker_completion(&reservation, "C:\\vaults\\personal.hc", 102)
+            .unwrap();
+        assert!(store
+            .complete_personal_registration(&reservation, 103)
+            .is_ok());
+    }
+
+    #[test]
+    fn personal_creation_rejects_preexisting_or_unrelated_files() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        files.lock().unwrap().insert(
+            PathBuf::from("C:\\vaults\\existing.hc"),
+            b"not a new vault".to_vec(),
+        );
+        let store = personal_store(
+            files.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert!(matches!(
+            store.begin_personal_registration(
+                "C:\\vaults\\existing.hc",
+                "S-1-5-21-owner",
+                7,
+                1_001,
+                (55, -66),
+                41,
+                100,
+            ),
+            Err(VaultError::Validation)
+        ));
+
+        let reservation = store
+            .begin_personal_registration(
+                "C:\\vaults\\personal.hc",
+                "S-1-5-21-owner",
+                7,
+                1_001,
+                (55, -66),
+                42,
+                100,
+            )
+            .unwrap();
+        assert!(matches!(
+            store.record_personal_broker_completion(&reservation, "C:\\vaults\\existing.hc", 101,),
+            Err(VaultError::Validation)
+        ));
+        assert!(store
+            .begin_personal_registration(
+                "C:\\vaults\\..\\escape.hc",
+                "S-1-5-21-owner",
+                7,
+                1_001,
+                (55, -66),
+                43,
+                100,
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn personal_creation_identity_swap_restores_acl_and_never_registers() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let restored = Arc::new(AtomicBool::new(false));
+        let store = VaultAccessStore::open(
+            Box::new(SwappingIdentityFs {
+                files: Arc::new(Mutex::new(HashMap::new())),
+                identity_reads: reads,
+            }),
+            Box::new(Resolver),
+            Box::new(RestoringAcl(restored.clone())),
+            PathBuf::from("/policy"),
+        );
+        let reservation = store
+            .begin_personal_registration(
+                "C:\\vaults\\personal.hc",
+                "S-1-5-21-owner",
+                7,
+                1_001,
+                (55, -66),
+                44,
+                100,
+            )
+            .unwrap();
+        store
+            .record_personal_broker_completion(&reservation, "C:\\vaults\\personal.hc", 101)
+            .unwrap();
+
+        assert_eq!(
+            store.complete_personal_registration(&reservation, 102),
+            Err(VaultError::ContainerIdentity)
+        );
+        assert!(restored.load(Ordering::SeqCst));
         assert_eq!(
             store
                 .personal_for_owner("C:\\vaults\\personal.hc", "S-1-5-21-owner")
                 .unwrap(),
             None
         );
-
-        fail_acl.store(false, Ordering::SeqCst);
-        let restarted = personal_store(files, fail_write, fail_acl);
-        restarted.load_at_startup();
-        assert_eq!(
-            restarted
-                .begin_personal_registration("C:\\vaults\\personal.hc", "S-1-5-21-owner", 7)
-                .unwrap(),
-            PersonalRegistrationReservation::Pending
-        );
-        assert!(restarted
-            .complete_personal_registration("C:\\vaults\\personal.hc", "S-1-5-21-owner", 7)
-            .is_ok());
     }
 
     #[test]
-    fn personal_owner_record_write_failure_keeps_a_recoverable_pending_record() {
+    fn personal_creation_rejects_second_client_mismatch_and_replay() {
         let files = Arc::new(Mutex::new(HashMap::new()));
-        let fail_write = Arc::new(AtomicBool::new(false));
-        let fail_acl = Arc::new(AtomicBool::new(false));
-        let store = personal_store(files.clone(), fail_write.clone(), fail_acl.clone());
-        store
-            .begin_personal_registration("C:\\vaults\\personal.hc", "S-1-5-21-owner", 7)
+        let store = personal_store(
+            files.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let reservation = store
+            .begin_personal_registration(
+                "C:\\vaults\\personal.hc",
+                "S-1-5-21-owner",
+                7,
+                1_001,
+                (55, -66),
+                41,
+                100,
+            )
             .unwrap();
-        fail_write.store(true, Ordering::SeqCst);
-        assert_eq!(
-            store.complete_personal_registration("C:\\vaults\\personal.hc", "S-1-5-21-owner", 7,),
-            Err(VaultError::Persistence)
-        );
+        assert!(store
+            .begin_personal_registration(
+                "C:\\vaults\\personal.hc",
+                "S-1-5-21-other",
+                8,
+                2_002,
+                (77, -88),
+                99,
+                101,
+            )
+            .is_err());
+        assert!(store
+            .begin_personal_registration(
+                "C:\\vaults\\other.hc",
+                "S-1-5-21-owner",
+                7,
+                1_001,
+                (55, -66),
+                41,
+                101,
+            )
+            .is_err());
 
-        let restarted = personal_store(files, fail_write, fail_acl);
-        restarted.load_at_startup();
-        assert_eq!(
-            restarted
-                .begin_personal_registration("C:\\vaults\\personal.hc", "S-1-5-21-owner", 7)
-                .unwrap(),
-            PersonalRegistrationReservation::Pending
+        files.lock().unwrap().insert(
+            PathBuf::from("C:\\vaults\\personal.hc"),
+            b"created vault".to_vec(),
         );
-        assert!(restarted
-            .complete_personal_registration("C:\\vaults\\personal.hc", "S-1-5-21-owner", 7)
-            .is_ok());
+        let mut wrong_operation = reservation.clone();
+        wrong_operation.operation_id = 99;
+        assert!(store
+            .record_personal_broker_completion(&wrong_operation, "C:\\vaults\\personal.hc", 102,)
+            .is_err());
+        let mut wrong_process = reservation.clone();
+        wrong_process.client_pid = 2_002;
+        assert!(store
+            .record_personal_broker_completion(&wrong_process, "C:\\vaults\\personal.hc", 102,)
+            .is_err());
+        let mut wrong_logon = reservation.clone();
+        wrong_logon.authentication_id = (77, -88);
+        assert!(store
+            .record_personal_broker_completion(&wrong_logon, "C:\\vaults\\personal.hc", 102,)
+            .is_err());
+        store
+            .record_personal_broker_completion(&reservation, "C:\\vaults\\personal.hc", 102)
+            .unwrap();
+        assert!(store
+            .record_personal_broker_completion(&reservation, "C:\\vaults\\personal.hc", 102)
+            .is_err());
+        store
+            .complete_personal_registration(&reservation, 103)
+            .unwrap();
+        assert!(store
+            .complete_personal_registration(&reservation, 104)
+            .is_err());
+    }
+
+    #[test]
+    fn personal_creation_timeout_invalidates_the_old_reservation() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = personal_store(
+            files,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let expired = store
+            .begin_personal_registration(
+                "C:\\vaults\\personal.hc",
+                "S-1-5-21-owner",
+                7,
+                1_001,
+                (55, -66),
+                41,
+                100,
+            )
+            .unwrap();
+        let replacement = store
+            .begin_personal_registration(
+                "C:\\vaults\\personal.hc",
+                "S-1-5-21-owner",
+                7,
+                1_001,
+                (55, -66),
+                42,
+                100 + PERSONAL_CREATION_TTL_SECS + 1,
+            )
+            .unwrap();
+        store.cancel_personal_registration(&expired);
+        let mut wrong_nonce = replacement.clone();
+        wrong_nonce.reservation_nonce[0] ^= 1;
+        store.cancel_personal_registration(&wrong_nonce);
+        assert!(store
+            .begin_personal_registration(
+                "C:\\vaults\\personal.hc",
+                "S-1-5-21-owner",
+                7,
+                1_001,
+                (55, -66),
+                43,
+                100 + PERSONAL_CREATION_TTL_SECS + 2,
+            )
+            .is_err());
     }
     #[test]
     fn stale_write_retains_last_valid_policy() {
@@ -3161,6 +3604,12 @@ pub fn test_store() -> std::sync::Arc<VaultAccessStore> {
         }
         fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
             Err(VaultError::ContainerIdentity)
+        }
+        fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+            lexical_normalize_creation_path(path)
+        }
+        fn personal_creation_target_exists(&self, _: &Path) -> Result<bool, VaultError> {
+            Ok(false)
         }
         fn validate_dedicated_parent(&self, _: &Path, _: &Path) -> Result<(), VaultError> {
             Err(VaultError::Validation)

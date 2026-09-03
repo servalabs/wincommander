@@ -300,10 +300,10 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.list_authorized"
         | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
 
-        // Personal creation accepts a new filesystem path and cannot be a
-        // normal-user verb until creation, file identity and ACL hardening are
-        // bound to one service-owned handle. Keep it administrator-only in the
-        // interim; ordinary users may still mount already registered vaults.
+        // Personal creation now has service-owned request correlation, but the
+        // service still cannot retain one file handle across the separate Pro
+        // engine creation. Keep it administrator-only until that remaining
+        // substitution boundary is proven safe for an ordinary user.
         "svc.vault.create_personal" => CapabilityClass::Privileged,
 
         // Creates/updates a Windows local group and sets its EXACT

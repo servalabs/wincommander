@@ -790,20 +790,25 @@ fn handle_personal_vault_create(
         ));
     }
     let requested_path = path.to_string();
+    let now = crate::vault_access::unix_time_seconds();
     let registration = vault_access
-        .begin_personal_registration(&requested_path, peer.caller_sid(), peer.session_id())
+        .begin_personal_registration(
+            &requested_path,
+            peer.caller_sid(),
+            peer.session_id(),
+            peer.client_pid(),
+            peer.authentication_id(),
+            operation_id,
+            now,
+        )
         .map_err(|_| {
             VerbError::new(
                 "vault_owner_record_failed",
                 "personal vault ownership could not be recorded",
             )
         })?;
-    if registration == crate::vault_access::PersonalRegistrationReservation::Pending {
-        return Err(VerbError::new(
-            "vault_owner_record_failed",
-            "personal vault creation is already in progress",
-        ));
-    }
+    let requested_path = registration.normalized_path().to_string();
+    args["Path"] = serde_json::Value::String(requested_path.clone());
     args["TargetSessionId"] = serde_json::Value::from(peer.session_id());
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
@@ -818,26 +823,29 @@ fn handle_personal_vault_create(
         ))
     })
     .map_err(|_| {
-        vault_access.cancel_personal_registration(
-            &requested_path,
-            peer.caller_sid(),
-            peer.session_id(),
-        );
+        vault_access.cancel_personal_registration(&registration);
         VerbError::new("vault_create_failed", "personal vault creation failed")
     })?;
-    if result.get("path").and_then(serde_json::Value::as_str) != Some(requested_path.as_str()) {
-        vault_access.cancel_personal_registration(
-            &requested_path,
-            peer.caller_sid(),
-            peer.session_id(),
-        );
+    let broker_path = result
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if vault_access
+        .record_personal_broker_completion(
+            &registration,
+            broker_path,
+            crate::vault_access::unix_time_seconds(),
+        )
+        .is_err()
+    {
+        vault_access.cancel_personal_registration(&registration);
         return Err(VerbError::new(
             "vault_create_failed",
             "personal vault creation could not be verified",
         ));
     }
     vault_access
-        .complete_personal_registration(&requested_path, peer.caller_sid(), peer.session_id())
+        .complete_personal_registration(&registration, crate::vault_access::unix_time_seconds())
         .map_err(|_| {
             VerbError::new(
                 "vault_owner_record_failed",
