@@ -8,7 +8,7 @@ describe("RDP machine settings use the typed service route", () => {
   test("the privacy card applies incoming RDP through the typed client", async () => {
     const card = await Bun.file("src/panels/privacy/RdpIdleCard.tsx").text();
 
-    expect(card).toContain('import { applyMachineSetting } from "../../lib/machineSettingsClient"');
+    expect(card).toContain('import { applyMachineSetting } from "../../hooks/machineSettingsClient"');
     expect(card).toContain("await applyMachineSetting({");
     expect(card).toContain('setting: "rdp_incoming"');
     expect(card).toContain('kind: "rdp_incoming"');
@@ -18,7 +18,7 @@ describe("RDP machine settings use the typed service route", () => {
 
   test("the client and Tauri bridge retain both fixed RDP service settings", async () => {
     const [client, bridge] = await Promise.all([
-      Bun.file("src/lib/machineSettingsClient.ts").text(),
+      Bun.file("src/hooks/machineSettingsClient.ts").text(),
       Bun.file("src-tauri/commander-free/src/machine_settings.rs").text(),
     ]);
 
