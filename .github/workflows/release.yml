@@ -1,10 +1,10 @@
 name: release
 
 # A vX.Y.Z tag starts the release. Pushing the tag (locally or after a
-# prepare-release PR merges) aligns Cargo/package versions, then the NSIS setup
+# prepare-release PR merges) validates the already-aligned versions, then the NSIS setup
 # job uses the protected `release` environment (signing key + R2).
-# Owners/admins and usernames in RELEASE_AUTO_APPROVERS skip the manual
-# Review deployments click; anyone else cannot start the workflow.
+# An authorized maintainer may start the workflow, but publication always waits
+# for a different required reviewer to approve the protected environment.
 on:
   push:
     tags:
@@ -26,18 +26,78 @@ env:
   RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
 
 concurrency:
-  group: public-release-${{ inputs.release_tag || github.ref }}
+  group: public-release
   cancel-in-progress: false
 
-permissions:
-  contents: write # version-file commit + GitHub Release archive
-  id-token: write # keyless Sigstore provenance
-  attestations: write # persist build provenance
+permissions: {}
 
 jobs:
-  align-version:
-    name: Align Cargo and version files
+  verify-release-controls:
+    name: Verify independent release controls
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require protected main and independently reviewed environment
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ! branch_rules="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"; then
+            echo "::error::Cannot verify the effective rules for main. Configure an active repository ruleset that requires pull requests and at least one approval, and ensure RELEASE_AUTOMATION_TOKEN can read repository rules." >&2
+            exit 1
+          fi
+          if ! release_environment="$(gh api "repos/${GITHUB_REPOSITORY}/environments/release")"; then
+            echo "::error::Cannot verify the Release environment. Create it with required reviewers, or ensure RELEASE_AUTOMATION_TOKEN can read environment settings." >&2
+            exit 1
+          fi
+          tag_rulesets=""
+          if ! tag_ruleset_ids="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --paginate --jq '.[] | select(.target == "tag" and .enforcement == "active") | .id')"; then
+            echo "::error::Cannot list active tag rulesets." >&2
+            exit 1
+          fi
+          while IFS= read -r ruleset_id; do
+            [[ -z "${ruleset_id}" ]] && continue
+            if ! ruleset="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}")"; then
+              echo "::error::Cannot inspect tag ruleset ${ruleset_id}." >&2
+              exit 1
+            fi
+            tag_rulesets+="${ruleset}"$'\n'
+          done <<< "${tag_ruleset_ids}"
+
+          BRANCH_RULES_JSON="${branch_rules}" RELEASE_ENVIRONMENT_JSON="${release_environment}" TAG_RULESETS_JSON_LINES="${tag_rulesets}" node <<'NODE'
+          // RELEASE_CONTROL_EVALUATOR
+          const branchRules = JSON.parse(process.env.BRANCH_RULES_JSON || "null");
+          const releaseEnvironment = JSON.parse(process.env.RELEASE_ENVIRONMENT_JSON || "null");
+          const tagRulesets = (process.env.TAG_RULESETS_JSON_LINES || "").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+          const reviewedMain = Array.isArray(branchRules) && branchRules.some((rule) => rule.type === "pull_request" &&
+            Number(rule.parameters?.required_approving_review_count || 0) >= 1 &&
+            (rule.parameters?.dismiss_stale_reviews_on_push === true || rule.parameters?.require_last_push_approval === true));
+          if (!reviewedMain) throw new Error("Release blocked: main review protection is incomplete.");
+          const reviewerRules = (releaseEnvironment?.protection_rules || []).filter((rule) => rule.type === "required_reviewers");
+          if (!reviewerRules.some((rule) => rule.reviewers?.length >= 1 && rule.prevent_self_review === true) || releaseEnvironment?.can_admins_bypass !== false) {
+            throw new Error("Release blocked: Release environment protection is incomplete.");
+          }
+          const protectedTags = tagRulesets.some((ruleset) => {
+            const includes = ruleset.conditions?.ref_name?.include || [];
+            const excludes = ruleset.conditions?.ref_name?.exclude || [];
+            const ruleTypes = new Set((ruleset.rules || []).map((rule) => rule.type));
+            return ruleset.target === "tag" && ruleset.enforcement === "active" && includes.includes("refs/tags/v*") &&
+              excludes.length === 0 && ["creation", "deletion", "update"].every((type) => ruleTypes.has(type)) &&
+              ruleset.current_user_can_bypass === "always";
+          });
+          if (!protectedTags) throw new Error("Release blocked: protected v* tag creation is not configured for this automation identity.");
+          NODE
+
+          echo "Release controls verified: reviewed main, independently approved publication, and protected v* tags."
+
+  align-version:
+    name: Validate release source and versions
+    needs: verify-release-controls
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       release_sha: ${{ steps.align.outputs.release_sha }}
     steps:
@@ -68,13 +128,12 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
 
-      - name: Align version files with the tag
+      - name: Require reviewed main source aligned with the tag
         id: align
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
-          RELEASE_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
         run: |
           set -euo pipefail
           if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
@@ -85,25 +144,55 @@ jobs:
           version="${RELEASE_TAG#v}"
           git fetch origin main --quiet
           tag_sha="$(git rev-parse HEAD)"
-          main_sha="$(git rev-parse origin/main)"
+          if ! git merge-base --is-ancestor "${tag_sha}" origin/main; then
+            echo "::error::Release blocked: ${RELEASE_TAG} is not part of protected main. Prepare and merge the release PR before creating its tag." >&2
+            exit 1
+          fi
 
-          node <<'NODE'
+          main_version="$(git show origin/main:package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
+          if ! published_tags="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[] | select(.draft == false) | .tag_name')"; then
+            echo "::error::Cannot verify published release versions." >&2
+            exit 1
+          fi
+          if [[ -z "${published_tags}" ]]; then
+            echo "::error::No published release baseline was found; bootstrap releases require a separately reviewed process." >&2
+            exit 1
+          fi
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "::error::Release ${RELEASE_TAG} is already published; replay and asset overwrite are blocked." >&2
+            exit 1
+          fi
+
+          MAIN_VERSION="${main_version}" PUBLISHED_TAGS_LINES="${published_tags}" node <<'NODE'
           const fs = require('fs');
           const version = process.env.RELEASE_TAG.slice(1);
           const packagePath = 'package.json';
           const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
           const current = packageJson.version;
           const parse = (value) => {
-            const match = /^(\d+)\.(\d+)\.(\d+)(?:-.*)?$/.exec(value);
+            const match = /^(?:v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value);
             if (!match) throw new Error(`Invalid version: ${value}`);
-            return match.slice(1, 4).map(Number);
+            return { core: match.slice(1, 4).map(Number), pre: match[4]?.split(".") || [] };
           };
-          const [requestedMajor, requestedMinor, requestedPatch] = parse(version);
-          const [currentMajor, currentMinor, currentPatch] = parse(current);
-          const requestedBase = requestedMajor * 1_000_000 + requestedMinor * 1_000 + requestedPatch;
-          const currentBase = currentMajor * 1_000_000 + currentMinor * 1_000 + currentPatch;
-          if (requestedBase < currentBase) {
-            throw new Error(`Tag v${version} is older than the current version ${current}.`);
+          const compare = (left, right) => {
+            const a = parse(left), b = parse(right);
+            for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i];
+            if (!a.pre.length || !b.pre.length) return a.pre.length ? -1 : b.pre.length ? 1 : 0;
+            for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+              if (a.pre[i] === undefined) return -1;
+              if (b.pre[i] === undefined) return 1;
+              if (a.pre[i] === b.pre[i]) continue;
+              const an = /^\d+$/.test(a.pre[i]), bn = /^\d+$/.test(b.pre[i]);
+              if (an && bn) return Number(a.pre[i]) - Number(b.pre[i]);
+              if (an !== bn) return an ? -1 : 1;
+              return a.pre[i].localeCompare(b.pre[i]);
+            }
+            return 0;
+          };
+          if (version !== process.env.MAIN_VERSION) throw new Error(`Tag v${version} is not current protected-main version ${process.env.MAIN_VERSION}.`);
+          const publishedTags = (process.env.PUBLISHED_TAGS_LINES || "").split("\n").filter(Boolean);
+          if (!publishedTags.length || publishedTags.some((tag) => compare(version, tag) <= 0)) {
+            throw new Error(`Tag v${version} must be newer than every published release; rollback or replay requires a separate reviewed process.`);
           }
 
           const tauriPath = 'src-tauri/commander-free/tauri.conf.json';
@@ -119,101 +208,23 @@ jobs:
             tauriConfig.version === version &&
             cargoVersion === version &&
             lockVersion === version;
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `already_aligned=${aligned}\n`);
-          if (aligned) {
-            console.log(`Version files already match ${version}.`);
-            process.exit(0);
+          if (!aligned) {
+            throw new Error(`Release tag v${version} is not version-aligned. Run prepare release and merge its reviewed PR; this workflow never writes to main.`);
           }
+          console.log(`Version files match ${version}.`);
 
-          packageJson.version = version;
-          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
-          tauriConfig.version = version;
-          fs.writeFileSync(tauriPath, `${JSON.stringify(tauriConfig, null, 2)}\n`);
-          if (!/^version = ".*"$/m.test(cargo)) {
-            throw new Error('Free Cargo package version was not found.');
-          }
-          fs.writeFileSync(cargoPath, cargo.replace(/^version = ".*"$/m, `version = "${version}"`));
-          const updatedLock = lock.replace(
-            /(\[\[package\]\]\nname = "commander-free"\nversion = ")[^"]+(")/,
-            `$1${version}$2`,
-          );
-          if (updatedLock === lock) throw new Error('Free Cargo.lock package version was not found.');
-          fs.writeFileSync(lockPath, updatedLock);
-          console.log(`Updated version files ${current} -> ${version}.`);
           NODE
 
-          if [[ "$(git rev-parse HEAD)" != "$tag_sha" ]]; then
-            echo "Checkout moved while aligning versions." >&2
-            exit 1
-          fi
-
-          git config user.name "WinCommander release automation"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          if git diff --quiet -- package.json \
-              src-tauri/commander-free/tauri.conf.json \
-              src-tauri/commander-free/Cargo.toml \
-              src-tauri/Cargo.lock; then
-            echo "release_sha=${tag_sha}" >> "$GITHUB_OUTPUT"
-            echo "Version files already match ${version} at ${tag_sha}."
-            exit 0
-          fi
-
-          if [[ "${tag_sha}" != "${main_sha}" ]]; then
-            echo "Tag ${RELEASE_TAG} is not origin/main HEAD, so the workflow cannot commit version files on top of it." >&2
-            echo "Merge the intended commits to main, then retag, or run prepare release first." >&2
-            exit 1
-          fi
-
-          git add package.json \
-            src-tauri/commander-free/tauri.conf.json \
-            src-tauri/commander-free/Cargo.toml \
-            src-tauri/Cargo.lock
-          git commit -m "release: v${version}"
-          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git push origin HEAD:main
-          echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-  auto-approve-release:
-    name: Auto-approve release environment
-    needs: align-version
-    runs-on: ubuntu-latest
-    steps:
-      - name: Approve pending release deployment
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
-          ACTOR: ${{ github.actor }}
-        run: |
-          set -euo pipefail
-          # GITHUB_TOKEN cannot approve its own deployment. The automation
-          # PAT must belong to a required reviewer on the `release`
-          # environment, and "Prevent self-review" must be off if that
-          # person also pushed the tag.
-          for _ in $(seq 1 40); do
-            pending="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/pending_deployments")"
-            count="$(printf '%s' "${pending}" | jq 'length')"
-            if [[ "${count}" != "0" ]]; then
-              ids="$(printf '%s' "${pending}" | jq -c '[.[].environment.id]')"
-              printf '%s' "${pending}" | jq -r '.[] | "Pending environment: \(.environment.name) (\(.environment.id))"'
-              if jq -n \
-                --argjson ids "${ids}" \
-                --arg comment "Auto-approved: ${ACTOR} is a repository owner/admin or RELEASE_AUTO_APPROVERS entry." \
-                '{environment_ids: $ids, state: "approved", comment: $comment}' \
-                | gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/pending_deployments" --input -; then
-                echo "Approved the release environment for ${ACTOR}."
-                exit 0
-              fi
-              echo "Auto-approve was rejected (often Prevent self-review, or the PAT is not a required reviewer). Approve Review deployments in the Actions UI."
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "No pending deployment appeared. If the setup job is waiting, approve the release environment in the Actions UI. If Prevent self-review is enabled, turn it off for owner-triggered releases."
+          echo "release_sha=${tag_sha}" >> "$GITHUB_OUTPUT"
 
   build-free-release:
     name: Build, sign, publish to R2 and GitHub, and attest Free setup
     needs: align-version
     runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     environment:
       name: release
       url: https://winupdates.servalabs.com/free/latest.json
@@ -221,8 +232,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.align-version.outputs.release_sha }}
-          # Build from the aligned release commit (the tag itself when
-          # versions already match, or the follow-up Cargo bump on main).
+          # Build from the exact reviewed and version-aligned tag commit.
           # A hard-coded assets ref can drift from local development and ship
           # a release with missing runtime logos despite a passing dev build.
           submodules: recursive

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { requestDestructiveCapability } from "../../hooks/destructiveAuthz";
 import type { AuthMode } from "../../context/AuthModeContext";
 import calcIcon from "@assets/softwares/calc.png";
 import "./CalculatorGate.css";
@@ -119,7 +120,15 @@ export default function CalculatorGate({ onAuth }: Props) {
         await invoke("exit_calculator_mode", { title: "WinCommander" });
         onAuth("decoy");
       } else if (result === "destroy") {
-        await invoke("lockdown", { deactivateLicenseFirst: false, shutdownSystem: false });
+        const capabilityToken = await requestDestructiveCapability(
+          { command: "lockdown", deactivateLicenseFirst: false, shutdownSystem: false },
+          displayValue,
+        );
+        await invoke("lockdown", {
+          deactivateLicenseFirst: false,
+          shutdownSystem: false,
+          capabilityToken,
+        });
       }
     } catch {
       // swallow — never surface auth errors visually

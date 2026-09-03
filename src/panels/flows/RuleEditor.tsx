@@ -473,15 +473,17 @@ function ActionEditor({ action, commands, disabled, onChange }: { action: Action
     "NotifyAction",
     "DelayAction",
     "SignalAction",
-    "LockdownAction",
   ];
+  const actionOptions = action.type === "LockdownAction"
+    ? [{ value: "LockdownAction" as const, label: "Lockdown unavailable — replace this action" }, ...types.map((t) => ({ value: t, label: ACTION_LABELS[t] }))]
+    : types.map((t) => ({ value: t, label: ACTION_LABELS[t] }));
   return (
     <div className="flow-block__grid">
       <Sel
         ariaLabel="Action type"
         value={action.type}
         onChange={(v) => onChange(defaultAction(v))}
-        options={types.map((t) => ({ value: t, label: ACTION_LABELS[t] }))}
+        options={actionOptions}
       />
       {action.type === "SetToggleAction" && (() => {
         const meta = TOGGLE_CATALOG.find((t) => t.id === action.toggleId);
@@ -547,7 +549,7 @@ function ActionEditor({ action, commands, disabled, onChange }: { action: Action
       )}
       {action.type === "LockdownAction" && (
         <span className="flow-danger-note">
-          <Icon icon="warning-sign" size={12} /> Only fires if self-destruct is already armed.
+          <Icon icon="warning-sign" size={12} /> Persisted flows cannot authorize Lockdown. Replace this action before saving.
         </span>
       )}
     </div>

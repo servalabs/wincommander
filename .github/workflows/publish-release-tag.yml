@@ -10,8 +10,7 @@ on:
     types:
       - closed
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   create-release-tag:
@@ -20,7 +19,70 @@ jobs:
       startsWith(github.event.pull_request.head.ref, 'release/v')
     name: Create protected version tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - name: Recheck protected release controls
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ! branch_rules="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"; then
+            echo "::error::Cannot verify the effective rules for main. Configure an active repository ruleset that requires pull requests and at least one approval, and ensure RELEASE_AUTOMATION_TOKEN can read repository rules." >&2
+            exit 1
+          fi
+          if ! release_environment="$(gh api "repos/${GITHUB_REPOSITORY}/environments/release")"; then
+            echo "::error::Cannot verify the Release environment. Create it with required reviewers, or ensure RELEASE_AUTOMATION_TOKEN can read environment settings." >&2
+            exit 1
+          fi
+
+          tag_rulesets=""
+          if ! tag_ruleset_ids="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --paginate --jq '.[] | select(.target == "tag" and .enforcement == "active") | .id')"; then
+            echo "::error::Cannot list active tag rulesets." >&2
+            exit 1
+          fi
+          while IFS= read -r ruleset_id; do
+            [[ -z "${ruleset_id}" ]] && continue
+            if ! ruleset="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}")"; then
+              echo "::error::Cannot inspect tag ruleset ${ruleset_id}." >&2
+              exit 1
+            fi
+            tag_rulesets+="${ruleset}"$'\n'
+          done <<< "${tag_ruleset_ids}"
+
+          BRANCH_RULES_JSON="${branch_rules}" \
+          RELEASE_ENVIRONMENT_JSON="${release_environment}" \
+          TAG_RULESETS_JSON_LINES="${tag_rulesets}" \
+          node <<'NODE'
+          // RELEASE_CONTROL_EVALUATOR
+          const branchRules = JSON.parse(process.env.BRANCH_RULES_JSON || "null");
+          const releaseEnvironment = JSON.parse(process.env.RELEASE_ENVIRONMENT_JSON || "null");
+          const tagRulesets = (process.env.TAG_RULESETS_JSON_LINES || "")
+            .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+          const reviewedMain = Array.isArray(branchRules) && branchRules.some((rule) =>
+            rule.type === "pull_request" &&
+            Number(rule.parameters?.required_approving_review_count || 0) >= 1 &&
+            (rule.parameters?.dismiss_stale_reviews_on_push === true ||
+              rule.parameters?.require_last_push_approval === true));
+          if (!reviewedMain) throw new Error("Release blocked: main review protection is incomplete.");
+          const reviewerRules = (releaseEnvironment?.protection_rules || []).filter((rule) => rule.type === "required_reviewers");
+          if (!reviewerRules.some((rule) => rule.reviewers?.length >= 1 && rule.prevent_self_review === true) || releaseEnvironment?.can_admins_bypass !== false) {
+            throw new Error("Release blocked: Release environment protection is incomplete.");
+          }
+          const protectedTags = tagRulesets.some((ruleset) => {
+            const includes = ruleset.conditions?.ref_name?.include || [];
+            const excludes = ruleset.conditions?.ref_name?.exclude || [];
+            const ruleTypes = new Set((ruleset.rules || []).map((rule) => rule.type));
+            return ruleset.target === "tag" && ruleset.enforcement === "active" && includes.includes("refs/tags/v*") &&
+              excludes.length === 0 && ["creation", "deletion", "update"].every((type) => ruleTypes.has(type)) &&
+              ruleset.current_user_can_bypass === "always";
+          });
+          if (!protectedTags) throw new Error("Release blocked: protected v* tag creation is not configured for this automation identity.");
+          NODE
+
+          echo "Release controls verified before tag creation."
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
@@ -29,6 +91,7 @@ jobs:
       - name: Validate release PR and push tag
         id: tag
         env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
           RELEASE_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
           RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
@@ -51,6 +114,55 @@ jobs:
             echo "Free Cargo version does not match package version." >&2
             exit 1
           fi
+          VERSION="${version}" node <<'NODE'
+          const fs = require("fs");
+          const lock = fs.readFileSync("src-tauri/Cargo.lock", "utf8");
+          const lockVersion = (lock.match(/\[\[package\]\]\nname = "commander-free"\nversion = "([^"]+)"/) || [])[1];
+          if (lockVersion !== process.env.VERSION) {
+            throw new Error(`Cargo.lock commander-free version ${lockVersion || "missing"} does not match ${process.env.VERSION}.`);
+          }
+          NODE
+
+          git fetch origin main --quiet
+          main_version="$(git show origin/main:package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
+          if ! published_tags="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[] | select(.draft == false) | .tag_name')"; then
+            echo "::error::Cannot verify published release versions." >&2
+            exit 1
+          fi
+          if [[ -z "${published_tags}" ]]; then
+            echo "::error::No published release baseline was found; bootstrap releases require a separately reviewed process." >&2
+            exit 1
+          fi
+          TARGET_VERSION="${version}" MAIN_VERSION="${main_version}" PUBLISHED_TAGS_LINES="${published_tags}" node <<'NODE'
+          // RELEASE_VERSION_EVALUATOR
+          const parse = (value) => {
+            const match = /^(?:v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value);
+            if (!match) throw new Error(`Invalid semantic version: ${value}`);
+            return { core: match.slice(1, 4).map(Number), pre: match[4]?.split(".") || [] };
+          };
+          const compare = (left, right) => {
+            const a = parse(left), b = parse(right);
+            for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i];
+            if (!a.pre.length || !b.pre.length) return a.pre.length ? -1 : b.pre.length ? 1 : 0;
+            for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+              if (a.pre[i] === undefined) return -1;
+              if (b.pre[i] === undefined) return 1;
+              if (a.pre[i] === b.pre[i]) continue;
+              const an = /^\d+$/.test(a.pre[i]), bn = /^\d+$/.test(b.pre[i]);
+              if (an && bn) return Number(a.pre[i]) - Number(b.pre[i]);
+              if (an !== bn) return an ? -1 : 1;
+              return a.pre[i].localeCompare(b.pre[i]);
+            }
+            return 0;
+          };
+          if (process.env.TARGET_VERSION !== process.env.MAIN_VERSION) {
+            throw new Error(`Release ${process.env.TARGET_VERSION} is not the current protected-main version ${process.env.MAIN_VERSION}.`);
+          }
+          const publishedTags = (process.env.PUBLISHED_TAGS_LINES || "").split("\n").filter(Boolean);
+          if (!publishedTags.length || publishedTags.some((tag) => compare(process.env.TARGET_VERSION, tag) <= 0)) {
+            throw new Error(`Release ${process.env.TARGET_VERSION} must be newer than every published release; rollback or replay requires a separate reviewed process.`);
+          }
+          NODE
 
           git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           if git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null; then

@@ -18,6 +18,7 @@ import { showSuccess, showError } from "../utils/toast";
 import { runOperation } from "../context/OperationContext";
 import { DESTRUCT_STEPS, isStepEnabled } from "../types/lockdownSteps";
 import { DEFAULT_BORROWED_EXTRAS } from "../lib/visibilityDefaults";
+import { requestDestructiveCapability } from "../hooks/destructiveAuthz";
 import './RightSidebar.css';
 
 // This large, occasional dialog carries its own legacy UI bridge; keep it out
@@ -155,6 +156,7 @@ export default function RightSidebar() {
     const [sdPopup, setSdPopup] = useState(false);
     const sdIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const sdCountdownRef = useRef<number | null>(null);
+    const sdRustOwnedRef = useRef(false);
     // true when the active countdown was armed by hotkey or coercion — no audio.
     const sdSilentRef = useRef<boolean>(false);
     const [scrubDialogOpen, setScrubDialogOpen] = useState(false);
@@ -371,11 +373,20 @@ export default function RightSidebar() {
         if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
         setLoadingAction('selfDestruct');
 
+        let capabilityToken: string;
+        try {
+            capabilityToken = await requestDestructiveCapability({ command: "full_lockdown" });
+        } catch (err) {
+            showError(`Lockdown cancelled: ${String(err)}`);
+            setLoadingAction(null);
+            return;
+        }
+
         // When the user has opted to hide the destruction sequence overlay,
         // skip the deferred/listener setup and fire the cascade silently.
         if (appSettings?.app?.hideDestructionSequence === true) {
             try {
-                await invoke('full_lockdown');
+                await invoke('full_lockdown', { capabilityToken });
             } catch (err) {
                 showError(`Lockdown failed: ${String(err)}`);
             } finally {
@@ -524,7 +535,7 @@ export default function RightSidebar() {
         // Kick off the universal destruct. Don't await — the include_app
         // path exits the app and would block the overlay's completion
         // handler.
-        invoke('full_lockdown').catch((err) => {
+        invoke('full_lockdown', { capabilityToken }).catch((err) => {
             // Surface the actual reason so the user knows WHY nothing
             // happened. Most common rejection causes:
             //   - Pro entitlement missing (require_paid gate)
@@ -582,20 +593,30 @@ export default function RightSidebar() {
     // Trigger paths fire the configured cascade directly and show progress in
     // the operation overlay; editing the routine lives under Cleanup.
     useEffect(() => {
-        const unlisten = listen<void>('lockdown-trigger', () => {
+        const unlisten = listen<{ countdownSeconds: number; cancelled: boolean }>('lockdown-trigger', (event) => {
             if (loadingAction === 'selfDestruct') return;
+            if (event.payload?.cancelled) {
+                if (sdIntervalRef.current) clearInterval(sdIntervalRef.current);
+                sdIntervalRef.current = null;
+                sdRustOwnedRef.current = false;
+                setSdCountdown(null);
+                setSdPopup(false);
+                return;
+            }
             // Hotkey toggle: pressing the hotkey again WHILE counting aborts.
             // Hotkey-armed countdowns are silent — no abort tone either.
             if (sdCountdownRef.current !== null) {
                 if (sdIntervalRef.current) clearInterval(sdIntervalRef.current);
                 sdIntervalRef.current = null;
+                sdRustOwnedRef.current = false;
                 setSdCountdown(null);
                 setSdPopup(false);
                 return;
             }
             sdSilentRef.current = true; // hotkey = no audio
+            sdRustOwnedRef.current = true;
             setSdPopup(false);
-            setSdCountdown(lockdownTimerSeconds);
+            setSdCountdown(event.payload?.countdownSeconds ?? lockdownTimerSeconds);
         });
         return () => { unlisten.then(fn => fn()); };
     }, [loadingAction, lockdownTimerSeconds]);
@@ -610,6 +631,7 @@ export default function RightSidebar() {
         if (sdCountdown !== null) {
             if (sdIntervalRef.current) clearInterval(sdIntervalRef.current);
             sdIntervalRef.current = null;
+            sdRustOwnedRef.current = false;
             setSdCountdown(null);
             setSdPopup(false);
             lockdownAbort();
@@ -623,6 +645,7 @@ export default function RightSidebar() {
         }
         // Clicking the sidebar control shows the countdown popup with audio.
         sdSilentRef.current = false;
+        sdRustOwnedRef.current = false;
         setSdPopup(true);
         setSdCountdown(lockdownTimerSeconds);
     };
@@ -633,7 +656,9 @@ export default function RightSidebar() {
         if (sdCountdown === null) return;
         if (sdCountdown === 0) {
             if (!sdSilentRef.current) lockdownFire();
-            void fireSelfDestruct();
+            const rustOwned = sdRustOwnedRef.current;
+            sdRustOwnedRef.current = false;
+            if (!rustOwned) void fireSelfDestruct();
             setSdCountdown(null);
             setSdPopup(false);
             return;
@@ -644,22 +669,6 @@ export default function RightSidebar() {
         }, 1000);
         return () => { if (sdIntervalRef.current) clearInterval(sdIntervalRef.current); };
     }, [sdCountdown, fireSelfDestruct]);
-
-    // Listen for instant-cascade window event (from panic phrase
-    // triggers in BackgroundPollers). These bypass the 4s abort
-    // countdown — a user under duress can't reach the abort button, and
-    // the trigger itself is intentional (typed phrase). Reuses
-    // fireSelfDestruct so the user gets the same
-    // operation overlay the configured cascade produces; without it, the
-    // cascade was invisible and indistinguishable from "trigger broken".
-    useEffect(() => {
-        const handler = () => {
-            if (loadingAction === 'selfDestruct') return; // already running
-            void fireSelfDestruct();
-        };
-        window.addEventListener('panic-cascade-instant', handler);
-        return () => window.removeEventListener('panic-cascade-instant', handler);
-    }, [fireSelfDestruct, loadingAction]);
 
     const handleAction = useCallback(async (action: string, handler: () => Promise<any>) => {
         setLoadingAction(action);

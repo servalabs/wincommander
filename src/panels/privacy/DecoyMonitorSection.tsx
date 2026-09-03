@@ -23,6 +23,7 @@ import { showSuccess, showError } from "../../utils/toast";
 import { DecoyMonitorIntro } from "./MonitorIntros";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
+import { requestDestructiveCapability } from "../../hooks/destructiveAuthz";
 import PrivacyEventTable from './PrivacyEventTable';
 import TierGate from "../../components/shared/TierGate";
 import useEntitlements from "../../hooks/useEntitlements";
@@ -215,7 +216,10 @@ export default function DecoyMonitorSection({
     });
     if (!accepted) return;
     try {
-      await invoke("delete_decoy", { path });
+      const capabilityToken = await requestDestructiveCapability(
+        { command: "delete_decoy", path },
+      );
+      await invoke("delete_decoy", { path, capabilityToken });
       onPatchDecoy({ enrolledPaths: enrolledPaths.filter((p) => p !== path) });
       await refreshDecoys();
       showSuccess("Decoy file deleted.");

@@ -5,6 +5,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
+import { ALL_TOGGLES } from "../src/registry";
 
 type Transport = "tauri" | "backend-script";
 
@@ -18,9 +19,18 @@ interface CommandEntry {
 }
 
 interface CommandCatalog {
-  schemaVersion: 2;
+  schemaVersion: 3;
+  destructiveBackendCommands: string[];
   commands: CommandEntry[];
 }
+
+// Backend scripts whose primary purpose is irreversible data destruction.
+// Keep this explicit because verbs such as Clear-* and Remove-* are also used
+// by ordinary cleanup operations.
+const EXPLICIT_DESTRUCTIVE_BACKEND_COMMANDS = [
+  "Invoke-CrashDumpErase",
+  "Invoke-PreviousWindowsInstallErase",
+] as const;
 
 const ROOT = resolve(import.meta.dir, "..");
 const LIB_RS = resolve(ROOT, "src-tauri/commander-free/src/lib.rs");
@@ -140,6 +150,15 @@ async function buildCatalog(): Promise<CommandCatalog> {
   const backendNames = new Set(registeredBackendNames);
   const tauriRefs = new Map<string, Set<string>>();
   const backendRefs = new Map<string, Set<string>>();
+  const destructiveBackendCommands = new Set<string>(
+    EXPLICIT_DESTRUCTIVE_BACKEND_COMMANDS,
+  );
+
+  for (const toggle of ALL_TOGGLES) {
+    if (!toggle.irreversible) continue;
+    destructiveBackendCommands.add(toggle.enableCmd);
+    destructiveBackendCommands.add(toggle.disableCmd);
+  }
 
   for (const file of await frontendSources()) {
     // A TypeScript generic can contain semicolons (for example an inline object
@@ -178,7 +197,11 @@ async function buildCatalog(): Promise<CommandCatalog> {
     })),
   ].sort((a, b) => a.id.localeCompare(b.id));
 
-  return { schemaVersion: 2, commands };
+  return {
+    schemaVersion: 3,
+    destructiveBackendCommands: [...destructiveBackendCommands].sort(),
+    commands,
+  };
 }
 
 function canonical(catalog: CommandCatalog): string {

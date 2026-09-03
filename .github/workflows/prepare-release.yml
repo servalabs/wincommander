@@ -10,15 +10,89 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   prepare-release-pr:
     name: Prepare exact version release PR
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
+      - name: Require protected release controls
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ! branch_rules="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main")"; then
+            echo "::error::Cannot verify the effective rules for main. Configure an active repository ruleset that requires pull requests and at least one approval, and ensure RELEASE_AUTOMATION_TOKEN can read repository rules." >&2
+            exit 1
+          fi
+          if ! release_environment="$(gh api "repos/${GITHUB_REPOSITORY}/environments/release")"; then
+            echo "::error::Cannot verify the Release environment. Create it with required reviewers, or ensure RELEASE_AUTOMATION_TOKEN can read environment settings." >&2
+            exit 1
+          fi
+
+          tag_rulesets=""
+          if ! tag_ruleset_ids="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --paginate --jq '.[] | select(.target == "tag" and .enforcement == "active") | .id')"; then
+            echo "::error::Cannot list active tag rulesets." >&2
+            exit 1
+          fi
+          while IFS= read -r ruleset_id; do
+            [[ -z "${ruleset_id}" ]] && continue
+            if ! ruleset="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}")"; then
+              echo "::error::Cannot inspect tag ruleset ${ruleset_id}." >&2
+              exit 1
+            fi
+            tag_rulesets+="${ruleset}"$'\n'
+          done <<< "${tag_ruleset_ids}"
+
+          BRANCH_RULES_JSON="${branch_rules}" \
+          RELEASE_ENVIRONMENT_JSON="${release_environment}" \
+          TAG_RULESETS_JSON_LINES="${tag_rulesets}" \
+          node <<'NODE'
+          // RELEASE_CONTROL_EVALUATOR
+          const branchRules = JSON.parse(process.env.BRANCH_RULES_JSON || "null");
+          const releaseEnvironment = JSON.parse(process.env.RELEASE_ENVIRONMENT_JSON || "null");
+          const tagRulesets = (process.env.TAG_RULESETS_JSON_LINES || "")
+            .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+
+          const reviewedMain = Array.isArray(branchRules) && branchRules.some((rule) =>
+            rule.type === "pull_request" &&
+            Number(rule.parameters?.required_approving_review_count || 0) >= 1 &&
+            (rule.parameters?.dismiss_stale_reviews_on_push === true ||
+              rule.parameters?.require_last_push_approval === true));
+          if (!reviewedMain) {
+            throw new Error("Release blocked: main must require an approval and either dismiss stale approvals on push or require approval of the last push.");
+          }
+
+          const reviewerRules = (releaseEnvironment?.protection_rules || [])
+            .filter((rule) => rule.type === "required_reviewers");
+          const reviewedEnvironment = reviewerRules.some((rule) =>
+            Array.isArray(rule.reviewers) && rule.reviewers.length >= 1 &&
+            rule.prevent_self_review === true);
+          if (!reviewedEnvironment || releaseEnvironment?.can_admins_bypass !== false) {
+            throw new Error("Release blocked: the Release environment must require a reviewer, prevent self-review, and disallow administrator bypass.");
+          }
+
+          const protectedTags = tagRulesets.some((ruleset) => {
+            const includes = ruleset.conditions?.ref_name?.include || [];
+            const excludes = ruleset.conditions?.ref_name?.exclude || [];
+            const ruleTypes = new Set((ruleset.rules || []).map((rule) => rule.type));
+            return ruleset.target === "tag" && ruleset.enforcement === "active" &&
+              includes.includes("refs/tags/v*") && excludes.length === 0 &&
+              ["creation", "deletion", "update"].every((type) => ruleTypes.has(type)) &&
+              ruleset.current_user_can_bypass === "always";
+          });
+          if (!protectedTags) {
+            throw new Error("Release blocked: configure an active refs/tags/v* ruleset that restricts creation, deletion, and updates, and lets the release automation identity bypass it.");
+          }
+          NODE
+
+          echo "Release controls verified: reviewed main, independently approved publication, and protected v* tags."
+
       - name: Require owner, admin, or allowlisted releaser
         env:
           GH_TOKEN: ${{ github.token }}
@@ -50,8 +124,19 @@ jobs:
       - name: Validate and set the release version
         id: version
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
+          set -euo pipefail
+          if ! published_tags="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[] | select(.draft == false) | .tag_name')"; then
+            echo "::error::Cannot verify published release versions." >&2
+            exit 1
+          fi
+          if [[ -z "${published_tags}" ]]; then
+            echo "::error::No published release baseline was found; bootstrap releases require a separately reviewed process." >&2
+            exit 1
+          fi
+          export PUBLISHED_TAGS_LINES="${published_tags}"
           node <<'NODE'
           const fs = require('fs');
           let version = process.env.RELEASE_VERSION;
@@ -69,6 +154,33 @@ jobs:
 
           const packagePath = 'package.json';
           const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          const parse = (value) => {
+            const match = /^(?:v)?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value);
+            if (!match) throw new Error(`Invalid semantic version: ${value}`);
+            return { core: match.slice(1, 4).map(Number), pre: match[4]?.split('.') || [] };
+          };
+          const compare = (left, right) => {
+            const a = parse(left), b = parse(right);
+            for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i];
+            if (!a.pre.length || !b.pre.length) return a.pre.length ? -1 : b.pre.length ? 1 : 0;
+            for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+              if (a.pre[i] === undefined) return -1;
+              if (b.pre[i] === undefined) return 1;
+              if (a.pre[i] === b.pre[i]) continue;
+              const an = /^\d+$/.test(a.pre[i]), bn = /^\d+$/.test(b.pre[i]);
+              if (an && bn) return Number(a.pre[i]) - Number(b.pre[i]);
+              if (an !== bn) return an ? -1 : 1;
+              return a.pre[i].localeCompare(b.pre[i]);
+            }
+            return 0;
+          };
+          if (compare(version, packageJson.version) < 0) {
+            throw new Error(`Release ${version} cannot lower protected main from ${packageJson.version}.`);
+          }
+          const publishedTags = (process.env.PUBLISHED_TAGS_LINES || '').split('\n').filter(Boolean);
+          if (!publishedTags.length || publishedTags.some((tag) => compare(version, tag) <= 0)) {
+            throw new Error(`Release ${version} must be newer than every published release; rollback or replay requires a separate reviewed process.`);
+          }
           if (packageJson.version === version) {
             console.log(`Version ${version} is already prepared on main; no release PR is needed.`);
             fs.appendFileSync(process.env.GITHUB_OUTPUT, 'already_prepared=true\n');
@@ -127,9 +239,7 @@ jobs:
             --head "${branch}" \
             --title "release: v${RELEASE_VERSION}" \
             --body "Exact version-release PR generated by GitHub Actions. Merging it automatically creates protected tag \`v${RELEASE_VERSION}\` and starts the signed Free NSIS setup workflow."
-          # Owner/admin (or RELEASE_AUTO_APPROVERS) initiated this; skip the
-          # CODEOWNERS wait on tauri.conf.json so prepare → tag → NSIS setup is one run.
-          gh pr merge --merge --admin "${branch}"
+          echo "Release PR created. A different human must approve it before a normal protected merge."
 
       - name: Confirm already prepared version
         if: steps.version.outputs.already_prepared == 'true'

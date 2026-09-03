@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import catalog from "../src-tauri/commander-free/src/cli_catalog.generated.json";
-import { getRadarDriftToggles } from "../src/registry";
+import { ALL_TOGGLES, getRadarDriftToggles } from "../src/registry";
 
 type Entry = (typeof catalog.commands)[number];
 
@@ -21,7 +21,7 @@ function grouped(value: number) {
 
 describe("generated WinCommander CLI catalog", () => {
   test("covers the real Tauri and backend command surfaces", () => {
-    expect(catalog.schemaVersion).toBe(2);
+    expect(catalog.schemaVersion).toBe(3);
     expect(catalog.commands.length).toBeGreaterThan(400);
     expect(byId.get("tauri:get_settings")?.registered).toBe(true);
     expect(byId.get("tauri:configure_wifi_guard")?.registered).toBe(true);
@@ -38,7 +38,7 @@ describe("generated WinCommander CLI catalog", () => {
   // truth; test the single public rendering so a catalog change cannot stale it.
   test("matches the command totals quoted in the CLI docs", () => {
     const totals = commandTotals(catalog.commands as Entry[]);
-    expect(totals).toEqual({ total: 1272, tauri: 466, backend: 806, releaseExecutable: 1268 });
+    expect(totals).toEqual({ total: 1278, tauri: 472, backend: 806, releaseExecutable: 1274 });
 
     const total = grouped(totals.total);
     const tauri = grouped(totals.tauri);
@@ -46,6 +46,26 @@ describe("generated WinCommander CLI catalog", () => {
     expect(readFileSync("docs/cli.md", "utf8")).toContain(
       `The generated catalog contains ${total} entries: ${backend} backend-script commands and ${tauri} Tauri handlers.`,
     );
+  });
+
+  test("uses explicit registry risk instead of destructive command-name heuristics", () => {
+    for (const id of [
+      "backend:Clear-DnsCache",
+      "backend:Remove-AppHistoryTraces",
+      "backend:Invoke-CleanupClearAllUsers",
+    ]) {
+      expect(catalog.destructiveBackendCommands).not.toContain(byId.get(id)?.name);
+    }
+    expect(catalog.destructiveBackendCommands).toContain("Clear-MFTResidentSlack");
+    expect(catalog.destructiveBackendCommands).toContain("Invoke-CrashDumpErase");
+    expect(catalog.destructiveBackendCommands).toContain(
+      "Invoke-PreviousWindowsInstallErase",
+    );
+
+    for (const toggle of ALL_TOGGLES.filter((entry) => entry.irreversible)) {
+      expect(catalog.destructiveBackendCommands).toContain(toggle.enableCmd);
+      expect(catalog.destructiveBackendCommands).toContain(toggle.disableCmd);
+    }
   });
 
   test("has stable unique identifiers and valid references", () => {

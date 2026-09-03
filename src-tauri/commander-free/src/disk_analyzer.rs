@@ -557,7 +557,10 @@ fn is_protected_against(target: &Path, roots: &[PathBuf]) -> bool {
 }
 
 #[tauri::command]
-pub async fn disk_delete_item(path: String) -> Result<(), String> {
+pub async fn disk_delete_item(
+    path: String,
+    capability_token: Option<String>,
+) -> Result<(), String> {
     let p = PathBuf::from(&path);
     if !p.exists() {
         return Err(format!("Path does not exist: {}", path));
@@ -586,6 +589,11 @@ pub async fn disk_delete_item(path: String) -> Result<(), String> {
             path
         ));
     }
+    crate::authz::consume_required(
+        capability_token.as_deref(),
+        crate::authz::DestructiveAction::DiskDelete,
+        &crate::authz::disk_delete_args(&p.to_string_lossy()),
+    )?;
     let result = if p.is_dir() {
         fs::remove_dir_all(&p)
     } else {

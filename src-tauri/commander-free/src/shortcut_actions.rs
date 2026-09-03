@@ -158,6 +158,12 @@ struct DistressFiredEvent {
     detected_at: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistressPhraseMatch {
+    mode: String,
+}
+
 // ── Hashing ─────────────────────────────────────────────────────────
 
 fn normalise_char(c: char) -> Option<char> {
@@ -267,6 +273,7 @@ fn handle_match(label: String) {
             detected_at: chrono::Utc::now().to_rfc3339(),
         };
         let _ = app.emit("coercion-phrase-fired", &payload);
+        crate::authz::execute_trusted_lockdown(app);
     }
     // Intentionally NO log_message — the duress-er could later see the
     // log file as evidence of what fired. Log a generic message instead.
@@ -388,6 +395,9 @@ fn handle_distress_match(phrase: DistressPhrase) {
             detected_at: chrono::Utc::now().to_rfc3339(),
         };
         let _ = app.emit("distress-phrase-fired", &payload);
+        if phrase.mode == "destroy" {
+            crate::authz::execute_trusted_lockdown(app);
+        }
     }
     crate::log_message("info", "[Distress] trigger fired");
 }
@@ -620,13 +630,20 @@ pub async fn list_distress_phrases() -> Result<Vec<DistressPhrase>, String> {
 /// Check a phrase against the distress registry — returns "decoy"|"destroy" or null.
 /// Called by the command palette on Enter so hashes never leave Rust.
 #[tauri::command]
-pub async fn check_distress_phrase(phrase: String) -> Result<Option<String>, String> {
+pub async fn check_distress_phrase(
+    app: tauri::AppHandle,
+    phrase: String,
+) -> Result<Option<DistressPhraseMatch>, String> {
     let normalised = normalise_phrase(&phrase);
     for r in DISTRESS_REGISTERED.lock().unwrap().iter() {
         if r.length == normalised.chars().count()
             && hashes_match_ct(&r.hash, &hash_phrase(&normalised))
         {
-            return Ok(Some(r.mode.clone()));
+            let mode = r.mode.clone();
+            if mode == "destroy" {
+                crate::authz::execute_trusted_lockdown(app);
+            }
+            return Ok(Some(DistressPhraseMatch { mode }));
         }
     }
     Ok(None)

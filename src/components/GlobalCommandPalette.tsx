@@ -87,16 +87,15 @@ export default function GlobalCommandPalette() {
     // Distress phrase check — method D. Async verify so it doesn't block
     // the keydown handler. Non-matches return null and are invisible.
     if (cmd.length >= 3) {
-      invoke<string | null>("check_distress_phrase", { phrase: cmd })
-        .then((mode) => {
-          if (mode === "decoy") {
+      invoke<{ mode: string } | null>("check_distress_phrase", { phrase: cmd })
+        .then((match) => {
+          if (match?.mode === "decoy") {
             setQuery("");
             setOpen(false);
             setMode("decoy");
-          } else if (mode === "destroy") {
+          } else if (match?.mode === "destroy") {
             setQuery("");
             setOpen(false);
-            invoke("lockdown", { deactivateLicenseFirst: false, shutdownSystem: false }).catch(() => {});
           }
         })
         .catch(() => {});

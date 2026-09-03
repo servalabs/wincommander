@@ -42,7 +42,7 @@ Tier column: **Free** runs in-process in `commander-free`; **Paid** is gated by 
 
 | Command | Tier | Purpose |
 |---------|------|---------|
-| `run_backend_script` | Free/Paid | Central toggle dispatcher — decrypts + runs a PS module, or forwards to Pro if the command is paid. |
+| `run_backend_script` | Free/Paid | Central toggle dispatcher — decrypts + runs a PS module, or forwards to Pro if the command is paid. Renderer requests for protected erase commands require a matching single-use capability; Lockdown-only internal commands are refused. |
 | `search_everything` | Free | Filename search across drives. |
 | `get_file_icon_data` | Free | Resolve a file's icon as image data for the UI. |
 | `open_path` | Free | Open a path in Explorer / the default handler. |
@@ -55,8 +55,10 @@ Tier column: **Free** runs in-process in `commander-free`; **Paid** is gated by 
 
 | Command | Tier | Purpose |
 |---------|------|---------|
-| `lockdown` | Free | Single-step lockdown action. |
-| `full_lockdown` | Paid | Full destruct cascade; dispatches by stable step ID (`run_destruct_step`) to Pro. |
+| `request_destructive_confirmation` | Free/Paid | Shows a native, target-specific confirmation and returns a short-lived, single-use capability bound to Rust-canonicalized arguments. Lockdown binds the complete settings snapshot; path mutations bind the canonical path and available Windows file identity. PIN attempts share a Rust-side rate limiter. The WebView cannot choose the action vocabulary or canonical string. |
+| `lockdown` | Free | Interactive single-step lockdown; requires a matching capability. Trusted hotkey, watcher, and distress triggers execute through a separate Rust-owned path without exposing a capability to the WebView. |
+| `full_lockdown` | Paid | Interactive full destruct cascade; requires a matching capability and dispatches stable step IDs (`run_destruct_step`) to Pro. |
+| `erase_encrypted_container` | Paid | Selectively crypto-erases one BitLocker or VeraCrypt target after a native capability is bound to the Rust-normalized target and available file identity. OS-target classification is derived in Rust. |
 | `lock_to_calculator` | Free | Enter calculator cover immediately (dashboard lock button). |
 | `set_capture_protection` | Paid | Apply `WDA_EXCLUDEFROMCAPTURE` to WinCommander's own window. |
 | `apply_wincommander_hide_mode` | Free | Hide/show the app window + tray and persist the hidden-mode flag. |
@@ -175,7 +177,7 @@ automations (that's v2, above).
 | `run_disk_scan` | `ScanMeta` | Run a disk-usage scan of a root path; returns totals. |
 | `get_disk_children` | `DiskNode[]` | Children of a directory from the in-memory scan map. |
 | `get_large_disk_items` | `LargeDiskItem[]` | Largest files/dirs above a size threshold (filterable). |
-| `disk_delete_item` | — | Delete a path surfaced by the analyzer. |
+| `disk_delete_item` | — | Delete a path surfaced by the analyzer after native confirmation; requires a single-use capability bound to that path. |
 
 ### File-content search (FTS, Free)
 
@@ -202,7 +204,7 @@ automations (that's v2, above).
 
 | Command | Tier | Purpose |
 |---------|------|---------|
-| `internet_kill_switch_set` / `internet_kill_switch_get` | Free | In-process firewall internet block toggle + state. |
+| `internet_kill_switch_set` / `internet_kill_switch_get` | Free | In-process firewall internet block toggle + state. The setter requires a single-use capability bound to the requested state. |
 | `vpn_kill_switch_arm` / `vpn_kill_switch_status` | Free | Arm + query the VPN-drop kill switch (Tailscale/ProtonVPN watchdog). |
 | `get_ping_block_status` / `set_ping_block` | Paid | ICMP/ping block quick-toggle. |
 | `connect_rdp` / `set_rdp_credentials` | Free | Launch an RDP session / stash credentials. |
