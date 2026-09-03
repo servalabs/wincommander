@@ -5,6 +5,13 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Developer and CI checks now run on trusted `main` pushes and pull requests
+  with path selection and redundant-run cancellation. An explicit reversible
+  pre-push hook runs the repository validation command. Debug builds load
+  backend modules directly without regenerating release ciphertext; release
+  builds fail when the salt or encrypted modules are missing, corrupt, or stale,
+  and the final executable is scanned for protected plaintext.
+
 - Paid Pro update installation now requires the signed
   `updates_entitled_until` entitlement in both the interface and the Rust
   installer. When coverage ends, the installed normal-Pro build keeps working

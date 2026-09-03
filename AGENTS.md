@@ -103,6 +103,10 @@ Run commands from the repository root in PowerShell on Windows.
   `cargo test --workspace`
 - Rust lint: from `src-tauri`, run
   `cargo clippy --workspace --all-targets -- -D warnings`
+- Repository validation: `bun run validate`
+- Install the optional pre-push gate: `bun run hooks:install`; remove it with
+  `bun run hooks:uninstall`. The hook runs repository-owned validation, but CI
+  remains authoritative because local hooks can be bypassed.
 
 The Rust toolchain is pinned in `rust-toolchain.toml`. Bun is the package
 manager and task runner.
