@@ -253,7 +253,7 @@ impl VaultMountPlan {
         if self.operation_id == 0
             || self.container_path.is_empty()
             || self.container_path.len() > 32_767
-            || !std::path::Path::new(&self.container_path).is_absolute()
+            || !is_windows_absolute_path(&self.container_path)
             || self.password.is_empty()
             || self.password.len() > 32_767
             || self.mounted_root_acl_sddl.is_empty()
@@ -311,6 +311,20 @@ impl VaultMountPlan {
         self.hidden_keyfiles.iter_mut().for_each(Zeroize::zeroize);
         self.hidden_keyfiles.clear();
     }
+}
+
+fn is_windows_absolute_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let is_drive_rooted = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    let is_unc = value.strip_prefix("\\\\").is_some_and(|rest| {
+        let mut components = rest.split('\\');
+        components.next().is_some_and(|server| !server.is_empty())
+            && components.next().is_some_and(|share| !share.is_empty())
+    });
+    is_drive_rooted || is_unc
 }
 
 impl std::fmt::Debug for VaultMountPlan {
@@ -645,6 +659,37 @@ mod tests {
         let mut invalid = sample_mount_plan();
         invalid.mount_mode = VaultMountMode::Hidden;
         assert_eq!(invalid.validate(), Err("vault_mount_plan_invalid"));
+    }
+
+    #[test]
+    fn mount_plan_windows_path_validation_is_host_independent() {
+        let mut plan = sample_mount_plan();
+        for path in [
+            r"C:\Vaults\private.hc",
+            r"C:/Vaults/private.hc",
+            r"\\server\vaults\private.hc",
+        ] {
+            plan.container_path = path.into();
+            assert_eq!(
+                plan.validate(),
+                Ok(()),
+                "expected Windows absolute path: {path}"
+            );
+        }
+        for path in [
+            r"Vaults\private.hc",
+            r"C:Vaults\private.hc",
+            r"\Vaults\private.hc",
+            r"\\server",
+            r"\\",
+        ] {
+            plan.container_path = path.into();
+            assert_eq!(
+                plan.validate(),
+                Err("vault_mount_plan_invalid"),
+                "expected non-absolute Windows path: {path}"
+            );
+        }
     }
 
     #[test]
