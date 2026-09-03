@@ -1742,7 +1742,15 @@ pub async fn test_pro_dispatch(
     args: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     crate::license::require_paid("test_pro_dispatch")?;
+    if !test_dispatch_allows(&feature_id) {
+        return Err("destructive commands are unavailable through test_pro_dispatch".to_string());
+    }
     dispatch_paid_command(&feature_id, args.unwrap_or(serde_json::Value::Null)).await
+}
+
+#[cfg(debug_assertions)]
+fn test_dispatch_allows(feature_id: &str) -> bool {
+    matches!(feature_id, "get_decoy_recent")
 }
 
 /// Best-effort graceful shutdown — drains the pool, sending Bye to
@@ -1767,6 +1775,28 @@ mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn debug_dispatch_cannot_bypass_destructive_authorization() {
+        for feature_id in [
+            "lockdown",
+            "full_lockdown",
+            "run_destruct_step",
+            "disk_delete_item",
+            "delete_decoy",
+            "internet_kill_switch_set",
+        ] {
+            assert!(!test_dispatch_allows(feature_id), "allowed {feature_id}");
+        }
+        assert!(test_dispatch_allows("get_decoy_recent"));
+        for feature_id in [
+            "clear_decoy_recent",
+            "enable_last_access_tracking",
+            "some_new_pro_command",
+        ] {
+            assert!(!test_dispatch_allows(feature_id), "allowed {feature_id}");
+        }
+    }
 
     #[test]
     fn personal_mount_has_no_free_side_request_timeout() {

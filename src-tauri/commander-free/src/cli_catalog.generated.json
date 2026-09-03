@@ -1,5 +1,10 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
+  "destructiveBackendCommands": [
+    "Clear\u002dMFTResidentSlack",
+    "Invoke\u002dCrashDumpErase",
+    "Invoke\u002dPreviousWindowsInstallErase"
+  ],
   "commands": [
     {
       "id": "backend:Add\u002dBlocklistToHosts",
@@ -1873,9 +1878,7 @@
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/privacy/RdpIdleCard.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "backend:Disable\u002dRdpKeepAlive",
@@ -3629,9 +3632,7 @@
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/privacy/RdpIdleCard.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "backend:Enable\u002dRdpKeepAlive",
@@ -5279,7 +5280,9 @@
       "transport": "backend\u002dscript",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": []
+      "frontendReferences": [
+        "src/panels/privacy/RdpIdleCard.tsx"
+      ]
     },
     {
       "id": "backend:Get\u002dRdpKeepAliveStatus",
@@ -7268,6 +7271,16 @@
       ]
     },
     {
+      "id": "tauri:apply_machine_setting",
+      "name": "apply_machine_setting",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/machineSettingsClient.ts"
+      ]
+    },
+    {
       "id": "tauri:apply_vault_access_policy",
       "name": "apply_vault_access_policy",
       "transport": "tauri",
@@ -7530,6 +7543,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/panels/privacy/PasteMonitorSection.tsx"
+      ]
+    },
+    {
+      "id": "tauri:cancel_purchase_subscription",
+      "name": "cancel_purchase_subscription",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/usePurchase.ts"
       ]
     },
     {
@@ -8592,7 +8615,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/components/BackgroundPollers.tsx",
         "src/components/RightSidebar.tsx"
       ]
     },
@@ -9618,8 +9640,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/App.tsx",
-        "src/components/GlobalCommandPalette.tsx",
         "src/components/startup/CalculatorGate.tsx"
       ]
     },
@@ -9741,6 +9761,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/panels/network/PortGuardSection.tsx"
+      ]
+    },
+    {
+      "id": "tauri:notification_renderer_ready",
+      "name": "notification_renderer_ready",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/CustomNotificationWindow.tsx"
       ]
     },
     {
@@ -9886,6 +9916,16 @@
       "frontendReferences": []
     },
     {
+      "id": "tauri:present_notification_window",
+      "name": "present_notification_window",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/CustomNotificationWindow.tsx"
+      ]
+    },
+    {
       "id": "tauri:probe_drive_capabilities",
       "name": "probe_drive_capabilities",
       "transport": "tauri",
@@ -9955,6 +9995,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/App.tsx"
+      ]
+    },
+    {
+      "id": "tauri:reconcile_vault_access_groups",
+      "name": "reconcile_vault_access_groups",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
       ]
     },
     {
@@ -10070,6 +10120,16 @@
       ]
     },
     {
+      "id": "tauri:repair_commander_service",
+      "name": "repair_commander_service",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/panels/privacy/RemoteAccessMonitorSection.tsx"
+      ]
+    },
+    {
       "id": "tauri:report_startup_milestone",
       "name": "report_startup_milestone",
       "transport": "tauri",
@@ -10095,7 +10155,9 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": []
+      "frontendReferences": [
+        "src/hooks/destructiveAuthz.ts"
+      ]
     },
     {
       "id": "tauri:resend_purchase_license",

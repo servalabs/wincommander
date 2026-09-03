@@ -3828,8 +3828,19 @@ mod param_env_tests {
 pub async fn run_backend_script(
     app: AppHandle,
     command: String,
-    params: HashMap<String, String>,
+    mut params: HashMap<String, String>,
 ) -> Result<serde_json::Value, String> {
+    if !crate::cli::tauri_runtime_active() {
+        if crate::authz::backend_dispatch_policy(&command)
+            == crate::authz::BackendDispatchPolicy::NativeConfirmation
+        {
+            if !crate::authz::confirm_backend_dispatch(&app, &command, &params).await {
+                return Err("native confirmation was refused".to_string());
+            }
+        } else {
+            crate::authz::authorize_backend_dispatch(&command, &mut params)?;
+        }
+    }
     run_backend_script_with_timeout(app, command, params, None).await
 }
 
@@ -5869,7 +5880,11 @@ mod crypto_erase_status_result_tests {
 /// Per-step log lines (start/finish + duration) land in the standard
 /// log_message stream so users can diagnose "why is it slow / stuck?"
 /// from %LOCALAPPDATA%\WinCommander\logs without needing DevTools.
-async fn run_destruct_step(app: &tauri::AppHandle, def: &DestructStepDef) -> Result<(), String> {
+async fn run_destruct_step(
+    app: &tauri::AppHandle,
+    def: &DestructStepDef,
+    plan: &crate::authz::LockdownPlanSnapshot,
+) -> Result<(), String> {
     let started = std::time::Instant::now();
     crate::log_message("info", &format!("[Destruct] starting: {}", def.label));
     emit_step(
@@ -5888,15 +5903,12 @@ async fn run_destruct_step(app: &tauri::AppHandle, def: &DestructStepDef) -> Res
         // is the user-facing knob for browser coverage.
         run_bleachbit_clean(true, false).await.map(|_| ())
     } else if def.id == "configured_folders" {
-        let settings = crate::settings::read_settings().ok();
-        let paths = settings
-            .as_ref()
-            .and_then(|s| s.ideal.privacy.self_destruct.shred_folders.clone())
+        let paths = plan
+            .self_destruct
+            .shred_folders
+            .clone()
             .unwrap_or_default();
-        let wipe_mft_slack = settings
-            .as_ref()
-            .and_then(|s| s.ideal.tweaks.security.shred_mft_slack_enabled)
-            .unwrap_or(false);
+        let wipe_mft_slack = plan.shred_mft_slack;
         if paths.is_empty() {
             crate::log_message(
                 "info",
@@ -5969,15 +5981,15 @@ async fn run_destruct_step(app: &tauri::AppHandle, def: &DestructStepDef) -> Res
         // keys-before-reboot safety contract) even for users with no
         // VeraCrypt containers to begin with. Skipping cleanly when nothing
         // is configured fixes that without changing what gets destroyed.
-        let (paths, devices) = crate::settings::read_settings()
-            .ok()
-            .map(|s| {
-                let settings = s.ideal.privacy.self_destruct;
-                (
-                    settings.crypto_erase_veracrypt_paths.unwrap_or_default(),
-                    settings.crypto_erase_veracrypt_devices.unwrap_or_default(),
-                )
-            })
+        let paths = plan
+            .self_destruct
+            .crypto_erase_veracrypt_paths
+            .clone()
+            .unwrap_or_default();
+        let devices = plan
+            .self_destruct
+            .crypto_erase_veracrypt_devices
+            .clone()
             .unwrap_or_default();
         if paths.is_empty() && devices.is_empty() {
             crate::log_message(
@@ -6040,15 +6052,10 @@ async fn run_destruct_step(app: &tauri::AppHandle, def: &DestructStepDef) -> Res
         // above: empty/None cleanly skips rather than falling back to "C:".
         // Selecting the system drive here means it WILL be targeted on the
         // next trigger — the destroy-PIN/trigger itself is the confirmation.
-        let drives = crate::settings::read_settings()
-            .ok()
-            .and_then(|s| {
-                s.ideal
-                    .privacy
-                    .self_destruct
-                    .crypto_erase_bitlocker_drives
-                    .clone()
-            })
+        let drives = plan
+            .self_destruct
+            .crypto_erase_bitlocker_drives
+            .clone()
             .unwrap_or_default();
         if drives.is_empty() {
             crate::log_message(
@@ -6089,9 +6096,10 @@ async fn run_destruct_step(app: &tauri::AppHandle, def: &DestructStepDef) -> Res
         // trigger (sidebar, hotkey, distress phrase, dead-man, destroy PIN).
         // Pro re-validates every account server-side (built-in/self/loaded).
         let step_args = if def.id == "remove_users" {
-            let usernames = crate::settings::read_settings()
-                .ok()
-                .and_then(|s| s.ideal.privacy.self_destruct.users_to_remove.clone())
+            let usernames = plan
+                .self_destruct
+                .users_to_remove
+                .clone()
                 .unwrap_or_default();
             serde_json::json!({ "stepId": def.id, "usernames": usernames })
         } else {
@@ -6141,7 +6149,35 @@ async fn run_destruct_step(app: &tauri::AppHandle, def: &DestructStepDef) -> Res
 }
 
 #[tauri::command]
-pub async fn full_lockdown(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn full_lockdown(
+    app: tauri::AppHandle,
+    capability_token: Option<String>,
+) -> Result<(), String> {
+    let settings =
+        settings::read_settings().map_err(|e| format!("Failed to read settings: {}", e))?;
+    let plan = crate::authz::LockdownPlanSnapshot::from_settings(&settings);
+    crate::authz::consume_required(
+        capability_token.as_deref(),
+        crate::authz::DestructiveAction::SelfDestruct,
+        &crate::authz::full_lockdown_args(&plan),
+    )?;
+    full_lockdown_with_plan(app, plan).await
+}
+
+pub(crate) async fn full_lockdown_internal(app: tauri::AppHandle) -> Result<(), String> {
+    let settings =
+        settings::read_settings().map_err(|e| format!("Failed to read settings: {}", e))?;
+    full_lockdown_with_plan(
+        app,
+        crate::authz::LockdownPlanSnapshot::from_settings(&settings),
+    )
+    .await
+}
+
+async fn full_lockdown_with_plan(
+    app: tauri::AppHandle,
+    plan: crate::authz::LockdownPlanSnapshot,
+) -> Result<(), String> {
     // Tier gate — lockdown is paid-only. The frontend already
     // wraps the configuration UI in <TierGate tier="paid"> and the
     // sidebar button checks canUse("paid") before arming, but that's
@@ -6158,14 +6194,11 @@ pub async fn full_lockdown(app: tauri::AppHandle) -> Result<(), String> {
         return Err("Refused: investigator mode does not run the destruction cascade.".to_string());
     }
 
-    let settings =
-        settings::read_settings().map_err(|e| format!("Failed to read settings: {}", e))?;
-
     // Explicit opt-in gate — every destructive path funnels through here or
     // lockdown_impl. Refuse if the user hasn't opted in. This single check
     // covers all full_lockdown callers (sidebar button, panic hotkey,
     // coercion via panic-cascade-instant).
-    if settings.ideal.privacy.self_destruct.enabled != Some(true) {
+    if plan.self_destruct.enabled != Some(true) {
         return Err(
             "Self-destruct is not enabled. Opt in via Settings → Secret → Self-Destruct."
                 .to_string(),
@@ -6177,7 +6210,7 @@ pub async fn full_lockdown(app: tauri::AppHandle) -> Result<(), String> {
     // trigger silently failed to wipe whenever cleanup was toggled off. Each
     // paid step still gates itself at the sidecar; the app-erase always runs.
 
-    let cfg = &settings.ideal.privacy.self_destruct;
+    let cfg = &plan.self_destruct;
     // Defaults are deliberately conservative: they preserve the
     // pre-customisation behaviour where every panic trigger
     // (sidebar button, Ctrl+Shift+Q, coercion) cleared, freed
@@ -6282,7 +6315,8 @@ pub async fn full_lockdown(app: tauri::AppHandle) -> Result<(), String> {
         .map(|def| {
             let app = app.clone();
             let def: &'static DestructStepDef = def;
-            tokio::spawn(async move { (def.label, run_destruct_step(&app, def).await) })
+            let plan = plan.clone();
+            tokio::spawn(async move { (def.label, run_destruct_step(&app, def, &plan).await) })
         })
         .collect();
     // Aggregate per-step outcomes for the truthful summary below.
@@ -6299,7 +6333,7 @@ pub async fn full_lockdown(app: tauri::AppHandle) -> Result<(), String> {
         .iter()
         .filter(|d| d.group == DestructGroup::PrivacyClean && allow_pro && is_step_enabled(d))
     {
-        outcomes.push((def.label, run_destruct_step(&app, def).await));
+        outcomes.push((def.label, run_destruct_step(&app, def, &plan).await));
     }
 
     emit_destruct_summary(&app, &outcomes, license_warning.as_deref());
@@ -6337,7 +6371,14 @@ pub async fn full_lockdown(app: tauri::AppHandle) -> Result<(), String> {
                 error: None,
             },
         );
-        return lockdown_impl(app, deactivate_license_first, shutdown_system, false).await;
+        return lockdown_impl_with_config(
+            app,
+            deactivate_license_first,
+            shutdown_system,
+            false,
+            plan,
+        )
+        .await;
     }
 
     // App-removal opted out — handle the standalone shutdown / licence
@@ -6384,10 +6425,11 @@ pub async fn full_lockdown(app: tauri::AppHandle) -> Result<(), String> {
 /// falling back to the `DESTRUCT_STEPS` defaults. Shared by the top-level
 /// `lockdown` trigger; `full_lockdown` runs the same set itself and therefore
 /// skips this via `lockdown_impl(.., run_destruct_steps=false)`.
-async fn run_configured_destruct_steps(app: &tauri::AppHandle) {
-    let user_steps = crate::settings::read_settings()
-        .ok()
-        .and_then(|s| s.ideal.privacy.self_destruct.steps);
+async fn run_configured_destruct_steps(
+    app: &tauri::AppHandle,
+    plan: &crate::authz::LockdownPlanSnapshot,
+) {
+    let user_steps = plan.self_destruct.steps.clone();
     let is_step_on = |def: &'static DestructStepDef| -> bool {
         match user_steps.as_ref().and_then(|m| m.get(def.id).copied()) {
             Some(v) => v,
@@ -6428,7 +6470,8 @@ async fn run_configured_destruct_steps(app: &tauri::AppHandle) {
         .map(|def| {
             let app_c = app.clone();
             let def: &'static DestructStepDef = def;
-            tokio::spawn(async move { (def.label, run_destruct_step(&app_c, def).await) })
+            let plan = plan.clone();
+            tokio::spawn(async move { (def.label, run_destruct_step(&app_c, def, &plan).await) })
         })
         .collect();
     let mut outcomes: Vec<(&'static str, Result<(), String>)> = Vec::new();
@@ -6442,7 +6485,7 @@ async fn run_configured_destruct_steps(app: &tauri::AppHandle) {
         .iter()
         .filter(|d| d.group == DestructGroup::PrivacyClean && allow_pro && is_step_on(d))
     {
-        outcomes.push((def.label, run_destruct_step(app, def).await));
+        outcomes.push((def.label, run_destruct_step(app, def, plan).await));
     }
 
     emit_destruct_summary(app, &outcomes, license_warning.as_deref());
@@ -6459,8 +6502,28 @@ pub async fn lockdown(
     app: tauri::AppHandle,
     deactivate_license_first: bool,
     shutdown_system: bool,
+    capability_token: Option<String>,
 ) -> Result<(), String> {
-    lockdown_impl(app, deactivate_license_first, shutdown_system, true).await
+    let settings =
+        settings::read_settings().map_err(|e| format!("Failed to read settings: {}", e))?;
+    let plan = crate::authz::LockdownPlanSnapshot::from_settings(&settings);
+    crate::authz::consume_required(
+        capability_token.as_deref(),
+        crate::authz::DestructiveAction::SelfDestruct,
+        &crate::authz::lockdown_args(
+            deactivate_license_first,
+            shutdown_system,
+            &plan,
+        ),
+    )?;
+    lockdown_impl_with_config(
+        app,
+        deactivate_license_first,
+        shutdown_system,
+        true,
+        plan,
+    )
+    .await
 }
 
 pub(crate) async fn lockdown_impl(
@@ -6469,14 +6532,30 @@ pub(crate) async fn lockdown_impl(
     shutdown_system: bool,
     run_destruct_steps: bool,
 ) -> Result<(), String> {
+    let settings = settings::read_settings()
+        .map_err(|e| format!("Failed to read settings: {}", e))?;
+    let plan = crate::authz::LockdownPlanSnapshot::from_settings(&settings);
+    lockdown_impl_with_config(
+        app,
+        deactivate_license_first,
+        shutdown_system,
+        run_destruct_steps,
+        plan,
+    )
+    .await
+}
+
+async fn lockdown_impl_with_config(
+    app: tauri::AppHandle,
+    deactivate_license_first: bool,
+    shutdown_system: bool,
+    run_destruct_steps: bool,
+    plan: crate::authz::LockdownPlanSnapshot,
+) -> Result<(), String> {
     // Explicit opt-in gate — mirrors the check in full_lockdown. Covers all
     // direct callers: inactivity_timer (dead-man's switch) and the destroy
     // PIN. Refuse before any destructive work if the user hasn't opted in.
-    let sd_enabled = crate::settings::read_settings()
-        .ok()
-        .map(|s| s.ideal.privacy.self_destruct.enabled)
-        .unwrap_or(None);
-    if sd_enabled != Some(true) {
+    if plan.self_destruct.enabled != Some(true) {
         crate::log_message(
             "warn",
             "[Lockdown] refused — self-destruct not enabled (opt in via Settings → Secret → Self-Destruct)",
@@ -6503,7 +6582,7 @@ pub(crate) async fn lockdown_impl(
             "warn",
             "[Lockdown] destroy/emergency lockdown triggered — running privacy cleaners then app removal",
         );
-        run_configured_destruct_steps(&app).await;
+        run_configured_destruct_steps(&app, &plan).await;
         crate::log_message(
             "warn",
             "[Lockdown] privacy cleaners done — proceeding to app removal",

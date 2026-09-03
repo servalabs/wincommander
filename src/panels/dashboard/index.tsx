@@ -28,6 +28,7 @@ import useProInstall from "../../hooks/useProInstall";
 import useBorrowedActive from "../../hooks/useBorrowedActive";
 import { useQueuedAppUpdateIds } from "../../hooks/useQueuedAppUpdateIds";
 import { markAppUpdatesQueued, clearAppUpdatesQueued } from "../../lib/appUpdateQueue";
+import { requestDestructiveCapability } from "../../hooks/destructiveAuthz";
 import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/packageOperationLock";
 import { getRadarDriftToggles, getToggleById } from "../../registry";
 import { getByPath, getToggleVisibility, resolveToggleText } from "../../types/toggles";
@@ -694,7 +695,10 @@ export default function DashboardPanel() {
     if (needsElevation) { showError(MACHINE_SCOPE_ELEVATION_MESSAGE); return; }
     setInternetPending(true);
     try {
-      const result = await invoke<boolean>("internet_kill_switch_set", { enable: cut });
+      const capabilityToken = await requestDestructiveCapability(
+        { command: "internet_kill_switch_set", enable: cut },
+      );
+      const result = await invoke<boolean>("internet_kill_switch_set", { enable: cut, capabilityToken });
       setInternetCut(result);
       await patchAppSettings({ app: { internetKillSwitch: result } });
     } catch (e) {

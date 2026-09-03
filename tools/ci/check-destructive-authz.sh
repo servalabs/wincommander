@@ -17,6 +17,7 @@ EXPECTED=(
   disk_delete_item
   delete_decoy
   internet_kill_switch_set
+  erase_encrypted_container
 )
 
 missing=0

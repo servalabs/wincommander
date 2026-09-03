@@ -178,7 +178,7 @@ async fn tick(app: &AppHandle) -> Result<(), String> {
     // steps per the user's selfDestruct settings.
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
-        let _ = crate::backend::lockdown(app_clone, false, false).await;
+        let _ = crate::backend::lockdown_impl(app_clone, false, false, true).await;
     });
 
     let _ = app.emit(

@@ -123,10 +123,21 @@ fn rule_exists(name: &str) -> bool {
 /// (true = internet cut). Persists nothing itself — the caller patches
 /// `settings.app.internetKillSwitch` so the Dashboard reflects it on reload.
 #[tauri::command]
-pub fn internet_kill_switch_set(enable: bool) -> Result<bool, String> {
+pub fn internet_kill_switch_set(
+    enable: bool,
+    capability_token: Option<String>,
+) -> Result<bool, String> {
+    crate::authz::consume_required(
+        capability_token.as_deref(),
+        crate::authz::DestructiveAction::KillSwitch,
+        &crate::authz::kill_switch_args(enable),
+    )?;
+    internet_kill_switch_set_internal(enable)
+}
+
+pub(crate) fn internet_kill_switch_set_internal(enable: bool) -> Result<bool, String> {
     // Rate-limit (audit L1): a compromised WebView could otherwise script rapid
-    // toggles as a network-disruption/harassment vector. The action is reversible
-    // so no confirmation prompt is added — just a floor on call frequency.
+    // toggles as a network-disruption/harassment vector.
     {
         static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
         let mut last = LAST.lock().unwrap();

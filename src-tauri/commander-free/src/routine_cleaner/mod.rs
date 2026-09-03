@@ -9,6 +9,8 @@ mod rules;
 mod scanner;
 mod steam_rules;
 
+pub(crate) use scanner::file_identity;
+
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -220,18 +220,19 @@ pub(super) fn is_old_enough(
 }
 
 #[cfg(windows)]
-pub(super) fn file_identity(path: &Path) -> Option<(u32, u64)> {
+pub(crate) fn file_identity(path: &Path) -> Option<(u32, u64)> {
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_OPEN_REPARSE_POINT,
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
 
     let file = fs::OpenOptions::new()
         .access_mode(FILE_READ_ATTRIBUTES)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
         .ok()?;
     let mut information = BY_HANDLE_FILE_INFORMATION::default();
@@ -245,7 +246,7 @@ pub(super) fn file_identity(path: &Path) -> Option<(u32, u64)> {
 }
 
 #[cfg(not(windows))]
-pub(super) fn file_identity(_path: &Path) -> Option<(u32, u64)> {
+pub(crate) fn file_identity(_path: &Path) -> Option<(u32, u64)> {
     None
 }
 

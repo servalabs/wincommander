@@ -5,6 +5,19 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Destructive desktop actions now require a native, target-specific confirmation
+  and a short-lived, single-use capability bound to Rust-canonicalized arguments.
+  Renderer-accessible generic and debug dispatch paths refuse Lockdown-only
+  internals; trusted hotkey, watcher, and distress triggers remain Rust-owned and
+  do not expose authorization secrets to WebView events. Lockdown capabilities
+  are bound to the complete configuration snapshot that is subsequently
+  executed; path mutations bind canonical paths and Windows file identities,
+  selective BitLocker/VeraCrypt erasure uses the same native capability path,
+  and repeated PIN failures are rate limited in Rust. Persisted flows now fail
+  closed for Lockdown and protected erase actions. These controls are covered
+  by source-level automated tests; signed installed-Windows acceptance remains
+  pending.
+
 - Developer and CI checks now run on trusted `main` pushes and pull requests
   with path selection and redundant-run cancellation. An explicit reversible
   pre-push hook runs the repository validation command. Debug builds load

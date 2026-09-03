@@ -197,7 +197,7 @@ fn update_panic_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Stri
         app.global_shortcut()
             .on_shortcut(hotkey.as_str(), |app, _sc, event| {
                 if event.state() == ShortcutState::Pressed {
-                    let _ = app.emit("lockdown-trigger", ());
+                    authz::toggle_trusted_lockdown(app.clone());
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -2175,7 +2175,7 @@ pub fn run() {
                 app.global_shortcut()
                     .on_shortcut("Ctrl+Shift+Q", |app, _shortcut, event| {
                         if event.state() == ShortcutState::Pressed {
-                            let _ = app.emit("lockdown-trigger", ());
+                            authz::toggle_trusted_lockdown(app.clone());
                         }
                     })
             {

@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EraseTargetInput {
     /// "veracrypt" | "bitlocker"
@@ -25,6 +25,28 @@ pub struct EraseTargetInput {
     pub confirmed: bool,
     /// Typed identifier from the nuclear ceremony; present only for OS targets.
     pub os_volume_ack: Option<String>,
+}
+
+pub fn canonical_erase_args(target: &EraseTargetInput) -> String {
+    let path = target.path.as_deref().map(crate::authz::canonical_path);
+    let identity = path
+        .as_deref()
+        .and_then(|path| crate::routine_cleaner::file_identity(std::path::Path::new(path)));
+    serde_json::to_string(&(
+        "erase_encrypted_container",
+        target.kind.trim().to_ascii_lowercase(),
+        path,
+        identity,
+        target.mount_letter.as_deref().map(norm_drive),
+        target.mount_point.as_deref().map(norm_drive),
+        is_os_target(
+            &target.kind,
+            target.mount_point.as_deref(),
+            target.path.as_deref(),
+            &system_drive(),
+        ),
+    ))
+    .expect("selective erase arguments serialize")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -251,7 +273,10 @@ fn apply_header_verification(receipt: &mut EraseReceipt, pre: Option<&[u8]>, pos
 /// Tauri command like this is never routed through `run_backend_script`, so it
 /// needs no `get_command_tier` arm — that table is only consulted for PS commands.
 #[tauri::command]
-pub async fn erase_encrypted_container(target: EraseTargetInput) -> Result<EraseReceipt, String> {
+pub async fn erase_encrypted_container(
+    target: EraseTargetInput,
+    capability_token: Option<String>,
+) -> Result<EraseReceipt, String> {
     crate::license::require_paid("selective crypto-erase")?;
 
     // An examiner must never crypto-erase a seized device.
@@ -261,6 +286,11 @@ pub async fn erase_encrypted_container(target: EraseTargetInput) -> Result<Erase
     if !target.confirmed {
         return Err("Refusing: erase not confirmed.".to_string());
     }
+    crate::authz::consume_required(
+        capability_token.as_deref(),
+        crate::authz::DestructiveAction::CryptoErase,
+        &canonical_erase_args(&target),
+    )?;
 
     let sys = system_drive();
     let is_os = is_os_target(

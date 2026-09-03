@@ -11,9 +11,57 @@
 // hash to this machine (was fixed-salt single SHA-256 — cracked in ms off-disk).
 
 use argon2::{Argon2, Params};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 
 const MIN_PIN_LEN: usize = 4;
+
+#[derive(Default)]
+struct PinAttemptState {
+    consecutive_failures: u32,
+    blocked_until: Option<Instant>,
+}
+
+impl PinAttemptState {
+    fn ensure_allowed(&self, now: Instant) -> Result<(), String> {
+        if self.blocked_until.is_some_and(|deadline| now < deadline) {
+            return Err("PIN verification temporarily rate limited".to_string());
+        }
+        Ok(())
+    }
+
+    fn record_result(&mut self, now: Instant, mode: &'static str) {
+        if mode == "wrong" {
+            self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+            if self.consecutive_failures >= 5 {
+                let exponent = (self.consecutive_failures - 5).min(4);
+                self.blocked_until = Some(now + Duration::from_secs(1 << exponent));
+            }
+        } else {
+            *self = Self::default();
+        }
+    }
+}
+
+static PIN_ATTEMPTS: LazyLock<Mutex<PinAttemptState>> =
+    LazyLock::new(|| Mutex::new(PinAttemptState::default()));
+
+pub(crate) fn verify_pin_mode_limited(
+    pin: &str,
+    real_hash: Option<&str>,
+    decoy_hash: Option<&str>,
+    destroy_hash: Option<&str>,
+) -> Result<&'static str, String> {
+    let mut attempts = PIN_ATTEMPTS
+        .lock()
+        .map_err(|_| "PIN verification unavailable".to_string())?;
+    let now = Instant::now();
+    attempts.ensure_allowed(now)?;
+    let mode = verify_pin_mode(pin, real_hash, decoy_hash, destroy_hash);
+    attempts.record_result(now, mode);
+    Ok(mode)
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -125,12 +173,12 @@ pub async fn verify_startup_pin(pin: String) -> Result<String, String> {
     if !gate_enabled(sp) {
         return Ok("open".to_string());
     }
-    Ok(verify_pin_mode(
+    Ok(verify_pin_mode_limited(
         &pin,
         sp.real_hash.as_deref(),
         sp.decoy_hash.as_deref(),
         sp.destroy_hash.as_deref(),
-    )
+    )?
     .to_string())
 }
 
@@ -321,6 +369,39 @@ pub fn write_calculator_process_identity() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_pin_limiter_blocks_after_five_failures_without_global_state() {
+        let now = Instant::now();
+        let mut attempts = PinAttemptState::default();
+
+        for _ in 0..4 {
+            attempts.ensure_allowed(now).unwrap();
+            attempts.record_result(now, "wrong");
+            assert!(attempts.ensure_allowed(now).is_ok());
+        }
+        attempts.record_result(now, "wrong");
+
+        assert!(attempts.ensure_allowed(now).is_err());
+        assert!(attempts
+            .ensure_allowed(now + Duration::from_secs(1))
+            .is_ok());
+    }
+
+    #[test]
+    fn local_pin_limiter_resets_after_a_valid_result() {
+        let now = Instant::now();
+        let mut attempts = PinAttemptState::default();
+        for _ in 0..5 {
+            attempts.record_result(now, "wrong");
+        }
+
+        attempts.record_result(now + Duration::from_secs(1), "real");
+
+        assert_eq!(attempts.consecutive_failures, 0);
+        assert!(attempts.blocked_until.is_none());
+        assert!(attempts.ensure_allowed(now).is_ok());
+    }
 
     /// A decoy PIN's hash must never satisfy the real-PIN branch of
     /// verify_pin_mode. If this ever passed, entering the decoy PIN under

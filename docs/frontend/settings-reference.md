@@ -386,10 +386,15 @@ Cleanup Score. Each audit item has a view command and a clear command.
 | `Clear-PrintSpooler`          | Stops Spooler, erases the spool queue + XPS print cache.                                          |
 | `Invoke-SQLiteWALKiller`      | Recursively destroys `.wal`/`.shm` files under `%LOCALAPPDATA%` and `%APPDATA%`.                  |
 | `Clear-RecallDatabase`        | Purges Windows Recall (`CoreAIPlatform.00`), Timeline, and notification DBs.                       |
-| `Invoke-UnallocatedSpaceErase`| Runs `cipher /w:C:\` in the background (3-pass free-cluster overwrite); returns a PID to monitor.  |
+| `Invoke-UnallocatedSpaceErase`| After a native confirmation bound to the selected drive and media type, runs `cipher /w:C:\` in the background (3-pass free-cluster overwrite); returns a PID to monitor. |
 | `Invoke-SSDTrim`              | Forces `Optimize-Volume -ReTrim` on all FileSystem drives.                                        |
 
 `Invoke-MasterPrivacyClean` runs the full set above plus the standard cleaners.
+Interactive `Invoke-7Erase`, free-space erase, and Lockdown requests require a
+native confirmation whose single-use capability is bound to the selected target.
+Trusted hotkey, file-watch, and distress triggers are initiated and executed by
+Rust without placing that capability in a WebView event. Persisted flows cannot
+provide interactive authorization and therefore fail closed for these actions.
 The Rust-native `lockdown` command erases everything and uninstalls. The
 Rust-native `run_bleachbit_clean` drives BleachBit with preview mode, browser
 exclusion, and structured JSON output.

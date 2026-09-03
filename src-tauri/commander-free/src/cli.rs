@@ -28,6 +28,7 @@ pub fn is_cli_invocation(args: &[String]) -> bool {
 #[serde(rename_all = "camelCase")]
 struct GeneratedCatalog {
     schema_version: u32,
+    destructive_backend_commands: Vec<String>,
     commands: Vec<GeneratedCommand>,
 }
 
@@ -55,7 +56,7 @@ enum Transport {
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-enum Risk {
+pub(crate) enum Risk {
     ReadOnly,
     Mutating,
     Destructive,
@@ -502,6 +503,32 @@ fn classify_risk(entry: &GeneratedCommand) -> Risk {
         return Risk::Destructive;
     }
     Risk::Mutating
+}
+
+static BACKEND_SCRIPT_RISKS: LazyLock<HashMap<String, Risk>> = LazyLock::new(|| {
+    catalog()
+        .map(|catalog| {
+            let destructive: std::collections::HashSet<String> =
+                catalog.destructive_backend_commands.into_iter().collect();
+            catalog
+                .commands
+                .into_iter()
+                .filter(|entry| entry.transport == Transport::BackendScript && entry.registered)
+                .map(|entry| {
+                    let risk = if destructive.contains(&entry.name) {
+                        Risk::Destructive
+                    } else {
+                        Risk::Mutating
+                    };
+                    (entry.name, risk)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+});
+
+pub(crate) fn backend_script_risk(command: &str) -> Option<Risk> {
+    BACKEND_SCRIPT_RISKS.get(command).copied()
 }
 
 fn classify_headless_support(entry: &GeneratedCommand) -> HeadlessSupport {
@@ -1264,7 +1291,7 @@ mod tests {
         // Keep this snapshot count intentional: the generated catalog is the
         // authority, but a count change must be reviewed with the handler
         // registrations rather than silently widening the CLI surface.
-        assert_eq!(tauri_commands.len(), 466);
+        assert_eq!(tauri_commands.len(), 472);
         assert!(tauri_commands.iter().all(|entry| entry.registered));
         for name in [
             "decoy_read_audit_status",
@@ -1302,7 +1329,7 @@ mod tests {
                 .iter()
                 .filter(|entry| available_in_this_build(entry))
                 .count(),
-            if cfg!(debug_assertions) { 466 } else { 462 }
+            if cfg!(debug_assertions) { 472 } else { 468 }
         );
     }
 
@@ -1385,5 +1412,25 @@ mod tests {
         assert!(!is_cli_invocation(&[]));
         assert!(!is_cli_invocation(&["--scrub".to_string()]));
         assert!(!is_cli_invocation(&["--safe-paste".to_string()]));
+    }
+
+    #[test]
+    fn backend_dispatch_safety_uses_explicit_catalog_metadata_not_command_verbs() {
+        for command in [
+            "Clear-DnsCache",
+            "Remove-AppHistoryTraces",
+            "Invoke-CleanupClearAllUsers",
+        ] {
+            assert_eq!(
+                backend_script_risk(command),
+                Some(Risk::Mutating),
+                "{command}"
+            );
+        }
+        assert_eq!(
+            backend_script_risk("Clear-MFTResidentSlack"),
+            Some(Risk::Destructive)
+        );
+        assert_eq!(backend_script_risk("not-a-registered-command"), None);
     }
 }

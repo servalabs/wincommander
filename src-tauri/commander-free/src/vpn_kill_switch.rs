@@ -224,7 +224,7 @@ fn spawn_watcher(app: AppHandle, my_epoch: u64) {
             let curr = probe_state(&cfg.provider);
             match evaluate_transition(prev, curr) {
                 Action::Block => {
-                    if crate::network_toggle::internet_kill_switch_set(true).is_ok() {
+                    if crate::network_toggle::internet_kill_switch_set_internal(true).is_ok() {
                         FIRED.store(true, Ordering::SeqCst);
                         LAST_FIRED_AT.store(now_secs(), Ordering::SeqCst);
                         crate::fleet_agent::report_required_device_alert(
@@ -244,7 +244,7 @@ fn spawn_watcher(app: AppHandle, my_epoch: u64) {
                 Action::Release => {
                     // Only auto-release the block if WE engaged it.
                     if FIRED.swap(false, Ordering::SeqCst) {
-                        let _ = crate::network_toggle::internet_kill_switch_set(false);
+                        let _ = crate::network_toggle::internet_kill_switch_set_internal(false);
                         let _ = app.emit("vpn-kill-switch-fired", false);
                         crate::log_message(
                             "info",
@@ -273,7 +273,7 @@ pub fn vpn_kill_switch_arm(app: AppHandle, enable: bool) -> Result<(), String> {
         EPOCH.fetch_add(1, Ordering::SeqCst); // signal any running watcher to exit
                                               // If we had cut traffic, restore it on disarm so the user isn't stranded.
         if FIRED.swap(false, Ordering::SeqCst) {
-            let _ = crate::network_toggle::internet_kill_switch_set(false);
+            let _ = crate::network_toggle::internet_kill_switch_set_internal(false);
             let _ = app.emit("vpn-kill-switch-fired", false);
         }
     }

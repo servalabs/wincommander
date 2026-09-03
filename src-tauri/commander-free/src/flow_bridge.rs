@@ -427,10 +427,8 @@ async fn run_action(app: &AppHandle, action: &Value) -> Result<(), String> {
         }
 
         "LockdownAction" => {
-            // The ONLY safe entry point: full_lockdown independently re-verifies
-            // settings.ideal.privacy.self_destruct.enabled and refuses if not
-            // armed. Never inline the cascade (AGENTS.md hard rule).
-            crate::backend::full_lockdown(app.clone()).await
+            Err("LockdownAction is disabled for persisted flows: native authorization is required"
+                .to_string())
         }
 
         "ParallelGroup" => {

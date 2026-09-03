@@ -537,16 +537,8 @@ export default function BackgroundPollers({
         // matcher's strict-no-Enter rule was tripped).
         console.log("[panic-phrase] event received; firing cascade");
         recordEvidence("lockdown", "danger", "Lockdown triggered (coercion phrase)");
-        // Hand off to the sidebar's cascade entry point so the user
-        // gets the same operation overlay (per-step rows ticking
-        // green/red) the sidebar button shows. The previous silent
-        // `invoke('full_lockdown')` design honoured a strict
-        // duress contract but in practice was indistinguishable from
-        // "trigger broken" — a user who tests the feature with no
-        // visible feedback can't tell the cascade ran. Surfacing the
-        // overlay does tip a duress-er off, but the alternative is
-        // shipping a feature the user can't verify, which is worse.
-        window.dispatchEvent(new CustomEvent("panic-cascade-instant"));
+        // Rust owns and executes the authorized action; this event is
+        // informational only and never carries an authorization secret.
       },
     );
 

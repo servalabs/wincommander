@@ -953,8 +953,6 @@ function AppContent() {
       listen<{ mode: string }>("distress-phrase-fired", (ev) => {
         if (ev.payload.mode === "decoy") {
           setAuthMode("decoy");
-        } else if (ev.payload.mode === "destroy") {
-          invoke("lockdown", { deactivateLicenseFirst: false, shutdownSystem: false }).catch(() => {});
         } else if (ev.payload.mode === "reboot_usb") {
           // F6 reboot-to-USB wipe: the Rust distress handler already spawned
           // the orchestrator in-process (see shortcut_actions.rs).

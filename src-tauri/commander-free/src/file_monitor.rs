@@ -217,8 +217,14 @@ pub async fn drop_standard_decoys() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub async fn delete_decoy(path: String) -> Result<(), String> {
-    pro("delete_decoy", json!({ "path": path })).await?;
+pub async fn delete_decoy(path: String, capability_token: Option<String>) -> Result<(), String> {
+    let canonical_path = crate::authz::canonical_path(&path);
+    crate::authz::consume_required(
+        capability_token.as_deref(),
+        crate::authz::DestructiveAction::DecoyDelete,
+        &crate::authz::decoy_delete_args(&canonical_path),
+    )?;
+    pro("delete_decoy", json!({ "path": canonical_path })).await?;
     forget(Path::new(&path));
     Ok(())
 }

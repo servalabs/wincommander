@@ -23,7 +23,7 @@ flowchart LR
     UI[Flows panel<br/>RuleEditor.tsx] -->|CRUD| BRIDGE[flow_bridge.rs]
     EVT[Event sources:<br/>settings-changed, gaze,<br/>usb, ransomware, paste,<br/>decoy, wifi] -->|forward_event| BRIDGE
     BRIDGE -->|"Flow-Sync-Rules<br/>Flow-Ingest-Event"| IPC[Pro sidecar IPC]
-    IPC -->|admitted dispatches| EXEC["run_backend_script /<br/>full_lockdown"]
+    IPC -->|admitted dispatches| EXEC["authorized<br/>run_backend_script"]
   end
   subgraph pro["commander-pro (Pro, paid)"]
     IPC --> CORE["flow-core crate<br/>(pure: schema/reducer/<br/>governor/classifier)"]
@@ -34,9 +34,10 @@ flowchart LR
 **Division of labor:** Free never decides which rule fires. It (1) persists the rule set and
 re-syncs the whole thing to Pro on every CRUD change (`Flow-Sync-Rules`), (2) normalizes each
 observed event plus a read-only world snapshot and hands them to Pro (`Flow-Ingest-Event`), and
-(3) executes whatever dispatches Pro admits, through the **same gate chain the UI uses**
-(`run_backend_script` — tier/module/evidence-integrity-kill-switch — or `full_lockdown` for the one
-`Lockdown` action type, which independently re-verifies `self_destruct.enabled`). The engine
+(3) executes whatever non-destructive dispatches Pro admits through `run_backend_script`, which
+still applies tier, module, and authorization gates. Persisted flows cannot answer a native
+confirmation or hold an argument-bound, single-use destructive capability, so Lockdown and
+protected erase dispatches fail closed. The engine
 itself — trigger matching, debounce, re-entrancy, loop detection, and the action safety
 classifier — runs in Pro (`flow-core` crate + `commander-pro/src/flow/`).
 
@@ -79,13 +80,12 @@ exist in v2 (both were the legacy engine's biggest safety hole; see
 | `Signal` | `Send-ContingencySignal` to mesh peers. |
 | `Notify` | Toast on this machine. |
 | `Delay` | Sleep between actions (capped at 600s). |
-| `Lockdown` | The **only** safe entry point: `backend::full_lockdown`, which independently re-verifies `settings.ideal.privacy.self_destruct.enabled` and refuses if not armed. Never inlined — a new action type must never bypass this chokepoint. |
+| `Lockdown` | Deserialize-only for existing rules. Persisted execution is refused because a background flow cannot provide the native, human-approved destructive capability. Interactive Lockdown and trusted Rust-owned triggers use separate authorized paths. |
 | `Parallel` | Runs nested actions concurrently; depth-capped. |
 
-Destructive commands (shred, Deep Clean, etc.) **are allowed** as `RunCommand` targets — the
-classifier's job is only to confirm the action is a recognized in-app command; the command's own
-tier/module/irreversibility gates still apply downstream. This was a deliberate 2026-07-05 owner
-decision, not an oversight.
+Recognized commands can be stored as `RunCommand` targets, but execution still passes through the
+command's own tier, module, and authorization gates. Commands requiring an interactive,
+argument-bound destructive capability are refused when invoked by a persisted flow.
 
 ### Storage & commands
 
@@ -150,6 +150,9 @@ This document owns the engine's current limitations.
 - The v2 manual-test bridge re-syncs rules and reports an acknowledgement; it
   does not dispatch an individual rule. Its execution log is a capped,
   frontend-only event stream, lost when the panel closes or the app restarts.
+- `LockdownAction` remains deserialize-only for existing rules and is not offered
+  for new rules. Existing instances fail closed until replaced. Protected erase
+  commands likewise cannot run unattended from a persisted flow.
 - The legacy `CameraTrigger` is permanently disabled. Use the v2 `GazeTrigger`.
 - Legacy execution history is an in-memory 50-run ring and is lost on restart.
   Destructive legacy flows have no debounce, actions stop at the first failure,

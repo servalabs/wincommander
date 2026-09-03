@@ -13,7 +13,6 @@
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
 use std::sync::{Arc, Mutex};
-use tauri::Emitter;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct FileWatchRule {
@@ -129,7 +128,7 @@ pub fn start_file_watch_triggers(
                             rule.id, event_type, file_name, parent
                         ),
                     );
-                    let _ = app_cb.emit("lockdown-trigger", ());
+                    crate::authz::schedule_trusted_lockdown(app_cb.clone());
                     return; // one match is enough
                 }
             }

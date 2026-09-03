@@ -3,6 +3,7 @@ import { useState, useCallback, useMemo } from "react";
 import { trackBackendWork } from "../lib/activityStore";
 import { clearCommand, commandId, invokeCommand } from "../lib/commandIds";
 import { createSearchMaintenanceClient } from "../lib/searchMaintenanceClient";
+import { requestDestructiveCapability } from "./destructiveAuthz";
 
 // Types for backend responses
 export interface BackendResponse<T = unknown> {
@@ -1789,14 +1790,17 @@ export function useBackend() {
     clearEmbeddedWebCache: () => execute<{ ok: boolean; stdout: string }>(clearCommand("EmbeddedWebCache")),
     clearP2PUpdateCache: () => execute<{ ok: boolean; stdout: string }>(clearCommand("P2PUpdateCache")),
     clearReliabilityHistory: () => execute<{ ok: boolean; stdout: string }>(clearCommand("ReliabilityHistory")),
-    invokeUnallocatedSpaceErase: (driveLetter?: string, mediaType?: string) =>
-      execute<{ status: string; pid: number; drive: string; message: string }>(
+    invokeUnallocatedSpaceErase: async (driveLetter = "C", mediaType = "Unknown") => {
+      const capabilityToken = await requestDestructiveCapability({
+        command: "free_space_erase",
+        driveLetter,
+        mediaType,
+      });
+      return execute<{ status: string; pid: number; drive: string; message: string }>(
         invokeCommand("UnallocatedSpaceErase"),
-        {
-          ...(driveLetter ? { DriveLetter: driveLetter } : {}),
-          ...(mediaType   ? { MediaType: mediaType }     : {}),
-        }
-      ),
+        { DriveLetter: driveLetter, MediaType: mediaType, CapabilityToken: capabilityToken },
+      );
+    },
     invokeSSDTrim: () => execute<{ status: string; drives: Array<{ drive: string; status: string; reason?: string }> }>(invokeCommand("SSDTrim")),
     invokePreviousWindowsInstallErase: () => execute<{ status: string; freedMB: number }>(invokeCommand("PreviousWindowsInstallErase")),
     getPreviousWindowsInstallInfo: () => execute<{ present: boolean; sizeMB: number }>("Get-PreviousWindowsInstallInfo"),
@@ -1898,7 +1902,14 @@ export function useBackend() {
       execute<BitLockerVolume[]>("Get-BitLockerVolumes"),
     eraseEncryptedContainer: async (input: EraseInput): Promise<BackendResponse<EraseReceipt>> => {
       try {
-        const data = await invoke<EraseReceipt>("erase_encrypted_container", { target: input });
+        const capabilityToken = await requestDestructiveCapability({
+          command: "selective_crypto_erase",
+          target: input,
+        });
+        const data = await invoke<EraseReceipt>("erase_encrypted_container", {
+          target: input,
+          capabilityToken,
+        });
         return { success: true, data };
       } catch (e) {
         return { success: false, error: e instanceof Error ? e.message : String(e) };
@@ -2235,7 +2246,10 @@ export function useBackend() {
     // RegistryProperty, Folder}; the "File" branch handles directories
     // internally via PSIsContainer recursion, so we always pass "File"
     // regardless of whether the target is a file or a folder.
-    invoke7Erase: (path: string, _type: 'File' | 'Directory' = 'File') => execute(invokeCommand("7Erase"), { Path: path, Type: 'File' }),
+    invoke7Erase: async (path: string, _type: 'File' | 'Directory' = 'File') => {
+      const capabilityToken = await requestDestructiveCapability({ command: "secure_erase", path });
+      return execute(invokeCommand("7Erase"), { Path: path, Type: 'File', CapabilityToken: capabilityToken });
+    },
 
     // App Licensing
     getLicenseStatus: () => invoke<AppLicenseStatus>("get_license_status"),
@@ -2330,8 +2344,12 @@ export function useBackend() {
     getLargeDiskItems: (minSizeBytes: number, limit: number = 200, includeDirs: boolean = true) =>
       invoke<Array<{ name: string; fullPath: string; size: number; allocated: number; isDir: boolean; lastModified: string; fileCount: number; folderCount: number; itemType: string; cleanupHint: string; risk: string }>>("get_large_disk_items", { minSizeBytes, limit, includeDirs }),
     /** Permanently delete a file or folder and evict it from the scan cache. */
-    diskDeleteItem: (path: string) =>
-      invoke<void>("disk_delete_item", { path }),
+    diskDeleteItem: async (path: string) => {
+      const capabilityToken = await requestDestructiveCapability(
+        { command: "disk_delete_item", path },
+      );
+      return invoke<void>("disk_delete_item", { path, capabilityToken });
+    },
 
     // Productivity
     getProductivityStatus: () => execute<{ installed: boolean; running: boolean; details: { server: boolean; input: boolean; active: boolean } }>("Get-ProductivityStatus"),
