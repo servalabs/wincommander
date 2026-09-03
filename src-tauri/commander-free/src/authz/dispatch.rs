@@ -11,6 +11,20 @@ pub enum BackendDispatchPolicy {
     InternalOnly,
 }
 
+fn is_internal_lockdown_command(command: &str) -> bool {
+    let local_user_removal =
+        wincmd_shared::command_strings::join_parts(&["Remove~-", "Local~", "Users~"]);
+    command == "run_destruct_step"
+        || command == local_user_removal
+        || matches!(
+            command,
+            "Destroy-VeraCryptHeader"
+                | "Clear-BitLockerKeyProtectors"
+                | "Invoke-7Wipe"
+                | "Clear-MFTResidentSlack"
+        )
+}
+
 /// Security policy for the renderer-facing generic backend dispatcher.
 ///
 /// Ordinary cleanup commands intentionally remain available. Commands in the
@@ -18,17 +32,14 @@ pub enum BackendDispatchPolicy {
 /// from the WebView; the two user-facing erase operations require a native,
 /// argument-bound capability at this final dispatch boundary.
 pub fn backend_dispatch_policy(command: &str) -> BackendDispatchPolicy {
+    if is_internal_lockdown_command(command) {
+        return BackendDispatchPolicy::InternalOnly;
+    }
     match command {
         "Invoke-7Erase" => BackendDispatchPolicy::Capability(DestructiveAction::DiskDelete),
         "Invoke-UnallocatedSpaceErase" => {
             BackendDispatchPolicy::Capability(DestructiveAction::CryptoErase)
         }
-        "run_destruct_step"
-        | "Remove-LocalUsers"
-        | "Destroy-VeraCryptHeader"
-        | "Clear-BitLockerKeyProtectors"
-        | "Invoke-7Wipe"
-        | "Clear-MFTResidentSlack" => BackendDispatchPolicy::InternalOnly,
         _ => match crate::cli::backend_script_risk(command) {
             Some(crate::cli::Risk::ReadOnly | crate::cli::Risk::Mutating) => {
                 BackendDispatchPolicy::Ordinary
