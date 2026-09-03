@@ -25,7 +25,118 @@ use serde::{Deserialize, Serialize};
 /// Magic string in the Hello frame so a connecting peer can spot a
 /// protocol-mismatch immediately. Bumped on incompatible wire-format
 /// changes; minor tweaks to a request body don't touch this.
-pub const PROTOCOL_VERSION: &str = "wincmd-ipc-v1";
+pub const PROTOCOL_VERSION: &str = "wincmd-ipc-v2";
+pub const DESTRUCTIVE_IDENTITY_VERSION: &str = "v2";
+
+/// Decimal wire integer that round-trips without JavaScript number precision
+/// loss. The representation is canonical: ASCII digits only, no sign,
+/// whitespace, or leading zeroes (except the value `0`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
+#[serde(transparent)]
+pub struct CanonicalDecimal(String);
+
+impl CanonicalDecimal {
+    pub fn from_u64(value: u64) -> Self {
+        Self(value.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn parse_u64(&self) -> Result<u64, &'static str> {
+        self.0
+            .parse()
+            .map_err(|_| "decimal integer is out of range")
+    }
+
+    pub fn parse_u32(&self) -> Result<u32, &'static str> {
+        self.0
+            .parse()
+            .map_err(|_| "decimal integer is out of range")
+    }
+}
+
+impl<'de> Deserialize<'de> for CanonicalDecimal {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let canonical = value == "0"
+            || (!value.starts_with('0') && value.bytes().all(|byte| byte.is_ascii_digit()));
+        if !canonical {
+            return Err(serde::de::Error::custom(
+                "expected a canonical unsigned decimal string",
+            ));
+        }
+        value
+            .parse::<u64>()
+            .map_err(|_| serde::de::Error::custom("decimal integer is out of range"))?;
+        Ok(Self(value))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
+pub enum DestructiveTargetIdentityV2 {
+    File {
+        volume_serial_number: CanonicalDecimal,
+        file_index: CanonicalDecimal,
+    },
+    RawPartition {
+        disk_number: CanonicalDecimal,
+        partition_number: CanonicalDecimal,
+        partition_guid: String,
+        offset_bytes: CanonicalDecimal,
+        size_bytes: CanonicalDecimal,
+        disk_unique_id: String,
+    },
+    BitlockerVolume {
+        volume_guid: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct DestructiveRequestV2 {
+    pub version: String,
+    pub target: DestructiveTargetIdentityV2,
+}
+
+impl DestructiveRequestV2 {
+    pub fn new(target: DestructiveTargetIdentityV2) -> Self {
+        Self {
+            version: DESTRUCTIVE_IDENTITY_VERSION.to_string(),
+            target,
+        }
+    }
+
+    pub fn validate_version(&self) -> Result<(), &'static str> {
+        if self.version == DESTRUCTIVE_IDENTITY_VERSION {
+            Ok(())
+        } else {
+            Err("unsupported destructive identity version")
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-codegen", ts(export, export_to = "ipc.ts"))]
+#[serde(deny_unknown_fields)]
+pub struct MutationReceiptV2 {
+    pub version: String,
+    pub target: DestructiveTargetIdentityV2,
+    pub verified: bool,
+}
 
 /// The auto-erase PowerShell module — single source of truth for the
 /// per-card auto-erase scheduler used by the Privacy Clean panel.
@@ -682,6 +793,54 @@ mod tests {
         let body = b"hello";
         let tag = sign_body(token, body);
         assert!(!verify_body(token, body, &tag[..tag.len() - 1]));
+    }
+
+    #[test]
+    fn destructive_identity_uses_canonical_string_integers() {
+        let identity = DestructiveRequestV2::new(DestructiveTargetIdentityV2::File {
+            volume_serial_number: CanonicalDecimal::from_u64(u32::MAX.into()),
+            file_index: CanonicalDecimal::from_u64(u64::MAX),
+        });
+        let encoded = serde_json::to_value(&identity).unwrap();
+        assert_eq!(encoded["version"], "v2");
+        assert_eq!(
+            encoded["target"]["volume_serial_number"],
+            u32::MAX.to_string()
+        );
+        assert_eq!(encoded["target"]["file_index"], u64::MAX.to_string());
+        assert_eq!(
+            serde_json::from_value::<DestructiveRequestV2>(encoded).unwrap(),
+            identity
+        );
+    }
+
+    #[test]
+    fn destructive_identity_rejects_numbers_and_noncanonical_strings() {
+        for value in [
+            serde_json::json!({"version":"v2","target":{"kind":"file","volume_serial_number":1,"file_index":"2"}}),
+            serde_json::json!({"version":"v2","target":{"kind":"file","volume_serial_number":"01","file_index":"2"}}),
+            serde_json::json!({"version":"v2","target":{"kind":"file","volume_serial_number":"1","file_index":" 2"}}),
+            serde_json::json!({"version":"v2","target":{"kind":"file","volume_serial_number":"1","file_index":"18446744073709551616"}}),
+        ] {
+            assert!(serde_json::from_value::<DestructiveRequestV2>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn destructive_identity_rejects_unknown_version_and_fields() {
+        let old = serde_json::from_value::<DestructiveRequestV2>(serde_json::json!({
+            "version":"v1",
+            "target":{"kind":"bitlocker_volume","volume_guid":"x"}
+        }))
+        .unwrap();
+        assert!(old.validate_version().is_err());
+        assert!(
+            serde_json::from_value::<DestructiveRequestV2>(serde_json::json!({
+                "version":"v2",
+                "target":{"kind":"bitlocker_volume","volume_guid":"x","fallback":"C:"}
+            }))
+            .is_err()
+        );
     }
 }
 

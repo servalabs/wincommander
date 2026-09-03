@@ -8,9 +8,12 @@ use std::{
     fs::OpenOptions,
     io::{self, Write},
     path::{Path, PathBuf},
-    thread,
-    time::Duration,
 };
+
+#[cfg(windows)]
+use std::io::{Read, Seek, SeekFrom};
+#[cfg(not(windows))]
+use std::{thread, time::Duration};
 
 use rand::{rngs::OsRng, RngCore};
 
@@ -114,6 +117,15 @@ fn validate_target(raw_path: &str) -> Result<PathBuf, String> {
     }
     let target = fs::canonicalize(&raw)
         .map_err(|error| format!("cannot resolve Explorer target: {error}"))?;
+    if !fs::metadata(&target)
+        .map_err(|error| format!("cannot inspect Explorer target: {error}"))?
+        .is_file()
+    {
+        return Err(
+            "folder shredding is disabled because handle-safe recursive deletion is unavailable"
+                .into(),
+        );
+    }
     if is_target_or_ancestor_of_protected_root(&target, &protected_roots())
         || is_descendant_of_system_root(&target, &system_roots())
     {
@@ -145,14 +157,11 @@ fn validate_selection(raw_paths: &[String]) -> Result<Vec<PathBuf>, String> {
     Ok(targets)
 }
 
-fn remove_with_retries(path: &Path, directory: bool) -> io::Result<()> {
+#[cfg(not(windows))]
+fn remove_with_retries(path: &Path) -> io::Result<()> {
     let mut last_error = None;
     for _ in 0..4 {
-        let result = if directory {
-            fs::remove_dir(path)
-        } else {
-            fs::remove_file(path)
-        };
+        let result = fs::remove_file(path);
         match result {
             Ok(()) => return Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -163,32 +172,8 @@ fn remove_with_retries(path: &Path, directory: bool) -> io::Result<()> {
     Err(last_error.unwrap_or_else(|| io::Error::other("erase removal failed")))
 }
 
-#[cfg(windows)]
-#[allow(clippy::permissions_set_readonly_false)]
-fn clear_readonly(permissions: &mut fs::Permissions) {
-    // This helper ships only for Windows Explorer, where readonly is a file attribute.
-    permissions.set_readonly(false);
-}
-
-#[cfg(unix)]
-fn clear_readonly(permissions: &mut fs::Permissions) {
-    use std::os::unix::fs::PermissionsExt;
-
-    permissions.set_mode(permissions.mode() | 0o200);
-}
-
-fn make_writable(path: &Path) -> io::Result<()> {
-    let metadata = fs::metadata(path)?;
-    let mut permissions = metadata.permissions();
-    if permissions.readonly() {
-        clear_readonly(&mut permissions);
-        fs::set_permissions(path, permissions)?;
-    }
-    Ok(())
-}
-
-fn overwrite_file(path: &Path) -> Result<(), String> {
-    make_writable(path).map_err(|error| format!("cannot make file writable: {error}"))?;
+#[cfg(not(windows))]
+fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
     let length = fs::metadata(path)
         .map_err(|error| format!("cannot inspect file: {error}"))?
         .len();
@@ -211,6 +196,79 @@ fn overwrite_file(path: &Path) -> Result<(), String> {
     }
     file.sync_all()
         .map_err(|error| format!("cannot flush overwritten file: {error}"))?;
+    drop(file);
+    remove_with_retries(path)
+        .map_err(|error| format!("cannot delete file '{}': {error}", path.display()))
+}
+
+#[cfg(windows)]
+fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfo, GetFileInformationByHandle, SetFileInformationByHandle,
+        BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_DISPOSITION_INFO,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    };
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .access_mode(0x8000_0000 | 0x4000_0000 | DELETE)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|error| format!("cannot open file for verified erase: {error}"))?;
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) } == 0 {
+        return Err(format!(
+            "cannot inspect opened erase target: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || information.nNumberOfLinks != 1
+    {
+        return Err("refused linked, reparse-point, or hard-linked erase target".into());
+    }
+    let length = file
+        .metadata()
+        .map_err(|error| format!("cannot inspect opened file: {error}"))?
+        .len();
+    let mut offset = 0u64;
+    let mut expected = [0u8; 64 * 1024];
+    let mut actual = [0u8; 64 * 1024];
+    while offset < length {
+        let bytes = (length - offset).min(expected.len() as u64) as usize;
+        OsRng.fill_bytes(&mut expected[..bytes]);
+        file.seek(SeekFrom::Start(offset))
+            .and_then(|_| file.write_all(&expected[..bytes]))
+            .and_then(|_| file.flush())
+            .and_then(|_| file.seek(SeekFrom::Start(offset)))
+            .and_then(|_| file.read_exact(&mut actual[..bytes]))
+            .map_err(|error| format!("cannot overwrite and verify file: {error}"))?;
+        if actual[..bytes] != expected[..bytes] {
+            return Err("file overwrite read-back verification failed".into());
+        }
+        offset += bytes as u64;
+    }
+    file.sync_all()
+        .map_err(|error| format!("cannot flush overwritten file: {error}"))?;
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            std::ptr::from_ref(&disposition).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(format!(
+            "cannot delete verified erase target: {}",
+            io::Error::last_os_error()
+        ));
+    }
     Ok(())
 }
 
@@ -218,23 +276,15 @@ fn secure_erase_path(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("cannot inspect erase target '{}': {error}", path.display()))?;
     if has_reparse_point(path)? {
-        return remove_with_retries(path, metadata.is_dir())
-            .map_err(|error| format!("cannot remove linked target '{}': {error}", path.display()));
+        return Err("refused linked or reparse-point erase target".into());
     }
     if metadata.is_dir() {
-        let entries = fs::read_dir(path)
-            .map_err(|error| format!("cannot enumerate folder '{}': {error}", path.display()))?;
-        for entry in entries {
-            let entry = entry.map_err(|error| format!("cannot read folder entry: {error}"))?;
-            secure_erase_path(&entry.path())?;
-        }
-        make_writable(path).map_err(|error| format!("cannot make folder writable: {error}"))?;
-        return remove_with_retries(path, true)
-            .map_err(|error| format!("cannot delete folder '{}': {error}", path.display()));
+        return Err(
+            "folder shredding is disabled because handle-safe recursive deletion is unavailable"
+                .into(),
+        );
     }
-    overwrite_file(path)?;
-    remove_with_retries(path, false)
-        .map_err(|error| format!("cannot delete file '{}': {error}", path.display()))
+    overwrite_and_delete_file(path)
 }
 
 fn secure_erase_target(target: PathBuf) -> Result<(), String> {
@@ -303,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn erases_a_mixed_file_and_folder_batch_without_partial_rename() {
+    fn rejects_a_folder_batch_before_erasing_any_file() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("erase-file.txt");
         let folder = directory.path().join("erase-folder");
@@ -311,15 +361,15 @@ mod tests {
         fs::create_dir_all(folder.join("nested")).unwrap();
         fs::write(folder.join("nested").join("inside.txt"), b"sensitive").unwrap();
 
-        execute_cli(vec![
+        let error = execute_cli(vec![
             file.to_string_lossy().into_owned(),
             folder.to_string_lossy().into_owned(),
         ])
-        .unwrap();
+        .unwrap_err();
 
-        assert!(!file.exists());
-        assert!(!folder.exists());
-        assert!(fs::read_dir(directory.path()).unwrap().next().is_none());
+        assert!(error.contains("folder shredding is disabled"));
+        assert!(file.exists());
+        assert!(folder.exists());
     }
 
     #[test]

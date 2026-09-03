@@ -151,6 +151,11 @@ pub async fn vault_call(
             .await
             .map_err(|_| VaultMountReason::BrokerUnavailable)?
             .map_err(|_| VaultMountReason::BrokerUnavailable)?;
+        let connected_hash = verified_connected_process_hash(&pipe, process)
+            .ok_or(VaultMountReason::BrokerRejected)?;
+        if !hash_matches_fixed_pro(&connected_hash) {
+            return Err(VaultMountReason::BrokerRejected);
+        }
         eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): pipe connected, sending hello");
         let hello = Envelope::Hello(Hello {
             protocol_version: PROTOCOL_VERSION.into(),
@@ -179,9 +184,9 @@ pub async fn vault_call(
         };
         if protocol_version != PROTOCOL_VERSION
             || echoed != session_token
-            || !hash_matches_fixed_pro(&hash)
+            || !hash.eq_ignore_ascii_case(&connected_hash)
         {
-            eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake mismatch (protocol_version={protocol_version}, echoed_token_matches={}, hash_matches={})", echoed == session_token, hash_matches_fixed_pro(&hash));
+            eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake mismatch (protocol_version={protocol_version}, echoed_token_matches={}, hash_matches={})", echoed == session_token, hash.eq_ignore_ascii_case(&connected_hash));
             return Err(VaultMountReason::BrokerRejected);
         }
         eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake ok, sending request");
@@ -227,6 +232,62 @@ pub async fn vault_call(
         windows_sys::Win32::Foundation::CloseHandle(process);
     }
     result
+}
+
+#[cfg(windows)]
+fn verified_connected_process_hash(
+    pipe: &tokio::net::windows::named_pipe::NamedPipeServer,
+    process: windows_sys::Win32::Foundation::HANDLE,
+) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_DELETE, FILE_SHARE_READ};
+    use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
+    use windows_sys::Win32::System::Threading::{GetProcessId, QueryFullProcessImageNameW};
+    let mut client_pid = 0u32;
+    let spawned_pid = unsafe { GetProcessId(process) };
+    if spawned_pid == 0
+        || unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle(), &mut client_pid) } == 0
+        || client_pid != spawned_pid
+    {
+        return None;
+    }
+    let mut image_buffer = vec![0u16; 32_768];
+    let mut image_length = image_buffer.len() as u32;
+    if unsafe {
+        QueryFullProcessImageNameW(process, 0, image_buffer.as_mut_ptr(), &mut image_length)
+    } == 0
+    {
+        return None;
+    }
+    let actual = std::fs::canonicalize(std::path::PathBuf::from(String::from_utf16_lossy(
+        &image_buffer[..image_length as usize],
+    )))
+    .ok()?;
+    let expected = std::fs::canonicalize(fixed_pro_path()).ok()?;
+    if !actual
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&expected.to_string_lossy())
+    {
+        return None;
+    }
+    let mut image = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+        .open(actual)
+        .ok()?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = image.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Some(bytes_to_hex(&digest.finalize()))
 }
 
 #[cfg(windows)]
@@ -449,7 +510,7 @@ fn spawn_pro_for_presentation(
 #[cfg(windows)]
 fn spawn_pro_as_service(
     pipe: &str,
-    token: &str,
+    _token: &str,
 ) -> Result<windows_sys::Win32::Foundation::HANDLE, &'static str> {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::Foundation::HANDLE;
@@ -462,7 +523,6 @@ fn spawn_pro_as_service(
     let mut command = std::process::Command::new(&exe);
     command
         .arg(format!("--core-pipe={pipe}"))
-        .arg(format!("--session-token={token}"))
         // The service has no interactive UI. Never attach a child console to
         // the desktop if a Vault recovery helper cannot start.
         .creation_flags(CREATE_NO_WINDOW);
@@ -529,7 +589,7 @@ fn spawn_pro_with_user_token(
     session_id: u32,
     caller_sid: &str,
     pipe: &str,
-    token: &str,
+    _token: &str,
 ) -> Result<windows_sys::Win32::Foundation::HANDLE, &'static str> {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::Security::{
@@ -568,12 +628,7 @@ fn spawn_pro_with_user_token(
         eprintln!("[wincommander-svc] spawn_pro_with_user_token: authentication_id mismatch (source={:?}, expected={:?})", source_authentication_id, expected_authentication_id);
         return Err("broker_rejected");
     }
-    let command = format!(
-        "\"{}\" --core-pipe={} --session-token={}",
-        exe.display(),
-        pipe,
-        token
-    );
+    let command = format!("\"{}\" --core-pipe={}", exe.display(), pipe);
     let mut command_wide: Vec<u16> = command.encode_utf16().chain(Some(0)).collect();
     let mut desktop_wide: Vec<u16> = "winsta0\\default".encode_utf16().chain(Some(0)).collect();
     unsafe {

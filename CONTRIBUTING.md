@@ -180,7 +180,8 @@ to actually run. Two paths for contributors:
 
 The Free binary is the Tauri host (UI + settings engine + licence
 layer + IPC broker). The Pro binary is a headless sidecar spawned
-on demand over a Windows named pipe; per-spawn session tokens prevent
+on demand over a Windows named pipe. Free verifies the connected child PID and
+executable before disclosing a per-spawn session token; the token then prevents
 replay across runs.
 
 Common tasks:

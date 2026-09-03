@@ -5,6 +5,16 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Free, the Windows service, and Investigator now authenticate the connected
+  Pro child by PID and executable bytes before sending the per-spawn secret;
+  the secret no longer appears in the child command line. IPC v2 carries one
+  strict destructive target identity through authorization, mutation, and a
+  checked receipt. VeraCrypt headers use verified file/partition handles and
+  BitLocker uses the resolved volume GUID. Explorer/search secure erase now
+  overwrites, reads back, and deletes regular files through one handle while
+  refusing reparse points, hard links, and folders. These are source and
+  automated-test claims; signed installed-Windows attack acceptance is pending.
+
 - Destructive desktop actions now require a native, target-specific confirmation
   and a short-lived, single-use capability bound to Rust-canonicalized arguments.
   Renderer-accessible generic and debug dispatch paths refuse Lockdown-only

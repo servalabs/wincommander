@@ -426,10 +426,10 @@ async fn run_action(app: &AppHandle, action: &Value) -> Result<(), String> {
             run_command_with_timeout(app, "Send-ContingencySignal".to_string(), params).await
         }
 
-        "LockdownAction" => {
-            Err("LockdownAction is disabled for persisted flows: native authorization is required"
-                .to_string())
-        }
+        "LockdownAction" => Err(
+            "LockdownAction is disabled for persisted flows: native authorization is required"
+                .to_string(),
+        ),
 
         "ParallelGroup" => {
             let children = action

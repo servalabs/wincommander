@@ -34,19 +34,73 @@ pub(super) fn canonical_json(value: &serde_json::Value) -> String {
 pub struct LockdownPlanSnapshot {
     pub self_destruct: crate::settings::SelfDestructSettings,
     pub shred_mft_slack: bool,
+    pub destructive_identities: Vec<(String, wincmd_shared::DestructiveRequestV2)>,
 }
 
 impl LockdownPlanSnapshot {
-    pub fn from_settings(settings: &crate::settings::AppSettings) -> Self {
-        Self {
-            self_destruct: settings.ideal.privacy.self_destruct.clone(),
+    pub fn from_settings(settings: &crate::settings::AppSettings) -> Result<Self, String> {
+        let self_destruct = settings.ideal.privacy.self_destruct.clone();
+        let mut destructive_identities = Vec::new();
+        for path in self_destruct
+            .crypto_erase_veracrypt_paths
+            .as_deref()
+            .unwrap_or_default()
+        {
+            let identity =
+                crate::path_identity::ExpectedFileIdentity::capture(std::path::Path::new(path))?;
+            destructive_identities.push((
+                identity.canonical_path().to_string_lossy().into_owned(),
+                identity.request(),
+            ));
+        }
+        for drive in self_destruct
+            .crypto_erase_bitlocker_drives
+            .as_deref()
+            .unwrap_or_default()
+        {
+            destructive_identities.push((
+                drive.trim().trim_end_matches('\\').to_ascii_uppercase(),
+                crate::path_identity::bitlocker_identity(drive)?,
+            ));
+        }
+        for device in self_destruct
+            .crypto_erase_veracrypt_devices
+            .as_deref()
+            .unwrap_or_default()
+        {
+            destructive_identities.push((
+                device.device_path.clone(),
+                crate::path_identity::raw_partition_identity(
+                    device.disk_number,
+                    device.partition_number,
+                    &device.partition_guid,
+                    device.offset_bytes,
+                    device.size_bytes,
+                    &device.disk_unique_id,
+                ),
+            ));
+        }
+        Ok(Self {
+            self_destruct,
             shred_mft_slack: settings
                 .ideal
                 .tweaks
                 .security
                 .shred_mft_slack_enabled
                 .unwrap_or(false),
-        }
+            destructive_identities,
+        })
+    }
+
+    pub fn destructive_identity(
+        &self,
+        target: &str,
+    ) -> Result<&wincmd_shared::DestructiveRequestV2, String> {
+        self.destructive_identities
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(target))
+            .map(|(_, identity)| identity)
+            .ok_or_else(|| format!("authorized destructive identity is missing for {target}"))
     }
 }
 

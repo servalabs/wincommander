@@ -125,6 +125,29 @@ authoritative statement of what WinCommander does not claim to defend against.
   Planned or source-tested functionality is not a shipped or independently
   certified guarantee.
 
+## Free-to-Pro process and destructive-target boundary
+
+Free starts Pro with a random pipe name but no secret command-line argument.
+Before sending the per-session HMAC token, Free verifies that the connected
+pipe client is the exact spawned PID and independently checks that process's
+executable path and SHA-256 against the accepted Pro
+image. Errors, an old protocol peer, or a mismatched self-reported hash close
+the session.
+
+Destructive IPC requires the versioned v2 target contract. Numeric file and
+partition identifiers use strict decimal strings; BitLocker targets use the
+Windows volume GUID. Pro validates and mutates a file or raw partition through
+the same exclusive handle and performs read-back through that handle. BitLocker
+protector removal and locking use only the verified volume GUID. Free accepts
+success only when Pro returns a matching typed receipt. These controls have
+source and automated-test coverage; signed installed-Windows substitution and
+drive-reassignment testing remains part of release acceptance.
+
+Explorer and search-result secure erase now overwrite, verify, and delete a
+regular file through one opened Windows handle, and reject reparse points and
+hard links. Folder shredding fails closed until handle-relative, reparse-safe
+recursive traversal is available.
+
 ## Cryptography and post-quantum status
 
 **Current releases are not quantum-resistant end to end.** WinCommander uses

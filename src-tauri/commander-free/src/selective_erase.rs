@@ -27,11 +27,37 @@ pub struct EraseTargetInput {
     pub os_volume_ack: Option<String>,
 }
 
-pub fn canonical_erase_args(target: &EraseTargetInput) -> String {
+fn capture_identity(
+    target: &EraseTargetInput,
+) -> Result<wincmd_shared::DestructiveRequestV2, String> {
+    match target.kind.trim().to_ascii_lowercase().as_str() {
+        "veracrypt" => crate::path_identity::ExpectedFileIdentity::capture(std::path::Path::new(
+            target
+                .path
+                .as_deref()
+                .ok_or_else(|| "veracrypt target requires a path".to_string())?,
+        ))
+        .map(|identity| identity.request()),
+        "bitlocker" => crate::path_identity::bitlocker_identity(
+            target
+                .mount_point
+                .as_deref()
+                .ok_or_else(|| "bitlocker target requires a mount point".to_string())?,
+        ),
+        other => Err(format!("unknown target kind: {other}")),
+    }
+}
+
+pub fn canonical_erase_args(target: &EraseTargetInput) -> Result<String, String> {
+    let identity = capture_identity(target)?;
+    canonical_erase_args_with_identity(target, &identity)
+}
+
+fn canonical_erase_args_with_identity(
+    target: &EraseTargetInput,
+    identity: &wincmd_shared::DestructiveRequestV2,
+) -> Result<String, String> {
     let path = target.path.as_deref().map(crate::authz::canonical_path);
-    let identity = path
-        .as_deref()
-        .and_then(|path| crate::routine_cleaner::file_identity(std::path::Path::new(path)));
     serde_json::to_string(&(
         "erase_encrypted_container",
         target.kind.trim().to_ascii_lowercase(),
@@ -45,8 +71,9 @@ pub fn canonical_erase_args(target: &EraseTargetInput) -> String {
             target.path.as_deref(),
             &system_drive(),
         ),
+        identity,
     ))
-    .expect("selective erase arguments serialize")
+    .map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -286,10 +313,11 @@ pub async fn erase_encrypted_container(
     if !target.confirmed {
         return Err("Refusing: erase not confirmed.".to_string());
     }
+    let destructive_identity = capture_identity(&target)?;
     crate::authz::consume_required(
         capability_token.as_deref(),
         crate::authz::DestructiveAction::CryptoErase,
-        &canonical_erase_args(&target),
+        &canonical_erase_args_with_identity(&target, &destructive_identity)?,
     )?;
 
     let sys = system_drive();
@@ -320,7 +348,12 @@ pub async fn erase_encrypted_container(
 
     match target.kind.as_str() {
         "veracrypt" => {
-            let path = target.path.clone().unwrap_or_default();
+            let path = crate::path_identity::ExpectedFileIdentity::capture(std::path::Path::new(
+                target.path.as_deref().unwrap_or_default(),
+            ))?
+            .canonical_path()
+            .to_string_lossy()
+            .into_owned();
             if path.is_empty() {
                 return Err("veracrypt target requires a path".to_string());
             }
@@ -351,11 +384,14 @@ pub async fn erase_encrypted_container(
             let pre_header = read_header_prefix(&path);
             let feature =
                 wincmd_shared::command_strings::join_parts(&["Destroy~-", "VeraCrypt~", "Header~"]);
-            let res = crate::sidecar::dispatch_paid_command(
-                &feature,
-                serde_json::json!({ "Path": path }),
-            )
-            .await?;
+            let mut payload = serde_json::json!({ "Path": path })
+                .as_object()
+                .cloned()
+                .expect("destructive payload is an object");
+            crate::path_identity::insert_request(&mut payload, &destructive_identity)?;
+            let res =
+                crate::sidecar::dispatch_paid_command(&feature, Value::Object(payload)).await?;
+            crate::path_identity::verify_receipt(&res, &destructive_identity)?;
             let label = target
                 .mount_letter
                 .as_deref()
@@ -385,11 +421,14 @@ pub async fn erase_encrypted_container(
                 "Key~",
                 "Protectors~",
             ]);
-            let res = crate::sidecar::dispatch_paid_command(
-                &clear,
-                serde_json::json!({ "DriveLetter": mp.clone() }),
-            )
-            .await?;
+            let mut clear_payload = serde_json::json!({ "DriveLetter": mp.clone() })
+                .as_object()
+                .cloned()
+                .expect("destructive payload is an object");
+            crate::path_identity::insert_request(&mut clear_payload, &destructive_identity)?;
+            let res =
+                crate::sidecar::dispatch_paid_command(&clear, Value::Object(clear_payload)).await?;
+            crate::path_identity::verify_receipt(&res, &destructive_identity)?;
             // Evict the FVEK for a DATA volume; the running OS drive can't be locked.
             // "No key-eviction retry": an open handle (e.g. an
             // Explorer window on the volume) commonly clears within a second,
@@ -403,15 +442,23 @@ pub async fn erase_encrypted_container(
                     if attempt > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     }
+                    let mut lock_payload = serde_json::json!({ "MountPoint": mp.clone() })
+                        .as_object()
+                        .cloned()
+                        .expect("destructive payload is an object");
+                    crate::path_identity::insert_request(&mut lock_payload, &destructive_identity)?;
                     let lock = crate::sidecar::dispatch_paid_command(
                         "Lock-BitLockerVolume",
-                        serde_json::json!({ "MountPoint": mp.clone() }),
+                        Value::Object(lock_payload),
                     )
                     .await;
                     key_evicted = matches!(
                         &lock,
                         Ok(v) if v.get("status").and_then(Value::as_str) == Some("locked")
                     );
+                    if let Ok(value) = &lock {
+                        crate::path_identity::verify_receipt(value, &destructive_identity)?;
+                    }
                     if key_evicted {
                         break;
                     }

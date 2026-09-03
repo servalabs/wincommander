@@ -97,19 +97,13 @@ fn decode_utf16le(bytes: &[u8]) -> String {
     // `chunks_exact` silently drops a trailing odd byte, which is correct
     // here: a lone byte can't be a UTF-16 code unit.
     let (pairs, _) = bytes.as_chunks::<2>();
-    let units: Vec<u16> = pairs
-        .iter()
-        .map(|pair| u16::from_le_bytes(*pair))
-        .collect();
+    let units: Vec<u16> = pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
     String::from_utf16_lossy(&units)
 }
 
 fn decode_utf16be(bytes: &[u8]) -> String {
     let (pairs, _) = bytes.as_chunks::<2>();
-    let units: Vec<u16> = pairs
-        .iter()
-        .map(|pair| u16::from_be_bytes(*pair))
-        .collect();
+    let units: Vec<u16> = pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect();
     String::from_utf16_lossy(&units)
 }
 

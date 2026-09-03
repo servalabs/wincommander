@@ -9,13 +9,11 @@
 // implementations into Pro and routes requests through here.
 //
 // Lifecycle (per spawn):
-//   1. spawn_pro() generates a random pipe name + 32-byte session token,
-//      creates the named-pipe server end, then launches the Pro binary
-//      with --core-pipe=<name> --session-token=<token>.
-//   2. Pro connects as client, sends its Hello with the echoed token +
-//      the SHA-256 hex of itself in `binary_hash`.
-//   3. Free verifies token match + (when phase 8 lands) pinned binary
-//      hash, then keeps the connection in a ProSession.
+//   1. Free creates a random pipe, spawns Pro with only the pipe name, and
+//      records the returned PID.
+//   2. After connect, Free binds the pipe client to that PID and independently
+//      verifies the process image identity and hash before disclosing a token.
+//   3. Free sends the random token in Hello; Pro validates and echoes it.
 //   4. dispatch() writes Requests, awaits Responses keyed by request_id.
 //   5. close() sends Bye and waits for the child to exit (with a short
 //      kill timeout if Pro misbehaves).
@@ -759,7 +757,6 @@ pub async fn handshake_pro_once() -> HandshakeResult {
     // Spawn Pro.
     let mut cmd = Command::new(&pro_path);
     cmd.arg(format!("--core-pipe={}", pipe_name));
-    cmd.arg(format!("--session-token={}", token));
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     #[cfg(windows)]
@@ -795,6 +792,10 @@ pub async fn handshake_pro_once() -> HandshakeResult {
 
         let mut server = server;
 
+        let verified =
+            crate::sidecar_process_auth::verify_connected_pro(&server, child.id(), &pro_path)?;
+        verify_pro_binary_hash(&verified.image_hash)?;
+
         // Step 1: send Hello to Pro.
         let outbound = Envelope::Hello(hello_from_free(&token));
         timeout(HANDSHAKE_TIMEOUT, write_envelope(&mut server, &outbound))
@@ -825,6 +826,11 @@ pub async fn handshake_pro_once() -> HandshakeResult {
 
         // F-3: refuse handshake if Pro's reported SHA-256 isn't pinned.
         let reported_hash = h.binary_hash.clone().unwrap_or_default();
+        if !reported_hash.eq_ignore_ascii_case(&verified.image_hash) {
+            return Err(
+                "Pro's reported hash does not match its independently verified image".to_string(),
+            );
+        }
         verify_pro_binary_hash(&reported_hash)?;
 
         Ok((h.pro_version.unwrap_or_default(), reported_hash))
@@ -948,7 +954,6 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
 
     let mut cmd = Command::new(&pro_path);
     cmd.arg(format!("--core-pipe={}", pipe_name));
-    cmd.arg(format!("--session-token={}", token));
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.kill_on_drop(true);
@@ -1002,6 +1007,10 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
         .map_err(|_| "pipe connect timeout".to_string())?
         .map_err(|e| format!("pipe connect error: {}", e))?;
 
+    let verified =
+        crate::sidecar_process_auth::verify_connected_pro(&server, child.id(), &pro_path)?;
+    verify_pro_binary_hash(&verified.image_hash)?;
+
     let outbound = Envelope::Hello(hello_from_free(&token));
     timeout(HANDSHAKE_TIMEOUT, write_envelope(&mut server, &outbound))
         .await
@@ -1022,6 +1031,12 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
             // handshake (handshake_pro_once) — defence-in-depth against
             // a locally-swapped wincommander-pro.exe.
             let reported_hash = h.binary_hash.clone().unwrap_or_default();
+            if !reported_hash.eq_ignore_ascii_case(&verified.image_hash) {
+                return Err(
+                    "Pro's reported hash does not match its independently verified image"
+                        .to_string(),
+                );
+            }
             let pro_ver = h.pro_version.as_deref().unwrap_or("unknown");
             crate::log_message_src(
                 "info",

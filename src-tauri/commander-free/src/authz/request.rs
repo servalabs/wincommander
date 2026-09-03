@@ -53,8 +53,11 @@ impl DestructiveRequest {
         }
     }
 
-    pub(super) fn canonical_args(&self, plan: Option<&LockdownPlanSnapshot>) -> String {
-        match self {
+    pub(super) fn canonical_args(
+        &self,
+        plan: Option<&LockdownPlanSnapshot>,
+    ) -> Result<String, String> {
+        Ok(match self {
             Self::Lockdown {
                 deactivate_license_first,
                 shutdown_system,
@@ -73,9 +76,9 @@ impl DestructiveRequest {
                 media_type,
             } => free_space_erase_args(drive_letter, media_type),
             Self::SelectiveCryptoErase { target } => {
-                crate::selective_erase::canonical_erase_args(target)
+                return crate::selective_erase::canonical_erase_args(target)
             }
-        }
+        })
     }
 
     pub(super) fn confirmation_detail(&self, plan: Option<&LockdownPlanSnapshot>) -> String {
@@ -256,11 +259,11 @@ pub(super) async fn request_destructive_confirmation_impl(
     ) {
         let settings =
             crate::settings::read_settings().map_err(|error| format!("read settings: {error}"))?;
-        Some(LockdownPlanSnapshot::from_settings(&settings))
+        Some(LockdownPlanSnapshot::from_settings(&settings)?)
     } else {
         None
     };
-    let args_canonical = request.canonical_args(lockdown_plan.as_ref());
+    let args_canonical = request.canonical_args(lockdown_plan.as_ref())?;
     let confirmation_detail = request.confirmation_detail(lockdown_plan.as_ref());
     let needs_destroy = matches!(
         action,
