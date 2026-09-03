@@ -512,7 +512,7 @@ mod tests {
         #[cfg(windows)]
         {
             let value = canonical.to_string_lossy();
-            return PathBuf::from(value.strip_prefix(r"\\?\").unwrap_or(&value));
+            PathBuf::from(value.strip_prefix(r"\\?\").unwrap_or(&value))
         }
         #[cfg(not(windows))]
         canonical
