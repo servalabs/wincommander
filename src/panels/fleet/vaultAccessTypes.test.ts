@@ -16,6 +16,18 @@ describe("Vault Access service intent", () => {
       "engine_mount_failed", "acl_apply_failed", "acl_readback_failed", "dismount_failed",
     ]);
   });
+
+  test("renders every terminal reason without falling back to a generic failure", () => {
+    for (const reason of VAULT_MOUNT_REASONS) {
+      expect(vaultMountResultLabel({
+        entry_id: "opaque-entry",
+        state: reason === "not_authorized" ? "denied" : "failed",
+        presentation: null,
+        drive_letter: null,
+        reason,
+      })).not.toBe("Mount request could not be completed");
+    }
+  });
   test("starts with the shared plus two private file-container shape", () => {
     const policy = newVaultPolicy();
     expect(policy.schema_version).toBe(1);

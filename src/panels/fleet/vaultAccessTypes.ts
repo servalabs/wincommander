@@ -36,6 +36,20 @@ export const VAULT_MOUNT_REASONS = [
 ] as const;
 export type VaultMountReason = typeof VAULT_MOUNT_REASONS[number];
 
+const VAULT_MOUNT_REASON_LABELS: Record<VaultMountReason, string> = {
+  not_authorized: "Mount denied by the secure service",
+  invalid_request: "The Vault request is invalid",
+  broker_unavailable: "The secure Vault service is unavailable",
+  broker_rejected: "The secure Vault service rejected the request",
+  session_unavailable: "The Windows session is unavailable",
+  engine_unlock_failed: "The password, PIM, or keyfiles did not unlock this Vault",
+  engine_drive_letter_unavailable: "The requested drive letter is already in use",
+  engine_mount_failed: "The encrypted-volume engine could not mount this Vault",
+  acl_apply_failed: "Windows permissions could not be applied to this Vault",
+  acl_readback_failed: "Windows permissions could not be verified for this Vault",
+  dismount_failed: "The Vault could not be safely unmounted",
+};
+
 export interface VaultGrantInput {
   principal_name: string;
   access: VaultAccess;
@@ -120,20 +134,9 @@ export function vaultMountResultLabel(result: VaultMountEntryResult): string {
       : "Mounted for this Windows session";
   }
   if (result.state === "unmounted") return "Unmounted";
-  const labels: Record<VaultMountReason, string> = {
-    not_authorized: "Mount denied by the secure service",
-    invalid_request: "The Vault request is invalid",
-    broker_unavailable: "The secure Vault service is unavailable",
-    broker_rejected: "The secure Vault service rejected the request",
-    session_unavailable: "The Windows session is unavailable",
-    engine_unlock_failed: "The password, PIM, or keyfiles did not unlock this Vault",
-    engine_drive_letter_unavailable: "The requested drive letter is already in use",
-    engine_mount_failed: "The encrypted-volume engine could not mount this Vault",
-    acl_apply_failed: "Windows permissions could not be applied to this Vault",
-    acl_readback_failed: "Windows permissions could not be verified for this Vault",
-    dismount_failed: "The Vault could not be safely unmounted",
-  };
-  return result.reason ? labels[result.reason] : "Mount request could not be completed";
+  return result.reason
+    ? VAULT_MOUNT_REASON_LABELS[result.reason]
+    : "Mount request could not be completed";
 }
 
 export function newVaultEntry(kind: "shared" | "private" = "private"): VaultAccessEntry {
