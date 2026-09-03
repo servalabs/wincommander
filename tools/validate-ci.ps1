@@ -31,6 +31,10 @@ foreach ($job in @('cargo-check', 'cargo-test', 'cargo-clippy')) {
         throw "invariants.yml Rust job '$job' must generate ignored backend modules before compiling."
     }
 }
+$stringsJob = [regex]::Match($text, '(?ms)^  strings-grep-free:\s*(.*?)(?=^  [a-z0-9-]+:|\z)')
+if (-not $stringsJob.Success -or -not $stringsJob.Groups[1].Value.Contains('products/wincommander')) {
+    throw "invariants.yml Free binary job must checkout the WinCommander product assets required by the production frontend build."
+}
 $actionRefs = [regex]::Matches($text, '(?m)^\s*(?:-\s*)?uses:\s*[^@\s]+@([^\s#]+)')
 foreach ($match in $actionRefs) {
     if ($match.Groups[1].Value -notmatch '^[0-9a-f]{40}$') {
