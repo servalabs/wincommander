@@ -102,9 +102,12 @@ pub(crate) struct VaultCall<'a> {
 }
 
 #[cfg(windows)]
-pub async fn vault_call(call: VaultCall<'_>) -> Result<serde_json::Value, String> {
+pub async fn vault_call(
+    call: VaultCall<'_>,
+) -> Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason> {
     use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
     use tokio::time::{timeout_at, Instant};
+    use wincmd_shared::vault_access::VaultMountReason;
     use wincmd_shared::{
         read_envelope, write_envelope, Envelope, Hello, Request, PROTOCOL_VERSION,
     };
@@ -127,7 +130,7 @@ pub async fn vault_call(call: VaultCall<'_>) -> Result<serde_json::Value, String
         .pipe_mode(PipeMode::Byte)
         .first_pipe_instance(true)
         .create(&pipe_name)
-        .map_err(|_| "broker_unavailable")?;
+        .map_err(|_| VaultMountReason::BrokerUnavailable)?;
     eprintln!(
         "[wincommander-svc] vault_call({feature_id}, operation={request_id}): spawning broker helper"
     );
@@ -140,13 +143,14 @@ pub async fn vault_call(call: VaultCall<'_>) -> Result<serde_json::Value, String
         feature_id,
         &pipe_name,
         &session_token,
-    )?;
+    )
+    .map_err(broker_transport_reason)?;
     eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): broker spawned, waiting for connect");
     let result = async {
         timeout_at(deadline, pipe.connect())
             .await
-            .map_err(|_| "broker_timeout")?
-            .map_err(|_| "broker_io")?;
+            .map_err(|_| VaultMountReason::BrokerUnavailable)?
+            .map_err(|_| VaultMountReason::BrokerUnavailable)?;
         eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): pipe connected, sending hello");
         let hello = Envelope::Hello(Hello {
             protocol_version: PROTOCOL_VERSION.into(),
@@ -157,12 +161,12 @@ pub async fn vault_call(call: VaultCall<'_>) -> Result<serde_json::Value, String
         });
         timeout_at(deadline, write_envelope(&mut pipe, &hello))
             .await
-            .map_err(|_| "broker_timeout")?
-            .map_err(|_| "broker_io")?;
+            .map_err(|_| VaultMountReason::BrokerUnavailable)?
+            .map_err(|_| VaultMountReason::BrokerUnavailable)?;
         let ack = timeout_at(deadline, read_envelope(&mut pipe))
             .await
-            .map_err(|_| "broker_timeout")?
-            .map_err(|_| "broker_io")?;
+            .map_err(|_| VaultMountReason::BrokerUnavailable)?
+            .map_err(|_| VaultMountReason::BrokerUnavailable)?;
         eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): hello ack received");
         let Envelope::Hello(Hello {
             protocol_version,
@@ -171,14 +175,14 @@ pub async fn vault_call(call: VaultCall<'_>) -> Result<serde_json::Value, String
             ..
         }) = ack
         else {
-            return Err("broker_handshake");
+            return Err(VaultMountReason::BrokerRejected);
         };
         if protocol_version != PROTOCOL_VERSION
             || echoed != session_token
             || !hash_matches_fixed_pro(&hash)
         {
             eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake mismatch (protocol_version={protocol_version}, echoed_token_matches={}, hash_matches={})", echoed == session_token, hash_matches_fixed_pro(&hash));
-            return Err("broker_handshake");
+            return Err(VaultMountReason::BrokerRejected);
         }
         eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake ok, sending request");
         let mut request = Envelope::Request(Request {
@@ -189,8 +193,8 @@ pub async fn vault_call(call: VaultCall<'_>) -> Result<serde_json::Value, String
         .sign(&session_token);
         let write_result = timeout_at(deadline, write_envelope(&mut pipe, &request))
             .await
-            .map_err(|_| "broker_timeout")
-            .and_then(|result| result.map_err(|_| "broker_io"));
+            .map_err(|_| VaultMountReason::BrokerUnavailable)
+            .and_then(|result| result.map_err(|_| VaultMountReason::BrokerUnavailable));
         zeroize_broker_request(&mut request);
         write_result?;
         eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): request sent, awaiting reply");
@@ -198,8 +202,8 @@ pub async fn vault_call(call: VaultCall<'_>) -> Result<serde_json::Value, String
         let result = loop {
             let reply = timeout_at(deadline, read_envelope(&mut pipe))
                 .await
-                .map_err(|_| "broker_timeout")?
-                .map_err(|_| "broker_io")?;
+                .map_err(|_| VaultMountReason::BrokerUnavailable)?
+                .map_err(|_| VaultMountReason::BrokerUnavailable)?;
             match process_broker_reply(reply, &session_token, request_id, &mut notification_count)?
             {
                 BrokerReply::Notification => {}
@@ -222,7 +226,18 @@ pub async fn vault_call(call: VaultCall<'_>) -> Result<serde_json::Value, String
     unsafe {
         windows_sys::Win32::Foundation::CloseHandle(process);
     }
-    result.map_err(str::to_string)
+    result
+}
+
+#[cfg(windows)]
+fn broker_transport_reason(error: &str) -> wincmd_shared::vault_access::VaultMountReason {
+    use wincmd_shared::vault_access::VaultMountReason;
+
+    match error {
+        "session_unavailable" => VaultMountReason::SessionUnavailable,
+        "broker_rejected" | "broker_handshake" | "broker_hmac" => VaultMountReason::BrokerRejected,
+        _ => VaultMountReason::BrokerUnavailable,
+    }
 }
 
 #[cfg(windows)]
@@ -250,10 +265,14 @@ fn zeroize_json(value: &mut serde_json::Value) {
 /// on. This path has no renderer input and names only a bounded engine slot;
 /// it launches the authenticated Pro sidecar as SYSTEM to close that slot.
 #[cfg(windows)]
-pub async fn vault_recovery_dismount(internal_drive: u8) -> Result<serde_json::Value, String> {
+pub async fn vault_recovery_dismount(
+    internal_drive: u8,
+) -> Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason> {
+    use wincmd_shared::vault_access::VaultMountReason;
+
     use std::sync::atomic::Ordering;
     if internal_drive > 25 {
-        return Err("broker_rejected".to_string());
+        return Err(VaultMountReason::BrokerRejected);
     }
     let request_id = NEXT_RECOVERY_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     vault_call(VaultCall {
@@ -272,7 +291,7 @@ pub async fn vault_recovery_dismount(internal_drive: u8) -> Result<serde_json::V
 #[cfg(windows)]
 enum BrokerReply {
     Notification,
-    Finished(Result<serde_json::Value, &'static str>),
+    Finished(Result<serde_json::Value, wincmd_shared::vault_access::VaultMountReason>),
 }
 
 #[cfg(windows)]
@@ -281,17 +300,20 @@ fn process_broker_reply(
     session_token: &str,
     request_id: u64,
     notification_count: &mut usize,
-) -> Result<BrokerReply, &'static str> {
+) -> Result<BrokerReply, wincmd_shared::vault_access::VaultMountReason> {
+    use wincmd_shared::vault_access::VaultMountReason;
     use wincmd_shared::Envelope;
 
     match reply
         .verify_and_unwrap(session_token)
-        .map_err(|_| "broker_hmac")?
+        .map_err(|_| VaultMountReason::BrokerRejected)?
     {
         Envelope::Notification(_) => {
-            *notification_count = notification_count.checked_add(1).ok_or("broker_rejected")?;
+            *notification_count = notification_count
+                .checked_add(1)
+                .ok_or(VaultMountReason::BrokerRejected)?;
             if *notification_count > MAX_SIGNED_NOTIFICATIONS {
-                return Err("broker_rejected");
+                return Err(VaultMountReason::BrokerRejected);
             }
             Ok(BrokerReply::Notification)
         }
@@ -299,30 +321,16 @@ fn process_broker_reply(
             Ok(BrokerReply::Finished(Ok(response.result)))
         }
         Envelope::Error(error) if error.request_id == request_id => {
-            let error = match error.kind.as_str() {
-                "vault_acl_readback_failed" => "vault_acl_readback_failed",
-                "vault_acl_apply_failed" => "vault_acl_apply_failed",
-                "vault_engine_unlock_failed" => "vault_engine_unlock_failed",
-                "vault_engine_drive_letter_unavailable" => "vault_engine_drive_letter_unavailable",
-                "vault_engine_mount_failed" => "vault_engine_mount_failed",
-                // These are the deliberately bounded, renderer-safe personal-vault
-                // terminal codes.  Do not turn them into `broker_rejected`: doing
-                // so makes a real driver/session/ownership failure indistinguishable
-                // from a broker transport fault in the desktop UI.
-                "vault_not_authorized" => "vault_not_authorized",
-                "vault_drive_letter_unavailable" => "vault_drive_letter_unavailable",
-                "vault_driver_unavailable" => "vault_driver_unavailable",
-                "vault_session_unavailable" => "vault_session_unavailable",
-                _ => "broker_rejected",
-            };
-            Ok(BrokerReply::Finished(Err(error)))
+            let reason = VaultMountReason::from_wire(&error.kind)
+                .unwrap_or(VaultMountReason::BrokerRejected);
+            Ok(BrokerReply::Finished(Err(reason)))
         }
         Envelope::Response(_)
         | Envelope::Error(_)
         | Envelope::Hello(_)
         | Envelope::Request(_)
         | Envelope::Bye
-        | Envelope::Signed(_) => Err("broker_rejected"),
+        | Envelope::Signed(_) => Err(VaultMountReason::BrokerRejected),
     }
 }
 
@@ -769,7 +777,7 @@ mod tests {
                 REQUEST_ID,
                 &mut notifications
             ),
-            Err("broker_rejected")
+            Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
         ));
     }
 
@@ -785,39 +793,29 @@ mod tests {
         .sign(token);
         assert!(matches!(
             process_broker_reply(response, token, REQUEST_ID, &mut notifications),
-            Err("broker_rejected")
+            Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
         ));
 
         let error = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
             request_id: REQUEST_ID + 1,
-            kind: "vault_acl_readback_failed".to_string(),
+            kind: "acl_readback_failed".to_string(),
             message: "wrong request".to_string(),
         })
         .sign(token);
         assert!(matches!(
             process_broker_reply(error, token, REQUEST_ID, &mut notifications),
-            Err("broker_rejected")
+            Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
         ));
     }
 
     #[cfg(windows)]
     #[test]
-    fn broker_preserves_personal_vault_native_terminal_codes() {
+    fn broker_preserves_every_shared_vault_terminal_reason() {
         let token = "broker-test-token";
-        for expected in [
-            "vault_acl_readback_failed",
-            "vault_acl_apply_failed",
-            "vault_engine_unlock_failed",
-            "vault_engine_drive_letter_unavailable",
-            "vault_engine_mount_failed",
-            "vault_not_authorized",
-            "vault_drive_letter_unavailable",
-            "vault_driver_unavailable",
-            "vault_session_unavailable",
-        ] {
+        for expected in wincmd_shared::vault_access::VaultMountReason::ALL {
             let reply = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
                 request_id: REQUEST_ID,
-                kind: expected.to_string(),
+                kind: expected.as_str().to_string(),
                 message: "bounded failure".to_string(),
             })
             .sign(token);
@@ -827,6 +825,20 @@ mod tests {
                 Ok(BrokerReply::Finished(Err(actual))) if actual == expected
             ));
         }
+
+        let legacy = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
+            request_id: REQUEST_ID,
+            kind: "vault_engine_mount_failed".to_string(),
+            message: "bounded failure".to_string(),
+        })
+        .sign(token);
+        let mut notifications = 0;
+        assert!(matches!(
+            process_broker_reply(legacy, token, REQUEST_ID, &mut notifications),
+            Ok(BrokerReply::Finished(Err(
+                wincmd_shared::vault_access::VaultMountReason::BrokerRejected
+            )))
+        ));
     }
 
     #[test]
@@ -865,7 +877,7 @@ mod tests {
     async fn recovery_dismount_rejects_out_of_range_slots_before_launching_pro() {
         assert_eq!(
             vault_recovery_dismount(26).await,
-            Err("broker_rejected".to_string())
+            Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
         );
     }
 

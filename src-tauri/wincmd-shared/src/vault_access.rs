@@ -406,6 +406,20 @@ pub enum VaultMountReason {
 }
 
 impl VaultMountReason {
+    pub const ALL: [Self; 11] = [
+        Self::NotAuthorized,
+        Self::InvalidRequest,
+        Self::BrokerUnavailable,
+        Self::BrokerRejected,
+        Self::SessionUnavailable,
+        Self::EngineUnlockFailed,
+        Self::EngineDriveLetterUnavailable,
+        Self::EngineMountFailed,
+        Self::AclApplyFailed,
+        Self::AclReadbackFailed,
+        Self::DismountFailed,
+    ];
+
     pub const ALL_WIRE_VALUES: [&'static str; 11] = [
         "not_authorized",
         "invalid_request",
@@ -419,6 +433,39 @@ impl VaultMountReason {
         "acl_readback_failed",
         "dismount_failed",
     ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotAuthorized => "not_authorized",
+            Self::InvalidRequest => "invalid_request",
+            Self::BrokerUnavailable => "broker_unavailable",
+            Self::BrokerRejected => "broker_rejected",
+            Self::SessionUnavailable => "session_unavailable",
+            Self::EngineUnlockFailed => "engine_unlock_failed",
+            Self::EngineDriveLetterUnavailable => "engine_drive_letter_unavailable",
+            Self::EngineMountFailed => "engine_mount_failed",
+            Self::AclApplyFailed => "acl_apply_failed",
+            Self::AclReadbackFailed => "acl_readback_failed",
+            Self::DismountFailed => "dismount_failed",
+        }
+    }
+
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value {
+            "not_authorized" => Some(Self::NotAuthorized),
+            "invalid_request" => Some(Self::InvalidRequest),
+            "broker_unavailable" => Some(Self::BrokerUnavailable),
+            "broker_rejected" => Some(Self::BrokerRejected),
+            "session_unavailable" => Some(Self::SessionUnavailable),
+            "engine_unlock_failed" => Some(Self::EngineUnlockFailed),
+            "engine_drive_letter_unavailable" => Some(Self::EngineDriveLetterUnavailable),
+            "engine_mount_failed" => Some(Self::EngineMountFailed),
+            "acl_apply_failed" => Some(Self::AclApplyFailed),
+            "acl_readback_failed" => Some(Self::AclReadbackFailed),
+            "dismount_failed" => Some(Self::DismountFailed),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -782,12 +829,28 @@ mod tests {
     #[test]
     fn renderer_and_rust_mount_reason_vocabularies_are_in_parity() {
         let renderer = include_str!("../../../src/panels/fleet/vaultAccessTypes.ts");
-        for reason in VaultMountReason::ALL_WIRE_VALUES {
+        for (reason, wire_value) in VaultMountReason::ALL
+            .into_iter()
+            .zip(VaultMountReason::ALL_WIRE_VALUES)
+        {
+            assert_eq!(reason.as_str(), wire_value);
+            assert_eq!(VaultMountReason::from_wire(wire_value), Some(reason));
+            assert_eq!(
+                serde_json::from_str::<VaultMountReason>(
+                    &serde_json::to_string(&reason).expect("serialize reason")
+                )
+                .expect("deserialize reason"),
+                reason,
+            );
             assert!(
-                renderer.contains(&format!("\"{reason}\"")),
-                "renderer is missing Rust Vault reason {reason}",
+                renderer.contains(&format!("\"{wire_value}\"")),
+                "renderer is missing Rust Vault reason {wire_value}",
             );
         }
+        assert_eq!(
+            VaultMountReason::from_wire("vault_engine_mount_failed"),
+            None
+        );
         let declaration = renderer
             .split("export const VAULT_MOUNT_REASONS = [")
             .nth(1)

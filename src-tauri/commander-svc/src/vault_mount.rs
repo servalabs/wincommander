@@ -88,23 +88,6 @@ trait AuthenticatedVaultBroker: Send + Sync {
 
 struct ProEnvelopeBroker;
 
-fn broker_mount_reason(error: &str) -> VaultMountReason {
-    match error {
-        "session_unavailable" => VaultMountReason::SessionUnavailable,
-        "vault_acl_apply_failed" => VaultMountReason::AclApplyFailed,
-        "vault_acl_readback_failed" => VaultMountReason::AclReadbackFailed,
-        "vault_engine_unlock_failed" => VaultMountReason::EngineUnlockFailed,
-        "vault_engine_drive_letter_unavailable" | "vault_drive_letter_unavailable" => {
-            VaultMountReason::EngineDriveLetterUnavailable
-        }
-        "vault_engine_mount_failed" => VaultMountReason::EngineMountFailed,
-        "broker_handshake" | "broker_hmac" | "broker_rejected" | "vault_broker_failed" => {
-            VaultMountReason::BrokerRejected
-        }
-        _ => VaultMountReason::BrokerUnavailable,
-    }
-}
-
 impl AuthenticatedVaultBroker for ProEnvelopeBroker {
     fn mount(
         &self,
@@ -126,7 +109,7 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
             ))
         });
         request.zeroize_secrets();
-        let value = result.map_err(|error| broker_mount_reason(&error))?;
+        let value = result?;
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Reply {
@@ -321,9 +304,6 @@ struct RecoveryState {
 }
 
 impl VaultMountBroker {
-    /// Stable terminal codes for the personal-vault caller. These are the only
-    /// engine details released through the service; all unrecognised broker
-    /// failures stay generic.
     pub(crate) fn personal_mount_failure_code(reason: VaultMountReason) -> &'static str {
         match reason {
             VaultMountReason::NotAuthorized => "vault_not_authorized",
@@ -1386,7 +1366,7 @@ mod tests {
     }
 
     #[test]
-    fn personal_mount_terminal_reasons_keep_their_exact_codes() {
+    fn personal_mount_public_codes_remain_bounded() {
         for (reason, expected) in [
             (VaultMountReason::NotAuthorized, "vault_not_authorized"),
             (
@@ -1410,34 +1390,6 @@ mod tests {
                 VaultMountBroker::personal_mount_failure_code(reason),
                 expected
             );
-        }
-    }
-
-    #[test]
-    fn broker_terminal_reasons_do_not_collapse_actionable_failures() {
-        for (error, expected) in [
-            ("session_unavailable", VaultMountReason::SessionUnavailable),
-            ("vault_acl_apply_failed", VaultMountReason::AclApplyFailed),
-            (
-                "vault_acl_readback_failed",
-                VaultMountReason::AclReadbackFailed,
-            ),
-            (
-                "vault_engine_unlock_failed",
-                VaultMountReason::EngineUnlockFailed,
-            ),
-            (
-                "vault_engine_drive_letter_unavailable",
-                VaultMountReason::EngineDriveLetterUnavailable,
-            ),
-            (
-                "vault_engine_mount_failed",
-                VaultMountReason::EngineMountFailed,
-            ),
-            ("vault_broker_failed", VaultMountReason::BrokerRejected),
-            ("broker_timeout", VaultMountReason::BrokerUnavailable),
-        ] {
-            assert_eq!(broker_mount_reason(error), expected, "{error}");
         }
     }
 
