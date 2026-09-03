@@ -27,7 +27,7 @@ import { showError, showSuccess } from "../../utils/toast";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import { useAppState } from "../../context/AppContext";
-import { applyMachineSetting } from "../../lib/machineSettingsClient";
+import { applyMachineSetting } from "../../hooks/machineSettingsClient";
 import PrivacyEventTable from './PrivacyEventTable';
 
 interface ToolEntry {

@@ -9,7 +9,7 @@ import SectionCard from "../../components/shared/SectionCard";
 import ConflictToggleDialog from "../../components/shared/ConflictToggleDialog";
 import useBackend, { executeBackendCommand } from "../../hooks/useBackend";
 import { getControlLifecycle } from "../../hooks/queries/useSettingsQuery";
-import { applyMachineSetting } from "../../lib/machineSettingsClient";
+import { applyMachineSetting } from "../../hooks/machineSettingsClient";
 
 interface RdpIncomingReadBack {
     enabled: boolean;

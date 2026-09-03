@@ -35,7 +35,7 @@
 // No callers are wired in P0 — this module is the seam P1/P2 build against.
 
 use aes_gcm::{
-    aead::{Aead, KeyInit, Payload},
+    aead::{consts::U12, Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
 };
 use argon2::{Argon2, Params};
@@ -346,6 +346,10 @@ fn section_aad(scope: &str) -> String {
     format!("{AAD_PREFIX}{scope}")
 }
 
+fn nonce_from_bytes(bytes: &[u8]) -> Result<&Nonce<U12>, String> {
+    <&Nonce<U12>>::try_from(bytes).map_err(|_| "Invalid AES-GCM nonce length".to_string())
+}
+
 /// Writes the current datastore envelope.  The authenticated scope prevents a
 /// local attacker who can replace files from moving a valid ciphertext between
 /// settings sections or user-owned blobs.
@@ -357,7 +361,7 @@ fn encode_section(
     let cipher = Aes256Gcm::new(key.into());
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = nonce_from_bytes(&nonce_bytes)?;
     let aad = section_aad(scope);
     let ciphertext = cipher
         .encrypt(
@@ -396,7 +400,7 @@ fn decode_section(
     }
     let (nonce_bytes, ciphertext) = payload.split_at(12);
     let cipher = Aes256Gcm::new(key.into());
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = nonce_from_bytes(nonce_bytes)?;
     let aad = section_aad(scope);
     let plaintext = if uses_aad {
         cipher.decrypt(
@@ -552,7 +556,9 @@ pub fn log_encrypt_line(date: &str, body: &str) -> String {
     let cipher = Aes256Gcm::new((&key).into());
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let Ok(nonce) = nonce_from_bytes(&nonce_bytes) else {
+        return format!("[ENCRYPT_FAIL] {}", body);
+    };
     let aad = section_aad(&format!("log:{date}"));
     match cipher.encrypt(
         nonce,
@@ -589,7 +595,7 @@ pub fn log_decrypt_line(line: &str) -> Option<(String, String)> {
     let (nonce_bytes, ct) = payload.split_at(12);
     let key = cached_log_key().ok()?;
     let cipher = Aes256Gcm::new((&key).into());
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = nonce_from_bytes(nonce_bytes).ok()?;
     let aad = section_aad(&format!("log:{date}"));
     let plaintext = if uses_aad {
         cipher
@@ -722,9 +728,8 @@ mod tests {
         let key = test_key(31);
         let cipher = Aes256Gcm::new((&key).into());
         let nonce_bytes = [3u8; 12];
-        let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&nonce_bytes), b"legacy payload".as_ref())
-            .unwrap();
+        let nonce = nonce_from_bytes(&nonce_bytes).unwrap();
+        let ciphertext = cipher.encrypt(nonce, b"legacy payload".as_ref()).unwrap();
         let mut payload = nonce_bytes.to_vec();
         payload.extend_from_slice(&ciphertext);
         let encoded = format!("{FORMAT_PREFIX_V1}{}", B64.encode(payload));
@@ -790,7 +795,7 @@ mod tests {
         let plaintext = b"wincommander-datastore-golden-vector-2026-07-12";
 
         let cipher = Aes256Gcm::new((&key).into());
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = nonce_from_bytes(&nonce_bytes).unwrap();
         let ciphertext = cipher.encrypt(nonce, plaintext.as_ref()).unwrap();
 
         let hex: String = ciphertext.iter().map(|b| format!("{b:02x}")).collect();

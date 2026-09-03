@@ -21,15 +21,20 @@ export type VaultEntryResult =
 
 /** Bounded renderer-facing lifecycle reported by the secure mount broker. */
 export type VaultMountState = "mounted" | "unmounted" | "denied" | "failed";
-export type VaultMountReason =
-  | "not_authorized"
-  | "invalid_request"
-  | "broker_unavailable"
-  | "broker_rejected"
-  | "session_unavailable"
-  | "acl_apply_failed"
-  | "acl_readback_failed"
-  | "dismount_failed";
+export const VAULT_MOUNT_REASONS = [
+  "not_authorized",
+  "invalid_request",
+  "broker_unavailable",
+  "broker_rejected",
+  "session_unavailable",
+  "engine_unlock_failed",
+  "engine_drive_letter_unavailable",
+  "engine_mount_failed",
+  "acl_apply_failed",
+  "acl_readback_failed",
+  "dismount_failed",
+] as const;
+export type VaultMountReason = typeof VAULT_MOUNT_REASONS[number];
 
 export interface VaultGrantInput {
   principal_name: string;
@@ -115,8 +120,20 @@ export function vaultMountResultLabel(result: VaultMountEntryResult): string {
       : "Mounted for this Windows session";
   }
   if (result.state === "unmounted") return "Unmounted";
-  if (result.state === "denied") return "Mount denied by the secure service";
-  return "Mount request could not be completed";
+  const labels: Record<VaultMountReason, string> = {
+    not_authorized: "Mount denied by the secure service",
+    invalid_request: "The Vault request is invalid",
+    broker_unavailable: "The secure Vault service is unavailable",
+    broker_rejected: "The secure Vault service rejected the request",
+    session_unavailable: "The Windows session is unavailable",
+    engine_unlock_failed: "The password, PIM, or keyfiles did not unlock this Vault",
+    engine_drive_letter_unavailable: "The requested drive letter is already in use",
+    engine_mount_failed: "The encrypted-volume engine could not mount this Vault",
+    acl_apply_failed: "Windows permissions could not be applied to this Vault",
+    acl_readback_failed: "Windows permissions could not be verified for this Vault",
+    dismount_failed: "The Vault could not be safely unmounted",
+  };
+  return result.reason ? labels[result.reason] : "Mount request could not be completed";
 }
 
 export function newVaultEntry(kind: "shared" | "private" = "private"): VaultAccessEntry {

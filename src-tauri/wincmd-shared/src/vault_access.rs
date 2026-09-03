@@ -5,6 +5,7 @@
 //! mounted-path fields.  The SYSTEM service resolves and persists those facts.
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 pub const VAULT_ACCESS_SCHEMA_VERSION: u32 = 1;
 
@@ -144,7 +145,7 @@ pub struct VaultMountRequest {
 /// access-policy wire.  The service derives the owner SID, session, mounted
 /// root DACL and presentation; the caller may only name the backing file and
 /// supply credentials/options for its own registered container.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PersonalVaultMountRequest {
     pub container_path: String,
@@ -173,15 +174,174 @@ impl std::fmt::Debug for PersonalVaultMountRequest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PersonalVaultMountRequest")
-            .field("container_path", &self.container_path)
             .field("volume_kind", &self.volume_kind)
             .field("volume_role", &self.volume_role)
             .field("preferred_letter", &self.preferred_letter)
             .field("read_only", &self.read_only)
-            .field("pim", &self.pim)
-            .field("keyfiles", &self.keyfiles)
+            .field("container_path", &"[redacted]")
+            .field("credentials", &"[redacted]")
             .field("hidden_protection_password", &"[REDACTED]")
             .finish_non_exhaustive()
+    }
+}
+
+impl PersonalVaultMountRequest {
+    pub fn zeroize_secrets(&mut self) {
+        self.password.zeroize();
+        if let Some(password) = &mut self.hidden_protection_password {
+            password.zeroize();
+        }
+        self.hidden_protection_password = None;
+        self.keyfiles.iter_mut().for_each(Zeroize::zeroize);
+        self.keyfiles.clear();
+        self.hidden_keyfiles.iter_mut().for_each(Zeroize::zeroize);
+        self.hidden_keyfiles.clear();
+    }
+}
+
+/// Service-produced, authenticated service-to-Pro mount plan. Renderer input
+/// is never deserialized into this type. The service derives the path, ACL,
+/// presentation, session and operation id, validates the complete plan once,
+/// then sends it over the signed one-shot broker pipe.
+#[derive(PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultMountPlan {
+    pub operation_id: u64,
+    pub container_path: String,
+    pub password: String,
+    pub mounted_root_acl_sddl: String,
+    pub mount_mode: VaultMountMode,
+    pub presentation: VaultPresentation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_letter: Option<String>,
+    #[serde(default)]
+    pub read_only: bool,
+    pub volume_kind: VaultContainerKind,
+    pub volume_role: VaultBrokerVolumeRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_protection_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pim: Option<u32>,
+    #[serde(default)]
+    pub keyfiles: Vec<String>,
+    #[serde(default)]
+    pub hidden_keyfiles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_pim: Option<u32>,
+    #[serde(default)]
+    pub removable: bool,
+    pub target_session_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultMountMode {
+    Standard,
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultBrokerVolumeRole {
+    Standard,
+    Outer,
+    Hidden,
+}
+
+impl VaultMountPlan {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.operation_id == 0
+            || self.container_path.is_empty()
+            || self.container_path.len() > 32_767
+            || !is_windows_absolute_path(&self.container_path)
+            || self.password.is_empty()
+            || self.password.len() > 32_767
+            || self.mounted_root_acl_sddl.is_empty()
+            || self.mounted_root_acl_sddl.len() > 4_096
+            || !self.mounted_root_acl_sddl.starts_with("D:")
+            || self.mounted_root_acl_sddl.contains(['\r', '\n'])
+            || self.target_session_id == 0
+        {
+            return Err("vault_mount_plan_invalid");
+        }
+        if self.preferred_letter.as_deref().is_some_and(|letter| {
+            !matches!(letter.as_bytes(), [value] | [value, b':'] if value.is_ascii_alphabetic())
+        }) {
+            return Err("vault_mount_plan_invalid");
+        }
+        if self.keyfiles.len() > 32
+            || self.hidden_keyfiles.len() > 32
+            || self
+                .keyfiles
+                .iter()
+                .chain(self.hidden_keyfiles.iter())
+                .any(|path| path.is_empty() || path.len() > 32_767)
+        {
+            return Err("vault_mount_plan_invalid");
+        }
+        let expected_mode = match (self.volume_kind, self.volume_role) {
+            (VaultContainerKind::Standard, VaultBrokerVolumeRole::Standard)
+            | (VaultContainerKind::Dual, VaultBrokerVolumeRole::Outer) => VaultMountMode::Standard,
+            (VaultContainerKind::Dual, VaultBrokerVolumeRole::Hidden) => VaultMountMode::Hidden,
+            _ => return Err("vault_mount_plan_invalid"),
+        };
+        if self.mount_mode != expected_mode {
+            return Err("vault_mount_plan_invalid");
+        }
+        let hidden_protection_allowed = self.volume_kind == VaultContainerKind::Dual
+            && self.volume_role == VaultBrokerVolumeRole::Outer
+            && !self.read_only;
+        let has_hidden_protection = self.hidden_protection_password.is_some()
+            || !self.hidden_keyfiles.is_empty()
+            || self.hidden_pim.is_some();
+        if has_hidden_protection != hidden_protection_allowed {
+            return Err("vault_mount_plan_invalid");
+        }
+        Ok(())
+    }
+
+    pub fn zeroize_secrets(&mut self) {
+        self.password.zeroize();
+        if let Some(password) = &mut self.hidden_protection_password {
+            password.zeroize();
+        }
+        self.hidden_protection_password = None;
+        self.keyfiles.iter_mut().for_each(Zeroize::zeroize);
+        self.keyfiles.clear();
+        self.hidden_keyfiles.iter_mut().for_each(Zeroize::zeroize);
+        self.hidden_keyfiles.clear();
+    }
+}
+
+fn is_windows_absolute_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let is_drive_rooted = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/');
+    let is_unc = value.strip_prefix("\\\\").is_some_and(|rest| {
+        let mut components = rest.split('\\');
+        components.next().is_some_and(|server| !server.is_empty())
+            && components.next().is_some_and(|share| !share.is_empty())
+    });
+    is_drive_rooted || is_unc
+}
+
+impl std::fmt::Debug for VaultMountPlan {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultMountPlan")
+            .field("operation_id", &self.operation_id)
+            .field("mount_mode", &self.mount_mode)
+            .field("presentation", &self.presentation)
+            .field("volume_kind", &self.volume_kind)
+            .field("volume_role", &self.volume_role)
+            .field("read_only", &self.read_only)
+            .field("target_session_id", &self.target_session_id)
+            .field("container_path", &"[redacted]")
+            .field("credentials", &"[redacted]")
+            .field("mounted_root_acl_sddl", &"[redacted]")
+            .finish()
     }
 }
 
@@ -243,6 +403,22 @@ pub enum VaultMountReason {
     AclApplyFailed,
     AclReadbackFailed,
     DismountFailed,
+}
+
+impl VaultMountReason {
+    pub const ALL_WIRE_VALUES: [&'static str; 11] = [
+        "not_authorized",
+        "invalid_request",
+        "broker_unavailable",
+        "broker_rejected",
+        "session_unavailable",
+        "engine_unlock_failed",
+        "engine_drive_letter_unavailable",
+        "engine_mount_failed",
+        "acl_apply_failed",
+        "acl_readback_failed",
+        "dismount_failed",
+    ];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -421,10 +597,206 @@ mod tests {
             drive_letter: None,
             reason: Some(VaultMountReason::NotAuthorized),
         };
-        assert!(
-            !serde_json::to_string(&result)
-                .unwrap()
-                .contains("canary-password")
+        assert!(!serde_json::to_string(&result)
+            .unwrap()
+            .contains("canary-password"));
+    }
+
+    fn sample_mount_plan() -> VaultMountPlan {
+        VaultMountPlan {
+            operation_id: 41,
+            container_path: r"C:\Vaults\private.hc".into(),
+            password: "canary-password".into(),
+            mounted_root_acl_sddl: "D:P(A;;FA;;;SY)(A;;FA;;;BA)".into(),
+            mount_mode: VaultMountMode::Standard,
+            presentation: VaultPresentation::PerUser,
+            preferred_letter: Some("V:".into()),
+            read_only: false,
+            volume_kind: VaultContainerKind::Dual,
+            volume_role: VaultBrokerVolumeRole::Outer,
+            hidden_protection_password: Some("hidden-canary-password".into()),
+            pim: Some(1),
+            keyfiles: vec![r"C:\Keys\canary.key".into()],
+            hidden_keyfiles: vec![r"C:\Keys\hidden-canary.key".into()],
+            hidden_pim: Some(2),
+            removable: false,
+            target_session_id: 7,
+        }
+    }
+
+    #[test]
+    fn mount_plan_has_a_stable_strict_wire_and_validates_combinations() {
+        let plan = sample_mount_plan();
+        assert_eq!(plan.validate(), Ok(()));
+        let json = serde_json::to_value(&plan).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "operation_id": 41,
+                "container_path": r"C:\Vaults\private.hc",
+                "password": "canary-password",
+                "mounted_root_acl_sddl": "D:P(A;;FA;;;SY)(A;;FA;;;BA)",
+                "mount_mode": "standard",
+                "presentation": "per-user",
+                "preferred_letter": "V:",
+                "read_only": false,
+                "volume_kind": "dual",
+                "volume_role": "outer",
+                "hidden_protection_password": "hidden-canary-password",
+                "pim": 1,
+                "keyfiles": [r"C:\Keys\canary.key"],
+                "hidden_keyfiles": [r"C:\Keys\hidden-canary.key"],
+                "hidden_pim": 2,
+                "removable": false,
+                "target_session_id": 7,
+            })
+        );
+
+        let mut unknown = json.clone();
+        unknown["renderer_override"] = serde_json::Value::Bool(true);
+        assert!(serde_json::from_value::<VaultMountPlan>(unknown).is_err());
+
+        let mut invalid = sample_mount_plan();
+        invalid.mount_mode = VaultMountMode::Hidden;
+        assert_eq!(invalid.validate(), Err("vault_mount_plan_invalid"));
+    }
+
+    #[test]
+    fn mount_plan_windows_path_validation_is_host_independent() {
+        let mut plan = sample_mount_plan();
+        for path in [
+            r"C:\Vaults\private.hc",
+            r"C:/Vaults/private.hc",
+            r"\\server\vaults\private.hc",
+        ] {
+            plan.container_path = path.into();
+            assert_eq!(
+                plan.validate(),
+                Ok(()),
+                "expected Windows absolute path: {path}"
+            );
+        }
+        for path in [
+            r"Vaults\private.hc",
+            r"C:Vaults\private.hc",
+            r"\Vaults\private.hc",
+            r"\\server",
+            r"\\",
+        ] {
+            plan.container_path = path.into();
+            assert_eq!(
+                plan.validate(),
+                Err("vault_mount_plan_invalid"),
+                "expected non-absolute Windows path: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn request_result_and_error_golden_fixtures_keep_the_operation_id_bounded() {
+        let request = VaultMountRequest {
+            entry_id: "sales".into(),
+            password: "one-shot".into(),
+            volume_role: VaultVolumeRole::Outer,
+            hidden_protection_password: None,
+        };
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "entry_id": "sales", "password": "one-shot", "volume_role": "outer"
+            })
+        );
+        let result = VaultMountResult {
+            entry_id: "sales".into(),
+            state: VaultMountState::Failed,
+            presentation: Some(VaultPresentation::Machine),
+            drive_letter: None,
+            reason: Some(VaultMountReason::EngineDriveLetterUnavailable),
+        };
+        assert_eq!(
+            serde_json::to_value(result).unwrap(),
+            serde_json::json!({
+                "entry_id": "sales", "state": "failed", "presentation": "machine",
+                "drive_letter": null, "reason": "engine_drive_letter_unavailable"
+            })
+        );
+        let error = crate::Envelope::Error(crate::ErrorReply {
+            request_id: 41,
+            kind: "unknown_verb".into(),
+            message: "service verb is not recognized".into(),
+        });
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+                "kind": "error", "request_id": 41, "error_kind": "unknown_verb",
+                "message": "service verb is not recognized"
+            })
+        );
+    }
+
+    #[test]
+    fn mount_plan_and_personal_request_redact_and_zeroize_all_credentials() {
+        let mut plan = sample_mount_plan();
+        let debug = format!("{plan:?}");
+        for secret in [
+            "private.hc",
+            "canary-password",
+            "hidden-canary-password",
+            "canary.key",
+            "hidden-canary.key",
+            "A;;FA",
+        ] {
+            assert!(!debug.contains(secret));
+        }
+        plan.zeroize_secrets();
+        assert!(plan.password.chars().all(|value| value == '\0'));
+        assert!(plan.hidden_protection_password.is_none());
+        assert!(plan.keyfiles.is_empty());
+        assert!(plan.hidden_keyfiles.is_empty());
+
+        let mut personal = PersonalVaultMountRequest {
+            container_path: r"C:\Vaults\private.hc".into(),
+            password: "canary-password".into(),
+            volume_kind: VaultContainerKind::Dual,
+            volume_role: VaultVolumeRole::Outer,
+            preferred_letter: Some("V".into()),
+            read_only: false,
+            pim: Some(1),
+            keyfiles: vec![r"C:\Keys\canary.key".into()],
+            hidden_protection_password: Some("hidden-canary-password".into()),
+            hidden_keyfiles: vec![r"C:\Keys\hidden-canary.key".into()],
+            hidden_pim: Some(2),
+            removable: false,
+        };
+        let debug = format!("{personal:?}");
+        assert!(!debug.contains("private.hc"));
+        assert!(!debug.contains("canary.key"));
+        assert!(!debug.contains("canary-password"));
+        personal.zeroize_secrets();
+        assert!(personal.password.chars().all(|value| value == '\0'));
+        assert!(personal.hidden_protection_password.is_none());
+        assert!(personal.keyfiles.is_empty());
+        assert!(personal.hidden_keyfiles.is_empty());
+    }
+
+    #[test]
+    fn renderer_and_rust_mount_reason_vocabularies_are_in_parity() {
+        let renderer = include_str!("../../../src/panels/fleet/vaultAccessTypes.ts");
+        for reason in VaultMountReason::ALL_WIRE_VALUES {
+            assert!(
+                renderer.contains(&format!("\"{reason}\"")),
+                "renderer is missing Rust Vault reason {reason}",
+            );
+        }
+        let declaration = renderer
+            .split("export const VAULT_MOUNT_REASONS = [")
+            .nth(1)
+            .and_then(|tail| tail.split("] as const;").next())
+            .expect("renderer reason declaration");
+        assert_eq!(
+            declaration.matches('"').count() / 2,
+            VaultMountReason::ALL_WIRE_VALUES.len(),
+            "renderer must not add a reason without the Rust wire enum",
         );
     }
 

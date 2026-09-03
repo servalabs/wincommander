@@ -16,9 +16,10 @@
 // the bundled payload under `resources/`, matching the installer's
 // `WC_BUNDLED_SERVICE`.
 
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
-const SERVICE_NAME: &str = "WinCommanderSvc";
+const SERVICE_NAME: &str = wincmd_shared::svc::SVC_WINDOWS_SERVICE_NAME;
 const ERROR_SERVICE_EXISTS: i32 = 1073;
 const ERROR_SERVICE_ALREADY_RUNNING: i32 = 1056;
 const ERROR_ACCESS_DENIED: i32 = 5;
@@ -52,6 +53,103 @@ fn service_exe_path() -> Result<PathBuf, String> {
         .parent()
         .ok_or_else(|| "current exe has no parent directory".to_string())?;
     Ok(dir.join("wincommander-svc.exe"))
+}
+
+fn path_is_within(candidate: &std::path::Path, expected_parent: &std::path::Path) -> bool {
+    candidate
+        .components()
+        .zip(expected_parent.components())
+        .all(|(left, right)| {
+            left.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+        })
+        && candidate.components().count() > expected_parent.components().count()
+}
+
+fn paths_equal_ignore_case(left: &std::path::Path, right: &std::path::Path) -> bool {
+    left.components().count() == right.components().count()
+        && left
+            .components()
+            .zip(right.components())
+            .all(|(left, right)| {
+                left.as_os_str()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+            })
+}
+
+fn file_sha256(path: &std::path::Path) -> Result<[u8; 32], String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)
+        .map_err(|_| "service executable could not be opened for verification".to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|_| "service executable could not be read for verification".to_string())?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(hasher.finalize().into())
+}
+
+#[cfg(windows)]
+fn require_elevated_administrator() -> Result<(), String> {
+    // This checks the process token, not a renderer checkbox or Windows group
+    // name. A split-token administrator must explicitly elevate first.
+    if unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() } == 0 {
+        return Err(
+            "Administrator privileges required to repair the WinCommander service.".to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_release_paths(
+    payload: &std::path::Path,
+    live_path: &std::path::Path,
+) -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
+    let program_files = std::env::var_os("ProgramW6432")
+        .or_else(|| std::env::var_os("ProgramFiles"))
+        .map(PathBuf::from)
+        .ok_or_else(|| "Windows Program Files location is unavailable".to_string())?;
+    let install_dir = std::fs::canonicalize(program_files.join("WinCommander"))
+        .map_err(|_| "protected WinCommander installation could not be resolved".to_string())?;
+    let resolved_payload = std::fs::canonicalize(payload)
+        .map_err(|_| "service payload could not be resolved".to_string())?;
+    let live_parent = live_path
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .ok_or_else(|| "service installation directory could not be resolved".to_string())?;
+    if !path_is_within(&resolved_payload, &install_dir)
+        || !paths_equal_ignore_case(&live_parent, &install_dir)
+    {
+        return Err(
+            "service repair is available only from the protected WinCommander installation"
+                .to_string(),
+        );
+    }
+    let payload_metadata = std::fs::symlink_metadata(payload)
+        .map_err(|_| "service payload could not be inspected".to_string())?;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    use std::os::windows::fs::MetadataExt;
+    if payload_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err("service payload cannot be a reparse point".to_string());
+    }
+    if let Ok(live_metadata) = std::fs::symlink_metadata(live_path) {
+        if live_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("installed service executable cannot be a reparse point".to_string());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -97,8 +195,10 @@ fn access_denied_message(result: &ScResult) -> Option<String> {
 /// as success.
 #[cfg(windows)]
 pub async fn repair() -> Result<String, String> {
+    require_elevated_administrator()?;
     let payload = resolve_service_payload()?;
     let live_path = service_exe_path()?;
+    validate_release_paths(&payload, &live_path)?;
 
     // Best-effort stop so the executable can be replaced; a missing or
     // already-stopped service is not an error here — `create`/`config`
@@ -108,6 +208,9 @@ pub async fn repair() -> Result<String, String> {
     if live_path != payload {
         std::fs::copy(&payload, &live_path)
             .map_err(|e| format!("could not install service executable: {e}"))?;
+    }
+    if file_sha256(&payload)? != file_sha256(&live_path)? {
+        return Err("installed service executable did not match the bundled payload".to_string());
     }
 
     let bin_path_value = format!("\"{}\"", live_path.display());
@@ -183,4 +286,31 @@ pub async fn repair() -> Result<String, String> {
 #[tauri::command]
 pub async fn repair_commander_service() -> Result<String, String> {
     repair().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{path_is_within, paths_equal_ignore_case};
+    use std::path::Path;
+
+    #[test]
+    fn repair_path_boundary_rejects_lookalike_and_parent_locations() {
+        let installed = Path::new(r"C:\Program Files\WinCommander");
+        assert!(path_is_within(
+            Path::new(r"C:\Program Files\WinCommander\resources\wincommander-svc.exe"),
+            installed,
+        ));
+        assert!(!path_is_within(
+            Path::new(r"C:\Program Files\WinCommander-Evil\wincommander-svc.exe"),
+            installed,
+        ));
+        assert!(!path_is_within(
+            Path::new(r"C:\Program Files\WinCommander"),
+            installed
+        ));
+        assert!(paths_equal_ignore_case(
+            Path::new(r"c:\PROGRAM FILES\wincommander"),
+            installed,
+        ));
+    }
 }

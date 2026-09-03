@@ -2,12 +2,20 @@ import { describe, expect, test } from "bun:test";
 import {
   newVaultEntry,
   newVaultPolicy,
+  VAULT_MOUNT_REASONS,
   validateVaultAccessIntent,
   vaultMountResultLabel,
   vaultPresentationLabel,
 } from "./vaultAccessTypes";
 
 describe("Vault Access service intent", () => {
+  test("keeps every actionable Rust mount reason in the renderer vocabulary", () => {
+    expect(VAULT_MOUNT_REASONS).toEqual([
+      "not_authorized", "invalid_request", "broker_unavailable", "broker_rejected",
+      "session_unavailable", "engine_unlock_failed", "engine_drive_letter_unavailable",
+      "engine_mount_failed", "acl_apply_failed", "acl_readback_failed", "dismount_failed",
+    ]);
+  });
   test("starts with the shared plus two private file-container shape", () => {
     const policy = newVaultPolicy();
     expect(policy.schema_version).toBe(1);
@@ -114,5 +122,26 @@ describe("Vault Access service intent", () => {
       drive_letter: null,
       reason: "not_authorized",
     })).toBe("Mount denied by the secure service");
+    expect(vaultMountResultLabel({
+      entry_id: "opaque-entry",
+      state: "failed",
+      presentation: "per-user",
+      drive_letter: null,
+      reason: "engine_unlock_failed",
+    })).toBe("The password, PIM, or keyfiles did not unlock this Vault");
+    expect(vaultMountResultLabel({
+      entry_id: "opaque-entry",
+      state: "failed",
+      presentation: "per-user",
+      drive_letter: null,
+      reason: "engine_drive_letter_unavailable",
+    })).toBe("The requested drive letter is already in use");
+    expect(vaultMountResultLabel({
+      entry_id: "opaque-entry",
+      state: "failed",
+      presentation: "per-user",
+      drive_letter: null,
+      reason: "broker_unavailable",
+    })).toBe("The secure Vault service is unavailable");
   });
 });

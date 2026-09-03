@@ -1,10 +1,85 @@
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
+};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
-// KT: Per-build encryption key derivation.
-// encrypt.ts writes a random 32-byte salt to scripts/.build_salt before each build.
-// build.rs reads it, XOR-obfuscates it with a compile-time mask, and emits
-// generated_key.rs into OUT_DIR so the salt never appears as a plain string in the binary.
+fn script_files(root: &Path, output: &mut Vec<std::path::PathBuf>) {
+    let entries = fs::read_dir(root).unwrap_or_else(|error| {
+        panic!(
+            "failed to read protected module directory {}: {error}",
+            root.display()
+        )
+    });
+    for entry in entries {
+        let path = entry.expect("failed to read protected module entry").path();
+        if path.is_dir() {
+            script_files(&path, output);
+        } else if path.extension().and_then(|value| value.to_str()) == Some("ps1") {
+            output.push(path);
+        }
+    }
+}
+
+fn validate_release_modules(salt_bytes: &[u8]) {
+    let key: [u8; 32] = Sha256::digest(salt_bytes).into();
+    let cipher = Aes256Gcm::new(&key.into());
+    let mut sources = Vec::new();
+    script_files(Path::new("scripts/core"), &mut sources);
+    script_files(Path::new("scripts/modules"), &mut sources);
+    assert!(
+        !sources.is_empty(),
+        "no protected backend modules were found"
+    );
+
+    for source_path in sources {
+        let encrypted_path = source_path.with_extension("enc");
+        println!("cargo:rerun-if-changed={}", source_path.display());
+        println!("cargo:rerun-if-changed={}", encrypted_path.display());
+        let source = fs::read(&source_path).unwrap_or_else(|error| {
+            panic!(
+                "failed to read protected module {}: {error}",
+                source_path.display()
+            )
+        });
+        let encrypted = fs::read(&encrypted_path).unwrap_or_else(|error| {
+            panic!(
+                "release ciphertext is missing for {}: {error}; run `bun run encrypt-backend`",
+                source_path.display()
+            )
+        });
+        assert!(
+            encrypted.len() >= 28,
+            "release ciphertext is malformed for {}",
+            source_path.display()
+        );
+        let mut payload = Vec::with_capacity(encrypted.len() - 12);
+        payload.extend_from_slice(&encrypted[28..]);
+        payload.extend_from_slice(&encrypted[12..28]);
+        let nonce = Nonce::try_from(&encrypted[..12])
+            .expect("validated release ciphertext must contain a 12-byte nonce");
+        let plaintext = cipher
+            .decrypt(&nonce, payload.as_slice())
+            .unwrap_or_else(|_| {
+                panic!(
+                    "release ciphertext authentication failed for {}; regenerate the complete protected module set",
+                    source_path.display()
+                )
+            });
+        assert_eq!(
+            plaintext,
+            source,
+            "release ciphertext is stale for {}; regenerate the complete protected module set",
+            source_path.display()
+        );
+    }
+}
+
+// Release encryption key derivation. The explicit release-preparation command
+// writes a random salt and matching ciphertext; debug builds do not consume it.
+// The salt is XOR-obfuscated into generated_key.rs so it is not stored verbatim.
 fn main() {
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_CURRENT");
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_PREVIOUS");
@@ -90,16 +165,22 @@ fn main() {
         println!("cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'");
     }
 
-    // --- Per-build encryption key generation ---
+    // --- Release encryption key generation ---
     let salt_path = Path::new("scripts/.build_salt");
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
 
-    if salt_path.exists() {
-        let salt_bytes = fs::read(salt_path).expect("Failed to read .build_salt");
+    if !is_development_profile {
+        println!("cargo:rerun-if-changed=scripts/.build_salt");
+        let salt_bytes = fs::read(salt_path).unwrap_or_else(|error| {
+            panic!(
+                "release builds require scripts/.build_salt and a complete matching ciphertext set: {error}; run `bun run encrypt-backend`"
+            )
+        });
         assert!(
             salt_bytes.len() == 32,
             ".build_salt must be exactly 32 bytes"
         );
+        validate_release_modules(&salt_bytes);
 
         // XOR mask to prevent plain salt bytes from appearing in the binary.
         // The mask is arbitrary; it only needs to be consistent between build.rs and runtime.
@@ -126,19 +207,14 @@ fn main() {
 
         let gen_path = Path::new(&out_dir).join("generated_key.rs");
         fs::write(&gen_path, generated).expect("Failed to write generated_key.rs");
-
-        // Re-run build.rs if the salt file changes
-        println!("cargo:rerun-if-changed=scripts/.build_salt");
     } else {
-        // Fallback: if no .build_salt exists (first clone, CI without encrypt step),
-        // emit a dummy that will fail decryption with a clear error.
-        let generated = "// Auto-generated by build.rs — no .build_salt found\n\
+        // Debug builds use the plaintext source path in backend.rs and never
+        // consult or rewrite release encryption artifacts.
+        let generated = "// Auto-generated by build.rs — debug plaintext module path\n\
              pub const OBFUSCATED_SALT: [u8; 32] = [0u8; 32];\n\
              pub const XOR_MASK: [u8; 32] = [0u8; 32];\n";
         let gen_path = Path::new(&out_dir).join("generated_key.rs");
         fs::write(&gen_path, generated).expect("Failed to write generated_key.rs");
-        println!("cargo:rerun-if-changed=scripts/.build_salt");
-        println!("cargo:warning=No .build_salt found — modules will fail to decrypt. Run `bun run encrypt-backend` first.");
     }
 
     tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows))

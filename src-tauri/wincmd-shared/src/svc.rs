@@ -68,11 +68,42 @@ pub const SVC_PIPE_NAME: &str = r"\\.\pipe\wincmd-svc";
 /// before attempting to parse feature-specific payloads.  Bumped on
 /// incompatible wire-format changes only (not on every new `svc.*` verb).
 pub const SVC_PROTOCOL_VERSION: &str = "wincmd-svc-v1";
+pub const SVC_WINDOWS_SERVICE_NAME: &str = "WinCommanderSvc";
 
 /// Privileged RPC for the small, typed machine-setting allow-list.  This is
 /// deliberately not a generic "apply tweak" endpoint: callers cannot supply
 /// registry paths, shell commands, firewall rules, ACLs, or arbitrary JSON.
 pub const APPLY_MACHINE_SETTING_VERB: &str = "svc.apply.machine_setting";
+
+/// Exact verbs implemented by the current service dispatcher.
+///
+/// Existence is deliberately independent from [`classify_verb`]. The latter
+/// answers how much authority a caller needs; it must never make an unknown
+/// string executable merely because the caller is privileged.
+pub fn is_known_verb(feature_id: &str) -> bool {
+    matches!(
+        feature_id,
+        "svc.status"
+            | "svc.get_settings"
+            | "svc.ping"
+            | "svc.health"
+            | APPLY_MACHINE_SETTING_VERB
+            | "svc.clipboard.get_policy"
+            | "svc.clipboard.report_event"
+            | "svc.clipboard.set_enabled"
+            | "svc.policy.install_epoch"
+            | "svc.vault.get_policy"
+            | "svc.vault.get_status"
+            | "svc.vault.apply_policy"
+            | "svc.vault.authorize_mount"
+            | "svc.vault.mount"
+            | "svc.vault.create_personal"
+            | "svc.vault.unmount"
+            | "svc.vault.list_authorized"
+            | "svc.vault.capabilities"
+            | "svc.vault.reconcile_access_groups"
+    )
+}
 
 /// A machine-owned Windows setting the service may change.
 ///
@@ -265,10 +296,15 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // client cannot provide a path, SID, ACL, or presentation decision.
         "svc.vault.authorize_mount"
         | "svc.vault.mount"
-        | "svc.vault.create_personal"
         | "svc.vault.unmount"
         | "svc.vault.list_authorized"
         | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
+
+        // Personal creation now has service-owned request correlation, but the
+        // service still cannot retain one file handle across the separate Pro
+        // engine creation. Keep it administrator-only until that remaining
+        // substitution boundary is proven safe for an ordinary user.
+        "svc.vault.create_personal" => CapabilityClass::Privileged,
 
         // Creates/updates a Windows local group and sets its EXACT
         // membership from admin-supplied SIDs (the Access control UI's
@@ -334,6 +370,7 @@ mod tests {
             "svc.patch_settings",
             "svc.dispatch",
             "svc.set_fleet_enabled",
+            "svc.vault.create_personal",
             "svc.vault.reconcile_access_groups",
             APPLY_MACHINE_SETTING_VERB,
         ] {
@@ -375,40 +412,81 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_allowlist_is_separate_from_capability_classification() {
+        for verb in [
+            "svc.status",
+            "svc.get_settings",
+            "svc.ping",
+            "svc.health",
+            APPLY_MACHINE_SETTING_VERB,
+            "svc.clipboard.get_policy",
+            "svc.clipboard.report_event",
+            "svc.clipboard.set_enabled",
+            "svc.policy.install_epoch",
+            "svc.vault.get_policy",
+            "svc.vault.get_status",
+            "svc.vault.apply_policy",
+            "svc.vault.authorize_mount",
+            "svc.vault.mount",
+            "svc.vault.create_personal",
+            "svc.vault.unmount",
+            "svc.vault.list_authorized",
+            "svc.vault.capabilities",
+            "svc.vault.reconcile_access_groups",
+        ] {
+            assert!(
+                is_known_verb(verb),
+                "missing dispatch allowlist entry for {verb}"
+            );
+        }
+        for verb in [
+            "svc.totally_unknown_verb",
+            "svc.dispatch",
+            "svc.patch_settings",
+            "svc.set_fleet_enabled",
+            "svc.ink_receipt.get_policy",
+        ] {
+            assert!(
+                !is_known_verb(verb),
+                "unimplemented verb must fail closed: {verb}"
+            );
+        }
+        assert_eq!(
+            classify_verb("svc.totally_unknown_verb"),
+            CapabilityClass::Privileged,
+            "classification remains fail-closed even though existence is checked separately",
+        );
+    }
+
+    #[test]
     fn machine_setting_contract_rejects_mismatched_or_unbounded_values() {
-        assert!(
-            ApplyMachineSettingRequest {
-                setting: MachineSettingId::RdpIncoming,
-                value: MachineSettingValue::RdpIncoming {
-                    enabled: true,
-                    idle_timeout_seconds: 900,
-                },
-            }
-            .validate()
-            .is_ok()
-        );
-        assert!(
-            ApplyMachineSettingRequest {
-                setting: MachineSettingId::RdpIncoming,
-                value: MachineSettingValue::RdpIncoming {
-                    enabled: true,
-                    idle_timeout_seconds: 9,
-                },
-            }
-            .validate()
-            .is_err()
-        );
-        assert!(
-            ApplyMachineSettingRequest {
-                setting: MachineSettingId::RdpLock,
-                value: MachineSettingValue::RdpIncoming {
-                    enabled: true,
-                    idle_timeout_seconds: 900,
-                },
-            }
-            .validate()
-            .is_err()
-        );
+        assert!(ApplyMachineSettingRequest {
+            setting: MachineSettingId::RdpIncoming,
+            value: MachineSettingValue::RdpIncoming {
+                enabled: true,
+                idle_timeout_seconds: 900,
+            },
+        }
+        .validate()
+        .is_ok());
+        assert!(ApplyMachineSettingRequest {
+            setting: MachineSettingId::RdpIncoming,
+            value: MachineSettingValue::RdpIncoming {
+                enabled: true,
+                idle_timeout_seconds: 9,
+            },
+        }
+        .validate()
+        .is_err());
+        assert!(ApplyMachineSettingRequest {
+            setting: MachineSettingId::RdpLock,
+            value: MachineSettingValue::RdpIncoming {
+                enabled: true,
+                idle_timeout_seconds: 900,
+            },
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]

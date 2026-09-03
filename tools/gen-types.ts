@@ -50,6 +50,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -124,6 +125,19 @@ function canonical(raw: string): string {
   return lines.join("\n") + "\n";
 }
 
+// ts-rs writes crate-local binding files as a side effect of both generation
+// and --check. Keep those emitted files whitespace-clean too; one of them is a
+// tracked compatibility artifact and otherwise makes `git diff --check` fail
+// immediately after a successful generated-type check.
+function canonicalEmitted(raw: string): string {
+  const lines = raw
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((l) => l.replace(/[ \t]+$/g, ""));
+  while (lines.length && lines[lines.length - 1] === "") lines.pop();
+  return lines.join("\n") + "\n";
+}
+
 // Merges ts-rs output fragments that legitimately share one `export_to`
 // filename but land in different crates' `bindings/` dirs (see the header
 // comment's `wincmd-clip-rules` note). Each fragment is a full ts-rs file:
@@ -173,6 +187,29 @@ function mergeFleetFragments(fragments: string[]): string {
 
 const check = process.argv.includes("--check");
 
+const emittedSnapshots = new Map<string, string | null>();
+if (check) {
+  for (const { rel, bindingsDirs } of FILES) {
+    for (const bindingsDir of bindingsDirs) {
+      const emittedPath = join(bindingsDir, rel);
+      emittedSnapshots.set(
+        emittedPath,
+        existsSync(emittedPath) ? readFileSync(emittedPath, "utf8") : null,
+      );
+    }
+  }
+  process.on("exit", () => {
+    for (const [emittedPath, original] of emittedSnapshots) {
+      if (original === null) {
+        if (existsSync(emittedPath)) unlinkSync(emittedPath);
+      } else {
+        mkdirSync(dirname(emittedPath), { recursive: true });
+        writeFileSync(emittedPath, original);
+      }
+    }
+  });
+}
+
 runCodegen();
 
 let drift = false;
@@ -184,10 +221,16 @@ for (const { rel, bindingsDirs } of FILES) {
       process.exit(1);
     }
   }
+  const emittedFragments = emittedPaths.map((emittedPath) => {
+    const raw = readFileSync(emittedPath, "utf8");
+    const normalized = canonicalEmitted(raw);
+    if (!check && raw !== normalized) writeFileSync(emittedPath, normalized);
+    return normalized;
+  });
   const raw =
-    emittedPaths.length === 1
-      ? readFileSync(emittedPaths[0], "utf8")
-      : mergeFleetFragments(emittedPaths.map((p) => readFileSync(p, "utf8")));
+    emittedFragments.length === 1
+      ? emittedFragments[0]
+      : mergeFleetFragments(emittedFragments);
   const want = canonical(raw);
   const outPath = join(OUT_DIR, rel);
 

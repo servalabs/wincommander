@@ -4,9 +4,7 @@
 // && vite) with real parallelism wherever the dependency graph allows it.
 //
 // Real dependencies (verified, not assumed):
-//   - kill:dev, `bun install`, and encrypt-backend have ZERO dependencies on
-//     each other — encrypt.ts and build-pro.ts import only node: builtins +
-//     a local module, so neither needs node_modules to run.
+//   - kill:dev and `bun install` have no dependency on each other.
 //   - vite needs `bun install` done (its own deps) AND kill:dev done (frees
 //     port 1420 — vite.config.ts sets strictPort: true, so an occupied port
 //     aborts startup outright).
@@ -16,13 +14,9 @@
 //     at compile time. commander-free's Rust build doesn't statically link
 //     the Pro sidecar; it only needs the exe to exist on disk at RUNTIME,
 //     when a Pro-gated feature is actually used.
-//   - Tauri's `beforeDevCommand` + `devUrl` polling means Tauri starts
-//     compiling commander-free (which embeds the .enc files via
-//     include_bytes!) the MOMENT vite responds on :1420 — running
-//     concurrently with this script's own vite process, not waiting for it
-//     to exit. So encrypt-backend MUST be fully finished before vite starts
-//     (else Tauri's Rust compile could embed stale/partial .enc bytes), even
-//     though encrypt-backend and vite have no direct data dependency.
+//   - Debug commander-free builds embed the plaintext source modules directly.
+//     Encryption is an explicit release-preparation step, so an ordinary dev
+//     launch never rewrites the ignored salt and ciphertext tree.
 //
 // Once the independent preparation steps finish, build Pro before exposing
 // Vite's dev URL. Tauri starts the desktop app as soon as that URL responds;
@@ -78,7 +72,7 @@ function freeVitePort(): void {
 }
 
 async function main(): Promise<void> {
-  console.log("[dev-server] kill:dev, bun install, encrypt-backend running in parallel...");
+  console.log("[dev-server] kill:dev and bun install running in parallel...");
 
   const steps: Array<{ name: string; promise: Promise<number> }> = [
     {
@@ -89,7 +83,6 @@ async function main(): Promise<void> {
       ]),
     },
     { name: "bun install", promise: run("[install]", "bun", ["install", "--frozen-lockfile"]) },
-    { name: "encrypt-backend", promise: run("[encrypt]", "bun", ["run", "tools/encrypt.ts"]) },
   ];
 
   const results = await Promise.all(steps.map((s) => s.promise));
@@ -102,8 +95,8 @@ async function main(): Promise<void> {
 
   console.log(
     FREE_ONLY
-      ? "[dev-server] kill:dev/install/encrypt done — starting vite..."
-      : "[dev-server] kill:dev/install/encrypt done — building Pro before starting vite...",
+      ? "[dev-server] kill:dev/install done — starting vite..."
+      : "[dev-server] kill:dev/install done — building Pro before starting vite...",
   );
 
   if (!FREE_ONLY) {

@@ -507,6 +507,17 @@ fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
 mod tests {
     use super::*;
 
+    fn canonical_fixture_path(path: &Path) -> PathBuf {
+        let canonical = fs::canonicalize(path).unwrap();
+        #[cfg(windows)]
+        {
+            let value = canonical.to_string_lossy();
+            PathBuf::from(value.strip_prefix(r"\\?\").unwrap_or(&value))
+        }
+        #[cfg(not(windows))]
+        canonical
+    }
+
     #[cfg(windows)]
     fn create_junction(link: &Path, target: &Path) {
         let output = std::process::Command::new("cmd")
@@ -562,7 +573,8 @@ mod tests {
     #[test]
     fn recursive_rules_return_only_named_caches_below_the_anchor() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("Partitions");
+        // Use one ordinary canonical spelling even when Windows TEMP is aliased.
+        let root = canonical_fixture_path(temp.path()).join("Partitions");
         let allowed = root.join("preview").join("Cache");
         let excluded = root.join("preview").join("IndexedDB").join("Cache");
         fs::create_dir_all(&allowed).unwrap();
@@ -589,7 +601,7 @@ mod tests {
     #[test]
     fn recursive_rules_bound_broad_directory_discovery() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("Partitions");
+        let root = canonical_fixture_path(temp.path()).join("Partitions");
         fs::create_dir_all(root.join("one")).unwrap();
         fs::create_dir_all(root.join("two")).unwrap();
         fs::create_dir_all(root.join("three")).unwrap();

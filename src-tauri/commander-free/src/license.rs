@@ -352,7 +352,7 @@ fn claims_allow_paid_update(claims: &LicenseClaims, now: u64) -> bool {
     }
     claims
         .updates_entitled_until
-        .map_or(true, |updates_entitled_until| updates_entitled_until > now)
+        .is_none_or(|updates_entitled_until| updates_entitled_until > now)
 }
 
 /// Backend authority for downloading or installing a paid build. Keeping

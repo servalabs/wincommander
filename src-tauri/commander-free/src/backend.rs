@@ -360,10 +360,12 @@ pub fn register_file_search_commands() {
     ]);
 }
 
+#[cfg(not(wincommander_dev_profile))]
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
+#[cfg(not(wincommander_dev_profile))]
 use sha2::{Digest, Sha256};
 
 fn normalize_sidecar_error(raw: String) -> String {
@@ -379,8 +381,9 @@ fn normalize_sidecar_error(raw: String) -> String {
         .to_string()
 }
 
-// KT: Salt is generated per-build by build.rs and XOR-obfuscated so it never
-// appears as a plain string in the binary. See build.rs for the generation logic.
+// Release-only key material. Debug builds use the source modules below and do
+// not depend on the ignored release-encryption artifacts.
+#[cfg(not(wincommander_dev_profile))]
 mod generated_key {
     include!(concat!(env!("OUT_DIR"), "/generated_key.rs"));
 }
@@ -388,6 +391,7 @@ mod generated_key {
 static MODULE_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 // Derive AES key from per-build salt (deobfuscated at runtime)
+#[cfg(not(wincommander_dev_profile))]
 fn derive_key() -> [u8; 32] {
     // Deobfuscate: XOR the stored bytes with the mask to recover the original salt
     let salt: Vec<u8> = generated_key::OBFUSCATED_SALT
@@ -402,7 +406,8 @@ fn derive_key() -> [u8; 32] {
 }
 
 // Decrypt a module using AES-256-GCM
-fn decrypt_module(encrypted: &[u8]) -> Result<String, String> {
+#[cfg(not(wincommander_dev_profile))]
+fn decode_module(encrypted: &[u8]) -> Result<String, String> {
     if encrypted.len() < 28 {
         return Err("Invalid encrypted data: too short".to_string());
     }
@@ -420,8 +425,8 @@ fn decrypt_module(encrypted: &[u8]) -> Result<String, String> {
     payload.extend_from_slice(ciphertext);
     payload.extend_from_slice(auth_tag);
 
-    let nonce = Nonce::from_slice(iv);
-    let plaintext = cipher.decrypt(nonce, payload.as_slice()).map_err(|e| {
+    let nonce = Nonce::try_from(iv).map_err(|_| "Invalid encrypted nonce".to_string())?;
+    let plaintext = cipher.decrypt(&nonce, payload.as_slice()).map_err(|e| {
         crate::log_message("error", &format!("[Backend] Decryption failed: {}", e));
         format!("Decryption failed: {}", e)
     })?;
@@ -442,6 +447,13 @@ fn decrypt_module(encrypted: &[u8]) -> Result<String, String> {
         script = script.trim_start_matches('\u{FEFF}').to_string();
     }
     Ok(script)
+}
+
+#[cfg(wincommander_dev_profile)]
+fn decode_module(source: &[u8]) -> Result<String, String> {
+    let script = std::str::from_utf8(source)
+        .map_err(|error| format!("Backend source is not valid UTF-8: {error}"))?;
+    Ok(script.trim_start_matches('\u{FEFF}').to_string())
 }
 
 #[tauri::command]
@@ -547,64 +559,203 @@ fn build_powershell_command() -> (Command, String) {
     (cmd, exe)
 }
 
-// Embedded encrypted modules (compile-time inclusion)
-const CORE_UTILS: &[u8] = include_bytes!("../scripts/core/utils.enc");
-const CORE_ROUTER: &[u8] = include_bytes!("../scripts/core/router.enc");
-const PRIVACY_TELEMETRY: &[u8] = include_bytes!("../scripts/modules/privacy/telemetry.enc");
-const NETWORK_HOSTS: &[u8] = include_bytes!("../scripts/modules/network/hosts.enc");
-const NETWORK_BLOCKLISTS_DATA: &[u8] =
-    include_bytes!("../scripts/modules/network/blocklists-data.enc");
-const APPS_WINGET: &[u8] = include_bytes!("../scripts/modules/apps/winget.enc");
-const APPS_UNINSTALLER: &[u8] = include_bytes!("../scripts/modules/apps/uninstaller.enc");
-const APPS_BCU_UNINSTALLER: &[u8] = include_bytes!("../scripts/modules/apps/bcu-uninstaller.enc");
-const SYSTEM_ACTIVATION: &[u8] = include_bytes!("../scripts/modules/identity/activation.enc");
-const SYSTEM_MAINTENANCE: &[u8] = include_bytes!("../scripts/modules/tweaks/maintenance.enc");
-const SYSTEM_INFO: &[u8] = include_bytes!("../scripts/modules/dashboard/info.enc");
-const SYSTEM_SECURITY: &[u8] = include_bytes!("../scripts/modules/tweaks/security.enc");
-const TWEAKS_SYSTEM: &[u8] = include_bytes!("../scripts/modules/tweaks/system.enc");
-const TWEAKS_SERVER: &[u8] = include_bytes!("../scripts/modules/tweaks/server.enc");
-const TWEAKS_UI: &[u8] = include_bytes!("../scripts/modules/tweaks/ui.enc");
-const NETWORK_FIREWALL: &[u8] = include_bytes!("../scripts/modules/network/firewall.enc");
-const NETWORK_DNS: &[u8] = include_bytes!("../scripts/modules/network/dns.enc");
-const NETWORK_PORTS: &[u8] = include_bytes!("../scripts/modules/network/ports.enc");
-const NETWORK_ADAPTERS: &[u8] = include_bytes!("../scripts/modules/network/adapters.enc");
-const PRIVACY_CLEANUP: &[u8] = include_bytes!("../scripts/modules/privacy/cleanup.enc");
-const SYSTEM_STARTUP: &[u8] = include_bytes!("../scripts/modules/dashboard/startup.enc");
-const STORAGE_VOLUMES: &[u8] = include_bytes!("../scripts/modules/vault/volumes.enc");
-const STORAGE_RAMDISKS: &[u8] = include_bytes!("../scripts/modules/vault/ramdisks.enc");
-const IDENTITY_BRANDING: &[u8] = include_bytes!("../scripts/modules/identity/branding.enc");
-const PRIVACY_SHIELD: &[u8] = include_bytes!("../scripts/modules/privacy/privacy_shield.enc");
-const TWEAKS_STARTUP_MANAGER: &[u8] =
-    include_bytes!("../scripts/modules/tweaks/startup-manager.enc");
+// Debug embeds editable source for a stable iteration loop. Release embeds only
+// authenticated ciphertext; build.rs proves every artifact matches its source.
+macro_rules! embedded_module {
+    ($source:literal, $encrypted:literal) => {{
+        #[cfg(wincommander_dev_profile)]
+        {
+            include_bytes!($source) as &[u8]
+        }
+        #[cfg(not(wincommander_dev_profile))]
+        {
+            include_bytes!($encrypted) as &[u8]
+        }
+    }};
+}
+
+const CORE_UTILS: &[u8] =
+    embedded_module!("../scripts/core/utils.ps1", "../scripts/core/utils.enc");
+const CORE_ROUTER: &[u8] =
+    embedded_module!("../scripts/core/router.ps1", "../scripts/core/router.enc");
+const PRIVACY_TELEMETRY: &[u8] = embedded_module!(
+    "../scripts/modules/privacy/telemetry.ps1",
+    "../scripts/modules/privacy/telemetry.enc"
+);
+const NETWORK_HOSTS: &[u8] = embedded_module!(
+    "../scripts/modules/network/hosts.ps1",
+    "../scripts/modules/network/hosts.enc"
+);
+const NETWORK_BLOCKLISTS_DATA: &[u8] = embedded_module!(
+    "../scripts/modules/network/blocklists-data.ps1",
+    "../scripts/modules/network/blocklists-data.enc"
+);
+const APPS_WINGET: &[u8] = embedded_module!(
+    "../scripts/modules/apps/winget.ps1",
+    "../scripts/modules/apps/winget.enc"
+);
+const APPS_UNINSTALLER: &[u8] = embedded_module!(
+    "../scripts/modules/apps/uninstaller.ps1",
+    "../scripts/modules/apps/uninstaller.enc"
+);
+const APPS_BCU_UNINSTALLER: &[u8] = embedded_module!(
+    "../scripts/modules/apps/bcu-uninstaller.ps1",
+    "../scripts/modules/apps/bcu-uninstaller.enc"
+);
+const SYSTEM_ACTIVATION: &[u8] = embedded_module!(
+    "../scripts/modules/identity/activation.ps1",
+    "../scripts/modules/identity/activation.enc"
+);
+const SYSTEM_MAINTENANCE: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/maintenance.ps1",
+    "../scripts/modules/tweaks/maintenance.enc"
+);
+const SYSTEM_INFO: &[u8] = embedded_module!(
+    "../scripts/modules/dashboard/info.ps1",
+    "../scripts/modules/dashboard/info.enc"
+);
+const SYSTEM_SECURITY: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/security.ps1",
+    "../scripts/modules/tweaks/security.enc"
+);
+const TWEAKS_SYSTEM: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/system.ps1",
+    "../scripts/modules/tweaks/system.enc"
+);
+const TWEAKS_SERVER: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/server.ps1",
+    "../scripts/modules/tweaks/server.enc"
+);
+const TWEAKS_UI: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/ui.ps1",
+    "../scripts/modules/tweaks/ui.enc"
+);
+const NETWORK_FIREWALL: &[u8] = embedded_module!(
+    "../scripts/modules/network/firewall.ps1",
+    "../scripts/modules/network/firewall.enc"
+);
+const NETWORK_DNS: &[u8] = embedded_module!(
+    "../scripts/modules/network/dns.ps1",
+    "../scripts/modules/network/dns.enc"
+);
+const NETWORK_PORTS: &[u8] = embedded_module!(
+    "../scripts/modules/network/ports.ps1",
+    "../scripts/modules/network/ports.enc"
+);
+const NETWORK_ADAPTERS: &[u8] = embedded_module!(
+    "../scripts/modules/network/adapters.ps1",
+    "../scripts/modules/network/adapters.enc"
+);
+const PRIVACY_CLEANUP: &[u8] = embedded_module!(
+    "../scripts/modules/privacy/cleanup.ps1",
+    "../scripts/modules/privacy/cleanup.enc"
+);
+const SYSTEM_STARTUP: &[u8] = embedded_module!(
+    "../scripts/modules/dashboard/startup.ps1",
+    "../scripts/modules/dashboard/startup.enc"
+);
+const STORAGE_VOLUMES: &[u8] = embedded_module!(
+    "../scripts/modules/vault/volumes.ps1",
+    "../scripts/modules/vault/volumes.enc"
+);
+const STORAGE_RAMDISKS: &[u8] = embedded_module!(
+    "../scripts/modules/vault/ramdisks.ps1",
+    "../scripts/modules/vault/ramdisks.enc"
+);
+const IDENTITY_BRANDING: &[u8] = embedded_module!(
+    "../scripts/modules/identity/branding.ps1",
+    "../scripts/modules/identity/branding.enc"
+);
+const PRIVACY_SHIELD: &[u8] = embedded_module!(
+    "../scripts/modules/privacy/privacy_shield.ps1",
+    "../scripts/modules/privacy/privacy_shield.enc"
+);
+const TWEAKS_STARTUP_MANAGER: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/startup-manager.ps1",
+    "../scripts/modules/tweaks/startup-manager.enc"
+);
 // ── Granular tweak modules ───────────────────────────────────────────
-const TWEAKS_PERFORMANCE: &[u8] = include_bytes!("../scripts/modules/tweaks/performance.enc");
-const TWEAKS_GPU: &[u8] = include_bytes!("../scripts/modules/tweaks/gpu.enc");
-const TWEAKS_POWER: &[u8] = include_bytes!("../scripts/modules/tweaks/power.enc");
-const TWEAKS_UI_GRANULAR: &[u8] = include_bytes!("../scripts/modules/tweaks/ui-granular.enc");
-const TWEAKS_SCHEDULED_TASKS: &[u8] =
-    include_bytes!("../scripts/modules/tweaks/scheduled-tasks.enc");
-const TWEAKS_SERVICE_MANAGER: &[u8] =
-    include_bytes!("../scripts/modules/tweaks/service-manager.enc");
-const TWEAKS_LOCAL_USERS: &[u8] = include_bytes!("../scripts/modules/tweaks/local-users.enc");
-const TWEAKS_DISK_CLEANUP_GRANULAR: &[u8] =
-    include_bytes!("../scripts/modules/tweaks/disk-cleanup-granular.enc");
-const PRODUCTIVITY_MODULE: &[u8] = include_bytes!("../scripts/modules/productivity.enc");
-const CORE_SETTINGS_BRIDGE: &[u8] = include_bytes!("../scripts/core/settings-bridge.enc");
-const DEPENDENCIES_MODULE: &[u8] =
-    include_bytes!("../scripts/modules/dependencies/dependencies.enc");
-const CONTINGENCY_OPS: &[u8] = include_bytes!("../scripts/modules/contingency/ops.enc");
+const TWEAKS_PERFORMANCE: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/performance.ps1",
+    "../scripts/modules/tweaks/performance.enc"
+);
+const TWEAKS_GPU: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/gpu.ps1",
+    "../scripts/modules/tweaks/gpu.enc"
+);
+const TWEAKS_POWER: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/power.ps1",
+    "../scripts/modules/tweaks/power.enc"
+);
+const TWEAKS_UI_GRANULAR: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/ui-granular.ps1",
+    "../scripts/modules/tweaks/ui-granular.enc"
+);
+const TWEAKS_SCHEDULED_TASKS: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/scheduled-tasks.ps1",
+    "../scripts/modules/tweaks/scheduled-tasks.enc"
+);
+const TWEAKS_SERVICE_MANAGER: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/service-manager.ps1",
+    "../scripts/modules/tweaks/service-manager.enc"
+);
+const TWEAKS_LOCAL_USERS: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/local-users.ps1",
+    "../scripts/modules/tweaks/local-users.enc"
+);
+const TWEAKS_DISK_CLEANUP_GRANULAR: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/disk-cleanup-granular.ps1",
+    "../scripts/modules/tweaks/disk-cleanup-granular.enc"
+);
+const PRODUCTIVITY_MODULE: &[u8] = embedded_module!(
+    "../scripts/modules/productivity.ps1",
+    "../scripts/modules/productivity.enc"
+);
+const CORE_SETTINGS_BRIDGE: &[u8] = embedded_module!(
+    "../scripts/core/settings-bridge.ps1",
+    "../scripts/core/settings-bridge.enc"
+);
+const DEPENDENCIES_MODULE: &[u8] = embedded_module!(
+    "../scripts/modules/dependencies/dependencies.ps1",
+    "../scripts/modules/dependencies/dependencies.enc"
+);
+const CONTINGENCY_OPS: &[u8] = embedded_module!(
+    "../scripts/modules/contingency/ops.ps1",
+    "../scripts/modules/contingency/ops.enc"
+);
 // P3: activity-reduction toggles (DN-09)
-const TWEAKS_PREVENTION: &[u8] = include_bytes!("../scripts/modules/tweaks/prevention.enc");
-const AI_CONTROL_COMMON: &[u8] = include_bytes!("../scripts/modules/tweaks/ai-control-common.enc");
-const AI_CONTROL_POLICIES: &[u8] =
-    include_bytes!("../scripts/modules/tweaks/ai-control-policies.enc");
-const AI_CONTROL_APPS: &[u8] = include_bytes!("../scripts/modules/tweaks/ai-control-apps.enc");
-const AI_CONTROL_SHELL: &[u8] = include_bytes!("../scripts/modules/tweaks/ai-control-shell.enc");
-const AI_CONTROL_REMOVAL: &[u8] =
-    include_bytes!("../scripts/modules/tweaks/ai-control-removal.enc");
-const AI_CONTROL_MAINTENANCE: &[u8] =
-    include_bytes!("../scripts/modules/tweaks/ai-control-maintenance.enc");
-const AI_CONTROL: &[u8] = include_bytes!("../scripts/modules/tweaks/ai-control.enc");
+const TWEAKS_PREVENTION: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/prevention.ps1",
+    "../scripts/modules/tweaks/prevention.enc"
+);
+const AI_CONTROL_COMMON: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/ai-control-common.ps1",
+    "../scripts/modules/tweaks/ai-control-common.enc"
+);
+const AI_CONTROL_POLICIES: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/ai-control-policies.ps1",
+    "../scripts/modules/tweaks/ai-control-policies.enc"
+);
+const AI_CONTROL_APPS: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/ai-control-apps.ps1",
+    "../scripts/modules/tweaks/ai-control-apps.enc"
+);
+const AI_CONTROL_SHELL: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/ai-control-shell.ps1",
+    "../scripts/modules/tweaks/ai-control-shell.enc"
+);
+const AI_CONTROL_REMOVAL: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/ai-control-removal.ps1",
+    "../scripts/modules/tweaks/ai-control-removal.enc"
+);
+const AI_CONTROL_MAINTENANCE: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/ai-control-maintenance.ps1",
+    "../scripts/modules/tweaks/ai-control-maintenance.enc"
+);
+const AI_CONTROL: &[u8] = embedded_module!(
+    "../scripts/modules/tweaks/ai-control.ps1",
+    "../scripts/modules/tweaks/ai-control.enc"
+);
 
 #[derive(Clone, Copy)]
 struct SensitiveCommand {
@@ -2722,7 +2873,7 @@ fn load_module(module_name: &str) -> Result<String, String> {
         _ => return Err(format!("Unknown module: {}", module_name)),
     };
 
-    let decrypted = decrypt_module(encrypted)?;
+    let decrypted = decode_module(encrypted)?;
     cache.insert(module_name.to_string(), decrypted.clone());
 
     Ok(decrypted)

@@ -163,11 +163,25 @@ fn remove_with_retries(path: &Path, directory: bool) -> io::Result<()> {
     Err(last_error.unwrap_or_else(|| io::Error::other("erase removal failed")))
 }
 
+#[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)]
+fn clear_readonly(permissions: &mut fs::Permissions) {
+    // This helper ships only for Windows Explorer, where readonly is a file attribute.
+    permissions.set_readonly(false);
+}
+
+#[cfg(unix)]
+fn clear_readonly(permissions: &mut fs::Permissions) {
+    use std::os::unix::fs::PermissionsExt;
+
+    permissions.set_mode(permissions.mode() | 0o200);
+}
+
 fn make_writable(path: &Path) -> io::Result<()> {
     let metadata = fs::metadata(path)?;
     let mut permissions = metadata.permissions();
     if permissions.readonly() {
-        permissions.set_readonly(false);
+        clear_readonly(&mut permissions);
         fs::set_permissions(path, permissions)?;
     }
     Ok(())
