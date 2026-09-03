@@ -1,8 +1,7 @@
 name: invariants
 
-# Tier-split CI invariants. Runs on PRs to main and on manual dispatch.
-# Does not run on every push to main — that was burning Actions minutes
-# on direct commits; cut a release or dispatch this workflow when you want it.
+# Tier-split CI invariants. Runs on relevant PRs and trusted pushes to main,
+# with path selection and concurrency cancellation to bound Actions usage.
 # of the rules in ref/architecture.md (Open-Core Architecture — CI invariants) before they
 # merge. Three jobs:
 #
@@ -21,8 +20,40 @@ name: invariants
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/invariants.yml"
+      - "package.json"
+      - "bun.lock"
+      - "rust-toolchain.toml"
+      - ".githooks/**"
+      - "tsconfig*.json"
+      - "vite.config.*"
+      - "eslint.config.*"
+      - ".gitleaks.toml"
+      - "src/**"
+      - "src-tauri/**"
+      - "tools/**"
   pull_request:
     branches: [main]
+    paths:
+      - ".github/workflows/invariants.yml"
+      - "package.json"
+      - "bun.lock"
+      - "rust-toolchain.toml"
+      - ".githooks/**"
+      - "tsconfig*.json"
+      - "vite.config.*"
+      - "eslint.config.*"
+      - ".gitleaks.toml"
+      - "src/**"
+      - "src-tauri/**"
+      - "tools/**"
+
+concurrency:
+  group: invariants-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   ts-schema:
@@ -133,6 +164,7 @@ jobs:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile
       - run: bun run gen:types:check
+      - run: git diff --check && git diff --exit-code
 
   cargo-check:
     name: Rust cargo check
@@ -148,14 +180,6 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           workspaces: src-tauri
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.0
-      - name: Generate encrypted backend modules
-        working-directory: .
-        run: |
-          bun install --frozen-lockfile
-          bun run encrypt-backend
       - run: cargo check --all-targets
 
   # F-18 — exercise the in-repo #[cfg(test)] units (webhook HMAC verification,
@@ -177,14 +201,6 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           workspaces: src-tauri
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.0
-      - name: Generate encrypted backend modules
-        working-directory: .
-        run: |
-          bun install --frozen-lockfile
-          bun run encrypt-backend
       - run: cargo test --workspace --no-fail-fast
 
   # NOTE (L2): the Cloudflare licence worker lives in the commander-pro repo, so
@@ -247,14 +263,6 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           workspaces: src-tauri
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: 1.4.0
-      - name: Generate encrypted backend modules
-        working-directory: .
-        run: |
-          bun install --frozen-lockfile
-          bun run encrypt-backend
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   # F-11 — dependency-CVE audit for both Rust workspaces and npm. This blocks
@@ -366,6 +374,9 @@ jobs:
           pwsh -ExecutionPolicy Bypass -File tools/strings-grep-free.ps1 `
             -Binary src-tauri/target/release/wincommander-free.exe `
             -HardGate
+      - name: Reject protected backend plaintext in the release binary
+        shell: pwsh
+        run: pwsh -ExecutionPolicy Bypass -File tools/check-backend-leakage.ps1
   #
   # reproducible-build:
   #   name: Reproducible build (Free + Pro)

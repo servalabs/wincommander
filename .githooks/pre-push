@@ -1,0 +1,11 @@
+#!/bin/sh
+remote_name="$1"
+base=""
+while read local_ref local_sha remote_ref remote_sha; do
+  case "$remote_sha" in
+    0000000000000000000000000000000000000000) ;;
+    *) base="$remote_sha"; break ;;
+  esac
+done
+
+exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/validate.ps1 -Mode PrePush -Base "$base"
