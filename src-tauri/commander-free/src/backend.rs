@@ -4393,12 +4393,15 @@ fn context_shred_icon_path_for_mode(
             .join(CONTEXT_SHRED_ICON)
     };
 
-    icon_path.is_file().then_some(icon_path.clone()).ok_or_else(|| {
-        format!(
-            "WinCommander context-delete icon is missing: {}",
-            icon_path.display()
-        )
-    })
+    icon_path
+        .is_file()
+        .then_some(icon_path.clone())
+        .ok_or_else(|| {
+            format!(
+                "WinCommander context-delete icon is missing: {}",
+                icon_path.display()
+            )
+        })
 }
 
 fn context_shred_icon_value(app_exe: &std::path::Path) -> Result<String, String> {
@@ -4506,7 +4509,10 @@ mod context_shred_verb_tests {
         let helper = temporary.path().join(CONTEXT_SHRED_HELPER);
         std::fs::write(&helper, b"helper").unwrap();
 
-        assert_eq!(context_shred_helper_path_for_mode(&app, true).unwrap(), helper);
+        assert_eq!(
+            context_shred_helper_path_for_mode(&app, true).unwrap(),
+            helper
+        );
     }
 
     #[cfg(debug_assertions)]
@@ -4518,7 +4524,11 @@ mod context_shred_verb_tests {
         let resources = temporary.path().join("resources");
         std::fs::create_dir(&resources).unwrap();
         std::fs::write(&debug_helper, b"debug helper").unwrap();
-        std::fs::write(resources.join(CONTEXT_SHRED_HELPER), b"stale packaged helper").unwrap();
+        std::fs::write(
+            resources.join(CONTEXT_SHRED_HELPER),
+            b"stale packaged helper",
+        )
+        .unwrap();
 
         assert_eq!(
             context_shred_helper_path_for_mode(&app, true).unwrap(),
@@ -5903,11 +5913,7 @@ async fn run_destruct_step(
         // is the user-facing knob for browser coverage.
         run_bleachbit_clean(true, false).await.map(|_| ())
     } else if def.id == "configured_folders" {
-        let paths = plan
-            .self_destruct
-            .shred_folders
-            .clone()
-            .unwrap_or_default();
+        let paths = plan.self_destruct.shred_folders.clone().unwrap_or_default();
         let wipe_mft_slack = plan.shred_mft_slack;
         if paths.is_empty() {
             crate::log_message(
@@ -6510,20 +6516,9 @@ pub async fn lockdown(
     crate::authz::consume_required(
         capability_token.as_deref(),
         crate::authz::DestructiveAction::SelfDestruct,
-        &crate::authz::lockdown_args(
-            deactivate_license_first,
-            shutdown_system,
-            &plan,
-        ),
+        &crate::authz::lockdown_args(deactivate_license_first, shutdown_system, &plan),
     )?;
-    lockdown_impl_with_config(
-        app,
-        deactivate_license_first,
-        shutdown_system,
-        true,
-        plan,
-    )
-    .await
+    lockdown_impl_with_config(app, deactivate_license_first, shutdown_system, true, plan).await
 }
 
 pub(crate) async fn lockdown_impl(
@@ -6532,8 +6527,8 @@ pub(crate) async fn lockdown_impl(
     shutdown_system: bool,
     run_destruct_steps: bool,
 ) -> Result<(), String> {
-    let settings = settings::read_settings()
-        .map_err(|e| format!("Failed to read settings: {}", e))?;
+    let settings =
+        settings::read_settings().map_err(|e| format!("Failed to read settings: {}", e))?;
     let plan = crate::authz::LockdownPlanSnapshot::from_settings(&settings);
     lockdown_impl_with_config(
         app,
@@ -7457,8 +7452,8 @@ fn locate_es_exe_uncached() -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod es_query_tests {
     use super::{
-        build_es_count_args, build_es_search_args, parse_es_count, tokenize_es_query,
-        search_scope_drive_root, validate_es_scope_path, validate_es_sort, validate_es_tokens,
+        build_es_count_args, build_es_search_args, parse_es_count, search_scope_drive_root,
+        tokenize_es_query, validate_es_scope_path, validate_es_sort, validate_es_tokens,
     };
 
     // ── Tokenizer: one argv entry per term, or es.exe silently returns nothing ──
@@ -7591,7 +7586,10 @@ mod es_query_tests {
 
     #[test]
     fn scope_drive_root_extracts_only_windows_drive_scopes() {
-        assert_eq!(search_scope_drive_root(r"d:\\Work"), Some("D:\\".to_string()));
+        assert_eq!(
+            search_scope_drive_root(r"d:\\Work"),
+            Some("D:\\".to_string())
+        );
         assert_eq!(search_scope_drive_root("E:"), Some("E:\\".to_string()));
         assert_eq!(search_scope_drive_root(r"\\server\\share"), None);
         assert_eq!(search_scope_drive_root("Downloads"), None);

@@ -226,10 +226,7 @@ fn read_info_props(doc: &Document) -> DocProps {
 fn decode_pdf_string(bytes: &[u8]) -> String {
     if let Some(rest) = bytes.strip_prefix(&[0xFE, 0xFF]) {
         let (pairs, _) = rest.as_chunks::<2>();
-        let units: Vec<u16> = pairs
-            .iter()
-            .map(|pair| u16::from_be_bytes(*pair))
-            .collect();
+        let units: Vec<u16> = pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect();
         String::from_utf16_lossy(&units)
     } else {
         // KT: from_utf8_lossy mangled latin-1/PDFDocEncoding bytes (e.g. 0xE9

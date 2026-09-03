@@ -35,11 +35,11 @@ pub async fn request_destructive_confirmation(
 }
 
 #[cfg(test)]
-use capability::{hash_args, Minted, STORE, TTL};
-#[cfg(test)]
 use arguments::{free_space_erase_args, secure_erase_args};
 #[cfg(test)]
 use capability::mint;
+#[cfg(test)]
+use capability::{hash_args, Minted, STORE, TTL};
 #[cfg(test)]
 pub use dispatch::DESTRUCTIVE_COMMANDS;
 #[cfg(test)]
