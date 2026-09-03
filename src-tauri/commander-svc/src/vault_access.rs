@@ -8,9 +8,9 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use wincmd_shared::vault_access::{
-    PersonalVaultRecord, VAULT_ACCESS_SCHEMA_VERSION, VaultAccess, VaultAccessEntry,
-    VaultAccessPolicy, VaultAuthorizeMountResponse, VaultEntryResult, VaultEntryStatus,
-    VaultMountDenial, VaultPolicyStatus, VaultPresentation, VaultValidationState,
+    PersonalVaultRecord, VaultAccess, VaultAccessEntry, VaultAccessPolicy,
+    VaultAuthorizeMountResponse, VaultEntryResult, VaultEntryStatus, VaultMountDenial,
+    VaultPolicyStatus, VaultPresentation, VaultValidationState, VAULT_ACCESS_SCHEMA_VERSION,
 };
 
 const POLICY_FILE: &str = "vault-access-v1.json";
@@ -438,7 +438,10 @@ impl VaultAccessStore {
             };
         }
         state.personal_pending.insert(key.clone(), pending);
-        if self.persist_personal(&state.personal, &state.personal_pending).is_err() {
+        if self
+            .persist_personal(&state.personal, &state.personal_pending)
+            .is_err()
+        {
             state.personal_pending.remove(&key);
             return Err(VaultError::Persistence);
         }
@@ -465,13 +468,29 @@ impl VaultAccessStore {
         }
         let container = PathBuf::from(&pending.container_path);
         let identity = self.fs.stable_file_identity(&container)?;
-        self.acls.apply_container_and_verify(
-            &container,
-            &[ResolvedGrant {
-                sid: owner_sid.to_string(),
-                access: VaultAccess::Write,
-            }],
-        )?;
+        let grants = vec![ResolvedGrant {
+            sid: owner_sid.to_string(),
+            access: VaultAccess::Write,
+        }];
+        let acl_plan = VaultAclPlan {
+            parent: container
+                .parent()
+                .ok_or(VaultError::Validation)?
+                .to_path_buf(),
+            container: container.clone(),
+            grants: grants.clone(),
+            authorization_grants: Vec::new(),
+            managed_groups: Vec::new(),
+        };
+        let snapshots = self.acls.snapshot(&acl_plan)?;
+        if let Err(error) = self.acls.apply_container_and_verify(&container, &grants) {
+            let _ = self.acls.restore(&snapshots);
+            return Err(error);
+        }
+        if self.fs.stable_file_identity(&container).ok().as_deref() != Some(identity.as_str()) {
+            let _ = self.acls.restore(&snapshots);
+            return Err(VaultError::ContainerIdentity);
+        }
         let record = PersonalVaultRecord {
             container_path: pending.container_path.clone(),
             container_identity: identity,
@@ -481,7 +500,10 @@ impl VaultAccessStore {
         };
         state.personal_pending.remove(&key);
         state.personal.insert(key.clone(), record.clone());
-        if self.persist_personal(&state.personal, &state.personal_pending).is_err() {
+        if self
+            .persist_personal(&state.personal, &state.personal_pending)
+            .is_err()
+        {
             state.personal.remove(&key);
             state.personal_pending.insert(key, pending);
             return Err(VaultError::Persistence);
@@ -506,7 +528,10 @@ impl VaultAccessStore {
             return;
         }
         let pending = state.personal_pending.remove(&key);
-        if self.persist_personal(&state.personal, &state.personal_pending).is_err() {
+        if self
+            .persist_personal(&state.personal, &state.personal_pending)
+            .is_err()
+        {
             if let Some(pending) = pending {
                 state.personal_pending.insert(key, pending);
             }
@@ -577,7 +602,13 @@ impl VaultAccessStore {
         record: &PersonalVaultRecord,
     ) -> Result<Vec<AclSnapshot>, VaultError> {
         let container = PathBuf::from(&record.container_path);
-        let parent = container.parent().ok_or(VaultError::Validation)?.to_path_buf();
+        if self.fs.stable_file_identity(&container)? != record.container_identity {
+            return Err(VaultError::ContainerIdentity);
+        }
+        let parent = container
+            .parent()
+            .ok_or(VaultError::Validation)?
+            .to_path_buf();
         let plan = VaultAclPlan {
             parent,
             container: container.clone(),
@@ -596,6 +627,12 @@ impl VaultAccessStore {
         {
             let _ = self.acls.restore(&snapshots);
             return Err(VaultError::AclApply);
+        }
+        if self.fs.stable_file_identity(&container).ok().as_deref()
+            != Some(record.container_identity.as_str())
+        {
+            let _ = self.acls.restore(&snapshots);
+            return Err(VaultError::ContainerIdentity);
         }
         Ok(snapshots)
     }
@@ -1261,7 +1298,7 @@ impl VaultFs for WindowsVaultFs {
     fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         use std::sync::atomic::{AtomicU64, Ordering};
         use windows_sys::Win32::Storage::FileSystem::{
-            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
         };
         static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
         let parent = path
@@ -1295,7 +1332,7 @@ impl VaultFs for WindowsVaultFs {
     fn stable_file_identity(&self, path: &Path) -> Result<String, VaultError> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::Storage::FileSystem::{
-            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
         };
         let file = std::fs::File::open(path).map_err(|_| VaultError::ContainerIdentity)?;
         let mut info = BY_HANDLE_FILE_INFORMATION::default();
@@ -1493,7 +1530,7 @@ impl LocalGroupReconciler for WindowsLocalGroupReconciler {
 #[cfg(windows)]
 fn ensure_local_group(group: &str) -> Result<(), VaultError> {
     use windows_sys::Win32::NetworkManagement::NetManagement::{
-        LOCALGROUP_INFO_1, NetLocalGroupAdd,
+        NetLocalGroupAdd, LOCALGROUP_INFO_1,
     };
     let mut name = wide(std::ffi::OsStr::new(group));
     let info = LOCALGROUP_INFO_1 {
@@ -1520,7 +1557,7 @@ fn local_group_members(
     group: &str,
 ) -> Result<Option<std::collections::HashSet<String>>, VaultError> {
     use windows_sys::Win32::NetworkManagement::NetManagement::{
-        LOCALGROUP_MEMBERS_INFO_0, MAX_PREFERRED_LENGTH, NetApiBufferFree, NetLocalGroupGetMembers,
+        NetApiBufferFree, NetLocalGroupGetMembers, LOCALGROUP_MEMBERS_INFO_0, MAX_PREFERRED_LENGTH,
     };
     let name = wide(std::ffi::OsStr::new(group));
     let mut buffer: *mut u8 = std::ptr::null_mut();
@@ -1580,7 +1617,7 @@ fn delete_local_group(group: &str) -> Result<(), VaultError> {
 fn set_local_group_members(group: &str, sids: &[String], add: bool) -> Result<(), VaultError> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::NetworkManagement::NetManagement::{
-        LOCALGROUP_MEMBERS_INFO_0, NetLocalGroupAddMembers, NetLocalGroupDelMembers,
+        NetLocalGroupAddMembers, NetLocalGroupDelMembers, LOCALGROUP_MEMBERS_INFO_0,
     };
     use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
     let name = wide(std::ffi::OsStr::new(group));
@@ -1686,13 +1723,13 @@ impl AclApplier for WindowsAclApplier {
 
 #[cfg(windows)]
 fn verify_one_acl(path: &Path, grants: &[ResolvedGrant]) -> Result<(), VaultError> {
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
     use windows_sys::Win32::Security::Authorization::{
         ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
     };
     use windows_sys::Win32::Security::{
-        AllocateAndInitializeSid, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
-        GetSecurityDescriptorControl, PSID, SE_DACL_PROTECTED, SECURITY_NT_AUTHORITY,
+        AllocateAndInitializeSid, EqualSid, GetAce, GetSecurityDescriptorControl,
+        DACL_SECURITY_INFORMATION, PSID, SECURITY_NT_AUTHORITY, SE_DACL_PROTECTED,
     };
     use windows_sys::Win32::System::SystemServices::{
         DOMAIN_ALIAS_RID_ADMINS, SECURITY_BUILTIN_DOMAIN_RID,
@@ -1794,10 +1831,10 @@ fn verify_one_acl(path: &Path, grants: &[ResolvedGrant]) -> Result<(), VaultErro
 
 #[cfg(windows)]
 fn snapshot_one_acl(path: &Path) -> Result<AclSnapshot, VaultError> {
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
     use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
     use windows_sys::Win32::Security::{
-        DACL_SECURITY_INFORMATION, GetSecurityDescriptorControl, GetSecurityDescriptorLength,
+        GetSecurityDescriptorControl, GetSecurityDescriptorLength, DACL_SECURITY_INFORMATION,
         SE_DACL_PROTECTED,
     };
     unsafe {
@@ -1836,8 +1873,8 @@ fn snapshot_one_acl(path: &Path) -> Result<AclSnapshot, VaultError> {
 #[cfg(windows)]
 fn restore_one_acl(snapshot: &AclSnapshot) -> Result<(), VaultError> {
     use windows_sys::Win32::Security::{
-        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-        SetFileSecurityW, UNPROTECTED_DACL_SECURITY_INFORMATION,
+        SetFileSecurityW, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR, UNPROTECTED_DACL_SECURITY_INFORMATION,
     };
     let name = wide(snapshot.path.as_os_str());
     let info = DACL_SECURITY_INFORMATION
@@ -1862,14 +1899,14 @@ fn restore_one_acl(snapshot: &AclSnapshot) -> Result<(), VaultError> {
 
 #[cfg(windows)]
 fn apply_one_acl(path: &Path, grants: &[ResolvedGrant]) -> Result<(), VaultError> {
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
     use windows_sys::Win32::Security::Authorization::{
-        ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT, SetNamedSecurityInfoW,
+        ConvertStringSidToSidW, GetNamedSecurityInfoW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
     };
     use windows_sys::Win32::Security::{
-        ACL, ACL_REVISION, AddAccessAllowedAce, AllocateAndInitializeSid,
-        DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetSecurityDescriptorControl, InitializeAcl,
-        PROTECTED_DACL_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED, SECURITY_NT_AUTHORITY,
+        AddAccessAllowedAce, AllocateAndInitializeSid, EqualSid, GetAce,
+        GetSecurityDescriptorControl, InitializeAcl, ACL, ACL_REVISION, DACL_SECURITY_INFORMATION,
+        PROTECTED_DACL_SECURITY_INFORMATION, PSID, SECURITY_NT_AUTHORITY, SE_DACL_PROTECTED,
     };
     use windows_sys::Win32::System::SystemServices::{
         DOMAIN_ALIAS_RID_ADMINS, SECURITY_BUILTIN_DOMAIN_RID,
@@ -2029,7 +2066,7 @@ pub fn authorize_mount_for_token(
     use windows_sys::Win32::Foundation::{CloseHandle, LocalFree};
     use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
     use windows_sys::Win32::Security::{
-        CheckTokenMembership, DuplicateToken, PSID, SecurityIdentification,
+        CheckTokenMembership, DuplicateToken, SecurityIdentification, PSID,
     };
 
     let sids = {
@@ -2434,17 +2471,89 @@ mod tests {
             PathBuf::from("/policy"),
         )
     }
+
+    struct SwappingIdentityFs {
+        files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
+        identity_reads: Arc<AtomicUsize>,
+    }
+    impl VaultFs for SwappingIdentityFs {
+        fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
+        fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+            self.files.lock().unwrap().insert(path.into(), bytes.into());
+            Ok(())
+        }
+        fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
+            let read = self.identity_reads.fetch_add(1, Ordering::SeqCst);
+            Ok(if read < 2 { "v:1:i:2" } else { "v:1:i:99" }.into())
+        }
+        fn validate_dedicated_parent(&self, _: &Path, _: &Path) -> Result<(), VaultError> {
+            Ok(())
+        }
+    }
+    struct RestoringAcl(Arc<AtomicBool>);
+    impl AclApplier for RestoringAcl {
+        fn apply_and_verify(&self, _: &VaultAclPlan) -> Result<(), VaultError> {
+            Ok(())
+        }
+        fn snapshot(&self, plan: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError> {
+            Ok(vec![AclSnapshot {
+                path: plan.container.clone(),
+                descriptor: vec![1],
+                dacl_protected: true,
+            }])
+        }
+        fn restore(&self, _: &[AclSnapshot]) -> Result<(), VaultError> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+        fn apply_container_and_verify(
+            &self,
+            _: &Path,
+            _: &[ResolvedGrant],
+        ) -> Result<(), VaultError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn legacy_personal_adoption_detects_identity_swap_and_restores_the_acl() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let restored = Arc::new(AtomicBool::new(false));
+        let store = VaultAccessStore::open(
+            Box::new(SwappingIdentityFs {
+                files,
+                identity_reads: reads,
+            }),
+            Box::new(Resolver),
+            Box::new(RestoringAcl(restored.clone())),
+            PathBuf::from("/policy"),
+        );
+        let record = store
+            .legacy_personal_record(r"C:\Vaults\legacy.hc", "S-1-5-21-owner", 7)
+            .unwrap();
+        assert!(matches!(
+            store.prepare_legacy_personal_mount(&record),
+            Err(VaultError::ContainerIdentity)
+        ));
+        assert!(restored.load(Ordering::SeqCst));
+    }
     #[test]
     fn applies_atomically_after_acl_verification() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let s = store(files.clone());
         assert_eq!(s.apply(policy(1, 0), 7).unwrap().version, 1);
-        assert!(
-            files
-                .lock()
-                .unwrap()
-                .contains_key(&PathBuf::from("/policy").join(POLICY_FILE))
-        );
+        assert!(files
+            .lock()
+            .unwrap()
+            .contains_key(&PathBuf::from("/policy").join(POLICY_FILE)));
     }
 
     #[test]
@@ -2457,11 +2566,7 @@ mod tests {
             .begin_personal_registration("C:\\vaults\\personal.hc", "S-1-5-21-owner", 7)
             .unwrap();
         assert_eq!(
-            store.complete_personal_registration(
-                "C:\\vaults\\personal.hc",
-                "S-1-5-21-owner",
-                7,
-            ),
+            store.complete_personal_registration("C:\\vaults\\personal.hc", "S-1-5-21-owner", 7,),
             Err(VaultError::AclApply)
         );
         assert_eq!(
@@ -2496,11 +2601,7 @@ mod tests {
             .unwrap();
         fail_write.store(true, Ordering::SeqCst);
         assert_eq!(
-            store.complete_personal_registration(
-                "C:\\vaults\\personal.hc",
-                "S-1-5-21-owner",
-                7,
-            ),
+            store.complete_personal_registration("C:\\vaults\\personal.hc", "S-1-5-21-owner", 7,),
             Err(VaultError::Persistence)
         );
 
@@ -2887,7 +2988,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// Regression: reconciling an existing group must not be treated as a
     /// failure. `NetLocalGroupAdd` returns ERROR_ALIAS_EXISTS (not
     /// NERR_GroupExists) for a local group that is already there, and
@@ -2933,11 +3033,9 @@ mod tests {
                 },
             ])
             .unwrap();
-        assert!(
-            results
-                .iter()
-                .all(|r| r.state == VaultAccessGroupState::Failed && r.error.is_some())
-        );
+        assert!(results
+            .iter()
+            .all(|r| r.state == VaultAccessGroupState::Failed && r.error.is_some()));
     }
 
     #[test]

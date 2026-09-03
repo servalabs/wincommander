@@ -15,8 +15,9 @@ use zeroize::Zeroize;
 
 use crate::vault_access::{ResolvedGrant, VaultAccessStore};
 use wincmd_shared::vault_access::{
-    PersonalVaultMountRequest, PersonalVaultRecord, VaultContainerKind, VaultMountReason,
-    VaultMountResult, VaultMountState, VaultPresentation, VaultVolumeRole,
+    PersonalVaultMountRequest, PersonalVaultRecord, VaultBrokerVolumeRole, VaultContainerKind,
+    VaultMountMode, VaultMountPlan, VaultMountReason, VaultMountResult, VaultMountState,
+    VaultPresentation, VaultVolumeRole,
 };
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -43,6 +44,12 @@ struct DurableMountRegistry {
 }
 
 const MAX_DURABLE_MOUNTS: usize = 64;
+static NEXT_INTERNAL_OPERATION_ID: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1 << 62);
+
+fn next_internal_operation_id() -> u64 {
+    NEXT_INTERNAL_OPERATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Service-to-Pro only.  No implementation may be backed by an unauthenticated
 /// executable argument/stdio mode: a renderer must never be able to select the
@@ -54,6 +61,7 @@ trait AuthenticatedVaultBroker: Send + Sync {
     ) -> Result<InternalMountReply, VaultMountReason>;
     fn dismount(
         &self,
+        operation_id: u64,
         internal_drive: u8,
         presented_drive_letter: Option<&str>,
         presentation: VaultPresentation,
@@ -70,37 +78,43 @@ trait AuthenticatedVaultBroker: Send + Sync {
 
 struct ProEnvelopeBroker;
 
+fn broker_mount_reason(error: &str) -> VaultMountReason {
+    match error {
+        "session_unavailable" => VaultMountReason::SessionUnavailable,
+        "vault_acl_apply_failed" => VaultMountReason::AclApplyFailed,
+        "vault_acl_readback_failed" => VaultMountReason::AclReadbackFailed,
+        "vault_engine_unlock_failed" => VaultMountReason::EngineUnlockFailed,
+        "vault_engine_drive_letter_unavailable" | "vault_drive_letter_unavailable" => {
+            VaultMountReason::EngineDriveLetterUnavailable
+        }
+        "vault_engine_mount_failed" => VaultMountReason::EngineMountFailed,
+        "broker_handshake" | "broker_hmac" | "broker_rejected" | "vault_broker_failed" => {
+            VaultMountReason::BrokerRejected
+        }
+        _ => VaultMountReason::BrokerUnavailable,
+    }
+}
+
 impl AuthenticatedVaultBroker for ProEnvelopeBroker {
     fn mount(
         &self,
         request: &mut InternalMountRequest,
     ) -> Result<InternalMountReply, VaultMountReason> {
+        let args = broker_mount_args(request)?;
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
+                request.operation_id,
                 request.target_session_id,
                 &request.caller_sid,
                 Some(request.caller_token),
                 Some(request.caller_authentication_id),
                 request.presentation,
                 "vault.broker.mount",
-                broker_mount_args(request),
+                args,
             ))
         });
         request.zeroize_secrets();
-        let value = result.map_err(|error| match error.as_str() {
-            "session_unavailable" => VaultMountReason::SessionUnavailable,
-            "vault_acl_apply_failed" => VaultMountReason::AclApplyFailed,
-            "vault_acl_readback_failed" => VaultMountReason::AclReadbackFailed,
-            "vault_engine_unlock_failed" => VaultMountReason::EngineUnlockFailed,
-            "vault_engine_drive_letter_unavailable" => {
-                VaultMountReason::EngineDriveLetterUnavailable
-            }
-            "vault_engine_mount_failed" => VaultMountReason::EngineMountFailed,
-            "broker_handshake" | "broker_hmac" | "broker_rejected" => {
-                VaultMountReason::BrokerRejected
-            }
-            _ => VaultMountReason::BrokerUnavailable,
-        })?;
+        let value = result.map_err(|error| broker_mount_reason(&error))?;
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Reply {
@@ -118,6 +132,7 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
     }
     fn dismount(
         &self,
+        operation_id: u64,
         internal_drive: u8,
         presented_drive_letter: Option<&str>,
         presentation: VaultPresentation,
@@ -127,6 +142,7 @@ impl AuthenticatedVaultBroker for ProEnvelopeBroker {
     ) -> Result<(), VaultMountReason> {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
+                operation_id,
                 target_session_id,
                 caller_sid,
                 caller_token,
@@ -186,6 +202,7 @@ fn per_user_presented_drive_letter(
 /// Private input to the authenticated broker.  It is deliberately not serde
 /// serializable: the public named-pipe and Tauri wire must never reuse it.
 struct InternalMountRequest {
+    operation_id: u64,
     container_path: String,
     mount_mode: &'static str,
     volume_kind: &'static str,
@@ -207,29 +224,48 @@ struct InternalMountRequest {
     hidden_protection_password: Option<String>,
 }
 
-fn broker_mount_args(request: &InternalMountRequest) -> serde_json::Value {
-    let mut args = serde_json::json!({
-        "container_path": &request.container_path,
-        "password": &request.password,
-        "mounted_root_acl_sddl": &request.mounted_root_acl_sddl.0,
-        "mount_mode": request.mount_mode,
-        "volume_kind": request.volume_kind,
-        "volume_role": request.volume_role,
-        "presentation": request.presentation,
-        "preferred_letter": &request.preferred_letter,
-        "read_only": request.read_only,
-        "pim": request.pim,
-        "keyfiles": &request.keyfiles,
-        "hidden_keyfiles": &request.hidden_keyfiles,
-        "hidden_pim": request.hidden_pim,
-        "removable": request.removable,
-        "target_session_id": request.target_session_id,
-    });
-    if let Some(hidden_protection_password) = &request.hidden_protection_password {
-        args["hidden_protection_password"] =
-            serde_json::Value::String(hidden_protection_password.clone());
+fn broker_mount_args(
+    request: &mut InternalMountRequest,
+) -> Result<serde_json::Value, VaultMountReason> {
+    let mut plan = VaultMountPlan {
+        operation_id: request.operation_id,
+        container_path: request.container_path.clone(),
+        password: std::mem::take(&mut request.password),
+        mounted_root_acl_sddl: request.mounted_root_acl_sddl.0.clone(),
+        mount_mode: match request.mount_mode {
+            "standard" => VaultMountMode::Standard,
+            "hidden" => VaultMountMode::Hidden,
+            _ => return Err(VaultMountReason::InvalidRequest),
+        },
+        presentation: request.presentation,
+        preferred_letter: request.preferred_letter.clone(),
+        read_only: request.read_only,
+        volume_kind: match request.volume_kind {
+            "standard" => VaultContainerKind::Standard,
+            "dual" => VaultContainerKind::Dual,
+            _ => return Err(VaultMountReason::InvalidRequest),
+        },
+        volume_role: match request.volume_role {
+            "standard" => VaultBrokerVolumeRole::Standard,
+            "outer" => VaultBrokerVolumeRole::Outer,
+            "hidden" => VaultBrokerVolumeRole::Hidden,
+            _ => return Err(VaultMountReason::InvalidRequest),
+        },
+        hidden_protection_password: std::mem::take(&mut request.hidden_protection_password),
+        pim: request.pim,
+        keyfiles: std::mem::take(&mut request.keyfiles),
+        hidden_keyfiles: std::mem::take(&mut request.hidden_keyfiles),
+        hidden_pim: request.hidden_pim,
+        removable: request.removable,
+        target_session_id: request.target_session_id,
+    };
+    if plan.validate().is_err() {
+        plan.zeroize_secrets();
+        return Err(VaultMountReason::InvalidRequest);
     }
-    args
+    let result = serde_json::to_value(&plan).map_err(|_| VaultMountReason::InvalidRequest);
+    plan.zeroize_secrets();
+    result
 }
 
 impl InternalMountRequest {
@@ -239,6 +275,10 @@ impl InternalMountRequest {
             hidden_protection_password.zeroize();
         }
         self.hidden_protection_password = None;
+        self.keyfiles.iter_mut().for_each(Zeroize::zeroize);
+        self.keyfiles.clear();
+        self.hidden_keyfiles.iter_mut().for_each(Zeroize::zeroize);
+        self.hidden_keyfiles.clear();
     }
 }
 
@@ -320,6 +360,7 @@ impl VaultMountBroker {
     #[allow(clippy::too_many_arguments)]
     pub fn mount_authorized(
         &self,
+        operation_id: u64,
         store: &VaultAccessStore,
         entry_id: &str,
         password: &mut String,
@@ -333,6 +374,7 @@ impl VaultMountBroker {
     ) -> VaultMountResult {
         self.with_exclusive_operation(|| {
             self.mount_authorized_locked(
+                operation_id,
                 store,
                 entry_id,
                 password,
@@ -353,6 +395,7 @@ impl VaultMountBroker {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn mount_personal_authorized(
         &self,
+        operation_id: u64,
         store: &VaultAccessStore,
         record: &PersonalVaultRecord,
         request: &mut PersonalVaultMountRequest,
@@ -363,6 +406,7 @@ impl VaultMountBroker {
     ) -> Result<(String, u8), VaultMountReason> {
         self.with_exclusive_operation(|| {
             self.mount_personal_authorized_locked(
+                operation_id,
                 store,
                 record,
                 request,
@@ -386,6 +430,7 @@ impl VaultMountBroker {
     ) {
         self.with_exclusive_operation(|| {
             let _ = self.dismount_entry_locked_for_client(
+                next_internal_operation_id(),
                 store,
                 &personal_mount_entry_id(record),
                 Some(caller_token),
@@ -399,6 +444,7 @@ impl VaultMountBroker {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn mount_personal_authorized_locked(
         &self,
+        operation_id: u64,
         store: &VaultAccessStore,
         record: &PersonalVaultRecord,
         request: &mut PersonalVaultMountRequest,
@@ -412,18 +458,12 @@ impl VaultMountBroker {
             || session_id == 0
             || caller_sid.is_empty()
         {
-            request.password.zeroize();
-            if let Some(password) = &mut request.hidden_protection_password {
-                password.zeroize();
-            }
+            request.zeroize_secrets();
             return Err(VaultMountReason::NotAuthorized);
         }
         let entry_id = personal_mount_entry_id(record);
         if !self.recovery_allows_entry(&entry_id, store) {
-            request.password.zeroize();
-            if let Some(password) = &mut request.hidden_protection_password {
-                password.zeroize();
-            }
+            request.zeroize_secrets();
             return Err(VaultMountReason::DismountFailed);
         }
         let access = if request.read_only {
@@ -438,10 +478,7 @@ impl VaultMountBroker {
             request.hidden_protection_password.as_deref(),
         )?;
         if !profile.requires_hidden_protection && request.hidden_protection_password.is_some() {
-            request.password.zeroize();
-            if let Some(password) = &mut request.hidden_protection_password {
-                password.zeroize();
-            }
+            request.zeroize_secrets();
             return Err(VaultMountReason::InvalidRequest);
         }
         if let Some(existing) = self
@@ -451,33 +488,33 @@ impl VaultMountBroker {
             .and_then(|active| active.get(&entry_id).cloned())
         {
             if !same_mount_owner(&existing, session_id, caller_sid) {
-                request.password.zeroize();
-                if let Some(password) = &mut request.hidden_protection_password {
-                    password.zeroize();
-                }
+                request.zeroize_secrets();
                 return Err(VaultMountReason::NotAuthorized);
             }
             if self
-                .dismount_entry_locked_for_client(store, &entry_id, Some(caller_token))
+                .dismount_entry_locked_for_client(
+                    operation_id,
+                    store,
+                    &entry_id,
+                    Some(caller_token),
+                )
                 .state
                 != VaultMountState::Unmounted
             {
-                request.password.zeroize();
-                if let Some(password) = &mut request.hidden_protection_password {
-                    password.zeroize();
-                }
+                request.zeroize_secrets();
                 return Err(VaultMountReason::DismountFailed);
             }
         }
         let mut internal = InternalMountRequest {
+            operation_id,
             container_path: record.container_path.clone(),
             mount_mode: profile.mount_mode,
             volume_kind: profile.container_kind,
             volume_role: profile.volume_role,
             read_only: request.read_only,
             pim: request.pim,
-            keyfiles: request.keyfiles.clone(),
-            hidden_keyfiles: request.hidden_keyfiles.clone(),
+            keyfiles: std::mem::take(&mut request.keyfiles),
+            hidden_keyfiles: std::mem::take(&mut request.hidden_keyfiles),
             hidden_pim: request.hidden_pim,
             removable: request.removable,
             presentation: VaultPresentation::PerUser,
@@ -501,6 +538,7 @@ impl VaultMountBroker {
             || reply.internal_drive > 25
         {
             let _ = self.broker.dismount(
+                operation_id,
                 reply.internal_drive,
                 None,
                 VaultPresentation::PerUser,
@@ -534,6 +572,7 @@ impl VaultMountBroker {
             mounts.remove(&entry_id);
         }
         let _ = self.broker.dismount(
+            operation_id,
             active.internal_drive,
             per_user_presented_drive_letter(active.presentation, active.drive_letter.as_str()),
             active.presentation,
@@ -547,6 +586,7 @@ impl VaultMountBroker {
     #[allow(clippy::too_many_arguments)]
     fn mount_authorized_locked(
         &self,
+        operation_id: u64,
         store: &VaultAccessStore,
         entry_id: &str,
         password: &mut String,
@@ -607,7 +647,7 @@ impl VaultMountBroker {
                 return denied(entry_id, VaultMountReason::NotAuthorized);
             }
             if self
-                .dismount_entry_locked_for_client(store, entry_id, Some(caller_token))
+                .dismount_entry_locked_for_client(operation_id, store, entry_id, Some(caller_token))
                 .state
                 != VaultMountState::Unmounted
             {
@@ -620,6 +660,7 @@ impl VaultMountBroker {
             }
         }
         let mut request = InternalMountRequest {
+            operation_id,
             container_path: plan.container.to_string_lossy().into_owned(),
             // Policy fixes the container kind; the caller chooses only a
             // bounded role for that registered dual container.
@@ -654,6 +695,7 @@ impl VaultMountBroker {
             || reply.internal_drive > 25
         {
             let _ = self.broker.dismount(
+                operation_id,
                 reply.internal_drive,
                 None,
                 presentation,
@@ -669,6 +711,7 @@ impl VaultMountBroker {
         }
         let Some((policy_id, policy_version)) = store.active_policy_identity() else {
             let _ = self.broker.dismount(
+                operation_id,
                 reply.internal_drive,
                 per_user_presented_drive_letter(presentation, reply.drive_letter.as_str()),
                 presentation,
@@ -707,6 +750,7 @@ impl VaultMountBroker {
                 drop(active);
                 if let Some(mount) = mount {
                     let _ = self.broker.dismount(
+                        operation_id,
                         mount.internal_drive,
                         per_user_presented_drive_letter(
                             mount.presentation,
@@ -726,6 +770,7 @@ impl VaultMountBroker {
             }
         } else {
             let _ = self.broker.dismount(
+                operation_id,
                 reply.internal_drive,
                 per_user_presented_drive_letter(presentation, reply.drive_letter.as_str()),
                 presentation,
@@ -749,11 +794,12 @@ impl VaultMountBroker {
     }
 
     fn dismount_entry_locked(&self, store: &VaultAccessStore, entry_id: &str) -> VaultMountResult {
-        self.dismount_entry_locked_for_client(store, entry_id, None)
+        self.dismount_entry_locked_for_client(next_internal_operation_id(), store, entry_id, None)
     }
 
     fn dismount_entry_locked_for_client(
         &self,
+        operation_id: u64,
         store: &VaultAccessStore,
         entry_id: &str,
         caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
@@ -775,6 +821,7 @@ impl VaultMountBroker {
         if self
             .broker
             .dismount(
+                operation_id,
                 active.internal_drive,
                 per_user_presented_drive_letter(active.presentation, active.drive_letter.as_str()),
                 active.presentation,
@@ -816,6 +863,7 @@ impl VaultMountBroker {
 
     pub fn dismount_authorized(
         &self,
+        operation_id: u64,
         store: &VaultAccessStore,
         entry_id: &str,
         caller_token: windows_sys::Win32::Foundation::HANDLE,
@@ -825,6 +873,7 @@ impl VaultMountBroker {
     ) -> VaultMountResult {
         self.with_exclusive_operation(|| {
             self.dismount_authorized_locked(
+                operation_id,
                 store,
                 entry_id,
                 caller_token,
@@ -837,6 +886,7 @@ impl VaultMountBroker {
 
     fn dismount_authorized_locked(
         &self,
+        operation_id: u64,
         store: &VaultAccessStore,
         entry_id: &str,
         caller_token: windows_sys::Win32::Foundation::HANDLE,
@@ -863,7 +913,7 @@ impl VaultMountBroker {
                 return denied(entry_id, VaultMountReason::NotAuthorized);
             }
         }
-        self.dismount_entry_locked_for_client(store, entry_id, Some(caller_token))
+        self.dismount_entry_locked_for_client(operation_id, store, entry_id, Some(caller_token))
     }
 
     pub fn projection(&self, entry_id: &str) -> (VaultMountState, Option<String>) {
@@ -1191,7 +1241,10 @@ mod tests {
             self.files.lock().unwrap().insert(path.into(), bytes.into());
             Ok(())
         }
-        fn stable_file_identity(&self, _: &Path) -> Result<String, crate::vault_access::VaultError> {
+        fn stable_file_identity(
+            &self,
+            _: &Path,
+        ) -> Result<String, crate::vault_access::VaultError> {
             Ok("v:1:i:2".into())
         }
         fn validate_dedicated_parent(
@@ -1210,10 +1263,16 @@ mod tests {
     }
     struct MountAcl;
     impl AclApplier for MountAcl {
-        fn apply_and_verify(&self, _: &VaultAclPlan) -> Result<(), crate::vault_access::VaultError> {
+        fn apply_and_verify(
+            &self,
+            _: &VaultAclPlan,
+        ) -> Result<(), crate::vault_access::VaultError> {
             Ok(())
         }
-        fn snapshot(&self, _: &VaultAclPlan) -> Result<Vec<AclSnapshot>, crate::vault_access::VaultError> {
+        fn snapshot(
+            &self,
+            _: &VaultAclPlan,
+        ) -> Result<Vec<AclSnapshot>, crate::vault_access::VaultError> {
             Ok(vec![])
         }
         fn restore(&self, _: &[AclSnapshot]) -> Result<(), crate::vault_access::VaultError> {
@@ -1239,6 +1298,7 @@ mod tests {
         }
         fn dismount(
             &self,
+            _: u64,
             internal_drive: u8,
             _: Option<&str>,
             _: VaultPresentation,
@@ -1361,6 +1421,34 @@ mod tests {
     }
 
     #[test]
+    fn broker_terminal_reasons_do_not_collapse_actionable_failures() {
+        for (error, expected) in [
+            ("session_unavailable", VaultMountReason::SessionUnavailable),
+            ("vault_acl_apply_failed", VaultMountReason::AclApplyFailed),
+            (
+                "vault_acl_readback_failed",
+                VaultMountReason::AclReadbackFailed,
+            ),
+            (
+                "vault_engine_unlock_failed",
+                VaultMountReason::EngineUnlockFailed,
+            ),
+            (
+                "vault_engine_drive_letter_unavailable",
+                VaultMountReason::EngineDriveLetterUnavailable,
+            ),
+            (
+                "vault_engine_mount_failed",
+                VaultMountReason::EngineMountFailed,
+            ),
+            ("vault_broker_failed", VaultMountReason::BrokerRejected),
+            ("broker_timeout", VaultMountReason::BrokerUnavailable),
+        ] {
+            assert_eq!(broker_mount_reason(error), expected, "{error}");
+        }
+    }
+
+    #[test]
     fn personal_mount_uses_durable_registry_and_session_cleanup() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let store = mount_store(files, Arc::new(AtomicBool::new(false)));
@@ -1372,6 +1460,7 @@ mod tests {
 
         assert_eq!(
             broker.mount_personal_authorized(
+                41,
                 &store,
                 &record,
                 &mut request,
@@ -1383,7 +1472,11 @@ mod tests {
             Ok(("P:".into(), 12))
         );
         assert_eq!(broker.projection(&entry_id).0, VaultMountState::Mounted);
-        assert!(store.read_active_mounts().unwrap().windows(8).any(|window| window == b"personal"));
+        assert!(store
+            .read_active_mounts()
+            .unwrap()
+            .windows(8)
+            .any(|window| window == b"personal"));
 
         broker.dismount_session(&store, 7);
         assert_eq!(broker.projection(&entry_id).0, VaultMountState::Unmounted);
@@ -1400,6 +1493,7 @@ mod tests {
         let mut request = personal_request();
         initial
             .mount_personal_authorized(
+                42,
                 &store,
                 &record,
                 &mut request,
@@ -1411,10 +1505,15 @@ mod tests {
             .unwrap();
 
         let recovery_events = Arc::new(Mutex::new(BrokerEvents::default()));
-        let restarted = VaultMountBroker::with_broker(Box::new(MountBroker(recovery_events.clone())));
+        let restarted =
+            VaultMountBroker::with_broker(Box::new(MountBroker(recovery_events.clone())));
         restarted.load_and_cleanup(&store).unwrap();
         assert_eq!(recovery_events.lock().unwrap().recovered, vec![12]);
-        assert!(store.read_active_mounts().unwrap().windows(11).any(|window| window == b"\"mounts\":{}"));
+        assert!(store
+            .read_active_mounts()
+            .unwrap()
+            .windows(11)
+            .any(|window| window == b"\"mounts\":{}"));
     }
 
     #[test]
@@ -1429,6 +1528,7 @@ mod tests {
 
         assert_eq!(
             broker.mount_personal_authorized(
+                43,
                 &store,
                 &record,
                 &mut request,
@@ -1546,7 +1646,8 @@ mod tests {
             ("standard", "dual", "outer", Some("hidden-secret")),
             ("hidden", "dual", "hidden", None),
         ] {
-            let request = InternalMountRequest {
+            let mut request = InternalMountRequest {
+                operation_id: 41,
                 container_path: "C:\\vaults\\dual.hc".into(),
                 mount_mode,
                 volume_kind: container_kind,
@@ -1567,7 +1668,7 @@ mod tests {
                 password: "outer-secret".into(),
                 hidden_protection_password: hidden_protection_password.map(str::to_owned),
             };
-            let args = broker_mount_args(&request);
+            let args = broker_mount_args(&mut request).unwrap();
             assert_eq!(args["mount_mode"], mount_mode);
             assert_eq!(args["volume_kind"], container_kind);
             assert_eq!(args["volume_role"], volume_role);

@@ -37,8 +37,8 @@ use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
 
 use wincmd_shared::fleet::{Action, ClipboardEventReport};
 use wincmd_shared::svc::{
-    classify_verb, ApplyMachineSettingRequest, CapabilityClass, APPLY_MACHINE_SETTING_VERB,
-    SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
+    classify_verb, is_known_verb, ApplyMachineSettingRequest, CapabilityClass,
+    APPLY_MACHINE_SETTING_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
 };
 use wincmd_shared::{
     read_envelope, write_envelope, Envelope, ErrorReply, Hello, Request, Response,
@@ -61,10 +61,10 @@ use windows_sys::Win32::{
     Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
     Security::{
         AllocateAndInitializeSid, CheckTokenMembership, DuplicateToken, EqualSid, FreeSid,
-        GetTokenInformation, LookupAccountNameW, RevertToSelf,
-        SecurityIdentification, TokenSessionId, TokenStatistics, TokenUser,
-        PSECURITY_DESCRIPTOR, PSID, SECURITY_NT_AUTHORITY, SID_NAME_USE, TOKEN_DUPLICATE,
-        TOKEN_QUERY, TOKEN_STATISTICS, TOKEN_USER,
+        GetTokenInformation, LookupAccountNameW, RevertToSelf, SecurityIdentification,
+        TokenSessionId, TokenStatistics, TokenUser, PSECURITY_DESCRIPTOR, PSID,
+        SECURITY_NT_AUTHORITY, SID_NAME_USE, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_STATISTICS,
+        TOKEN_USER,
     },
     System::{
         Pipes::{GetNamedPipeClientProcessId, ImpersonateNamedPipeClient},
@@ -334,6 +334,15 @@ pub(crate) async fn handle_connection(
         };
 
         let request_id = req.request_id;
+        if !is_known_verb(&req.feature_id) {
+            let reply = Envelope::Error(ErrorReply {
+                request_id,
+                kind: "unknown_verb".to_string(),
+                message: "service verb is not recognized".to_string(),
+            });
+            write_envelope(&mut conn, &reply).await?;
+            continue;
+        }
         match authorize(
             &req.feature_id,
             caller_privileged
@@ -531,11 +540,17 @@ async fn dispatch_verb(
         "svc.vault.apply_policy" => handle_vault_apply_and_cleanup(vault_access, vault_mount, args),
         "svc.vault.authorize_mount" => handle_vault_authorize(vault_access, args, peer),
         "svc.vault.mount" if args.get("personal") == Some(&serde_json::Value::Bool(true)) => {
-            handle_personal_vault_mount(vault_access, vault_mount, args, peer).await
+            handle_personal_vault_mount(request_id, vault_access, vault_mount, args, peer).await
         }
-        "svc.vault.mount" => handle_vault_mount(vault_access, vault_mount, args, peer).await,
-        "svc.vault.create_personal" => handle_personal_vault_create(vault_access, args, peer),
-        "svc.vault.unmount" => handle_vault_unmount(vault_access, vault_mount, args, peer),
+        "svc.vault.mount" => {
+            handle_vault_mount(request_id, vault_access, vault_mount, args, peer).await
+        }
+        "svc.vault.create_personal" => {
+            handle_personal_vault_create(request_id, vault_access, args, peer)
+        }
+        "svc.vault.unmount" => {
+            handle_vault_unmount(request_id, vault_access, vault_mount, args, peer)
+        }
         "svc.vault.list_authorized" => {
             handle_vault_list_authorized(vault_access, vault_mount, peer)
         }
@@ -546,10 +561,13 @@ async fn dispatch_verb(
             handle_vault_reconcile_access_groups(vault_access, args)
         }
 
-        // Every other verb (ink_receipt.* and anything privileged/unknown)
-        // is still a stub — out of this task's scope. `authorize()` above
-        // has already gated it correctly by CapabilityClass regardless.
-        _ => Ok(serde_json::json!({ "ok": true, "verb": feature_id })),
+        // The connection loop checks `is_known_verb` before authorization.
+        // Keep this second guard so direct tests or future internal callers of
+        // `dispatch_verb` cannot turn an unrecognized string into success.
+        _ => Err(VerbError::new(
+            "unknown_verb",
+            "service verb is not recognized",
+        )),
     };
 
     match outcome {
@@ -731,6 +749,7 @@ fn handle_vault_authorize(
 /// file-placement semantics while the SYSTEM service remains the source of
 /// truth for the owner record and the protected container DACL.
 fn handle_personal_vault_create(
+    operation_id: u64,
     vault_access: &VaultAccessStore,
     mut args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
@@ -780,24 +799,15 @@ fn handle_personal_vault_create(
             )
         })?;
     if registration == crate::vault_access::PersonalRegistrationReservation::Pending {
-        match vault_access.complete_personal_registration(
-            &requested_path,
-            peer.caller_sid(),
-            peer.session_id(),
-        ) {
-            Ok(_) => return Ok(serde_json::json!({"path": requested_path, "status": "created"})),
-            Err(crate::vault_access::VaultError::ContainerIdentity) => {}
-            Err(_) => {
-                return Err(VerbError::new(
-                    "vault_owner_record_failed",
-                    "personal vault ownership could not be recorded",
-                ));
-            }
-        }
+        return Err(VerbError::new(
+            "vault_owner_record_failed",
+            "personal vault creation is already in progress",
+        ));
     }
     args["TargetSessionId"] = serde_json::Value::from(peer.session_id());
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
+            operation_id,
             peer.session_id(),
             peer.caller_sid(),
             Some(peer.token()),
@@ -837,37 +847,11 @@ fn handle_personal_vault_create(
     Ok(result)
 }
 
-/// Promotes a legacy container only after the native engine accepted the
-/// caller's existing credential. That credential check prevents a readable
-/// Administrator-owned file from being claimed by a different Windows user.
-fn register_legacy_personal_vault(
-    vault_access: &VaultAccessStore,
-    path: &str,
-    peer: &AuthenticatedPipePeer,
-) -> Result<wincmd_shared::vault_access::PersonalVaultRecord, VerbError> {
-    vault_access
-        .begin_personal_registration(path, peer.caller_sid(), peer.session_id())
-        .map_err(|_| {
-            VerbError::new(
-                "vault_owner_record_failed",
-                "this container is already registered, or the path is invalid",
-            )
-        })?;
-    vault_access
-        .complete_personal_registration(path, peer.caller_sid(), peer.session_id())
-        .map_err(|_| {
-            vault_access.cancel_personal_registration(path, peer.caller_sid(), peer.session_id());
-            VerbError::new(
-                "vault_owner_record_failed",
-                "personal vault ownership could not be recorded",
-            )
-        })
-}
-
 /// Pre-flight failures are intentionally separate from native-engine failures:
 /// operators can fix an owner ACL, a busy letter, a missing user session, or a
 /// stopped driver without losing the generic engine diagnostic.
 async fn handle_personal_vault_mount(
+    operation_id: u64,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     mut args: serde_json::Value,
@@ -907,25 +891,9 @@ async fn handle_personal_vault_mount(
             "no interactive Windows session",
         ));
     }
-    let (record, is_legacy) = match vault_access.personal_for_owner(&request.container_path, peer.caller_sid()) {
-        Ok(Some(record)) => (record, false),
-        Ok(None) => {
-            match vault_access.legacy_personal_record(
-                &request.container_path,
-                peer.caller_sid(),
-                peer.session_id(),
-            ) {
-                Ok(record) => (record, true),
-                Err(_) => {
-                    zeroize_personal_mount(&mut request);
-                    return Err(VerbError::new(
-                        PERSONAL_VAULT_UNAUTHORIZED,
-                        "caller is not authorized for this personal vault",
-                    ));
-                }
-            }
-        }
-        Err(_) => {
+    let record = match vault_access.personal_for_owner(&request.container_path, peer.caller_sid()) {
+        Ok(Some(record)) => record,
+        Ok(None) | Err(_) => {
             zeroize_personal_mount(&mut request);
             return Err(VerbError::new(
                 PERSONAL_VAULT_UNAUTHORIZED,
@@ -945,20 +913,6 @@ async fn handle_personal_vault_mount(
             error.public_message(),
         ));
     }
-    let legacy_acl = if is_legacy {
-        match vault_access.prepare_legacy_personal_mount(&record) {
-            Ok(snapshot) => Some(snapshot),
-            Err(_) => {
-                zeroize_personal_mount(&mut request);
-                return Err(VerbError::new(
-                    PERSONAL_VAULT_CONTAINER_UNWRITABLE,
-                    "personal vault container could not be prepared for legacy recovery",
-                ));
-            }
-        }
-    } else {
-        None
-    };
     let mount_result = vault_mount.with_exclusive_operation(|| {
         // The service runs in Session 0, where a DOS-device query cannot
         // authoritatively describe the caller's per-user device namespace. The
@@ -968,6 +922,7 @@ async fn handle_personal_vault_mount(
         // "drive letter unavailable" result for a genuinely free letter.
         vault_mount
             .mount_personal_authorized_locked(
+                operation_id,
                 vault_access,
                 &record,
                 &mut request,
@@ -983,45 +938,7 @@ async fn handle_personal_vault_mount(
                 )
             })
     });
-    let (drive_letter, internal_drive) = match mount_result {
-        Ok(result) => result,
-        Err(error) => {
-            if let Some(snapshot) = &legacy_acl {
-                vault_access.restore_legacy_personal_mount(snapshot);
-            }
-            return Err(error);
-        }
-    };
-    if is_legacy {
-        match register_legacy_personal_vault(vault_access, &record.container_path, peer) {
-            Ok(registered) if registered.container_identity == record.container_identity => {}
-            Ok(_) => {
-                vault_mount.dismount_personal_registration_failure(
-                    vault_access,
-                    &record,
-                    peer.token(),
-                );
-                if let Some(snapshot) = &legacy_acl {
-                    vault_access.restore_legacy_personal_mount(snapshot);
-                }
-                return Err(VerbError::new(
-                    "vault_owner_record_failed",
-                    "personal vault changed before ownership could be recorded",
-                ));
-            }
-            Err(error) => {
-                vault_mount.dismount_personal_registration_failure(
-                    vault_access,
-                    &record,
-                    peer.token(),
-                );
-                if let Some(snapshot) = &legacy_acl {
-                    vault_access.restore_legacy_personal_mount(snapshot);
-                }
-                return Err(error);
-            }
-        }
-    }
+    let (drive_letter, internal_drive) = mount_result?;
     Ok(serde_json::json!({
         "status": "mounted",
         "drive": drive_letter,
@@ -1032,12 +949,7 @@ async fn handle_personal_vault_mount(
 }
 
 fn zeroize_personal_mount(request: &mut wincmd_shared::vault_access::PersonalVaultMountRequest) {
-    use zeroize::Zeroize;
-    request.password.zeroize();
-    if let Some(password) = &mut request.hidden_protection_password {
-        password.zeroize();
-    }
-    request.hidden_protection_password = None;
+    request.zeroize_secrets();
 }
 
 fn peer_has_active_interactive_session(peer: &AuthenticatedPipePeer) -> bool {
@@ -1077,6 +989,7 @@ fn wts_connect_state(session_id: u32) -> Option<WTS_CONNECTSTATE_CLASS> {
 }
 
 async fn handle_vault_mount(
+    operation_id: u64,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     mut args: serde_json::Value,
@@ -1125,6 +1038,7 @@ async fn handle_vault_mount(
             ));
         };
         vault_mount.mount_authorized(
+            operation_id,
             vault_access,
             &request.entry_id,
             &mut request.password,
@@ -1259,6 +1173,7 @@ fn vault_authorization_denied() -> wincmd_shared::vault_access::VaultAuthorizeMo
 }
 
 fn handle_vault_unmount(
+    operation_id: u64,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
@@ -1283,6 +1198,7 @@ fn handle_vault_unmount(
             ));
         };
         vault_mount.dismount_authorized(
+            operation_id,
             vault_access,
             &request.entry_id,
             peer.token(),
@@ -2422,7 +2338,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_verb_from_privileged_caller_is_allowed() {
+    async fn unknown_verb_from_privileged_caller_still_classifies_privileged() {
         let gate = passing_gate();
         let result = authorize("svc.totally_unknown_verb", true, 1234, &gate).await;
         assert_eq!(result, Ok(None));
@@ -2866,7 +2782,13 @@ mod integration {
 
     #[tokio::test]
     async fn privileged_verb_with_forced_unprivileged_returns_forbidden() {
-        let reply = run_one_request("forbidden", "svc.dispatch", false, false).await;
+        let reply = run_one_request(
+            "forbidden",
+            wincmd_shared::svc::APPLY_MACHINE_SETTING_VERB,
+            false,
+            false,
+        )
+        .await;
         match reply {
             Envelope::Error(ErrorReply { kind, .. }) => {
                 assert_eq!(kind, "forbidden", "expected kind=forbidden, got {:?}", kind);
@@ -2876,14 +2798,40 @@ mod integration {
     }
 
     #[tokio::test]
-    async fn privileged_verb_with_forced_privileged_returns_response() {
-        let reply = run_one_request("priv-ok", "svc.dispatch", true, false).await;
+    async fn privileged_known_verb_with_forced_privileged_reaches_handler() {
+        let reply = run_one_request(
+            "priv-ok",
+            wincmd_shared::svc::APPLY_MACHINE_SETTING_VERB,
+            true,
+            false,
+        )
+        .await;
         match reply {
-            Envelope::Response(r) => {
-                assert_eq!(r.result["ok"], true);
-                assert_eq!(r.result["verb"], "svc.dispatch");
+            Envelope::Error(ErrorReply { kind, .. }) => {
+                assert_eq!(kind, "machine_setting_validation_failed");
             }
-            other => panic!("expected Envelope::Response, got {:?}", other),
+            other => panic!("expected handler validation error, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_verb_returns_the_same_bounded_error_for_every_caller() {
+        for (suffix, privileged) in [("unknown-user", false), ("unknown-admin", true)] {
+            let reply =
+                run_one_request(suffix, "svc.totally_unknown_verb", privileged, false).await;
+            match reply {
+                Envelope::Error(ErrorReply {
+                    request_id,
+                    kind,
+                    message,
+                }) => {
+                    assert_eq!(request_id, 1);
+                    assert_eq!(kind, "unknown_verb");
+                    assert_eq!(message, "service verb is not recognized");
+                    assert!(!message.contains("totally_unknown"));
+                }
+                other => panic!("expected Envelope::Error, got {:?}", other),
+            }
         }
     }
 

@@ -84,10 +84,14 @@ const BROKER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 #[cfg(windows)]
 const MAX_SIGNED_NOTIFICATIONS: usize = 32;
 #[cfg(windows)]
-const REQUEST_ID: u64 = 1;
+static NEXT_RECOVERY_REQUEST_ID: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1 << 63);
+#[cfg(all(windows, test))]
+const REQUEST_ID: u64 = 41;
 
 #[cfg(windows)]
 pub async fn vault_call(
+    request_id: u64,
     target_session_id: u32,
     caller_sid: &str,
     caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
@@ -111,7 +115,7 @@ pub async fn vault_call(
         .create(&pipe_name)
         .map_err(|_| "broker_unavailable")?;
     eprintln!(
-        "[wincommander-svc] vault_call({feature_id}): spawning broker helper on pipe {pipe_name}"
+        "[wincommander-svc] vault_call({feature_id}, operation={request_id}): spawning broker helper"
     );
     let process = spawn_pro_for_presentation(
         target_session_id,
@@ -123,13 +127,13 @@ pub async fn vault_call(
         &pipe_name,
         &session_token,
     )?;
-    eprintln!("[wincommander-svc] vault_call({feature_id}): spawn returned handle {:?}, waiting for connect", process);
+    eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): broker spawned, waiting for connect");
     let result = async {
         timeout_at(deadline, pipe.connect())
             .await
             .map_err(|_| "broker_timeout")?
             .map_err(|_| "broker_io")?;
-        eprintln!("[wincommander-svc] vault_call({feature_id}): pipe connected, sending hello");
+        eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): pipe connected, sending hello");
         let hello = Envelope::Hello(Hello {
             protocol_version: PROTOCOL_VERSION.into(),
             session_token: session_token.clone(),
@@ -145,7 +149,7 @@ pub async fn vault_call(
             .await
             .map_err(|_| "broker_timeout")?
             .map_err(|_| "broker_io")?;
-        eprintln!("[wincommander-svc] vault_call({feature_id}): hello ack received: {:?}", ack);
+        eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): hello ack received");
         let Envelope::Hello(Hello {
             protocol_version,
             session_token: echoed,
@@ -159,12 +163,12 @@ pub async fn vault_call(
             || echoed != session_token
             || !hash_matches_fixed_pro(&hash)
         {
-            eprintln!("[wincommander-svc] vault_call({feature_id}): handshake mismatch (protocol_version={protocol_version}, echoed_token_matches={}, hash_matches={})", echoed == session_token, hash_matches_fixed_pro(&hash));
+            eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake mismatch (protocol_version={protocol_version}, echoed_token_matches={}, hash_matches={})", echoed == session_token, hash_matches_fixed_pro(&hash));
             return Err("broker_handshake");
         }
-        eprintln!("[wincommander-svc] vault_call({feature_id}): handshake ok, sending request");
+        eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake ok, sending request");
         let mut request = Envelope::Request(Request {
-            request_id: REQUEST_ID,
+            request_id,
             feature_id: feature_id.into(),
             args,
         })
@@ -175,20 +179,20 @@ pub async fn vault_call(
             .and_then(|result| result.map_err(|_| "broker_io"));
         zeroize_broker_request(&mut request);
         write_result?;
-        eprintln!("[wincommander-svc] vault_call({feature_id}): request sent, awaiting reply");
+        eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): request sent, awaiting reply");
         let mut notification_count = 0;
         let result = loop {
             let reply = timeout_at(deadline, read_envelope(&mut pipe))
                 .await
                 .map_err(|_| "broker_timeout")?
                 .map_err(|_| "broker_io")?;
-            match process_broker_reply(reply, &session_token, REQUEST_ID, &mut notification_count)?
+            match process_broker_reply(reply, &session_token, request_id, &mut notification_count)?
             {
                 BrokerReply::Notification => {}
                 BrokerReply::Finished(result) => break result,
             }
         };
-        eprintln!("[wincommander-svc] vault_call({feature_id}): finished with {:?}", result);
+        eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): finished");
         let _ = timeout_at(deadline, write_envelope(&mut pipe, &Envelope::Bye)).await;
         result
     }
@@ -233,10 +237,13 @@ fn zeroize_json(value: &mut serde_json::Value) {
 /// it launches the authenticated Pro sidecar as SYSTEM to close that slot.
 #[cfg(windows)]
 pub async fn vault_recovery_dismount(internal_drive: u8) -> Result<serde_json::Value, String> {
+    use std::sync::atomic::Ordering;
     if internal_drive > 25 {
         return Err("broker_rejected".to_string());
     }
+    let request_id = NEXT_RECOVERY_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     vault_call(
+        request_id,
         0,
         "S-1-5-18",
         None,

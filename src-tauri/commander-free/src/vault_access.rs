@@ -92,7 +92,11 @@ fn reconcile_access_groups_payload(groups: Value) -> Value {
 /// observe any container path/SID/ACL data of its own.
 #[tauri::command]
 pub async fn reconcile_vault_access_groups(groups: Value) -> Result<Value, String> {
-    crate::svc_client::call(RECONCILE_ACCESS_GROUPS, reconcile_access_groups_payload(groups)).await
+    crate::svc_client::call(
+        RECONCILE_ACCESS_GROUPS,
+        reconcile_access_groups_payload(groups),
+    )
+    .await
 }
 
 #[cfg(test)]

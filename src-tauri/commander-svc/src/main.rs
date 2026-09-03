@@ -88,7 +88,7 @@ use windows_service::{
 };
 
 #[cfg(windows)]
-const SERVICE_NAME: &str = "WinCommanderSvc";
+const SERVICE_NAME: &str = wincmd_shared::svc::SVC_WINDOWS_SERVICE_NAME;
 
 #[cfg(windows)]
 fn stop_pending_status() -> ServiceStatus {
@@ -160,9 +160,7 @@ fn service_main(_arguments: Vec<std::ffi::OsString>) {
                     let _ = stop_tx.send(true);
                     ServiceControlHandlerResult::NoError
                 }
-                ServiceControl::Interrogate => {
-                    ServiceControlHandlerResult::NoError
-                }
+                ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
                 ServiceControl::SessionChange(change)
                     if matches!(
                         change.reason,
@@ -170,22 +168,28 @@ fn service_main(_arguments: Vec<std::ffi::OsString>) {
                             | SessionChangeReason::ConsoleDisconnect
                             | SessionChangeReason::RemoteDisconnect
                             | SessionChangeReason::SessionTerminate
-                    ) => {
-                        if let Some(broker) = VAULT_MOUNT_FOR_STOP.get().cloned() {
-                            let session_id = change.notification.session_id;
-                            // SCM control callbacks must return promptly. Run
-                            // the bounded signed broker dismount on a runtime
-                            // worker instead of blocking the dispatcher.
-                            std::thread::spawn(move || {
-                                if let Ok(runtime) = tokio::runtime::Builder::new_multi_thread().enable_all().build() {
-                            if let Some(store) = VAULT_ACCESS_FOR_STOP.get().cloned() {
-                                runtime.block_on(async move { broker.dismount_session(&store, session_id); });
-                            }
+                    ) =>
+                {
+                    if let Some(broker) = VAULT_MOUNT_FOR_STOP.get().cloned() {
+                        let session_id = change.notification.session_id;
+                        // SCM control callbacks must return promptly. Run
+                        // the bounded signed broker dismount on a runtime
+                        // worker instead of blocking the dispatcher.
+                        std::thread::spawn(move || {
+                            if let Ok(runtime) = tokio::runtime::Builder::new_multi_thread()
+                                .enable_all()
+                                .build()
+                            {
+                                if let Some(store) = VAULT_ACCESS_FOR_STOP.get().cloned() {
+                                    runtime.block_on(async move {
+                                        broker.dismount_session(&store, session_id);
+                                    });
                                 }
-                            });
-                        }
-                        ServiceControlHandlerResult::NoError
+                            }
+                        });
                     }
+                    ServiceControlHandlerResult::NoError
+                }
                 _ => ServiceControlHandlerResult::NotImplemented,
             }
         },
@@ -360,7 +364,13 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
     });
 
     // ── Named-pipe server ────────────────────────────────────────────────
-    let pipe_server = pipe::serve(policy_store, session_helper_gate, clipboard_state, Arc::clone(&vault_access), Arc::clone(&vault_mount));
+    let pipe_server = pipe::serve(
+        policy_store,
+        session_helper_gate,
+        clipboard_state,
+        Arc::clone(&vault_access),
+        Arc::clone(&vault_mount),
+    );
     if let Some(receiver) = stop_rx.as_mut() {
         tokio::select! {
             result = pipe_server => {

@@ -1,7 +1,7 @@
 # Authenticated acceptance client for the local WinCommander SYSTEM service.
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('get-policy', 'get-status', 'capabilities', 'list', 'apply', 'mount', 'unmount')]
+    [ValidateSet('get-policy', 'get-status', 'capabilities', 'list', 'apply', 'mount', 'unmount', 'unknown-verb')]
     [string]$Action,
 
     [string]$EntryId,
@@ -51,6 +51,8 @@ $feature = switch ($Action) {
     'apply' { 'svc.vault.apply_policy' }
     'mount' { 'svc.vault.mount' }
     'unmount' { 'svc.vault.unmount' }
+    # Fixed acceptance probe only; this does not expose arbitrary service verbs.
+    'unknown-verb' { 'svc.vault.__unknown_acceptance_probe' }
 }
 
 $passwordText = $null
@@ -107,7 +109,16 @@ try {
 
     $reply = Read-Frame $pipe | ConvertFrom-Json
     if ($reply.kind -eq 'error') {
-        throw "Service rejected request: $($reply.kind): $($reply.message)"
+        if ($Action -eq 'unknown-verb') {
+            [ordered]@{
+                request_id = $reply.request_id
+                error_kind = $reply.error_kind
+                message = $reply.message
+            } | ConvertTo-Json -Compress
+            Write-Frame $pipe '{"kind":"bye"}'
+            return
+        }
+        throw "Service rejected request: $($reply.error_kind): $($reply.message)"
     }
     if ($reply.kind -ne 'response' -or $reply.request_id -ne 1) {
         throw 'Service returned an unexpected response.'
