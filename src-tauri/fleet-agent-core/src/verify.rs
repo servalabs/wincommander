@@ -23,6 +23,8 @@ use hmac::{KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use fleet_proto::{CheckinRequest, HealthSnapshot, PendingSearchJob};
+
 /// Enrollment capability that opts a device into request-body-bound HMACs.
 /// Once recorded, the server rejects v1 identity-only MACs for that device.
 pub const HMAC_BODY_V2_CAPABILITY: &str = "hmac_body_v2";
@@ -72,145 +74,9 @@ pub struct EnrollResponse {
     pub checkin_secret_b64: Option<String>,
 }
 
-/// Check-in request body (POST `/v1/agents/checkin`).
-///
-/// Version 2 binds the method, route, and canonical JSON payload (excluding
-/// only `hmac`), so acknowledgements, telemetry, padding, and `decoy` all have
-/// integrity rather than merely authenticating a device identity.
-#[derive(Debug, Serialize)]
-pub struct CheckinRequest {
-    pub device_id: String,
-    pub hostname: String,
-    pub posture: String,
-    /// Unix epoch seconds for the freshness check (and HMAC preimage).
-    pub ts: i64,
-    /// Single-use nonce for replay defence (and HMAC preimage).
-    pub nonce: String,
-    pub hmac_version: i64,
-    /// HMAC-SHA256 over the v2 request preimage, STANDARD base64 encoded.
-    pub hmac: String,
-    /// Opaque, ignored-by-server filler bytes (base64) so every check-in
-    /// request lands in the same size bucket regardless of what it actually
-    /// carries. It is covered by the v2 request MAC. Empty string when padding
-    /// is disabled (`FleetConfig::checkin_padding_bytes == 0`).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub padding: String,
-    /// Marks this as a cover-traffic decoy check-in: authenticate normally,
-    /// but the server must return no commands and record nothing sensitive
-    /// for it (see `fleet-server`'s `checkin` handler). Since the request body
-    /// is sent over TLS, this flag is never visible to a network observer —
-    /// it exists purely so the server can distinguish decoys from real
-    /// check-ins *after* decryption, without that distinction leaking on the
-    /// wire (size/timing are identical either way).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub decoy: bool,
-    /// Optional live resource sample (CPU/RAM/disk/network) — see
-    /// `FleetActions::sample_resources`. Always-on, no consent gate; omitted
-    /// entirely when the platform has no collector wired up (duress-only
-    /// agents) so older/other check-ins are byte-identical to before this
-    /// field existed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resources: Option<fleet_proto::DeviceResourceSample>,
-    /// Optional device-health snapshot (encryption/patch/AV/OS/sovereignty) —
-    /// see [`HealthSnapshot`] and `FleetActions::sample_health`. Transport-
-    /// envelope only, exactly like `resources` immediately above; omitted
-    /// entirely when the platform has no health collector
-    /// wired up (duress-only agents, or before a platform implements
-    /// `sample_health`) so older/other check-ins are byte-identical to before
-    /// this field existed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub health: Option<HealthSnapshot>,
-}
-
-/// Agent-reported device-health snapshot, folded into the SAME check-in
-/// round-trip as `resources`/`posture`. Deliberately ROUTE-LOCAL — not a
-/// `fleet_proto` wire type — mirroring the fleet server's own
-/// `device_health::HealthSnapshot` (`fleet-server/src/routes/device_health.rs`),
-/// which is intentionally kept out of the shared `fleet_proto` crate because
-/// this is an admin-visibility roll-up, not a signed/verified command or
-/// policy type. Field names/shape are pinned to match that server struct
-/// exactly (`encryption_on`, `patch_state` ∈ {"current","behind"} or null,
-/// `av_on`, `os_version`, `sovereignty_score`).
-///
-/// PII-free: every field is a scalar or a coarse label — never a filename,
-/// path, URL, or username, matching the `ArgusSignal` discipline.
-///
-/// Every field is independently optional: a platform's `sample_health`
-/// implementation should degrade a single failed/unavailable probe to `None`
-/// for that field alone rather than dropping the whole snapshot — see the
-/// `FleetActions::sample_health` doc.
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct HealthSnapshot {
-    pub encryption_on: Option<bool>,
-    pub patch_state: Option<String>,
-    pub av_on: Option<bool>,
-    pub os_version: Option<String>,
-    pub sovereignty_score: Option<i64>,
-    /// Additive bounded platform facts. The server selects facts using its
-    /// stored device kind and derives compliance; agents never send verdicts.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub platform_facts: Option<serde_json::Value>,
-}
-
-/// Check-in response: zero or more signed commands to execute.
-#[derive(Debug, Deserialize)]
-pub struct CheckinResponse {
-    /// Whether the server is issuing an all-clear (resets the dead-man).
-    #[serde(default)]
-    pub all_clear: bool,
-    /// Signed commands to dispatch.
-    #[serde(default)]
-    pub commands: Vec<SignedCommand>,
-    /// The only server-to-agent policy payload.  It contains independently
-    /// revised sections in one signed envelope; there is no legacy config or
-    /// shield field to dual-read.
-    pub policy: serde_json::Value,
-    /// Opaque, ignored filler bytes (base64) mirroring `CheckinRequest::padding`
-    /// — pads the response into the same size bucket regardless of whether it
-    /// carries zero or several signed commands. Never covered by any
-    /// signature; purely transport-envelope. Absent/empty on servers that
-    /// don't shape responses.
-    #[serde(default)]
-    pub padding: String,
-    /// On-device content-search jobs this device currently owes (fleet
-    /// server's `search_job_devices` rows in `pending` state for this
-    /// device). **Optional / null-absent-safe**: `#[serde(default)]` so a
-    /// server that hasn't shipped dispatch yet, or a response that simply
-    /// has none to hand out, deserializes to an empty `Vec` rather than a
-    /// parse error — this must never break check-in parsing or block the
-    /// check-in loop. See [`dispatch::execute_pending_search_jobs`] for how
-    /// these are executed and reported.
-    ///
-    /// [`dispatch::execute_pending_search_jobs`]: crate::dispatch::execute_pending_search_jobs
-    #[serde(default)]
-    pub pending_search_jobs: Vec<PendingSearchJob>,
-}
-
-/// One on-device content-search job owed by this device, as carried in
-/// [`CheckinResponse::pending_search_jobs`]. Route-local (like
-/// [`HealthSnapshot`]) — mirrors the fleet server's
-/// `content_search::ContentSearchJob`/`NewSearchJob` shape, not a signed
-/// `fleet_proto` command (a search job is dispatched over the check-in
-/// response, not the signed-command channel — it carries no signature to
-/// verify).
-#[derive(Debug, Clone, Deserialize)]
-pub struct PendingSearchJob {
-    /// The fleet server's job id (`csj_<uuid>` — see fleet-server's
-    /// `CONTENT_JOB_ID_PREFIX`). Echoed back verbatim in the result report.
-    pub job_id: String,
-    /// The search query text to run against the local content index.
-    pub query: String,
-    /// Cap on the number of hits to report for this job on this device.
-    /// `#[serde(default)]` with a conservative fallback so a malformed/
-    /// missing value never blocks execution — matches the server's own
-    /// `max_hits_per_device` ceiling (1..=1000).
-    #[serde(default = "default_max_hits_per_device")]
-    pub max_hits_per_device: usize,
-}
-
-fn default_max_hits_per_device() -> usize {
-    50
-}
+/// Canonical check-in response using this crate's legacy-compatible command
+/// view. The envelope itself lives in `fleet-proto`.
+pub type CheckinResponse = fleet_proto::CheckinResponse<SignedCommand>;
 
 /// One content-search hit — field names pinned to match the fleet server's
 /// `content_search::ContentSearchHit` exactly (`path`, `snippet`, `score`).
@@ -674,8 +540,7 @@ mod tests {
         // `skip_serializing_if` discipline as `resources`.
         let req = CheckinRequest {
             device_id: "dev-1".to_string(),
-            hostname: "host".to_string(),
-            posture: "nominal".to_string(),
+            posture: None,
             ts: 1_700_000_000,
             nonce: "n".to_string(),
             hmac_version: HMAC_VERSION_V2,
@@ -684,6 +549,7 @@ mod tests {
             decoy: false,
             resources: None,
             health: None,
+            ..Default::default()
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(
@@ -709,8 +575,7 @@ mod tests {
         };
         let req = CheckinRequest {
             device_id: "dev-1".to_string(),
-            hostname: "host".to_string(),
-            posture: "nominal".to_string(),
+            posture: None,
             ts: 1_700_000_000,
             nonce: "n".to_string(),
             hmac_version: HMAC_VERSION_V2,
@@ -719,6 +584,7 @@ mod tests {
             decoy: false,
             resources: None,
             health: Some(health),
+            ..Default::default()
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["health"]["encryption_on"], serde_json::json!(true));

@@ -517,19 +517,21 @@ pub async fn run_checkin_cycle_inner(
     // 4b. Verify the one signed policy envelope before exposing either
     // section to a platform.  The signer is the enrollment-pinned key, never
     // a key merely supplied inside the received packet.
-    match serde_json::from_value::<PolicyEnvelope>(resp.policy.clone()) {
-        Ok(policy)
-            if pinned_server_key_b64.as_deref() == Some(policy.signer_key.as_str())
-                && verify_signature_b64(
-                    &policy.signer_key,
-                    &policy.preimage(),
-                    &policy.signature,
-                ) =>
-        {
-            dispatch.on_policy_envelope(&resp.policy)
+    if let Some(policy_value) = resp.policy.as_ref() {
+        match serde_json::from_value::<PolicyEnvelope>(policy_value.clone()) {
+            Ok(policy)
+                if pinned_server_key_b64.as_deref() == Some(policy.signer_key.as_str())
+                    && verify_signature_b64(
+                        &policy.signer_key,
+                        &policy.preimage(),
+                        &policy.signature,
+                    ) =>
+            {
+                dispatch.on_policy_envelope(policy_value)
+            }
+            Ok(_) => warn!("fleet: rejected policy envelope signed by an unpinned or invalid key"),
+            Err(error) => warn!("fleet: rejected malformed policy envelope: {error}"),
         }
-        Ok(_) => warn!("fleet: rejected policy envelope signed by an unpinned or invalid key"),
-        Err(error) => warn!("fleet: rejected malformed policy envelope: {error}"),
     }
 
     // 4c. Execute any on-device content-search jobs this check-in handed us,

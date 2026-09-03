@@ -43,6 +43,17 @@ record_hash: string,
 signature: string, };
 
 /**
+ * Latest server-observed cursor for the signed action-outcome chain.
+ */
+export type ActionOutcomeHead = { sequence: bigint, record_hash: string, };
+
+/**
+ * Optional per-outcome confirmation used by peers that negotiate receipt
+ * support. This distinguishes acceptance from quarantine/orphan handling.
+ */
+export type ActionOutcomeReceipt = { receipt_id: string, sequence: bigint, disposition: string, };
+
+/**
  * Server-signed recovery point for an endpoint that has lost only its local
  * outcome-chain cursor. It preserves every accepted record: the next receipt
  * continues from `previous_hash` at `next_sequence`, rather than replacing or
@@ -175,6 +186,41 @@ export type BrandingView = { org_id: string, display_name: string, logo_url: str
 export type BuiltinPattern = "aws_access_key" | "google_api_key" | "sendgrid_api_key" | "mailgun_api_key" | "twilio_account_sid" | "database_url_with_credentials" | "open_ai_project_key" | "open_ai_api_key" | "anthropic_api_key" | "git_hub_classic_token" | "git_hub_fine_grained_token" | "npm_token" | "stripe_live_secret" | "stripe_live_publishable" | "slack_token" | "discord_bot_token" | "private_key_pem" | "ssh_private_key_header" | "jwt" | "bitcoin_wif_private_key" | "powershell_encoded_payload" | "hidden_powershell_window" | "powershell_execution_policy_bypass" | "powershell_remote_download_execute" | "mshta_web_payload" | "certutil_web_download" | "regsvr32_web_payload" | "bitsadmin_web_transfer" | "curl_wget_pipe_to_shell" | "unicode_bidi_override" | "unicode_zero_width_in_code" | "unicode_confusable_url_host";
 
 /**
+ * Legacy-compatible command acknowledgement carried on the next check-in.
+ *
+ * The first four fields match deployed agents and servers. The optional
+ * reporting fields allow a negotiated peer to deduplicate progress reports
+ * without changing the containing envelope.
+ */
+export type CheckinAck = { command_id: string, success: boolean, detail: string | null, result: JsonValue | null, report_id: string | null, phase: string | null, terminal_reason: string | null, };
+
+/**
+ * Optional per-ACK confirmation used by peers that negotiate receipt support.
+ */
+export type CheckinAckReceipt = { command_id: string, report_id: string | null, disposition: string, resulting_status: string | null, };
+
+/**
+ * `POST /v1/agents/checkin` request body.
+ *
+ * Required authentication fields deliberately have no serde defaults.
+ * Everything else is additive/defaulted for mixed-version operation. This
+ * top-level type must not use `deny_unknown_fields`.
+ */
+export type CheckinRequest = { protocol_version: bigint, capabilities: Array<string>, device_id: string, ts: bigint, nonce: string, hmac_version: bigint, hmac: string, acks: Array<CheckinAck>, action_outcomes: Array<ActionOutcome>, posture: PostureReport | null, health: HealthSnapshot | null, resources: DeviceResourceSample | null, telemetry: JsonValue | null, productivity: JsonValue | null, argus: JsonValue | null, decoy_tripwire: JsonValue | null, capability_status: JsonValue | null, transport_health: JsonValue | null, offline_delivery_opt_out: boolean | null, productivity_detail: JsonValue | null, inventory: JsonValue | null, events: Array<LocalAlertReport>, clipboard_events: Array<ClipboardEventReport>, ink_receipts: Array<InkReceiptReport>, padding: string, decoy: boolean, };
+
+/**
+ * Successful check-in response.
+ *
+ * `Command` is generic so an older agent may retain compatibility-only
+ * command metadata while the canonical server form remains the default.
+ */
+export type CheckinResponse<Command = SignedCommand> = { protocol_version: bigint, capabilities: Array<string>, server_time: string | null, commands: Array<Command>, all_clear: boolean,
+/**
+ * Optional while old and new server versions overlap.
+ */
+policy: JsonValue | null, padding: string, pending_search_jobs: Array<PendingSearchJob>, cancelled_search_job_ids: Array<string>, pending_approval: boolean, ack_receipts: Array<CheckinAckReceipt>, action_outcome_receipts: Array<ActionOutcomeReceipt>, action_outcome_head: ActionOutcomeHead | null, action_outcome_recovery_checkpoint: ActionOutcomeRecoveryCheckpoint | null, productivity_detail_receipt: JsonValue | null, inventory_receipt: JsonValue | null, };
+
+/**
  * One clipboard-guard rule match, reported by the agent as part of a
  * `CheckinRequest` batch (`clipboard_events: Vec<ClipboardEventReport>`,
  * plan §4.4).
@@ -244,16 +290,16 @@ export type CommandRequest = { device_id: DeviceId, catalog_id: string, action_c
 /**
  * Lifecycle of a remote command. `pending` awaits multi-party approval;
  * `approved` is signed and pollable; `dispatched` was handed to the agent;
- * `acked` proves only that the agent responded; `applied` requires an
- * explicit device-side postcondition receipt. `failed`/`rejected`/`expired`
- * are terminal results.
+ * `acked` proves only that the agent responded; `applying` means execution is
+ * still in progress; `applied` requires an explicit device-side postcondition
+ * receipt. `failed`/`rejected`/`expired` are terminal results.
  */
-export type CommandStatus = "pending" | "approved" | "dispatched" | "acked" | "applied" | "failed" | "rejected" | "expired";
+export type CommandStatus = "pending" | "approved" | "dispatched" | "acked" | "applying" | "applied" | "failed" | "rejected" | "expired";
 
 /**
  * Admin-facing view of a command and its gate state.
  */
-export type CommandView = { command_id: string, device_id: DeviceId, catalog_id: string, action_class: ActionClass, status: CommandStatus, approvals: number, required_approvals: number, requested_by: string, created_at: string,
+export type CommandView = { command_id: string, device_id: DeviceId, catalog_id: string, action_class: ActionClass, status: CommandStatus, approvals: number, required_approvals: number, requested_by: string, created_at: string, updated_at: string | null, approved_at: string | null, dispatched_at: string | null, acknowledged_at: string | null, applying_at: string | null, applied_at: string | null, terminal_at: string | null,
 /**
  * Stable request/correlation id supplied when the command was created.
  * This is distinct from the server-assigned `command_id`.
@@ -612,6 +658,11 @@ correlation_ids: Array<string>, };
 export type HashResult = { ok: boolean, path: string, detail: string | null, algo: string, hex: string, size_bytes: bigint, };
 
 /**
+ * PII-free device health reported with a normal check-in.
+ */
+export type HealthSnapshot = { encryption_on: boolean | null, patch_state: string | null, av_on: boolean | null, os_version: string | null, sovereignty_score: bigint | null, platform_facts: JsonValue | null, };
+
+/**
  * One Ink Receipt lifecycle report, batched onto `CheckinRequest` as
  * `ink_receipts: Vec<InkReceiptReport>` (plan §5.6). Same rules as
  * [`ClipboardEventReport`] above: `deny_unknown_fields` scoped to this
@@ -711,6 +762,11 @@ export type MatchKind = { "kind": "phrase", "params": { value: string, case_sens
  * org slugs once multi-tenancy is enabled.
  */
 export type OrgId = string;
+
+/**
+ * One content-search job delivered in a check-in response.
+ */
+export type PendingSearchJob = { job_id: string, query: string, max_hits_per_device: number, };
 
 /**
  * The only policy payload sent by a check-in response.  It carries separate

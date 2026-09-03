@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use crate::dispatch::FleetDispatchOutcome;
+
 /// Platform-supplied secret persistence seam.
 ///
 /// `fleet-agent-core` is behavior-identical whether or not a `SecretStore` is
@@ -46,6 +48,10 @@ pub struct FleetClientState {
     /// Seen-nonce map for replay defense on fleet commands.
     /// Value: Unix timestamp when the nonce was first seen (for TTL eviction).
     pub seen_nonces: HashMap<String, i64>,
+    /// Results from the most recently processed command batch. Keeping these
+    /// makes dispatch observable to the owning agent instead of silently
+    /// discarding `process_checkin`'s output in the transport loop.
+    pub last_dispatch_outcomes: Vec<FleetDispatchOutcome>,
     /// Number of check-in intervals where no all_clear was received.
     pub dead_man_misses: u32,
     /// RFC3339 timestamp of the last successful check-in.
@@ -65,6 +71,7 @@ impl std::fmt::Debug for FleetClientState {
                 &self.checkin_secret.as_ref().map(|_| "<redacted>"),
             )
             .field("seen_nonces_len", &self.seen_nonces.len())
+            .field("last_dispatch_outcomes", &self.last_dispatch_outcomes)
             .field("dead_man_misses", &self.dead_man_misses)
             .field("last_checkin_at", &self.last_checkin_at)
             .field("persist", &self.persist.is_some())

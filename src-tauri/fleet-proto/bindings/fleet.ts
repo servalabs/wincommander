@@ -22,24 +22,35 @@ export type ActionClass = "safe" | "destructive" | "irreversible";
  * nevertheless signed so a captured record cannot be replayed for another
  * device.
  */
-export type ActionOutcome = { version: number, receipt_id: string, device_id: DeviceId, sequence: bigint, previous_hash: string | null, command_id: string | null, catalog_id: string, action_class: ActionClass, outcome: ActionOutcomeState, 
+export type ActionOutcome = { version: number, receipt_id: string, device_id: DeviceId, sequence: bigint, previous_hash: string | null, command_id: string | null, catalog_id: string, action_class: ActionClass, outcome: ActionOutcomeState,
 /**
  * Required for failed/unknown records; absent only for a confirmed pass.
  */
-failure_stage: CommandFailureStage | null, observed_at: string, 
+failure_stage: CommandFailureStage | null, observed_at: string,
 /**
  * Bounded structured data interpreted by the catalog-specific result
  * seam. The server validates its size and readiness-self-test shape.
  */
-result_digest: JsonValue, 
+result_digest: JsonValue,
 /**
  * Lowercase SHA-256 hex of [`canonical_action_outcome_bytes`].
  */
-record_hash: string, 
+record_hash: string,
 /**
  * Base64 Ed25519 signature over the 32 raw bytes of `record_hash`.
  */
 signature: string, };
+
+/**
+ * Latest server-observed cursor for the signed action-outcome chain.
+ */
+export type ActionOutcomeHead = { sequence: bigint, record_hash: string, };
+
+/**
+ * Optional per-outcome confirmation used by peers that negotiate receipt
+ * support. This distinguishes acceptance from quarantine/orphan handling.
+ */
+export type ActionOutcomeReceipt = { receipt_id: string, sequence: bigint, disposition: string, };
 
 /**
  * Server-signed recovery point for an endpoint that has lost only its local
@@ -85,24 +96,24 @@ export type AndroidFleetStatus = { framework_key_fingerprint: string, deadman_la
  * scalars only — no filenames, paths, URLs, printer/document names, or
  * usernames (the Argus privacy invariant).
  */
-export type ArgusKindBucket = { 
+export type ArgusKindBucket = {
 /**
  * High-level category: "dlp_exfil" | "tamper" | "print" | "removable_media" | "tripwire" | "access".
  */
-kind: string, 
+kind: string,
 /**
  * Single sub-type label shared by every signal in the bucket, or `None`
  * when the kind spans multiple classes (mixed → collapse to kind level).
  */
-class: string | null, 
+class: string | null,
 /**
  * Number of signal records in this bucket.
  */
-count: bigint, 
+count: bigint,
 /**
  * Sum of magnitude within this single-kind bucket (commensurable units).
  */
-magnitude: bigint, 
+magnitude: bigint,
 /**
  * Highest severity seen, ordered info < warn < critical.
  */
@@ -118,23 +129,23 @@ max_severity: string, };
  * class = sub-type label (e.g. "usb_large_transfer", "log_cleared").
  * magnitude = aggregate scalar (bytes / pages / count).
  */
-export type ArgusSignal = { window_start: string, window_end: string, 
+export type ArgusSignal = { window_start: string, window_end: string,
 /**
  * High-level category: "dlp_exfil" | "tamper" | "print" | "removable_media" | "tripwire" | "access"
  */
-kind: string, 
+kind: string,
 /**
  * Sub-type label within the kind (no PII — e.g. "usb_large_transfer").
  */
-class: string, 
+class: string,
 /**
  * Aggregate scalar for this window (bytes transferred, pages printed, count).
  */
-magnitude: bigint, 
+magnitude: bigint,
 /**
  * "info" | "warn" | "critical"
  */
-severity: string, consent_version: number, disclosure_version: number, 
+severity: string, consent_version: number, disclosure_version: number,
 /**
  * Stable, device-minted idempotency key for a retried signal. Older
  * agents omit it, in which case the server preserves legacy insertion.
@@ -166,6 +177,41 @@ export type AuditEntry = { actor: string, action: string, target: string | null,
 export type BrandingView = { org_id: string, display_name: string, logo_url: string | null, accent_color: string, };
 
 /**
+ * Legacy-compatible command acknowledgement carried on the next check-in.
+ *
+ * The first four fields match deployed agents and servers. The optional
+ * reporting fields allow a negotiated peer to deduplicate progress reports
+ * without changing the containing envelope.
+ */
+export type CheckinAck = { command_id: string, success: boolean, detail: string | null, result: JsonValue | null, report_id: string | null, phase: string | null, terminal_reason: string | null, };
+
+/**
+ * Optional per-ACK confirmation used by peers that negotiate receipt support.
+ */
+export type CheckinAckReceipt = { command_id: string, report_id: string | null, disposition: string, resulting_status: string | null, };
+
+/**
+ * `POST /v1/agents/checkin` request body.
+ *
+ * Required authentication fields deliberately have no serde defaults.
+ * Everything else is additive/defaulted for mixed-version operation. This
+ * top-level type must not use `deny_unknown_fields`.
+ */
+export type CheckinRequest = { protocol_version: bigint, capabilities: Array<string>, device_id: string, ts: bigint, nonce: string, hmac_version: bigint, hmac: string, acks: Array<CheckinAck>, action_outcomes: Array<ActionOutcome>, posture: PostureReport | null, health: HealthSnapshot | null, resources: DeviceResourceSample | null, telemetry: JsonValue | null, productivity: JsonValue | null, argus: JsonValue | null, decoy_tripwire: JsonValue | null, capability_status: JsonValue | null, transport_health: JsonValue | null, offline_delivery_opt_out: boolean | null, productivity_detail: JsonValue | null, inventory: JsonValue | null, events: Array<LocalAlertReport>, clipboard_events: Array<ClipboardEventReport>, ink_receipts: Array<InkReceiptReport>, padding: string, decoy: boolean, };
+
+/**
+ * Successful check-in response.
+ *
+ * `Command` is generic so an older agent may retain compatibility-only
+ * command metadata while the canonical server form remains the default.
+ */
+export type CheckinResponse<Command = SignedCommand> = { protocol_version: bigint, capabilities: Array<string>, server_time: string | null, commands: Array<Command>, all_clear: boolean,
+/**
+ * Optional while old and new server versions overlap.
+ */
+policy: JsonValue | null, padding: string, pending_search_jobs: Array<PendingSearchJob>, cancelled_search_job_ids: Array<string>, pending_approval: boolean, ack_receipts: Array<CheckinAckReceipt>, action_outcome_receipts: Array<ActionOutcomeReceipt>, action_outcome_head: ActionOutcomeHead | null, action_outcome_recovery_checkpoint: ActionOutcomeRecoveryCheckpoint | null, productivity_detail_receipt: JsonValue | null, inventory_receipt: JsonValue | null, };
+
+/**
  * One clipboard-guard rule match, reported by the agent as part of a
  * `CheckinRequest` batch (`clipboard_events: Vec<ClipboardEventReport>`,
  * plan §4.4).
@@ -190,15 +236,15 @@ export type BrandingView = { org_id: string, display_name: string, logo_url: str
  * content-free cooldown metric from `wincmd_clip_rules::CooldownLedger::
  * should_emit`'s `Emit::Suppressed { count }`.
  */
-export type ClipboardEventReport = { 
+export type ClipboardEventReport = {
 /**
  * Device-minted UUIDv7 — the idempotency key.
  */
-event_id: string, 
+event_id: string,
 /**
  * RFC3339, agent clock.
  */
-occurred_at: string, policy_version: bigint, 
+occurred_at: string, policy_version: bigint,
 /**
  * String form of a `wincmd_clip_rules::RuleId` — see the struct doc.
  */
@@ -217,7 +263,7 @@ export type CommandFailureStage = "resolve" | "gate" | "dispatch" | "execute" | 
  * `catalog_id` + `action_class` + a human-safe `summary` + an optional
  * hand-authored `payload_schema` cross the wire to integrators.
  */
-export type CommandMeta = { catalog_id: string, action_class: ActionClass, summary: string, 
+export type CommandMeta = { catalog_id: string, action_class: ActionClass, summary: string,
 /**
  * Compact JSON-Schema-ish literal string, or `None` for parameterless
  * commands. Kept as a JSON *string* (not a parsed `Value`) so this
@@ -235,26 +281,26 @@ export type CommandRequest = { device_id: DeviceId, catalog_id: string, action_c
 /**
  * Lifecycle of a remote command. `pending` awaits multi-party approval;
  * `approved` is signed and pollable; `dispatched` was handed to the agent;
- * `acked` proves only that the agent responded; `applied` requires an
- * explicit device-side postcondition receipt. `failed`/`rejected`/`expired`
- * are terminal results.
+ * `acked` proves only that the agent responded; `applying` means execution is
+ * still in progress; `applied` requires an explicit device-side postcondition
+ * receipt. `failed`/`rejected`/`expired` are terminal results.
  */
-export type CommandStatus = "pending" | "approved" | "dispatched" | "acked" | "applied" | "failed" | "rejected" | "expired";
+export type CommandStatus = "pending" | "approved" | "dispatched" | "acked" | "applying" | "applied" | "failed" | "rejected" | "expired";
 
 /**
  * Admin-facing view of a command and its gate state.
  */
-export type CommandView = { command_id: string, device_id: DeviceId, catalog_id: string, action_class: ActionClass, status: CommandStatus, approvals: number, required_approvals: number, requested_by: string, created_at: string, 
+export type CommandView = { command_id: string, device_id: DeviceId, catalog_id: string, action_class: ActionClass, status: CommandStatus, approvals: number, required_approvals: number, requested_by: string, created_at: string, updated_at: string | null, approved_at: string | null, dispatched_at: string | null, acknowledged_at: string | null, applying_at: string | null, applied_at: string | null, terminal_at: string | null,
 /**
  * Stable request/correlation id supplied when the command was created.
  * This is distinct from the server-assigned `command_id`.
  */
-request_id: string, 
+request_id: string,
 /**
  * Safe, human-readable terminal reason. This is deliberately a bounded
  * classification, not arbitrary device output or sensitive result data.
  */
-terminal_reason: string | null, 
+terminal_reason: string | null,
 /**
  * Command payload — included so the admin panel can reconstruct current
  * per-capability state from command history without a separate endpoint.
@@ -272,31 +318,31 @@ payload: JsonValue, };
  * of these via [`epoch_signing_envelope`] so a device cannot replay another
  * scope's policy (target spoofing) or strip the locks (downgrade).
  */
-export type ConfigEpoch = { org_id: OrgId, version: bigint, config_json: JsonValue, 
+export type ConfigEpoch = { org_id: OrgId, version: bigint, config_json: JsonValue,
 /**
  * Scope this epoch applies to: "org" | "group" | "device". Defaults to
  * "org" for epochs published before targeting existed.
  */
-target_kind: string, 
+target_kind: string,
 /**
  * Target id within the kind (group_id / device_id). `None` for org-wide.
  */
-target_id: string | null, 
+target_id: string | null,
 /**
  * Settings dot-paths the device must keep at the published value — locked
  * against local edits while the device is fleet-managed.
  */
-locked_paths: Array<string>, 
+locked_paths: Array<string>,
 /**
  * P5 enrollment lock: when true the device should refuse a local unenroll
  * without admin approval. Carried here (signed) so it can't be spoofed.
  */
-managed: boolean, 
+managed: boolean,
 /**
  * Base64 Ed25519 signature over [`canonical_epoch_bytes`]`(version,
  * epoch_signing_envelope(config_json, locked_paths, managed, target))`.
  */
-signature: string, 
+signature: string,
 /**
  * Base64 of the public key that produced `signature` (lets agents pin the
  * fleet signing key and detect rotation).
@@ -307,19 +353,19 @@ signer_key: string, };
  * Admin request to publish new policy. The server assigns the next monotonic
  * version and signs it; the admin never supplies version or signature.
  */
-export type ConfigPushRequest = { config_json: JsonValue, 
+export type ConfigPushRequest = { config_json: JsonValue,
 /**
  * Scope: "org" (default) | "group" | "device".
  */
-target_kind: string, 
+target_kind: string,
 /**
  * group_id / device_id for a scoped push; ignored for "org".
  */
-target_id: string | null, 
+target_id: string | null,
 /**
  * Settings dot-paths to lock on the targeted devices.
  */
-locked_paths: Array<string>, 
+locked_paths: Array<string>,
 /**
  * Mark the targeted devices enrollment-locked (P5).
  */
@@ -353,33 +399,33 @@ export type CreateGroupRequest = { name: string, };
  * recent disclosure-mismatch ingest denial in the audit log), and which signal
  * kinds have been seen. Aggregate/opaque scalars only — no PII.
  */
-export type DeviceArgusCoverage = { device_id: DeviceId, hostname: string | null, 
+export type DeviceArgusCoverage = { device_id: DeviceId, hostname: string | null,
 /**
  * True when ≥1 Argus signal was ingested for this device within the window.
  */
-monitoring_active: boolean, 
+monitoring_active: boolean,
 /**
  * RFC 3339 window_end of the most recent ingested signal, else `None`.
  */
-last_signal_at: string | null, 
+last_signal_at: string | null,
 /**
  * Disclosure version of the most recent ingested signal, else `None`.
  * (A mismatch is retained as disclosure evidence rather than rejected.)
  */
-disclosure_version: number | null, 
+disclosure_version: number | null,
 /**
  * Distinct signal kinds observed for this device in the window, sorted asc.
  */
-kinds_observed: Array<string>, 
+kinds_observed: Array<string>,
 /**
  * Number of signal records ingested for this device in the window.
  */
-signal_count: bigint, 
+signal_count: bigint,
 /**
  * False when a disclosure-mismatch ingest denial was recorded for this
  * device in the audit log within the window.
  */
-disclosure_in_good_standing: boolean, 
+disclosure_in_good_standing: boolean,
 /**
  * RFC 3339 timestamp of the most recent disclosure-mismatch denial, else `None`.
  */
@@ -388,26 +434,26 @@ last_disclosure_mismatch_at: string | null, };
 /**
  * Per-device Argus signal rollup for the admin dashboard.
  */
-export type DeviceArgusSummary = { device_id: DeviceId, hostname: string | null, 
+export type DeviceArgusSummary = { device_id: DeviceId, hostname: string | null,
 /**
  * Total number of signal records for this device in the window.
  */
-signal_count: bigint, 
+signal_count: bigint,
 /**
  * Sum of magnitude across all signals. NOTE: mixes incommensurable units
  * (bytes + pages + counts) — kept for back-compat; prefer `by_kind` and
  * `risk_score` for a meaningful read.
  */
-total_magnitude: bigint, 
+total_magnitude: bigint,
 /**
  * RFC 3339 timestamp of the most recent signal window end.
  */
-last_window_end: string | null, 
+last_window_end: string | null,
 /**
  * Per-kind severity-aware breakdown (additive). Sorted by `kind`. Each
  * bucket aggregates one commensurable signal family so magnitudes never mix.
  */
-by_kind: Array<ArgusKindBucket>, 
+by_kind: Array<ArgusKindBucket>,
 /**
  * Normalised insider-risk score (additive). Severity-weighted signal
  * volume, unit-independent — see `store::argus_risk_score` for the model.
@@ -447,7 +493,7 @@ export type DeviceLifecycle = "pending" | "active" | "suspended" | "revoked" | "
 /**
  * Per-device productivity rollup for the admin dashboard.
  */
-export type DeviceProductivity = { device_id: DeviceId, hostname: string | null, active_seconds: bigint, idle_seconds: bigint, sample_count: bigint, last_window_end: string | null, 
+export type DeviceProductivity = { device_id: DeviceId, hostname: string | null, active_seconds: bigint, idle_seconds: bigint, sample_count: bigint, last_window_end: string | null,
 /**
  * Per-category weighted totals folded from each sample's `category_scores`
  * (each score weighted by that sample's `active_seconds`), e.g.
@@ -464,11 +510,11 @@ category_totals: JsonValue, };
  * overwrites the prior sample rather than accumulating history. No process
  * list, no filenames — aggregate scalars only.
  */
-export type DeviceResourceSample = { 
+export type DeviceResourceSample = {
 /**
  * 0.0–100.0, whole-system CPU utilization.
  */
-cpu_usage_pct: number, ram_used_gb: number, ram_total_gb: number, disks: Array<DiskMetric>, net_up_bytes_per_sec: number, net_down_bytes_per_sec: number, 
+cpu_usage_pct: number, ram_used_gb: number, ram_total_gb: number, disks: Array<DiskMetric>, net_up_bytes_per_sec: number, net_down_bytes_per_sec: number,
 /**
  * RFC3339, set by the agent at sample time (not the server's receipt time).
  */
@@ -478,22 +524,22 @@ sampled_at: string, };
  * A device as shown in the admin panel's fleet view. `online` is computed by
  * the server from `last_seen` against a freshness window.
  */
-export type DeviceSummary = { device_id: DeviceId, device_hash: string, 
+export type DeviceSummary = { device_id: DeviceId, device_hash: string,
 /**
  * Enrolled agent class (`wincommander`, `tuxcommander`, or `android`).
  * Additive/defaulted so older cached API responses still deserialize.
  */
-device_kind: string, hostname: string | null, os_version: string | null, agent_version: string, enrolled_at: string, last_seen_at: string | null, online: boolean, 
+device_kind: string, hostname: string | null, os_version: string | null, agent_version: string, enrolled_at: string, last_seen_at: string | null, online: boolean,
 /**
  * Group this device is assigned to, if any (F4 device groups).
  */
-group_id: string | null, 
+group_id: string | null,
 /**
  * Latest live resource sample (F-metrics), if the device has ever
  * reported one. `None` for a device on an agent build predating this
  * field, or one that simply hasn't checked in yet.
  */
-resources: DeviceResourceSample | null, 
+resources: DeviceResourceSample | null,
 /**
  * Framework-authoritative Android fleet state from the latest check-in.
  */
@@ -521,7 +567,7 @@ export type FetchContentPayload = { path: string, transfer_token: string, };
 /**
  * One row of a `files.list_dir` result — metadata only, never content.
  */
-export type FileEntry = { name: string, path: string, is_dir: boolean, size_bytes: bigint, 
+export type FileEntry = { name: string, path: string, is_dir: boolean, size_bytes: bigint,
 /**
  * RFC3339 last-modified time, or `None` if unavailable.
  */
@@ -538,15 +584,15 @@ export type FileOpResult = { ok: boolean, path: string, detail: string | null, }
 /**
  * `files.stat` result — size / timestamps / attributes for one path.
  */
-export type FileStatResult = { ok: boolean, path: string, detail: string | null, is_dir: boolean, size_bytes: bigint, 
+export type FileStatResult = { ok: boolean, path: string, detail: string | null, is_dir: boolean, size_bytes: bigint,
 /**
  * RFC3339 last-modified time, or `None` if unavailable.
  */
-modified_at: string | null, 
+modified_at: string | null,
 /**
  * RFC3339 creation time, or `None` if the platform doesn't record it.
  */
-created_at: string | null, 
+created_at: string | null,
 /**
  * Windows file-attribute bitmask (0 on non-Windows agents).
  */
@@ -563,34 +609,34 @@ export type FleetError = "not_found" | "stale_epoch" | "bad_signature" | "bad_re
  * device running behind its resolved policy epoch (and, when the device reports
  * `toggle_states`, the specific toggles that diverged). `detail` is PII-free.
  */
-export type FleetNotification = { id: bigint, 
+export type FleetNotification = { id: bigint,
 /**
  * Notification class — "drift" (config drift) or "insider_risk" (a critical
  * Argus DLP/tamper/tripwire signal); extensible (e.g. "device_dark").
  */
-kind: string, 
+kind: string,
 /**
  * "info" | "warn" | "critical".
  */
-severity: string, 
+severity: string,
 /**
  * One-line human summary (no PII).
  */
-summary: string, 
+summary: string,
 /**
  * Structured PII-free detail (e.g. drifted toggle paths + desired values).
  */
-detail: JsonValue, device_id: DeviceId | null, hostname: string | null, read: boolean, created_at: string, 
+detail: JsonValue, device_id: DeviceId | null, hostname: string | null, read: boolean, created_at: string,
 /**
  * Number of identical events folded into this notification during its
  * cooldown window. A value above one means Fleet suppressed duplicate
  * paging while retaining occurrence evidence.
  */
-occurrence_count: number, 
+occurrence_count: number,
 /**
  * Most recent occurrence, distinct from when this incident card started.
  */
-latest_at: string, 
+latest_at: string,
 /**
  * Bounded, safe correlation/request IDs for this incident. Never carries
  * device content, camera data, clipboard data, or free-form text.
@@ -601,6 +647,11 @@ correlation_ids: Array<string>, };
  * `files.hash` result — a content digest (currently SHA-256 only).
  */
 export type HashResult = { ok: boolean, path: string, detail: string | null, algo: string, hex: string, size_bytes: bigint, };
+
+/**
+ * PII-free device health reported with a normal check-in.
+ */
+export type HealthSnapshot = { encryption_on: boolean | null, patch_state: string | null, av_on: boolean | null, os_version: string | null, sovereignty_score: bigint | null, platform_facts: JsonValue | null, };
 
 /**
  * One Ink Receipt lifecycle report, batched onto `CheckinRequest` as
@@ -616,17 +667,17 @@ export type HashResult = { ok: boolean, path: string, detail: string | null, alg
  * controlled-PDF lane (plan §5) is that Fleet learns a page COUNT and an
  * OUTCOME, never what was printed or by whom on the machine.
  */
-export type InkReceiptReport = { 
+export type InkReceiptReport = {
 /**
  * Device-minted UUID — the idempotency key.
  */
-receipt_id: string, 
+receipt_id: string,
 /**
  * The `IR-<uuid-simple>` ticket id (D-5) this receipt completes.
  * Treated as pseudonymous and encrypted at rest (D-8) — the route
  * layer, not this type, owns that encryption and any format check.
  */
-ticket_id: string, printer_class: PrinterClass, pages: number, status: InkReceiptStatus, policy_version: bigint, 
+ticket_id: string, printer_class: PrinterClass, pages: number, status: InkReceiptStatus, policy_version: bigint,
 /**
  * RFC3339, agent clock.
  */
@@ -659,22 +710,22 @@ export type ListDirResult = { ok: boolean, path: string, detail: string | null, 
  * bounded counters, or aggregate metric values only—never clipboard text,
  * process names, paths, peers, SSIDs, window titles, or other free text.
  */
-export type LocalAlertReport = { 
+export type LocalAlertReport = {
 /**
  * Endpoint-minted UUID. It is stable across an outbox retry, so the
  * server can retain a repeated check-in as one occurrence rather than
  * creating a second alert or second external notification.
  */
-event_id: string, 
+event_id: string,
 /**
  * Closed allowlist enforced by Pro's `normalize_local_alert`.
  */
-alert_type: string, 
+alert_type: string,
 /**
  * e.g. `{"detected":"OBS Studio","process":"obs64.exe"}` or
  * `{"metric":"cpu","value_pct":94,"threshold_pct":85,"duration_s":300}`.
  */
-detail: JsonValue, 
+detail: JsonValue,
 /**
  * RFC3339, set by the agent at the moment the local notification fired.
  */
@@ -699,21 +750,26 @@ export type LoginResponse = { token: string, role: AdminRole, expires_at: string
 export type OrgId = string;
 
 /**
+ * One content-search job delivered in a check-in response.
+ */
+export type PendingSearchJob = { job_id: string, query: string, max_hits_per_device: number, };
+
+/**
  * The only policy payload sent by a check-in response.  It carries separate
  * independently-revised sections in one server-signed envelope so every
  * agent receives the same policy decision atomically.
  */
-export type PolicyEnvelope = { org_id: OrgId, device_id: DeviceId, config: ConfigEpoch | null, shield: ShieldDesiredState | null, 
+export type PolicyEnvelope = { org_id: OrgId, device_id: DeviceId, config: ConfigEpoch | null, shield: ShieldDesiredState | null,
 /**
  * Latest independent Shield revision for the organisation, including a
  * tombstone/empty shield section.  This prevents replaying an older
  * signed empty section to erase a newer Shield policy.
  */
-shield_revision: bigint, 
+shield_revision: bigint,
 /**
  * Base64 Ed25519 signature over [`policy_envelope_preimage`].
  */
-signature: string, 
+signature: string,
 /**
  * Base64 public key expected to match the key pinned at enrollment.
  */
@@ -728,20 +784,20 @@ signer_key: string, };
  * Wire type — shared with the fleet server and the admin panel.  All fields
  * are serialised; none are optional except `ttl_secs` (absent = no expiry).
  */
-export type PolicyIntent = { 
+export type PolicyIntent = {
 /**
  * Dot-path policy key, e.g. `"privacy.telemetry"` or `"fleet.enabled"`.
  */
-key: string, 
+key: string,
 /**
  * Desired value — matches the AppSettings field type on the wire.
  */
-value: JsonValue, 
+value: JsonValue,
 /**
  * Enforcement mode: `"off"` | `"report"` | `"heal"` | `"hard-lock"`.
  * Unknown modes are treated as `"off"` by the agent (fail-safe).
  */
-mode: string, 
+mode: string,
 /**
  * How long (seconds) this intent is valid for.  `None` = no expiry.
  * The agent re-fetches policy before acting on an expired intent.
@@ -753,21 +809,21 @@ ttl_secs: bigint | null, };
  * Layers are merged by the server (priority ascending) into a
  * [`ResolvedPolicy`] that is signed and handed to the agent.
  */
-export type PolicyLayer = { 
+export type PolicyLayer = {
 /**
  * Scope of this layer: `"org"` | `"group"` | `"device"`.
  */
-layer_kind: string, 
+layer_kind: string,
 /**
  * Scope identifier within the kind (group_id / device_id). `None` for
  * org-wide layers.
  */
-layer_id: string | null, 
+layer_id: string | null,
 /**
  * Priority used when merging layers.  Higher priority wins on conflict.
  * Conventional values: org=0, group=100, device=200.
  */
-priority: bigint, 
+priority: bigint,
 /**
  * The intents this layer declares.  The server deduplicates by `key`
  * (highest-priority wins) before producing [`ResolvedPolicy`].
@@ -779,14 +835,14 @@ intents: Array<PolicyIntent>, };
  * epoch it currently holds + a hash of its applied settings, so the server can
  * compute drift (behind the latest epoch) and compliance. No PII.
  */
-export type PostureReport = { applied_epoch: bigint, settings_hash: string, 
+export type PostureReport = { applied_epoch: bigint, settings_hash: string,
 /**
  * Optional PII-free map of `settings-dot-path → applied value` (booleans /
  * scalars only — never names/paths/URLs). When present the server diffs it
  * against the resolved epoch's desired config to surface PER-TOGGLE drift
  * (P3). Absent (`null`) → drift is computed at epoch granularity only.
  */
-toggle_states: JsonValue | null, 
+toggle_states: JsonValue | null,
 /**
  * Whether the Privacy Shield is ACTUALLY running on the device right
  * now, self-reported at posture time. Compared against the resolved
@@ -811,7 +867,7 @@ export type PrinterClass = "pdf" | "secure_physical";
  * display color. Validation belongs to the Fleet server; this is only the
  * shared wire shape used by the server and its console.
  */
-export type ProductivityCategoryRule = { name: Array<string>, regex: string, ignore_case: boolean, 
+export type ProductivityCategoryRule = { name: Array<string>, regex: string, ignore_case: boolean,
 /**
  * Empty means no display color has been set.
  */
@@ -824,7 +880,7 @@ color: string, };
  * compatibility; ingest records the active `disclosure_version` and does not
  * treat either version as a consent gate.
  */
-export type ProductivitySample = { window_start: string, window_end: string, active_seconds: number, idle_seconds: number, 
+export type ProductivitySample = { window_start: string, window_end: string, active_seconds: number, idle_seconds: number,
 /**
  * Aggregate category → score map, e.g. `{"productive": 0.8}`. Aggregate only.
  */
@@ -847,7 +903,7 @@ export type ReadinessState = "pass" | "fail" | "unknown";
  * same disclosure boundary as `RemoteSearchResultRow`: an explicit,
  * audited, admin-triggered listing, never passive/automatic collection.
  */
-export type RecentDownloadEntry = { name: string, path: string, size_bytes: bigint, 
+export type RecentDownloadEntry = { name: string, path: string, size_bytes: bigint,
 /**
  * RFC3339 last-modified time.
  */
@@ -864,19 +920,19 @@ export type RecentDownloadsResult = { entries: Array<RecentDownloadEntry>, };
  * returned via the command result endpoint. Not yet wired to any catalog entry
  * or handler.
  */
-export type RemoteSearchRequest = { terms: string, 
+export type RemoteSearchRequest = { terms: string,
 /**
  * Roots to walk. Omitted/empty ⇒ the device uses a bounded default scope
  * (the common user-profile dirs). `#[serde(default)]` so the payload can
  * omit it and the JSON-Schema `required` stays `[terms, mode]`.
  */
-scope: Array<string>, mode: SearchMode, 
+scope: Array<string>, mode: SearchMode,
 /**
  * Device-side filters applied before the row cap. `#[serde(default)]` keeps
  * the JSON-Schema `required` at `[terms, mode]`, so an older console that
  * omits this is unaffected.
  */
-predicates: SearchPredicates, rank: SearchRank, 
+predicates: SearchPredicates, rank: SearchRank,
 /**
  * Maximum result rows the device may return. Fleet derives this from the
  * organization setting before signing the command; callers cannot select
@@ -888,7 +944,7 @@ result_limit: number, };
  * Cross-device file search result, returned via the command result endpoint
  * (§3.4) / the search fan-out aggregation route.
  */
-export type RemoteSearchResult = { command_id: string, rows: Array<RemoteSearchResultRow>, index_status: JsonValue | null, 
+export type RemoteSearchResult = { command_id: string, rows: Array<RemoteSearchResultRow>, index_status: JsonValue | null,
 /**
  * Whether this device actually evaluated `RemoteSearchRequest::predicates`.
  *
@@ -928,11 +984,11 @@ export type RemoteSearchResultRow = { doc_id: string, path: string, name: string
  * [`ConfigEpoch`]).  Agents reject any `ResolvedPolicy` whose `version` is ≤
  * the last applied version.
  */
-export type ResolvedPolicy = { 
+export type ResolvedPolicy = {
 /**
  * Monotonically increasing policy version for this org.
  */
-version: bigint, org_id: OrgId, device_id: DeviceId, 
+version: bigint, org_id: OrgId, device_id: DeviceId,
 /**
  * Merged, deduplicated intents (sorted by `key` in the preimage — see
  * [`policy_preimage`]).
@@ -961,20 +1017,20 @@ export type SearchMode = "keyword" | "semantic" | "forensic";
  * payload, and an omitted predicate means "no constraint", never "match
  * nothing".
  */
-export type SearchPredicates = { 
+export type SearchPredicates = {
 /**
  * Lowercase extensions WITHOUT the leading dot (`["xlsx", "csv"]`).
  * Empty ⇒ any extension.
  */
-ext_in: Array<string>, 
+ext_in: Array<string>,
 /**
  * Inclusive size bounds in bytes.
  */
-size_min: bigint | null, size_max: bigint | null, 
+size_min: bigint | null, size_max: bigint | null,
 /**
  * Inclusive mtime bounds, Unix seconds.
  */
-modified_after: bigint | null, modified_before: bigint | null, 
+modified_after: bigint | null, modified_before: bigint | null,
 /**
  * Case-insensitive path substrings to skip (e.g. `node_modules`). Applied
  * to the full path, and used to prune directory recursion where possible.
@@ -1033,20 +1089,20 @@ export type Severity = "info" | "warn" | "high" | "critical";
  * independent from [`ConfigEpoch::version`]: changing the shield must not
  * make ordinary configuration appear behind.
  */
-export type ShieldDesiredState = { enabled: boolean, 
+export type ShieldDesiredState = { enabled: boolean,
 /**
  * `"blur_notify"` | `"notify_only"`.
  */
-mode: string, 
+mode: string,
 /**
  * Monotonic only for this resolved Shield policy domain.
  */
-revision: bigint, 
+revision: bigint,
 /**
  * RFC3339 server write time, useful for display but never used as the
  * anti-rollback guard.
  */
-updated_at: string, 
+updated_at: string,
 /**
  * Device-scoped Start/Stop command that caused this state, if any.
  */
@@ -1068,7 +1124,7 @@ command_id: string | null, };
  * signature verification silently fails and the command (including
  * `duress_wipe`) never executes. See `canonical_command_bytes`'s doc.
  */
-export type SignedCommand = { command_id: string, 
+export type SignedCommand = { command_id: string,
 /**
  * The stable id the signer actually signed over (operator-signed
  * commands: the offline tool's `--idempotency-key`; server-signed

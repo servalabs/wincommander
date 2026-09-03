@@ -496,9 +496,10 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![cmd],
-            policy: serde_json::Value::Null,
+            policy: Some(serde_json::Value::Null),
             padding: String::new(),
             pending_search_jobs: Vec::new(),
+            ..Default::default()
         };
         let dispatch = MockDispatch::default();
         let mut seen = HashMap::new();
@@ -521,9 +522,10 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![cmd],
-            policy: serde_json::Value::Null,
+            policy: Some(serde_json::Value::Null),
             padding: String::new(),
             pending_search_jobs: Vec::new(),
+            ..Default::default()
         };
         let dispatch = MockDispatch::default();
         let mut seen = HashMap::new();
@@ -576,9 +578,10 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![cmd],
-            policy: serde_json::Value::Null,
+            policy: Some(serde_json::Value::Null),
             padding: String::new(),
             pending_search_jobs: Vec::new(),
+            ..Default::default()
         };
         let dispatch = MockDispatch::default();
         let mut seen = HashMap::new();
@@ -624,9 +627,10 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![duress],
-            policy: serde_json::Value::Null,
+            policy: Some(serde_json::Value::Null),
             padding: String::new(),
             pending_search_jobs: Vec::new(),
+            ..Default::default()
         };
         // Both keys pinned → routes to operator → dispatched.
         let d = MockDispatch::default();
@@ -657,9 +661,10 @@ pub(crate) mod tests {
         let resp2 = CheckinResponse {
             all_clear: false,
             commands: vec![ordinary],
-            policy: serde_json::Value::Null,
+            policy: Some(serde_json::Value::Null),
             padding: String::new(),
             pending_search_jobs: Vec::new(),
+            ..Default::default()
         };
         let out3 = process_checkin(
             &resp2,
@@ -696,9 +701,10 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![cmd],
-            policy: serde_json::Value::Null,
+            policy: Some(serde_json::Value::Null),
             padding: String::new(),
             pending_search_jobs: Vec::new(),
+            ..Default::default()
         };
         let dispatch = MockDispatch::default();
         let mut seen = HashMap::new();
@@ -718,9 +724,10 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: true,
             commands: vec![cmd],
-            policy: serde_json::Value::Null,
+            policy: Some(serde_json::Value::Null),
             padding: String::new(),
             pending_search_jobs: Vec::new(),
+            ..Default::default()
         };
         let dispatch = MockDispatch::default();
         let mut seen = HashMap::new();
@@ -738,9 +745,10 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![cmd],
-            policy: serde_json::Value::Null,
+            policy: Some(serde_json::Value::Null),
             padding: String::new(),
             pending_search_jobs: Vec::new(),
+            ..Default::default()
         };
         let dispatch = MockDispatch::default();
         let mut seen = HashMap::new();
@@ -764,9 +772,10 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![unseal_cmd],
-            policy: serde_json::Value::Null,
+            policy: Some(serde_json::Value::Null),
             padding: String::new(),
             pending_search_jobs: Vec::new(),
+            ..Default::default()
         };
         let dispatch = MockDispatch::default();
         let mut seen = HashMap::new();
@@ -781,9 +790,10 @@ pub(crate) mod tests {
         let resp2 = CheckinResponse {
             all_clear: false,
             commands: vec![revoke_cmd],
-            policy: serde_json::Value::Null,
+            policy: Some(serde_json::Value::Null),
             padding: String::new(),
             pending_search_jobs: Vec::new(),
+            ..Default::default()
         };
         let dispatch2 = MockDispatch::default();
         let mut seen2 = HashMap::new();
@@ -811,9 +821,10 @@ pub(crate) mod tests {
         let resp = CheckinResponse {
             all_clear: false,
             commands: vec![],
-            policy: serde_json::Value::Null,
+            policy: Some(serde_json::Value::Null),
             padding: String::new(),
             pending_search_jobs: Vec::new(),
+            ..Default::default()
         };
         let dispatch = MockDispatch::default();
         let mut seen = HashMap::new();

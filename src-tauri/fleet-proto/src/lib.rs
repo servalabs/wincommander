@@ -14,12 +14,14 @@ use serde_json::Value;
 
 #[cfg(feature = "autonomous-test")]
 pub mod autonomous_test;
+pub mod checkin;
 pub mod events;
 pub mod outcomes;
 pub mod policy;
 
 #[cfg(feature = "autonomous-test")]
 pub use autonomous_test::*;
+pub use checkin::*;
 pub use events::*;
 pub use outcomes::*;
 pub use policy::*;
