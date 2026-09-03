@@ -302,4 +302,47 @@ mod tests {
         assert!(response.action_outcome_receipts.is_empty());
         assert_eq!(response.protocol_version, CHECKIN_PROTOCOL_VERSION);
     }
+
+    #[test]
+    fn ack_report_ids_and_receipts_round_trip_without_loss() {
+        let request: CheckinRequest = serde_json::from_value(serde_json::json!({
+            "protocol_version": CHECKIN_PROTOCOL_VERSION,
+            "capabilities": ["checkin-v1", "ack-receipts-v1"],
+            "device_id": "device-1",
+            "ts": 1,
+            "nonce": "nonce-with-at-least-16-chars",
+            "hmac": "mac",
+            "acks": [{
+                "command_id": "command-1",
+                "success": true,
+                "report_id": "report-1",
+                "phase": "applied"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(request.capabilities.len(), 2);
+        assert_eq!(request.acks[0].report_id.as_deref(), Some("report-1"));
+        assert_eq!(request.acks[0].phase.as_deref(), Some("applied"));
+
+        let response: CheckinResponse = serde_json::from_value(serde_json::json!({
+            "protocol_version": CHECKIN_PROTOCOL_VERSION,
+            "ack_receipts": [{
+                "command_id": "command-1",
+                "report_id": "report-1",
+                "disposition": "accepted",
+                "resulting_status": "applied"
+            }],
+            "action_outcome_receipts": [{
+                "receipt_id": "receipt-1",
+                "sequence": 7,
+                "disposition": "accepted"
+            }]
+        }))
+        .unwrap();
+        assert_eq!(
+            response.ack_receipts[0].report_id.as_deref(),
+            Some("report-1")
+        );
+        assert_eq!(response.action_outcome_receipts[0].receipt_id, "receipt-1");
+    }
 }
