@@ -180,6 +180,14 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           workspaces: src-tauri
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+        working-directory: .
+      - name: Generate encrypted backend modules
+        run: bun run encrypt-backend
+        working-directory: .
       - run: cargo check --all-targets
 
   # F-18 — exercise the in-repo #[cfg(test)] units (webhook HMAC verification,
@@ -201,6 +209,14 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           workspaces: src-tauri
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+        working-directory: .
+      - name: Generate encrypted backend modules
+        run: bun run encrypt-backend
+        working-directory: .
       - run: cargo test --workspace --no-fail-fast
 
   # NOTE (L2): the Cloudflare licence worker lives in the commander-pro repo, so
@@ -263,6 +279,14 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           workspaces: src-tauri
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+        working-directory: .
+      - name: Generate encrypted backend modules
+        run: bun run encrypt-backend
+        working-directory: .
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   # F-11 — dependency-CVE audit for both Rust workspaces and npm. This blocks

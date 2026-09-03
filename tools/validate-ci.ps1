@@ -25,6 +25,12 @@ foreach ($needle in $required) {
 if ($text.Contains('pull_request_target:')) {
     throw 'invariants.yml must not run repository code through pull_request_target.'
 }
+foreach ($job in @('cargo-check', 'cargo-test', 'cargo-clippy')) {
+    $match = [regex]::Match($text, "(?ms)^  $([regex]::Escape($job)):\s*(.*?)(?=^  [a-z0-9-]+:|\z)")
+    if (-not $match.Success -or -not $match.Groups[1].Value.Contains('bun run encrypt-backend')) {
+        throw "invariants.yml Rust job '$job' must generate ignored backend modules before compiling."
+    }
+}
 $actionRefs = [regex]::Matches($text, '(?m)^\s*(?:-\s*)?uses:\s*[^@\s]+@([^\s#]+)')
 foreach ($match in $actionRefs) {
     if ($match.Groups[1].Value -notmatch '^[0-9a-f]{40}$') {
