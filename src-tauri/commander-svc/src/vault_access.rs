@@ -170,6 +170,7 @@ fn valid_creation_path(path: &Path) -> bool {
         })
 }
 
+#[cfg(test)]
 fn lexical_normalize_creation_path(path: &Path) -> Result<PathBuf, VaultError> {
     if !valid_creation_path(path) {
         return Err(VaultError::Validation);
@@ -344,6 +345,13 @@ impl PersonalCreationReservation {
     }
 }
 
+pub(crate) struct PersonalCreationCaller<'a> {
+    pub owner_sid: &'a str,
+    pub session_id: u32,
+    pub client_pid: u32,
+    pub authentication_id: (u32, i32),
+}
+
 fn reservation_matches_without_time(
     pending: &PendingPersonalVault,
     reservation: &PersonalCreationReservation,
@@ -512,16 +520,13 @@ impl VaultAccessStore {
     pub fn begin_personal_registration(
         &self,
         container_path: &str,
-        owner_sid: &str,
-        created_by_session: u32,
-        client_pid: u32,
-        authentication_id: (u32, i32),
+        caller: PersonalCreationCaller<'_>,
         operation_id: u64,
         now: i64,
     ) -> Result<PersonalCreationReservation, VaultError> {
-        if owner_sid.is_empty()
-            || created_by_session == 0
-            || client_pid == 0
+        if caller.owner_sid.is_empty()
+            || caller.session_id == 0
+            || caller.client_pid == 0
             || operation_id == 0
             || now <= 0
             || !valid_creation_path(Path::new(container_path))
@@ -543,11 +548,11 @@ impl VaultAccessStore {
             .map_err(|_| VaultError::Persistence)?;
         let pending = PendingPersonalVault {
             container_path: normalized_path.clone(),
-            owner_sid: owner_sid.to_string(),
-            created_by_session,
-            client_pid,
-            authentication_id_high: authentication_id.0,
-            authentication_id_low: authentication_id.1,
+            owner_sid: caller.owner_sid.to_string(),
+            created_by_session: caller.session_id,
+            client_pid: caller.client_pid,
+            authentication_id_high: caller.authentication_id.0,
+            authentication_id_low: caller.authentication_id.1,
             operation_id,
             reservation_nonce: reservation_nonce.to_vec(),
             reserved_at: now,
@@ -568,11 +573,11 @@ impl VaultAccessStore {
         }
         if state.personal_pending.values().any(|existing| {
             existing.expires_at > now
-                && existing.owner_sid == owner_sid
-                && existing.created_by_session == created_by_session
-                && existing.client_pid == client_pid
-                && existing.authentication_id_high == authentication_id.0
-                && existing.authentication_id_low == authentication_id.1
+                && existing.owner_sid == caller.owner_sid
+                && existing.created_by_session == caller.session_id
+                && existing.client_pid == caller.client_pid
+                && existing.authentication_id_high == caller.authentication_id.0
+                && existing.authentication_id_low == caller.authentication_id.1
                 && existing.operation_id == operation_id
         }) {
             return Err(VaultError::Validation);
@@ -588,10 +593,10 @@ impl VaultAccessStore {
         }
         Ok(PersonalCreationReservation {
             normalized_path,
-            owner_sid: owner_sid.to_string(),
-            created_by_session,
-            client_pid,
-            authentication_id,
+            owner_sid: caller.owner_sid.to_string(),
+            created_by_session: caller.session_id,
+            client_pid: caller.client_pid,
+            authentication_id: caller.authentication_id,
             operation_id,
             reservation_nonce,
         })
@@ -760,83 +765,6 @@ impl VaultAccessStore {
             .fs
             .stable_file_identity(Path::new(&record.container_path))?;
         Ok((identity == record.container_identity).then_some(record))
-    }
-
-    /// Builds a non-durable personal record for a container that predates the
-    /// personal registry. The caller is not trusted by this method: the pipe
-    /// permits use only after the native engine has accepted that caller's
-    /// existing credential, then promotes the same identity to a durable
-    /// record before returning a successful mount response.
-    pub fn legacy_personal_record(
-        &self,
-        container_path: &str,
-        owner_sid: &str,
-        created_by_session: u32,
-    ) -> Result<PersonalVaultRecord, VaultError> {
-        if container_path.is_empty()
-            || owner_sid.is_empty()
-            || created_by_session == 0
-            || !Path::new(container_path).is_absolute()
-        {
-            return Err(VaultError::Validation);
-        }
-        Ok(PersonalVaultRecord {
-            container_path: container_path.to_owned(),
-            container_identity: self.fs.stable_file_identity(Path::new(container_path))?,
-            owner_sid: owner_sid.to_owned(),
-            scope: VaultPresentation::PerUser,
-            created_by_session,
-        })
-    }
-
-    /// Gives a legacy container's interactive caller a temporary, exact write
-    /// DACL while its pre-existing credential is verified by the native
-    /// engine. The original ACL snapshot is restored on every failed mount;
-    /// a successful mount is immediately promoted through
-    /// [`complete_personal_registration`], which replaces this temporary ACL
-    /// with the normal durable personal-vault ACL.
-    pub fn prepare_legacy_personal_mount(
-        &self,
-        record: &PersonalVaultRecord,
-    ) -> Result<Vec<AclSnapshot>, VaultError> {
-        let container = PathBuf::from(&record.container_path);
-        if self.fs.stable_file_identity(&container)? != record.container_identity {
-            return Err(VaultError::ContainerIdentity);
-        }
-        let parent = container
-            .parent()
-            .ok_or(VaultError::Validation)?
-            .to_path_buf();
-        let plan = VaultAclPlan {
-            parent,
-            container: container.clone(),
-            grants: vec![ResolvedGrant {
-                sid: record.owner_sid.clone(),
-                access: VaultAccess::Write,
-            }],
-            authorization_grants: Vec::new(),
-            managed_groups: Vec::new(),
-        };
-        let snapshots = self.acls.snapshot(&plan)?;
-        if self
-            .acls
-            .apply_container_and_verify(&container, &plan.grants)
-            .is_err()
-        {
-            let _ = self.acls.restore(&snapshots);
-            return Err(VaultError::AclApply);
-        }
-        if self.fs.stable_file_identity(&container).ok().as_deref()
-            != Some(record.container_identity.as_str())
-        {
-            let _ = self.acls.restore(&snapshots);
-            return Err(VaultError::ContainerIdentity);
-        }
-        Ok(snapshots)
-    }
-
-    pub fn restore_legacy_personal_mount(&self, snapshots: &[AclSnapshot]) {
-        let _ = self.acls.restore(snapshots);
     }
 
     fn persist_personal(
@@ -2719,6 +2647,15 @@ mod tests {
         )
     }
 
+    fn personal_caller() -> PersonalCreationCaller<'static> {
+        PersonalCreationCaller {
+            owner_sid: "S-1-5-21-owner",
+            session_id: 7,
+            client_pid: 1_001,
+            authentication_id: (55, -66),
+        }
+    }
+
     struct SwappingIdentityFs {
         files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
         identity_reads: Arc<AtomicUsize>,
@@ -2776,29 +2713,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_personal_adoption_detects_identity_swap_and_restores_the_acl() {
-        let files = Arc::new(Mutex::new(HashMap::new()));
-        let reads = Arc::new(AtomicUsize::new(0));
-        let restored = Arc::new(AtomicBool::new(false));
-        let store = VaultAccessStore::open(
-            Box::new(SwappingIdentityFs {
-                files,
-                identity_reads: reads,
-            }),
-            Box::new(Resolver),
-            Box::new(RestoringAcl(restored.clone())),
-            PathBuf::from("/policy"),
-        );
-        let record = store
-            .legacy_personal_record(r"C:\Vaults\legacy.hc", "S-1-5-21-owner", 7)
-            .unwrap();
-        assert!(matches!(
-            store.prepare_legacy_personal_mount(&record),
-            Err(VaultError::ContainerIdentity)
-        ));
-        assert!(restored.load(Ordering::SeqCst));
-    }
-    #[test]
     fn applies_atomically_after_acl_verification() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let s = store(files.clone());
@@ -2818,15 +2732,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
         let reservation = store
-            .begin_personal_registration(
-                "C:\\vaults\\personal.hc",
-                "S-1-5-21-owner",
-                7,
-                1_001,
-                (55, -66),
-                41,
-                100,
-            )
+            .begin_personal_registration("C:\\vaults\\personal.hc", personal_caller(), 41, 100)
             .unwrap();
         assert!(matches!(
             store.complete_personal_registration(&reservation, 101),
@@ -2860,10 +2766,7 @@ mod tests {
         assert!(matches!(
             store.begin_personal_registration(
                 "C:\\vaults\\existing.hc",
-                "S-1-5-21-owner",
-                7,
-                1_001,
-                (55, -66),
+                personal_caller(),
                 41,
                 100,
             ),
@@ -2871,30 +2774,14 @@ mod tests {
         ));
 
         let reservation = store
-            .begin_personal_registration(
-                "C:\\vaults\\personal.hc",
-                "S-1-5-21-owner",
-                7,
-                1_001,
-                (55, -66),
-                42,
-                100,
-            )
+            .begin_personal_registration("C:\\vaults\\personal.hc", personal_caller(), 42, 100)
             .unwrap();
         assert!(matches!(
             store.record_personal_broker_completion(&reservation, "C:\\vaults\\existing.hc", 101,),
             Err(VaultError::Validation)
         ));
         assert!(store
-            .begin_personal_registration(
-                "C:\\vaults\\..\\escape.hc",
-                "S-1-5-21-owner",
-                7,
-                1_001,
-                (55, -66),
-                43,
-                100,
-            )
+            .begin_personal_registration("C:\\vaults\\..\\escape.hc", personal_caller(), 43, 100,)
             .is_err());
     }
 
@@ -2912,15 +2799,7 @@ mod tests {
             PathBuf::from("/policy"),
         );
         let reservation = store
-            .begin_personal_registration(
-                "C:\\vaults\\personal.hc",
-                "S-1-5-21-owner",
-                7,
-                1_001,
-                (55, -66),
-                44,
-                100,
-            )
+            .begin_personal_registration("C:\\vaults\\personal.hc", personal_caller(), 44, 100)
             .unwrap();
         store
             .record_personal_broker_completion(&reservation, "C:\\vaults\\personal.hc", 101)
@@ -2948,37 +2827,23 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
         let reservation = store
-            .begin_personal_registration(
-                "C:\\vaults\\personal.hc",
-                "S-1-5-21-owner",
-                7,
-                1_001,
-                (55, -66),
-                41,
-                100,
-            )
+            .begin_personal_registration("C:\\vaults\\personal.hc", personal_caller(), 41, 100)
             .unwrap();
         assert!(store
             .begin_personal_registration(
                 "C:\\vaults\\personal.hc",
-                "S-1-5-21-other",
-                8,
-                2_002,
-                (77, -88),
+                PersonalCreationCaller {
+                    owner_sid: "S-1-5-21-other",
+                    session_id: 8,
+                    client_pid: 2_002,
+                    authentication_id: (77, -88),
+                },
                 99,
                 101,
             )
             .is_err());
         assert!(store
-            .begin_personal_registration(
-                "C:\\vaults\\other.hc",
-                "S-1-5-21-owner",
-                7,
-                1_001,
-                (55, -66),
-                41,
-                101,
-            )
+            .begin_personal_registration("C:\\vaults\\other.hc", personal_caller(), 41, 101,)
             .is_err());
 
         files.lock().unwrap().insert(
@@ -3023,23 +2888,12 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
         let expired = store
-            .begin_personal_registration(
-                "C:\\vaults\\personal.hc",
-                "S-1-5-21-owner",
-                7,
-                1_001,
-                (55, -66),
-                41,
-                100,
-            )
+            .begin_personal_registration("C:\\vaults\\personal.hc", personal_caller(), 41, 100)
             .unwrap();
         let replacement = store
             .begin_personal_registration(
                 "C:\\vaults\\personal.hc",
-                "S-1-5-21-owner",
-                7,
-                1_001,
-                (55, -66),
+                personal_caller(),
                 42,
                 100 + PERSONAL_CREATION_TTL_SECS + 1,
             )
@@ -3051,10 +2905,7 @@ mod tests {
         assert!(store
             .begin_personal_registration(
                 "C:\\vaults\\personal.hc",
-                "S-1-5-21-owner",
-                7,
-                1_001,
-                (55, -66),
+                personal_caller(),
                 43,
                 100 + PERSONAL_CREATION_TTL_SECS + 2,
             )

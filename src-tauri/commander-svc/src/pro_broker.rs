@@ -90,21 +90,35 @@ static NEXT_RECOVERY_REQUEST_ID: std::sync::atomic::AtomicU64 =
 const REQUEST_ID: u64 = 41;
 
 #[cfg(windows)]
-pub async fn vault_call(
-    request_id: u64,
-    target_session_id: u32,
-    caller_sid: &str,
-    caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
-    caller_authentication_id: Option<(u32, i32)>,
-    presentation: wincmd_shared::vault_access::VaultPresentation,
-    feature_id: &str,
-    args: serde_json::Value,
-) -> Result<serde_json::Value, String> {
+pub(crate) struct VaultCall<'a> {
+    pub request_id: u64,
+    pub target_session_id: u32,
+    pub caller_sid: &'a str,
+    pub caller_token: Option<windows_sys::Win32::Foundation::HANDLE>,
+    pub caller_authentication_id: Option<(u32, i32)>,
+    pub presentation: wincmd_shared::vault_access::VaultPresentation,
+    pub feature_id: &'a str,
+    pub args: serde_json::Value,
+}
+
+#[cfg(windows)]
+pub async fn vault_call(call: VaultCall<'_>) -> Result<serde_json::Value, String> {
     use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
     use tokio::time::{timeout_at, Instant};
     use wincmd_shared::{
         read_envelope, write_envelope, Envelope, Hello, Request, PROTOCOL_VERSION,
     };
+
+    let VaultCall {
+        request_id,
+        target_session_id,
+        caller_sid,
+        caller_token,
+        caller_authentication_id,
+        presentation,
+        feature_id,
+        args,
+    } = call;
 
     let deadline = Instant::now() + BROKER_TIMEOUT;
     let pipe_name = random_pipe_name();
@@ -242,16 +256,16 @@ pub async fn vault_recovery_dismount(internal_drive: u8) -> Result<serde_json::V
         return Err("broker_rejected".to_string());
     }
     let request_id = NEXT_RECOVERY_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    vault_call(
+    vault_call(VaultCall {
         request_id,
-        0,
-        "S-1-5-18",
-        None,
-        None,
-        wincmd_shared::vault_access::VaultPresentation::Machine,
-        "vault.broker.dismount",
-        serde_json::json!({ "internal_drive": internal_drive }),
-    )
+        target_session_id: 0,
+        caller_sid: "S-1-5-18",
+        caller_token: None,
+        caller_authentication_id: None,
+        presentation: wincmd_shared::vault_access::VaultPresentation::Machine,
+        feature_id: "vault.broker.dismount",
+        args: serde_json::json!({ "internal_drive": internal_drive }),
+    })
     .await
 }
 

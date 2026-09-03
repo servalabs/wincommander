@@ -92,6 +92,7 @@ use windows_sys::Win32::{
 // still derives the local client PID/token for every request.
 const PIPE_SDDL: &str = "D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x12019b;;;BU)";
 const VAULT_POLICY_ADMIN_GROUP: &str = "WinCommander Vault Policy Administrators";
+#[cfg(test)]
 const PERSONAL_VAULT_CONTAINER_UNWRITABLE: &str = "vault_container_not_writable";
 const PERSONAL_VAULT_SESSION_ABSENT: &str = "vault_session_unavailable";
 const PERSONAL_VAULT_DRIVER_STOPPED: &str = "vault_driver_unavailable";
@@ -794,10 +795,12 @@ fn handle_personal_vault_create(
     let registration = vault_access
         .begin_personal_registration(
             &requested_path,
-            peer.caller_sid(),
-            peer.session_id(),
-            peer.client_pid(),
-            peer.authentication_id(),
+            crate::vault_access::PersonalCreationCaller {
+                owner_sid: peer.caller_sid(),
+                session_id: peer.session_id(),
+                client_pid: peer.client_pid(),
+                authentication_id: peer.authentication_id(),
+            },
             operation_id,
             now,
         )
@@ -812,14 +815,16 @@ fn handle_personal_vault_create(
     args["TargetSessionId"] = serde_json::Value::from(peer.session_id());
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
-            operation_id,
-            peer.session_id(),
-            peer.caller_sid(),
-            Some(peer.token()),
-            Some(peer.authentication_id()),
-            wincmd_shared::vault_access::VaultPresentation::PerUser,
-            "vault.broker.create_personal",
-            args,
+            crate::pro_broker::VaultCall {
+                request_id: operation_id,
+                target_session_id: peer.session_id(),
+                caller_sid: peer.caller_sid(),
+                caller_token: Some(peer.token()),
+                caller_authentication_id: Some(peer.authentication_id()),
+                presentation: wincmd_shared::vault_access::VaultPresentation::PerUser,
+                feature_id: "vault.broker.create_personal",
+                args,
+            },
         ))
     })
     .map_err(|_| {
@@ -1206,15 +1211,17 @@ fn handle_vault_unmount(
             ));
         };
         vault_mount.dismount_authorized(
-            operation_id,
             vault_access,
-            &request.entry_id,
-            peer.token(),
-            peer.session_id(),
-            peer.caller_sid(),
-            authorization
-                .presentation
-                .unwrap_or(wincmd_shared::vault_access::VaultPresentation::PerUser),
+            crate::vault_mount::AuthorizedDismount {
+                operation_id,
+                entry_id: &request.entry_id,
+                caller_token: peer.token(),
+                caller_session: peer.session_id(),
+                caller_sid: peer.caller_sid(),
+                presentation: authorization
+                    .presentation
+                    .unwrap_or(wincmd_shared::vault_access::VaultPresentation::PerUser),
+            },
         )
     } else {
         wincmd_shared::vault_access::VaultMountResult {
