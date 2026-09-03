@@ -444,7 +444,7 @@ noted.
 | End Task on Taskbar         | `Enable-EndTaskOnTaskbar`       | `Disable-EndTaskOnTaskbar`       | Every existing profile + Default profile; no Explorer process is terminated. Each active desktop applies it at next sign-in; unavailable on Server Core. |
 | Gallery & Home              | `Enable-RemoveGalleryHome`      | `Disable-RemoveGalleryHome`      | HKCU HideDesktopIcons                              |
 | Bing Search                 | `Disable-BingSearch`            | `Enable-BingSearch`              | HKCU Explorer                                      |
-| Context Menu Shredder       | `toggle_context_menu` (Rust)    | `toggle_context_menu` (Rust)     | HKCU Shell entries                                 |
+| Context Menu Shredder       | `toggle_context_menu` (Rust)    | `toggle_context_menu` (Rust)     | HKCU Shell entries; regular files only. Overwrite, read-back, and deletion use one verified handle; folders fail closed. |
 | Background Apps             | `Disable-BackgroundApps`        | `Enable-BackgroundApps`          | HKCU BackgroundAccessApplications                  |
 | Notifications               | `Disable-Notifications`         | `Enable-Notifications`           | HKCU Explorer\Advanced                            |
 | Folder Type Discovery       | `Disable-FolderTypeDiscovery`   | `Enable-FolderTypeDiscovery`     | FolderType=NotSpecified (slow-media fix)           |

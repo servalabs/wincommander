@@ -3,6 +3,17 @@
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
+ * Decimal wire integer that round-trips without JavaScript number precision
+ * loss. The representation is canonical: ASCII digits only, no sign,
+ * whitespace, or leading zeroes (except the value `0`).
+ */
+export type CanonicalDecimal = string;
+
+export type DestructiveRequestV2 = { version: string, target: DestructiveTargetIdentityV2, };
+
+export type DestructiveTargetIdentityV2 = { "kind": "file", volume_serial_number: CanonicalDecimal, file_index: CanonicalDecimal, } | { "kind": "raw_partition", disk_number: CanonicalDecimal, partition_number: CanonicalDecimal, partition_guid: string, offset_bytes: CanonicalDecimal, size_bytes: CanonicalDecimal, disk_unique_id: string, } | { "kind": "bitlocker_volume", volume_guid: string, };
+
+/**
  * Top-level envelope. The first byte of the JSON tells us which variant
  * it is — serde renames the tag to `kind` for legibility on the wire.
  */
@@ -52,6 +63,8 @@ free_version: string | null,
  * Pro version string in the ack.
  */
 pro_version: string | null, };
+
+export type MutationReceiptV2 = { version: string, target: DestructiveTargetIdentityV2, verified: boolean, };
 
 /**
  * Pro → Free: unsolicited UI event. The reader task on Free side

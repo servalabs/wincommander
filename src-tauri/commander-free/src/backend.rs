@@ -6006,32 +6006,67 @@ async fn run_destruct_step(
         } else {
             let mut failures = Vec::new();
             for path in &paths {
+                let expected = match crate::path_identity::ExpectedFileIdentity::capture(
+                    std::path::Path::new(path),
+                ) {
+                    Ok(expected) => expected,
+                    Err(error) => {
+                        failures.push(format!("{path}: {error}"));
+                        continue;
+                    }
+                };
+                let identity = plan
+                    .destructive_identity(&expected.canonical_path().to_string_lossy())?
+                    .clone();
+                let mut payload = serde_json::json!({
+                    "stepId": "veracrypt_header_destroy",
+                    "Path": expected.canonical_path().to_string_lossy(),
+                })
+                .as_object()
+                .cloned()
+                .expect("destructive payload is an object");
+                if let Err(error) = crate::path_identity::insert_request(&mut payload, &identity) {
+                    failures.push(format!("{path}: {error}"));
+                    continue;
+                }
                 let outcome = crate::sidecar::dispatch_paid_command(
                     "run_destruct_step",
-                    serde_json::json!({ "stepId": "veracrypt_header_destroy", "Path": path }),
+                    serde_json::Value::Object(payload),
                 )
                 .await
-                .and_then(|v| crypto_erase_status_result(&v, "destroyed"));
+                .and_then(|v| {
+                    crate::path_identity::verify_receipt(&v, &identity)?;
+                    crypto_erase_status_result(&v, "destroyed")
+                });
                 if let Err(e) = outcome {
                     failures.push(format!("{path}: {e}"));
                 }
             }
             for device in &devices {
+                let identity = plan.destructive_identity(&device.device_path)?.clone();
+                let mut payload = serde_json::json!({
+                    "stepId": "veracrypt_header_destroy",
+                    "Path": device.device_path,
+                    "DeviceDiskNumber": device.disk_number,
+                    "DevicePartitionNumber": device.partition_number,
+                    "DevicePartitionGuid": device.partition_guid,
+                    "DeviceOffsetBytes": device.offset_bytes,
+                    "DeviceSizeBytes": device.size_bytes,
+                    "DeviceDiskUniqueId": device.disk_unique_id,
+                })
+                .as_object()
+                .cloned()
+                .expect("destructive payload is an object");
+                crate::path_identity::insert_request(&mut payload, &identity)?;
                 let outcome = crate::sidecar::dispatch_paid_command(
                     "run_destruct_step",
-                    serde_json::json!({
-                        "stepId": "veracrypt_header_destroy",
-                        "Path": device.device_path,
-                        "DeviceDiskNumber": device.disk_number,
-                        "DevicePartitionNumber": device.partition_number,
-                        "DevicePartitionGuid": device.partition_guid,
-                        "DeviceOffsetBytes": device.offset_bytes,
-                        "DeviceSizeBytes": device.size_bytes,
-                        "DeviceDiskUniqueId": device.disk_unique_id,
-                    }),
+                    serde_json::Value::Object(payload),
                 )
                 .await
-                .and_then(|v| crypto_erase_status_result(&v, "destroyed"));
+                .and_then(|v| {
+                    crate::path_identity::verify_receipt(&v, &identity)?;
+                    crypto_erase_status_result(&v, "destroyed")
+                });
                 if let Err(e) = outcome {
                     failures.push(format!("{}: {e}", device.device_path));
                 }
@@ -6073,12 +6108,28 @@ async fn run_destruct_step(
         } else {
             let mut failures = Vec::new();
             for drive in &drives {
+                let identity = plan
+                    .destructive_identity(
+                        &drive.trim().trim_end_matches('\\').to_ascii_uppercase(),
+                    )?
+                    .clone();
+                let mut payload = serde_json::json!({
+                    "stepId": "bitlocker_erase",
+                    "DriveLetter": drive,
+                })
+                .as_object()
+                .cloned()
+                .expect("destructive payload is an object");
+                crate::path_identity::insert_request(&mut payload, &identity)?;
                 let outcome = crate::sidecar::dispatch_paid_command(
                     "run_destruct_step",
-                    serde_json::json!({ "stepId": "bitlocker_erase", "DriveLetter": drive }),
+                    serde_json::Value::Object(payload),
                 )
                 .await
-                .and_then(|v| crypto_erase_status_result(&v, "ok"));
+                .and_then(|v| {
+                    crate::path_identity::verify_receipt(&v, &identity)?;
+                    crypto_erase_status_result(&v, "ok")
+                });
                 if let Err(e) = outcome {
                     failures.push(format!("{drive}: {e}"));
                 }
@@ -6161,7 +6212,7 @@ pub async fn full_lockdown(
 ) -> Result<(), String> {
     let settings =
         settings::read_settings().map_err(|e| format!("Failed to read settings: {}", e))?;
-    let plan = crate::authz::LockdownPlanSnapshot::from_settings(&settings);
+    let plan = crate::authz::LockdownPlanSnapshot::from_settings(&settings)?;
     crate::authz::consume_required(
         capability_token.as_deref(),
         crate::authz::DestructiveAction::SelfDestruct,
@@ -6175,7 +6226,7 @@ pub(crate) async fn full_lockdown_internal(app: tauri::AppHandle) -> Result<(), 
         settings::read_settings().map_err(|e| format!("Failed to read settings: {}", e))?;
     full_lockdown_with_plan(
         app,
-        crate::authz::LockdownPlanSnapshot::from_settings(&settings),
+        crate::authz::LockdownPlanSnapshot::from_settings(&settings)?,
     )
     .await
 }
@@ -6512,7 +6563,7 @@ pub async fn lockdown(
 ) -> Result<(), String> {
     let settings =
         settings::read_settings().map_err(|e| format!("Failed to read settings: {}", e))?;
-    let plan = crate::authz::LockdownPlanSnapshot::from_settings(&settings);
+    let plan = crate::authz::LockdownPlanSnapshot::from_settings(&settings)?;
     crate::authz::consume_required(
         capability_token.as_deref(),
         crate::authz::DestructiveAction::SelfDestruct,
@@ -6529,7 +6580,7 @@ pub(crate) async fn lockdown_impl(
 ) -> Result<(), String> {
     let settings =
         settings::read_settings().map_err(|e| format!("Failed to read settings: {}", e))?;
-    let plan = crate::authz::LockdownPlanSnapshot::from_settings(&settings);
+    let plan = crate::authz::LockdownPlanSnapshot::from_settings(&settings)?;
     lockdown_impl_with_config(
         app,
         deactivate_license_first,

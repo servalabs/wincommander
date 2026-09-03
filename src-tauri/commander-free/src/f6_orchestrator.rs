@@ -355,13 +355,19 @@ pub fn build_production_deps() -> Result<F6Deps, String> {
                 }
                 let mut warnings = Vec::new();
                 for drive in &drives {
+                    let identity = crate::path_identity::bitlocker_identity(drive)?;
+                    let mut payload = serde_json::json!({
+                        "stepId": "bitlocker_erase",
+                        "DriveLetter": drive,
+                    })
+                    .as_object()
+                    .cloned()
+                    .expect("destructive payload is an object");
+                    crate::path_identity::insert_request(&mut payload, &identity)?;
                     let result = tokio::runtime::Handle::current().block_on(async {
                         crate::sidecar::dispatch_paid_command(
                             "run_destruct_step",
-                            serde_json::json!({
-                                "stepId": "bitlocker_erase",
-                                "DriveLetter": drive,
-                            }),
+                            serde_json::Value::Object(payload),
                         )
                         .await
                     });
@@ -376,6 +382,7 @@ pub fn build_production_deps() -> Result<F6Deps, String> {
                     // configured target that genuinely fails to destroy must not
                     // proceed to reboot believing crypto-erase succeeded.
                     let v = result?;
+                    crate::path_identity::verify_receipt(&v, &identity)?;
                     crate::backend::crypto_erase_status_result(&v, "ok")
                         .map_err(|e| format!("bitlocker_erase: {drive}: {e}"))?;
                     if let Some(w) = v
@@ -419,41 +426,67 @@ pub fn build_production_deps() -> Result<F6Deps, String> {
                     return Ok(());
                 }
                 for path in &paths {
+                    let expected = crate::path_identity::ExpectedFileIdentity::capture(
+                        std::path::Path::new(path),
+                    )?;
+                    let identity = expected.request();
+                    let mut payload = serde_json::json!({
+                        "stepId": "veracrypt_header_destroy",
+                        "Path": expected.canonical_path().to_string_lossy(),
+                    })
+                    .as_object()
+                    .cloned()
+                    .expect("destructive payload is an object");
+                    crate::path_identity::insert_request(&mut payload, &identity)?;
                     let result = tokio::runtime::Handle::current().block_on(async {
                         crate::sidecar::dispatch_paid_command(
                             "run_destruct_step",
-                            serde_json::json!({
-                                "stepId": "veracrypt_header_destroy",
-                                "Path": path,
-                            }),
+                            serde_json::Value::Object(payload),
                         )
                         .await
                     });
-                    let outcome = result
-                        .and_then(|v| crate::backend::crypto_erase_status_result(&v, "destroyed"));
+                    let outcome = result.and_then(|v| {
+                        crate::path_identity::verify_receipt(&v, &identity)?;
+                        crate::backend::crypto_erase_status_result(&v, "destroyed")
+                    });
                     if let Err(e) = outcome {
                         return Err(format!("veracrypt_destroy: {path}: {e}"));
                     }
                 }
                 for device in &devices {
+                    let identity = crate::path_identity::raw_partition_identity(
+                        device.disk_number,
+                        device.partition_number,
+                        &device.partition_guid,
+                        device.offset_bytes,
+                        device.size_bytes,
+                        &device.disk_unique_id,
+                    );
+                    let mut payload = serde_json::json!({
+                        "stepId": "veracrypt_header_destroy",
+                        "Path": device.device_path,
+                        "DeviceDiskNumber": device.disk_number,
+                        "DevicePartitionNumber": device.partition_number,
+                        "DevicePartitionGuid": device.partition_guid,
+                        "DeviceOffsetBytes": device.offset_bytes,
+                        "DeviceSizeBytes": device.size_bytes,
+                        "DeviceDiskUniqueId": device.disk_unique_id,
+                    })
+                    .as_object()
+                    .cloned()
+                    .expect("destructive payload is an object");
+                    crate::path_identity::insert_request(&mut payload, &identity)?;
                     let result = tokio::runtime::Handle::current().block_on(async {
                         crate::sidecar::dispatch_paid_command(
                             "run_destruct_step",
-                            serde_json::json!({
-                                "stepId": "veracrypt_header_destroy",
-                                "Path": device.device_path,
-                                "DeviceDiskNumber": device.disk_number,
-                                "DevicePartitionNumber": device.partition_number,
-                                "DevicePartitionGuid": device.partition_guid,
-                                "DeviceOffsetBytes": device.offset_bytes,
-                                "DeviceSizeBytes": device.size_bytes,
-                                "DeviceDiskUniqueId": device.disk_unique_id,
-                            }),
+                            serde_json::Value::Object(payload),
                         )
                         .await
                     });
-                    let outcome = result
-                        .and_then(|v| crate::backend::crypto_erase_status_result(&v, "destroyed"));
+                    let outcome = result.and_then(|v| {
+                        crate::path_identity::verify_receipt(&v, &identity)?;
+                        crate::backend::crypto_erase_status_result(&v, "destroyed")
+                    });
                     if let Err(e) = outcome {
                         return Err(format!("veracrypt_destroy: {}: {e}", device.device_path));
                     }

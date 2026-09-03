@@ -589,17 +589,19 @@ pub async fn disk_delete_item(
             path
         ));
     }
+    if p.is_dir() {
+        return Err(
+            "Directory deletion is disabled because handle-safe recursive deletion is unavailable. Delete individual files instead."
+                .to_string(),
+        );
+    }
+    let identity = crate::path_identity::ExpectedFileIdentity::capture(&p)?;
     crate::authz::consume_required(
         capability_token.as_deref(),
         crate::authz::DestructiveAction::DiskDelete,
         &crate::authz::disk_delete_args(&p.to_string_lossy()),
     )?;
-    let result = if p.is_dir() {
-        fs::remove_dir_all(&p)
-    } else {
-        fs::remove_file(&p)
-    };
-    result.map_err(|e| format!("delete failed: {}", e))?;
+    identity.delete_file()?;
 
     // Evict the deleted entry from the cache so the UI doesn't have to
     // re-scan to see it gone.

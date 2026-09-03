@@ -6,6 +6,7 @@ fn test_plan(self_destruct: crate::settings::SelfDestructSettings) -> LockdownPl
     LockdownPlanSnapshot {
         self_destruct,
         shred_mft_slack: false,
+        destructive_identities: Vec::new(),
     }
 }
 
@@ -196,7 +197,7 @@ fn typed_request_owns_action_arguments_and_safe_details() {
     };
     assert_eq!(request.action(), DestructiveAction::DiskDelete);
     assert_eq!(
-        request.canonical_args(None),
+        request.canonical_args(None).unwrap(),
         disk_delete_args("C:\\target\nspoof")
     );
     let detail = request.confirmation_detail(None);

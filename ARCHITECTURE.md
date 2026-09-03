@@ -250,7 +250,8 @@ sequenceDiagram
 - **Transport:** Windows named pipe `\\.\pipe\wincmd-pro-<random>` (random per spawn).
 - **Framing:** `[u32 LE payload length][JSON body]`, capped at `MAX_PAYLOAD_BYTES` (16 MiB) to bound a malicious/wedged peer (`wincmd-shared::read_envelope/write_envelope`).
 - **Envelope variants:** `Hello | Request | Response | Error | Notification | Bye | Signed` (`#[serde(tag = "kind")]`).
-- **Handshake:** Free generates a 32-byte `session_token`, spawns Pro with `--core-pipe` + `--session-token`, creates the pipe server, and awaits connect. The initial `Hello` is **Free → Pro** (`protocol_version`, `session_token`, no `binary_hash`); Pro replies with its **Hello ack** (`Pro → Free`) echoing the token and carrying `binary_hash` — the SHA-256 of the Pro EXE. Free verifies the protocol version, the echoed token, and that `binary_hash` matches the value pinned in Free (`verify_pro_binary_hash`); any mismatch refuses the handshake and kills the child.
+- **Handshake:** Free creates the pipe, spawns Pro with only `--core-pipe`, and records the child PID. After connection it requires the named-pipe client PID to equal that child, opens that process, resolves its executable, and independently checks the executable path and SHA-256 before sending the random 32-byte `session_token` in `Hello`. Pro validates the token's exact format and echoes it with its own hash; Free requires the reported hash to equal the independently measured hash and an accepted release/install pin. Any error fails closed and kills the child.
+- **Destructive identity:** IPC v2 destructive requests carry a typed `DestructiveRequestV2`. File and raw-partition integers are canonical decimal strings, BitLocker uses a Windows volume GUID, and unknown versions/fields are rejected. Pro opens file and partition targets once, validates identity from that handle, mutates and reads back through that handle, and returns a typed receipt. BitLocker clear/lock use only the verified volume GUID. Free compares the receipt with the identity bound into authorization.
 - **Request/Response:** after handshake every frame is wrapped as `Envelope::Signed { tag, inner }` where `tag = HMAC-SHA256(session_token, serde_json(inner))`, verified constant-time via the `subtle` crate (`verify_body`). `Hello`/`Bye` are unsigned (Hello establishes the key).
 - **Notifications:** Pro pushes UI events (decoy-accessed, dead-man's-switch tick) signed the same way; Free's reader task re-emits them via `app.emit(event, payload)` so existing frontend listeners are unchanged.
 
@@ -264,12 +265,13 @@ sequenceDiagram
   participant PRO as wincommander-pro.exe
 
   Note over FREE: generate 32-byte session_token
-  FREE->>PRO: spawn with --core-pipe &lt;name&gt; --session-token &lt;token&gt;
+  FREE->>PRO: spawn with --core-pipe &lt;name&gt; (no secret argument)
   FREE->>PIPE: create pipe server, await connect
   PRO->>PIPE: connect
-  FREE->>PRO: Hello { protocol_version: "wincmd-ipc-v1", session_token, binary_hash: none }
+  Note over FREE: verify pipe client PID == spawned PID<br/>verify process image path + SHA-256
+  FREE->>PRO: Hello { protocol_version: "wincmd-ipc-v2", session_token, binary_hash: none }
   PRO->>FREE: Hello ack { protocol_version, session_token (echoed), binary_hash: SHA-256(Pro EXE) }
-  Note over FREE: verify protocol_version + echoed token<br/>verify binary_hash == pinned SHA-256 of Pro EXE (verify_pro_binary_hash)
+  Note over FREE: verify protocol_version + echoed token<br/>verify reported hash == independently measured and pinned hash
   alt version / token / hash mismatch
     FREE-->>PRO: refuse + kill child (swapped/incompatible binary)
   else verified
@@ -290,7 +292,7 @@ pub fn sign_body(session_token: &str, body: &[u8]) -> String { /* HMAC-SHA256 �
 pub fn verify_body(session_token: &str, body: &[u8], expected_tag_hex: &str) -> bool { /* constant-time */ }
 ```
 
-Trust model: a swapped Pro binary fails the pinned-hash check; a tampered frame fails HMAC; a replayed frame from a prior session fails because the token rotates per spawn; an orphaned Pro can't start without the Free-issued token. **In the portable edition, Pro additionally verifies the machine-wide licence's Ed25519 signature itself (`commander-pro/src/entitlement.rs`) before running any paid request — so a patched Free that skips its own `require_paid` still can't unlock Pro.** Tested by `cargo test -p wincmd-shared` (12 tests).
+Trust model: an unexpected pipe client fails the PID check before learning the token; a swapped Pro image fails independent identity/hash verification; a tampered frame fails HMAC; a replayed frame from a prior session fails because the token rotates per spawn; and an old IPC peer fails the v2 handshake. Destructive work additionally fails without an exact v2 target and matching mutation receipt. **In the portable edition, Pro additionally verifies the machine-wide licence's Ed25519 signature itself (`commander-pro/src/entitlement.rs`) before running any paid request — so a patched Free that skips its own `require_paid` still can't unlock Pro.** These are source and automated-test claims; signed installed-Windows attack acceptance remains a separate release gate.
 
 ## Data model / storage
 

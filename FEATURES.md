@@ -48,6 +48,9 @@ the backend and private component before execution.
   review surfaces where available in the current build.
 - Backend-owned candidate identifiers and live revalidation before mutations;
   the frontend does not submit arbitrary filesystem targets.
+- Explorer and search-result secure erase for regular files uses one verified
+  Windows handle for overwrite, read-back, and deletion. Folder shredding is
+  refused until handle-safe recursive traversal is implemented.
 
 ### Search and automation surface
 
