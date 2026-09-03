@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CI guardrail (audit C2/C4/H1/H2/L1): the DESTRUCTIVE_COMMANDS registry in
-# authz.rs must list every catastrophic Tauri command, so a destructive command
+# authz/dispatch.rs must list every catastrophic Tauri command, so a destructive command
 # cannot silently ship without an entry (and the accompanying authorization /
 # confinement review). Removing an entry fails the build here.
 # The registry's runtime coverage is separately asserted by the Rust unit test
@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-REG=src-tauri/commander-free/src/authz.rs
+REG=src-tauri/commander-free/src/authz/dispatch.rs
 EXPECTED=(
   lockdown
   full_lockdown
