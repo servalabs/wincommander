@@ -58,6 +58,16 @@ function Get-ServiceImagePath {
     return (($line -replace '^.*BINARY_PATH_NAME\s*:\s*', '').Trim().Trim('"').Trim('\'))
 }
 
+function Get-DriverImagePath {
+    $registryPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$driverServiceName"
+    try {
+        return (Get-ItemProperty -LiteralPath $registryPath -Name ImagePath -ErrorAction Stop).ImagePath
+    }
+    catch {
+        return $null
+    }
+}
+
 function Assert-StagedDevelopmentService {
     $configuredPath = Get-ServiceImagePath
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
@@ -95,6 +105,22 @@ function Ensure-EncryptedVolumeDriver {
         throw "Windows could not configure $driverServiceName."
     }
 
+    # sc.exe accepts its own command-line grammar.  Some older development
+    # synchronizers passed an escaped path through PowerShell and persisted
+    # two leading slashes (\\??\\...) instead of the NT driver path
+    # (\??\...). Windows reports that malformed legacy configuration as
+    # ERROR_INVALID_PARAMETER (87) when starting the driver. Write the owned
+    # ImagePath value directly and verify it before attempting the start.
+    $driverRegistryPath = "HKLM\SYSTEM\CurrentControlSet\Services\$driverServiceName"
+    & reg.exe add $driverRegistryPath '/v' 'ImagePath' '/t' 'REG_EXPAND_SZ' '/d' $driverNtPath '/f'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Windows could not set the fixed driver path for $driverServiceName."
+    }
+    $configuredDriverPath = Get-DriverImagePath
+    if ($configuredDriverPath -cne $driverNtPath) {
+        throw "$driverServiceName did not retain the fixed driver path. Expected: $driverNtPath. Actual: $configuredDriverPath"
+    }
+
     & sc.exe start $driverServiceName 2>$null
     if ($LASTEXITCODE -notin @(0, 1056)) {
         throw "Windows could not start $driverServiceName (exit code $LASTEXITCODE)."
@@ -119,7 +145,9 @@ function Test-EncryptedVolumeDriverReady {
         return $false
     }
     $config = @(& sc.exe qc $driverServiceName 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $config -notmatch [regex]::Escape($driverNtPath)) {
+    if ($LASTEXITCODE -ne 0 -or
+        (Get-DriverImagePath) -cne $driverNtPath -or
+        $config -notmatch [regex]::Escape($driverNtPath)) {
         return $false
     }
     return (@(& sc.exe query $driverServiceName 2>$null) -match 'STATE\s*:\s*4\s+RUNNING').Count -gt 0
