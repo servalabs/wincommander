@@ -18,7 +18,7 @@ const EXPANDED_CATEGORY_IDS = [
 const FORENSIC_TRACE_LOCKDOWN_IDS = [
   "web_cache", "thumbnail_cache", "notification_database", "branch_cache",
   "event_transcript", "activities_timeline", "rdp_bitmap_cache", "servicing_logs",
-  "device_install_logs", "usage_trace_logs", "defender_history", "app_launch_history",
+  "device_install_logs", "usage_trace_logs", "defender_history", "third_party_security_product_logs", "forensic_tool_artifacts", "app_launch_history",
   "office_mru", "embedded_web_cache", "p2p_update_cache", "reliability_history",
   "explorer_search_history", "search_personalization",
 ];

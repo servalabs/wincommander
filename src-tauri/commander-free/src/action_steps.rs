@@ -599,6 +599,18 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         default_enabled: true,
     },
     DestructStepDef {
+        id: "third_party_security_product_logs",
+        label: "Third-Party Security Product Logs",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
+        id: "forensic_tool_artifacts",
+        label: "FTK Imager Artifacts",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
         id: "app_launch_history",
         label: "App Launch History",
         group: DestructGroup::DeepDfir,
@@ -705,4 +717,28 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
 #[allow(dead_code)]
 pub fn lookup(id: &str) -> Option<&'static DestructStepDef> {
     DESTRUCT_STEPS.iter().find(|s| s.id == id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{lookup, DestructGroup};
+
+    #[test]
+    fn nyx_security_and_forensic_steps_are_opt_in_deep_dfir_actions() {
+        for (id, label) in [
+            (
+                "third_party_security_product_logs",
+                "Third-Party Security Product Logs",
+            ),
+            ("forensic_tool_artifacts", "FTK Imager Artifacts"),
+        ] {
+            let step = lookup(id).expect("Nyx-derived step must remain selectable");
+            assert_eq!(step.label, label);
+            assert_eq!(step.group, DestructGroup::DeepDfir);
+            assert!(
+                !step.default_enabled,
+                "{id} must require an explicit opt-in"
+            );
+        }
+    }
 }
