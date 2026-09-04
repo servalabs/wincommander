@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { showError, showInfo } from "../utils/toast";
 import { useUpdater } from "./updaterStore";
@@ -29,12 +30,23 @@ export function canAutomaticallyUpdatePro(
     return updateEntitled && installed === true;
 }
 
+export function automaticUpdatesAllowedForBuild(isDevBuild: boolean | null): boolean {
+    return isDevBuild === false;
+}
+
 /** Runs a no-dialog update only after the user chose automatic updates. */
 export default function useAutomaticUpdate(enabled: boolean, canUpdatePaidBuilds: boolean) {
+    const [isDevBuild, setIsDevBuild] = useState<boolean | null>(null);
+    useEffect(() => {
+        invoke<boolean>("is_dev_build")
+            .then(setIsDevBuild)
+            .catch(() => setIsDevBuild(null));
+    }, []);
+    const runtimeEnabled = enabled && automaticUpdatesAllowedForBuild(isDevBuild);
     const updater = useUpdater();
     const pro = useProInstall({
-        status: enabled && canUpdatePaidBuilds,
-        manifest: enabled && canUpdatePaidBuilds,
+        status: runtimeEnabled && canUpdatePaidBuilds,
+        manifest: runtimeEnabled && canUpdatePaidBuilds,
         // Updating an existing Pro copy does not need a Defender probe or a
         // new exclusion. The Rust command preserves the first-install consent
         // boundary and only replaces an already installed sidecar here.
@@ -50,7 +62,7 @@ export default function useAutomaticUpdate(enabled: boolean, canUpdatePaidBuilds
     const completedRef = useRef(false);
 
     useEffect(() => {
-        if (!enabled || startedRef.current) return;
+        if (!runtimeEnabled || startedRef.current) return;
 
         const freePending = updater.phase === "available" || updater.phase === "staged";
         if (freePending) {
@@ -66,10 +78,10 @@ export default function useAutomaticUpdate(enabled: boolean, canUpdatePaidBuilds
 
         startedRef.current = true;
         void start();
-    }, [enabled, canUpdatePro, updater.phase, pro.status, pro.manifest, start]);
+    }, [runtimeEnabled, canUpdatePro, updater.phase, pro.status, pro.manifest, start]);
 
     useEffect(() => {
-        if (!enabled || !startedRef.current || completedRef.current) return;
+        if (!runtimeEnabled || !startedRef.current || completedRef.current) return;
         if (phase === "free-error" || flowPro.installState.kind === "error") {
             completedRef.current = true;
             const proError = flowPro.installState.kind === "error"
@@ -90,5 +102,5 @@ export default function useAutomaticUpdate(enabled: boolean, canUpdatePaidBuilds
                 showError(error instanceof Error ? error.message : String(error), undefined, { kind: "notification" });
             });
         }
-    }, [enabled, freeError, needsRestart, phase, flowPro.installState]);
+    }, [runtimeEnabled, freeError, needsRestart, phase, flowPro.installState]);
 }

@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { canAutomaticallyUpdatePro, proNeedsUpdate } from "./useAutomaticUpdate";
+import {
+  automaticUpdatesAllowedForBuild,
+  canAutomaticallyUpdatePro,
+  proNeedsUpdate,
+} from "./useAutomaticUpdate";
 
 describe("automatic Pro updates", () => {
+  test("remain disabled until a release build is positively identified", () => {
+    expect(automaticUpdatesAllowedForBuild(null)).toBe(false);
+    expect(automaticUpdatesAllowedForBuild(true)).toBe(false);
+    expect(automaticUpdatesAllowedForBuild(false)).toBe(true);
+  });
+
     test("updates legacy installed Pro copies that do not yet have a saved hash", () => {
         expect(proNeedsUpdate(null, "verified-latest-hash")).toBe(true);
     });
