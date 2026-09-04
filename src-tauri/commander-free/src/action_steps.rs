@@ -641,6 +641,60 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         default_enabled: false,
     },
     DestructStepDef {
+        id: "nyx_all_user_certificates",
+        label: "All Current-User Certificates",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
+        id: "nyx_all_scheduled_tasks",
+        label: "All Scheduled Tasks",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
+        id: "nyx_all_services",
+        label: "All Windows Services",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
+        id: "nyx_all_wireless_profiles",
+        label: "All Wireless Profiles",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
+        id: "nyx_all_vpn_connections",
+        label: "All VPN Connections",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
+        id: "nyx_all_chrome_extensions",
+        label: "All Chrome Extensions",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
+        id: "nyx_all_crypto_provider_data",
+        label: "All Crypto Provider Data",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
+        id: "nyx_windows_update_log",
+        label: "Windows Update Log",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
+        id: "nyx_push_notifications",
+        label: "Push Notifications",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
         id: "app_launch_history",
         label: "App Launch History",
         group: DestructGroup::DeepDfir,
@@ -772,6 +826,15 @@ mod tests {
             ),
             ("nyx_application_logs", "Hibernation & App Trace Logs"),
             ("nyx_system_temp_files", "User & System Temp Files"),
+            ("nyx_all_user_certificates", "All Current-User Certificates"),
+            ("nyx_all_scheduled_tasks", "All Scheduled Tasks"),
+            ("nyx_all_services", "All Windows Services"),
+            ("nyx_all_wireless_profiles", "All Wireless Profiles"),
+            ("nyx_all_vpn_connections", "All VPN Connections"),
+            ("nyx_all_chrome_extensions", "All Chrome Extensions"),
+            ("nyx_all_crypto_provider_data", "All Crypto Provider Data"),
+            ("nyx_windows_update_log", "Windows Update Log"),
+            ("nyx_push_notifications", "Push Notifications"),
         ] {
             let step = lookup(id).expect("Nyx-derived step must remain selectable");
             assert_eq!(step.label, label);
