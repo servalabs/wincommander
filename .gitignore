@@ -150,6 +150,11 @@ UI_problem/
 # Release-only service staging payload (created and removed by build-tauri-release.ts)
 /wincommander-svc.exe
 
+# Local development copy of the SYSTEM service. tools/sync-dev-service.ps1
+# stages a hash-verified build here so Cargo can rebuild its normal target
+# without a running service locking it.
+/.dev/
+
 target-cmd-alert-check
 target-commander-free-shield
 target-autonomous-adapter

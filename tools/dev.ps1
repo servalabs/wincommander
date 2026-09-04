@@ -30,6 +30,10 @@ try {
     if ($ServerOnly) {
         & $bun run dev:server
     } else {
+        # The desktop talks to a SYSTEM-owned Vault service. Keep its staged
+        # development binary in lockstep with this checkout so a fresh UI build
+        # cannot silently keep exercising an older installed service.
+        & (Join-Path $PSScriptRoot "sync-dev-service.ps1")
         # Release an old debug executable before Tauri starts its build.  The
         # beforeDevCommand intentionally preserves the new app startup, so
         # this outer entry point owns stale-window cleanup.
