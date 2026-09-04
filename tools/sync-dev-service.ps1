@@ -54,6 +54,17 @@ function Get-ServiceImagePath {
     return (($line -replace '^.*BINARY_PATH_NAME\s*:\s*', '').Trim().Trim('"').Trim('\'))
 }
 
+function Assert-StagedDevelopmentService {
+    $configuredPath = Get-ServiceImagePath
+    $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    $serviceState = if ($service) { $service.Status } else { 'Missing' }
+    if (-not $configuredPath -or
+        -not $configuredPath.Equals($stagedService, [StringComparison]::OrdinalIgnoreCase) -or
+        $serviceState -ne 'Running') {
+        throw "WinCommander development-service synchronization did not take effect. Expected running service path: $stagedService. Actual path: $configuredPath. Actual state: $serviceState."
+    }
+}
+
 function Build-Service {
     Push-Location $tauriRoot
     try {
@@ -84,9 +95,11 @@ function Start-ElevatedSync([switch]$UseExistingBuild) {
     $existingBuildArgument = if ($UseExistingBuild) { ' -UseExistingBuild' } else { '' }
     $childCommand = "try { & '$escapedScriptPath' -Elevated$existingBuildArgument -DiagnosticPath '$escapedDiagnostic'; if (`$?) { exit 0 }; exit 1 } catch { exit 1 }"
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
-    $process = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encodedCommand
-    )
+    # Pass one argument string to the Windows process launcher.  The encoded
+    # payload contains no spaces, avoiding another quoting boundary on paths
+    # such as E:\E drive\Company\wincommander.
+    $processArguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand"
+    $process = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList $processArguments
     if ($process.ExitCode -ne 0) {
         $details = if (Test-Path -LiteralPath $diagnostic) {
             Get-Content -LiteralPath $diagnostic -Raw
@@ -95,7 +108,12 @@ function Start-ElevatedSync([switch]$UseExistingBuild) {
         }
         throw "The elevated development-service synchronization failed with exit code $($process.ExitCode).`n$details"
     }
-    Remove-Item -LiteralPath $diagnostic -Force -ErrorAction SilentlyContinue
+    try {
+        Assert-StagedDevelopmentService
+    }
+    finally {
+        Remove-Item -LiteralPath $diagnostic -Force -ErrorAction SilentlyContinue
+    }
 }
 
 if (-not $Elevated) {
@@ -173,4 +191,5 @@ if (-not $configuredPath -or -not $configuredPath.Equals($stagedService, [String
 Write-Diagnostic 'Starting the staged development service.'
 Start-Service -Name $serviceName
 (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+Assert-StagedDevelopmentService
 Write-Host 'WinCommander development service synchronized and running.'
