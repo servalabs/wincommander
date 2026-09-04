@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TourStep } from "../content/guide/types";
+import { setTourActive } from "../lib/tourActive";
 
 interface UseTourArgs {
   steps: TourStep[];
@@ -332,6 +333,10 @@ export default function useTour({ steps, onClose, dismissable = true }: UseTourA
     const maxFrames = step.navigateTo ? MAX_FIND_FRAMES_CROSS_PANEL : MAX_FIND_FRAMES_SAME_PANEL;
 
     if (isRealPanelChange) {
+      // GuideHost also publishes this in an effect, but this child effect can
+      // run first on the very first onboarding step. Publish synchronously so
+      // App's module gate cannot drop the first cross-panel navigation.
+      setTourActive(true);
       window.dispatchEvent(new CustomEvent("navigate-panel", { detail: step.navigateTo }));
     }
     if (step.navigateTo) lastNavigatedPanelRef.current = step.navigateTo;

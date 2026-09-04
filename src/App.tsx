@@ -96,7 +96,7 @@ import { getModuleForPanel, isModuleEnabled } from "./types/modules";
 import { setSoundEnabled } from "./utils/sound";
 import { importPanelWithRetry } from "./lib/panelLoading";
 import { PanelPrefetchQueue, scheduleWhenIdle } from "./lib/panelPrefetch";
-import { isTourActive } from "./lib/tourActive";
+import { isTourActive, useTourActive } from "./lib/tourActive";
 import { reportStartupPhase } from "./hooks/startupTrace";
 import {
   createStartupProtectionReadiness,
@@ -193,6 +193,7 @@ function PanelRoute({
 }
 
 function AppContent() {
+  const tourActive = useTourActive();
   // Chromium's stock menu exposes developer tooling in packaged builds. Keep
   // it available to the dev server, but suppress the browser menu in releases.
   useEffect(() => {
@@ -1094,10 +1095,10 @@ function AppContent() {
 
   useEffect(() => {
     const moduleId = getModuleForPanel(activePanel);
-    if (moduleId && !isModuleEnabled(appSettings?.app?.modules, moduleId)) {
+    if (moduleId && !isModuleEnabled(appSettings?.app?.modules, moduleId) && !tourActive) {
       setActivePanel('dashboard');
     }
-  }, [activePanel, appSettings?.app?.modules]);
+  }, [activePanel, appSettings?.app?.modules, tourActive]);
 
   const handleSplashComplete = useCallback(() => {
     setSplashDone(true);
