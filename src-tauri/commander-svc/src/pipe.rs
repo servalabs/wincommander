@@ -73,7 +73,10 @@ use windows_sys::Win32::{
             WTS_CONNECTSTATE_CLASS, WTS_CURRENT_SERVER_HANDLE,
         },
         SystemServices::{DOMAIN_ALIAS_RID_ADMINS, SECURITY_BUILTIN_DOMAIN_RID},
-        Threading::{GetCurrentThread, OpenThreadToken},
+        Threading::{
+            GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        },
     },
 };
 
@@ -1929,18 +1932,52 @@ pub(crate) fn capture_authenticated_pipe_peer(
                 token_sid(token).ok_or_else(|| anyhow::anyhow!("token SID unavailable"))?;
             let authentication_id = token_authentication_id(token)
                 .ok_or_else(|| anyhow::anyhow!("token authentication ID unavailable"))?;
+            let process_token = open_verified_client_process_token(
+                client_pid,
+                &caller_sid,
+                session_id,
+                authentication_id,
+            )?;
             Ok(AuthenticatedPipePeer {
                 client_pid,
-                token,
+                token: process_token,
                 session_id,
                 caller_sid,
                 authentication_id,
             })
         })();
-        if result.is_err() {
-            CloseHandle(token);
-        }
+        CloseHandle(token);
         result
+    }
+}
+
+fn open_verified_client_process_token(
+    client_pid: u32,
+    expected_sid: &str,
+    expected_session_id: u32,
+    expected_authentication_id: (u32, i32),
+) -> Result<HANDLE> {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, client_pid);
+        if process.is_null() {
+            anyhow::bail!("OpenProcess for pipe client failed");
+        }
+        let mut process_token = std::ptr::null_mut();
+        let opened =
+            OpenProcessToken(process, TOKEN_QUERY | TOKEN_DUPLICATE, &mut process_token) != 0;
+        CloseHandle(process);
+        if !opened {
+            anyhow::bail!("OpenProcessToken for pipe client failed");
+        }
+
+        let matches = token_sid(process_token).as_deref() == Some(expected_sid)
+            && token_session_id(process_token) == Some(expected_session_id)
+            && token_authentication_id(process_token) == Some(expected_authentication_id);
+        if !matches {
+            CloseHandle(process_token);
+            anyhow::bail!("pipe and process token identities differ");
+        }
+        Ok(process_token)
     }
 }
 
