@@ -127,6 +127,7 @@ if (-not $Elevated) {
         # output open. The elevated child stops it, rebuilds, and completes the
         # one-time move to the staging directory.
         Start-ElevatedSync
+        Write-Host 'WinCommander development service synchronized and running.'
         return
     }
 
@@ -143,6 +144,7 @@ if (-not $Elevated) {
     }
 
     Start-ElevatedSync -UseExistingBuild
+    Write-Host 'WinCommander development service synchronized and running.'
     return
 }
 
