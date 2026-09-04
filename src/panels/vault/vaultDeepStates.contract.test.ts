@@ -37,7 +37,6 @@ describe("secure storage deep-state contracts", () => {
     expect(mountHandlerSource).toContain("setMountFailure(message);");
     expect(mountHandlerSource).toContain("const mountRequest = mountVolume({");
     expect(mountHandlerSource).toContain("setMountPassword(\"\");");
-    expect(mountHandlerSource).toContain("setHiddenPassword(\"\");");
     expect(mountHandlerSource).toContain("getAvailableDriveLetters()");
     expect(mountHandlerSource).toContain("is already in use. Dismount it first or choose a free drive letter.");
     expect(vaultSource).toContain("vault_engine_unlock_failed");
@@ -48,21 +47,17 @@ describe("secure storage deep-state contracts", () => {
     );
     expect(failureBranch).not.toContain("setMountDialogOpen(false)");
     expect(failureBranch).not.toContain("setMountPim");
-    expect(failureBranch).not.toContain("setHiddenPim");
-    expect(failureBranch).not.toContain("setProtectHidden");
   });
 
-  test("dual-volume mount makes its target explicit and protects writable decoys", () => {
-    expect(vaultSource).toContain('selectVolumeKind("dual")');
-    expect(vaultSource).toContain('selectVolumeRole("outer")');
-    expect(vaultSource).toContain('selectVolumeRole("hidden")');
-    expect(mountHandlerSource).toContain("volumeKind,");
-    expect(mountHandlerSource).toContain("volumeRole,");
-    expect(vaultSource).toContain("Open hidden volume");
-    expect(vaultSource).toContain("Open visible decoy");
-    expect(vaultSource).toContain('label={volumeRole === "hidden" ? "Hidden volume password" : "Password"}');
-    expect(vaultSource).toContain("const requiresHiddenProtection = isOuterDualVolume && !mountReadOnly;");
-    expect(vaultSource).toContain("protectHidden: requiresHiddenProtection && protectHidden");
+  test("mount credentials select the matching volume without exposing container internals", () => {
+    expect(vaultSource).not.toContain("Hidden + decoy");
+    expect(vaultSource).not.toContain("Open hidden volume");
+    expect(vaultSource).not.toContain("Open visible decoy");
+    expect(vaultSource).toContain('volumeKind: "standard"');
+    expect(vaultSource).toContain('volumeRole: "standard"');
+    expect(vaultSource).toContain("The password selects the matching standard, outer, or hidden volume automatically.");
+    expect(mountHandlerSource).toContain("readOnly: true");
+    expect(vaultSource).toContain("Read-only automatic mount");
     expect(backendSource).toContain("VolumeKind: params.volumeKind");
     expect(backendSource).toContain("VolumeRole: params.volumeRole");
   });
@@ -80,6 +75,7 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).toContain("setMountedVolume(result.data)");
     expect(vaultSource).toContain('icon="warning-sign"');
     expect(sidebarSource).toContain('scope: "per-user"');
+    expect(sidebarSource).toContain('readOnly: true');
     expect(sidebarSource).toContain("hardenAcl: true");
     expect(sidebarSource).toContain("await verifyVaultDrive(r.data.drive)");
     expect(backendSource).toContain('invoke<{ drive: string; accessible: boolean }>("verify_vault_drive"');

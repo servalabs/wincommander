@@ -99,17 +99,10 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [mountDialogOpen, setMountDialogOpen] = useState(false);
   const [mountPath, setMountPath] = useState("");
   const [mountLetter, setMountLetter] = useState("Y");
-  const [volumeKind, setVolumeKind] = useState<"standard" | "dual">("standard");
-  const [volumeRole, setVolumeRole] = useState<"standard" | "outer" | "hidden">("standard");
   const [mountPassword, setMountPassword] = useState("");
   const [mountKeyfile, setMountKeyfile] = useState("");
   const [mountPim, setMountPim] = useState("");
-  const [mountReadOnly, setMountReadOnly] = useState(false);
   const [mountRemovable, setMountRemovable] = useState(false);
-  const [protectHidden, setProtectHidden] = useState(false);
-  const [hiddenPassword, setHiddenPassword] = useState("");
-  const [hiddenKeyfile, setHiddenKeyfile] = useState("");
-  const [hiddenPim, setHiddenPim] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [createWizardOpen, setCreateWizardOpen] = useState(false);
   const [availableLetters, setAvailableLetters] = useState<string[]>([]);
@@ -133,50 +126,22 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const unavailableVolumes = volumes.filter((volume) => volume.accessible === false);
 
   const [mounting, setMounting] = useState(false);
-  const isDualVolume = volumeKind === "dual";
-  const isOuterDualVolume = isDualVolume && volumeRole === "outer";
-  const requiresHiddenProtection = isOuterDualVolume && !mountReadOnly;
   const canMount = Boolean(
     mountPath
     && (mountPassword || mountKeyfile)
     && validPim(mountPim)
-    && (!requiresHiddenProtection || (protectHidden && (hiddenPassword || hiddenKeyfile) && validPim(hiddenPim)))
     && !mounting
   );
 
   const resetMountForm = useCallback(() => {
     setMountFailure("");
     setMountPath("");
-    setVolumeKind("standard");
-    setVolumeRole("standard");
     setMountPassword("");
     setMountKeyfile("");
     setMountPim("");
-    setMountReadOnly(false);
     setMountRemovable(false);
-    setProtectHidden(false);
-    setHiddenPassword("");
-    setHiddenKeyfile("");
-    setHiddenPim("");
     setMountLetter("Y");
     setMountType('file');
-  }, []);
-
-  const selectVolumeKind = useCallback((nextKind: "standard" | "dual") => {
-    setVolumeKind(nextKind);
-    setVolumeRole(nextKind === "dual" ? "outer" : "standard");
-    setProtectHidden(false);
-    setHiddenPassword("");
-    setHiddenKeyfile("");
-    setHiddenPim("");
-  }, []);
-
-  const selectVolumeRole = useCallback((nextRole: "outer" | "hidden") => {
-    setVolumeRole(nextRole);
-    setProtectHidden(false);
-    setHiddenPassword("");
-    setHiddenKeyfile("");
-    setHiddenPim("");
   }, []);
 
   // Fetch available (unused) drive letters when the mount dialog opens
@@ -250,15 +215,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     }
   };
 
-  const handleBrowseHiddenKeyfile = async () => {
-    try {
-      const selected = await open({ multiple: false });
-      if (selected && typeof selected === 'string') setHiddenKeyfile(selected);
-    } catch (err) {
-      console.error("Failed to open hidden-volume keyfile picker", err);
-    }
-  };
-
   const handleMountVolume = useCallback(async () => {
     setMounting(true);
     setMountFailure("");
@@ -270,22 +226,19 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       const mountRequest = mountVolume({
         volumePath: mountPath,
         driveLetter: mountLetter,
-        volumeKind,
-        volumeRole,
+        volumeKind: "standard",
+        volumeRole: "standard",
         password: mountPassword,
         keyfiles: mountKeyfile ? [mountKeyfile] : [],
         pim: mountPim || undefined,
-        readOnly: mountReadOnly,
+        readOnly: true,
         removable: mountRemovable,
-        protectHidden: requiresHiddenProtection && protectHidden,
-        hiddenPassword: requiresHiddenProtection ? hiddenPassword : undefined,
-        hiddenKeyfiles: requiresHiddenProtection && hiddenKeyfile ? [hiddenKeyfile] : [],
-        hiddenPim: requiresHiddenProtection ? hiddenPim || undefined : undefined,
+        protectHidden: false,
+        hiddenKeyfiles: [],
         scope: "per-user",
         hardenAcl: true,
       });
       setMountPassword("");
-      setHiddenPassword("");
       const result = await mountRequest;
       if (!result.success || !result.data) throw new Error(result.error || "Failed to mount volume");
       if (result.data.scope !== "per-user") {
@@ -310,10 +263,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       showError(message, undefined, { kind: "notification" });
     } finally {
       setMountPassword("");
-      setHiddenPassword("");
       setMounting(false);
     }
-  }, [getAvailableDriveLetters, hiddenKeyfile, hiddenPassword, hiddenPim, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, protectHidden, refreshVault, requiresHiddenProtection, resetMountForm, verifyVaultDrive, volumeKind, volumeRole]);
+  }, [getAvailableDriveLetters, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountRemovable, mountVolume, refreshVault, resetMountForm, verifyVaultDrive]);
 
   const handleOpenMountedVolume = useCallback(async () => {
     if (!mountedVolume) return;
@@ -511,57 +463,10 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               <span>{mountFailure}</span>
             </div>
           )}
-          {mounting && (mountPim || (protectHidden && hiddenPim)) && (
+          {mounting && mountPim && (
             <div className="mount-progress" role="status">
               <Icon icon="time" size={16} />
               <span>Unlocking with your PIM can take several minutes. Your password was cleared for safety.</span>
-            </div>
-          )}
-          <div className="mount-volume-selector" role="radiogroup" aria-label="Volume kind">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={volumeKind === "standard"}
-              className={`mount-volume-selector__option${volumeKind === "standard" ? " is-active" : ""}`}
-              onClick={() => selectVolumeKind("standard")}
-            >
-              <Icon icon="lock" size={14} />
-              <span>Standard volume</span>
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={volumeKind === "dual"}
-              className={`mount-volume-selector__option${volumeKind === "dual" ? " is-active" : ""}`}
-              onClick={() => selectVolumeKind("dual")}
-            >
-              <Icon icon="layers" size={14} />
-              <span>Hidden + decoy</span>
-            </button>
-          </div>
-
-          {isDualVolume && (
-            <div className="mount-volume-selector mount-volume-selector--role" role="radiogroup" aria-label="Dual-volume action">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={volumeRole === "hidden"}
-                className={`mount-volume-selector__option${volumeRole === "hidden" ? " is-active" : ""}`}
-                onClick={() => selectVolumeRole("hidden")}
-              >
-                <Icon icon="eye-off" size={14} />
-                <span>Open hidden volume</span>
-              </button>
-              <button
-                type="button"
-                role="radio"
-                aria-checked={volumeRole === "outer"}
-                className={`mount-volume-selector__option${volumeRole === "outer" ? " is-active" : ""}`}
-                onClick={() => selectVolumeRole("outer")}
-              >
-                <Icon icon="eye-open" size={14} />
-                <span>Open visible decoy</span>
-              </button>
             </div>
           )}
           {/* Mount source toggle. The previous Button-with-active pattern
@@ -675,11 +580,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             />
           </FormGroup>
 
-          <FormGroup
-            label={volumeRole === "hidden" ? "Hidden volume password" : "Password"}
-            labelFor="password"
-            helperText={volumeRole === "hidden" ? "Use the hidden volume's password." : "Make sure CAPS Lock is off."}
-          >
+          <FormGroup label="Password" labelFor="password" helperText="The password selects the matching standard, outer, or hidden volume automatically. Make sure CAPS Lock is off.">
             <InputGroup
               id="password"
               type={showPassword ? "text" : "password"}
@@ -698,7 +599,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             />
           </FormGroup>
 
-          <FormGroup label={volumeRole === "hidden" ? "Hidden volume keyfile (optional)" : "Keyfile (optional)"} labelFor="mount-keyfile">
+          <FormGroup label="Keyfile (optional)" labelFor="mount-keyfile">
             <InputGroup
               id="mount-keyfile"
               placeholder="Path to keyfile or folder"
@@ -712,7 +613,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             />
           </FormGroup>
 
-          <FormGroup label={volumeRole === "hidden" ? "Hidden volume PIM (optional)" : "PIM (optional)"} labelFor="mount-pim" helperText="Leave blank for default; otherwise it must match the volume's creation PIM.">
+          <FormGroup label="PIM (optional)" labelFor="mount-pim" helperText="Leave blank for default; otherwise it must match the volume's creation PIM.">
             <InputGroup
               id="mount-pim"
               type="number"
@@ -727,19 +628,11 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
           </FormGroup>
 
           <div className="mount-options-grid" aria-label="Mount options">
-            <label className="quick-toggle">
-              <CheckboxControl
-                checked={mountReadOnly}
-                ariaLabel="Mount read-only"
-                onChange={event => {
-                  const checked = event.currentTarget.checked;
-                  setMountReadOnly(checked);
-                  if (checked) setProtectHidden(false);
-                }}
-              />
-              <span>Read-only</span>
-              <span className="quick-desc">Blocks every write to this volume.</span>
-            </label>
+            <div className="quick-toggle quick-toggle--locked" aria-label="Automatic mount is read-only">
+              <Icon icon="lock" size={14} />
+              <span>Read-only automatic mount</span>
+              <span className="quick-desc">Your password selects the matching volume without risking hidden data.</span>
+            </div>
             <label className="quick-toggle">
               <CheckboxControl
                 checked={mountRemovable}
@@ -749,18 +642,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               <span>Removable media</span>
               <span className="quick-desc">Reports the mounted volume as removable.</span>
             </label>
-            {isOuterDualVolume && (
-              <label className="quick-toggle">
-                <CheckboxControl
-                  checked={protectHidden}
-                  disabled={mountReadOnly}
-                  ariaLabel="Protect hidden volume"
-                  onChange={event => setProtectHidden(event.currentTarget.checked)}
-                />
-                <span>Protect hidden volume</span>
-                <span className="quick-desc">Required for writable outer-decoy mounts.</span>
-              </label>
-            )}
             <div className="quick-toggle quick-toggle--locked" aria-label="Private NTFS permissions enabled">
               <Icon icon="lock" size={14} />
               <span>Private NTFS permissions</span>
@@ -768,42 +649,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
             </div>
           </div>
 
-          {requiresHiddenProtection && protectHidden && (
-            <div className="mount-hidden-protection">
-              <FormGroup label="Hidden volume password or keyfile" labelFor="hidden-password" helperText="Used only in memory to protect the hidden region; it is not mounted.">
-                <InputGroup
-                  id="hidden-password"
-                  type={showPassword ? "text" : "password"}
-                  value={hiddenPassword}
-                  autoComplete="off"
-                  onChange={event => setHiddenPassword(event.target.value)}
-                  onKeyDown={handleMountFieldEnter}
-                />
-              </FormGroup>
-              <FormGroup label="Hidden keyfile (optional)" labelFor="hidden-keyfile">
-                <InputGroup
-                  id="hidden-keyfile"
-                  value={hiddenKeyfile}
-                  autoComplete="off"
-                  onChange={event => setHiddenKeyfile(event.target.value)}
-                  rightElement={<Button icon="folder-open" minimal aria-label="Browse for hidden-volume keyfile" onClick={handleBrowseHiddenKeyfile} />}
-                />
-              </FormGroup>
-              <FormGroup label="Hidden PIM (optional)" labelFor="hidden-pim">
-                <InputGroup
-                  id="hidden-pim"
-                  type="number"
-                  min={1}
-                  max={2147468}
-                  placeholder="Default"
-                  value={hiddenPim}
-                  autoComplete="off"
-                  onChange={event => setHiddenPim(event.target.value)}
-                  onKeyDown={handleMountFieldEnter}
-                />
-              </FormGroup>
-            </div>
-          )}
         </div>
 
         <div className="mount-dialog-footer">

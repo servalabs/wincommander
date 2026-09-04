@@ -5,6 +5,13 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Secure Storage no longer asks users to identify a standard, outer, or hidden
+  volume before mounting. The native engine selects the matching header from
+  the supplied credentials, while personal and Quick Mount are locked
+  read-only so an automatically selected outer volume cannot overwrite hidden
+  data. This is source and automated-test evidence; a successful
+  password-based mount still requires installed-Windows acceptance.
+
 - Free, the Windows service, and Investigator now authenticate the connected
   Pro child by PID and executable bytes before sending the per-spawn secret;
   the secret no longer appears in the child command line. IPC v2 carries one

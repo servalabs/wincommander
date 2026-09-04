@@ -78,7 +78,10 @@ operational risk, or proprietary enforcement logic.
   reactive unknown-keyboard approval.
 - Advanced automation rules and event-driven actions.
 - Encrypted-volume create, mount, dismount, recovery, and secure-erasure
-  workflows.
+  workflows. Personal and Quick Mount use the supplied password, PIM, and
+  keyfile to select a standard, outer, or hidden volume automatically and are
+  read-only; writable outer-volume mounts require the explicit protected
+  policy workflow.
 - Deep cleanup, secure deletion, metadata/privacy-clean operations, and
   evidence-grade receipts where supported.
 - Signed evidence-vault export and advanced verification/reporting options.

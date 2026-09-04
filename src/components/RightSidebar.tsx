@@ -251,7 +251,11 @@ export default function RightSidebar() {
             const r = await mountVolume({
               volumePath: slot.filePath,
               driveLetter: slot.driveLetter,
+              volumeKind: "standard",
+              volumeRole: "standard",
               password: qmPassword,
+              readOnly: true,
+              protectHidden: false,
               scope: "per-user",
               hardenAcl: true,
             });
