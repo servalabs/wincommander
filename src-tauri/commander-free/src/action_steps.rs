@@ -678,7 +678,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
     },
     DestructStepDef {
         id: "nyx_all_crypto_provider_data",
-        label: "All Crypto Provider Data",
+        label: "All Current-User RSA Provider Data",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
@@ -835,7 +835,10 @@ mod tests {
                 "nyx_all_chrome_extensions",
                 "Chrome Extensions in Every Profile",
             ),
-            ("nyx_all_crypto_provider_data", "All Crypto Provider Data"),
+            (
+                "nyx_all_crypto_provider_data",
+                "All Current-User RSA Provider Data",
+            ),
             ("nyx_windows_update_log", "Windows Update Log"),
             ("nyx_push_notifications", "Push Notifications"),
         ] {
