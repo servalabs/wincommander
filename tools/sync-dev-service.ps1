@@ -171,9 +171,10 @@ if ((Get-Sha256 $builtService) -ne (Get-Sha256 $stagedService)) {
 }
 
 # sc.exe receives an already-parsed argument list from PowerShell. Preserve
-# literal quotes *inside* its binPath value so paths such as
-# E:\E drive\Company\... are stored as one executable path by SCM.
-$servicePathArgument = '\"' + $stagedService + '\"'
+# literal quote characters *inside* its binPath value so paths such as
+# E:\E drive\Company\... are stored as one executable path by SCM. Do not
+# add a backslash here: it turns the quote literal and splits a spaced path.
+$servicePathArgument = '"' + $stagedService + '"'
 if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
     Write-Diagnostic "Configuring the service with staged path: $stagedService"
     & sc.exe config $serviceName 'binPath=' $servicePathArgument 'start=' 'auto' 'obj=' 'LocalSystem'

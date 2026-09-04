@@ -27,4 +27,9 @@ describe("desktop development launchers", () => {
     expect(serviceSync).toContain("Start-ElevatedSync -UseExistingBuild");
     expect(serviceSync).toContain("Using the development service built by the non-elevated parent.");
   });
+
+  test("keeps a spaced development service path quoted for the Windows service manager", () => {
+    expect(serviceSync).toContain(`$servicePathArgument = '"' + $stagedService + '"'`);
+    expect(serviceSync).not.toContain(`$servicePathArgument = '\\"' + $stagedService + '\\"'`);
+  });
 });
