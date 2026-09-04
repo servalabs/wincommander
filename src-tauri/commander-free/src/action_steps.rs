@@ -635,6 +635,12 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         default_enabled: false,
     },
     DestructStepDef {
+        id: "nyx_system_temp_files",
+        label: "User & System Temp Files",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
         id: "app_launch_history",
         label: "App Launch History",
         group: DestructGroup::DeepDfir,
@@ -765,6 +771,7 @@ mod tests {
                 "BitLocker Recovery-Key Temp Files",
             ),
             ("nyx_application_logs", "Hibernation & App Trace Logs"),
+            ("nyx_system_temp_files", "User & System Temp Files"),
         ] {
             let step = lookup(id).expect("Nyx-derived step must remain selectable");
             assert_eq!(step.label, label);
