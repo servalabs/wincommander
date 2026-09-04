@@ -2451,7 +2451,7 @@ fn open_legacy_container_as_caller(
     use windows_sys::Win32::Security::{ImpersonateLoggedOnUser, RevertToSelf};
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
-        FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, WRITE_DAC,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
 
     struct RevertGuard;
@@ -2471,8 +2471,16 @@ fn open_legacy_container_as_caller(
     }
     let guard = RevertGuard;
     let mut options = std::fs::OpenOptions::new();
+    // Adoption has to work when a vault is brought to a different Windows PC.
+    // The new signed-in account need only be able to read the selected container
+    // and prove its VeraCrypt credentials to the broker.  Requiring WRITE_DAC
+    // here made an otherwise readable copied/removable vault look like an
+    // authorization failure before its credentials were ever checked.  The
+    // SYSTEM service snapshots and applies the durable owner ACL itself after
+    // this caller-readability check, so the caller is never granted permission
+    // to edit an ACL merely by attempting an adoption.
     options
-        .access_mode(FILE_GENERIC_READ | FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)
+        .access_mode(FILE_GENERIC_READ | FILE_READ_ATTRIBUTES)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     let file = options.open(path).map_err(|_| VaultError::AclReadback)?;
