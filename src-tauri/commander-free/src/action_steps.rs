@@ -227,7 +227,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
     },
     DestructStepDef {
         id: "powershell_history",
-        label: "PowerShell History",
+        label: "Command History",
         group: DestructGroup::PrivacyTraces,
         default_enabled: true,
     },
