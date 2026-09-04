@@ -20,12 +20,12 @@ describe("Nyx full-scope advanced cleanup steps", () => {
   test("remain opt-in Deep Trace actions with an operator-facing impact explanation", () => {
     for (const id of NYX_FULL_SCOPE_ADVANCED_IDS) {
       const step = DESTRUCT_STEPS.find((candidate) => candidate.id === id);
-      expect(step, `${id} must remain selectable`).toBeDefined();
+      expect(step).toBeTruthy();
       expect(step?.group).toBe("deepDfir");
-      expect(step?.defaultEnabled).toBeFalse();
+      expect(step?.defaultEnabled).toBe(false);
 
       const description = DESTRUCT_STEP_DESCRIPTIONS[id];
-      expect(description, `${id} must explain its impact`).toBeTruthy();
+      expect(description).toBeTruthy();
       expect(description.length).toBeGreaterThan(70);
     }
   });
