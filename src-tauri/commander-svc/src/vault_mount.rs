@@ -319,9 +319,9 @@ impl VaultMountBroker {
             VaultMountReason::AclApplyFailed => "vault_acl_apply_failed",
             VaultMountReason::AclReadbackFailed => "vault_acl_readback_failed",
             VaultMountReason::InvalidRequest => "vault_validation_failed",
-            VaultMountReason::BrokerUnavailable
-            | VaultMountReason::BrokerRejected
-            | VaultMountReason::DismountFailed => "vault_broker_failed",
+            VaultMountReason::BrokerUnavailable => "vault_broker_unavailable",
+            VaultMountReason::BrokerRejected => "vault_broker_rejected",
+            VaultMountReason::DismountFailed => "vault_cleanup_failed",
         }
     }
 
@@ -1579,6 +1579,12 @@ mod tests {
                 VaultMountReason::EngineMountFailed,
                 "vault_engine_mount_failed",
             ),
+            (
+                VaultMountReason::BrokerUnavailable,
+                "vault_broker_unavailable",
+            ),
+            (VaultMountReason::BrokerRejected, "vault_broker_rejected"),
+            (VaultMountReason::DismountFailed, "vault_cleanup_failed"),
         ] {
             assert_eq!(
                 VaultMountBroker::personal_mount_failure_code(reason),

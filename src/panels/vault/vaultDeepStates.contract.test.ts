@@ -41,6 +41,18 @@ describe("secure storage deep-state contracts", () => {
     expect(mountHandlerSource).toContain("is already in use. Dismount it first or choose a free drive letter.");
     expect(vaultSource).toContain("vault_engine_unlock_failed");
     expect(vaultSource).toContain("entered its original password, PIM, and keyfile");
+    expect(vaultSource).toContain("vault_broker_unavailable");
+    expect(vaultSource).toContain("secure mount helper could not be reached");
+    expect(vaultSource).toContain("vault_broker_rejected");
+    expect(vaultSource).toContain("could not verify the secure mount helper");
+    const cleanupMessage = vaultSource.slice(
+      vaultSource.indexOf('if (normalized.includes("vault_cleanup_failed"))'),
+      vaultSource.indexOf("return normalized.length"),
+    );
+    expect(cleanupMessage).toContain("mount state could not be confirmed after cleanup");
+    expect(cleanupMessage).not.toContain("was not left mounted");
+    expect(cleanupMessage).not.toContain("safely unmounted");
+    expect(vaultSource).not.toContain("vault_broker_failed");
     const failureBranch = mountHandlerSource.slice(
       mountHandlerSource.indexOf("} catch"),
       mountHandlerSource.indexOf("} finally"),

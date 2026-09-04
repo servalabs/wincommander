@@ -46,8 +46,14 @@ const boundedMountError = (error: unknown) => {
   if (normalized.includes("vault_session_unavailable")) {
     return "WinCommander could not access your interactive Windows session. Sign out and back in, then retry.";
   }
-  if (normalized.includes("vault_broker_failed")) {
-    return "WinCommander's secure mount helper did not complete. The volume was not left mounted; check the driver status and retry after restarting WinCommander.";
+  if (normalized.includes("vault_broker_unavailable")) {
+    return "WinCommander's secure mount helper could not be reached, so no mount was confirmed. Restart WinCommander, then try again.";
+  }
+  if (normalized.includes("vault_broker_rejected")) {
+    return "WinCommander could not verify the secure mount helper. Update or repair WinCommander, then try again.";
+  }
+  if (normalized.includes("vault_cleanup_failed")) {
+    return "The final mount state could not be confirmed after cleanup. Do not use the selected drive letter until you restart WinCommander and check Secure Storage.";
   }
   return normalized.length > MOUNT_ERROR_MAX_LENGTH
     ? `${normalized.slice(0, MOUNT_ERROR_MAX_LENGTH - 1)}…`
