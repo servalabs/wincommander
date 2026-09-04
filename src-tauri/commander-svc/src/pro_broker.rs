@@ -90,6 +90,110 @@ static NEXT_RECOVERY_REQUEST_ID: std::sync::atomic::AtomicU64 =
 const REQUEST_ID: u64 = 41;
 
 #[cfg(windows)]
+struct BrokerPipeSecurityAttributes {
+    attributes: windows_sys::Win32::Security::SECURITY_ATTRIBUTES,
+    descriptor: windows_sys::Win32::Security::PSECURITY_DESCRIPTOR,
+}
+
+#[cfg(windows)]
+impl BrokerPipeSecurityAttributes {
+    fn as_mut_ptr(&mut self) -> *mut windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
+        &mut self.attributes
+    }
+}
+
+#[cfg(windows)]
+impl Drop for BrokerPipeSecurityAttributes {
+    fn drop(&mut self) {
+        if !self.descriptor.is_null() {
+            unsafe {
+                windows_sys::Win32::Foundation::LocalFree(self.descriptor as *mut _);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn broker_pipe_sddl(caller_sid: &str) -> Option<String> {
+    let mut parts = caller_sid.split('-');
+    if parts.next() != Some("S") || parts.next() != Some("1") {
+        return None;
+    }
+    let remaining: Vec<&str> = parts.collect();
+    if remaining.len() < 2
+        || remaining
+            .iter()
+            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return None;
+    }
+
+    Some(format!("D:P(A;;FA;;;SY)(A;;0x12019b;;;{caller_sid})"))
+}
+
+#[cfg(windows)]
+fn broker_pipe_security_attributes(
+    caller_sid: &str,
+) -> Result<BrokerPipeSecurityAttributes, wincmd_shared::vault_access::VaultMountReason> {
+    use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+    use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+
+    let sddl = broker_pipe_sddl(caller_sid)
+        .ok_or(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)?;
+    let sddl_wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let mut descriptor_size = 0u32;
+    let converted = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl_wide.as_ptr(),
+            1,
+            &mut descriptor,
+            &mut descriptor_size,
+        )
+    };
+    if converted == 0 {
+        return Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected);
+    }
+
+    Ok(BrokerPipeSecurityAttributes {
+        attributes: SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor,
+            bInheritHandle: 0,
+        },
+        descriptor,
+    })
+}
+
+#[cfg(windows)]
+async fn connect_broker_pipe(
+    pipe: &tokio::net::windows::named_pipe::NamedPipeServer,
+    process: windows_sys::Win32::Foundation::HANDLE,
+    deadline: tokio::time::Instant,
+) -> Result<(), wincmd_shared::vault_access::VaultMountReason> {
+    use wincmd_shared::vault_access::VaultMountReason;
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+    loop {
+        tokio::select! {
+            result = pipe.connect() => {
+                return result.map_err(|_| VaultMountReason::BrokerUnavailable);
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                return Err(VaultMountReason::BrokerUnavailable);
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                if unsafe { WaitForSingleObject(process, 0) } == WAIT_OBJECT_0 {
+                    eprintln!("[wincommander-svc] broker helper exited before connecting");
+                    return Err(VaultMountReason::BrokerUnavailable);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
 pub(crate) struct VaultCall<'a> {
     pub request_id: u64,
     pub target_session_id: u32,
@@ -126,11 +230,19 @@ pub async fn vault_call(
     let deadline = Instant::now() + BROKER_TIMEOUT;
     let pipe_name = random_pipe_name();
     let session_token = random_session_token();
-    let mut pipe = ServerOptions::new()
-        .pipe_mode(PipeMode::Byte)
-        .first_pipe_instance(true)
-        .create(&pipe_name)
-        .map_err(|_| VaultMountReason::BrokerUnavailable)?;
+    let mut pipe_security = broker_pipe_security_attributes(caller_sid)?;
+    let mut pipe = unsafe {
+        ServerOptions::new()
+            .pipe_mode(PipeMode::Byte)
+            .reject_remote_clients(true)
+            .first_pipe_instance(true)
+            .create_with_security_attributes_raw(
+                &pipe_name,
+                pipe_security.as_mut_ptr() as *mut std::ffi::c_void,
+            )
+            .map_err(|_| VaultMountReason::BrokerUnavailable)?
+    };
+    drop(pipe_security);
     eprintln!(
         "[wincommander-svc] vault_call({feature_id}, operation={request_id}): spawning broker helper"
     );
@@ -147,10 +259,7 @@ pub async fn vault_call(
     .map_err(broker_transport_reason)?;
     eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): broker spawned, waiting for connect");
     let result = async {
-        timeout_at(deadline, pipe.connect())
-            .await
-            .map_err(|_| VaultMountReason::BrokerUnavailable)?
-            .map_err(|_| VaultMountReason::BrokerUnavailable)?;
+        connect_broker_pipe(&pipe, process, deadline).await?;
         let connected_hash = verified_connected_process_hash(&pipe, process)
             .ok_or(VaultMountReason::BrokerRejected)?;
         if !hash_matches_fixed_pro(&connected_hash) {
@@ -901,6 +1010,32 @@ mod tests {
         let token = random_session_token();
         assert_eq!(token.len(), 64);
         assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn broker_pipe_acl_allows_only_system_and_the_authenticated_caller() {
+        let sddl = broker_pipe_sddl("S-1-5-21-100-200-300-1001").unwrap();
+        assert_eq!(
+            sddl,
+            "D:P(A;;FA;;;SY)(A;;0x12019b;;;S-1-5-21-100-200-300-1001)"
+        );
+        assert!(!sddl.contains(";;;BU)"));
+        assert!(!sddl.contains(";;;WD)"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn broker_pipe_acl_rejects_sddl_injection_and_malformed_sids() {
+        for sid in [
+            "",
+            "S-1-5-21-100)(A;;FA;;;WD)",
+            "S-2-5-21-100",
+            "S-1-",
+            "not-a-sid",
+        ] {
+            assert!(broker_pipe_sddl(sid).is_none(), "accepted {sid}");
+        }
     }
 
     #[test]
