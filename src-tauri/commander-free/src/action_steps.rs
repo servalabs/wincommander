@@ -611,6 +611,24 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         default_enabled: false,
     },
     DestructStepDef {
+        id: "windows_policy_auth_caches",
+        label: "Policy & Authentication Caches",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
+        id: "cortana_wsa_logs",
+        label: "Cortana & Android Subsystem Logs",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
+        id: "bitlocker_recovery_temp",
+        label: "BitLocker Recovery-Key Temp Files",
+        group: DestructGroup::DeepDfir,
+        default_enabled: false,
+    },
+    DestructStepDef {
         id: "app_launch_history",
         label: "App Launch History",
         group: DestructGroup::DeepDfir,
@@ -731,6 +749,15 @@ mod tests {
                 "Third-Party Security Product Logs",
             ),
             ("forensic_tool_artifacts", "FTK Imager Artifacts"),
+            (
+                "windows_policy_auth_caches",
+                "Policy & Authentication Caches",
+            ),
+            ("cortana_wsa_logs", "Cortana & Android Subsystem Logs"),
+            (
+                "bitlocker_recovery_temp",
+                "BitLocker Recovery-Key Temp Files",
+            ),
         ] {
             let step = lookup(id).expect("Nyx-derived step must remain selectable");
             assert_eq!(step.label, label);
