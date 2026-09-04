@@ -9,6 +9,7 @@ import CleanupTraceCard from "../../components/cleanup/CleanupTraceCard";
 import RunOnceButton from "../../components/cleanup/RunOnceButton";
 import { ACTION_CATEGORIES, VIEW_ONLY_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
 import type { CardData } from "./useCleanupScan";
+import RoutineHygieneCard from "./RoutineHygieneCard";
 
 interface Props {
     cardDataMap: Record<string, CardData>;
@@ -32,6 +33,12 @@ export default function CleanupActionsMonitoring({
     return (
         <SectionCard title="One-Time Actions & Monitoring" style={{ marginBottom: '32px' }}>
             <div className="flex flex-col gap-8">
+                <RoutineHygieneCard
+                    cardDataMap={cardDataMap}
+                    isInvestigator={isInvestigator}
+                    handleCardLoad={handleCardLoad}
+                    handleCardClear={handleCardClear}
+                />
                 {/* Keep on-demand actions and their review in one card, with the
                     read-only review directly below the actions it relates to. */}
                 <section data-tour="cleanup-one-time-actions" aria-labelledby="cleanup-one-time-actions-heading">
