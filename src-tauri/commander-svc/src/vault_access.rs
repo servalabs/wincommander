@@ -56,6 +56,9 @@ pub enum VaultError {
 pub trait VaultFs: Send + Sync {
     fn read(&self, path: &Path) -> std::io::Result<Vec<u8>>;
     fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()>;
+    fn remove(&self, _path: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+    }
     fn stable_file_identity(&self, path: &Path) -> Result<String, VaultError>;
     fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError>;
     fn personal_creation_target_exists(&self, path: &Path) -> Result<bool, VaultError>;
@@ -201,6 +204,15 @@ fn valid_pending_personal(pending: &PendingPersonalVault) -> bool {
                 .saturating_add(PERSONAL_CREATION_TTL_SECS)
 }
 
+fn valid_legacy_recovery(recovery: &LegacyRecoveryRecord) -> bool {
+    valid_personal_record(&recovery.record)
+        && !recovery.snapshots.is_empty()
+        && recovery
+            .snapshots
+            .iter()
+            .all(|snapshot| snapshot.path == Path::new(&recovery.record.container_path))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultAclPlan {
     pub parent: PathBuf,
@@ -214,11 +226,31 @@ pub struct VaultAclPlan {
     pub managed_groups: Vec<GroupMembershipPlan>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AclSnapshot {
     pub path: PathBuf,
     pub descriptor: Vec<u8>,
     pub dacl_protected: bool,
+}
+
+pub struct LegacyAclPreparation {
+    container: PathBuf,
+    identity: String,
+    snapshots: Vec<AclSnapshot>,
+    #[cfg(windows)]
+    _lock: Option<std::fs::File>,
+}
+
+pub struct LegacyPersonalMountPreparation {
+    record: PersonalVaultRecord,
+    acl: LegacyAclPreparation,
+}
+
+impl LegacyPersonalMountPreparation {
+    pub fn record(&self) -> &PersonalVaultRecord {
+        &self.record
+    }
 }
 
 /// An implementation must leave neither a broad inherited DACL nor an
@@ -228,6 +260,44 @@ pub trait AclApplier: Send + Sync {
     fn apply_and_verify(&self, plan: &VaultAclPlan) -> Result<(), VaultError>;
     fn snapshot(&self, plan: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError>;
     fn restore(&self, snapshots: &[AclSnapshot]) -> Result<(), VaultError>;
+    fn restore_legacy_recovery(
+        &self,
+        _record: &PersonalVaultRecord,
+        snapshots: &[AclSnapshot],
+    ) -> Result<(), VaultError> {
+        self.restore(snapshots)
+    }
+    fn inspect_legacy_personal(
+        &self,
+        _container: &Path,
+        _caller_sid: &str,
+        _caller_token: windows_sys::Win32::Foundation::HANDLE,
+    ) -> Result<LegacyAclPreparation, VaultError> {
+        Err(VaultError::AclReadback)
+    }
+    fn apply_legacy_personal(
+        &self,
+        _preparation: &LegacyAclPreparation,
+        _caller_sid: &str,
+    ) -> Result<(), VaultError> {
+        Err(VaultError::AclApply)
+    }
+    /// Verify and restrict surviving targets as one operation. Production
+    /// holds each target open without delete sharing so a path cannot be
+    /// swapped between identity/ACL verification and revocation.
+    fn decommission_and_snapshot(
+        &self,
+        plan: &VaultAclPlan,
+        _expected_container_identity: &str,
+    ) -> Result<Vec<AclSnapshot>, VaultError> {
+        let snapshots = self.snapshot(plan)?;
+        let mut restricted = plan.clone();
+        restricted.grants.clear();
+        restricted.authorization_grants.clear();
+        restricted.managed_groups.clear();
+        self.apply_and_verify(&restricted)?;
+        Ok(snapshots)
+    }
     /// Personal containers inherit from arbitrary user-selected parents.  Only
     /// the container file is hardened; changing the parent would alter an
     /// unrelated folder such as D:\ for every account.
@@ -283,6 +353,15 @@ struct State {
     status: VaultPolicyStatus,
     personal: HashMap<String, PersonalVaultRecord>,
     personal_pending: HashMap<String, PendingPersonalVault>,
+    legacy_recoveries: HashMap<String, LegacyRecoveryRecord>,
+    personal_registry_healthy: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyRecoveryRecord {
+    record: PersonalVaultRecord,
+    snapshots: Vec<AclSnapshot>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -326,6 +405,8 @@ struct PersonalVaultRegistry {
     records: Vec<PersonalVaultRecord>,
     #[serde(default)]
     pending: Vec<PendingPersonalVault>,
+    #[serde(default)]
+    legacy_recoveries: Vec<LegacyRecoveryRecord>,
 }
 
 #[derive(Clone)]
@@ -429,11 +510,21 @@ impl VaultAccessStore {
                 status: empty_status(),
                 personal: HashMap::new(),
                 personal_pending: HashMap::new(),
+                legacy_recoveries: HashMap::new(),
+                personal_registry_healthy: true,
             }),
         }
     }
 
+    #[cfg_attr(windows, allow(dead_code))]
     pub fn load_at_startup(&self) {
+        self.load_at_startup_after_mount_cleanup(&HashSet::new());
+    }
+
+    pub fn load_at_startup_after_mount_cleanup(
+        &self,
+        recovered_mount_identities: &HashSet<String>,
+    ) {
         let mut loaded: Option<PersistedPolicy> = self
             .fs
             .read(&self.path)
@@ -478,39 +569,95 @@ impl VaultAccessStore {
             None => {}
         }
         drop(state);
-        if let Ok(bytes) = self.fs.read(&self.personal_path) {
-            let registry = serde_json::from_slice::<PersonalVaultRegistry>(&bytes).or_else(|_| {
-                serde_json::from_slice::<Vec<PersonalVaultRecord>>(&bytes).map(|records| {
-                    PersonalVaultRegistry {
-                        records,
-                        pending: vec![],
-                    }
-                })
-            });
-            if let Ok(registry) = registry {
-                let mut state = self
-                    .state
+        let bytes = match self.fs.read(&self.personal_path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(_) => {
+                self.state
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
-                state.personal = registry
-                    .records
-                    .into_iter()
-                    .filter(valid_personal_record)
-                    .map(|record| (personal_key(&record.container_path), record))
-                    .collect();
-                state.personal_pending = registry
-                    .pending
-                    .into_iter()
-                    .filter(valid_pending_personal)
-                    .filter(|pending| pending.expires_at > unix_time_seconds())
-                    .filter(|pending| {
-                        !state
-                            .personal
-                            .contains_key(&personal_key(&pending.container_path))
-                    })
-                    .map(|pending| (personal_key(&pending.container_path), pending))
-                    .collect();
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .personal_registry_healthy = false;
+                return;
             }
+        };
+        let registry = serde_json::from_slice::<PersonalVaultRegistry>(&bytes).or_else(|_| {
+            serde_json::from_slice::<Vec<PersonalVaultRecord>>(&bytes).map(|records| {
+                PersonalVaultRegistry {
+                    records,
+                    pending: vec![],
+                    legacy_recoveries: vec![],
+                }
+            })
+        });
+        let Ok(registry) = registry else {
+            self.state
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .personal_registry_healthy = false;
+            return;
+        };
+        let recovery_count = registry.legacy_recoveries.len();
+        let mut recovery_keys = HashSet::new();
+        if registry.legacy_recoveries.iter().any(|recovery| {
+            !valid_legacy_recovery(recovery)
+                || !recovery_keys.insert(personal_key(&recovery.record.container_path))
+        }) {
+            // A recovery journal is security state, not best-effort cache data.
+            // Never silently discard or rewrite a semantically invalid or
+            // duplicate record: preserve the bytes for diagnosis and block
+            // personal-vault operations until an operator repairs the state.
+            self.state
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .personal_registry_healthy = false;
+            return;
+        }
+        let mut legacy_recoveries = registry
+            .legacy_recoveries
+            .into_iter()
+            .map(|recovery| (personal_key(&recovery.record.container_path), recovery))
+            .collect::<HashMap<_, _>>();
+        legacy_recoveries.retain(|_, recovery| {
+            !recovered_mount_identities.contains(&recovery.record.container_identity)
+                || self
+                    .acls
+                    .restore_legacy_recovery(&recovery.record, &recovery.snapshots)
+                    .is_err()
+        });
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        state.personal = registry
+            .records
+            .into_iter()
+            .filter(valid_personal_record)
+            .map(|record| (personal_key(&record.container_path), record))
+            .collect();
+        state.personal_pending = registry
+            .pending
+            .into_iter()
+            .filter(valid_pending_personal)
+            .filter(|pending| pending.expires_at > unix_time_seconds())
+            .filter(|pending| {
+                !state
+                    .personal
+                    .contains_key(&personal_key(&pending.container_path))
+            })
+            .map(|pending| (personal_key(&pending.container_path), pending))
+            .collect();
+        state.legacy_recoveries = legacy_recoveries;
+        state.personal_registry_healthy = state.legacy_recoveries.is_empty();
+        if recovery_count != 0
+            && self
+                .persist_personal(
+                    &state.personal,
+                    &state.personal_pending,
+                    &state.legacy_recoveries,
+                )
+                .is_err()
+        {
+            state.personal_registry_healthy = false;
         }
     }
 
@@ -532,6 +679,14 @@ impl VaultAccessStore {
             || !valid_creation_path(Path::new(container_path))
         {
             return Err(VaultError::Validation);
+        }
+        if !self
+            .state
+            .lock()
+            .map_err(|_| VaultError::Persistence)?
+            .personal_registry_healthy
+        {
+            return Err(VaultError::Persistence);
         }
         let normalized = self
             .fs
@@ -585,7 +740,11 @@ impl VaultAccessStore {
         state.personal_pending.remove(&key);
         state.personal_pending.insert(key.clone(), pending);
         if self
-            .persist_personal(&state.personal, &state.personal_pending)
+            .persist_personal(
+                &state.personal,
+                &state.personal_pending,
+                &state.legacy_recoveries,
+            )
             .is_err()
         {
             state.personal_pending.remove(&key);
@@ -633,7 +792,11 @@ impl VaultAccessStore {
             container_identity: identity,
         };
         if self
-            .persist_personal(&state.personal, &state.personal_pending)
+            .persist_personal(
+                &state.personal,
+                &state.personal_pending,
+                &state.legacy_recoveries,
+            )
             .is_err()
         {
             if let Some(pending) = state.personal_pending.get_mut(&key) {
@@ -708,7 +871,11 @@ impl VaultAccessStore {
         state.personal_pending.remove(&key);
         state.personal.insert(key.clone(), record.clone());
         if self
-            .persist_personal(&state.personal, &state.personal_pending)
+            .persist_personal(
+                &state.personal,
+                &state.personal_pending,
+                &state.legacy_recoveries,
+            )
             .is_err()
         {
             state.personal.remove(&key);
@@ -732,7 +899,11 @@ impl VaultAccessStore {
         }
         let pending = state.personal_pending.remove(&key);
         if self
-            .persist_personal(&state.personal, &state.personal_pending)
+            .persist_personal(
+                &state.personal,
+                &state.personal_pending,
+                &state.legacy_recoveries,
+            )
             .is_err()
         {
             if let Some(pending) = pending {
@@ -748,13 +919,12 @@ impl VaultAccessStore {
         container_path: &str,
         caller_sid: &str,
     ) -> Result<Option<PersonalVaultRecord>, VaultError> {
-        let record = self
-            .state
-            .lock()
-            .map_err(|_| VaultError::Persistence)?
-            .personal
-            .get(&personal_key(container_path))
-            .cloned();
+        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        if !state.personal_registry_healthy {
+            return Err(VaultError::Persistence);
+        }
+        let record = state.personal.get(&personal_key(container_path)).cloned();
+        drop(state);
         let Some(record) = record else {
             return Ok(None);
         };
@@ -767,14 +937,197 @@ impl VaultAccessStore {
         Ok((identity == record.container_identity).then_some(record))
     }
 
+    /// Prepares an existing, unregistered container for one-time adoption.
+    /// The ACL implementation proves access through the authenticated caller
+    /// token and retains a no-delete-share handle until commit or rollback.
+    pub fn prepare_legacy_personal_mount(
+        &self,
+        container_path: &str,
+        caller_sid: &str,
+        caller_session: u32,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+    ) -> Result<LegacyPersonalMountPreparation, VaultError> {
+        if caller_sid.is_empty()
+            || caller_session == 0
+            || !valid_creation_path(Path::new(container_path))
+        {
+            return Err(VaultError::Validation);
+        }
+        let normalized = self
+            .fs
+            .normalize_personal_creation_path(Path::new(container_path))?;
+        let normalized_path = normalized.to_string_lossy().into_owned();
+        let key = personal_key(&normalized_path);
+        {
+            let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+            if !state.personal_registry_healthy {
+                return Err(VaultError::Persistence);
+            }
+            if state.personal.contains_key(&key)
+                || state.personal_pending.contains_key(&key)
+                || state.legacy_recoveries.contains_key(&key)
+            {
+                return Err(VaultError::Validation);
+            }
+        }
+        let acl = self
+            .acls
+            .inspect_legacy_personal(&normalized, caller_sid, caller_token)?;
+        match self.fs.personal_creation_target_identity(&normalized) {
+            Ok(identity) if identity == acl.identity => {}
+            Ok(_) | Err(_) => return Err(VaultError::ContainerIdentity),
+        }
+        let preparation = LegacyPersonalMountPreparation {
+            record: PersonalVaultRecord {
+                container_path: normalized_path,
+                container_identity: acl.identity.clone(),
+                owner_sid: caller_sid.to_owned(),
+                scope: VaultPresentation::PerUser,
+                created_by_session: caller_session,
+            },
+            acl,
+        };
+        {
+            let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+            if !state.personal_registry_healthy {
+                return Err(VaultError::Persistence);
+            }
+            if state.personal.contains_key(&key)
+                || state.personal_pending.contains_key(&key)
+                || state.legacy_recoveries.contains_key(&key)
+            {
+                return Err(VaultError::Validation);
+            }
+            state.legacy_recoveries.insert(
+                key.clone(),
+                LegacyRecoveryRecord {
+                    record: preparation.record.clone(),
+                    snapshots: preparation.acl.snapshots.clone(),
+                },
+            );
+            if self
+                .persist_personal(
+                    &state.personal,
+                    &state.personal_pending,
+                    &state.legacy_recoveries,
+                )
+                .is_err()
+            {
+                state.legacy_recoveries.remove(&key);
+                return Err(VaultError::Persistence);
+            }
+        }
+        if let Err(error) = self
+            .acls
+            .apply_legacy_personal(&preparation.acl, caller_sid)
+        {
+            return match self.restore_legacy_personal_mount(preparation) {
+                Ok(()) => Err(error),
+                Err(_) => Err(VaultError::AclReadback),
+            };
+        }
+        match self.fs.personal_creation_target_identity(&normalized) {
+            Ok(identity) if identity == preparation.acl.identity => Ok(preparation),
+            Ok(_) | Err(_) => match self.restore_legacy_personal_mount(preparation) {
+                Ok(()) => Err(VaultError::ContainerIdentity),
+                Err(_) => Err(VaultError::AclReadback),
+            },
+        }
+    }
+
+    pub fn commit_legacy_personal_mount(
+        &self,
+        preparation: &LegacyPersonalMountPreparation,
+        caller_sid: &str,
+        caller_session: u32,
+    ) -> Result<PersonalVaultRecord, VaultError> {
+        let record = &preparation.record;
+        if record.owner_sid != caller_sid
+            || record.created_by_session != caller_session
+            || record.container_identity != preparation.acl.identity
+            || self
+                .fs
+                .personal_creation_target_identity(Path::new(&record.container_path))?
+                != record.container_identity
+        {
+            return Err(VaultError::ContainerIdentity);
+        }
+        let key = personal_key(&record.container_path);
+        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        if !state.personal_registry_healthy {
+            return Err(VaultError::Persistence);
+        }
+        if state.personal.contains_key(&key)
+            || state.personal_pending.contains_key(&key)
+            || state
+                .legacy_recoveries
+                .get(&key)
+                .map(|recovery| &recovery.record)
+                != Some(record)
+        {
+            return Err(VaultError::Validation);
+        }
+        let recovery = state
+            .legacy_recoveries
+            .remove(&key)
+            .ok_or(VaultError::Validation)?;
+        state.personal.insert(key.clone(), record.clone());
+        if self
+            .persist_personal(
+                &state.personal,
+                &state.personal_pending,
+                &state.legacy_recoveries,
+            )
+            .is_err()
+        {
+            state.personal.remove(&key);
+            state.legacy_recoveries.insert(key, recovery);
+            return Err(VaultError::Persistence);
+        }
+        Ok(record.clone())
+    }
+
+    pub fn restore_legacy_personal_mount(
+        &self,
+        preparation: LegacyPersonalMountPreparation,
+    ) -> Result<(), VaultError> {
+        self.acls.restore(&preparation.acl.snapshots)?;
+        let key = personal_key(&preparation.record.container_path);
+        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        let recovery = state.legacy_recoveries.remove(&key);
+        if self
+            .persist_personal(
+                &state.personal,
+                &state.personal_pending,
+                &state.legacy_recoveries,
+            )
+            .is_err()
+        {
+            if let Some(recovery) = recovery {
+                state.legacy_recoveries.insert(key, recovery);
+            }
+            return Err(VaultError::Persistence);
+        }
+        Ok(())
+    }
+
+    pub fn mark_personal_recovery_uncertain(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .personal_registry_healthy = false;
+    }
+
     fn persist_personal(
         &self,
         records: &HashMap<String, PersonalVaultRecord>,
         pending: &HashMap<String, PendingPersonalVault>,
+        legacy_recoveries: &HashMap<String, LegacyRecoveryRecord>,
     ) -> Result<(), VaultError> {
         let bytes = serde_json::to_vec(&PersonalVaultRegistry {
             records: records.values().cloned().collect(),
             pending: pending.values().cloned().collect(),
+            legacy_recoveries: legacy_recoveries.values().cloned().collect(),
         })
         .map_err(|_| VaultError::Persistence)?;
         self.fs
@@ -1119,6 +1472,106 @@ impl VaultAccessStore {
         Ok(status)
     }
 
+    /// Decommission the one service-owned shared-Vault policy. Existing
+    /// mounts are dismounted by the pipe handler before this runs. Revoke the
+    /// policy's container access before removing its durable record; failure
+    /// restores the previous ACL and group membership snapshots.
+    pub fn clear(&self, requested: VaultAccessPolicy) -> Result<VaultPolicyStatus, VaultError> {
+        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        let active = state.active.clone().ok_or(VaultError::VersionConflict)?;
+        if requested.schema_version != VAULT_ACCESS_SCHEMA_VERSION
+            || requested.policy_id != active.policy.policy_id
+            || requested.expected_previous_version != active.policy.version
+            || requested.version != active.policy.version.saturating_add(1)
+            || !requested.entries.is_empty()
+        {
+            return Err(VaultError::Validation);
+        }
+
+        // Decommission from the trusted data persisted at apply time. A stale
+        // Windows account or a deleted container must not make its old policy
+        // impossible to remove by forcing fresh principal/path resolution.
+        let plans = active
+            .policy
+            .entries
+            .iter()
+            .map(|entry| {
+                let resolved = active
+                    .resolved
+                    .iter()
+                    .find(|resolved| resolved.id == entry.id)
+                    .ok_or(VaultError::Validation)?;
+                let container = PathBuf::from(&entry.container_path);
+                let parent = container
+                    .parent()
+                    .ok_or(VaultError::Validation)?
+                    .to_path_buf();
+                Ok((
+                    VaultAclPlan {
+                        parent,
+                        container,
+                        grants: resolved
+                            .grants
+                            .iter()
+                            .map(|grant| ResolvedGrant {
+                                sid: grant.sid.clone(),
+                                access: grant.access,
+                            })
+                            .collect(),
+                        authorization_grants: Vec::new(),
+                        // Both deterministic names are safe candidates. The
+                        // group snapshot tells us which ones actually exist.
+                        managed_groups: [VaultAccess::Read, VaultAccess::Write]
+                            .into_iter()
+                            .map(|access| GroupMembershipPlan {
+                                group: managed_group_name(&entry.id, access),
+                                members: Vec::new(),
+                                access,
+                            })
+                            .collect(),
+                    },
+                    resolved.identity.clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>, VaultError>>()?;
+        let group_plans = plans
+            .iter()
+            .flat_map(|(plan, _)| plan.managed_groups.clone())
+            .collect::<Vec<_>>();
+        let group_snapshots = self.groups.snapshot(&group_plans)?;
+        if group_snapshots.len() != group_plans.len() {
+            return Err(VaultError::Persistence);
+        }
+
+        let mut snapshots = Vec::new();
+        for (plan, expected_identity) in &plans {
+            match self.acls.decommission_and_snapshot(plan, expected_identity) {
+                Ok(applied) => snapshots.extend(applied),
+                Err(error) => {
+                    self.rollback_after_apply(&mut state, &snapshots);
+                    return Err(error);
+                }
+            }
+        }
+        for group in group_snapshots.iter().filter(|group| group.existed) {
+            if let Err(error) = self.groups.reconcile_exact_members(&group.group, &[]) {
+                self.rollback_after_apply(&mut state, &snapshots);
+                let _ = self.groups.restore(&group_snapshots);
+                return Err(error);
+            }
+        }
+        if let Err(error) = self.fs.remove(&self.path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                self.rollback_after_apply(&mut state, &snapshots);
+                let _ = self.groups.restore(&group_snapshots);
+                return Err(VaultError::Persistence);
+            }
+        }
+        state.active = None;
+        state.status = empty_status();
+        Ok(state.status.clone())
+    }
+
     /// Authorization is caller-token based.  Eligibility intentionally never
     /// becomes a launch authorization until a closed mount broker exists.
     pub fn authorize_mount(
@@ -1454,6 +1907,9 @@ impl VaultFs for WindowsVaultFs {
             return Err(error);
         }
         Ok(())
+    }
+    fn remove(&self, path: &Path) -> std::io::Result<()> {
+        std::fs::remove_file(path)
     }
     fn stable_file_identity(&self, path: &Path) -> Result<String, VaultError> {
         use std::os::windows::io::AsRawHandle;
@@ -1863,6 +2319,115 @@ impl AclApplier for WindowsAclApplier {
         }
         Ok(())
     }
+    fn restore_legacy_recovery(
+        &self,
+        record: &PersonalVaultRecord,
+        snapshots: &[AclSnapshot],
+    ) -> Result<(), VaultError> {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+        let Some(lock) = open_acl_target_without_delete_share(Path::new(&record.container_path))?
+        else {
+            return Err(VaultError::ContainerIdentity);
+        };
+        let metadata = lock.metadata().map_err(|_| VaultError::ContainerIdentity)?;
+        if !metadata.is_file()
+            || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || file_identity_from_handle(&lock)? != record.container_identity
+        {
+            return Err(VaultError::ContainerIdentity);
+        }
+        self.restore(snapshots)
+    }
+    fn inspect_legacy_personal(
+        &self,
+        container: &Path,
+        _caller_sid: &str,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+    ) -> Result<LegacyAclPreparation, VaultError> {
+        let lock = open_legacy_container_as_caller(container, caller_token)?;
+        let identity = file_identity_from_handle(&lock)?;
+        let snapshots = vec![snapshot_one_acl(container)?];
+        Ok(LegacyAclPreparation {
+            container: container.to_path_buf(),
+            identity,
+            snapshots,
+            _lock: Some(lock),
+        })
+    }
+    fn apply_legacy_personal(
+        &self,
+        preparation: &LegacyAclPreparation,
+        caller_sid: &str,
+    ) -> Result<(), VaultError> {
+        let grants = [ResolvedGrant {
+            sid: caller_sid.to_owned(),
+            access: VaultAccess::Write,
+        }];
+        apply_one_acl(&preparation.container, &grants)
+            .and_then(|_| verify_one_acl(&preparation.container, &grants))?;
+        #[cfg(windows)]
+        let identity = preparation
+            ._lock
+            .as_ref()
+            .ok_or(VaultError::ContainerIdentity)
+            .and_then(file_identity_from_handle)?;
+        #[cfg(not(windows))]
+        let identity = preparation.identity.clone();
+        if identity != preparation.identity {
+            return Err(VaultError::ContainerIdentity);
+        }
+        Ok(())
+    }
+    fn decommission_and_snapshot(
+        &self,
+        plan: &VaultAclPlan,
+        expected_container_identity: &str,
+    ) -> Result<Vec<AclSnapshot>, VaultError> {
+        let mut snapshots = Vec::new();
+        let mut locks = Vec::new();
+        for path in [&plan.parent, &plan.container] {
+            let lock = match open_acl_target_without_delete_share(path) {
+                Ok(Some(lock)) => lock,
+                Ok(None) => continue,
+                Err(error) => {
+                    let _ = self.restore(&snapshots);
+                    return Err(error);
+                }
+            };
+            locks.push(lock);
+            let lock = locks.last().expect("just pushed target lock");
+            if path == &plan.container {
+                match file_identity_from_handle(lock) {
+                    Ok(identity) if identity == expected_container_identity => {}
+                    Ok(_) | Err(_) => {
+                        let _ = self.restore(&snapshots);
+                        return Err(VaultError::ContainerIdentity);
+                    }
+                }
+            }
+            if let Err(error) = verify_one_acl(path, &plan.grants) {
+                let _ = self.restore(&snapshots);
+                return Err(error);
+            }
+            let snapshot = match snapshot_one_acl(path) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    let _ = self.restore(&snapshots);
+                    return Err(error);
+                }
+            };
+            // Include this target before mutating it so a failed application
+            // or readback restores the current target as well as earlier ones.
+            snapshots.push(snapshot);
+            if let Err(error) = apply_one_acl(path, &[]).and_then(|_| verify_one_acl(path, &[])) {
+                let _ = self.restore(&snapshots);
+                return Err(error);
+            }
+        }
+        Ok(snapshots)
+    }
     fn apply_container_and_verify(
         &self,
         container: &Path,
@@ -1875,6 +2440,86 @@ impl AclApplier for WindowsAclApplier {
         verify_one_acl(&plan.parent, &plan.grants)?;
         verify_one_acl(&plan.container, &plan.grants)
     }
+}
+
+#[cfg(windows)]
+fn open_legacy_container_as_caller(
+    path: &Path,
+    caller_token: windows_sys::Win32::Foundation::HANDLE,
+) -> Result<std::fs::File, VaultError> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Security::{ImpersonateLoggedOnUser, RevertToSelf};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL, WRITE_DAC,
+    };
+
+    struct RevertGuard;
+    impl Drop for RevertGuard {
+        fn drop(&mut self) {
+            if unsafe { RevertToSelf() } == 0 {
+                // Continuing a reusable service worker under a client token is
+                // a privilege-boundary failure; fail-stop is the only safe
+                // outcome when Windows cannot restore the service identity.
+                std::process::abort();
+            }
+        }
+    }
+
+    if caller_token.is_null() || unsafe { ImpersonateLoggedOnUser(caller_token) } == 0 {
+        return Err(VaultError::AclReadback);
+    }
+    let guard = RevertGuard;
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .access_mode(FILE_GENERIC_READ | FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path).map_err(|_| VaultError::AclReadback)?;
+    let metadata = file.metadata().map_err(|_| VaultError::ContainerIdentity)?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(VaultError::ContainerIdentity);
+    }
+    drop(guard);
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn open_acl_target_without_delete_share(path: &Path) -> Result<Option<std::fs::File>, VaultError> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    match options.open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(VaultError::AclReadback),
+    }
+}
+
+#[cfg(windows)]
+fn file_identity_from_handle(file: &std::fs::File) -> Result<String, VaultError> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
+        return Err(VaultError::ContainerIdentity);
+    }
+    Ok(format!(
+        "v:{}:i:{}",
+        info.dwVolumeSerialNumber,
+        ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64
+    ))
 }
 
 #[cfg(windows)]
@@ -2431,6 +3076,14 @@ mod tests {
             self.0.lock().unwrap().insert(p.into(), b.into());
             Ok(())
         }
+        fn remove(&self, p: &Path) -> std::io::Result<()> {
+            self.0
+                .lock()
+                .unwrap()
+                .remove(p)
+                .map(|_| ())
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
         fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
             Ok("volume:1:file:2".into())
         }
@@ -2448,6 +3101,12 @@ mod tests {
     impl PrincipalResolver for Resolver {
         fn resolve_sid(&self, name: &str) -> Result<String, VaultError> {
             Ok(format!("S-1-test-{name}"))
+        }
+    }
+    struct RejectingResolver;
+    impl PrincipalResolver for RejectingResolver {
+        fn resolve_sid(&self, name: &str) -> Result<String, VaultError> {
+            Err(VaultError::PrincipalResolution(name.to_string()))
         }
     }
     #[derive(Default)]
@@ -2515,6 +3174,146 @@ mod tests {
         }
         fn restore(&self, _: &[AclSnapshot]) -> Result<(), VaultError> {
             Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingAcl {
+        grants: Arc<Mutex<Vec<Vec<ResolvedGrant>>>>,
+        restored: Arc<AtomicBool>,
+    }
+    impl AclApplier for RecordingAcl {
+        fn apply_and_verify(&self, plan: &VaultAclPlan) -> Result<(), VaultError> {
+            self.grants.lock().unwrap().push(plan.grants.clone());
+            Ok(())
+        }
+        fn snapshot(&self, plan: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError> {
+            Ok(vec![AclSnapshot {
+                path: plan.container.clone(),
+                descriptor: vec![],
+                dacl_protected: true,
+            }])
+        }
+        fn restore(&self, _: &[AclSnapshot]) -> Result<(), VaultError> {
+            self.restored.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct RemoveFailFs(Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>);
+    impl VaultFs for RemoveFailFs {
+        fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
+        fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+            self.0.lock().unwrap().insert(path.into(), bytes.into());
+            Ok(())
+        }
+        fn remove(&self, _: &Path) -> std::io::Result<()> {
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        }
+        fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
+            Ok("volume:1:file:2".into())
+        }
+        fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+            lexical_normalize_creation_path(path)
+        }
+        fn personal_creation_target_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            Ok(self.0.lock().unwrap().contains_key(path))
+        }
+        fn validate_dedicated_parent(&self, _: &Path, _: &Path) -> Result<(), VaultError> {
+            Ok(())
+        }
+    }
+
+    struct MissingTargetFs(Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>);
+    impl VaultFs for MissingTargetFs {
+        fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
+        fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+            self.0.lock().unwrap().insert(path.into(), bytes.into());
+            Ok(())
+        }
+        fn remove(&self, path: &Path) -> std::io::Result<()> {
+            self.0
+                .lock()
+                .unwrap()
+                .remove(path)
+                .map(|_| ())
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
+        fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
+            Err(VaultError::ContainerIdentity)
+        }
+        fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+            lexical_normalize_creation_path(path)
+        }
+        fn personal_creation_target_exists(&self, _: &Path) -> Result<bool, VaultError> {
+            Ok(false)
+        }
+        fn validate_dedicated_parent(&self, _: &Path, _: &Path) -> Result<(), VaultError> {
+            Err(VaultError::Validation)
+        }
+    }
+
+    struct ParentOnlyAcl(Arc<AtomicBool>);
+    impl AclApplier for ParentOnlyAcl {
+        fn apply_and_verify(&self, _: &VaultAclPlan) -> Result<(), VaultError> {
+            Err(VaultError::AclApply)
+        }
+        fn snapshot(&self, _: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError> {
+            Err(VaultError::AclReadback)
+        }
+        fn restore(&self, _: &[AclSnapshot]) -> Result<(), VaultError> {
+            Ok(())
+        }
+        fn decommission_and_snapshot(
+            &self,
+            plan: &VaultAclPlan,
+            _: &str,
+        ) -> Result<Vec<AclSnapshot>, VaultError> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(vec![AclSnapshot {
+                path: plan.parent.clone(),
+                descriptor: vec![],
+                dacl_protected: true,
+            }])
+        }
+    }
+
+    struct ChangingTargetAcl(Arc<AtomicBool>);
+    impl AclApplier for ChangingTargetAcl {
+        fn apply_and_verify(&self, _: &VaultAclPlan) -> Result<(), VaultError> {
+            Ok(())
+        }
+        fn snapshot(&self, plan: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError> {
+            Ok(vec![AclSnapshot {
+                path: plan.container.clone(),
+                descriptor: vec![],
+                dacl_protected: true,
+            }])
+        }
+        fn restore(&self, _: &[AclSnapshot]) -> Result<(), VaultError> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+        fn decommission_and_snapshot(
+            &self,
+            _: &VaultAclPlan,
+            _: &str,
+        ) -> Result<Vec<AclSnapshot>, VaultError> {
+            Err(VaultError::AclReadback)
         }
     }
     fn policy(version: u64, expected: u64) -> VaultAccessPolicy {
@@ -2631,6 +3430,75 @@ mod tests {
             }
         }
     }
+
+    struct LegacyAcl {
+        allowed_sid: &'static str,
+        prepared: Arc<AtomicUsize>,
+        restored: Arc<AtomicUsize>,
+    }
+    impl AclApplier for LegacyAcl {
+        fn apply_and_verify(&self, _: &VaultAclPlan) -> Result<(), VaultError> {
+            Ok(())
+        }
+        fn snapshot(&self, _: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError> {
+            Ok(vec![])
+        }
+        fn restore(&self, snapshots: &[AclSnapshot]) -> Result<(), VaultError> {
+            assert_eq!(snapshots[0].descriptor, b"original-acl");
+            self.restored.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn inspect_legacy_personal(
+            &self,
+            container: &Path,
+            caller_sid: &str,
+            _: windows_sys::Win32::Foundation::HANDLE,
+        ) -> Result<LegacyAclPreparation, VaultError> {
+            if caller_sid != self.allowed_sid {
+                return Err(VaultError::AclReadback);
+            }
+            self.prepared.fetch_add(1, Ordering::SeqCst);
+            Ok(LegacyAclPreparation {
+                container: container.to_path_buf(),
+                identity: "v:1:i:2".into(),
+                snapshots: vec![AclSnapshot {
+                    path: container.to_path_buf(),
+                    descriptor: b"original-acl".to_vec(),
+                    dacl_protected: false,
+                }],
+                #[cfg(windows)]
+                _lock: None,
+            })
+        }
+        fn apply_legacy_personal(
+            &self,
+            _: &LegacyAclPreparation,
+            _: &str,
+        ) -> Result<(), VaultError> {
+            Ok(())
+        }
+    }
+
+    fn legacy_store(
+        files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
+        fail_next_write: Arc<AtomicBool>,
+        prepared: Arc<AtomicUsize>,
+        restored: Arc<AtomicUsize>,
+    ) -> VaultAccessStore {
+        VaultAccessStore::open(
+            Box::new(PersonalFs {
+                files,
+                fail_next_write,
+            }),
+            Box::new(Resolver),
+            Box::new(LegacyAcl {
+                allowed_sid: "S-1-5-21-owner",
+                prepared,
+                restored,
+            }),
+            PathBuf::from("/policy"),
+        )
+    }
     fn personal_store(
         files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
         fail_next_write: Arc<AtomicBool>,
@@ -2659,6 +3527,38 @@ mod tests {
     struct SwappingIdentityFs {
         files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
         identity_reads: Arc<AtomicUsize>,
+    }
+
+    struct LegacySwappingIdentityFs {
+        files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
+        identity_reads: Arc<AtomicUsize>,
+    }
+    impl VaultFs for LegacySwappingIdentityFs {
+        fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+        }
+        fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+            self.files.lock().unwrap().insert(path.into(), bytes.into());
+            Ok(())
+        }
+        fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
+            let read = self.identity_reads.fetch_add(1, Ordering::SeqCst);
+            Ok(if read == 0 { "v:1:i:2" } else { "v:1:i:99" }.into())
+        }
+        fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+            lexical_normalize_creation_path(path)
+        }
+        fn personal_creation_target_exists(&self, path: &Path) -> Result<bool, VaultError> {
+            Ok(self.files.lock().unwrap().contains_key(path))
+        }
+        fn validate_dedicated_parent(&self, _: &Path, _: &Path) -> Result<(), VaultError> {
+            Ok(())
+        }
     }
     impl VaultFs for SwappingIdentityFs {
         fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
@@ -2724,6 +3624,197 @@ mod tests {
     }
 
     #[test]
+    fn clearing_policy_revokes_grants_memberships_and_durable_policy() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let groups = Groups::default();
+        let memberships = Arc::clone(&groups.0);
+        let acl = RecordingAcl::default();
+        let applied_grants = Arc::clone(&acl.grants);
+        let store = VaultAccessStore::open_with_groups(
+            Box::new(Fs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(acl),
+            Box::new(groups),
+            PathBuf::from("/policy"),
+        );
+        store.apply(policy(1, 0), 7).unwrap();
+
+        let mut removal = policy(2, 1);
+        removal.entries.clear();
+        let status = store.clear(removal).unwrap();
+
+        assert_eq!(status.validation_state, VaultValidationState::NeverApplied);
+        assert!(store.policy().is_none());
+        assert!(!files
+            .lock()
+            .unwrap()
+            .contains_key(&PathBuf::from("/policy").join(POLICY_FILE)));
+        assert!(applied_grants.lock().unwrap().last().unwrap().is_empty());
+        assert!(memberships.lock().unwrap().values().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn failed_policy_file_removal_restores_acl_and_keeps_policy() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let acl = RecordingAcl::default();
+        let restored = Arc::clone(&acl.restored);
+        let store = VaultAccessStore::open(
+            Box::new(RemoveFailFs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(acl),
+            PathBuf::from("/policy"),
+        );
+        store.apply(policy(1, 0), 7).unwrap();
+        let mut removal = policy(2, 1);
+        removal.entries.clear();
+
+        assert_eq!(store.clear(removal), Err(VaultError::Persistence));
+        assert!(restored.load(Ordering::SeqCst));
+        assert_eq!(store.policy().unwrap().version, 1);
+        assert!(files
+            .lock()
+            .unwrap()
+            .contains_key(&PathBuf::from("/policy").join(POLICY_FILE)));
+    }
+
+    #[test]
+    fn missing_policy_file_stays_revoked_and_restart_has_no_policy() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = VaultAccessStore::open(
+            Box::new(Fs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        store.apply(policy(1, 0), 7).unwrap();
+        files
+            .lock()
+            .unwrap()
+            .remove(&PathBuf::from("/policy").join(POLICY_FILE));
+        let mut removal = policy(2, 1);
+        removal.entries.clear();
+
+        assert!(store.clear(removal).is_ok());
+        assert!(store.policy().is_none());
+        let restarted = VaultAccessStore::open(
+            Box::new(Fs(files)),
+            Box::new(Resolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        restarted.load_at_startup();
+        assert!(restarted.policy().is_none());
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::NeverApplied
+        );
+    }
+
+    #[test]
+    fn degraded_policy_can_be_removed_without_resolving_deleted_principals() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let installed = VaultAccessStore::open(
+            Box::new(Fs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        installed.apply(policy(1, 0), 7).unwrap();
+
+        let restarted = VaultAccessStore::open(
+            Box::new(Fs(files)),
+            Box::new(RejectingResolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        restarted.load_at_startup();
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Degraded
+        );
+        let mut removal = policy(2, 1);
+        removal.entries.clear();
+        assert!(restarted.clear(removal).is_ok());
+        assert!(restarted.policy().is_none());
+    }
+
+    #[test]
+    fn missing_container_still_revokes_the_surviving_parent() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let installed = VaultAccessStore::open(
+            Box::new(Fs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        installed.apply(policy(1, 0), 7).unwrap();
+
+        let parent_revoked = Arc::new(AtomicBool::new(false));
+        let restarted = VaultAccessStore::open(
+            Box::new(MissingTargetFs(files)),
+            Box::new(Resolver),
+            Box::new(ParentOnlyAcl(Arc::clone(&parent_revoked))),
+            PathBuf::from("/policy"),
+        );
+        restarted.load_at_startup();
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Degraded
+        );
+        let mut removal = policy(2, 1);
+        removal.entries.clear();
+        assert!(restarted.clear(removal).is_ok());
+        assert!(parent_revoked.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn target_change_between_verification_and_revoke_keeps_policy_fail_closed() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let installed = VaultAccessStore::open(
+            Box::new(Fs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        installed.apply(policy(1, 0), 7).unwrap();
+
+        let restored = Arc::new(AtomicBool::new(false));
+        let restarted = VaultAccessStore::open(
+            Box::new(Fs(files)),
+            Box::new(Resolver),
+            Box::new(ChangingTargetAcl(Arc::clone(&restored))),
+            PathBuf::from("/policy"),
+        );
+        restarted.load_at_startup();
+        let mut removal = policy(2, 1);
+        removal.entries.clear();
+        assert_eq!(restarted.clear(removal), Err(VaultError::AclReadback));
+        assert!(restored.load(Ordering::SeqCst));
+        assert_eq!(restarted.policy().unwrap().version, 1);
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Degraded
+        );
+    }
+
+    #[test]
+    fn clear_rejects_stale_or_nonempty_requests() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = VaultAccessStore::open(
+            Box::new(Fs(files)),
+            Box::new(Resolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        store.apply(policy(1, 0), 7).unwrap();
+        let mut stale = policy(1, 0);
+        stale.entries.clear();
+        assert_eq!(store.clear(stale), Err(VaultError::Validation));
+        assert_eq!(store.clear(policy(2, 1)), Err(VaultError::Validation));
+        assert_eq!(store.policy().unwrap().version, 1);
+    }
+
+    #[test]
     fn personal_creation_requires_the_bound_broker_lifecycle_before_acl() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let store = personal_store(
@@ -2749,6 +3840,317 @@ mod tests {
         assert!(store
             .complete_personal_registration(&reservation, 103)
             .is_ok());
+    }
+
+    #[test]
+    fn legacy_owner_mount_preparation_commits_and_survives_restart() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        files.lock().unwrap().insert(
+            PathBuf::from("C:\\vaults\\legacy.hc"),
+            b"legacy vault".to_vec(),
+        );
+        let prepared = Arc::new(AtomicUsize::new(0));
+        let restored = Arc::new(AtomicUsize::new(0));
+        let store = legacy_store(
+            Arc::clone(&files),
+            Arc::new(AtomicBool::new(false)),
+            Arc::clone(&prepared),
+            Arc::clone(&restored),
+        );
+        let recovery = store
+            .prepare_legacy_personal_mount("C:\\vaults\\legacy.hc", "S-1-5-21-owner", 7, 1 as _)
+            .unwrap();
+        let record = store
+            .commit_legacy_personal_mount(&recovery, "S-1-5-21-owner", 7)
+            .unwrap();
+        assert_eq!(record.owner_sid, "S-1-5-21-owner");
+        assert_eq!(prepared.load(Ordering::SeqCst), 1);
+        assert_eq!(restored.load(Ordering::SeqCst), 0);
+        drop(recovery);
+        assert!(store
+            .prepare_legacy_personal_mount("C:\\vaults\\legacy.hc", "S-1-5-21-owner", 7, 1 as _,)
+            .is_err());
+        assert_eq!(prepared.load(Ordering::SeqCst), 1);
+
+        let restarted = legacy_store(
+            files,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        restarted.load_at_startup();
+        assert!(restarted
+            .personal_for_owner("C:\\vaults\\legacy.hc", "S-1-5-21-owner")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn legacy_non_owner_is_rejected_before_acl_mutation() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        files.lock().unwrap().insert(
+            PathBuf::from("C:\\vaults\\legacy.hc"),
+            b"legacy vault".to_vec(),
+        );
+        let prepared = Arc::new(AtomicUsize::new(0));
+        let store = legacy_store(
+            files,
+            Arc::new(AtomicBool::new(false)),
+            Arc::clone(&prepared),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        assert!(store
+            .prepare_legacy_personal_mount("C:\\vaults\\legacy.hc", "S-1-5-21-other", 7, 1 as _,)
+            .is_err());
+        assert_eq!(prepared.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn legacy_mount_failure_restores_acl_and_leaves_no_registration() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        files.lock().unwrap().insert(
+            PathBuf::from("C:\\vaults\\legacy.hc"),
+            b"legacy vault".to_vec(),
+        );
+        let restored = Arc::new(AtomicUsize::new(0));
+        let store = legacy_store(
+            files,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::clone(&restored),
+        );
+        let recovery = store
+            .prepare_legacy_personal_mount("C:\\vaults\\legacy.hc", "S-1-5-21-owner", 7, 1 as _)
+            .unwrap();
+        store.restore_legacy_personal_mount(recovery).unwrap();
+        assert_eq!(restored.load(Ordering::SeqCst), 1);
+        assert!(store
+            .personal_for_owner("C:\\vaults\\legacy.hc", "S-1-5-21-owner")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn legacy_crash_journal_restores_acl_on_restart_after_mount_cleanup() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        files.lock().unwrap().insert(
+            PathBuf::from("C:\\vaults\\legacy.hc"),
+            b"legacy vault".to_vec(),
+        );
+        let restored = Arc::new(AtomicUsize::new(0));
+        let initial = legacy_store(
+            Arc::clone(&files),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::clone(&restored),
+        );
+        let recovery = initial
+            .prepare_legacy_personal_mount("C:\\vaults\\legacy.hc", "S-1-5-21-owner", 7, 1 as _)
+            .unwrap();
+        drop(recovery);
+        drop(initial);
+
+        let restarted = legacy_store(
+            files,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::clone(&restored),
+        );
+        restarted.load_at_startup_after_mount_cleanup(&HashSet::from(["v:1:i:2".into()]));
+        assert_eq!(restored.load(Ordering::SeqCst), 1);
+        assert!(restarted
+            .personal_for_owner("C:\\vaults\\legacy.hc", "S-1-5-21-owner")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn legacy_crash_journal_waits_when_mount_cleanup_failed() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        files.lock().unwrap().insert(
+            PathBuf::from("C:\\vaults\\legacy.hc"),
+            b"legacy vault".to_vec(),
+        );
+        let initial = legacy_store(
+            Arc::clone(&files),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        drop(
+            initial
+                .prepare_legacy_personal_mount("C:\\vaults\\legacy.hc", "S-1-5-21-owner", 7, 1 as _)
+                .unwrap(),
+        );
+        drop(initial);
+
+        let restored = Arc::new(AtomicUsize::new(0));
+        let restarted = legacy_store(
+            files,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::clone(&restored),
+        );
+        restarted.load_at_startup_after_mount_cleanup(&HashSet::new());
+        assert_eq!(restored.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            restarted.prepare_legacy_personal_mount(
+                "C:\\vaults\\another.hc",
+                "S-1-5-21-owner",
+                7,
+                1 as _,
+            ),
+            Err(VaultError::Persistence)
+        ));
+    }
+
+    #[test]
+    fn malformed_personal_registry_blocks_new_recovery() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        files.lock().unwrap().insert(
+            PathBuf::from("/policy").join(PERSONAL_VAULTS_FILE),
+            b"not-json".to_vec(),
+        );
+        let store = legacy_store(
+            files,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        store.load_at_startup();
+        assert!(matches!(
+            store.prepare_legacy_personal_mount(
+                "C:\\vaults\\legacy.hc",
+                "S-1-5-21-owner",
+                7,
+                1 as _,
+            ),
+            Err(VaultError::Persistence)
+        ));
+    }
+
+    #[test]
+    fn duplicate_recovery_journal_is_preserved_and_blocks_new_recovery() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        files.lock().unwrap().insert(
+            PathBuf::from("C:\\vaults\\legacy.hc"),
+            b"legacy vault".to_vec(),
+        );
+        let initial = legacy_store(
+            Arc::clone(&files),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        drop(
+            initial
+                .prepare_legacy_personal_mount("C:\\vaults\\legacy.hc", "S-1-5-21-owner", 7, 1 as _)
+                .unwrap(),
+        );
+        drop(initial);
+
+        let registry_path = PathBuf::from("/policy").join(PERSONAL_VAULTS_FILE);
+        let mut registry: PersonalVaultRegistry =
+            serde_json::from_slice(files.lock().unwrap().get(&registry_path).unwrap()).unwrap();
+        registry
+            .legacy_recoveries
+            .push(registry.legacy_recoveries[0].clone());
+        let duplicate_bytes = serde_json::to_vec(&registry).unwrap();
+        files
+            .lock()
+            .unwrap()
+            .insert(registry_path.clone(), duplicate_bytes.clone());
+
+        let restarted = legacy_store(
+            Arc::clone(&files),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        restarted.load_at_startup_after_mount_cleanup(&HashSet::from(["v:1:i:2".into()]));
+        assert_eq!(
+            files.lock().unwrap().get(&registry_path),
+            Some(&duplicate_bytes)
+        );
+        assert!(matches!(
+            restarted.prepare_legacy_personal_mount(
+                "C:\\vaults\\another.hc",
+                "S-1-5-21-owner",
+                7,
+                1 as _,
+            ),
+            Err(VaultError::Persistence)
+        ));
+    }
+
+    #[test]
+    fn legacy_persistence_failure_restores_acl_and_does_not_register() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        files.lock().unwrap().insert(
+            PathBuf::from("C:\\vaults\\legacy.hc"),
+            b"legacy vault".to_vec(),
+        );
+        let fail_write = Arc::new(AtomicBool::new(false));
+        let restored = Arc::new(AtomicUsize::new(0));
+        let store = legacy_store(
+            files,
+            Arc::clone(&fail_write),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::clone(&restored),
+        );
+        let recovery = store
+            .prepare_legacy_personal_mount("C:\\vaults\\legacy.hc", "S-1-5-21-owner", 7, 1 as _)
+            .unwrap();
+        fail_write.store(true, Ordering::SeqCst);
+        assert_eq!(
+            store.commit_legacy_personal_mount(&recovery, "S-1-5-21-owner", 7),
+            Err(VaultError::Persistence)
+        );
+        store.restore_legacy_personal_mount(recovery).unwrap();
+        assert_eq!(restored.load(Ordering::SeqCst), 1);
+        assert!(store
+            .personal_for_owner("C:\\vaults\\legacy.hc", "S-1-5-21-owner")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn legacy_identity_swap_is_rejected_restored_and_not_registered() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        files.lock().unwrap().insert(
+            PathBuf::from("C:\\vaults\\legacy.hc"),
+            b"legacy vault".to_vec(),
+        );
+        let restored = Arc::new(AtomicUsize::new(0));
+        let store = VaultAccessStore::open(
+            Box::new(LegacySwappingIdentityFs {
+                files,
+                identity_reads: Arc::new(AtomicUsize::new(0)),
+            }),
+            Box::new(Resolver),
+            Box::new(LegacyAcl {
+                allowed_sid: "S-1-5-21-owner",
+                prepared: Arc::new(AtomicUsize::new(0)),
+                restored: Arc::clone(&restored),
+            }),
+            PathBuf::from("/policy"),
+        );
+        assert_eq!(
+            store
+                .prepare_legacy_personal_mount(
+                    "C:\\vaults\\legacy.hc",
+                    "S-1-5-21-owner",
+                    7,
+                    1 as _,
+                )
+                .err(),
+            Some(VaultError::ContainerIdentity)
+        );
+        assert_eq!(restored.load(Ordering::SeqCst), 1);
+        assert!(store
+            .personal_for_owner("C:\\vaults\\legacy.hc", "S-1-5-21-owner")
+            .unwrap()
+            .is_none());
     }
 
     #[test]

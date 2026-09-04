@@ -289,16 +289,20 @@ async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
         Box::new(vault_access::WindowsLocalGroupReconciler),
         policy_store::default_policy_dir(),
     ));
-    vault_access.load_at_startup();
     let vault_mount = Arc::new(vault_mount::VaultMountBroker::new());
     let _ = VAULT_ACCESS_FOR_STOP.set(Arc::clone(&vault_access));
     let _ = VAULT_MOUNT_FOR_STOP.set(Arc::clone(&vault_mount));
     // Service restarts must not leave an untracked broker-owned mount behind.
     // The fixed broker performs this best-effort cleanup without receiving a
     // path or password from this process.
-    if vault_mount.load_and_cleanup(&vault_access).is_err() {
-        eprintln!("[wincommander-svc] vault mount recovery requires administrator repair");
-    }
+    let recovered_mount_identities = match vault_mount.load_and_cleanup(&vault_access) {
+        Ok(identities) => identities,
+        Err(_) => {
+            eprintln!("[wincommander-svc] vault mount recovery requires administrator repair");
+            std::collections::HashSet::new()
+        }
+    };
+    vault_access.load_at_startup_after_mount_cleanup(&recovered_mount_identities);
 
     // ── SessionHelper peer gate (D-2) ────────────────────────────────────
     //

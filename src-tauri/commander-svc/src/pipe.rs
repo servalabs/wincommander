@@ -648,6 +648,15 @@ fn handle_vault_apply(
     if policy.version <= policy.expected_previous_version {
         policy.version = policy.expected_previous_version.saturating_add(1);
     }
+    if policy.entries.is_empty() {
+        return vault_access
+            .clear(policy)
+            .and_then(|status| {
+                serde_json::to_value(status)
+                    .map_err(|_| crate::vault_access::VaultError::Persistence)
+            })
+            .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)));
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
@@ -871,6 +880,7 @@ async fn handle_personal_vault_mount(
     peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
     let Some(object) = args.as_object_mut() else {
+        zeroize_json(&mut args);
         return Err(VerbError::new(
             "vault_validation_failed",
             "personal mount request is invalid",
@@ -883,13 +893,7 @@ async fn handle_personal_vault_mount(
             "personal mount request is invalid",
         ));
     }
-    let mut request: wincmd_shared::vault_access::PersonalVaultMountRequest =
-        serde_json::from_value(args).map_err(|_| {
-            VerbError::new(
-                "vault_validation_failed",
-                "personal mount request is invalid",
-            )
-        })?;
+    let mut request = parse_personal_mount_request(&mut args)?;
     let Some(peer) = peer else {
         zeroize_personal_mount(&mut request);
         return Err(VerbError::new(
@@ -904,16 +908,17 @@ async fn handle_personal_vault_mount(
             "no interactive Windows session",
         ));
     }
-    let record = match vault_access.personal_for_owner(&request.container_path, peer.caller_sid()) {
-        Ok(Some(record)) => record,
-        Ok(None) | Err(_) => {
-            zeroize_personal_mount(&mut request);
-            return Err(VerbError::new(
-                PERSONAL_VAULT_UNAUTHORIZED,
-                "caller is not authorized for this personal vault",
-            ));
-        }
-    };
+    let registered =
+        match vault_access.personal_for_owner(&request.container_path, peer.caller_sid()) {
+            Ok(record) => record,
+            Err(_) => {
+                zeroize_personal_mount(&mut request);
+                return Err(VerbError::new(
+                    PERSONAL_VAULT_UNAUTHORIZED,
+                    "caller is not authorized for this personal vault",
+                ));
+            }
+        };
     let driver = tokio::task::spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)
         .await
         .unwrap_or(Err(
@@ -927,29 +932,109 @@ async fn handle_personal_vault_mount(
         ));
     }
     let mount_result = vault_mount.with_exclusive_operation(|| {
+        let legacy = if registered.is_none() {
+            match vault_access.prepare_legacy_personal_mount(
+                &request.container_path,
+                peer.caller_sid(),
+                peer.session_id(),
+                peer.token(),
+            ) {
+                Ok(preparation) => Some(preparation),
+                Err(_) => {
+                    zeroize_personal_mount(&mut request);
+                    return Err(VerbError::new(
+                        PERSONAL_VAULT_UNAUTHORIZED,
+                        "caller is not authorized for this personal vault",
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+        let record = match (registered.as_ref(), legacy.as_ref()) {
+            (Some(record), _) => record,
+            (None, Some(preparation)) => preparation.record(),
+            (None, None) => {
+                zeroize_personal_mount(&mut request);
+                return Err(VerbError::new(
+                    PERSONAL_VAULT_UNAUTHORIZED,
+                    "caller is not authorized for this personal vault",
+                ));
+            }
+        };
         // The service runs in Session 0, where a DOS-device query cannot
         // authoritatively describe the caller's per-user device namespace. The
         // authenticated broker and native engine run in the requested desktop
         // session and reject an occupied presentation letter immediately before
         // linking it. Do not turn a Session-0 lookup failure into a false
         // "drive letter unavailable" result for a genuinely free letter.
-        vault_mount
-            .mount_personal_authorized_locked(
-                operation_id,
-                vault_access,
-                &record,
-                &mut request,
-                peer.token(),
-                peer.session_id(),
-                peer.caller_sid(),
-                peer.authentication_id(),
-            )
-            .map_err(|reason| {
-                VerbError::new(
+        let mounted = vault_mount.mount_personal_authorized_locked(
+            operation_id,
+            vault_access,
+            record,
+            &mut request,
+            peer.token(),
+            peer.session_id(),
+            peer.caller_sid(),
+            peer.authentication_id(),
+        );
+        let mounted = match mounted {
+            Ok(mounted) => mounted,
+            Err(reason) => {
+                if let Some(preparation) = legacy {
+                    if reason == wincmd_shared::vault_access::VaultMountReason::DismountFailed {
+                        vault_access.mark_personal_recovery_uncertain();
+                        drop(preparation);
+                        return Err(VerbError::new(
+                            VaultMountBroker::personal_mount_failure_code(reason),
+                            "personal vault cleanup could not be confirmed",
+                        ));
+                    }
+                    if vault_access
+                        .restore_legacy_personal_mount(preparation)
+                        .is_err()
+                    {
+                        return Err(VerbError::new(
+                            "vault_owner_record_failed",
+                            "personal vault recovery could not be rolled back",
+                        ));
+                    }
+                }
+                return Err(VerbError::new(
                     VaultMountBroker::personal_mount_failure_code(reason),
                     "personal vault mount failed",
-                )
-            })
+                ));
+            }
+        };
+        if let Some(preparation) = legacy {
+            if vault_access
+                .commit_legacy_personal_mount(&preparation, peer.caller_sid(), peer.session_id())
+                .is_err()
+            {
+                let dismounted = vault_mount.dismount_personal_registration_failure_locked(
+                    operation_id,
+                    vault_access,
+                    preparation.record(),
+                    peer.token(),
+                );
+                let restored = dismounted
+                    && vault_access
+                        .restore_legacy_personal_mount(preparation)
+                        .is_ok();
+                if !restored {
+                    vault_access.mark_personal_recovery_uncertain();
+                }
+                return Err(VerbError::new(
+                    "vault_owner_record_failed",
+                    if dismounted && restored {
+                        "personal vault ownership could not be recorded"
+                    } else {
+                        "personal vault recovery could not be rolled back"
+                    },
+                ));
+            }
+        }
+        Ok(mounted)
     });
     let (drive_letter, internal_drive) = mount_result?;
     Ok(serde_json::json!({
@@ -963,6 +1048,108 @@ async fn handle_personal_vault_mount(
 
 fn zeroize_personal_mount(request: &mut wincmd_shared::vault_access::PersonalVaultMountRequest) {
     request.zeroize_secrets();
+}
+
+fn parse_personal_mount_request(
+    args: &mut serde_json::Value,
+) -> Result<wincmd_shared::vault_access::PersonalVaultMountRequest, VerbError> {
+    use zeroize::Zeroize;
+
+    let invalid = || {
+        VerbError::new(
+            "vault_validation_failed",
+            "personal mount request is invalid",
+        )
+    };
+    let object = args.as_object_mut().ok_or_else(invalid)?;
+    let mut password = match object.remove("password") {
+        Some(serde_json::Value::String(value)) => value,
+        Some(mut value) => {
+            zeroize_json(&mut value);
+            zeroize_json(args);
+            return Err(invalid());
+        }
+        None => {
+            zeroize_json(args);
+            return Err(invalid());
+        }
+    };
+    let mut hidden_password = match object.remove("hidden_protection_password") {
+        Some(serde_json::Value::String(value)) => Some(value),
+        Some(serde_json::Value::Null) | None => None,
+        Some(mut value) => {
+            password.zeroize();
+            zeroize_json(&mut value);
+            zeroize_json(args);
+            return Err(invalid());
+        }
+    };
+    let mut keyfiles = match take_secret_string_list(object.remove("keyfiles")) {
+        Ok(values) => values,
+        Err(mut value) => {
+            password.zeroize();
+            hidden_password.iter_mut().for_each(Zeroize::zeroize);
+            zeroize_json(&mut value);
+            zeroize_json(args);
+            return Err(invalid());
+        }
+    };
+    let mut hidden_keyfiles = match take_secret_string_list(object.remove("hidden_keyfiles")) {
+        Ok(values) => values,
+        Err(mut value) => {
+            password.zeroize();
+            hidden_password.iter_mut().for_each(Zeroize::zeroize);
+            keyfiles.iter_mut().for_each(Zeroize::zeroize);
+            zeroize_json(&mut value);
+            zeroize_json(args);
+            return Err(invalid());
+        }
+    };
+    object.insert("password".into(), serde_json::Value::String(String::new()));
+    let decoded = serde_json::from_value(args.take());
+    let mut request: wincmd_shared::vault_access::PersonalVaultMountRequest = match decoded {
+        Ok(request) => request,
+        Err(_) => {
+            password.zeroize();
+            if let Some(value) = &mut hidden_password {
+                value.zeroize();
+            }
+            keyfiles.iter_mut().for_each(Zeroize::zeroize);
+            hidden_keyfiles.iter_mut().for_each(Zeroize::zeroize);
+            return Err(invalid());
+        }
+    };
+    request.password = password;
+    request.hidden_protection_password = hidden_password;
+    request.keyfiles = keyfiles;
+    request.hidden_keyfiles = hidden_keyfiles;
+    Ok(request)
+}
+
+fn take_secret_string_list(
+    value: Option<serde_json::Value>,
+) -> Result<Vec<String>, serde_json::Value> {
+    use zeroize::Zeroize;
+
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let serde_json::Value::Array(mut values) = value else {
+        return Err(value);
+    };
+    let mut strings = Vec::with_capacity(values.len());
+    while let Some(value) = values.pop() {
+        match value {
+            serde_json::Value::String(value) => strings.push(value),
+            mut other => {
+                strings.iter_mut().for_each(Zeroize::zeroize);
+                values.iter_mut().for_each(zeroize_json);
+                zeroize_json(&mut other);
+                return Err(other);
+            }
+        }
+    }
+    Ok(strings)
 }
 
 fn peer_has_active_interactive_session(peer: &AuthenticatedPipePeer) -> bool {
