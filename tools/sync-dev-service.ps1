@@ -67,9 +67,16 @@ function Build-Service {
 function Start-ElevatedSync {
     $diagnostic = Join-Path $env:TEMP ("wincommander-dev-service-{0}.log" -f [guid]::NewGuid().ToString('N'))
     Set-Content -LiteralPath $diagnostic -Value 'Starting elevated WinCommander development-service synchronization.'
+    # Start-Process does not preserve a -File value containing spaces when it
+    # receives an argument array. Encode the tiny trampoline instead, so a
+    # checkout such as E:\E drive\Company\wincommander reliably starts this
+    # exact script in the elevated process.
+    $escapedScriptPath = $PSCommandPath.Replace("'", "''")
+    $escapedDiagnostic = $diagnostic.Replace("'", "''")
+    $childCommand = "& '$escapedScriptPath' -Elevated -DiagnosticPath '$escapedDiagnostic'; exit `$LASTEXITCODE"
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
     $process = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-Elevated',
-        '-DiagnosticPath', $diagnostic
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encodedCommand
     )
     if ($process.ExitCode -ne 0) {
         $details = if (Test-Path -LiteralPath $diagnostic) {
