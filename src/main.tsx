@@ -20,13 +20,20 @@ const windowLabel = (() => {
     return "main";
   }
 })();
+const isNotificationWindow = windowLabel === "notification-alerts"
+  || new URLSearchParams(window.location.search).get("wc-window") === "notification-alerts";
 
-if (!hasNativeBackend) {
+// The alert window is created by the Rust backend. In dev mode Tauri can
+// legitimately use its postMessage IPC fallback before it exposes the legacy
+// `__TAURI_INTERNALS__` marker, so route this trusted window by label first.
+// Otherwise it mounts the disconnected-dev page and never acknowledges queued
+// security alerts.
+if (isNotificationWindow) {
+  void import("./entries/notificationAlerts").then(({ mountNotificationAlerts }) => mountNotificationAlerts());
+} else if (!hasNativeBackend) {
   void import("./entries/backendRequired").then(({ mountBackendRequired }) => mountBackendRequired());
 } else if (windowLabel === "search-overlay") {
   void import("./entries/searchOverlay").then(({ mountSearchOverlay }) => mountSearchOverlay());
-} else if (windowLabel === "notification-alerts") {
-  void import("./entries/notificationAlerts").then(({ mountNotificationAlerts }) => mountNotificationAlerts());
 } else {
   void import("./entries/mainWindow").then(({ mountMainWindow }) => mountMainWindow());
 }

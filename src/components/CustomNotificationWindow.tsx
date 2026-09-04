@@ -57,6 +57,10 @@ export default function CustomNotificationWindow() {
   const [notifications, setNotifications] = useState<NotificationPayload[]>([]);
   const hideTimers = useRef(new Map<number, number>());
   const recentlyShown = useRef(new Map<string, number>());
+  // Invalidates a presentation task already awaiting window positioning when
+  // the Shield is stopped. Without this, that task could finish after a
+  // dismiss event and re-show an old, now-empty alert window.
+  const presentationGeneration = useRef(0);
 
   const removeNotification = useCallback((id: number) => {
     const timer = hideTimers.current.get(id);
@@ -66,6 +70,7 @@ export default function CustomNotificationWindow() {
   }, []);
 
   const dismissAll = useCallback(() => {
+    presentationGeneration.current += 1;
     hideTimers.current.forEach((timer) => window.clearTimeout(timer));
     hideTimers.current.clear();
     setNotifications([]);
@@ -89,6 +94,7 @@ export default function CustomNotificationWindow() {
     let isDisposed = false;
 
     const onNotification = (payload: NotificationPayload) => {
+      const generation = presentationGeneration.current;
       const now = Date.now();
       const dedupeKey = getDedupeKey(payload);
       const lastShownAt = shownNotifications.get(dedupeKey) ?? 0;
@@ -108,11 +114,14 @@ export default function CustomNotificationWindow() {
       void (async () => {
         try {
           await positionNotificationWindow();
+          if (generation !== presentationGeneration.current) return;
           await windowRef.setIgnoreCursorEvents(false);
+          if (generation !== presentationGeneration.current) return;
           await windowRef.show();
           // Let React commit the alert content, then raise the now-visible HWND
           // above Privacy Shield's independently topmost PyQt overlay.
           await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+          if (generation !== presentationGeneration.current) return;
           await invoke("present_notification_window");
         } catch (error) {
           console.warn("[Notify] could not present notification window", error);

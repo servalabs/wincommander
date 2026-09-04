@@ -11,6 +11,7 @@ const MAX_PENDING_NOTIFICATIONS: usize = 32;
 #[derive(Clone, serde::Serialize)]
 struct CustomNotificationPayload {
     id: u64,
+    delivery_generation: u64,
     title: String,
     body: String,
     severity: String,
@@ -20,6 +21,9 @@ struct CustomNotificationPayload {
 #[derive(Default)]
 struct NotificationDeliveryState {
     renderer_ready: bool,
+    /// Bumped whenever a protection session ends. A queued payload from an
+    /// earlier session is never allowed to become visible after that stop.
+    delivery_generation: u64,
     pending: VecDeque<CustomNotificationPayload>,
 }
 
@@ -40,12 +44,13 @@ fn enqueue_pending_notification(
 
 fn queue_or_deliver_notification(
     window: &WebviewWindow,
-    payload: CustomNotificationPayload,
+    mut payload: CustomNotificationPayload,
 ) -> Result<(), String> {
     let renderer_ready = {
         let mut state = notification_delivery_state()
             .lock()
             .map_err(|_| "notification delivery state is unavailable".to_string())?;
+        payload.delivery_generation = state.delivery_generation;
         if state.renderer_ready {
             true
         } else {
@@ -80,6 +85,16 @@ pub fn notification_renderer_ready(app: AppHandle) -> Result<(), String> {
         .get_webview_window(NOTIFICATION_WINDOW_LABEL)
         .ok_or_else(|| "notification window was not created".to_string())?;
     for payload in pending {
+        // A stop can race the renderer's ready acknowledgement. Re-check the
+        // session generation after draining so old alerts cannot be emitted
+        // after the user has turned Privacy Shield off.
+        let still_current = notification_delivery_state()
+            .lock()
+            .map(|state| state.delivery_generation == payload.delivery_generation)
+            .unwrap_or(false);
+        if !still_current {
+            continue;
+        }
         window
             .emit(NOTIFICATION_DELIVERY_EVENT, payload)
             .map_err(|error| format!("could not deliver queued notification: {error}"))?;
@@ -87,8 +102,35 @@ pub fn notification_renderer_ready(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Drop queued security alerts when their monitor is stopped. They describe a
+/// past protection session and must never appear later as a burst.
+pub fn clear_pending_notifications(app: &AppHandle) {
+    if let Ok(mut state) = notification_delivery_state().lock() {
+        state.delivery_generation = state.delivery_generation.wrapping_add(1);
+        state.pending.clear();
+    }
+    let _ = app.emit("wc-native-notification-dismiss", ());
+}
+
 pub fn show_native_notification(app: &AppHandle, title: &str, body: &str) -> Result<(), String> {
-    if crate::settings::is_native_notifications_disabled() {
+    show_notification(app, title, body, false)
+}
+
+/// Display a security-critical local alert. Unlike ordinary convenience
+/// notifications, this remains visible when the user has disabled the
+/// floating alert surface: a detected Privacy Shield event must tell the
+/// protected local session immediately. Decoy mode is always respected.
+pub fn show_security_notification(app: &AppHandle, title: &str, body: &str) -> Result<(), String> {
+    show_notification(app, title, body, true)
+}
+
+fn show_notification(
+    app: &AppHandle,
+    title: &str,
+    body: &str,
+    security_critical: bool,
+) -> Result<(), String> {
+    if !security_critical && crate::settings::is_native_notifications_disabled() {
         return Ok(());
     }
     if crate::settings::is_decoy_mode() {
@@ -123,6 +165,7 @@ fn show_custom_notification(
     let toast_id = TOAST_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
     let payload = CustomNotificationPayload {
         id: toast_id,
+        delivery_generation: 0,
         title: title.to_string(),
         body: body.to_string(),
         severity: severity.to_string(),
@@ -190,7 +233,11 @@ fn ensure_notification_window(app: &AppHandle) -> Result<WebviewWindow, String> 
     WebviewWindowBuilder::new(
         app,
         NOTIFICATION_WINDOW_LABEL,
-        WebviewUrl::App("index.html".into()),
+        // The dev WebView can begin evaluating before Tauri publishes the
+        // current-window label to JS. Keep an explicit route marker so this
+        // window never mounts the main app (and silently misses its ready
+        // acknowledgement) during that interval.
+        WebviewUrl::App("index.html?wc-window=notification-alerts".into()),
     )
     .title("WinCommander Alerts")
     .decorations(false)
@@ -204,6 +251,18 @@ fn ensure_notification_window(app: &AppHandle) -> Result<WebviewWindow, String> 
     .inner_size(440.0, 520.0)
     .build()
     .map_err(|error| format!("could not create notification window: {error}"))
+}
+
+/// Start the hidden alert renderer during application bootstrap. Privacy
+/// Shield's first detection must only deliver an event, never pay the cost of
+/// creating a WebView/React window on the critical detection path.
+pub fn warm_up_notification_window(app: &AppHandle) {
+    if let Err(error) = ensure_notification_window(app) {
+        crate::log_message(
+            "warn",
+            &format!("[Notify] could not warm up alert renderer: {error}"),
+        );
+    }
 }
 
 fn infer_presentation(title: &str, body: &str) -> (&'static str, &'static str) {
@@ -381,6 +440,7 @@ mod tests {
                 &mut state,
                 CustomNotificationPayload {
                     id: id as u64,
+                    delivery_generation: 0,
                     title: "Privacy Shield".to_string(),
                     body: "Look away".to_string(),
                     severity: "info".to_string(),

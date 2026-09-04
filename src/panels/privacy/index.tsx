@@ -4,7 +4,6 @@ import { useAppState } from "../../context/AppContext";
 import { reportSettingsWriteFailure } from "../../lib/settingsWriteRecovery";
 import useVisibility from "../../hooks/useVisibility";
 import { useTourActive } from "../../lib/tourActive";
-import useMonitoringOverview from "../../hooks/useMonitoringOverview";
 import ToggleSection from "../../components/shared/ToggleSection";
 import SectionCard from "../../components/shared/SectionCard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
@@ -28,7 +27,6 @@ import CanaryTokensSection from "./CanaryTokensSection";
 import UsbDevicesSection from "./UsbDevicesSection";
 import PrintActivitySection from "./PrintActivitySection";
 import RdpIdleCard from "./RdpIdleCard";
-import MonitoringOperationsSection from "./MonitoringOperationsSection";
 import PanelHeader from "../../components/shared/PanelHeader";
 import { useSettingsQuery } from "../../hooks/queries/useSettingsQuery";
 import {
@@ -160,12 +158,6 @@ export default function PrivacyPanel() {
         ("notifications.screenCapture.reportToFleet".startsWith(p) || "ideal.notifications.screenCapture.reportToFleet".startsWith(p))
     );
 
-    // One bounded snapshot feeds both the operations center and the compact
-    // count above it. This avoids waking six separate Pro status calls on
-    // every panel refresh.
-    const monitoringSnapshot = useMonitoringOverview(showMonitoring);
-    const { overview: monitoringOverview } = monitoringSnapshot;
-
     // Stats strip — counts active privacy controls and armed monitors
     const activePrivacyCount = useMemo(() => {
         if (!settingsData) return 0;
@@ -191,9 +183,7 @@ export default function PrivacyPanel() {
         return c;
     }, [pasteMonitorEnabled, decoyEnabled, ransomwareEnabled, screenCaptureDetectionEnabled, remoteAccessEnabled]);
 
-    const monitorCount = monitoringOverview
-        ? monitoringOverview.summary.running
-        : configuredMonitorCount;
+    const monitorCount = configuredMonitorCount;
 
     const warningCount = useMemo(() => {
         if (!settingsData) return 0;
@@ -336,8 +326,6 @@ export default function PrivacyPanel() {
                                     searchQuery={searchQuery}
                                 />
                             )}
-
-                            {monitoringMatchesSearch && <MonitoringOperationsSection {...monitoringSnapshot} />}
 
                             {monitoringMatchesSearch && (
                                 <SectionCard title="Alerts & Monitoring">

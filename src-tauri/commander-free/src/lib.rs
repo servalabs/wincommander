@@ -1852,7 +1852,7 @@ pub fn run() {
                         // here stalls the OS message pump and hangs the window.
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            let _ = backend::kill_privacy_shield_process().await;
+                            let _ = backend::kill_privacy_shield_process(app.clone()).await;
                             // Shield is being torn down from the tray — the
                             // in-app reader won't run to restore the camera,
                             // so restore it here before exiting.
@@ -1894,7 +1894,7 @@ pub fn run() {
                                     let _ = state.menu_item.set_text("Enable Privacy Shield");
                                     let app = app.clone();
                                     tauri::async_runtime::spawn(async move {
-                                        let _ = backend::kill_privacy_shield_process().await;
+                                        let _ = backend::kill_privacy_shield_process(app.clone()).await;
                                         // Restore the camera the shield denied
                                         // on look-away — the reader can't (its
                                         // process is being killed here).
@@ -2261,6 +2261,14 @@ pub fn run() {
             // Free-side event sources (settings-changed, gaze, monitors) and
             // forward them to the Pro engine. Paid-gated inside; harmless on Free.
             flow_bridge::init(app.handle());
+
+            // Pre-create the hidden alert renderer so a Privacy Shield event
+            // has no WebView/window-startup latency before it is visible.
+            native_notify::warm_up_notification_window(app.handle());
+
+            // The Privacy Shield card's “Auto start on launch” setting is
+            // per-user and must run only after its event/notification bridge.
+            backend::start_privacy_shield_if_enabled_on_launch(app.handle().clone());
 
             // Bootstrap the inactivity-timer watchdog. Idempotent —
             // safe to call repeatedly. Auto-resets the timer on startup.

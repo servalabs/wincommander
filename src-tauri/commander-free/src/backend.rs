@@ -3922,8 +3922,23 @@ pub(crate) async fn run_backend_script_with_timeout(
     //   3. Phase 6b moves the actual paid handler implementations into
     //      commander-pro; until then Pro returns "feature_unknown" for
     //      unmigrated commands.
+    // Arm/cancel locally before either the paid sidecar OR the local
+    // PowerShell path runs. Privacy Shield is currently executed locally in
+    // this build, so doing this only in the paid branch attached too late.
+    if command == "Start-PrivacyShield" {
+        SHIELD_READER_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
+        spawn_shield_event_reader(app.clone(), 0, true);
+    } else if command == "Stop-PrivacyShield" {
+        SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+        crate::native_notify::clear_pending_notifications(&app);
+    }
+
     if get_command_tier(&command) == "paid" {
         license::require_paid(&command)?;
+        // Arm the local tail BEFORE the Pro launcher starts Python. The
+        // detector can emit its first event before the paid reply returns;
+        // attaching afterwards replays that old event late (sometimes after
+        // the user has already stopped the Shield).
         // A-3: all remaining paid commands dispatch to Pro unconditionally.
         // The previous executor gate kept four hosts-blocklist commands
         // and Connect-MeshVPN on Free's local executor; the blocklist
@@ -3934,6 +3949,14 @@ pub(crate) async fn run_backend_script_with_timeout(
         let result = crate::sidecar::dispatch_paid_command(&command, args).await;
         // Apply settings sync patch so the toggle UI reflects the new
         // state immediately after the Pro sidecar succeeds.
+        // Stopping must cancel the local reader and its queued local alerts
+        // even if the Pro sidecar reports an error after it has already
+        // stopped its Python process. Otherwise the next renderer-ready event
+        // can replay the previous protection session.
+        if command == "Stop-PrivacyShield" {
+            SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+            crate::native_notify::clear_pending_notifications(&app);
+        }
         if let Ok(ref res) = result {
             if let Some(inner_patch) = get_settings_sync_patch(&command, &params, Some(res)) {
                 let patch = serde_json::json!({
@@ -3942,6 +3965,17 @@ pub(crate) async fn run_backend_script_with_timeout(
                 });
                 let _ = settings::patch_settings(patch);
             }
+            // Privacy Shield is dispatched through the paid sidecar and returns
+            // from this branch before the local PowerShell-command handling
+            // below. Attach its local event reader here as well; otherwise the
+            // detector writes events but no local notification is ever raised.
+        }
+        // The paid sidecar can report a transport/semantic error after it has
+        // already launched Python. The detector then runs normally but the
+        // response-based reader attach above is skipped. Attach by observing
+        // the actual process instead, and give Windows a short launch window.
+        if command == "Start-PrivacyShield" {
+            schedule_privacy_shield_reader_attach(app.clone());
         }
         let out = result.map_err(normalize_sidecar_error);
         if let Err(ref e) = out {
@@ -4278,20 +4312,30 @@ pub(crate) async fn run_backend_script_with_timeout(
     // over.
     if command == "Start-PrivacyShield" {
         if let Ok(ref json) = result {
-            if let Some(pid) = json.get("processId").and_then(|v| v.as_u64()) {
-                let _ = crate::child_jobs::assign_pid(pid as u32);
-                // Mark the shield feature active BEFORE spawning the reader so the
-                // reader's flag-based lifetime is armed from tick 0.
-                SHIELD_READER_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
-                // Attach a reader that reacts to the shield's look-away /
-                // look-back NDJSON sidecar for the lifetime of this session.
-                spawn_shield_event_reader(app.clone(), pid as u32);
+            // The PowerShell wrapper can successfully start the long-lived
+            // Python detector without returning its short-lived launcher PID.
+            // A missing PID must never suppress the sidecar reader: that
+            // reader is what turns a detected event into the local alert.
+            if json.get("success").and_then(|v| v.as_bool()) != Some(false) {
+                let pid = json.get("processId").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                if pid != 0 {
+                    let _ = crate::child_jobs::assign_pid(pid);
+                } else {
+                    crate::log_message(
+                        "warn",
+                        "[PrivacyShield] launcher PID missing; attaching event reader to the active sidecar",
+                    );
+                }
+                // The reader was armed before launching PowerShell so it can
+                // observe the detector's first event. Do not spawn a second
+                // reader here, which would replay/duplicate old entries.
             }
         }
     }
     // Any explicit stop of the shield clears the reader's run flag so it exits.
     if command == "Stop-PrivacyShield" {
         SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+        crate::native_notify::clear_pending_notifications(&app);
     }
 
     // After successful execution, sync toggle state to settings.json
@@ -4938,6 +4982,106 @@ pub async fn reconcile_shield_webcam_on_startup(app: AppHandle) {
     }
 }
 
+/// Honour the Privacy Shield card's per-user “Auto start on launch” setting.
+/// This runs after the app's event listeners have been armed, so the first
+/// detector event has a live reader and can notify immediately.
+pub fn start_privacy_shield_if_enabled_on_launch(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // A dev reload, crash, or Windows logon transition can leave the
+        // detector alive while its Tauri host is replaced. Reattach first:
+        // without this the camera keeps detecting but no local alert reader
+        // exists, which is indistinguishable to the user from a broken Shield.
+        if attach_privacy_shield_reader_to_active_detector(&app) {
+            return;
+        }
+
+        let Ok(settings) = crate::settings::read_settings() else {
+            return;
+        };
+        let shield = &settings.ideal.privacy.privacy_shield;
+        if !shield.autostart || shield.fleet_managed == Some(true) {
+            return;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        if let Err(error) =
+            run_backend_script(app, "Start-PrivacyShield".to_string(), HashMap::new()).await
+        {
+            crate::log_message(
+                "warn",
+                &format!("[PrivacyShield] auto-start did not activate: {}", error),
+            );
+        }
+    });
+}
+
+/// Returns the already-running detector process, if one belongs to this user
+/// session. This is deliberately independent of persisted toggle state: that
+/// state may be stale after an app reload, but an active detector must always
+/// have its local notification reader restored.
+fn find_running_privacy_shield_pid() -> Option<u32> {
+    let script = r#"
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+          Where-Object {
+            ($_.Name -in @('pythonw.exe', 'python.exe')) -and
+            $_.CommandLine -like '*--wc-privacy-shield*'
+          } |
+          Select-Object -First 1 -ExpandProperty ProcessId
+    "#;
+    let (mut command, _) = build_powershell_command();
+    let mut child = command.spawn().ok()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(script.as_bytes()).ok()?;
+    }
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().parse::<u32>().ok())
+}
+
+/// Attach exactly one local event reader to the real detector process. The
+/// paid launcher PID is not reliable, so this always discovers Python itself.
+fn attach_privacy_shield_reader_to_active_detector(app: &AppHandle) -> bool {
+    let Some(pid) = find_running_privacy_shield_pid() else {
+        return false;
+    };
+    if SHIELD_READER_ACTIVE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return true;
+    }
+    let _ = crate::child_jobs::assign_pid(pid);
+    spawn_shield_event_reader(app.clone(), pid, true);
+    crate::log_message(
+        "info",
+        &format!("[PrivacyShield] attached local alert reader to detector PID {}", pid),
+    );
+    true
+}
+
+/// The paid sidecar starts Python asynchronously; on slower machines it can
+/// appear several seconds after the Start reply. Watch without blocking the
+/// UI command, then attach as soon as the actual detector exists.
+fn schedule_privacy_shield_reader_attach(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        for attempt in 0..30 {
+            if attach_privacy_shield_reader_to_active_detector(&app) {
+                crate::flow_bridge::flow_trace(format!(
+                    "shield-reader: attached to detector after {} ms",
+                    attempt * 500
+                ));
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        crate::log_message(
+            "warn",
+            "[PrivacyShield] detector did not appear within 15 seconds; local alert reader was not attached",
+        );
+    });
+}
+
 /// Map the Privacy Shield Python detector's free-text `reason` (e.g.
 /// "PHONE DETECTED", "MULTIPLE FACES & LOOK AWAY") to the flow-core
 /// `GazeKind` string `flow_bridge::parse_gaze_kind` expects. Priority
@@ -5111,7 +5255,7 @@ mod fleet_privacy_alert_tests {
 /// returns can be short-lived / wrong while the Python overlay keeps writing, so
 /// the reader keeps tailing until the process is gone AND the sidecar has been
 /// idle — otherwise a flaky pid silently kills gaze forwarding mid-session.
-fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
+fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
     use std::sync::atomic::Ordering;
     let my_gen = SHIELD_READER_GEN.fetch_add(1, Ordering::SeqCst) + 1;
     tauri::async_runtime::spawn(async move {
@@ -5120,11 +5264,15 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
             crate::flow_bridge::flow_trace("shield-reader: no sidecar path — not starting");
             return;
         };
-        // Start from byte zero. Start-PrivacyShield waits until the new Python
-        // session has truncated this sidecar, and the detector may already have
-        // emitted its first look-away during that wait. Seeding at EOF dropped
-        // that initial native notification while the visual blur still worked.
-        let mut offset: u64 = 0;
+        // A pre-armed reader starts at the current EOF, then detects the
+        // detector's session-file truncation and follows only entries created
+        // by that session. This prevents old alerts replaying after stop.
+        let mut offset = if start_at_end {
+            std::fs::metadata(&sidecar).map(|meta| meta.len()).unwrap_or(0)
+        } else {
+            0
+        };
+        let mut locally_looking_away = false;
         crate::flow_bridge::flow_trace(format!(
             "shield-reader: SPAWNED gen={} pid={} seed_offset={} sidecar={}",
             my_gen,
@@ -5135,6 +5283,13 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
         let mut last_activity = std::time::Instant::now();
         let mut ticks: u64 = 0;
         loop {
+            // Check before reading: a Stop may race an append from Python.
+            // Once switched off, no pending sidecar line may create an alert.
+            if SHIELD_READER_GEN.load(Ordering::SeqCst) != my_gen
+                || !SHIELD_READER_ACTIVE.load(Ordering::SeqCst)
+            {
+                break;
+            }
             if let Ok(bytes) = std::fs::read(&sidecar) {
                 let len = bytes.len() as u64;
                 if len < offset {
@@ -5175,6 +5330,8 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
                                 // fired) AND the whole reader loop stalled (the "log
                                 // gets stuck when Privacy Shield is on" symptom).
                                 let gaze_kind = gaze_kind_from_reason(reason);
+                                let first_look_away_in_episode = !locally_looking_away;
+                                locally_looking_away = true;
                                 crate::flow_bridge::flow_trace(format!(
                                     "shield-reader: look_away read (reason='{}') → emit privacy-shield-event kind='{}'",
                                     reason, gaze_kind
@@ -5188,51 +5345,72 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
                                     serde_json::json!({ "lookingAway": true }),
                                 );
 
-                                // Fleet receives only the detected class. The Pro sidecar
-                                // queues it for the next authenticated check-in; a Fleet
-                                // outage or absent sidecar must never disrupt local shielding.
-                                if allow_fleet_privacy_alert(gaze_kind).await {
-                                    if let Err(error) = crate::sidecar::dispatch_paid_command(
-                                        "record_privacy_shield_event",
-                                        serde_json::json!({ "class": gaze_kind }),
-                                    )
-                                    .await
+                                // Local alerting is independent of Fleet. Do it before
+                                // any policy/readiness check so an attention event is
+                                // visible immediately even when Fleet is offline or slow.
+                                if first_look_away_in_episode {
+                                    let detail = if reason.is_empty() {
+                                        "Presence check failed".to_string()
+                                    } else {
+                                        reason.to_string()
+                                    };
+                                    // Do not read settings here: another
+                                    // settings writer can hold its lock for
+                                    // seconds, delaying a safety alert. The
+                                    // detector itself has already enforced
+                                    // the selected mode by this point.
+                                    let notification_body =
+                                        format!("{} — Privacy Shield detected this immediately.", detail);
+                                    if let Err(error) =
+                                        crate::native_notify::show_security_notification(
+                                            &app,
+                                            "Privacy Shield — look-away",
+                                            &notification_body,
+                                        )
                                     {
                                         crate::flow_bridge::flow_trace(format!(
-                                            "shield-reader: Fleet attention event not queued: {}",
+                                            "shield-reader: local security alert not displayed: {}",
                                             error
                                         ));
+                                        crate::log_message(
+                                            "warn",
+                                            &format!(
+                                                "[PrivacyShield] local detection alert could not be displayed: {}",
+                                                error
+                                            ),
+                                        );
+                                    } else {
+                                        crate::flow_bridge::flow_trace(
+                                            "shield-reader: local security alert delivered immediately",
+                                        );
                                     }
-                                } else {
-                                    crate::flow_bridge::flow_trace(
-                                        "shield-reader: Fleet attention event rate-limited by signed policy",
-                                    );
                                 }
 
-                                // ── UX side effects (may be slow; time-bounded) ──
-                                let detail = if reason.is_empty() {
-                                    "Presence check failed".to_string()
-                                } else {
-                                    reason.to_string()
-                                };
-                                let notify_only =
-                                    crate::settings::read_settings().ok().and_then(|settings| {
-                                        settings.ideal.privacy.privacy_shield.notify_mode
-                                    }) == Some(
-                                        crate::settings::PrivacyShieldNotifyMode::NotifyOnly,
-                                    );
-                                let notification_body = if notify_only {
-                                    format!("{} — notification only; screen unchanged.", detail)
-                                } else {
-                                    format!("{} — visual screen shield engaged.", detail)
-                                };
-                                let _ = crate::native_notify::show_native_notification(
-                                    &app,
-                                    "Privacy Shield — look-away",
-                                    &notification_body,
-                                );
+                                // Fleet receives only the detected class. Keep this
+                                // best-effort work off the reader loop: it must never
+                                // delay the protected user's local notification.
+                                tauri::async_runtime::spawn(async move {
+                                    if allow_fleet_privacy_alert(gaze_kind).await {
+                                        if let Err(error) = crate::sidecar::dispatch_paid_command(
+                                            "record_privacy_shield_event",
+                                            serde_json::json!({ "class": gaze_kind }),
+                                        )
+                                        .await
+                                        {
+                                            crate::flow_bridge::flow_trace(format!(
+                                                "shield-reader: Fleet attention event not queued: {}",
+                                                error
+                                            ));
+                                        }
+                                    } else {
+                                        crate::flow_bridge::flow_trace(
+                                            "shield-reader: Fleet attention event rate-limited by signed policy",
+                                        );
+                                    }
+                                });
                             }
                             Some("look_back") => {
+                                locally_looking_away = false;
                                 crate::flow_bridge::flow_trace("shield-reader: look_back");
                                 let _ = app.emit(
                                     "privacy-shield-look-state",
@@ -5286,10 +5464,10 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
             }
             // The overlay itself changes in the Python process, but this reader
             // drives the local UI state and the Fleet event bridge. A 750 ms
-            // interval made both look-back state and Fleet alerts visibly late.
-            // The sidecar is a tiny append-only file, so a bounded 100 ms poll
-            // keeps the local and Fleet surfaces in step without busy-waiting.
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            // interval made local notifications visibly late. The sidecar is
+            // tiny and append-only, so a 25 ms bounded poll keeps local alert
+            // delivery effectively concurrent with detector output.
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
         // Shield stopped — clear the visual look-away state. Camera access was
         // never modified by this reader.
@@ -5301,9 +5479,13 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32) {
 }
 
 #[tauri::command]
-pub async fn kill_privacy_shield_process() -> Result<(), String> {
+pub async fn kill_privacy_shield_process(app: AppHandle) -> Result<(), String> {
     // Clear the reader run-flag so the look-state reader exits with the shield.
     SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+    // The UI uses this direct path when the normal Stop command reports an
+    // error, and the tray uses it too. It is a real Shield stop, so discard
+    // any alert belonging to that session before terminating its process.
+    crate::native_notify::clear_pending_notifications(&app);
     crate::log_message(
         "info",
         "[PrivacyShield] Attempting to kill Privacy Shield process...",
