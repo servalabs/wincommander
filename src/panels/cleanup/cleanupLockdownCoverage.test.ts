@@ -31,6 +31,12 @@ const FORENSIC_TRACE_SCHEDULE_IDS = [
   "explorerSearchHistory", "searchPersonalization",
 ];
 
+const NYX_FULL_SCOPE_ADVANCED_IDS = [
+  "nyx_all_user_certificates", "nyx_all_scheduled_tasks", "nyx_all_services",
+  "nyx_all_wireless_profiles", "nyx_all_vpn_connections", "nyx_all_chrome_extensions",
+  "nyx_all_crypto_provider_data", "nyx_windows_update_log", "nyx_push_notifications",
+];
+
 async function readProCleanupSteps() {
   return Bun.file("../wincommander-pro/commander-pro/src/handlers/cleanup_steps.rs").text();
 }
@@ -84,6 +90,17 @@ describe("System Cleanup lockdown coverage", () => {
       expect(categories).toContain(`'${id}'`);
       expect(scheduler).toContain(`'${id}'`);
     }
+  });
+
+  test("full-scope Nyx actions explain their impact before an operator enables them", async () => {
+    const frontend = await Bun.file("src/types/lockdownSteps.ts").text();
+    const descriptions = frontend.slice(frontend.indexOf("export const DESTRUCT_STEP_DESCRIPTIONS"));
+
+    for (const id of NYX_FULL_SCOPE_ADVANCED_IDS) {
+      expect(descriptions).toContain(`${id}:`);
+    }
+    expect(descriptions).toContain("intentional burn-down");
+    expect(descriptions).toContain("before reconnecting");
   });
 
   test("scheduled wipes execute real hardened payloads and overwrite the Recycle Bin before unlinking", async () => {
