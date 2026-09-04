@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   newVaultEntry,
   newVaultPolicy,
+  nextVaultAccessPolicy,
+  removeVaultEntryDraft,
   VAULT_MOUNT_REASONS,
   validateVaultAccessIntent,
   vaultMountResultLabel,
@@ -80,13 +82,26 @@ describe("Vault Access service intent", () => {
 
   test("submits a next version while guarding against the version it edited", () => {
     const observed = newVaultPolicy();
-    const submitted = {
-      ...observed,
-      expected_previous_version: observed.version,
-      version: observed.version + 1,
-    };
+    const submitted = nextVaultAccessPolicy(observed);
     expect(submitted.expected_previous_version).toBe(0);
     expect(submitted.version).toBe(1);
+  });
+
+  test("discards a never-saved final row locally but preserves a saved deletion request", () => {
+    const unsaved = newVaultPolicy();
+    unsaved.entries = [unsaved.entries[0]!];
+    expect(removeVaultEntryDraft(unsaved, unsaved.entries[0]!.id, false)).toBeNull();
+
+    const saved = { ...unsaved, version: 7, expected_previous_version: 6 };
+    const empty = removeVaultEntryDraft(saved, saved.entries[0]!.id, true)!;
+    expect(empty.policy_id).toBe(saved.policy_id);
+    expect(empty.entries).toEqual([]);
+    expect(nextVaultAccessPolicy(empty)).toMatchObject({
+      policy_id: saved.policy_id,
+      expected_previous_version: 7,
+      version: 8,
+      entries: [],
+    });
   });
 
   test("rejects two managed containers in one parent folder", () => {

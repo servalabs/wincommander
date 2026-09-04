@@ -185,6 +185,23 @@ export function normalizeVaultAccessPolicy(policy: VaultAccessPolicy): VaultAcce
   };
 }
 
+export function removeVaultEntryDraft(
+  policy: VaultAccessPolicy,
+  entryId: string,
+  hasPersistedBase: boolean,
+): VaultAccessPolicy | null {
+  const next = { ...policy, entries: policy.entries.filter(entry => entry.id !== entryId) };
+  return next.entries.length === 0 && !hasPersistedBase ? null : next;
+}
+
+export function nextVaultAccessPolicy(policy: VaultAccessPolicy): VaultAccessPolicy {
+  return {
+    ...policy,
+    expected_previous_version: policy.version,
+    version: policy.version + 1,
+  };
+}
+
 export function validateVaultAccessIntent(policy: VaultAccessPolicy): string | null {
   if (!policy.policy_id.trim()) return "A policy identifier is required.";
   // An empty policy is the explicit emergency/decommission state: the service

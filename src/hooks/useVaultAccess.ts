@@ -6,7 +6,7 @@ import type { VaultAccessCapabilities, VaultAuthorizedEntry, VaultMountEntryResu
 /** Typed renderer boundary for the service-owned Vault Access policy. */
 export default function useVaultAccess<Policy, Status>() {
   const getPolicy = useCallback(
-    () => invoke<Policy>("get_vault_access_policy"),
+    () => invoke<Policy | null>("get_vault_access_policy"),
     [],
   );
   const getStatus = useCallback(

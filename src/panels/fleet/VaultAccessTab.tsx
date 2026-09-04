@@ -12,7 +12,7 @@ import {
 import { readUntrustedLegacyVaultDraft } from "./vaultLegacyImport";
 import type { FleetAccessDirectory } from "./accessControlTypes";
 import {
-  newVaultEntry, newVaultPolicy, normalizeVaultAccessPolicy, validateVaultAccessIntent, vaultMountResultLabel, vaultPresentationLabel,
+  newVaultEntry, newVaultPolicy, nextVaultAccessPolicy, normalizeVaultAccessPolicy, removeVaultEntryDraft, validateVaultAccessIntent, vaultMountResultLabel, vaultPresentationLabel,
   type VaultAuthorizedEntry,
   type VaultMountEntryResult,
   type VaultAccess, type VaultAccessEntry, type VaultAccessPolicy, type VaultPolicyStatus, type VaultContainerKind, type VaultVolumeRole,
@@ -44,6 +44,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const [mountTarget, setMountTarget] = useState<MountTarget | null>(null);
   const [volumeRole, setVolumeRole] = useState<VaultVolumeRole>("outer");
   const [draftConfirmation, setDraftConfirmation] = useState<"replace" | "discard" | null>(null);
+  const [policyRemovalConfirmation, setPolicyRemovalConfirmation] = useState(false);
   const [mountingEntryId, setMountingEntryId] = useState<string | null>(null);
   const [unmountingEntryId, setUnmountingEntryId] = useState<string | null>(null);
   const [mountResults, setMountResults] = useState<Record<string, VaultMountEntryResult>>({});
@@ -51,7 +52,6 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const hiddenProtectionPasswordInputRef = useRef<HTMLInputElement>(null);
   const policyRef = useRef<VaultAccessPolicy | null>(initialDraft?.policy ?? null);
   const draftBaseRef = useRef<VaultAccessPolicy | null>(initialDraft?.basePolicy ?? null);
-  const [savedPolicy, setSavedPolicy] = useState<VaultAccessPolicy | null>(null);
   const dirtyRef = useRef(initialDraft !== null);
   const draftWriteTimer = useRef<number | null>(null);
   const focusRefreshTimer = useRef<number | null>(null);
@@ -83,13 +83,12 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       if (isAdmin) {
         const [entries, loadedPolicy, loadedStatus] = await Promise.all([
           listAuthorizedEntries(),
-          getPolicy().then(normalizeVaultAccessPolicy),
+          getPolicy().then(value => value ? normalizeVaultAccessPolicy(value) : null),
           includeStatus ? getStatus() : Promise.resolve(null),
         ]);
         setAuthorizedEntries(entries);
-        setSavedPolicy(loadedPolicy);
         if (replaceDirtyDraft || !dirtyRef.current) replacePolicy(loadedPolicy, false);
-        else if (!draftBaseRef.current && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
+        else if (!draftBaseRef.current && loadedPolicy && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
         if (loadedStatus) setStatus(loadedStatus);
       } else {
         setAuthorizedEntries(await listAuthorizedEntries());
@@ -136,6 +135,21 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     return { ...source, entries: source.entries.map(entry => entry.id === id ? { ...entry, ...patch } : entry) };
   });
 
+  const removeEntry = (id: string) => {
+    const current = policyRef.current;
+    if (!current) return;
+    const next = removeVaultEntryDraft(current, id, draftBaseRef.current !== null);
+    // A never-saved starter has no service policy to decommission. Removing
+    // its final row is therefore a local discard, not an invalid version-0
+    // deletion request.
+    if (!next) {
+      replacePolicy(null, false);
+      setStatus(null);
+      return;
+    }
+    replacePolicy(next, true);
+  };
+
   const setAccessPreset = (id: string, preset: Exclude<VaultAccessPreset, "custom">) => editPolicy(current => {
     const source = current ?? newVaultPolicy();
     return {
@@ -163,20 +177,23 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     if (error) return void showError(error);
     setSaving(true);
     try {
-      const submittedPolicy = {
-        // The service's optimistic lock accepts only the next revision. The
-        // displayed version remains the last observed policy until refresh.
-        ...policy,
-        expected_previous_version: policy.version,
-        version: policy.version + 1,
-      };
+      // The service's optimistic lock accepts only the next revision. The
+      // displayed version remains the last observed policy until refresh.
+      const submittedPolicy = nextVaultAccessPolicy(policy);
       const appliedStatus = await applyPolicy(submittedPolicy);
-      replacePolicy(submittedPolicy, false);
+      const removed = submittedPolicy.entries.length === 0;
+      replacePolicy(removed ? null : submittedPolicy, false);
       setStatus(appliedStatus);
+      if (removed) {
+        setAuthorizedEntries([]);
+        setMountResults({});
+      }
       // Applying a policy can change this caller's authorized rows, but the
       // returned status is already current; avoid an immediate duplicate read.
       await refresh(true, false);
-      if (appliedStatus.validation_state === "degraded") {
+      if (removed) {
+        showSuccess("Vault policy removed and shared access revoked.");
+      } else if (appliedStatus.validation_state === "degraded") {
         showError("Vault settings were saved with warnings. Fix the listed access problems before mounting.");
       } else {
         showSuccess("Vault settings saved. Future mounts only need the password.");
@@ -215,9 +232,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
   const reloadSavedPolicy = async () => {
     try {
-      const loaded = normalizeVaultAccessPolicy(await getPolicy());
+      const current = await getPolicy();
+      const loaded = current ? normalizeVaultAccessPolicy(current) : null;
       replacePolicy(loaded, false);
-      setSavedPolicy(loaded);
       await refresh(true);
     } catch {
       showError("Saved Vault settings could not be reloaded. Your draft is still available.");
@@ -228,8 +245,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     const draft = policyRef.current;
     if (!draft) return;
     try {
-      const latest = savedPolicy ?? normalizeVaultAccessPolicy(await getPolicy());
-      setSavedPolicy(latest);
+      const current = await getPolicy();
+      const latest = current ? normalizeVaultAccessPolicy(current) : null;
+      if (!latest) {
+        return void showError("The saved Vault policy was removed. Your draft was kept; create a new policy or discard the draft.");
+      }
       const rebased = rebaseVaultAccessDraft(draft, draftBaseRef.current, latest);
       if (!rebased) return void showError("The saved policy changed in the same Vault. Your draft was kept; reload and review before editing again.");
       replacePolicy(rebased, true, latest);
@@ -401,7 +421,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             return <div className="fleet-vault-workspace" key={entry.id}>
               <div className="fleet-vault-workspace-header">
                 <div><span className="fleet-vault-step">1. Vault details</span><strong>Vault {entryIndex + 1}</strong></div>
-                <Button variant="outline" size="sm" onClick={() => editPolicy(current => current && ({ ...current, entries: current.entries.filter(item => item.id !== entry.id) }))}>Remove</Button>
+                <Button variant="outline" size="sm" onClick={() => removeEntry(entry.id)}>Remove</Button>
               </div>
               <div className="fleet-owner-inputs">
                 <label className="fleet-field"><span>Vault name</span><Input aria-label={`Vault ${entryIndex + 1} label`} value={entry.label} placeholder="Shared vault" onChange={event => updateEntry(entry.id, { label: event.target.value })} /><small>The label people recognize.</small></label>
@@ -463,7 +483,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
               const source = current ?? newVaultPolicy();
               return { ...source, entries: [...source.entries, newVaultEntry("shared")] };
             })}>Add shared vault</Button>
-            <Button variant="primary" disabled={saving || !!error} onClick={() => void apply()}>{saving ? "Saving…" : "Save vault settings"}</Button>
+            {policy && <Button variant="primary" disabled={saving || !!error} onClick={() => policy.entries.length === 0 ? setPolicyRemovalConfirmation(true) : void apply()}>{saving ? "Saving…" : policy.entries.length === 0 ? "Remove Vault policy" : "Save vault settings"}</Button>}
             {verification?.tone === "success" && <span className="fleet-vault-save-status" role="status"><Icon icon="tick-circle" size={14} />{verification.title}{verification.appliedAt != null ? ` · ${appliedAt(verification.appliedAt)}` : ""}</span>}
           </div>
           {error && <p className="fleet-validation-errors">{error}</p>}
@@ -525,6 +545,21 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <DialogFooter>
             <Button variant="outline" onClick={() => setDraftConfirmation(null)}>Keep editing</Button>
             <Button variant="primary" onClick={confirmDraftChange}>{draftConfirmation === "replace" ? "Replace draft" : "Discard & reload"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={policyRemovalConfirmation} onOpenChange={setPolicyRemovalConfirmation}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Remove the saved Vault policy?</DialogTitle>
+            <DialogDescription>
+              WinCommander will dismount managed Vaults, revoke their shared Windows access, and remove the saved policy. The encrypted container files are not deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPolicyRemovalConfirmation(false)}>Cancel</Button>
+            <Button variant="primary" onClick={() => { setPolicyRemovalConfirmation(false); void apply(); }}>Remove policy</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

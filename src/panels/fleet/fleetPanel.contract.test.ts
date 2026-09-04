@@ -145,12 +145,19 @@ describe("Fleet access-control panel contracts", () => {
   test("uses the service-owned Vault policy and makes old planner data opt-in only", () => {
     expect(vault).toContain("useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>()");
     expect(vault).not.toContain("invoke(");
-    expect(vaultHook).toContain('invoke<Policy>("get_vault_access_policy")');
+    expect(vaultHook).toContain('invoke<Policy | null>("get_vault_access_policy")');
     expect(vaultHook).toContain('invoke<Status>("apply_vault_access_policy"');
-    expect(vault).toContain("version: policy.version + 1");
+    expect(vault).toContain("nextVaultAccessPolicy(policy)");
     expect(vault).toContain("Saved vaults");
     expect(vault).toContain("Future mounts only need the password");
     expect(vault).toContain("Save vault settings");
+    expect(vault).toContain("Remove Vault policy");
+    expect(vault).toContain('replacePolicy(removed ? null : submittedPolicy, false)');
+    expect(vault).toContain("Vault policy removed and shared access revoked.");
+    expect(vault).toContain("Remove the saved Vault policy?");
+    expect(vault).toContain("The encrypted container files are not deleted.");
+    expect(vault).toContain("setAuthorizedEntries([])");
+    expect(vault).toContain("const current = await getPolicy();");
     expect(vaultPresentation).toContain("needs to refresh this older Vault status");
     expect(vaultPresentation).toContain("pending_mount_broker");
     expect(vault).toContain("own dedicated parent folder");
