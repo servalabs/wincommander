@@ -1216,12 +1216,49 @@ async fn handle_vault_mount(
         // for a policy-authorized mount, but can never name a driver, service,
         // or executable.  Validate/repair the fixed engine driver before the
         // privileged broker receives the password.
-        let driver_check =
+        let mut driver_check =
             tokio::task::spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)
                 .await
                 .unwrap_or(Err(
                     crate::encvol_driver::EnsureDriverError::ServiceInspection,
                 ));
+        // A clean developer machine can have the authenticated Pro sidecar but
+        // not yet its fixed ProgramData engine payload. Prepare that payload as
+        // SYSTEM, with no password or caller-controlled path, then retry the
+        // same pinned-driver validation. This also makes first vault use work
+        // after a normal signed installation rather than requiring a manual
+        // Settings repair first.
+        if matches!(
+            &driver_check,
+            Err(crate::encvol_driver::EnsureDriverError::PayloadValidation)
+        ) {
+            // The broker owns a Windows process HANDLE and is deliberately
+            // !Send. Run its short setup exchange in place, as the existing
+            // mount/dismount broker paths do, so this pipe connection remains
+            // safe to schedule on Tokio's multi-threaded runtime.
+            let prepared = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
+                    crate::pro_broker::VaultCall {
+                        request_id: operation_id,
+                        target_session_id: 0,
+                        caller_sid: "S-1-5-18",
+                        caller_token: None,
+                        caller_authentication_id: None,
+                        presentation: wincmd_shared::vault_access::VaultPresentation::Machine,
+                        feature_id: "vault.broker.prepare_driver",
+                        args: serde_json::json!({}),
+                    },
+                ))
+            });
+            if prepared.is_ok() {
+                driver_check =
+                    tokio::task::spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)
+                        .await
+                        .unwrap_or(Err(
+                            crate::encvol_driver::EnsureDriverError::ServiceInspection,
+                        ));
+            }
+        }
         if let Err(error) = driver_check {
             use zeroize::Zeroize;
             request.password.zeroize();
