@@ -672,7 +672,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
     },
     DestructStepDef {
         id: "nyx_all_chrome_extensions",
-        label: "All Chrome Extensions",
+        label: "Chrome Extensions in Every Profile",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
@@ -831,7 +831,10 @@ mod tests {
             ("nyx_all_services", "All Windows Services"),
             ("nyx_all_wireless_profiles", "All Wireless Profiles"),
             ("nyx_all_vpn_connections", "All VPN Connections"),
-            ("nyx_all_chrome_extensions", "All Chrome Extensions"),
+            (
+                "nyx_all_chrome_extensions",
+                "Chrome Extensions in Every Profile",
+            ),
             ("nyx_all_crypto_provider_data", "All Crypto Provider Data"),
             ("nyx_windows_update_log", "Windows Update Log"),
             ("nyx_push_notifications", "Push Notifications"),
