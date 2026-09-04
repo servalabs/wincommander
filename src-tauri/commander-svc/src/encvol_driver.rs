@@ -9,6 +9,11 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::{Mutex, OnceLock};
 
+#[cfg(windows)]
+use std::ffi::OsStr;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+
 const SERVICE_NAME: &str = "WinCommanderEncVol";
 const DRIVER_PATH: &str = r"C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys";
 // SCM stores `binPath=` verbatim into ImagePath, and a *kernel* service's
@@ -66,6 +71,17 @@ pub(crate) fn fixed_payload_present() -> bool {
 /// encryption work.  Validation precedes every SCM change; the client cannot
 /// influence the service name, driver path, signer policy, or ACL policy.
 pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
+    // VeraCrypt exposes one global control device.  If an existing, normally
+    // installed VeraCrypt driver already owns it, trying to load our bundled
+    // copy as a second kernel service fails with ERROR_INVALID_PARAMETER (87).
+    // The engine can use that control device directly, so do not reject an
+    // otherwise valid mount merely because our private SCM entry is stopped.
+    // Opening the fixed device is read-only and does not alter VeraCrypt's
+    // service record or driver image.
+    if existing_control_device_is_available() {
+        return Ok(());
+    }
+
     let identity = driver_identity().map_err(|_| EnsureDriverError::PayloadValidation)?;
     if cached_identity_matches(&READY_DRIVER, &identity) {
         return Ok(());
@@ -149,6 +165,48 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
     }
     cache_identity(&READY_DRIVER, identity);
     Ok(())
+}
+
+/// Returns true only when the already-loaded VeraCrypt control device accepts
+/// a read-only open. This is intentionally a fixed literal endpoint: callers
+/// cannot select a device or turn this into an arbitrary file open.
+#[cfg(windows)]
+fn existing_control_device_is_available() -> bool {
+    use std::ptr;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    const GENERIC_READ: u32 = 0x8000_0000;
+    let path: Vec<u16> = OsStr::new(r"\\.\VeraCrypt")
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // SAFETY: `path` is NUL-terminated; no caller-controlled pointer, path,
+    // access, or creation disposition reaches this operation.
+    let handle: HANDLE = unsafe {
+        CreateFileW(
+            path.as_ptr(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            ptr::null(),
+            OPEN_EXISTING,
+            0,
+            ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+        return false;
+    }
+    // SAFETY: only a non-null, non-invalid handle obtained above is closed.
+    unsafe { CloseHandle(handle) };
+    true
+}
+
+#[cfg(not(windows))]
+fn existing_control_device_is_available() -> bool {
+    false
 }
 
 /// Validation is expensive (hash, signature, and ACL inspection) but the
