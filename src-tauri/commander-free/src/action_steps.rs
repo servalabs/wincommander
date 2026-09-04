@@ -851,4 +851,12 @@ mod tests {
         let step = lookup("prefetch").expect("Prefetch step must remain selectable");
         assert_eq!(step.label, "Prefetch & ReadyBoot");
     }
+
+    #[test]
+    fn command_history_step_names_its_powershell_and_cmd_scope() {
+        let step =
+            lookup("powershell_history").expect("Command history step must remain selectable");
+        assert_eq!(step.label, "Command History");
+        assert_eq!(step.group, DestructGroup::PrivacyTraces);
+    }
 }
