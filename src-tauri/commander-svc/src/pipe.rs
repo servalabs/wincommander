@@ -1039,13 +1039,13 @@ async fn handle_personal_vault_mount(
         }
         Ok(mounted)
     });
-    let (drive_letter, internal_drive) = mount_result?;
+    let (drive_letter, internal_drive, acl_attested) = mount_result?;
     Ok(serde_json::json!({
         "status": "mounted",
         "drive": drive_letter,
         "internalDrive": internal_drive,
         "scope": "per-user",
-        "aclAttested": true,
+        "aclAttested": acl_attested,
     }))
 }
 

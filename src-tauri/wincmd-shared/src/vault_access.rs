@@ -216,6 +216,11 @@ pub struct VaultMountPlan {
     pub preferred_letter: Option<String>,
     #[serde(default)]
     pub read_only: bool,
+    /// Service-derived only. Personal mounts may be presented without a
+    /// filesystem-root ACL when the encrypted filesystem cannot store one.
+    /// Absence defaults to `false` so older plans remain fail-closed.
+    #[serde(default)]
+    pub personal: bool,
     pub volume_kind: VaultContainerKind,
     pub volume_role: VaultBrokerVolumeRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -659,6 +664,7 @@ mod tests {
             presentation: VaultPresentation::PerUser,
             preferred_letter: Some("V:".into()),
             read_only: false,
+            personal: false,
             volume_kind: VaultContainerKind::Dual,
             volume_role: VaultBrokerVolumeRole::Outer,
             hidden_protection_password: Some("hidden-canary-password".into()),
@@ -687,6 +693,7 @@ mod tests {
                 "presentation": "per-user",
                 "preferred_letter": "V:",
                 "read_only": false,
+                "personal": false,
                 "volume_kind": "dual",
                 "volume_role": "outer",
                 "hidden_protection_password": "hidden-canary-password",

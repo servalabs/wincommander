@@ -584,8 +584,8 @@ export interface MountVolumeParams {
   hiddenKeyfiles?: string[];
   hiddenPim?: string;
   scope?: "machine" | "per-user";
-  /** Replace the mounted NTFS root ACL with the mounting account plus SYSTEM
-   * and Administrators. Disable only for a volume with deliberate group ACLs. */
+  /** Apply and verify the mounted NTFS root ACL for the mounting account plus
+   * SYSTEM and Administrators when the filesystem supports Windows ACLs. */
   hardenAcl?: boolean;
 }
 
@@ -597,6 +597,8 @@ export interface MountVolumeResult {
   readOnly: boolean;
   removable: boolean;
   hiddenProtection: boolean;
+  /** False when this personal mount uses its sign-in drive mapping without a filesystem ACL. */
+  aclAttested: boolean;
 }
 
 export const buildMountVolumeRequest = (params: MountVolumeParams) => ({

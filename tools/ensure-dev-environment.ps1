@@ -60,6 +60,25 @@ function Get-TomlStringArray {
         ForEach-Object { $_.Groups[1].Value })
 }
 
+function Get-RunnableBunVersion {
+    param([Parameter(Mandatory)][string]$BunPath)
+
+    if (-not (Test-Path -LiteralPath $BunPath)) {
+        return $null
+    }
+
+    try {
+        $output = & $BunPath --version
+        if ($LASTEXITCODE -ne 0) {
+            return $null
+        }
+        return ([string]$output).Trim()
+    } catch {
+        # Broken WinGet shims exist on PATH but cannot be executed.
+        return $null
+    }
+}
+
 function Ensure-Bun {
     $bunInstallRoot = if ($env:BUN_INSTALL) {
         $env:BUN_INSTALL
@@ -67,31 +86,37 @@ function Ensure-Bun {
         Join-Path $env:USERPROFILE ".bun"
     }
     $bunBin = Join-Path $bunInstallRoot "bin"
+    $pinnedBun = Join-Path $bunBin "bun.exe"
     Add-ProcessPathEntry $bunBin
 
-    $bun = Find-Application "bun"
-    $installedVersion = if ($bun) { (& $bun --version).Trim() } else { $null }
+    $installedVersion = Get-RunnableBunVersion $pinnedBun
     if ($installedVersion -ne $bunVersion) {
-        $state = if ($installedVersion) { "Bun $installedVersion is installed" } else { "Bun is not installed" }
+        $pathBun = Find-Application "bun"
+        $pathVersion = if ($pathBun) { Get-RunnableBunVersion $pathBun } else { $null }
+        $state = if ($installedVersion) {
+            "Bun $installedVersion is installed"
+        } elseif ($pathVersion) {
+            "Bun $pathVersion is installed"
+        } else {
+            "Bun is not installed"
+        }
         Write-Host "$state. Installing Bun $bunVersion..."
         $installer = Invoke-RestMethod -Uri "https://bun.com/install.ps1"
         & ([scriptblock]::Create($installer)) -Version $bunVersion
         Add-ProcessPathEntry $bunBin
-        # Get-Command can retain an earlier WinGet shim after PATH changes.
-        $bun = Join-Path $bunBin "bun.exe"
     }
 
-    if (-not $bun) {
+    if (-not (Test-Path -LiteralPath $pinnedBun)) {
         throw "Bun installation completed but bun.exe was not found. Restart PowerShell and run tools/dev.ps1 again."
     }
 
-    $installedVersion = (& $bun --version).Trim()
+    $installedVersion = Get-RunnableBunVersion $pinnedBun
     if ($installedVersion -ne $bunVersion) {
-        throw "Bun $bunVersion is required, but '$installedVersion' was found at $bun. Restart PowerShell and run tools/dev.ps1 again."
+        throw "Bun $bunVersion is required, but '$installedVersion' was found at $pinnedBun. Restart PowerShell and run tools/dev.ps1 again."
     }
 
     Write-Host "Using Bun: $installedVersion"
-    return $bun
+    return $pinnedBun
 }
 
 function Ensure-Rustup {

@@ -34,6 +34,8 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).toContain('className="mount-progress" role="status"');
     expect(vaultSource).toContain("Unlocking with your PIM can take several minutes. Your password was cleared for safety.");
     expect(vaultSource).toContain("const boundedMountError");
+    expect(vaultSource).toContain("installed WinCommander service still requires an NTFS permission check");
+    expect(vaultSource).toContain("Repair or update the WinCommander service");
     expect(mountHandlerSource).toContain("setMountFailure(message);");
     expect(mountHandlerSource).toContain("const mountRequest = mountVolume({");
     expect(mountHandlerSource).toContain("setMountPassword(\"\");");
@@ -95,6 +97,11 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).not.toContain("Only this Windows account");
     expect(vaultSource).not.toContain("The drive will not appear in other users’ File Explorer sessions.");
     expect(backendSource).toContain("PresentedLetter: letter");
+  });
+
+  test("reports when a personal mount has no filesystem ACL attestation", () => {
+    expect(backendSource).toContain("aclAttested: boolean");
+    expect(vaultSource).toContain("Windows filesystem permissions were not applied.");
   });
 
   test("does not spawn an unsupported system-encryption probe when Secure Storage opens", () => {

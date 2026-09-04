@@ -201,6 +201,9 @@ struct InternalMountRequest {
     volume_kind: &'static str,
     volume_role: &'static str,
     read_only: bool,
+    /// Service-derived only; this private request cannot be supplied by UI or
+    /// named-pipe callers.
+    personal: bool,
     pim: Option<u32>,
     keyfiles: Vec<String>,
     hidden_keyfiles: Vec<String>,
@@ -233,6 +236,7 @@ fn broker_mount_args(
         presentation: request.presentation,
         preferred_letter: request.preferred_letter.clone(),
         read_only: request.read_only,
+        personal: request.personal,
         volume_kind: match request.volume_kind {
             "standard" => VaultContainerKind::Standard,
             "dual" => VaultContainerKind::Dual,
@@ -395,7 +399,7 @@ impl VaultMountBroker {
         session_id: u32,
         caller_sid: &str,
         caller_authentication_id: (u32, i32),
-    ) -> Result<(String, u8), VaultMountReason> {
+    ) -> Result<(String, u8, bool), VaultMountReason> {
         self.with_exclusive_operation(|| {
             self.mount_personal_authorized_locked(
                 operation_id,
@@ -424,7 +428,7 @@ impl VaultMountBroker {
         session_id: u32,
         caller_sid: &str,
         caller_authentication_id: (u32, i32),
-    ) -> Result<(String, u8), VaultMountReason> {
+    ) -> Result<(String, u8, bool), VaultMountReason> {
         if record.owner_sid != caller_sid
             || record.scope != VaultPresentation::PerUser
             || session_id == 0
@@ -499,6 +503,7 @@ impl VaultMountBroker {
             volume_kind: profile.container_kind,
             volume_role: profile.volume_role,
             read_only: request.read_only,
+            personal: true,
             pim: request.pim,
             keyfiles: std::mem::take(&mut request.keyfiles),
             hidden_keyfiles: std::mem::take(&mut request.hidden_keyfiles),
@@ -551,45 +556,15 @@ impl VaultMountBroker {
             container_identity: record.container_identity.clone(),
             access,
             mounted_at,
-            cleanup_required: !reply.acl_attested,
+            // A personal mount may honestly report no root filesystem ACL
+            // (for example FAT/exFAT). Session-scoped presentation and the
+            // protected container record remain its access boundary.
+            cleanup_required: false,
         };
-        if !reply.acl_attested {
-            // The bounded slot is now known. Persist it before cleanup so a
-            // failed targeted dismount remains recoverable after restart.
-            let retained = self.retain_cleanup_mount(store, &entry_id, active.clone());
-            let cleanup = self.broker.dismount(BrokerDismountRequest {
-                operation_id,
-                internal_drive: active.internal_drive,
-                presented_drive_letter: per_user_presented_drive_letter(
-                    active.presentation,
-                    active.drive_letter.as_str(),
-                ),
-                presentation: active.presentation,
-                target_session_id: active.session_id,
-                caller_sid: &active.caller_sid,
-                caller_token: Some(caller_token),
-            });
-            if cleanup.is_err() {
-                self.mark_registry_untrusted();
-                // A transient first write failure must not turn a known slot
-                // into an untracked orphan. Retry the exact durable record and
-                // retain it in memory even if storage remains unavailable.
-                if !retained {
-                    let _ = self.retain_cleanup_mount(store, &entry_id, active);
-                }
-                return Err(VaultMountReason::DismountFailed);
-            }
-            return Err(if self.clear_retained_mount(store, &entry_id) {
-                VaultMountReason::AclReadbackFailed
-            } else {
-                VaultMountReason::DismountFailed
-            });
-        }
-        active.cleanup_required = false;
         if let Ok(mut mounts) = self.active.lock() {
             mounts.insert(entry_id.clone(), active.clone());
             if self.persist_active(store, &mounts).is_ok() {
-                return Ok((reply.drive_letter, reply.internal_drive));
+                return Ok((reply.drive_letter, reply.internal_drive, reply.acl_attested));
             }
         }
         let cleanup = self.broker.dismount(BrokerDismountRequest {
@@ -736,6 +711,7 @@ impl VaultMountBroker {
             volume_kind: profile.container_kind,
             volume_role: profile.volume_role,
             read_only: false,
+            personal: false,
             pim: None,
             keyfiles: Vec::new(),
             hidden_keyfiles: Vec::new(),
@@ -1614,7 +1590,7 @@ mod tests {
                 "S-1-5-21-owner",
                 (0, 0),
             ),
-            Ok(("P:".into(), 12))
+            Ok(("P:".into(), 12, true))
         );
         assert_eq!(broker.projection(&entry_id).0, VaultMountState::Mounted);
         assert!(store
@@ -1747,7 +1723,7 @@ mod tests {
     }
 
     #[test]
-    fn personal_mount_reports_cleanup_uncertain_when_acl_rejection_cannot_dismount() {
+    fn personal_mount_accepts_an_honest_unattested_filesystem_acl() {
         let store = mount_store(
             Arc::new(Mutex::new(HashMap::new())),
             Arc::new(AtomicBool::new(false)),
@@ -1767,11 +1743,11 @@ mod tests {
                 "S-1-5-21-owner",
                 (0, 0),
             ),
-            Err(VaultMountReason::DismountFailed)
+            Ok(("P:".into(), 12, false))
         );
         let registry: DurableMountRegistry =
             serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
-        assert!(registry.mounts.values().all(|mount| mount.cleanup_required));
+        assert!(registry.mounts.values().all(|mount| !mount.cleanup_required));
     }
 
     #[test]
@@ -1912,6 +1888,7 @@ mod tests {
                 volume_kind: container_kind,
                 volume_role,
                 read_only: false,
+                personal: false,
                 pim: None,
                 keyfiles: Vec::new(),
                 hidden_keyfiles: Vec::new(),
@@ -1931,6 +1908,7 @@ mod tests {
             assert_eq!(args["mount_mode"], mount_mode);
             assert_eq!(args["volume_kind"], container_kind);
             assert_eq!(args["volume_role"], volume_role);
+            assert_eq!(args["personal"], false);
             assert_eq!(args.get("protect_inner"), None);
             assert_eq!(args.get("client_pid"), None);
             assert_eq!(

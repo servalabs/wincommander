@@ -35,7 +35,7 @@ const boundedMountError = (error: unknown) => {
     return "That drive letter is already in use. Choose a free drive letter, then try again.";
   }
   if (normalized.includes("vault_acl_apply_failed") || normalized.includes("vault_acl_readback_failed")) {
-    return "WinCommander mounted the volume but could not verify its private Windows permissions, so it safely unmounted it. Use an NTFS-formatted container; FAT/exFAT volumes cannot carry private Windows permissions.";
+    return "The installed WinCommander service still requires an NTFS permission check for this personal mount, so it safely unmounted the volume. Repair or update the WinCommander service, then mount it again from Secure Storage.";
   }
   if (normalized.includes("vault_not_authorized")) {
     return "This Windows account is not authorized to mount that container. Select the original container and use its original account, password, PIM, and keyfile.";
@@ -648,10 +648,10 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
               <span>Removable media</span>
               <span className="quick-desc">Reports the mounted volume as removable.</span>
             </label>
-            <div className="quick-toggle quick-toggle--locked" aria-label="Private NTFS permissions enabled">
+            <div className="quick-toggle quick-toggle--locked" aria-label="Sign-in-only drive mapping enabled">
               <Icon icon="lock" size={14} />
-              <span>Private NTFS permissions</span>
-              <span className="quick-desc">Always enabled for this user-only encrypted drive.</span>
+              <span>Sign-in-only drive mapping</span>
+              <span className="quick-desc">This personal mount does not require NTFS permissions.</span>
             </div>
           </div>
 
@@ -686,7 +686,11 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
           <Icon icon="warning-sign" size={28} className="mount-result-dialog__icon" />
           <div>
             <strong>{mountedVolume?.drive} is ready in File Explorer</strong>
-            <p>It is visible only to this signed-in Windows account and has private NTFS permissions.</p>
+            {mountedVolume?.aclAttested ? (
+              <p>Private Windows permissions were applied and verified for this encrypted volume.</p>
+            ) : (
+              <p>This encrypted volume is mounted through this sign-in’s drive mapping. Windows filesystem permissions were not applied.</p>
+            )}
             <p className="mount-result-dialog__note">Dismount it when you are finished. Windows administrators can still manage this computer.</p>
           </div>
         </div>
