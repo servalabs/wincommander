@@ -73,7 +73,11 @@ function Start-ElevatedSync {
     # exact script in the elevated process.
     $escapedScriptPath = $PSCommandPath.Replace("'", "''")
     $escapedDiagnostic = $diagnostic.Replace("'", "''")
-    $childCommand = "& '$escapedScriptPath' -Elevated -DiagnosticPath '$escapedDiagnostic'; exit `$LASTEXITCODE"
+    # A PowerShell script can fail with a terminating error without changing
+    # LASTEXITCODE (Cargo may have left it at zero). Propagate PowerShell's
+    # success flag instead, otherwise the parent would report success after
+    # the elevated child stopped the service but failed before restarting it.
+    $childCommand = "try { & '$escapedScriptPath' -Elevated -DiagnosticPath '$escapedDiagnostic'; if (`$?) { exit 0 }; exit 1 } catch { exit 1 }"
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
     $process = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encodedCommand
