@@ -150,7 +150,7 @@ export const DESTRUCT_STEPS: readonly DestructStepDef[] = [
   { id: "nyx_all_scheduled_tasks", label: "All Scheduled Tasks", command: clearCommand("NyxAllScheduledTasks"), group: "deepDfir", defaultEnabled: false },
   { id: "nyx_all_services", label: "All Windows Services", command: clearCommand("NyxAllServices"), group: "deepDfir", defaultEnabled: false },
   { id: "nyx_all_wireless_profiles", label: "All Wireless Profiles", command: clearCommand("NyxAllWirelessProfiles"), group: "deepDfir", defaultEnabled: false },
-  { id: "nyx_all_vpn_connections", label: "All VPN Connections", command: clearCommand("NyxAllVpnConnections"), group: "deepDfir", defaultEnabled: false },
+  { id: "nyx_all_vpn_connections", label: "Current & Shared VPN Connections", command: clearCommand("NyxAllVpnConnections"), group: "deepDfir", defaultEnabled: false },
   { id: "nyx_all_chrome_extensions", label: "Chrome Extensions in Every Profile", command: clearCommand("NyxAllChromeExtensions"), group: "deepDfir", defaultEnabled: false },
   { id: "nyx_all_crypto_provider_data", label: "All Current-User RSA Provider Data", command: clearCommand("NyxAllCryptoProviderData"), group: "deepDfir", defaultEnabled: false },
   { id: "nyx_windows_update_log", label: "Windows Update Log", command: clearCommand("NyxWindowsUpdateLog"), group: "deepDfir", defaultEnabled: false },

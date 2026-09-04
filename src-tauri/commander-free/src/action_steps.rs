@@ -666,7 +666,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
     },
     DestructStepDef {
         id: "nyx_all_vpn_connections",
-        label: "All VPN Connections",
+        label: "Current & Shared VPN Connections",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
@@ -830,7 +830,10 @@ mod tests {
             ("nyx_all_scheduled_tasks", "All Scheduled Tasks"),
             ("nyx_all_services", "All Windows Services"),
             ("nyx_all_wireless_profiles", "All Wireless Profiles"),
-            ("nyx_all_vpn_connections", "All VPN Connections"),
+            (
+                "nyx_all_vpn_connections",
+                "Current & Shared VPN Connections",
+            ),
             (
                 "nyx_all_chrome_extensions",
                 "Chrome Extensions in Every Profile",
