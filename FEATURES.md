@@ -44,6 +44,10 @@ the backend and private component before execution.
 ### Maintenance
 
 - Preview-first maintenance flows for supported cleanup categories.
+- Guided Routine Hygiene previews an exact, test-locked cache allowlist and
+  refuses bulk clear when any category is missing, busy, failed, or unscanned.
+  Clears run sequentially and publish an authoritative post-action rescan. See
+  [privacy hygiene and Nyx-family coverage](docs/product/privacy-hygiene.md).
 - Duplicate, empty-folder, broken-shortcut, package, registry, and firewall
   review surfaces where available in the current build.
 - Backend-owned candidate identifiers and live revalidation before mutations;
