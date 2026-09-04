@@ -19,6 +19,10 @@ $builtService = Join-Path $tauriRoot 'target\debug\wincommander-svc.exe'
 $stagingDirectory = Join-Path $repoRoot '.dev\wincommander-service'
 $stagedService = Join-Path $stagingDirectory 'wincommander-svc.exe'
 $serviceName = 'WinCommanderSvc'
+$driverServiceName = 'WinCommanderEncVol'
+$driverPath = Join-Path $env:ProgramData 'WinCommander\bin\engine\EncVolKm.sys'
+$driverNtPath = '\??\C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys'
+$driverSha256 = '1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6'
 
 function Write-Diagnostic([string]$Message) {
     if ($DiagnosticPath) {
@@ -63,6 +67,44 @@ function Assert-StagedDevelopmentService {
         $serviceState -ne 'Running') {
         throw "WinCommander development-service synchronization did not take effect. Expected running service path: $stagedService. Actual path: $configuredPath. Actual state: $serviceState."
     }
+}
+
+function Ensure-EncryptedVolumeDriver {
+    # The sidecar extracts this Microsoft-signed, pinned payload into the
+    # fixed ProgramData location. A fresh checkout may not have reached that
+    # extraction step yet; leave its first mount to the service bootstrap.
+    if (-not (Test-Path -LiteralPath $driverPath -PathType Leaf)) {
+        Write-Diagnostic "Encrypted-volume driver payload is not present yet: $driverPath"
+        return
+    }
+    if ((Get-Sha256 $driverPath) -ne $driverSha256) {
+        throw "The encrypted-volume driver does not match WinCommander's pinned payload: $driverPath"
+    }
+
+    & sc.exe qc $driverServiceName 2>$null
+    $driverExists = $LASTEXITCODE -eq 0
+    if ($driverExists) {
+        Write-Diagnostic "Configuring the fixed encrypted-volume driver service."
+        & sc.exe config $driverServiceName 'type=' 'kernel' 'start=' 'system' 'binPath=' $driverNtPath
+    }
+    else {
+        Write-Diagnostic "Creating the fixed encrypted-volume driver service."
+        & sc.exe create $driverServiceName 'type=' 'kernel' 'start=' 'system' 'binPath=' $driverNtPath
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Windows could not configure $driverServiceName."
+    }
+
+    & sc.exe start $driverServiceName 2>$null
+    if ($LASTEXITCODE -notin @(0, 1056)) {
+        throw "Windows could not start $driverServiceName (exit code $LASTEXITCODE)."
+    }
+    $driverConfig = @(& sc.exe qc $driverServiceName 2>&1)
+    $driverRunning = @(& sc.exe query $driverServiceName 2>&1) -match 'STATE\s*:\s*4\s+RUNNING'
+    if (($driverConfig -notmatch [regex]::Escape($driverNtPath)) -or -not $driverRunning) {
+        throw "$driverServiceName did not retain the fixed driver path or running state."
+    }
+    Write-Diagnostic 'Encrypted-volume driver service is running.'
 }
 
 function Build-Service {
@@ -195,4 +237,5 @@ Write-Diagnostic 'Starting the staged development service.'
 Start-Service -Name $serviceName
 (Get-Service -Name $serviceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
 Assert-StagedDevelopmentService
+Ensure-EncryptedVolumeDriver
 Write-Host 'WinCommander development service synchronized and running.'
