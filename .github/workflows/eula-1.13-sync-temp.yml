@@ -1,0 +1,37 @@
+name: Temporary EULA 1.13 sync
+
+on:
+  push:
+    branches:
+      - legal/eula-1.13-sync-2026-09-04
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: legal/eula-1.13-sync-2026-09-04
+          fetch-depth: 0
+          submodules: true
+      - uses: oven-sh/setup-bun@v2
+      - name: Point assets to EULA 1.13 and regenerate installer licence
+        run: |
+          git -C assets fetch origin legal/eula-b2b-b2c-payment-2026-09-04
+          git -C assets checkout 7d17b6f392f77f6e5c597dbbdd6a72b1abf2c1ae
+          bun run gen:eula-rtf
+          bun run gen:eula-rtf:check
+          grep -q "Version 1.13" src-tauri/commander-free/nsis/LICENSE.rtf
+          grep -q "50%.*before dispatch" src-tauri/commander-free/nsis/LICENSE.rtf
+          grep -q "60%.*on delivery" src-tauri/commander-free/nsis/LICENSE.rtf
+      - name: Commit sync
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets src-tauri/commander-free/nsis/LICENSE.rtf
+          git commit -m "legal: sync installer to EULA 1.13"
+          git push origin HEAD:legal/eula-1.13-sync-2026-09-04
