@@ -10,6 +10,7 @@ use std::process::{Command, Output};
 use std::sync::{Mutex, OnceLock};
 
 const SERVICE_NAME: &str = "WinCommanderEncVol";
+const COMPATIBLE_VERA_CRYPT_SERVICE_NAME: &str = "VeraCrypt";
 const DRIVER_PATH: &str = r"C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys";
 // SCM stores `binPath=` verbatim into ImagePath, and a *kernel* service's
 // ImagePath is resolved through the NT object namespace, not the Win32 path
@@ -71,6 +72,19 @@ pub(crate) fn ensure_for_vault_mount() -> Result<(), EnsureDriverError> {
         return Ok(());
     }
     validate_payload_cached(&identity).map_err(|_| EnsureDriverError::PayloadValidation)?;
+
+    // VeraCrypt exposes one machine-wide `\\.\VeraCrypt` control device.
+    // Its official driver and the signed WinCommander payload intentionally use
+    // the same protocol and device name. Starting our dedicated service while
+    // VeraCrypt already owns that device makes the second driver's DriverEntry
+    // fail (commonly surfaced by SCM as ERROR_INVALID_PARAMETER). The engine
+    // already supports this coexistence; the service gate must not reject it
+    // first. This is a fixed, system-owned service/device probe -- no caller
+    // input selects an alternate driver or path.
+    if compatible_veracrypt_driver_is_ready() {
+        cache_identity(&READY_DRIVER, identity);
+        return Ok(());
+    }
 
     let query =
         run_sc(&["query", SERVICE_NAME]).map_err(|_| EnsureDriverError::ServiceInspection)?;
@@ -200,6 +214,56 @@ fn run_sc(args: &[&str]) -> std::io::Result<Output> {
     Command::new(sc).args(args).output()
 }
 
+fn compatible_veracrypt_driver_is_ready() -> bool {
+    let Ok(query) = run_sc(&["query", COMPATIBLE_VERA_CRYPT_SERVICE_NAME]) else {
+        return false;
+    };
+    compatible_veracrypt_service_is_running(&query) && veracrypt_control_device_is_open()
+}
+
+fn compatible_veracrypt_service_is_running(query: &Output) -> bool {
+    query.status.success() && service_is_running(query)
+}
+
+#[cfg(windows)]
+fn veracrypt_control_device_is_open() -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let device: Vec<u16> = r"\\.\VeraCrypt"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `device` is NUL-terminated; zero desired access is the same
+    // non-mutating probe used by the native engine, and all pointer arguments
+    // are null where the Win32 API requires optional values.
+    let handle = unsafe {
+        CreateFileW(
+            device.as_ptr(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    // SAFETY: `handle` was returned by CreateFileW and is neither null nor
+    // INVALID_HANDLE_VALUE.
+    unsafe { CloseHandle(handle) };
+    true
+}
+
+#[cfg(not(windows))]
+fn veracrypt_control_device_is_open() -> bool {
+    false
+}
+
 /// `sc qc` is used only to check the fixed, literal service record.  It is
 /// never used to obtain a path that is later executed.
 fn service_config_is_fixed(output: &Output) -> bool {
@@ -325,6 +389,21 @@ mod tests {
         assert!(source.contains(DRIVER_SHA256));
         assert!(source.contains("$signature.Status -ne 'Valid'"));
         assert!(!source.contains(&["fn existing_control", "_device_is_available"].concat()));
+    }
+
+    #[test]
+    fn compatible_veracrypt_requires_a_running_service_and_open_control_device() {
+        let running = Command::new("cmd")
+            .args(["/c", "echo STATE : 4 RUNNING"])
+            .output()
+            .unwrap();
+        let stopped = Command::new("cmd")
+            .args(["/c", "echo STATE : 1 STOPPED"])
+            .output()
+            .unwrap();
+        assert!(compatible_veracrypt_service_is_running(&running));
+        assert!(!compatible_veracrypt_service_is_running(&stopped));
+        assert_eq!(COMPATIBLE_VERA_CRYPT_SERVICE_NAME, "VeraCrypt");
     }
 
     #[test]

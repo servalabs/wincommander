@@ -68,6 +68,13 @@ function Get-DriverImagePath {
     }
 }
 
+function Test-CompatibleVeraCryptDriverReady {
+    # VeraCrypt and WinCommander's signed EncVol driver intentionally expose
+    # the same machine-wide control device. If the official VeraCrypt driver
+    # already owns it, starting a duplicate service fails with error 87.
+    return (@(& sc.exe query VeraCrypt 2>$null) -match 'STATE\s*:\s*4\s+RUNNING').Count -gt 0
+}
+
 function Assert-StagedDevelopmentService {
     $configuredPath = Get-ServiceImagePath
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
@@ -80,6 +87,10 @@ function Assert-StagedDevelopmentService {
 }
 
 function Ensure-EncryptedVolumeDriver {
+    if (Test-CompatibleVeraCryptDriverReady) {
+        Write-Diagnostic 'Using the already-running compatible VeraCrypt driver.'
+        return
+    }
     # The sidecar extracts this Microsoft-signed, pinned payload into the
     # fixed ProgramData location. A fresh checkout may not have reached that
     # extraction step yet; leave its first mount to the service bootstrap.
@@ -138,6 +149,9 @@ function Test-EncryptedVolumeDriverReady {
     # Once it exists, however, a missing/stopped/misdirected service must force
     # the elevated sync rather than letting an otherwise-current broker return
     # early and leave the next mount to fail.
+    if (Test-CompatibleVeraCryptDriverReady) {
+        return $true
+    }
     if (-not (Test-Path -LiteralPath $driverPath -PathType Leaf)) {
         return $true
     }

@@ -38,6 +38,8 @@ describe("desktop development launchers", () => {
     expect(serviceSync).toContain("$driverSha256 = '1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6'");
     expect(serviceSync).toContain('Ensure-EncryptedVolumeDriver');
     expect(serviceSync).toContain('Test-EncryptedVolumeDriverReady');
+    expect(serviceSync).toContain('Test-CompatibleVeraCryptDriverReady');
+    expect(serviceSync).toContain("Using the already-running compatible VeraCrypt driver.");
     expect(serviceSync).toContain("reg.exe add $driverRegistryPath '/v' 'ImagePath' '/t' 'REG_EXPAND_SZ'");
     expect(serviceSync).toContain('(Get-DriverImagePath) -cne $driverNtPath');
   });
