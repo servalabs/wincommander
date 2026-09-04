@@ -107,6 +107,24 @@ function Ensure-EncryptedVolumeDriver {
     Write-Diagnostic 'Encrypted-volume driver service is running.'
 }
 
+function Test-EncryptedVolumeDriverReady {
+    # There is nothing to repair until Pro has extracted its fixed payload.
+    # Once it exists, however, a missing/stopped/misdirected service must force
+    # the elevated sync rather than letting an otherwise-current broker return
+    # early and leave the next mount to fail.
+    if (-not (Test-Path -LiteralPath $driverPath -PathType Leaf)) {
+        return $true
+    }
+    if ((Get-Sha256 $driverPath) -ne $driverSha256) {
+        return $false
+    }
+    $config = @(& sc.exe qc $driverServiceName 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $config -notmatch [regex]::Escape($driverNtPath)) {
+        return $false
+    }
+    return (@(& sc.exe query $driverServiceName 2>$null) -match 'STATE\s*:\s*4\s+RUNNING').Count -gt 0
+}
+
 function Build-Service {
     Push-Location $tauriRoot
     try {
@@ -180,7 +198,7 @@ if (-not $Elevated) {
     $serviceRunning = (Get-Service -Name $serviceName -ErrorAction SilentlyContinue).Status -eq 'Running'
     if ($stagedMatches -and $configuredPath -and
         $configuredPath.Equals($stagedService, [StringComparison]::OrdinalIgnoreCase) -and
-        $serviceRunning) {
+        $serviceRunning -and (Test-EncryptedVolumeDriverReady)) {
         Write-Host 'WinCommander development service is current.'
         return
     }

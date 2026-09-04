@@ -37,5 +37,6 @@ describe("desktop development launchers", () => {
     expect(serviceSync).toContain("$driverServiceName = 'WinCommanderEncVol'");
     expect(serviceSync).toContain("$driverSha256 = '1F0C6DB3559D1356C38A1486A967CD90DB5E6202E433FEA1DFE510DDB884FFB6'");
     expect(serviceSync).toContain('Ensure-EncryptedVolumeDriver');
+    expect(serviceSync).toContain('Test-EncryptedVolumeDriverReady');
   });
 });
