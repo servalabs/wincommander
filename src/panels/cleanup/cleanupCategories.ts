@@ -495,8 +495,8 @@ const legacyStandardCategories: LegacyCleanupCategory[] = [
   },
   {
     id: 'prefetchFiles',
-    label: 'Prefetch Files',
-    description: 'App execution history (.pf)',
+    label: 'Prefetch & ReadyBoot',
+    description: 'App execution history plus ReadyBoot trace files',
     icon: 'flash',
     color: '#eab308',
     severity: 'warning',

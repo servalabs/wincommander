@@ -2107,18 +2107,18 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                 </div>
             </Dialog>
 
-            {/* ── Prefetch Files Dialog ─────────────────────────────── */}
+            {/* ── Prefetch & ReadyBoot Dialog ───────────────────────── */}
             <Dialog
                 isOpen={prefetchDialogOpen}
                 onClose={() => setPrefetchDialogOpen(false)}
-                title="Prefetch Files"
+                title="Prefetch & ReadyBoot"
                 className="mount-dialog priv-dialog"
                 isCloseButtonShown={true}
                 canEscapeKeyClose={true}
             >
                 <div className="wc-dialog-body">
                     <UniversalCallout
-                        message="Windows Prefetch files record application execution history. Each .pf file proves an executable was launched on this device."
+                        message="Windows Prefetch records application execution history. This cleaner also removes temporary Prefetch entries and ReadyBoot traces; the table below lists only the app-linked .pf records."
                         intent="primary"
                     />
                     <div style={{ maxHeight: 400, overflowY: "auto", paddingRight: "8px", marginTop: 12 }}>
@@ -2158,7 +2158,7 @@ export function useCleanupLegacyDialogs(cardDataMap: Record<string, CardData>) {
                 </div>
                 <div className="mount-dialog-footer">
                     <Button icon="cross" text="CLOSE" onClick={() => setPrefetchDialogOpen(false)} minimal className="modal-cancel-btn" />
-                    <Button icon="trash" text="CLEAR PREFETCH" onClick={handleClearPrefetch} loading={localLoadingMap["prefetchClear"]} className="modal-primary-btn danger" />
+                    <Button icon="trash" text="CLEAR PREFETCH & READYBOOT" onClick={handleClearPrefetch} loading={localLoadingMap["prefetchClear"]} className="modal-primary-btn danger" />
                 </div>
             </Dialog>
 

@@ -74,7 +74,7 @@ export const DESTRUCT_STEPS: readonly DestructStepDef[] = [
   // double-cover) — turn this on to actually erase browser cache /
   // cookies / history / downloads.
   { id: "browser_footprints", label: "Browser Data",          command: clearCommand("BrowserFootprints"),       group: "privacyTraces", defaultEnabled: false },
-  { id: "prefetch",           label: "Prefetch Files",        command: clearCommand("Prefetch"),                group: "privacyTraces", defaultEnabled: true },
+  { id: "prefetch",           label: "Prefetch & ReadyBoot",  command: clearCommand("Prefetch"),                group: "privacyTraces", defaultEnabled: true },
   { id: "shellbags",          label: "ShellBags",             command: clearCommand("ShellBags"),               group: "privacyTraces", defaultEnabled: true },
   { id: "connectivity_history", label: "Connectivity History",command: clearCommand("ConnectivityHistory"),     group: "privacyTraces", defaultEnabled: true },
   // Expanded System Cleanup catalogue — opt-in because these can remove app
@@ -216,7 +216,7 @@ export const DESTRUCT_STEP_DESCRIPTIONS: Record<string, string> = {
   recent_files:        "Shell Recent folder (Windows-key + R history, etc.).",
   powershell_history:  "Terminal command history and session logs.",
   browser_footprints:  "Browser cache, cookies, history, and downloaded-files list.",
-  prefetch:            "Prefetch files (.pf) — execution timing data.",
+  prefetch:            "Prefetch execution records (.pf), temporary entries, and ReadyBoot trace logs.",
   shellbags:           "Folder access history stored in the registry.",
   connectivity_history: "General network connectivity traces.",
   pagefile_zero:        "Attempts to zero the active pagefile immediately via a raw volume handle (requires admin + SE_MANAGE_VOLUME_NAME). Best-effort — the safe deferred path is the RAM-Spill Control toggle (ClearPageFileAtShutdown=1).",

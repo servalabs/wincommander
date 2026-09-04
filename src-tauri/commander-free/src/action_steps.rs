@@ -241,7 +241,7 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
     },
     DestructStepDef {
         id: "prefetch",
-        label: "Prefetch Files",
+        label: "Prefetch & ReadyBoot",
         group: DestructGroup::PrivacyTraces,
         default_enabled: true,
     },
@@ -781,5 +781,11 @@ mod tests {
                 "{id} must require an explicit opt-in"
             );
         }
+    }
+
+    #[test]
+    fn prefetch_step_names_the_readyboot_traces_it_clears() {
+        let step = lookup("prefetch").expect("Prefetch step must remain selectable");
+        assert_eq!(step.label, "Prefetch & ReadyBoot");
     }
 }
