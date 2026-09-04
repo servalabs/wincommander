@@ -8,6 +8,7 @@ const vaultPresentation = readFileSync("src/panels/fleet/vaultAccessPresentation
 const patternPicker = readFileSync("src/panels/fleet/VaultAccessPatternPicker.tsx", "utf8");
 const vaultHook = readFileSync("src/hooks/useVaultAccess.ts", "utf8");
 const vaultDraft = readFileSync("src/panels/fleet/vaultAccessDraft.ts", "utf8");
+const principalPicker = readFileSync("src/panels/fleet/VaultPrincipalPicker.tsx", "utf8");
 const volumeEditor = readFileSync("src/panels/fleet/VaultVolumesEditor.tsx", "utf8");
 const infoPopover = readFileSync("src/panels/fleet/FleetInfoPopover.tsx", "utf8");
 const css = readFileSync("src/panels/fleet/index.css", "utf8");
@@ -125,6 +126,13 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).not.toContain('<div className="fleet-vault-matrix">');
     expect(css).toContain(".fleet-vault-grants");
     expect(css).toContain(".fleet-vault-grant-row");
+  });
+
+  test("keeps the Windows principal dropdown visible in the active theme", () => {
+    expect(principalPicker).toContain('className="vault-principal-picker"');
+    expect(css).toContain(".vault-principal-picker option");
+    expect(css).toContain("color-scheme: dark;");
+    expect(css).toContain(".light .vault-principal-picker");
   });
 
   test("opens real information popovers for access groups and Vault permissions", () => {

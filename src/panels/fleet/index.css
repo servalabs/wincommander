@@ -1402,6 +1402,44 @@
   display: flex;
 }
 
+/* Native Windows select popups do not inherit the panel theme reliably. Keep
+   the Vault principal directory readable in both the closed control and its
+   option list. */
+.vault-principal-picker {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 34px 8px 11px;
+  appearance: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text);
+  color-scheme: dark;
+  font: inherit;
+}
+
+.vault-principal-picker option,
+.vault-principal-picker optgroup {
+  background: #191918;
+  color: #f3f2f0;
+}
+
+.vault-principal-picker:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.light .vault-principal-picker {
+  color-scheme: light;
+}
+
+.light .vault-principal-picker option,
+.light .vault-principal-picker optgroup {
+  background: #ffffff;
+  color: #18221d;
+}
+
 .fleet-field-hint,
 .fleet-field > small,
 .fleet-switch-field small,

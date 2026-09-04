@@ -37,6 +37,7 @@ export default function VaultPrincipalPicker({ value, directory, onChange, ariaL
 
   return (
     <select
+      className="vault-principal-picker"
       aria-label={ariaLabel}
       value={value.trim() ? current.principalName : ""}
       onChange={event => {
