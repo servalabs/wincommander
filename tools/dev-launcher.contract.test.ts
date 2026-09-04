@@ -6,6 +6,7 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
 };
 const devLauncher = readFileSync("tools/dev.ps1", "utf8");
 const combinedLauncher = readFileSync("tools/dev-all.ts", "utf8");
+const serviceSync = readFileSync("tools/sync-dev-service.ps1", "utf8");
 
 describe("desktop development launchers", () => {
   test("synchronizes the Vault service before starting the normal desktop", () => {
@@ -19,5 +20,11 @@ describe("desktop development launchers", () => {
   test("routes the combined developer launcher through the normal desktop launcher", () => {
     expect(combinedLauncher).toContain('"run", "dev:tauri"');
     expect(combinedLauncher).not.toContain('"x", "tauri", "dev"');
+  });
+
+  test("does not repeat Cargo work after the parent has prepared the service binary", () => {
+    expect(serviceSync).toContain("[switch]$UseExistingBuild");
+    expect(serviceSync).toContain("Start-ElevatedSync -UseExistingBuild");
+    expect(serviceSync).toContain("Using the development service built by the non-elevated parent.");
   });
 });

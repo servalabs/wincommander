@@ -3,6 +3,10 @@ param(
     # Internal only: this copy runs after the UAC prompt and is allowed to
     # stop/reconfigure the machine service.
     [switch]$Elevated,
+    # The non-elevated parent has already built the current binary.  Avoid a
+    # second Cargo invocation after UAC elevation, where developer PATH/tooling
+    # differences could otherwise stop the old service and strand it.
+    [switch]$UseExistingBuild,
     [string]$DiagnosticPath
 )
 
@@ -64,7 +68,7 @@ function Build-Service {
     }
 }
 
-function Start-ElevatedSync {
+function Start-ElevatedSync([switch]$UseExistingBuild) {
     $diagnostic = Join-Path $env:TEMP ("wincommander-dev-service-{0}.log" -f [guid]::NewGuid().ToString('N'))
     Set-Content -LiteralPath $diagnostic -Value 'Starting elevated WinCommander development-service synchronization.'
     # Start-Process does not preserve a -File value containing spaces when it
@@ -77,7 +81,8 @@ function Start-ElevatedSync {
     # LASTEXITCODE (Cargo may have left it at zero). Propagate PowerShell's
     # success flag instead, otherwise the parent would report success after
     # the elevated child stopped the service but failed before restarting it.
-    $childCommand = "try { & '$escapedScriptPath' -Elevated -DiagnosticPath '$escapedDiagnostic'; if (`$?) { exit 0 }; exit 1 } catch { exit 1 }"
+    $existingBuildArgument = if ($UseExistingBuild) { ' -UseExistingBuild' } else { '' }
+    $childCommand = "try { & '$escapedScriptPath' -Elevated$existingBuildArgument -DiagnosticPath '$escapedDiagnostic'; if (`$?) { exit 0 }; exit 1 } catch { exit 1 }"
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
     $process = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encodedCommand
@@ -119,7 +124,7 @@ if (-not $Elevated) {
         return
     }
 
-    Start-ElevatedSync
+    Start-ElevatedSync -UseExistingBuild
     return
 }
 
@@ -132,8 +137,15 @@ if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
     (Get-Service -Name $serviceName).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
 }
 
-Write-Diagnostic 'Building the development service.'
-Build-Service
+if ($UseExistingBuild) {
+    if (-not (Test-Path -LiteralPath $builtService -PathType Leaf)) {
+        throw "The verified development service build is missing: $builtService."
+    }
+    Write-Diagnostic 'Using the development service built by the non-elevated parent.'
+} else {
+    Write-Diagnostic 'Building the development service.'
+    Build-Service
+}
 New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
 Copy-Item -LiteralPath $builtService -Destination $stagedService -Force
 if ((Get-Sha256 $builtService) -ne (Get-Sha256 $stagedService)) {
