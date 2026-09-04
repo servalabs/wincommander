@@ -74,7 +74,7 @@ const fleetArgs = [
   "--manifest-path", PRO_MANIFEST,
 ];
 
-// ── tauri dev ─────────────────────────────────────────────────────────────────
+// ── desktop development launcher ──────────────────────────────────────────────
 
 const tauriEnv: NodeJS.ProcessEnv = {
   ...process.env,
@@ -87,13 +87,15 @@ const tauriEnv: NodeJS.ProcessEnv = {
 };
 
 const tauriArgs = [
-  "x", "tauri", "dev",
-  "--config", "src-tauri/commander-free/tauri.conf.json",
+  // Use the supported launcher rather than invoking `tauri dev` directly.
+  // tools/dev.ps1 synchronizes the SYSTEM Vault service before the desktop
+  // starts, preventing this checkout from talking to an older installed service.
+  "run", "dev:tauri",
 ];
 
 // ── orchestration ─────────────────────────────────────────────────────────────
 
-console.log("[dev:all] Starting fleet-server (quiet) + tauri dev ...");
+console.log("[dev:all] Starting fleet-server (quiet) + desktop development launcher ...");
 console.log(`[dev:all] Dev keypair pub: ${DEV_PUB_B64}`);
 console.log("[dev:all] Ctrl+C stops both processes.\n");
 
