@@ -18,7 +18,7 @@ const EXPANDED_CATEGORY_IDS = [
 const FORENSIC_TRACE_LOCKDOWN_IDS = [
   "web_cache", "thumbnail_cache", "notification_database", "branch_cache",
   "event_transcript", "activities_timeline", "rdp_bitmap_cache", "servicing_logs",
-  "device_install_logs", "usage_trace_logs", "defender_history", "third_party_security_product_logs", "forensic_tool_artifacts", "windows_policy_auth_caches", "cortana_wsa_logs", "bitlocker_recovery_temp", "nyx_application_logs", "nyx_system_temp_files", "nyx_all_user_certificates", "nyx_all_scheduled_tasks", "nyx_all_services", "nyx_all_wireless_profiles", "nyx_all_vpn_connections", "nyx_all_chrome_extensions", "nyx_all_crypto_provider_data", "nyx_windows_update_log", "nyx_push_notifications", "app_launch_history",
+  "device_install_logs", "usage_trace_logs", "defender_history", "third_party_security_product_logs", "forensic_tool_artifacts", "windows_policy_auth_caches", "cortana_wsa_logs", "bitlocker_recovery_temp", "trace_application_logs", "trace_system_temp_files", "trace_all_user_certificates", "trace_all_scheduled_tasks", "trace_all_services", "trace_all_wireless_profiles", "trace_all_vpn_connections", "trace_all_chrome_extensions", "trace_all_crypto_provider_data", "trace_windows_update_log", "trace_push_notifications", "app_launch_history",
   "office_mru", "embedded_web_cache", "p2p_update_cache", "reliability_history",
   "explorer_search_history", "search_personalization",
 ];
@@ -31,10 +31,10 @@ const FORENSIC_TRACE_SCHEDULE_IDS = [
   "explorerSearchHistory", "searchPersonalization",
 ];
 
-const NYX_FULL_SCOPE_ADVANCED_IDS = [
-  "nyx_all_user_certificates", "nyx_all_scheduled_tasks", "nyx_all_services",
-  "nyx_all_wireless_profiles", "nyx_all_vpn_connections", "nyx_all_chrome_extensions",
-  "nyx_all_crypto_provider_data", "nyx_windows_update_log", "nyx_push_notifications",
+const TRACE_FULL_SCOPE_ADVANCED_IDS = [
+  "trace_all_user_certificates", "trace_all_scheduled_tasks", "trace_all_services",
+  "trace_all_wireless_profiles", "trace_all_vpn_connections", "trace_all_chrome_extensions",
+  "trace_all_crypto_provider_data", "trace_windows_update_log", "trace_push_notifications",
 ];
 
 async function readProCleanupSteps() {
@@ -92,11 +92,11 @@ describe("System Cleanup lockdown coverage", () => {
     }
   });
 
-  test("full-scope Nyx actions explain their impact before an operator enables them", async () => {
+  test("full-scope system hygiene actions explain their impact before an operator enables them", async () => {
     const frontend = await Bun.file("src/types/lockdownSteps.ts").text();
     const descriptions = frontend.slice(frontend.indexOf("export const DESTRUCT_STEP_DESCRIPTIONS"));
 
-    for (const id of NYX_FULL_SCOPE_ADVANCED_IDS) {
+    for (const id of TRACE_FULL_SCOPE_ADVANCED_IDS) {
       expect(descriptions).toContain(`${id}:`);
     }
     expect(descriptions).toContain("intentional burn-down");

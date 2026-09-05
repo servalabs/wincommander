@@ -629,67 +629,67 @@ pub const DESTRUCT_STEPS: &[DestructStepDef] = &[
         default_enabled: false,
     },
     DestructStepDef {
-        id: "nyx_application_logs",
+        id: "trace_application_logs",
         label: "Hibernation & App Trace Logs",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
     DestructStepDef {
-        id: "nyx_system_temp_files",
+        id: "trace_system_temp_files",
         label: "User & System Temp Files",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
     DestructStepDef {
-        id: "nyx_all_user_certificates",
+        id: "trace_all_user_certificates",
         label: "All Current-User Certificates",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
     DestructStepDef {
-        id: "nyx_all_scheduled_tasks",
+        id: "trace_all_scheduled_tasks",
         label: "All Scheduled Tasks",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
     DestructStepDef {
-        id: "nyx_all_services",
+        id: "trace_all_services",
         label: "All Windows Services",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
     DestructStepDef {
-        id: "nyx_all_wireless_profiles",
+        id: "trace_all_wireless_profiles",
         label: "All Wireless Profiles",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
     DestructStepDef {
-        id: "nyx_all_vpn_connections",
+        id: "trace_all_vpn_connections",
         label: "Current & Shared VPN Connections",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
     DestructStepDef {
-        id: "nyx_all_chrome_extensions",
+        id: "trace_all_chrome_extensions",
         label: "Chrome Extensions in Every Profile",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
     DestructStepDef {
-        id: "nyx_all_crypto_provider_data",
+        id: "trace_all_crypto_provider_data",
         label: "All Current-User RSA Provider Data",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
     DestructStepDef {
-        id: "nyx_windows_update_log",
+        id: "trace_windows_update_log",
         label: "Windows Update Log",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
     },
     DestructStepDef {
-        id: "nyx_push_notifications",
+        id: "trace_push_notifications",
         label: "Push Notifications",
         group: DestructGroup::DeepDfir,
         default_enabled: false,
@@ -808,7 +808,7 @@ mod tests {
     use super::{lookup, DestructGroup};
 
     #[test]
-    fn nyx_security_and_forensic_steps_are_opt_in_deep_dfir_actions() {
+    fn trace_security_and_forensic_steps_are_opt_in_deep_dfir_actions() {
         for (id, label) in [
             (
                 "third_party_security_product_logs",
@@ -824,28 +824,28 @@ mod tests {
                 "bitlocker_recovery_temp",
                 "BitLocker Recovery-Key Temp Files",
             ),
-            ("nyx_application_logs", "Hibernation & App Trace Logs"),
-            ("nyx_system_temp_files", "User & System Temp Files"),
-            ("nyx_all_user_certificates", "All Current-User Certificates"),
-            ("nyx_all_scheduled_tasks", "All Scheduled Tasks"),
-            ("nyx_all_services", "All Windows Services"),
-            ("nyx_all_wireless_profiles", "All Wireless Profiles"),
+            ("trace_application_logs", "Hibernation & App Trace Logs"),
+            ("trace_system_temp_files", "User & System Temp Files"),
+            ("trace_all_user_certificates", "All Current-User Certificates"),
+            ("trace_all_scheduled_tasks", "All Scheduled Tasks"),
+            ("trace_all_services", "All Windows Services"),
+            ("trace_all_wireless_profiles", "All Wireless Profiles"),
             (
-                "nyx_all_vpn_connections",
+                "trace_all_vpn_connections",
                 "Current & Shared VPN Connections",
             ),
             (
-                "nyx_all_chrome_extensions",
+                "trace_all_chrome_extensions",
                 "Chrome Extensions in Every Profile",
             ),
             (
-                "nyx_all_crypto_provider_data",
+                "trace_all_crypto_provider_data",
                 "All Current-User RSA Provider Data",
             ),
-            ("nyx_windows_update_log", "Windows Update Log"),
-            ("nyx_push_notifications", "Push Notifications"),
+            ("trace_windows_update_log", "Windows Update Log"),
+            ("trace_push_notifications", "Push Notifications"),
         ] {
-            let step = lookup(id).expect("Nyx-derived step must remain selectable");
+            let step = lookup(id).expect("system hygiene-derived step must remain selectable");
             assert_eq!(step.label, label);
             assert_eq!(step.group, DestructGroup::DeepDfir);
             assert!(
