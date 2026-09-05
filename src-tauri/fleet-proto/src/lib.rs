@@ -12,15 +12,15 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub mod events;
 #[cfg(feature = "autonomous-test")]
 pub mod autonomous_test;
+pub mod events;
 pub mod outcomes;
 pub mod policy;
 
-pub use events::*;
 #[cfg(feature = "autonomous-test")]
 pub use autonomous_test::*;
+pub use events::*;
 pub use outcomes::*;
 pub use policy::*;
 
@@ -2822,9 +2822,10 @@ mod tests {
 
     #[test]
     fn android_action_class_vectors_are_canonical() {
-        let fixture: Value =
-            serde_json::from_str(include_str!("../tests/fixtures/android-action-class-v1.json"))
-                .expect("Android action-class fixture must be valid JSON");
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/android-action-class-v1.json"
+        ))
+        .expect("Android action-class fixture must be valid JSON");
         assert_eq!(fixture["version"], 1);
         let fixture_rows: Vec<(String, String)> = fixture["commands"]
             .as_array()

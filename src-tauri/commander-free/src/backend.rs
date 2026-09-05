@@ -5055,7 +5055,10 @@ fn attach_privacy_shield_reader_to_active_detector(app: &AppHandle) -> bool {
     spawn_shield_event_reader(app.clone(), pid, true);
     crate::log_message(
         "info",
-        &format!("[PrivacyShield] attached local alert reader to detector PID {}", pid),
+        &format!(
+            "[PrivacyShield] attached local alert reader to detector PID {}",
+            pid
+        ),
     );
     true
 }
@@ -5268,7 +5271,9 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
         // detector's session-file truncation and follows only entries created
         // by that session. This prevents old alerts replaying after stop.
         let mut offset = if start_at_end {
-            std::fs::metadata(&sidecar).map(|meta| meta.len()).unwrap_or(0)
+            std::fs::metadata(&sidecar)
+                .map(|meta| meta.len())
+                .unwrap_or(0)
         } else {
             0
         };
@@ -5359,8 +5364,10 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                     // seconds, delaying a safety alert. The
                                     // detector itself has already enforced
                                     // the selected mode by this point.
-                                    let notification_body =
-                                        format!("{} — Privacy Shield detected this immediately.", detail);
+                                    let notification_body = format!(
+                                        "{} — Privacy Shield detected this immediately.",
+                                        detail
+                                    );
                                     if let Err(error) =
                                         crate::native_notify::show_security_notification(
                                             &app,

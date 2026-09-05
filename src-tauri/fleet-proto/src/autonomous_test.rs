@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{write_canonical, verify_signature_b64, ActionClass, DeviceId};
+use crate::{verify_signature_b64, write_canonical, ActionClass, DeviceId};
 
 /// A separate, short-lived admission pass for a disposable Fleet lab device.
 ///
@@ -89,7 +89,9 @@ pub struct AutonomousTestCapability {
     pub signature: String,
 }
 
-fn default_capability_version() -> u16 { 2 }
+fn default_capability_version() -> u16 {
+    2
+}
 
 pub fn autonomous_test_capability_preimage(capability: &AutonomousTestCapability) -> Vec<u8> {
     let value = serde_json::json!({
@@ -123,7 +125,11 @@ pub fn verify_autonomous_test_capability(
         && !capability.catalog_id.is_empty()
         && !capability.scenarios.is_empty()
         && !capability.nonce.is_empty()
-        && verify_signature_b64(public_key_b64, &autonomous_test_capability_preimage(capability), &capability.signature)
+        && verify_signature_b64(
+            public_key_b64,
+            &autonomous_test_capability_preimage(capability),
+            &capability.signature,
+        )
 }
 
 /// Device-signed, redacted measured state for one test-run member. `result`
@@ -141,7 +147,9 @@ pub struct AutonomousTestObservation {
     pub signature: String,
 }
 
-fn default_observation_version() -> u16 { 1 }
+fn default_observation_version() -> u16 {
+    1
+}
 
 /// Canonical bytes signed by the enrolled device outcome key. Including the
 /// full capability prevents a caller from splicing a valid result onto a
@@ -166,7 +174,11 @@ pub fn verify_autonomous_test_observation(
     observation.version == 1
         && !observation.observation_id.is_empty()
         && observation.device_id == observation.capability.device_id
-        && verify_signature_b64(public_key_b64, &autonomous_test_observation_preimage(observation), &observation.signature)
+        && verify_signature_b64(
+            public_key_b64,
+            &autonomous_test_observation_preimage(observation),
+            &observation.signature,
+        )
 }
 
 #[cfg(test)]

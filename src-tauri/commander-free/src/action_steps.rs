@@ -826,7 +826,10 @@ mod tests {
             ),
             ("trace_application_logs", "Hibernation & App Trace Logs"),
             ("trace_system_temp_files", "User & System Temp Files"),
-            ("trace_all_user_certificates", "All Current-User Certificates"),
+            (
+                "trace_all_user_certificates",
+                "All Current-User Certificates",
+            ),
             ("trace_all_scheduled_tasks", "All Scheduled Tasks"),
             ("trace_all_services", "All Windows Services"),
             ("trace_all_wireless_profiles", "All Wireless Profiles"),

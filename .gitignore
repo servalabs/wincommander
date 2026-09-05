@@ -160,3 +160,4 @@ target-commander-free-shield
 target-autonomous-adapter
 target-autonomy-lab
 target-codex-personal-vault
+.cargo-target-driver-bootstrap/

@@ -524,7 +524,10 @@ pub async fn run_checkin_cycle_inner(
                     &policy.signer_key,
                     &policy.preimage(),
                     &policy.signature,
-                ) => dispatch.on_policy_envelope(&resp.policy),
+                ) =>
+        {
+            dispatch.on_policy_envelope(&resp.policy)
+        }
         Ok(_) => warn!("fleet: rejected policy envelope signed by an unpinned or invalid key"),
         Err(error) => warn!("fleet: rejected malformed policy envelope: {error}"),
     }

@@ -1747,7 +1747,10 @@ mod tests {
         );
         let registry: DurableMountRegistry =
             serde_json::from_slice(&store.read_active_mounts().unwrap()).unwrap();
-        assert!(registry.mounts.values().all(|mount| !mount.cleanup_required));
+        assert!(registry
+            .mounts
+            .values()
+            .all(|mount| !mount.cleanup_required));
     }
 
     #[test]
