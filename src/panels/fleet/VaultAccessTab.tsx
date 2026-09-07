@@ -56,6 +56,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const draftWriteTimer = useRef<number | null>(null);
   const focusRefreshTimer = useRef<number | null>(null);
   const lastRefreshErrorAt = useRef(0);
+  const refreshRevision = useRef(0);
+  const saveInProgress = useRef(false);
   const [draftDirty, setDraftDirty] = useState(initialDraft !== null);
   const { getPolicy, getStatus, applyPolicy, mountEntry, unmountEntry, listAuthorizedEntries } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
   const error = useMemo(() => policy ? validateVaultAccessIntent(policy) : null, [policy]);
@@ -79,6 +81,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   }, [replacePolicy]);
 
   const refresh = useCallback(async (replaceDirtyDraft = false, includeStatus = true) => {
+    const revision = ++refreshRevision.current;
     try {
       if (isAdmin) {
         const [entries, loadedPolicy, loadedStatus] = await Promise.all([
@@ -86,21 +89,31 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           getPolicy().then(value => value ? normalizeVaultAccessPolicy(value) : null),
           includeStatus ? getStatus() : Promise.resolve(null),
         ]);
+        if (revision !== refreshRevision.current) return false;
         setAuthorizedEntries(entries);
+        setMountResults({});
         if (replaceDirtyDraft || !dirtyRef.current) replacePolicy(loadedPolicy, false);
         else if (!draftBaseRef.current && loadedPolicy && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
         if (loadedStatus) setStatus(loadedStatus);
       } else {
-        setAuthorizedEntries(await listAuthorizedEntries());
+        const entries = await listAuthorizedEntries();
+        if (revision !== refreshRevision.current) return false;
+        setAuthorizedEntries(entries);
+        setMountResults({});
         setStatus(null);
       }
+      return true;
     } catch {
+      if (revision !== refreshRevision.current) return false;
+      setAuthorizedEntries([]);
+      setMountResults({});
       // A service/status refresh must never destroy an administrator's draft.
       const now = Date.now();
       if (now - lastRefreshErrorAt.current > 30_000) {
         lastRefreshErrorAt.current = now;
         showError("Your Vault list is unavailable.");
       }
+      return false;
     } finally {
       setLoading(false);
     }
@@ -110,10 +123,10 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
   useEffect(() => {
     const refreshOnFocus = () => {
-      if (dirtyRef.current || focusRefreshTimer.current !== null) return;
+      if (saveInProgress.current || dirtyRef.current || focusRefreshTimer.current !== null) return;
       focusRefreshTimer.current = window.setTimeout(() => {
         focusRefreshTimer.current = null;
-        if (!dirtyRef.current) void refresh();
+        if (!saveInProgress.current && !dirtyRef.current) void refresh();
       }, 500);
     };
     window.addEventListener("focus", refreshOnFocus);
@@ -173,9 +186,15 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   });
 
   const apply = async () => {
+    if (saveInProgress.current) return;
     if (!policy) return;
     if (error) return void showError(error);
+    saveInProgress.current = true;
     setSaving(true);
+    ++refreshRevision.current;
+    setAuthorizedEntries([]);
+    setMountResults({});
+    closeMountPrompt();
     try {
       // The service's optimistic lock accepts only the next revision. The
       // displayed version remains the last observed policy until refresh.
@@ -190,7 +209,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       }
       // Applying a policy can change this caller's authorized rows, but the
       // returned status is already current; avoid an immediate duplicate read.
-      await refresh(true, false);
+      const refreshed = await refresh(true, false);
+      if (!refreshed) {
+        showError("Vault settings were saved, but current access could not be verified. Refresh before mounting.");
+        return;
+      }
       if (removed) {
         showSuccess("Vault policy removed and shared access revoked.");
       } else if (appliedStatus.validation_state === "degraded") {
@@ -201,6 +224,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     } catch (cause) {
       showError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      saveInProgress.current = false;
       setSaving(false);
     }
   };
@@ -362,6 +386,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             <p className="fleet-field-hint">{isAdmin ? "No vault has been saved and assigned to this account yet." : "No Vault access is currently assigned to this Windows account."}</p>
           )}
           {authorizedEntries.map(entry => {
+            const mountGate = vaultMountGate({ authorized: entry, entryResult: status?.entries.find(item => item.id === entry.entry_id)?.result, draftDirty: false });
             const mountResult = mountResults[entry.entry_id];
             const isMounted = mountResult?.state === "mounted" || entry.mount_state === "mounted";
             return <div className="fleet-vault-lifecycle" key={entry.entry_id}>
@@ -375,7 +400,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                       ? `Mounted at ${entry.drive_letter}`
                       : entry.mount_state === "mounted"
                         ? "Mounted for this Windows session"
-                        : "Ready to mount when needed"}
+                        : mountGate.disabledReason ?? "Ready to mount when needed"}
                 </p>
               </div>
               {isMounted ? (
@@ -383,19 +408,19 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                   {unmountingEntryId === entry.entry_id ? "Unmounting…" : "Unmount"}
                 </Button>
               ) : (
-                <Button variant="primary" size="sm" disabled={mountingEntryId === entry.entry_id} onClick={() => openMountPrompt(entry)}>
+                <Button variant="primary" size="sm" disabled={saving || mountingEntryId === entry.entry_id || !mountGate.canMount} title={mountGate.disabledReason ?? undefined} onClick={() => openMountPrompt(entry)}>
                   {mountingEntryId === entry.entry_id ? "Mounting…" : "Mount"}
                 </Button>
               )}
             </div>;
           })}
           <div className="fleet-vault-refresh-row">
-            <Button variant="outline" size="sm" onClick={() => void refresh()}><Icon icon="refresh" size={14} />Refresh</Button>
+            <Button variant="outline" size="sm" disabled={saving} onClick={() => void refresh()}><Icon icon="refresh" size={14} />Refresh</Button>
           </div>
         </CardContent>
       </Card>
 
-      {isAdmin && <>
+      {isAdmin && <fieldset disabled={saving} className="contents">
       <Card>
         <CardHeader>
           <CardTitle>Vault access</CardTitle>
@@ -464,9 +489,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                   <Button
                     variant="primary"
                     size="sm"
-                    disabled={mountingEntryId === entry.id || !mountGate.canMount}
+                    disabled={saving || mountingEntryId === entry.id || !mountGate.canMount}
                     title={mountGate.disabledReason ?? undefined}
-                    onClick={() => openMountPrompt({ ...entry, access: authorized?.access })}
+                    onClick={() => { if (authorized) openMountPrompt(authorized); }}
                   >
                     {mountingEntryId === entry.id ? "Mounting…" : "Mount"}
                   </Button>
@@ -504,7 +529,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         </CardContent>
       </Card>
 
-      </>}
+      </fieldset>}
 
       <Dialog open={mountTarget !== null} onOpenChange={open => { if (!open) closeMountPrompt(); }}>
         <DialogContent className="max-w-md">

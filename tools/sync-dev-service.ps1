@@ -138,7 +138,7 @@ function Ensure-EncryptedVolumeDriver {
     }
     $driverConfig = @(& sc.exe qc $driverServiceName 2>&1)
     $driverRunning = @(& sc.exe query $driverServiceName 2>&1) -match 'STATE\s*:\s*4\s+RUNNING'
-    if (($driverConfig -notmatch [regex]::Escape($driverNtPath)) -or -not $driverRunning) {
+    if (-not ($driverConfig -match [regex]::Escape($driverNtPath)) -or -not $driverRunning) {
         throw "$driverServiceName did not retain the fixed driver path or running state."
     }
     Write-Diagnostic 'Encrypted-volume driver service is running.'
@@ -161,7 +161,7 @@ function Test-EncryptedVolumeDriverReady {
     $config = @(& sc.exe qc $driverServiceName 2>$null)
     if ($LASTEXITCODE -ne 0 -or
         (Get-DriverImagePath) -cne $driverNtPath -or
-        $config -notmatch [regex]::Escape($driverNtPath)) {
+        -not ($config -match [regex]::Escape($driverNtPath))) {
         return $false
     }
     return (@(& sc.exe query $driverServiceName 2>$null) -match 'STATE\s*:\s*4\s+RUNNING').Count -gt 0
@@ -255,8 +255,9 @@ if (-not $Elevated) {
 # dismounts any active Vault presentation during its normal shutdown path.
 if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
     Write-Diagnostic 'Stopping the existing WinCommander service.'
-    Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
-    (Get-Service -Name $serviceName).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+    Stop-Service -Name $serviceName -Force -NoWait -ErrorAction Stop
+    # The service advertises 135 seconds for Vault cleanup; allow a scheduling margin.
+    (Get-Service -Name $serviceName).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(150))
 }
 
 if ($UseExistingBuild) {
