@@ -8,6 +8,7 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
 const devLauncher = readFileSync("tools/dev.ps1", "utf8");
 const combinedLauncher = readFileSync("tools/dev-all.ts", "utf8");
 const serviceSync = readFileSync("tools/sync-dev-service.ps1", "utf8");
+const devServer = readFileSync("tools/dev-server.ts", "utf8");
 
 describe("desktop development launchers", () => {
   test("excludes locked runtime files from the frontend watcher", () => {
@@ -63,10 +64,59 @@ ConvertTo-Json -Compress -InputObject @($results)
 
   test("synchronizes the Vault service before starting the normal desktop", () => {
     expect(packageJson.scripts["dev:tauri"]).toContain("tools/dev.ps1");
-    expect(devLauncher).toContain('sync-dev-service.ps1');
-    expect(devLauncher.indexOf('sync-dev-service.ps1')).toBeLessThan(
-      devLauncher.indexOf('x tauri dev'),
-    );
+    expect(devLauncher).not.toContain('sync-dev-service.ps1');
+    expect(devServer).toContain('"tools/sync-dev-service.ps1", "-SyncPro"');
+    expect(devServer.indexOf('"tools/build-pro.ts"')).toBeLessThan(devServer.indexOf('"tools/sync-dev-service.ps1"'));
+    expect(devServer.indexOf('"tools/sync-dev-service.ps1"')).toBeLessThan(devServer.indexOf('const vite = spawn'));
+    expect(devServer).toContain('if (serviceResult !== 0)');
+    const tauri = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8"));
+    expect(tauri.build.beforeDevCommand).toContain('dev:server');
+    expect(devLauncher).toContain('& $bun run dev:server');
+  });
+
+  test("verifies the running service process and current Pro helper", () => {
+    expect(serviceSync).toContain('Test-ServiceProcessCurrent');
+    expect(serviceSync).toContain('$runningProcess.ExecutablePath.Equals($stagedService');
+    expect(serviceSync).toContain('(-not $SyncPro -or (Test-DevelopmentProCurrent))');
+    expect(serviceSync).toContain('$existingBuildArgument$proArgument');
+    expect(serviceSync).toContain('The service Pro helper does not match the current development build.');
+  });
+
+  test.skipIf(process.platform !== "win32")("missing services are false rather than StrictMode exceptions", () => {
+    const expression = serviceSync.match(/\$serviceRunning = ([^\r\n]+)/)?.[1];
+    expect(expression).toBeDefined();
+    const script = `Set-StrictMode -Version Latest; $values = foreach ($service in @($null, [pscustomobject]@{Status='Stopped'}, [pscustomobject]@{Status='Running'})) { ${expression} }; ConvertTo-Json -Compress -InputObject @($values)`;
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual([false, false, true]);
+  });
+
+  test.skipIf(process.platform !== "win32")("only the verified parent tolerates an unreadable SYSTEM process path", () => {
+    const script = String.raw`
+Set-StrictMode -Version Latest
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+  (Join-Path (Get-Location) 'tools/sync-dev-service.ps1'), [ref]$null, [ref]$null)
+$definition = $ast.Find({ param($node)
+  $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Test-ServiceProcessCurrent'
+}, $true)
+. ([scriptblock]::Create($definition.Extent.Text))
+$stagedService = 'C:\checkout\.dev\wincommander-svc.exe'
+function Get-CimInstance {
+  [CmdletBinding()] param([string]$ClassName, [string]$Filter)
+  if ($ClassName -eq 'Win32_Service') { return [pscustomobject]@{ProcessId=42} }
+  return [pscustomobject]@{ExecutablePath=$script:observedImage}
+}
+$results = foreach ($script:observedImage in @($null, 'C:\old\wincommander-svc.exe', $stagedService)) {
+  Test-ServiceProcessCurrent
+  Test-ServiceProcessCurrent -AllowUnverifiable
+}
+ConvertTo-Json -Compress -InputObject @($results)
+`;
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual([false, true, false, false, true, true]);
+    expect(serviceSync).toContain('-AllowUnverifiable:(-not $Elevated)');
   });
 
   test("routes the combined developer launcher through the normal desktop launcher", () => {

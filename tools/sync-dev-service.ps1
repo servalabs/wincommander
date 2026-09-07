@@ -7,6 +7,7 @@ param(
     # second Cargo invocation after UAC elevation, where developer PATH/tooling
     # differences could otherwise stop the old service and strand it.
     [switch]$UseExistingBuild,
+    [switch]$SyncPro,
     [string]$DiagnosticPath
 )
 
@@ -19,6 +20,8 @@ $builtService = Join-Path $tauriRoot 'target\debug\wincommander-svc.exe'
 $stagingDirectory = Join-Path $repoRoot '.dev\wincommander-service'
 $stagedService = Join-Path $stagingDirectory 'wincommander-svc.exe'
 $serviceName = 'WinCommanderSvc'
+$builtPro = Join-Path $tauriRoot 'target\debug\wincommander-pro.exe'
+$managedPro = 'C:\ProgramData\WinCommander\bin\wincommander-pro.dev.exe'
 $driverServiceName = 'WinCommanderEncVol'
 $driverPath = Join-Path $env:ProgramData 'WinCommander\bin\engine\EncVolKm.sys'
 $driverNtPath = '\??\C:\ProgramData\WinCommander\bin\engine\EncVolKm.sys'
@@ -31,6 +34,7 @@ function Write-Diagnostic([string]$Message) {
 }
 
 trap {
+    Write-Host ("Development service synchronization failed: {0}" -f $_) -ForegroundColor Red
     if ($DiagnosticPath) {
         Add-Content -LiteralPath $DiagnosticPath -Value ($_ | Out-String)
         Add-Content -LiteralPath $DiagnosticPath -Value '--- WinCommanderSvc configuration ---'
@@ -49,6 +53,23 @@ function Test-Administrator {
 
 function Get-Sha256([string]$Path) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+}
+
+function Test-DevelopmentProCurrent {
+    return (Test-Path -LiteralPath $builtPro -PathType Leaf) -and
+        (Test-Path -LiteralPath $managedPro -PathType Leaf) -and
+        ((Get-Sha256 $builtPro) -eq (Get-Sha256 $managedPro))
+}
+
+function Test-ServiceProcessCurrent([switch]$AllowUnverifiable) {
+    try {
+        $serviceProcess = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction Stop
+        if ($null -eq $serviceProcess -or $serviceProcess.ProcessId -le 0) { return $false }
+        $runningProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($serviceProcess.ProcessId)" -ErrorAction Stop
+        if ($null -eq $runningProcess) { return $false }
+        if ([string]::IsNullOrWhiteSpace($runningProcess.ExecutablePath)) { return [bool]$AllowUnverifiable }
+        return $runningProcess.ExecutablePath.Equals($stagedService, [StringComparison]::OrdinalIgnoreCase)
+    } catch { return [bool]$AllowUnverifiable }
 }
 
 function Get-ServiceImagePath {
@@ -81,8 +102,16 @@ function Assert-StagedDevelopmentService {
     $serviceState = if ($service) { $service.Status } else { 'Missing' }
     if (-not $configuredPath -or
         -not $configuredPath.Equals($stagedService, [StringComparison]::OrdinalIgnoreCase) -or
-        $serviceState -ne 'Running') {
+        # The elevated child verifies the SYSTEM process path strictly. Its
+        # successful parent may lack permission to read that same process path.
+        $serviceState -ne 'Running' -or -not (Test-ServiceProcessCurrent -AllowUnverifiable:(-not $Elevated))) {
         throw "WinCommander development-service synchronization did not take effect. Expected running service path: $stagedService. Actual path: $configuredPath. Actual state: $serviceState."
+    }
+    if ((Get-Sha256 $builtService) -ne (Get-Sha256 $stagedService)) {
+        throw 'The staged development service no longer matches the current build.'
+    }
+    if ($SyncPro -and -not (Test-DevelopmentProCurrent)) {
+        throw 'The service Pro helper does not match the current development build.'
     }
 }
 
@@ -195,13 +224,14 @@ function Start-ElevatedSync([switch]$UseExistingBuild) {
     # success flag instead, otherwise the parent would report success after
     # the elevated child stopped the service but failed before restarting it.
     $existingBuildArgument = if ($UseExistingBuild) { ' -UseExistingBuild' } else { '' }
-    $childCommand = "try { & '$escapedScriptPath' -Elevated$existingBuildArgument -DiagnosticPath '$escapedDiagnostic'; if (`$?) { exit 0 }; exit 1 } catch { exit 1 }"
+    $proArgument = if ($SyncPro) { ' -SyncPro' } else { '' }
+    $childCommand = "try { & '$escapedScriptPath' -Elevated$existingBuildArgument$proArgument -DiagnosticPath '$escapedDiagnostic'; if (`$?) { exit 0 }; exit 1 } catch { exit 1 }"
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
     # Pass one argument string to the Windows process launcher.  The encoded
     # payload contains no spaces, avoiding another quoting boundary on paths
     # such as E:\E drive\Company\wincommander.
     $processArguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand"
-    $process = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList $processArguments
+    $process = Start-Process -FilePath powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList $processArguments
     if ($process.ExitCode -ne 0) {
         $details = if (Test-Path -LiteralPath $diagnostic) {
             Get-Content -LiteralPath $diagnostic -Raw
@@ -237,10 +267,12 @@ if (-not $Elevated) {
     $stagedMatches = (Test-Path -LiteralPath $stagedService -PathType Leaf) -and
         ((Get-Sha256 $stagedService) -eq $expectedHash)
     $configuredPath = Get-ServiceImagePath
-    $serviceRunning = (Get-Service -Name $serviceName -ErrorAction SilentlyContinue).Status -eq 'Running'
+    $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    $serviceRunning = $null -ne $service -and $service.Status -eq 'Running'
     if ($stagedMatches -and $configuredPath -and
         $configuredPath.Equals($stagedService, [StringComparison]::OrdinalIgnoreCase) -and
-        $serviceRunning -and (Test-EncryptedVolumeDriverReady)) {
+        $serviceRunning -and (Test-ServiceProcessCurrent) -and (Test-EncryptedVolumeDriverReady) -and
+        (-not $SyncPro -or (Test-DevelopmentProCurrent))) {
         Write-Host 'WinCommander development service is current.'
         return
     }
@@ -253,6 +285,9 @@ if (-not $Elevated) {
 # A changed development service is a security boundary update. Stop it before
 # copying so Windows cannot run a half-replaced binary; the service itself
 # dismounts any active Vault presentation during its normal shutdown path.
+if ($SyncPro -and -not (Test-Path -LiteralPath $builtPro -PathType Leaf)) {
+    throw 'Build the development Pro helper before synchronizing the service.'
+}
 if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
     Write-Diagnostic 'Stopping the existing WinCommander service.'
     Stop-Service -Name $serviceName -Force -NoWait -ErrorAction Stop
@@ -273,6 +308,15 @@ New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
 Copy-Item -LiteralPath $builtService -Destination $stagedService -Force
 if ((Get-Sha256 $builtService) -ne (Get-Sha256 $stagedService)) {
     throw 'The staged development service does not match the build output.'
+}
+if ($SyncPro -and -not (Test-DevelopmentProCurrent)) {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $managedPro) -Force | Out-Null
+    $temporaryPro = "$managedPro.dev-sync"
+    Copy-Item -LiteralPath $builtPro -Destination $temporaryPro -Force
+    if ((Get-Sha256 $builtPro) -ne (Get-Sha256 $temporaryPro)) {
+        throw 'The temporary development Pro helper does not match the build.'
+    }
+    Move-Item -LiteralPath $temporaryPro -Destination $managedPro -Force
 }
 
 # sc.exe receives an already-parsed argument list from PowerShell. Preserve

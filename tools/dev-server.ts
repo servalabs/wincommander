@@ -105,7 +105,14 @@ async function main(): Promise<void> {
       console.error(`[dev-server] build:pro failed (exit ${buildProResult}).`);
       process.exit(buildProResult);
     }
-    console.log("[dev-server] build:pro finished — starting vite.");
+    const serviceResult = await run("[service]", "powershell", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+      "tools/sync-dev-service.ps1", "-SyncPro",
+    ]);
+    if (serviceResult !== 0) {
+      throw new Error(`development service synchronization failed (exit ${serviceResult}); Vite was not started`);
+    }
+    console.log("[dev-server] current Pro and SYSTEM service verified — starting vite.");
   }
 
   freeVitePort();

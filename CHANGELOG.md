@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Full development startup now checks the Windows service and matching Pro
+  helper before exposing the dev server, including direct `dev:server` and
+  Tauri launches. Missing services enter installation instead of failing the
+  running-state check; failed synchronization stops startup.
+
 - The frontend development watcher ignores runtime staging files, preventing
   locked Vault test containers from crashing the dev server on Windows.
 
