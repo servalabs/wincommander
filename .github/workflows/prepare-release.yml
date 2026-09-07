@@ -1,7 +1,7 @@
 name: prepare release
 
 # A maintainer chooses the next exact version. This workflow creates a normal,
-# reviewable PR; merging that PR creates the tag and starts the installer release.
+# reviewable PR; merging it does not start a release automatically.
 on:
   workflow_dispatch:
     inputs:

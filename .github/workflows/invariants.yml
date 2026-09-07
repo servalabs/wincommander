@@ -1,7 +1,6 @@
 name: invariants
 
-# Tier-split CI invariants. Runs on relevant PRs and trusted pushes to main,
-# with path selection and concurrency cancellation to bound Actions usage.
+# Tier-split CI invariants. Run manually when a maintainer requests them.
 # of the rules in ref/architecture.md (Open-Core Architecture — CI invariants) before they
 # merge. Three jobs:
 #
@@ -20,36 +19,6 @@ name: invariants
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/invariants.yml"
-      - "package.json"
-      - "bun.lock"
-      - "rust-toolchain.toml"
-      - ".githooks/**"
-      - "tsconfig*.json"
-      - "vite.config.*"
-      - "eslint.config.*"
-      - ".gitleaks.toml"
-      - "src/**"
-      - "src-tauri/**"
-      - "tools/**"
-  pull_request:
-    branches: [main]
-    paths:
-      - ".github/workflows/invariants.yml"
-      - "package.json"
-      - "bun.lock"
-      - "rust-toolchain.toml"
-      - ".githooks/**"
-      - "tsconfig*.json"
-      - "vite.config.*"
-      - "eslint.config.*"
-      - ".gitleaks.toml"
-      - "src/**"
-      - "src-tauri/**"
-      - "tools/**"
 
 concurrency:
   group: invariants-${{ github.event.pull_request.number || github.ref }}

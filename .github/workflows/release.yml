@@ -1,14 +1,10 @@
 name: release
 
-# A vX.Y.Z tag starts the release. Pushing the tag (locally or after a
-# prepare-release PR merges) validates the already-aligned versions, then the NSIS setup
+# A maintainer explicitly starts a release for an existing vX.Y.Z tag. The NSIS setup
 # job uses the protected `release` environment (signing key + R2).
 # An authorized maintainer may start the workflow, but publication always waits
 # for a different required reviewer to approve the protected environment.
 on:
-  push:
-    tags:
-      - "v*.*.*"
   workflow_dispatch:
     inputs:
       release_tag:
