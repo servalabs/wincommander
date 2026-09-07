@@ -5,6 +5,10 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Updated the document-search XML readers for quick-xml 0.42, so the merged
+  dependency update builds correctly while preserving EPUB, Office, and ODF
+  extraction behavior.
+
 - Full development startup now checks the Windows service and matching Pro
   helper before exposing the dev server, including direct `dev:server` and
   Tauri launches. Missing services enter installation instead of failing the

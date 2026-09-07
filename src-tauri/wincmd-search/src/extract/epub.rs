@@ -77,11 +77,11 @@ fn rootfile_path(xml: &[u8]) -> Option<String> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Empty(e)) | Ok(XmlEvent::Start(e))
-                if e.local_name().as_ref() == b"rootfile" =>
+                if e.local_name().as_ref() == "rootfile" =>
             {
                 return e.attributes().flatten().find_map(|attr| {
-                    (attr.key.local_name().as_ref() == b"full-path")
-                        .then(|| String::from_utf8_lossy(attr.value.as_ref()).to_string())
+                    (attr.key.local_name().as_ref() == "full-path")
+                        .then(|| attr.value.as_ref().to_string())
                 });
             }
             Ok(XmlEvent::Eof) | Err(_) => return None,
@@ -98,19 +98,15 @@ fn parse_package(xml: &[u8]) -> (HashMap<String, String>, Vec<String>) {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(XmlEvent::Empty(e)) if e.local_name().as_ref() == b"item" => {
+            Ok(XmlEvent::Empty(e)) if e.local_name().as_ref() == "item" => {
                 let attrs: HashMap<_, _> = e
                     .attributes()
                     .flatten()
                     .filter_map(|attr| {
-                        std::str::from_utf8(attr.key.local_name().as_ref())
-                            .ok()
-                            .map(|key| {
-                                (
-                                    key.to_string(),
-                                    String::from_utf8_lossy(attr.value.as_ref()).to_string(),
-                                )
-                            })
+                        Some((
+                            attr.key.local_name().as_ref().to_string(),
+                            attr.value.as_ref().to_string(),
+                        ))
                     })
                     .collect();
                 if attrs.get("media-type").is_some_and(|kind| {
@@ -121,10 +117,10 @@ fn parse_package(xml: &[u8]) -> (HashMap<String, String>, Vec<String>) {
                     }
                 }
             }
-            Ok(XmlEvent::Empty(e)) if e.local_name().as_ref() == b"itemref" => {
+            Ok(XmlEvent::Empty(e)) if e.local_name().as_ref() == "itemref" => {
                 if let Some(idref) = e.attributes().flatten().find_map(|attr| {
-                    (attr.key.local_name().as_ref() == b"idref")
-                        .then(|| String::from_utf8_lossy(attr.value.as_ref()).to_string())
+                    (attr.key.local_name().as_ref() == "idref")
+                        .then(|| attr.value.as_ref().to_string())
                 }) {
                     spine.push(idref);
                 }
@@ -157,16 +153,15 @@ fn append_markup_text(xml: &[u8], out: &mut String) {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Text(e)) => {
-                if let Ok(decoded) = e.decode() {
-                    if let Ok(unescaped) = quick_xml::escape::unescape(&decoded) {
-                        out.push_str(&unescaped);
-                    }
+                let decoded = e.xml10_content();
+                if let Ok(unescaped) = quick_xml::escape::unescape(&decoded) {
+                    out.push_str(&unescaped);
                 }
             }
             Ok(XmlEvent::End(e))
                 if matches!(
                     e.local_name().as_ref(),
-                    b"p" | b"div" | b"h1" | b"h2" | b"h3" | b"li"
+                    "p" | "div" | "h1" | "h2" | "h3" | "li"
                 ) =>
             {
                 out.push('\n')

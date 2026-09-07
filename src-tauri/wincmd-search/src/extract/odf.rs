@@ -73,7 +73,7 @@ fn extract_body_text(bytes: &[u8]) -> String {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Start(e)) => {
-                if e.local_name().as_ref() == b"body" {
+                if e.local_name().as_ref() == "body" {
                     body_depth += 1;
                 }
             }
@@ -83,32 +83,31 @@ fn extract_body_text(bytes: &[u8]) -> String {
                 if body_depth > 0 {
                     match local {
                         // Paragraph / heading end → hard separator.
-                        b"p" | b"h" => out.push('\n'),
+                        "p" | "h" => out.push('\n'),
                         // Table cell end → soft separator (adjacent cells
                         // must not fuse into one word).
-                        b"table-cell" => out.push(' '),
+                        "table-cell" => out.push(' '),
                         _ => {}
                     }
                 }
-                if local == b"body" {
+                if local == "body" {
                     body_depth = body_depth.saturating_sub(1);
                 }
             }
             Ok(XmlEvent::Empty(e)) => {
                 if body_depth > 0 {
                     match e.local_name().as_ref() {
-                        b"tab" => out.push(' '),
-                        b"line-break" => out.push('\n'),
+                        "tab" => out.push(' '),
+                        "line-break" => out.push('\n'),
                         _ => {}
                     }
                 }
             }
             Ok(XmlEvent::Text(e)) => {
                 if body_depth > 0 {
-                    if let Ok(decoded) = e.decode() {
-                        if let Ok(unescaped) = quick_xml::escape::unescape(&decoded) {
-                            out.push_str(&unescaped);
-                        }
+                    let decoded = e.xml10_content();
+                    if let Ok(unescaped) = quick_xml::escape::unescape(&decoded) {
+                        out.push_str(&unescaped);
                     }
                 }
             }
@@ -146,10 +145,10 @@ fn parse_meta_xml(bytes: &[u8]) -> DocProps {
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Start(e)) => {
                 current = match e.local_name().as_ref() {
-                    b"creator" => Some(MetaField::Author),
-                    b"title" => Some(MetaField::Title),
-                    b"keyword" => Some(MetaField::Keyword),
-                    b"description" => Some(MetaField::Description),
+                    "creator" => Some(MetaField::Author),
+                    "title" => Some(MetaField::Title),
+                    "keyword" => Some(MetaField::Keyword),
+                    "description" => Some(MetaField::Description),
                     _ => None,
                 };
                 // A new <meta:keyword> starts a fresh accumulator slot.
@@ -159,18 +158,17 @@ fn parse_meta_xml(bytes: &[u8]) -> DocProps {
             }
             Ok(XmlEvent::Text(e)) => {
                 if let Some(field) = current {
-                    if let Ok(decoded) = e.decode() {
-                        if let Ok(unescaped) = quick_xml::escape::unescape(&decoded) {
-                            match field {
-                                MetaField::Author => props.author.push_str(&unescaped),
-                                MetaField::Title => props.doc_title.push_str(&unescaped),
-                                MetaField::Keyword => {
-                                    if let Some(last) = keywords.last_mut() {
-                                        last.push_str(&unescaped);
-                                    }
+                    let decoded = e.xml10_content();
+                    if let Ok(unescaped) = quick_xml::escape::unescape(&decoded) {
+                        match field {
+                            MetaField::Author => props.author.push_str(&unescaped),
+                            MetaField::Title => props.doc_title.push_str(&unescaped),
+                            MetaField::Keyword => {
+                                if let Some(last) = keywords.last_mut() {
+                                    last.push_str(&unescaped);
                                 }
-                                MetaField::Description => description.push_str(&unescaped),
                             }
+                            MetaField::Description => description.push_str(&unescaped),
                         }
                     }
                 }

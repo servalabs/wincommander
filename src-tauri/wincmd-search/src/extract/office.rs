@@ -110,23 +110,22 @@ fn parse_core_xml(bytes: &[u8]) -> DocProps {
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Start(e)) => {
                 current = match e.local_name().as_ref() {
-                    b"creator" => Some(CoreField::Author),
-                    b"title" => Some(CoreField::Title),
-                    b"keywords" => Some(CoreField::Keywords),
-                    b"subject" => Some(CoreField::Subject),
+                    "creator" => Some(CoreField::Author),
+                    "title" => Some(CoreField::Title),
+                    "keywords" => Some(CoreField::Keywords),
+                    "subject" => Some(CoreField::Subject),
                     _ => None,
                 };
             }
             Ok(XmlEvent::Text(e)) => {
                 if let Some(field) = current {
-                    if let Ok(decoded) = e.decode() {
-                        if let Ok(unescaped) = quick_xml::escape::unescape(&decoded) {
-                            match field {
-                                CoreField::Author => props.author.push_str(&unescaped),
-                                CoreField::Title => props.doc_title.push_str(&unescaped),
-                                CoreField::Keywords => keywords.push_str(&unescaped),
-                                CoreField::Subject => subject.push_str(&unescaped),
-                            }
+                    let decoded = e.xml10_content();
+                    if let Ok(unescaped) = quick_xml::escape::unescape(&decoded) {
+                        match field {
+                            CoreField::Author => props.author.push_str(&unescaped),
+                            CoreField::Title => props.doc_title.push_str(&unescaped),
+                            CoreField::Keywords => keywords.push_str(&unescaped),
+                            CoreField::Subject => subject.push_str(&unescaped),
                         }
                     }
                 }
@@ -165,20 +164,19 @@ fn extract_xml_text(bytes: &[u8]) -> String {
             Ok(XmlEvent::Text(e)) => {
                 // quick-xml 0.41 dropped BytesText::unescape(): decode the raw
                 // bytes (charset) then unescape XML entities separately.
-                if let Ok(decoded) = e.decode() {
-                    if let Ok(unescaped) = quick_xml::escape::unescape(&decoded) {
-                        out.push_str(&unescaped);
-                    }
+                let decoded = e.xml10_content();
+                if let Ok(unescaped) = quick_xml::escape::unescape(&decoded) {
+                    out.push_str(&unescaped);
                 }
             }
             Ok(XmlEvent::End(e)) => match e.name().as_ref() {
-                b"w:p" | b"a:p" => out.push('\n'),
-                b"w:tc" => out.push(' '),
+                "w:p" | "a:p" => out.push('\n'),
+                "w:tc" => out.push(' '),
                 _ => {}
             },
             Ok(XmlEvent::Empty(e)) => match e.name().as_ref() {
-                b"w:tab" => out.push(' '),
-                b"w:br" | b"a:br" => out.push('\n'),
+                "w:tab" => out.push(' '),
+                "w:br" | "a:br" => out.push('\n'),
                 _ => {}
             },
             Ok(XmlEvent::Eof) | Err(_) => break,
