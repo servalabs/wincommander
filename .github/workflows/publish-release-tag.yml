@@ -1,8 +1,13 @@
 name: publish release tag
 
-# Automatic release-tag creation is disabled. This placeholder remains visible
-# in Actions, but its pull-request event is intentionally removed.
-on: workflow_dispatch
+# Only a merged release/vX.Y.Z PR can create the protected tag. The tag push
+# starts release.yml; do not also call that workflow here.
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
 
 permissions: {}
 
