@@ -10,7 +10,7 @@ description = "Full-text file-content search for WinCommander (Free tier)"
 tantivy       = "0.26"
 lopdf         = "0.44"   # >=0.42 fixes RUSTSEC-2026-0187 (stack overflow on nested PDFs)
 calamine      = "0.36.1"
-quick-xml     = "0.41"   # >=0.42 fixes RUSTSEC-2026-0194/0195 (OOXML DoS)
+quick-xml     = "0.42"   # >=0.42 fixes RUSTSEC-2026-0194/0195 (OOXML DoS)
 globset       = "0.4"
 zip           = "4.6"
 notify        = "8"

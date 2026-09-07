@@ -225,6 +225,9 @@ export default defineConfig(({ command }): UserConfig => ({
       : undefined,
     watch: {
       ignored: [
+        // Runtime staging and locked Vault fixtures are not frontend source.
+        // Watching mounted containers can terminate Vite with Windows EBUSY.
+        "**/.dev/**",
         "**/src-tauri/**",
         "**/docs/**",
         "**/Readme.md",

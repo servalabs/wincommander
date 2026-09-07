@@ -162,6 +162,22 @@ fn personal_key(path: &str) -> String {
     path.trim().replace('/', "\\").to_ascii_lowercase()
 }
 
+fn personal_key_alias(key: &str) -> String {
+    if let Some(unc) = key.strip_prefix(r"\\?\unc\") {
+        format!(r"\\{unc}")
+    } else if let Some(dos) = key.strip_prefix(r"\\?\") {
+        dos.to_owned()
+    } else if let Some(unc) = key.strip_prefix(r"\\") {
+        format!(r"\\?\unc\{unc}")
+    } else {
+        format!(r"\\?\{key}")
+    }
+}
+
+fn contains_personal_key<T>(records: &HashMap<String, T>, key: &str) -> bool {
+    records.contains_key(key) || records.contains_key(&personal_key_alias(key))
+}
+
 fn valid_creation_path(path: &Path) -> bool {
     path.is_absolute()
         && path.file_name().is_some()
@@ -716,14 +732,17 @@ impl VaultAccessStore {
         };
         let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
         let key = personal_key(&pending.container_path);
-        if state.personal.contains_key(&key) {
+        if contains_personal_key(&state.personal, &key)
+            || contains_personal_key(&state.legacy_recoveries, &key)
+        {
             return Err(VaultError::Validation);
         }
-        if state
-            .personal_pending
-            .get(&key)
-            .is_some_and(|existing| existing.expires_at > now)
-        {
+        if [&key, &personal_key_alias(&key)].iter().any(|candidate| {
+            state
+                .personal_pending
+                .get(*candidate)
+                .is_some_and(|existing| existing.expires_at > now)
+        }) {
             return Err(VaultError::Validation);
         }
         if state.personal_pending.values().any(|existing| {
@@ -738,6 +757,7 @@ impl VaultAccessStore {
             return Err(VaultError::Validation);
         }
         state.personal_pending.remove(&key);
+        state.personal_pending.remove(&personal_key_alias(&key));
         state.personal_pending.insert(key.clone(), pending);
         if self
             .persist_personal(
@@ -919,11 +939,27 @@ impl VaultAccessStore {
         container_path: &str,
         caller_sid: &str,
     ) -> Result<Option<PersonalVaultRecord>, VaultError> {
+        // Registration canonicalizes the parent (including Windows' verbatim
+        // prefix); lookup must use the same spelling before attempting adoption.
+        let normalized = self
+            .fs
+            .normalize_personal_creation_path(Path::new(container_path))?;
+        let normalized_key = personal_key(&normalized.to_string_lossy());
+        // Older services persisted ordinary DOS/UNC paths without the prefix.
+        let legacy_key = personal_key_alias(&normalized_key);
         let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
         if !state.personal_registry_healthy {
             return Err(VaultError::Persistence);
         }
-        let record = state.personal.get(&personal_key(container_path)).cloned();
+        if state.personal.contains_key(&normalized_key) && state.personal.contains_key(&legacy_key)
+        {
+            return Err(VaultError::Persistence);
+        }
+        let record = state
+            .personal
+            .get(&normalized_key)
+            .or_else(|| state.personal.get(&legacy_key))
+            .cloned();
         drop(state);
         let Some(record) = record else {
             return Ok(None);
@@ -963,9 +999,9 @@ impl VaultAccessStore {
             if !state.personal_registry_healthy {
                 return Err(VaultError::Persistence);
             }
-            if state.personal.contains_key(&key)
-                || state.personal_pending.contains_key(&key)
-                || state.legacy_recoveries.contains_key(&key)
+            if contains_personal_key(&state.personal, &key)
+                || contains_personal_key(&state.personal_pending, &key)
+                || contains_personal_key(&state.legacy_recoveries, &key)
             {
                 return Err(VaultError::Validation);
             }
@@ -992,9 +1028,9 @@ impl VaultAccessStore {
             if !state.personal_registry_healthy {
                 return Err(VaultError::Persistence);
             }
-            if state.personal.contains_key(&key)
-                || state.personal_pending.contains_key(&key)
-                || state.legacy_recoveries.contains_key(&key)
+            if contains_personal_key(&state.personal, &key)
+                || contains_personal_key(&state.personal_pending, &key)
+                || contains_personal_key(&state.legacy_recoveries, &key)
             {
                 return Err(VaultError::Validation);
             }
@@ -3848,6 +3884,144 @@ mod tests {
         assert!(store
             .complete_personal_registration(&reservation, 103)
             .is_ok());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn registered_personal_vault_accepts_picker_path_but_rejects_other_owner_and_replacement() {
+        let directory = std::env::temp_dir().join(format!(
+            "wincmd-personal-lookup-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let container = directory.join("personal.hc");
+        std::fs::write(&container, b"test container").unwrap();
+        let fs = WindowsVaultFs;
+        let canonical = fs.normalize_personal_creation_path(&container).unwrap();
+        assert_ne!(
+            personal_key(&canonical.to_string_lossy()),
+            personal_key(&container.to_string_lossy())
+        );
+        let store = VaultAccessStore::open(
+            Box::new(WindowsVaultFs),
+            Box::new(Resolver),
+            Box::new(PersonalAcl(Arc::new(AtomicBool::new(false)))),
+            directory.join("policy"),
+        );
+        let record = PersonalVaultRecord {
+            container_path: canonical.to_string_lossy().into_owned(),
+            container_identity: fs.stable_file_identity(&container).unwrap(),
+            owner_sid: "S-1-5-21-owner".into(),
+            scope: VaultPresentation::PerUser,
+            created_by_session: 1,
+        };
+        store
+            .state
+            .lock()
+            .unwrap()
+            .personal
+            .insert(personal_key(&record.container_path), record.clone());
+        let picker_path = container.to_string_lossy();
+        assert!(store
+            .personal_for_owner(&picker_path, "S-1-5-21-owner")
+            .unwrap()
+            .is_some());
+        assert!(store
+            .personal_for_owner(&picker_path, "S-1-5-21-other")
+            .unwrap()
+            .is_none());
+        let mut legacy_record = record;
+        legacy_record.container_path = picker_path.to_string();
+        {
+            let mut state = store.state.lock().unwrap();
+            state.personal.clear();
+            state
+                .personal
+                .insert(personal_key(&picker_path), legacy_record);
+        }
+        for request_path in [picker_path.as_ref(), canonical.to_str().unwrap()] {
+            assert!(store
+                .personal_for_owner(request_path, "S-1-5-21-owner")
+                .unwrap()
+                .is_some());
+            assert!(store
+                .personal_for_owner(request_path, "S-1-5-21-other")
+                .unwrap()
+                .is_none());
+            assert!(matches!(
+                store.prepare_legacy_personal_mount(request_path, "S-1-5-21-other", 1, 1 as _),
+                Err(VaultError::Validation)
+            ));
+        }
+        std::fs::rename(&container, directory.join("original.hc")).unwrap();
+        std::fs::write(&container, b"replacement container").unwrap();
+        assert!(store
+            .personal_for_owner(&picker_path, "S-1-5-21-owner")
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            store.prepare_legacy_personal_mount(&picker_path, "S-1-5-21-owner", 1, 1 as _),
+            Err(VaultError::Validation)
+        ));
+        {
+            let mut state = store.state.lock().unwrap();
+            let legacy_record = state
+                .personal
+                .get(&personal_key(&picker_path))
+                .unwrap()
+                .clone();
+            state
+                .personal
+                .insert(personal_key(&canonical.to_string_lossy()), legacy_record);
+        }
+        assert!(matches!(
+            store.personal_for_owner(&picker_path, "S-1-5-21-owner"),
+            Err(VaultError::Persistence)
+        ));
+        std::fs::remove_file(&container).unwrap();
+        std::fs::remove_file(directory.join("original.hc")).unwrap();
+        std::fs::remove_dir(&directory).unwrap();
+    }
+
+    #[test]
+    fn personal_creation_rejects_pending_path_alias() {
+        let store = personal_store(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let reservation = store
+            .begin_personal_registration("C:\\vaults\\personal.hc", personal_caller(), 41, 100)
+            .unwrap();
+        {
+            let mut state = store.state.lock().unwrap();
+            let key = personal_key(&reservation.normalized_path);
+            let pending = state.personal_pending.remove(&key).unwrap();
+            state
+                .personal_pending
+                .insert(personal_key_alias(&key), pending);
+        }
+        assert_eq!(
+            store
+                .begin_personal_registration("C:\\vaults\\personal.hc", personal_caller(), 42, 101)
+                .err(),
+            Some(VaultError::Validation)
+        );
+    }
+
+    #[test]
+    fn personal_path_aliases_cover_dos_and_unc_in_both_directions() {
+        for (ordinary, verbatim) in [
+            (r"c:\vaults\personal.hc", r"\\?\c:\vaults\personal.hc"),
+            (
+                r"\\server\share\personal.hc",
+                r"\\?\unc\server\share\personal.hc",
+            ),
+        ] {
+            assert_eq!(personal_key_alias(ordinary), verbatim);
+            assert_eq!(personal_key_alias(verbatim), ordinary);
+        }
     }
 
     #[test]

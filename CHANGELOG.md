@@ -5,6 +5,21 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Full development startup now checks the Windows service and matching Pro
+  helper before exposing the dev server, including direct `dev:server` and
+  Tauri launches. Missing services enter installation instead of failing the
+  running-state check; failed synchronization stops startup.
+
+- The frontend development watcher ignores runtime staging files, preventing
+  locked Vault test containers from crashing the dev server on Windows.
+
+- Development service updates now wait at most 150 seconds for a graceful stop,
+  allowing Vault cleanup to finish and reporting a timeout before replacing files.
+
+- Vault permission saves now clear outdated access results, and both Mount
+  buttons respect permission-verification failures. Personal Vault lookup uses
+  consistent Windows file paths while retaining owner and file-identity checks.
+
 - Secure Storage no longer asks users to identify a standard, outer, or hidden
   volume before mounting. The native engine selects the matching header from
   the supplied credentials, while personal and Quick Mount are locked
