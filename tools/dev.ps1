@@ -2,11 +2,32 @@
 
 [CmdletBinding()]
 param(
-    [switch]$ServerOnly
+    [switch]$ServerOnly,
+    # Relaunch this development entry point through Windows' explicit RunAs
+    # path.  Debug builds intentionally use asInvoker, so an Administrator
+    # account alone is not enough for privileged Vault-policy testing.
+    [switch]$Elevated
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Test-ElevatedToken {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if ($Elevated -and -not (Test-ElevatedToken)) {
+    # Do not attempt to infer elevation from account membership or the UAC
+    # slider.  Ask Windows for an explicit elevated parent process, then let
+    # the debug executable inherit that token.
+    $scriptPath = '"' + $PSCommandPath.Replace('"', '""') + '"'
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File $scriptPath -Elevated"
+    if ($ServerOnly) { $arguments += " -ServerOnly" }
+    Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList $arguments
+    exit 0
+}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 & (Join-Path $PSScriptRoot "ensure-dev-environment.ps1")

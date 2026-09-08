@@ -64,6 +64,7 @@ ConvertTo-Json -Compress -InputObject @($results)
 
   test("synchronizes the Vault service before starting the normal desktop", () => {
     expect(packageJson.scripts["dev:tauri"]).toContain("tools/dev.ps1");
+    expect(packageJson.scripts["dev:admin"]).toContain("tools/dev.ps1 -Elevated");
     expect(devLauncher).not.toContain('sync-dev-service.ps1');
     expect(devServer).toContain('"tools/sync-dev-service.ps1", "-SyncPro"');
     expect(devServer.indexOf('"tools/build-pro.ts"')).toBeLessThan(devServer.indexOf('"tools/sync-dev-service.ps1"'));
@@ -72,6 +73,13 @@ ConvertTo-Json -Compress -InputObject @($results)
     const tauri = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8"));
     expect(tauri.build.beforeDevCommand).toContain('dev:server');
     expect(devLauncher).toContain('& $bun run dev:server');
+  });
+
+  test("offers an explicit elevated launcher for privileged development checks", () => {
+    expect(devLauncher).toContain("[switch]$Elevated");
+    expect(devLauncher).toContain("Test-ElevatedToken");
+    expect(devLauncher).toContain("Start-Process -FilePath powershell.exe -Verb RunAs");
+    expect(devLauncher).toContain("-File $scriptPath -Elevated");
   });
 
   test("verifies the running service process and current Pro helper", () => {
