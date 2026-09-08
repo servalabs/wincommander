@@ -19,6 +19,7 @@ import PanelHeader from "../../components/shared/PanelHeader";
 import TierGate from "../../components/shared/TierGate";
 import SectionCard from "../../components/shared/SectionCard";
 import useEntitlements from "../../hooks/useEntitlements";
+import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 import './index.css';
 import DriveLetterPicker from "./DriveLetterPicker";
 
@@ -58,6 +59,19 @@ const boundedMountError = (error: unknown) => {
   return normalized.length > MOUNT_ERROR_MAX_LENGTH
     ? `${normalized.slice(0, MOUNT_ERROR_MAX_LENGTH - 1)}…`
     : normalized;
+};
+
+const vaultMountErrorCode = (error: unknown) => {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("vault_engine_unlock_failed")) return "VLT.UNLOCK.FAILED";
+  if (message.includes("vault_engine_drive_letter_unavailable")) return "VLT.DRIVE_LETTER.UNAVAILABLE";
+  if (message.includes("vault_acl_")) return "VLT.ACL.FAILED";
+  if (message.includes("vault_not_authorized")) return "VLT.AUTHORIZATION.DENIED";
+  if (message.includes("vault_driver_unavailable")) return "VLT.DRIVER.UNAVAILABLE";
+  if (message.includes("vault_session_unavailable")) return "VLT.SESSION.UNAVAILABLE";
+  if (message.includes("vault_broker_")) return "VLT.BROKER.UNAVAILABLE";
+  if (message.includes("vault_cleanup_failed")) return "VLT.CLEANUP.FAILED";
+  return "VLT.MOUNT.FAILED";
 };
 
 type VaultVolume = NonNullable<EncryptionStatus["volumes"]>[number];
@@ -152,6 +166,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
 
   // Fetch available (unused) drive letters when the mount dialog opens
   const openMountDialog = useCallback(async () => {
+    const operationId = newDiagnosticOperationId("vault");
     resetMountForm();
     setMountDialogOpen(true);
     setMountDetailsLoading(true);
@@ -181,11 +196,20 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       } else if (partitionRes && !partitionRes.success && partitionRes.error?.includes("No module found")) {
         // KT: This specifically catches when the Rust binary hasn't been restarted after command registration
         showError("Backend update required: Please restart the application to enable partition mounting.");
+        recordDiagnostic({ operationId, feature: "vault", action: "load_mount_options", stage: "preflight",
+          lifecycle: "verified", outcome: "failed", errorCode: "VLT.PARTITION.UNAVAILABLE", severity: "warn",
+          retryability: "manual", suggestedNextAction: "restart_application", privacyClass: "local_sensitive" });
       } else if (partitionRes && !partitionRes.success) {
         showError(partitionRes.error || "Failed to fetch partitions.");
+        recordDiagnostic({ operationId, feature: "vault", action: "load_mount_options", stage: "preflight",
+          lifecycle: "verified", outcome: "failed", errorCode: "VLT.PARTITION.LIST_FAILED", severity: "warn",
+          retryability: "automatic", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
       }
     } catch (err) {
       console.error("Failed to fetch mount details", err);
+      recordDiagnostic({ operationId, feature: "vault", action: "load_mount_options", stage: "preflight",
+        lifecycle: "verified", outcome: "failed", errorCode: "VLT.MOUNT_OPTIONS.READ_FAILED", severity: "warn",
+        retryability: "automatic", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
       const fallback = "EFGHIJKLMNOPQRSTUVWXYZ".split("");
       setAvailableLetters(fallback);
     } finally {
@@ -194,6 +218,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   }, [resetMountForm, getAvailableDriveLetters, getEncryptionPartitions]);
 
   const handleBrowse = async () => {
+    const operationId = newDiagnosticOperationId("vault");
     try {
       const selected = await open({
         multiple: false,
@@ -207,10 +232,14 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       }
     } catch (err) {
       console.error("Failed to open file picker", err);
+      recordDiagnostic({ operationId, feature: "vault", action: "select_container", stage: "user_input",
+        lifecycle: "applied", outcome: "failed", errorCode: "VLT.CONTAINER.SELECT_FAILED", severity: "warn",
+        retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
     }
   };
 
   const handleBrowseKeyfile = async () => {
+    const operationId = newDiagnosticOperationId("vault");
     try {
       const selected = await open({ multiple: false });
       if (selected && typeof selected === 'string') {
@@ -218,13 +247,20 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       }
     } catch (err) {
       console.error("Failed to open keyfile picker", err);
+      recordDiagnostic({ operationId, feature: "vault", action: "select_keyfile", stage: "user_input",
+        lifecycle: "applied", outcome: "failed", errorCode: "VLT.KEYFILE.SELECT_FAILED", severity: "warn",
+        retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
     }
   };
 
   const handleMountVolume = useCallback(async () => {
+    const operationId = newDiagnosticOperationId("vault");
     setMounting(true);
     setMountFailure("");
     try {
+      recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "request",
+        lifecycle: "requested", outcome: "started", severity: "info", retryability: "automatic",
+        suggestedNextAction: "await_result", privacyClass: "local_sensitive" });
       const letters = await getAvailableDriveLetters();
       if (letters.success && letters.data && !letters.data.letters.includes(mountLetter)) {
         throw new Error(`Drive ${mountLetter}: is already in use. Dismount it first or choose a free drive letter.`);
@@ -262,10 +298,16 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       setMountDialogOpen(false);
       resetMountForm();
       setMountedVolume(result.data);
+      recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "windows_readback",
+        lifecycle: "verified", outcome: "succeeded", severity: "info", retryability: "never",
+        suggestedNextAction: "none", privacyClass: "local_sensitive" });
     } catch (e) {
       // Operational volume result → Notifications tab, not System Alerts.
       const message = boundedMountError(e);
       setMountFailure(message);
+      recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "windows_readback",
+        lifecycle: "verified", outcome: "failed", errorCode: vaultMountErrorCode(e), severity: "error",
+        retryability: "manual", suggestedNextAction: "review_status", privacyClass: "local_sensitive" });
       showError(message, undefined, { kind: "notification" });
     } finally {
       setMountPassword("");
@@ -275,11 +317,18 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
 
   const handleOpenMountedVolume = useCallback(async () => {
     if (!mountedVolume) return;
+    const operationId = newDiagnosticOperationId("vault");
     setOpeningMountedVolume(true);
     try {
       const result = await openEncryptionVolume(mountedVolume.drive);
       if (!result.success) throw new Error(result.error || "Could not open the encrypted volume.");
+      recordDiagnostic({ operationId, feature: "vault", action: "open_mounted_volume", stage: "windows_shell",
+        lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+        suggestedNextAction: "none", privacyClass: "local_sensitive" });
     } catch (error) {
+      recordDiagnostic({ operationId, feature: "vault", action: "open_mounted_volume", stage: "windows_shell",
+        lifecycle: "applied", outcome: "failed", errorCode: "VLT.OPEN.FAILED", severity: "warn",
+        retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
       showError(error instanceof Error ? error.message : "Could not open the encrypted volume.");
     } finally {
       setOpeningMountedVolume(false);
@@ -307,7 +356,12 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   }, [canMount, handleMountVolume]);
 
   useEffect(() => {
-    if (error) showError(error);
+    if (error) {
+      recordDiagnostic({ feature: "vault", action: "status_read", stage: "ui_refresh",
+        lifecycle: "verified", outcome: "failed", errorCode: "VLT.STATUS.READ_FAILED", severity: "warn",
+        retryability: "automatic", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
+      showError(error);
+    }
   }, [error]);
 
   return (

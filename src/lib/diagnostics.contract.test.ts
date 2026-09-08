@@ -142,6 +142,7 @@ describe("frontend diagnostics producer", () => {
       "src/panels/privacy/RansomwareMonitorSection.tsx",
       "src/panels/privacy/RemoteAccessMonitorSection.tsx",
       "src/panels/privacy/UsbDevicesSection.tsx",
+      "src/panels/vault/index.tsx",
     ];
     const failureOutput = /console\.(?:warn|error)\(|showError\(/g;
 
