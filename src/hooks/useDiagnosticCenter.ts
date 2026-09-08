@@ -46,7 +46,7 @@ export function useDiagnosticCenter() {
       if (nextEvents === null && nextLegacyRecords === null) throw new Error("No diagnostic source is available");
       setStructuredEvents([
         ...(nextEvents ?? []).map((event) => ({ ...event, source: "desktop" as const })),
-        ...serviceEvents.map((event) => ({ ...event, source: "service" as const, lifecycle: "applied" })),
+        ...serviceEvents.map((event) => ({ ...event, source: "service" as const })),
         ...proEvents.map((event) => ({ ...event, source: "pro" as const })),
       ]);
       setLegacyRecords(nextLegacyRecords ?? []);
