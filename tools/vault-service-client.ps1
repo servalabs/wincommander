@@ -1,7 +1,7 @@
 # Authenticated acceptance client for the local WinCommander SYSTEM service.
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('get-policy', 'get-status', 'capabilities', 'list', 'diagnostics', 'apply', 'mount', 'unmount', 'unknown-verb')]
+    [ValidateSet('get-policy', 'get-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe', 'apply', 'mount', 'unmount', 'unknown-verb')]
     [string]$Action,
 
     [string]$EntryId,
@@ -28,7 +28,7 @@ function Test-ElevatedToken {
 }
 
 if ($Elevated -and -not (Test-ElevatedToken)) {
-    $readOnlyActions = @('get-policy', 'get-status', 'capabilities', 'list', 'diagnostics')
+    $readOnlyActions = @('get-policy', 'get-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe')
     if ($Action -notin $readOnlyActions) {
         throw '-Elevated is restricted to read-only service probes.'
     }
@@ -76,12 +76,83 @@ function Read-Frame([System.IO.Stream]$Stream) {
     return [Text.Encoding]::UTF8.GetString($body)
 }
 
+if ($Action -eq 'engine-log') {
+    # The Pro log is SYSTEM/Admin-only.  Return only the two bounded native
+    # engine breadcrumbs needed to classify a fresh mount failure; never
+    # expose its paths, credentials, or arbitrary log lines.
+    $logPath = Join-Path $env:ProgramData 'WinCommander\pro-logs\pro.log'
+    $events = @()
+    $mountFailureCount = 0
+    $unclassifiedMountFailureCount = 0
+    $lastUnclassifiedStage = $null
+    if (Test-Path -LiteralPath $logPath -PathType Leaf) {
+        $events = Get-Content -LiteralPath $logPath -Tail 500 | ForEach-Object {
+            if ($_ -match 'native mount failed with exit code ([0-9]+|terminated); internal status ([0-9-]+|unavailable)') {
+                [ordered]@{ native_exit = $Matches[1]; internal_status = $Matches[2] }
+            } elseif ($_ -match 'vault broker mount failed .*: (native engine rejected mount|native engine could not unlock the selected volume|native engine rejected: drive letter unavailable|mounted-root ACL attestation failed|mount presentation verification failed)') {
+                [ordered]@{ broker_stage = $Matches[1] }
+            }
+        } | Where-Object { $_ }
+    }
+    ConvertTo-Json -InputObject @($events) -Compress
+    return
+}
+
+if ($Action -eq 'broker-log') {
+    # The Pro log is SYSTEM/Admin-only. Return only the fixed diagnostic
+    # vocabulary selected by the broker; never expose raw request data,
+    # paths, credentials, or arbitrary log lines.
+    $logPath = Join-Path $env:ProgramData 'WinCommander\pro-logs\pro.log'
+    $allowed = @(
+        'mount stdout attestation rejected: (?:scope|mount mode|root ACL)(?: \+ (?:mount mode|root ACL))?',
+        'per-user presentation rejected: (?:query|foreign mapping|drive letter)',
+        'mount plan rejected: (?:volume kind|volume role|mount mode|presentation|root ACL)',
+        'native engine rejected: drive letter unavailable',
+        'native engine could not unlock the selected volume',
+        'engine authentication timed out',
+        'mounted-root ACL attestation failed',
+        'mount presentation verification failed',
+        'native engine rejected the mount',
+        'mount rejected'
+    ) -join '|'
+    $events = @()
+    $logPresent = Test-Path -LiteralPath $logPath -PathType Leaf
+    $lastWriteUtc = $null
+    if ($logPresent) {
+        $lastWriteUtc = (Get-Item -LiteralPath $logPath).LastWriteTimeUtc.ToString('o')
+    }
+    if ($logPresent) {
+        $events = Get-Content -LiteralPath $logPath -Tail 500 | ForEach-Object {
+            if ($_ -match 'vault broker mount failed') {
+                $mountFailureCount++
+                if ($_ -match 'vault broker mount failed \(operation=[0-9]+\): ([A-Za-z0-9 ,+:-]+)$') {
+                    $lastUnclassifiedStage = $Matches[1]
+                }
+            }
+            if ($_ -match "vault broker mount failed .*: ($allowed)$") {
+                [ordered]@{ broker_stage = $Matches[1] }
+            }
+        } | Where-Object { $_ }
+        $unclassifiedMountFailureCount = [Math]::Max(0, $mountFailureCount - @($events).Count)
+    }
+    [ordered]@{
+        log_present = $logPresent
+        last_write_utc = $lastWriteUtc
+        matching_stage_count = @($events).Count
+        unclassified_mount_failure_count = $unclassifiedMountFailureCount
+        last_unclassified_stage = $lastUnclassifiedStage
+        stages = @($events)
+    } | ConvertTo-Json -Compress
+    return
+}
+
 $feature = switch ($Action) {
     'get-policy' { 'svc.vault.get_policy' }
     'get-status' { 'svc.vault.get_status' }
     'capabilities' { 'svc.vault.capabilities' }
     'list' { 'svc.vault.list_authorized' }
     'diagnostics' { 'svc.diagnostics.query' }
+    'container-probe' { 'svc.vault.get_policy' }
     'apply' { 'svc.vault.apply_policy' }
     'mount' { 'svc.vault.mount' }
     'unmount' { 'svc.vault.unmount' }
@@ -157,7 +228,36 @@ try {
     if ($reply.kind -ne 'response' -or $reply.request_id -ne 1) {
         throw 'Service returned an unexpected response.'
     }
-    ConvertTo-Json -InputObject $reply.result -Compress -Depth 30
+    if ($Action -eq 'container-probe') {
+        # The service chooses the registered path; this cannot be used as a
+        # general-purpose filesystem reader.  Report only existence, size,
+        # an elevated read probe, and whether SYSTEM has Full Control — enough
+        # to diagnose an engine access-denied result without leaking a path.
+        $entries = @($reply.result.entries)
+        $results = foreach ($entry in $entries) {
+            $path = [string]$entry.container_path
+            $exists = Test-Path -LiteralPath $path -PathType Leaf
+            $readable = $false
+            $systemFullControl = $false
+            $size = $null
+            if ($exists) {
+                try {
+                    $file = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+                    try { $size = $file.Length; $readable = $true } finally { $file.Dispose() }
+                    $acl = Get-Acl -LiteralPath $path
+                    $systemFullControl = @($acl.Access | Where-Object {
+                        $_.IdentityReference.Value -eq 'NT AUTHORITY\SYSTEM' -and
+                        $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+                        ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq [Security.AccessControl.FileSystemRights]::FullControl
+                    }).Count -gt 0
+                } catch { $readable = $false }
+            }
+            [ordered]@{ entry_id = $entry.id; exists = $exists; readable_elevated = $readable; system_full_control = $systemFullControl; size_bytes = $size }
+        }
+        ConvertTo-Json -InputObject @($results) -Compress -Depth 10
+    } else {
+        ConvertTo-Json -InputObject $reply.result -Compress -Depth 30
+    }
 
     Write-Frame $pipe '{"kind":"bye"}'
 } finally {

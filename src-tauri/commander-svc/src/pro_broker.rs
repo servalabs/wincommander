@@ -261,9 +261,9 @@ pub async fn vault_call(
     let result = async {
         connect_broker_pipe(&pipe, process, deadline).await?;
         let connected_hash = verified_connected_process_hash(&pipe, process)
-            .ok_or(VaultMountReason::BrokerRejected)?;
+            .ok_or(VaultMountReason::BrokerIdentityRejected)?;
         if !hash_matches_fixed_pro(&connected_hash) {
-            return Err(VaultMountReason::BrokerRejected);
+            return Err(VaultMountReason::BrokerIdentityRejected);
         }
         eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): pipe connected, sending hello");
         let hello = Envelope::Hello(Hello {
@@ -289,14 +289,14 @@ pub async fn vault_call(
             ..
         }) = ack
         else {
-            return Err(VaultMountReason::BrokerRejected);
+            return Err(VaultMountReason::BrokerHandshakeRejected);
         };
         if protocol_version != PROTOCOL_VERSION
             || echoed != session_token
             || !hash.eq_ignore_ascii_case(&connected_hash)
         {
             eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake mismatch (protocol_version={protocol_version}, echoed_token_matches={}, hash_matches={})", echoed == session_token, hash.eq_ignore_ascii_case(&connected_hash));
-            return Err(VaultMountReason::BrokerRejected);
+            return Err(VaultMountReason::BrokerHandshakeRejected);
         }
         eprintln!("[wincommander-svc] vault_call({feature_id}, operation={request_id}): handshake ok, sending request");
         let mut request = Envelope::Request(Request {
@@ -477,14 +477,14 @@ fn process_broker_reply(
 
     match reply
         .verify_and_unwrap(session_token)
-        .map_err(|_| VaultMountReason::BrokerRejected)?
+        .map_err(|_| VaultMountReason::BrokerReplyRejected)?
     {
         Envelope::Notification(_) => {
             *notification_count = notification_count
                 .checked_add(1)
-                .ok_or(VaultMountReason::BrokerRejected)?;
+                .ok_or(VaultMountReason::BrokerReplyRejected)?;
             if *notification_count > MAX_SIGNED_NOTIFICATIONS {
-                return Err(VaultMountReason::BrokerRejected);
+                return Err(VaultMountReason::BrokerReplyRejected);
             }
             Ok(BrokerReply::Notification)
         }
@@ -492,8 +492,13 @@ fn process_broker_reply(
             Ok(BrokerReply::Finished(Ok(response.result)))
         }
         Envelope::Error(error) if error.request_id == request_id => {
-            let reason = VaultMountReason::from_wire(&error.kind)
-                .unwrap_or(VaultMountReason::BrokerRejected);
+            let reason = VaultMountReason::from_wire(&error.kind).unwrap_or_else(|| {
+                if error.kind == "missing_entitlement" {
+                    VaultMountReason::EntitlementDenied
+                } else {
+                    VaultMountReason::BrokerRejected
+                }
+            });
             Ok(BrokerReply::Finished(Err(reason)))
         }
         Envelope::Response(_)
@@ -501,7 +506,7 @@ fn process_broker_reply(
         | Envelope::Hello(_)
         | Envelope::Request(_)
         | Envelope::Bye
-        | Envelope::Signed(_) => Err(VaultMountReason::BrokerRejected),
+        | Envelope::Signed(_) => Err(VaultMountReason::BrokerReplyRejected),
     }
 }
 
@@ -942,7 +947,7 @@ mod tests {
                 REQUEST_ID,
                 &mut notifications
             ),
-            Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
+            Err(wincmd_shared::vault_access::VaultMountReason::BrokerReplyRejected)
         ));
     }
 
@@ -958,7 +963,7 @@ mod tests {
         .sign(token);
         assert!(matches!(
             process_broker_reply(response, token, REQUEST_ID, &mut notifications),
-            Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
+            Err(wincmd_shared::vault_access::VaultMountReason::BrokerReplyRejected)
         ));
 
         let error = wincmd_shared::Envelope::Error(wincmd_shared::ErrorReply {
@@ -969,7 +974,7 @@ mod tests {
         .sign(token);
         assert!(matches!(
             process_broker_reply(error, token, REQUEST_ID, &mut notifications),
-            Err(wincmd_shared::vault_access::VaultMountReason::BrokerRejected)
+            Err(wincmd_shared::vault_access::VaultMountReason::BrokerReplyRejected)
         ));
     }
 

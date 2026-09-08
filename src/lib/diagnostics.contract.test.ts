@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { diagnosticBellProjection, routeDiagnosticNotification, type DiagnosticNotificationInput } from "./diagnosticNotification";
 
+declare const Bun: {
+  file(path: string): { text(): Promise<string> };
+};
+
 const baseEvent: DiagnosticNotificationInput = {
   feature: "vault", action: "mount", outcome: "failed", privacyClass: "local_sensitive",
 };

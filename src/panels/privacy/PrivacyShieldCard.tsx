@@ -92,20 +92,11 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         && shieldSettings?.gazeDetectionEnabled === false
         && shieldSettings?.antiPeepingEnabled === false
         && shieldSettings?.cameraHunterEnabled === false;
-    const fleetShieldMandatesOn = fleetPolicyManaged
-        && (fleetShieldDesiredState ? fleetShieldDesiredState.enabled : fleetShieldMonitoring);
-    // The Stop button is locked whenever fleet policy currently mandates the
-    // shield ON — derived directly from policy, never from who happened to
-    // start the running session. Previously this depended solely on
-    // `privacyShieldSessionOwned`, a flag the supervisor in BackgroundPollers
-    // only set on ITS OWN restart — so a shield already running locally (or
-    // started by the user a moment before the supervisor's next 60s tick)
-    // left the Stop button clickable even though policy required the shield
-    // on. `privacyShieldSessionOwned` is kept as a secondary OR so a
-    // just-stopped fleet session that hasn't re-synced policy yet still
-    // reads as locked for the brief window before the next checkin.
-    const fleetShieldSessionLocked = fleetShieldMandatesOn
-        || (appSettings?.app?.fleet?.enabled === true && appSettings?.app?.fleet?.privacyShieldSessionOwned === true);
+    // A Fleet policy controls whether it may start a session, but it must not
+    // take over a session the local user had already started. Only the session
+    // supervisor's explicit ownership receipt locks the local Stop control.
+    const fleetShieldSessionLocked = appSettings?.app?.fleet?.enabled === true
+        && appSettings?.app?.fleet?.privacyShieldSessionOwned === true;
     // Resolved shield mode ("blur_notify" | "notify_only"). Fleet-managed
     // devices always take the admin's mode; otherwise the local choice below.
     const resolvedShieldMode = resolvePrivacyShieldMode({
@@ -681,7 +672,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                         {fleetPolicyManaged && (
                             <p className="text-[10px] text-[var(--color-accent)] mt-1">
                                 Fleet policy managed · {fleetShieldSessionLocked
-                                    ? "this session was started by Fleet and can only be stopped there."
+                                    ? "Privacy Shield was started by Fleet and can only be stopped by a Fleet administrator."
                                     : fleetShieldMonitoring
                                         ? "the locked Fleet defaults will be used when Fleet starts the shield."
                                         : "monitoring is off by Fleet policy."}

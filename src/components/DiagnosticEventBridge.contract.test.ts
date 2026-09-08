@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
+declare const Bun: {
+  file(path: string): { text(): Promise<string> };
+};
+
 describe("DiagnosticEventBridge", () => {
   test("uses persisted Free, service, and Pro events as its only bell source", async () => {
     const source = await Bun.file("src/components/DiagnosticEventBridge.tsx").text();

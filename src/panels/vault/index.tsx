@@ -53,6 +53,24 @@ const boundedMountError = (error: unknown) => {
   if (normalized.includes("vault_broker_rejected")) {
     return "WinCommander could not verify the secure mount helper. Update or repair WinCommander, then try again.";
   }
+  if (normalized.includes("vault_broker_identity_rejected")) {
+    return "WinCommander could not verify the secure helper identity. Restart the current WinCommander service, then try again.";
+  }
+  if (normalized.includes("vault_broker_handshake_rejected")) {
+    return "WinCommander could not verify the secure helper handshake. Restart the current WinCommander service, then try again.";
+  }
+  if (normalized.includes("vault_broker_reply_rejected")) {
+    return "WinCommander could not verify the secure helper reply. Restart the current WinCommander service, then try again.";
+  }
+  if (normalized.includes("vault_broker_plan_rejected")) {
+    return "The secure Vault helper rejected the service-generated mount plan. Restart WinCommander after updating both components, then try again.";
+  }
+  if (normalized.includes("vault_presentation_rejected")) {
+    return "WinCommander mounted the Vault but Windows did not make its drive available to this signed-in account, so it was safely dismounted.";
+  }
+  if (normalized.includes("vault_entitlement_denied")) {
+    return "WinCommander could not verify the Pro licence for this Vault operation. Refresh the licence status, then try again.";
+  }
   if (normalized.includes("vault_cleanup_failed")) {
     return "The final mount state could not be confirmed after cleanup. Do not use the selected drive letter until you restart WinCommander and check Secure Storage.";
   }

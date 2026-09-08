@@ -552,14 +552,27 @@ async fn dispatch_verb(
             handle_personal_vault_mount(request_id, vault_access, vault_mount, args, peer).await
         }
         "svc.vault.mount" => {
-            handle_vault_mount(request_id, &diagnostic_operation_id, vault_access, vault_mount, args, peer).await
+            handle_vault_mount(
+                request_id,
+                &diagnostic_operation_id,
+                vault_access,
+                vault_mount,
+                args,
+                peer,
+            )
+            .await
         }
         "svc.vault.create_personal" => {
             handle_personal_vault_create(request_id, vault_access, args, peer)
         }
-        "svc.vault.unmount" => {
-            handle_vault_unmount(request_id, &diagnostic_operation_id, vault_access, vault_mount, args, peer)
-        }
+        "svc.vault.unmount" => handle_vault_unmount(
+            request_id,
+            &diagnostic_operation_id,
+            vault_access,
+            vault_mount,
+            args,
+            peer,
+        ),
         "svc.vault.list_authorized" => {
             handle_vault_list_authorized(vault_access, vault_mount, peer)
         }
@@ -592,7 +605,9 @@ async fn dispatch_verb(
 fn valid_diagnostic_operation_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 /// Returns the encrypted service store's deliberately small support view.
@@ -1608,7 +1623,12 @@ fn handle_vault_unmount(
             reason: Some(wincmd_shared::vault_access::VaultMountReason::NotAuthorized),
         }
     };
-    crate::diagnostics::record_vault_terminal(diagnostic_operation_id, "dismount", &result, started);
+    crate::diagnostics::record_vault_terminal(
+        diagnostic_operation_id,
+        "dismount",
+        &result,
+        started,
+    );
     serde_json::to_value(result).map_err(|_| {
         VerbError::new(
             "vault_internal_error",

@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
 import { newDiagnosticOperationId, recordDiagnostic } from "@/lib/diagnostics";
@@ -21,7 +22,7 @@ import {
 import { applyVaultAccessPreset, VAULT_ACCESS_PRESETS, vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
 import VaultAccessPatternPicker from "./VaultAccessPatternPicker";
 import VaultPrincipalPicker from "./VaultPrincipalPicker";
-import { vaultPolicyVerification } from "./vaultAccessPresentation";
+import { vaultEntryResultLabel, vaultPolicyVerification } from "./vaultAccessPresentation";
 import { patchAuthorizedEntriesFromMountResult, vaultMountGate } from "./vaultAccessUiState";
 
 function appliedAt(timestamp: number) {
@@ -103,11 +104,17 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const [volumeRole, setVolumeRole] = useState<VaultVolumeRole>("outer");
   const [draftConfirmation, setDraftConfirmation] = useState<"replace" | "discard" | null>(null);
   const [policyRemovalConfirmation, setPolicyRemovalConfirmation] = useState(false);
+  const [existingVaultDialogOpen, setExistingVaultDialogOpen] = useState(false);
+  const [existingVaultPath, setExistingVaultPath] = useState("");
+  const [existingVaultLabel, setExistingVaultLabel] = useState("");
+  const [selectedEntryId, setSelectedEntryId] = useState<string | null>(initialDraft?.policy?.entries[0]?.id ?? null);
+  const [editorMode, setEditorMode] = useState<"details" | "access">("details");
   const [mountingEntryId, setMountingEntryId] = useState<string | null>(null);
   const [unmountingEntryId, setUnmountingEntryId] = useState<string | null>(null);
   const [mountResults, setMountResults] = useState<Record<string, VaultMountEntryResult>>({});
   const passwordInputRef = useRef<HTMLInputElement>(null);
   const hiddenProtectionPasswordInputRef = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
   const policyRef = useRef<VaultAccessPolicy | null>(initialDraft?.policy ?? null);
   const draftBaseRef = useRef<VaultAccessPolicy | null>(initialDraft?.basePolicy ?? null);
   const dirtyRef = useRef(initialDraft !== null);
@@ -239,10 +246,81 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     if (draftWriteTimer.current !== null) window.clearTimeout(draftWriteTimer.current);
   }, []);
 
+  useEffect(() => {
+    const entries = policy?.entries ?? [];
+    if (entries.length === 0) {
+      if (selectedEntryId !== null) setSelectedEntryId(null);
+      return;
+    }
+    if (!selectedEntryId || !entries.some(entry => entry.id === selectedEntryId)) {
+      setSelectedEntryId(entries[0]!.id);
+    }
+  }, [policy, selectedEntryId]);
+
   const updateEntry = (id: string, patch: Partial<VaultAccessEntry>) => editPolicy(current => {
     const source = current ?? newVaultPolicy();
     return { ...source, entries: source.entries.map(entry => entry.id === id ? { ...entry, ...patch } : entry) };
   });
+
+  const openEntryEditor = (entryId: string, mode: "details" | "access") => {
+    setSelectedEntryId(entryId);
+    setEditorMode(mode);
+    window.requestAnimationFrame(() => {
+      editorRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      const target = mode === "access"
+        ? editorRef.current?.querySelector<HTMLElement>(".fleet-vault-grants select, .fleet-vault-grants button")
+        : editorRef.current?.querySelector<HTMLElement>("input");
+      target?.focus();
+    });
+  };
+
+  const browseExistingVault = async () => {
+    try {
+      // Deliberately do not filter by filename extension. Existing VeraCrypt
+      // containers can be valid without a conventional extension; the service
+      // owns safe identity and accessibility validation when this draft saves.
+      const selected = await openFileDialog({
+        multiple: false,
+        directory: false,
+        title: "Select an existing encrypted Vault container",
+      });
+      if (typeof selected !== "string") return;
+      setExistingVaultPath(selected);
+      if (!existingVaultLabel.trim()) {
+        setExistingVaultLabel(selected.replaceAll("/", "\\").split("\\").filter(Boolean).at(-1) ?? "Existing Vault");
+      }
+    } catch {
+      showError("WinCommander could not open the file chooser. You can enter the container path instead.");
+    }
+  };
+
+  const addExistingVault = () => {
+    const containerPath = existingVaultPath.trim();
+    if (!containerPath) return void showError("Choose or enter the encrypted container file first.");
+    const entry = newVaultEntry("shared");
+    entry.container_path = containerPath;
+    entry.label = existingVaultLabel.trim()
+      || containerPath.replaceAll("/", "\\").split("\\").filter(Boolean).at(-1)
+      || "Existing Vault";
+    editPolicy(current => {
+      if (current) return { ...current, entries: [...current.entries, entry] };
+      const next = newVaultPolicy();
+      return { ...next, entries: [entry] };
+    });
+    setExistingVaultDialogOpen(false);
+    setExistingVaultPath("");
+    setExistingVaultLabel("");
+    openEntryEditor(entry.id, "details");
+  };
+
+  const addVaultEntryDraft = (kind: "shared" | "private") => {
+    const entry = newVaultEntry(kind);
+    editPolicy(current => {
+      const source = current ?? newVaultPolicy();
+      return { ...source, entries: [...source.entries, entry] };
+    });
+    openEntryEditor(entry.id, "details");
+  };
 
   const removeEntry = (id: string) => {
     const current = policyRef.current;
@@ -486,6 +564,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   if (loading) return <div className="fleet-admin-stack">Loading your Vault access…</div>;
   const activePolicy = policy;
   const authorizedById = new Map(authorizedEntries.map(entry => [entry.entry_id, entry]));
+  const policyEntries = activePolicy?.entries ?? [];
+  const selectedEntry = policyEntries.find(entry => entry.id === selectedEntryId) ?? policyEntries[0] ?? null;
   const verification = draftDirty ? null : vaultPolicyVerification(status);
   const mountTargetEntry = authorizedEntries.find(entry => entry.entry_id === mountTarget?.entryId)
     ?? activePolicy?.entries.find(entry => entry.id === mountTarget?.entryId);
@@ -550,6 +630,54 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         <div><strong>Vault settings could not be loaded yet</strong><p>Your administrator permission is confirmed, but the local service did not return the saved settings. Refresh this page before making changes; your assigned Vaults can still be mounted normally.</p></div>
       </div>}
 
+      {canManagePolicy && !policyLoadUnavailable && <Card className="fleet-vault-management">
+        <CardHeader>
+          <div className="fleet-vault-management-header">
+            <div>
+              <CardTitle>Manage saved Vaults</CardTitle>
+              <CardDescription>Open an existing Vault to edit its details or Windows access. Removing a policy never deletes its encrypted container file.</CardDescription>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => {
+              setExistingVaultPath("");
+              setExistingVaultLabel("");
+              setExistingVaultDialogOpen(true);
+            }}><Icon icon="plus" size={14} />Add existing Vault</Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {policyEntries.length === 0 ? <div className="fleet-vault-empty-inline">
+            <Icon icon="database" size={20} />
+            <div><strong>No saved Vaults</strong><small>Add an existing encrypted container, or create a new Vault policy below.</small></div>
+          </div> : <div className="fleet-vault-policy-grid-wrap">
+            <table className="fleet-vault-policy-grid">
+              <thead><tr>
+                <th scope="col">Vault</th><th scope="col">Container path</th><th scope="col">Scope</th><th scope="col">Allowed users / groups</th><th scope="col">Mounted</th><th scope="col">Health</th><th scope="col">Actions</th>
+              </tr></thead>
+              <tbody>{policyEntries.map(entry => {
+                const authorized = authorizedById.get(entry.id);
+                const result = status?.entries.find(item => item.id === entry.id)?.result;
+                const mounted = authorized?.mount_state === "mounted";
+                return <tr className={selectedEntry?.id === entry.id ? "is-selected" : ""} key={entry.id}>
+                  <td><strong>{entry.label}</strong></td>
+                  <td className="fleet-vault-policy-path" title={entry.container_path}>{entry.container_path}</td>
+                  <td>{entry.mount.presentation === "machine" ? "Shared" : "Personal"}</td>
+                  <td title={entry.grants.map(grant => grant.principal_name).join(", ")}>{entry.grants.map(grant => `${grant.principal_name} (${grant.access === "write" ? "edit" : "view"})`).join(", ")}</td>
+                  <td>{mounted ? authorized?.drive_letter ?? "Mounted" : "Not mounted"}</td>
+                  <td className={result && result !== "applied" ? "is-warning" : ""}>{result ? vaultEntryResultLabel(result) : "Not yet verified"}</td>
+                  <td><div className="fleet-vault-policy-actions">
+                    <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry.id, "details")}>Edit</Button>
+                    <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
+                    {mounted ? <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id} onClick={() => void unmountSelectedEntry(entry.id)}>{unmountingEntryId === entry.id ? "Unmounting…" : "Dismount"}</Button>
+                      : <Button variant="primary" size="sm" disabled={saving || mountingEntryId === entry.id || !authorized} onClick={() => { if (authorized) openMountPrompt(authorized); }}>{mountingEntryId === entry.id ? "Mounting…" : "Mount"}</Button>}
+                    <Button variant="outline" size="sm" onClick={() => removeEntry(entry.id)}>Remove policy</Button>
+                  </div></td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div>}
+        </CardContent>
+      </Card>}
+
       {canManagePolicy && !policyLoadUnavailable && <fieldset disabled={saving} className="contents">
       <Card>
         <CardHeader>
@@ -573,7 +701,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
               <Button variant="outline" size="sm" onClick={() => void discardDraftAndReload()}>Show saved settings</Button>
             </div>
           </div>}
-          {activePolicy?.entries.map((entry, entryIndex) => {
+          {selectedEntry && (() => {
+            const entry = selectedEntry;
+            const entryIndex = policyEntries.findIndex(candidate => candidate.id === entry.id);
             const authorized = authorizedById.get(entry.id);
             const mountResult = mountResults[entry.id];
             const isMounted = mountResult?.state === "mounted" || authorized?.mount_state === "mounted";
@@ -581,9 +711,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             const isDualContainer = entry.container_kind === "dual";
             const entryResult = status?.entries.find(item => item.id === entry.id)?.result;
             const mountGate = vaultMountGate({ authorized, entryResult, draftDirty });
-            return <div className="fleet-vault-workspace" key={entry.id}>
+            return <div className="fleet-vault-workspace" key={entry.id} ref={editorRef} data-vault-editor-mode={editorMode}>
               <div className="fleet-vault-workspace-header">
-                <div><span className="fleet-vault-step">1. Vault details</span><strong>Vault {entryIndex + 1}</strong></div>
+                <div><span className="fleet-vault-step">{editorMode === "access" ? "Manage access" : "1. Vault details"}</span><strong>Vault {entryIndex + 1}</strong></div>
                 <Button variant="outline" size="sm" onClick={() => removeEntry(entry.id)}>Remove</Button>
               </div>
               <div className="fleet-owner-inputs">
@@ -636,16 +766,10 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 )}
               </div>
             </div>;
-          })}
+          })()}
           <div className="fleet-action-row">
-            <Button variant="outline" onClick={() => editPolicy(current => {
-              const source = current ?? newVaultPolicy();
-              return { ...source, entries: [...source.entries, newVaultEntry()] };
-            })}>Add private vault</Button>
-            <Button variant="outline" onClick={() => editPolicy(current => {
-              const source = current ?? newVaultPolicy();
-              return { ...source, entries: [...source.entries, newVaultEntry("shared")] };
-            })}>Add shared vault</Button>
+            <Button variant="outline" onClick={() => addVaultEntryDraft("private")}>Add private vault</Button>
+            <Button variant="outline" onClick={() => addVaultEntryDraft("shared")}>Add shared vault</Button>
             {policy && <Button variant="primary" disabled={saving || !!error} onClick={() => policy.entries.length === 0 ? setPolicyRemovalConfirmation(true) : void apply()}>{saving ? "Saving…" : policy.entries.length === 0 ? "Remove Vault policy" : "Save vault settings"}</Button>}
             {verification?.tone === "success" && <span className="fleet-vault-save-status" role="status"><Icon icon="tick-circle" size={14} />{verification.title}{verification.appliedAt != null ? ` · ${appliedAt(verification.appliedAt)}` : ""}</span>}
           </div>
@@ -668,6 +792,35 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       </Card>
 
       </fieldset>}
+
+      <Dialog open={existingVaultDialogOpen} onOpenChange={open => {
+        setExistingVaultDialogOpen(open);
+        if (!open) {
+          setExistingVaultPath("");
+          setExistingVaultLabel("");
+        }
+      }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Add existing Vault</DialogTitle>
+            <DialogDescription>
+              Select or enter an encrypted container file already on this PC. A filename extension is not required; WinCommander verifies the file safely when you save the policy.
+            </DialogDescription>
+          </DialogHeader>
+          <label className="fleet-field"><span>Container file</span>
+            <div className="fleet-vault-existing-path">
+              <Input aria-label="Existing Vault container path" value={existingVaultPath} placeholder="D:\\Vault\\sales" onChange={event => setExistingVaultPath(event.target.value)} />
+              <Button variant="outline" type="button" onClick={() => void browseExistingVault()}>Browse</Button>
+            </div>
+            <small>Choose the encrypted file itself, not its parent folder. Existing files do not need a particular extension.</small>
+          </label>
+          <label className="fleet-field"><span>Vault name</span><Input aria-label="Existing Vault label" value={existingVaultLabel} placeholder="Sales" onChange={event => setExistingVaultLabel(event.target.value)} /><small>This is only the label people see in WinCommander.</small></label>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExistingVaultDialogOpen(false)}>Cancel</Button>
+            <Button variant="primary" onClick={addExistingVault}>Add and manage access</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={mountTarget !== null} onOpenChange={open => { if (!open) closeMountPrompt(); }}>
         <DialogContent className="max-w-md">

@@ -14,6 +14,21 @@ export type DestructiveRequestV2 = { version: string, target: DestructiveTargetI
 export type DestructiveTargetIdentityV2 = { "kind": "file", volume_serial_number: CanonicalDecimal, file_index: CanonicalDecimal, } | { "kind": "raw_partition", disk_number: CanonicalDecimal, partition_number: CanonicalDecimal, partition_guid: string, offset_bytes: CanonicalDecimal, size_bytes: CanonicalDecimal, disk_unique_id: string, } | { "kind": "bitlocker_volume", volume_guid: string, };
 
 /**
+ * Neutral, privacy-classified diagnostic record shared by every WinCommander process.
+ */
+export type DiagnosticEvent = { eventId: string, operationId: string, parentOperationId: string | null, occurredAt: string, component: string, feature: string, action: string, stage: string, lifecycle: DiagnosticLifecycle, outcome: DiagnosticOutcome, errorCode: string | null, severity: DiagnosticSeverity, retryability: DiagnosticRetryability, suggestedNextAction: string, durationMs: bigint | null, privacyClass: DiagnosticPrivacyClass, redactedContext: { [key in string]?: string }, };
+
+export type DiagnosticLifecycle = "requested" | "delivered" | "acknowledged" | "applying" | "applied" | "verified";
+
+export type DiagnosticOutcome = "started" | "progress" | "succeeded" | "failed" | "degraded" | "recovered" | "cancelled" | "timed_out";
+
+export type DiagnosticPrivacyClass = "public" | "local_sensitive" | "restricted";
+
+export type DiagnosticRetryability = "never" | "manual" | "automatic";
+
+export type DiagnosticSeverity = "debug" | "info" | "warn" | "error" | "critical";
+
+/**
  * Top-level envelope. The first byte of the JSON tells us which variant
  * it is — serde renames the tag to `kind` for legibility on the wire.
  */
@@ -100,6 +115,12 @@ request_id: bigint,
  * commander-free's get_command_tier() that resolve to "paid".
  */
 feature_id: string,
+/**
+ * Optional opaque client operation correlation. It is intentionally
+ * absent for older clients and unrelated service calls. Newer service
+ * builds validate it before copying it into diagnostics.
+ */
+diagnostic_operation_id: string | null,
 /**
  * Arbitrary JSON args — Pro deserializes per-feature.
  */

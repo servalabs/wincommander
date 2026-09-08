@@ -325,6 +325,12 @@ impl VaultMountBroker {
             VaultMountReason::InvalidRequest => "vault_validation_failed",
             VaultMountReason::BrokerUnavailable => "vault_broker_unavailable",
             VaultMountReason::BrokerRejected => "vault_broker_rejected",
+            VaultMountReason::BrokerIdentityRejected => "vault_broker_identity_rejected",
+            VaultMountReason::BrokerHandshakeRejected => "vault_broker_handshake_rejected",
+            VaultMountReason::BrokerReplyRejected => "vault_broker_reply_rejected",
+            VaultMountReason::BrokerPlanRejected => "vault_broker_plan_rejected",
+            VaultMountReason::PresentationRejected => "vault_presentation_rejected",
+            VaultMountReason::EntitlementDenied => "vault_entitlement_denied",
             VaultMountReason::DismountFailed => "vault_cleanup_failed",
         }
     }
@@ -751,6 +757,37 @@ impl VaultMountBroker {
                 entry_id,
                 Some(presentation),
                 VaultMountReason::AclReadbackFailed,
+            );
+        }
+        // A global link created in the service namespace is not enough.  It
+        // must resolve through the original authenticated caller token and
+        // permit the root directory read that File Explorer needs.  This keeps
+        // shared Vaults fail-closed without requiring session-zero to discover
+        // an Explorer window it cannot see.
+        if presentation == VaultPresentation::Machine
+            && !machine_presentation_is_visible_to_caller(
+                caller_token,
+                &reply.drive_letter,
+                reply.internal_drive,
+            )
+        {
+            let cleanup = self.broker.dismount(BrokerDismountRequest {
+                operation_id,
+                internal_drive: reply.internal_drive,
+                presented_drive_letter: None,
+                presentation,
+                target_session_id: session_id,
+                caller_sid: &caller_sid,
+                caller_token: Some(caller_token),
+            });
+            return failed(
+                entry_id,
+                Some(presentation),
+                if cleanup.is_ok() {
+                    VaultMountReason::PresentationRejected
+                } else {
+                    VaultMountReason::DismountFailed
+                },
             );
         }
         let Some((policy_id, policy_version)) = store.active_policy_identity() else {
@@ -1242,6 +1279,80 @@ fn mounted_root_acl_sddl(grants: &[ResolvedGrant]) -> MountedRootAclSddl {
 fn valid_drive_letter(value: &str) -> bool {
     let value = value.strip_suffix(':').unwrap_or(value);
     value.len() == 1 && value.as_bytes()[0].is_ascii_alphabetic()
+}
+
+/// A shared Vault has a machine-wide drive link, but that link is useful only
+/// if the exact authenticated pipe caller can resolve it and enumerate its
+/// root.  The broker runs in session zero, so it cannot truthfully perform
+/// this check by looking for Explorer itself.  The service already owns the
+/// caller token; impersonate that token for this narrow, read-only attestation.
+fn machine_presentation_is_visible_to_caller(
+    caller_token: windows_sys::Win32::Foundation::HANDLE,
+    drive_letter: &str,
+    internal_drive: u8,
+) -> bool {
+    use windows_sys::Win32::Security::{ImpersonateLoggedOnUser, RevertToSelf};
+    use windows_sys::Win32::Storage::FileSystem::QueryDosDeviceW;
+
+    struct RevertGuard;
+    impl Drop for RevertGuard {
+        fn drop(&mut self) {
+            if unsafe { RevertToSelf() } == 0 {
+                // Continuing a reusable SYSTEM worker under a caller token is
+                // a security-boundary failure.  Fail-stop rather than risk
+                // serving another client as the previous one.
+                std::process::abort();
+            }
+        }
+    }
+
+    let normalized = drive_letter.strip_suffix(':').unwrap_or(drive_letter);
+    let Some(letter) = normalized
+        .as_bytes()
+        .first()
+        .copied()
+        .filter(|letter| normalized.len() == 1 && letter.is_ascii_alphabetic())
+        .map(|letter| letter.to_ascii_uppercase() as char)
+    else {
+        return false;
+    };
+    if internal_drive > 25 || caller_token.is_null() {
+        return false;
+    }
+    if unsafe { ImpersonateLoggedOnUser(caller_token) } == 0 {
+        return false;
+    }
+    let guard = RevertGuard;
+    let result = (|| {
+        let dos_name = [letter as u16, b':' as u16, 0];
+        let mut target = [0u16; 32_768];
+        let target_len =
+            unsafe { QueryDosDeviceW(dos_name.as_ptr(), target.as_mut_ptr(), target.len() as u32) }
+                as usize;
+        if target_len == 0 || target_len >= target.len() {
+            return false;
+        }
+        let Some(first_target_len) = target[..=target_len].iter().position(|unit| *unit == 0)
+        else {
+            return false;
+        };
+        let Ok(target) = String::from_utf16(&target[..first_target_len]) else {
+            return false;
+        };
+        let expected = format!(
+            r"\Device\VeraCryptVolume{}",
+            char::from(b'A' + internal_drive)
+        );
+        if !target.eq_ignore_ascii_case(&expected) {
+            return false;
+        }
+        let root = format!("{letter}:\\");
+        std::fs::read_dir(root)
+            .and_then(|mut entries| entries.next().transpose().map(|_| ()))
+            .is_ok()
+    })();
+    drop(guard);
+    result
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

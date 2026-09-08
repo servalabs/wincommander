@@ -60,6 +60,16 @@ pub trait VaultFs: Send + Sync {
         Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
     }
     fn stable_file_identity(&self, path: &Path) -> Result<String, VaultError>;
+    /// Normalize an already-existing container before it becomes policy
+    /// state. This is separate from personal *creation* normalization: an
+    /// existing container may have any extension, but must resolve to one
+    /// stable, non-directory path before ACL work or persistence.
+    fn normalize_existing_container_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+        if !valid_creation_path(path) {
+            return Err(VaultError::Validation);
+        }
+        Ok(path.components().collect())
+    }
     fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError>;
     fn personal_creation_target_exists(&self, path: &Path) -> Result<bool, VaultError>;
     fn personal_creation_target_identity(&self, path: &Path) -> Result<String, VaultError> {
@@ -160,6 +170,16 @@ fn merge_grant(grants: &mut Vec<ResolvedGrant>, sid: String, access: VaultAccess
 
 fn personal_key(path: &str) -> String {
     path.trim().replace('/', "\\").to_ascii_lowercase()
+}
+
+/// Paths have already been filesystem-normalized before this key is used for
+/// a policy apply. Keep this lightweight spelling key as a second defensive
+/// comparison for persisted records from earlier releases.
+fn container_policy_key(path: &str) -> String {
+    path.trim()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
 }
 
 fn personal_key_alias(key: &str) -> String {
@@ -550,9 +570,14 @@ impl VaultAccessStore {
             .as_mut()
             .filter(|policy| policy.policy.schema_version == VAULT_ACCESS_SCHEMA_VERSION)
             .map(|policy| {
+                // Older records may predate canonical existing-container
+                // paths. Rewrite only after the same identity/ACL readback
+                // succeeds, so startup never turns an unreadable path into a
+                // misleadingly healthy policy.
+                let normalized = self.normalize_policy_paths(&mut policy.policy)?;
                 let migrated = self.migrate_authorization_grants(policy)?;
                 self.revalidate_persisted_policy(policy)?;
-                if migrated {
+                if normalized || migrated {
                     let bytes = serde_json::to_vec(policy).map_err(|_| VaultError::Persistence)?;
                     self.fs
                         .atomic_write(&self.path, &bytes)
@@ -1333,18 +1358,29 @@ impl VaultAccessStore {
             .iter()
             .find(|resolved| resolved.id == entry_id)?;
         let container = PathBuf::from(&entry.container_path);
+        // The durable container ACL uses managed groups for direct users so
+        // policy changes remain manageable.  A signed-in Windows token does
+        // not acquire a newly-created local-group SID until its next logon,
+        // however.  The temporary mounted-root ACL must therefore also carry
+        // each direct authorization SID.  Otherwise a user can be allowed to
+        // mount a Vault and still receive Access Denied from Explorer until
+        // they sign out and back in.
+        let mut mounted_root_grants = resolved
+            .grants
+            .iter()
+            .map(|grant| ResolvedGrant {
+                sid: grant.sid.clone(),
+                access: grant.access,
+            })
+            .collect::<Vec<_>>();
+        for grant in &resolved.authorization_grants {
+            merge_grant(&mut mounted_root_grants, grant.sid.clone(), grant.access);
+        }
         Some((
             VaultAclPlan {
                 parent: container.parent()?.to_path_buf(),
                 container,
-                grants: resolved
-                    .grants
-                    .iter()
-                    .map(|grant| ResolvedGrant {
-                        sid: grant.sid.clone(),
-                        access: grant.access,
-                    })
-                    .collect(),
+                grants: mounted_root_grants,
                 authorization_grants: Vec::new(),
                 managed_groups: Vec::new(),
             },
@@ -1409,7 +1445,7 @@ impl VaultAccessStore {
 
     pub fn apply(
         &self,
-        policy: VaultAccessPolicy,
+        mut policy: VaultAccessPolicy,
         applied_at: i64,
     ) -> Result<VaultPolicyStatus, VaultError> {
         let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
@@ -1419,8 +1455,15 @@ impl VaultAccessStore {
         {
             return Err(VaultError::VersionConflict);
         }
+        self.normalize_policy_paths(&mut policy)?;
         validate_policy(&policy)?;
         let mut resolved = self.resolve_and_plan(&policy)?;
+        let removed = state
+            .active
+            .as_ref()
+            .map(|active| self.removed_entry_plans(active, &policy))
+            .transpose()?
+            .unwrap_or_default();
         let mut snapshots = Vec::new();
         for (_, plan) in &resolved {
             snapshots.extend(self.acls.snapshot(plan)?);
@@ -1429,7 +1472,21 @@ impl VaultAccessStore {
             .iter()
             .flat_map(|(_, plan)| plan.managed_groups.clone())
             .collect::<Vec<_>>();
-        let group_snapshots = self.groups.snapshot(&group_plans)?;
+        let retained_group_names = group_plans
+            .iter()
+            .map(|group| group.group.as_str())
+            .collect::<HashSet<_>>();
+        let removed_group_plans = removed
+            .iter()
+            .flat_map(|(plan, _)| plan.managed_groups.clone())
+            // A path edit keeps the entry ID, and therefore its deterministic
+            // group names. The new container still needs those memberships;
+            // revoke only old groups that no replacement entry owns.
+            .filter(|group| !retained_group_names.contains(group.group.as_str()))
+            .collect::<Vec<_>>();
+        let mut all_group_plans = group_plans.clone();
+        all_group_plans.extend(removed_group_plans.iter().cloned());
+        let group_snapshots = self.groups.snapshot(&all_group_plans)?;
         for group in &group_plans {
             if let Err(error) = self
                 .groups
@@ -1454,6 +1511,38 @@ impl VaultAccessStore {
                 self.rollback_after_apply(&mut state, &snapshots);
                 let _ = self.groups.restore(&group_snapshots);
                 return Err(error);
+            }
+        }
+        // Applying a non-empty replacement policy used to leave ACLs and
+        // deterministic local groups behind for entries the administrator had
+        // removed. Decommission those retired entries before replacing the
+        // durable JSON; every step below can still roll back to the snapshots
+        // above, so a failed edit never reports partial access revocation as a
+        // successful save.
+        for (plan, expected_identity) in &removed {
+            match self.acls.decommission_and_snapshot(plan, expected_identity) {
+                Ok(retired_snapshots) => snapshots.extend(retired_snapshots),
+                Err(error) => {
+                    self.rollback_after_apply(&mut state, &snapshots);
+                    let _ = self.groups.restore(&group_snapshots);
+                    return Err(error);
+                }
+            }
+        }
+        for group in &removed_group_plans {
+            // Do not create an unused deterministic group merely to remove
+            // it. Only groups proven to have existed in the pre-edit
+            // snapshot need their memberships cleared.
+            let existed = group_snapshots
+                .iter()
+                .find(|snapshot| snapshot.group == group.group)
+                .is_some_and(|snapshot| snapshot.existed);
+            if existed {
+                if let Err(error) = self.groups.reconcile_exact_members(&group.group, &[]) {
+                    self.rollback_after_apply(&mut state, &snapshots);
+                    let _ = self.groups.restore(&group_snapshots);
+                    return Err(error);
+                }
             }
         }
         let persisted = PersistedPolicy {
@@ -1671,7 +1760,7 @@ impl VaultAccessStore {
         &self,
         policy: &VaultAccessPolicy,
     ) -> Result<Vec<(VaultAccessEntry, VaultAclPlan)>, VaultError> {
-        policy
+        let resolved = policy
             .entries
             .iter()
             .map(|entry| {
@@ -1751,6 +1840,107 @@ impl VaultAccessStore {
                         authorization_grants,
                         managed_groups,
                     },
+                ))
+            })
+            .collect::<Result<Vec<_>, VaultError>>()?;
+        let mut identities = HashSet::new();
+        if resolved.iter().any(|(entry, _)| {
+            !identities.insert(entry.container_identity.as_deref().unwrap_or_default())
+        }) {
+            return Err(VaultError::Validation);
+        }
+        Ok(resolved)
+    }
+
+    /// The policy file is the authoritative registry for both backend-created
+    /// and manually selected containers. Normalize every supplied existing
+    /// path before validation and persistence so `D:\\Vault\\sales`, a
+    /// differently-cased spelling, and an extended-path spelling cannot form
+    /// stale duplicate registrations. No filename extension is consulted:
+    /// engine format validation happens at unlock time because it may require
+    /// credentials, while this service verifies safe file identity and ACL
+    /// readback before accepting a policy.
+    fn normalize_policy_paths(&self, policy: &mut VaultAccessPolicy) -> Result<bool, VaultError> {
+        let mut changed = false;
+        for entry in &mut policy.entries {
+            let normalized = self
+                .fs
+                .normalize_existing_container_path(Path::new(&entry.container_path))?;
+            let normalized = normalized.to_string_lossy().into_owned();
+            if entry.container_path != normalized {
+                entry.container_path = normalized;
+                changed = true;
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Build revoke plans solely from previously persisted, resolved facts.
+    /// A removed principal or deleted container must not prevent an
+    /// administrator from removing a different entry from the same policy.
+    fn removed_entry_plans(
+        &self,
+        active: &PersistedPolicy,
+        replacement: &VaultAccessPolicy,
+    ) -> Result<Vec<(VaultAclPlan, String)>, VaultError> {
+        let retained_ids = replacement
+            .entries
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<HashSet<_>>();
+        active
+            .policy
+            .entries
+            .iter()
+            .filter(|entry| {
+                let replacement_entry = replacement
+                    .entries
+                    .iter()
+                    .find(|candidate| candidate.id == entry.id);
+                // Retaining an ID only retains its former ACL when the entry
+                // still names the same backing container. An Edit that moves
+                // a Vault to another file must revoke the old file just like
+                // an explicit Remove does.
+                !retained_ids.contains(entry.id.as_str())
+                    || replacement_entry.is_some_and(|candidate| {
+                        container_policy_key(&candidate.container_path)
+                            != container_policy_key(&entry.container_path)
+                    })
+            })
+            .map(|entry| {
+                let resolved = active
+                    .resolved
+                    .iter()
+                    .find(|resolved| resolved.id == entry.id)
+                    .ok_or(VaultError::Validation)?;
+                let container = PathBuf::from(&entry.container_path);
+                let parent = container
+                    .parent()
+                    .ok_or(VaultError::Validation)?
+                    .to_path_buf();
+                Ok((
+                    VaultAclPlan {
+                        parent,
+                        container,
+                        grants: resolved
+                            .grants
+                            .iter()
+                            .map(|grant| ResolvedGrant {
+                                sid: grant.sid.clone(),
+                                access: grant.access,
+                            })
+                            .collect(),
+                        authorization_grants: Vec::new(),
+                        managed_groups: [VaultAccess::Read, VaultAccess::Write]
+                            .into_iter()
+                            .map(|access| GroupMembershipPlan {
+                                group: managed_group_name(&entry.id, access),
+                                members: Vec::new(),
+                                access,
+                            })
+                            .collect(),
+                    },
+                    resolved.identity.clone(),
                 ))
             })
             .collect()
@@ -1962,6 +2152,20 @@ impl VaultFs for WindowsVaultFs {
             info.dwVolumeSerialNumber,
             ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64
         ))
+    }
+    fn normalize_existing_container_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+        use std::os::windows::fs::MetadataExt;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if !valid_creation_path(path) {
+            return Err(VaultError::Validation);
+        }
+        let metadata =
+            std::fs::symlink_metadata(path).map_err(|_| VaultError::ContainerIdentity)?;
+        if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(VaultError::ContainerIdentity);
+        }
+        std::fs::canonicalize(path).map_err(|_| VaultError::ContainerIdentity)
     }
     fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
         if !valid_creation_path(path) {
@@ -2963,11 +3167,12 @@ fn validate_policy(policy: &VaultAccessPolicy) -> Result<(), VaultError> {
     }
     let mut ids = HashSet::new();
     let mut parents = HashSet::new();
+    let mut container_paths = HashSet::new();
     for entry in &policy.entries {
         if !valid_id(&entry.id)
-            || entry.label.is_empty()
+            || entry.label.trim().is_empty()
             || entry.label.len() > 128
-            || entry.owner_account.is_empty()
+            || entry.owner_account.trim().is_empty()
             || !Path::new(&entry.container_path).is_absolute()
             || entry.grants.is_empty()
             || entry.grants.len() > MAX_GRANTS
@@ -2975,6 +3180,10 @@ fn validate_policy(policy: &VaultAccessPolicy) -> Result<(), VaultError> {
             return Err(VaultError::Validation);
         }
         if !ids.insert(&entry.id) {
+            return Err(VaultError::Validation);
+        }
+        let container_key = container_policy_key(&entry.container_path);
+        if container_key.is_empty() || !container_paths.insert(container_key) {
             return Err(VaultError::Validation);
         }
         let parent = Path::new(&entry.container_path)
@@ -2992,9 +3201,10 @@ fn validate_policy(policy: &VaultAccessPolicy) -> Result<(), VaultError> {
         }
         let mut principals = HashSet::new();
         for grant in &entry.grants {
-            if grant.principal_name.is_empty()
+            let principal_key = grant.principal_name.trim().to_ascii_lowercase();
+            if principal_key.is_empty()
                 || grant.principal_name.len() > 256
-                || !principals.insert(&grant.principal_name)
+                || !principals.insert(principal_key)
             {
                 return Err(VaultError::Validation);
             }
@@ -3128,8 +3338,11 @@ mod tests {
                 .map(|_| ())
                 .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
         }
-        fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
-            Ok("volume:1:file:2".into())
+        fn stable_file_identity(&self, path: &Path) -> Result<String, VaultError> {
+            Ok(format!(
+                "volume:1:{}",
+                path.to_string_lossy().to_ascii_lowercase()
+            ))
         }
         fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
             lexical_normalize_creation_path(path)
@@ -3241,6 +3454,32 @@ mod tests {
         fn restore(&self, _: &[AclSnapshot]) -> Result<(), VaultError> {
             self.restored.store(true, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct TrackingDecommissionAcl(Arc<Mutex<Vec<PathBuf>>>);
+    impl AclApplier for TrackingDecommissionAcl {
+        fn apply_and_verify(&self, _: &VaultAclPlan) -> Result<(), VaultError> {
+            Ok(())
+        }
+        fn snapshot(&self, plan: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError> {
+            Ok(vec![AclSnapshot {
+                path: plan.container.clone(),
+                descriptor: vec![],
+                dacl_protected: true,
+            }])
+        }
+        fn restore(&self, _: &[AclSnapshot]) -> Result<(), VaultError> {
+            Ok(())
+        }
+        fn decommission_and_snapshot(
+            &self,
+            plan: &VaultAclPlan,
+            _: &str,
+        ) -> Result<Vec<AclSnapshot>, VaultError> {
+            self.0.lock().unwrap().push(plan.container.clone());
+            self.snapshot(plan)
         }
     }
 
@@ -4525,6 +4764,174 @@ mod tests {
         assert!(
             !s.authorize_mount("shared", &["S-1-test-Other".into()])
                 .allowed
+        );
+    }
+
+    #[test]
+    fn mounted_root_acl_includes_direct_users_without_waiting_for_relogon() {
+        let s = store(Arc::new(Mutex::new(HashMap::new())));
+        s.apply(policy(1, 0), 7).unwrap();
+        let (plan, ..) = s.mount_plan("shared").expect("current shared mount plan");
+
+        assert!(
+            plan.grants.iter().any(|grant| {
+                grant.sid == "S-1-test-Partner" && grant.access == VaultAccess::Write
+            }),
+            "the mounted root must include the direct user SID as well as its managed group"
+        );
+    }
+
+    #[test]
+    fn manual_existing_container_without_an_extension_is_persisted_and_reloads() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let s = store(files.clone());
+        let mut manual = policy(1, 0);
+        manual.entries[0].container_path = "D:\\Vault\\sales".into();
+
+        assert_eq!(
+            s.apply(manual, 7).unwrap().validation_state,
+            VaultValidationState::Current
+        );
+        assert_eq!(
+            s.policy().unwrap().entries[0].container_path,
+            "D:\\Vault\\sales",
+            "existing containers are identified by safe file identity, not filename extension"
+        );
+
+        let restarted = store(files);
+        restarted.load_at_startup();
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Current
+        );
+        assert_eq!(
+            restarted.policy().unwrap().entries[0].container_path,
+            "D:\\Vault\\sales"
+        );
+    }
+
+    #[test]
+    fn duplicate_existing_container_identity_is_rejected_before_acl_changes() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let mut duplicate = policy(1, 0);
+        let mut alias = duplicate.entries[0].clone();
+        alias.id = "same-file-alias".into();
+        alias.container_path = "D:\\Alias\\sales".into();
+        duplicate.entries[0].container_path = "D:\\Vault\\sales".into();
+        duplicate.entries.push(alias);
+
+        // The test seam intentionally gives different spellings distinct
+        // identities, so make both spellings prove the same backing file.
+        struct SameIdentityFs(Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>);
+        impl VaultFs for SameIdentityFs {
+            fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+            }
+            fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+                self.0.lock().unwrap().insert(path.into(), bytes.into());
+                Ok(())
+            }
+            fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
+                Ok("same-volume:same-file".into())
+            }
+            fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+                lexical_normalize_creation_path(path)
+            }
+            fn personal_creation_target_exists(&self, _: &Path) -> Result<bool, VaultError> {
+                Ok(false)
+            }
+            fn validate_dedicated_parent(&self, _: &Path, _: &Path) -> Result<(), VaultError> {
+                Ok(())
+            }
+        }
+        let aliases = VaultAccessStore::open(
+            Box::new(SameIdentityFs(files)),
+            Box::new(Resolver),
+            Box::new(Acl),
+            PathBuf::from("/policy"),
+        );
+        assert_eq!(aliases.apply(duplicate, 7), Err(VaultError::Validation));
+        assert!(aliases.policy().is_none());
+    }
+
+    #[test]
+    fn removing_one_entry_revokes_its_acl_and_managed_group_membership() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let groups = Groups::default();
+        let memberships = Arc::clone(&groups.0);
+        let acl = TrackingDecommissionAcl::default();
+        let revoked = Arc::clone(&acl.0);
+        let s = VaultAccessStore::open_with_groups(
+            Box::new(Fs(files)),
+            Box::new(Resolver),
+            Box::new(acl),
+            Box::new(groups),
+            PathBuf::from("/policy"),
+        );
+        let mut original = policy(1, 0);
+        let mut removable = original.entries[0].clone();
+        removable.id = "retired".into();
+        removable.container_path = "D:\\Vaults\\retired\\sales".into();
+        original.entries.push(removable);
+        s.apply(original, 7).unwrap();
+
+        let retained = policy(2, 1);
+        s.apply(retained, 8).unwrap();
+
+        assert_eq!(
+            revoked.lock().unwrap().as_slice(),
+            &[PathBuf::from("D:\\Vaults\\retired\\sales")]
+        );
+        assert!(
+            memberships
+                .lock()
+                .unwrap()
+                .get(&managed_group_name("retired", VaultAccess::Write))
+                .is_some_and(Vec::is_empty),
+            "removing a policy entry must empty its write group, even if Windows retains the empty local group"
+        );
+        assert_eq!(s.policy().unwrap().entries.len(), 1);
+    }
+
+    #[test]
+    fn editing_an_entry_to_a_new_container_revokes_only_the_old_container() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let groups = Groups::default();
+        let memberships = Arc::clone(&groups.0);
+        let acl = TrackingDecommissionAcl::default();
+        let revoked = Arc::clone(&acl.0);
+        let s = VaultAccessStore::open_with_groups(
+            Box::new(Fs(files)),
+            Box::new(Resolver),
+            Box::new(acl),
+            Box::new(groups),
+            PathBuf::from("/policy"),
+        );
+        s.apply(policy(1, 0), 7).unwrap();
+        let mut edited = policy(2, 1);
+        edited.entries[0].container_path = "D:\\Vaults\\moved\\sales".into();
+        s.apply(edited, 8).unwrap();
+
+        assert_eq!(
+            revoked.lock().unwrap().as_slice(),
+            &[PathBuf::from("C:\\vaults\\shared.hc")]
+        );
+        assert_eq!(
+            s.policy().unwrap().entries[0].container_path,
+            "D:\\Vaults\\moved\\sales"
+        );
+        assert!(
+            memberships
+                .lock()
+                .unwrap()
+                .get(&managed_group_name("shared", VaultAccess::Write))
+                .is_some_and(|members| !members.is_empty()),
+            "the edited entry keeps its deterministic group membership for the replacement container"
         );
     }
     #[test]

@@ -292,7 +292,9 @@ export type CommandRequest = { device_id: DeviceId, catalog_id: string, action_c
  * `approved` is signed and pollable; `dispatched` was handed to the agent;
  * `acked` proves only that the agent responded; `applying` means execution is
  * still in progress; `applied` requires an explicit device-side postcondition
- * receipt. `failed`/`rejected`/`expired` are terminal results.
+ * receipt. `verified` requires a separate, fresh Windows state read-back that
+ * matches the applied command; it is never inferred from an acknowledgement or
+ * action outcome. `failed`/`rejected`/`expired` are terminal results.
  */
 export type CommandStatus = "pending" | "approved" | "dispatched" | "acked" | "applying" | "applied" | "verified" | "failed" | "rejected" | "expired";
 

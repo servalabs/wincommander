@@ -3927,7 +3927,14 @@ pub(crate) async fn run_backend_script_with_timeout(
     // this build, so doing this only in the paid branch attached too late.
     if command == "Start-PrivacyShield" {
         SHIELD_READER_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
-        spawn_shield_event_reader(app.clone(), 0, true);
+        // A new detector session owns a fresh sidecar. Clear it before the
+        // asynchronous reader starts so it can begin at byte zero without
+        // replaying the prior session. Starting at EOF here can lose the
+        // initial native notification while the visual blur still worked.
+        if let Some(sidecar) = shield_events_sidecar_path() {
+            let _ = std::fs::write(sidecar, "");
+        }
+        spawn_shield_event_reader(app.clone(), 0, false);
     } else if command == "Stop-PrivacyShield" {
         SHIELD_READER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
         crate::native_notify::clear_pending_notifications(&app);
@@ -5270,13 +5277,12 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
         // A pre-armed reader starts at the current EOF, then detects the
         // detector's session-file truncation and follows only entries created
         // by that session. This prevents old alerts replaying after stop.
-        let mut offset = if start_at_end {
-            std::fs::metadata(&sidecar)
+        let mut offset: u64 = 0;
+        if start_at_end {
+            offset = std::fs::metadata(&sidecar)
                 .map(|meta| meta.len())
-                .unwrap_or(0)
-        } else {
-            0
-        };
+                .unwrap_or(0);
+        }
         let mut locally_looking_away = false;
         crate::flow_bridge::flow_trace(format!(
             "shield-reader: SPAWNED gen={} pid={} seed_offset={} sidecar={}",

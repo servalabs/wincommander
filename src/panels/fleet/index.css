@@ -2088,6 +2088,75 @@
   justify-content: flex-end;
 }
 
+.fleet-vault-management-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.fleet-vault-policy-grid-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+
+.fleet-vault-policy-grid {
+  width: 100%;
+  min-width: 1120px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 11px;
+}
+
+.fleet-vault-policy-grid th,
+.fleet-vault-policy-grid td {
+  max-width: 260px;
+  padding: 10px 12px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  text-align: left;
+  vertical-align: top;
+}
+
+.fleet-vault-policy-grid th:last-child,
+.fleet-vault-policy-grid td:last-child { border-right: 0; }
+.fleet-vault-policy-grid tbody tr:last-child td { border-bottom: 0; }
+
+.fleet-vault-policy-grid th {
+  color: var(--text-mute);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.fleet-vault-policy-grid tr.is-selected { background: var(--accent-soft); }
+.fleet-vault-policy-grid td strong { color: var(--text); }
+.fleet-vault-policy-grid td.is-warning { color: var(--warn); }
+
+.fleet-vault-policy-path {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fleet-vault-policy-actions,
+.fleet-vault-existing-path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fleet-vault-policy-actions { flex-wrap: wrap; }
+.fleet-vault-existing-path > input { min-width: 0; flex: 1; }
+
 .fleet-vault-grants {
   display: grid;
   gap: 10px;
@@ -2177,4 +2246,6 @@
   .fleet-vault-workspace-header > button { align-self: flex-start; }
   .fleet-vault-permission-head { align-items: flex-start; flex-direction: column; }
   .fleet-vault-lifecycle { align-items: flex-start; flex-direction: column; }
+  .fleet-vault-management-header { align-items: stretch; flex-direction: column; }
+  .fleet-vault-management-header > button { align-self: flex-start; }
 }

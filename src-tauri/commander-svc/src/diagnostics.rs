@@ -662,6 +662,42 @@ fn reason_fields(
             false,
             "check_service_health",
         ),
+        Some(VaultMountReason::BrokerIdentityRejected) => (
+            "VLT.BROKER.IDENTITY_REJECTED",
+            DiagnosticSeverity::Error,
+            false,
+            "check_service_health",
+        ),
+        Some(VaultMountReason::BrokerHandshakeRejected) => (
+            "VLT.BROKER.HANDSHAKE_REJECTED",
+            DiagnosticSeverity::Error,
+            false,
+            "check_service_health",
+        ),
+        Some(VaultMountReason::BrokerReplyRejected) => (
+            "VLT.BROKER.REPLY_REJECTED",
+            DiagnosticSeverity::Error,
+            false,
+            "check_service_health",
+        ),
+        Some(VaultMountReason::BrokerPlanRejected) => (
+            "VLT.BROKER.PLAN_REJECTED",
+            DiagnosticSeverity::Error,
+            false,
+            "check_service_health",
+        ),
+        Some(VaultMountReason::PresentationRejected) => (
+            "VLT.PRESENTATION.REJECTED",
+            DiagnosticSeverity::Error,
+            false,
+            "check_drive_visibility",
+        ),
+        Some(VaultMountReason::EntitlementDenied) => (
+            "VLT.ENTITLEMENT.DENIED",
+            DiagnosticSeverity::Error,
+            false,
+            "check_license_status",
+        ),
         Some(VaultMountReason::SessionUnavailable) => (
             "VLT.SESSION.UNAVAILABLE",
             DiagnosticSeverity::Warn,

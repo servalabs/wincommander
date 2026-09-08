@@ -135,6 +135,23 @@ describe("Fleet access-control panel contracts", () => {
     expect(css).toContain(".light .vault-principal-picker");
   });
 
+  test("makes every saved Vault discoverable and editable without an extension-only import gate", () => {
+    expect(vault).toContain("Manage saved Vaults");
+    expect(vault).toContain("fleet-vault-policy-grid");
+    expect(vault).toContain("Container path");
+    expect(vault).toContain("Allowed users / groups");
+    expect(vault).toContain("Manage access");
+    expect(vault).toContain("Remove policy");
+    expect(vault).toContain("Add existing Vault");
+    expect(vault).toContain("open as openFileDialog");
+    expect(vault).toContain("Existing Vault container path");
+    expect(vault).toContain("Existing files do not need a particular extension.");
+    expect(vault).toContain("openEntryEditor(entry.id, \"details\")");
+    expect(vault).toContain("openEntryEditor(entry.id, \"access\")");
+    expect(css).toContain(".fleet-vault-policy-grid-wrap");
+    expect(css).toContain(".fleet-vault-policy-actions");
+  });
+
   test("opens real information popovers for access groups and Vault permissions", () => {
     expect(infoPopover).toContain("PopoverTrigger");
     expect(infoPopover).toContain("PopoverContent");
