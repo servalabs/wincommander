@@ -294,12 +294,12 @@ export type CommandRequest = { device_id: DeviceId, catalog_id: string, action_c
  * still in progress; `applied` requires an explicit device-side postcondition
  * receipt. `failed`/`rejected`/`expired` are terminal results.
  */
-export type CommandStatus = "pending" | "approved" | "dispatched" | "acked" | "applying" | "applied" | "failed" | "rejected" | "expired";
+export type CommandStatus = "pending" | "approved" | "dispatched" | "acked" | "applying" | "applied" | "verified" | "failed" | "rejected" | "expired";
 
 /**
  * Admin-facing view of a command and its gate state.
  */
-export type CommandView = { command_id: string, device_id: DeviceId, catalog_id: string, action_class: ActionClass, status: CommandStatus, approvals: number, required_approvals: number, requested_by: string, created_at: string, updated_at: string | null, approved_at: string | null, dispatched_at: string | null, acknowledged_at: string | null, applying_at: string | null, applied_at: string | null, terminal_at: string | null,
+export type CommandView = { command_id: string, device_id: DeviceId, catalog_id: string, action_class: ActionClass, status: CommandStatus, approvals: number, required_approvals: number, requested_by: string, created_at: string, updated_at: string | null, approved_at: string | null, dispatched_at: string | null, acknowledged_at: string | null, applying_at: string | null, applied_at: string | null, verified_at: string | null, terminal_at: string | null,
 /**
  * Stable request/correlation id supplied when the command was created.
  * This is distinct from the server-assigned `command_id`.
