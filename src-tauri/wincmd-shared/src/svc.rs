@@ -87,6 +87,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.get_settings"
             | "svc.ping"
             | "svc.health"
+            | "svc.diagnostics.query"
             | APPLY_MACHINE_SETTING_VERB
             | "svc.clipboard.get_policy"
             | "svc.clipboard.report_event"
@@ -256,6 +257,10 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         "svc.get_settings" => CapabilityClass::ReadOnly,
         "svc.ping" => CapabilityClass::ReadOnly,
         "svc.health" => CapabilityClass::ReadOnly,
+        // The service pipe returns only a bounded, context-free diagnostic
+        // projection. `commander-svc` still requires an authenticated pipe
+        // peer before serving it.
+        "svc.diagnostics.query" => CapabilityClass::ReadOnly,
 
         // ── Clipboard Guard (D-2 / plan §4.3) ─────────────────────────────
         // The resolved ruleset is already observable by triggering it, so
@@ -350,6 +355,7 @@ mod tests {
             "svc.get_settings",
             "svc.ping",
             "svc.health",
+            "svc.diagnostics.query",
             "svc.vault.capabilities",
             "svc.vault.list_authorized",
         ] {
@@ -418,6 +424,7 @@ mod tests {
             "svc.get_settings",
             "svc.ping",
             "svc.health",
+            "svc.diagnostics.query",
             APPLY_MACHINE_SETTING_VERB,
             "svc.clipboard.get_policy",
             "svc.clipboard.report_event",

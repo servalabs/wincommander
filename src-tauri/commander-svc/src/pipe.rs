@@ -505,8 +505,12 @@ async fn dispatch_verb(
     let Request {
         request_id,
         feature_id,
+        diagnostic_operation_id,
         args,
     } = req;
+    let diagnostic_operation_id = diagnostic_operation_id
+        .filter(|value| valid_diagnostic_operation_id(value))
+        .unwrap_or_else(|| format!("VLT-{request_id}"));
 
     let outcome: Result<serde_json::Value, VerbError> = match feature_id.as_str() {
         "svc.status" => Ok(serde_json::to_value(settings_host::status())
@@ -514,6 +518,7 @@ async fn dispatch_verb(
         "svc.get_settings" => Ok(settings_host::get_settings()),
         "svc.health" => Ok(settings_host::health()),
         "svc.ping" => Ok(serde_json::json!({ "pong": true })),
+        "svc.diagnostics.query" => handle_diagnostics_query(args, peer),
 
         APPLY_MACHINE_SETTING_VERB => handle_apply_machine_setting(args),
 
@@ -547,13 +552,13 @@ async fn dispatch_verb(
             handle_personal_vault_mount(request_id, vault_access, vault_mount, args, peer).await
         }
         "svc.vault.mount" => {
-            handle_vault_mount(request_id, vault_access, vault_mount, args, peer).await
+            handle_vault_mount(request_id, &diagnostic_operation_id, vault_access, vault_mount, args, peer).await
         }
         "svc.vault.create_personal" => {
             handle_personal_vault_create(request_id, vault_access, args, peer)
         }
         "svc.vault.unmount" => {
-            handle_vault_unmount(request_id, vault_access, vault_mount, args, peer)
+            handle_vault_unmount(request_id, &diagnostic_operation_id, vault_access, vault_mount, args, peer)
         }
         "svc.vault.list_authorized" => {
             handle_vault_list_authorized(vault_access, vault_mount, peer)
@@ -582,6 +587,84 @@ async fn dispatch_verb(
             message: e.message,
         }),
     }
+}
+
+fn valid_diagnostic_operation_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+/// Returns the encrypted service store's deliberately small support view.
+/// The service writer owns decryption; the pipe never returns ciphertext,
+/// context, raw errors, paths, identities, or filesystem details.
+fn handle_diagnostics_query(
+    args: serde_json::Value,
+    peer: Option<&AuthenticatedPipePeer>,
+) -> Result<serde_json::Value, VerbError> {
+    if peer.is_none() {
+        return Err(VerbError::new(
+            "diagnostics_forbidden",
+            "diagnostic history requires an authenticated Windows session",
+        ));
+    }
+    let object = args.as_object().ok_or_else(|| {
+        VerbError::new(
+            "diagnostics_validation_failed",
+            "diagnostic query is invalid",
+        )
+    })?;
+    if object
+        .keys()
+        .any(|key| key != "operation_id" && key != "limit")
+    {
+        return Err(VerbError::new(
+            "diagnostics_validation_failed",
+            "diagnostic query is invalid",
+        ));
+    }
+    let operation_id = match object.get("operation_id") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(value))
+            if !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')) =>
+        {
+            Some(value.as_str())
+        }
+        _ => {
+            return Err(VerbError::new(
+                "diagnostics_validation_failed",
+                "diagnostic query is invalid",
+            ))
+        }
+    };
+    let limit = match object.get("limit") {
+        None => 100,
+        Some(value) => value
+            .as_u64()
+            .filter(|value| (1..=100).contains(value))
+            .map(|value| value as usize)
+            .ok_or_else(|| {
+                VerbError::new(
+                    "diagnostics_validation_failed",
+                    "diagnostic query is invalid",
+                )
+            })?,
+    };
+    crate::diagnostics::recent_summaries(operation_id, limit)
+        .and_then(|events| {
+            serde_json::to_value(events)
+                .map_err(|_| "encode diagnostic summaries failed".to_string())
+        })
+        .map_err(|_| {
+            VerbError::new(
+                "diagnostics_unavailable",
+                "encrypted diagnostic history is unavailable",
+            )
+        })
 }
 
 /// Applies one explicitly allow-listed machine setting through the SYSTEM
@@ -1192,14 +1275,25 @@ fn wts_connect_state(session_id: u32) -> Option<WTS_CONNECTSTATE_CLASS> {
 }
 
 async fn handle_vault_mount(
-    operation_id: u64,
+    request_id: u64,
+    diagnostic_operation_id: &str,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     mut args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
-    let mut request = take_vault_mount_request(&mut args)
-        .map_err(|_| VerbError::new("vault_validation_failed", "mount request is invalid"))?;
+    let started = std::time::Instant::now();
+    let mut request = take_vault_mount_request(&mut args).map_err(|_| {
+        crate::diagnostics::record_vault_failure(
+            diagnostic_operation_id,
+            "mount",
+            "VLT.REQUEST.INVALID",
+            "review_request",
+            false,
+            started,
+        );
+        VerbError::new("vault_validation_failed", "mount request is invalid")
+    })?;
     // This must happen before a broker attempt: PID/token membership is
     // derived from the named-pipe peer, never from a renderer identity.
     let authorization = peer
@@ -1239,7 +1333,7 @@ async fn handle_vault_mount(
             let prepared = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
                     crate::pro_broker::VaultCall {
-                        request_id: operation_id,
+                        request_id,
                         target_session_id: 0,
                         caller_sid: "S-1-5-18",
                         caller_token: None,
@@ -1266,19 +1360,53 @@ async fn handle_vault_mount(
                 hidden_protection_password.zeroize();
             }
             request.hidden_protection_password = None;
+            let error_code = match error {
+                crate::encvol_driver::EnsureDriverError::PayloadValidation => {
+                    "VLT.DRIVER.PAYLOAD_INVALID"
+                }
+                crate::encvol_driver::EnsureDriverError::ServiceInspection => {
+                    "VLT.DRIVER.SERVICE_INSPECTION_FAILED"
+                }
+                crate::encvol_driver::EnsureDriverError::ServiceOwnership => {
+                    "VLT.DRIVER.OWNERSHIP_REJECTED"
+                }
+                crate::encvol_driver::EnsureDriverError::ServiceCreate => {
+                    "VLT.DRIVER.CREATE_FAILED"
+                }
+                crate::encvol_driver::EnsureDriverError::ServiceConfigure => {
+                    "VLT.DRIVER.CONFIGURE_FAILED"
+                }
+                crate::encvol_driver::EnsureDriverError::ServiceStart => "VLT.DRIVER.START_FAILED",
+            };
+            crate::diagnostics::record_vault_failure(
+                diagnostic_operation_id,
+                "mount",
+                error_code,
+                "check_driver_health",
+                true,
+                started,
+            );
             return Err(VerbError::new(
                 "vault_driver_unavailable",
                 error.public_message(),
             ));
         }
         let Some(peer) = peer else {
+            crate::diagnostics::record_vault_failure(
+                diagnostic_operation_id,
+                "mount",
+                "VLT.AUTH.DENIED",
+                "request_authorization",
+                false,
+                started,
+            );
             return Err(VerbError::new(
                 "vault_not_authorized",
                 "vault peer token unavailable",
             ));
         };
         vault_mount.mount_authorized(
-            operation_id,
+            request_id,
             vault_access,
             &request.entry_id,
             &mut request.password,
@@ -1307,6 +1435,7 @@ async fn handle_vault_mount(
             reason: Some(wincmd_shared::vault_access::VaultMountReason::NotAuthorized),
         }
     };
+    crate::diagnostics::record_vault_terminal(diagnostic_operation_id, "mount", &result, started);
     serde_json::to_value(result)
         .map_err(|_| VerbError::new("vault_internal_error", "mount result could not be created"))
 }
@@ -1413,14 +1542,26 @@ fn vault_authorization_denied() -> wincmd_shared::vault_access::VaultAuthorizeMo
 }
 
 fn handle_vault_unmount(
-    operation_id: u64,
+    request_id: u64,
+    diagnostic_operation_id: &str,
     vault_access: &VaultAccessStore,
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
+    let started = std::time::Instant::now();
     let request: wincmd_shared::vault_access::VaultUnmountRequest = serde_json::from_value(args)
-        .map_err(|_| VerbError::new("vault_validation_failed", "unmount request is invalid"))?;
+        .map_err(|_| {
+            crate::diagnostics::record_vault_failure(
+                diagnostic_operation_id,
+                "dismount",
+                "VLT.REQUEST.INVALID",
+                "review_request",
+                false,
+                started,
+            );
+            VerbError::new("vault_validation_failed", "unmount request is invalid")
+        })?;
     let authorization = peer
         .map(|peer| {
             crate::vault_access::authorize_mount_for_token(
@@ -1432,6 +1573,14 @@ fn handle_vault_unmount(
         .unwrap_or_else(vault_authorization_denied);
     let result = if authorization.allowed {
         let Some(peer) = peer else {
+            crate::diagnostics::record_vault_failure(
+                diagnostic_operation_id,
+                "dismount",
+                "VLT.AUTH.DENIED",
+                "request_authorization",
+                false,
+                started,
+            );
             return Err(VerbError::new(
                 "vault_not_authorized",
                 "vault peer token unavailable",
@@ -1440,7 +1589,7 @@ fn handle_vault_unmount(
         vault_mount.dismount_authorized(
             vault_access,
             crate::vault_mount::AuthorizedDismount {
-                operation_id,
+                operation_id: request_id,
                 entry_id: &request.entry_id,
                 caller_token: peer.token(),
                 caller_session: peer.session_id(),
@@ -1459,6 +1608,7 @@ fn handle_vault_unmount(
             reason: Some(wincmd_shared::vault_access::VaultMountReason::NotAuthorized),
         }
     };
+    crate::diagnostics::record_vault_terminal(diagnostic_operation_id, "dismount", &result, started);
     serde_json::to_value(result).map_err(|_| {
         VerbError::new(
             "vault_internal_error",
@@ -3040,6 +3190,7 @@ mod integration {
         let req = Envelope::Request(Request {
             request_id: 1,
             feature_id: verb.to_string(),
+            diagnostic_operation_id: None,
             args: serde_json::json!({}),
         });
         write_envelope(&mut client, &req)
@@ -3231,6 +3382,7 @@ mod integration {
         let req = Envelope::Request(Request {
             request_id: 1,
             feature_id: "svc.clipboard.report_event".to_string(),
+            diagnostic_operation_id: None,
             args: test_support::sample_clipboard_event_report(),
         })
         .sign(&session_token);
@@ -3303,6 +3455,7 @@ mod integration {
         let req = Envelope::Request(Request {
             request_id: 1,
             feature_id: "svc.policy.install_epoch".to_string(),
+            diagnostic_operation_id: None,
             args: test_support::pipe_wire_args(1, test_support::PIPE_SIG_V1_B64),
         })
         .sign(&session_token);

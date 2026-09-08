@@ -329,6 +329,11 @@ pub struct Request {
     /// "Disable-WindowsDefender". Matches the keys in
     /// commander-free's get_command_tier() that resolve to "paid".
     pub feature_id: String,
+    /// Optional opaque client operation correlation. It is intentionally
+    /// absent for older clients and unrelated service calls. Newer service
+    /// builds validate it before copying it into diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic_operation_id: Option<String>,
     /// Arbitrary JSON args — Pro deserializes per-feature.
     pub args: serde_json::Value,
 }
@@ -542,6 +547,7 @@ mod tests {
         let req = Envelope::Request(Request {
             request_id: 42,
             feature_id: "Disable-WindowsDefender".to_string(),
+            diagnostic_operation_id: None,
             args: serde_json::json!({}),
         });
         let s = serde_json::to_string(&req).unwrap();
@@ -550,6 +556,15 @@ mod tests {
             Envelope::Request(r) => assert_eq!(r.request_id, 42),
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn request_accepts_older_wire_without_diagnostic_correlation() {
+        let raw = r#"{"kind":"request","request_id":1,"feature_id":"svc.vault.mount","args":{}}"#;
+        let Envelope::Request(request) = serde_json::from_str::<Envelope>(raw).unwrap() else {
+            panic!("request envelope expected");
+        };
+        assert_eq!(request.diagnostic_operation_id, None);
     }
 
     #[test]
@@ -613,6 +628,7 @@ mod tests {
                 &Envelope::Request(Request {
                     request_id: 7,
                     feature_id: "vault.create-volume".to_string(),
+                    diagnostic_operation_id: None,
                     args: serde_json::json!({"size_mb": 512}),
                 }),
             )
@@ -658,6 +674,7 @@ mod tests {
         let original = Envelope::Request(Request {
             request_id: 9,
             feature_id: "Disable-WindowsDefender".to_string(),
+            diagnostic_operation_id: None,
             args: serde_json::json!({}),
         });
         let signed = original.clone().sign("token-abc");
@@ -689,6 +706,7 @@ mod tests {
         let original = Envelope::Request(Request {
             request_id: 11,
             feature_id: "Flow-Sync-Rules".to_string(),
+            diagnostic_operation_id: None,
             args: serde_json::json!({
                 "confidence": 0.1,
                 "threshold": 1e-7,
@@ -741,6 +759,7 @@ mod tests {
         let req = Envelope::Request(Request {
             request_id: 1,
             feature_id: "x".to_string(),
+            diagnostic_operation_id: None,
             args: serde_json::Value::Null,
         });
         let once = req.clone().sign("tk");
@@ -845,6 +864,7 @@ mod tests {
 }
 
 pub mod command_strings;
+pub mod diagnostics;
 
 /// Fleet wire types — shared with `commander-pro/fleet-server` and the desktop
 /// Fleet admin panel (via ts-rs). Extracted into the standalone `fleet-proto`

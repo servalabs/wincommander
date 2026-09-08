@@ -47,6 +47,7 @@ mod reconciler;
 // engine and every test in this module compile and run on Linux CI too;
 // only its internal `WindowsPolicyFs`/`windows_acl` submodule is
 // `#[cfg(windows)]`-gated. See `policy_store.rs`'s module doc.
+mod diagnostics;
 mod policy_store;
 mod vault_access;
 

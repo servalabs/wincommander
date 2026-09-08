@@ -161,3 +161,7 @@ target-autonomous-adapter
 target-autonomy-lab
 target-codex-personal-vault
 .cargo-target-driver-bootstrap/
+.target0diagnostics-check/
+
+.codex-diagnostics-target/
+target-diagnostics-check/

@@ -7287,6 +7287,7 @@ dependencies = [
 name = "wincmd-shared"
 version = "3.0.7"
 dependencies = [
+ "aes-gcm",
  "base64 0.22.1",
  "ed25519-dalek",
  "fleet-proto",

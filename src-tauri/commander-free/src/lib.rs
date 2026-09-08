@@ -29,6 +29,7 @@ mod canary_tokens;
 mod context_menu_shred;
 mod datastore;
 mod devtools;
+mod diagnostics;
 mod disk_analyzer;
 mod downloads_watcher;
 mod driver_health;
@@ -2522,6 +2523,9 @@ pub fn run() {
             log::write_log_record,
             log::get_log_records,
             log::clear_log_records,
+            diagnostics::record_diagnostic_event,
+            diagnostics::get_diagnostic_events,
+            diagnostics::get_diagnostics_health,
             native_notify::show_native_test_notification,
             native_notify::notification_renderer_ready,
             native_notify::present_notification_window,
@@ -2854,6 +2858,7 @@ pub fn run() {
             vault_access::apply_vault_access_policy,
             vault_access::get_vault_access_status,
             vault_access::vault_mount_entry,
+            vault_access::get_service_diagnostic_summaries,
             vault_access::vault_unmount_entry,
             vault_access::vault_list_authorized_entries,
             vault_access::get_vault_access_capabilities,
