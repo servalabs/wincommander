@@ -142,7 +142,7 @@ export default class PanelErrorBoundary extends Component<Props, State> {
               <div className="flex flex-col items-center gap-3 text-center">
                 <p className="max-w-md text-[13px] text-[var(--color-text-muted)]">
                   This panel ran into an error and was contained — the rest of WinCommander is unaffected.
-                  Retry it below, or open Error Center for the complete diagnostic.
+                  Retry it below, or open Diagnostic Center for the complete diagnostic.
                 </p>
                 <div className="max-w-lg rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-2 text-left">
                   <p className="font-mono text-[11px] text-[var(--color-text-muted)]">
@@ -155,7 +155,7 @@ export default class PanelErrorBoundary extends Component<Props, State> {
                 <div className="flex flex-wrap justify-center gap-2">
                   <Button icon="refresh" text="Retry panel" intent="primary" onClick={this.handleRetry} />
                   <Button icon="duplicate" text={this.state.copied ? "Copied" : "Copy details"} onClick={this.handleCopy} />
-                  <Button icon="document-open" text="Open Error Center" onClick={this.handleOpenErrorCenter} />
+                  <Button icon="document-open" text="Open Diagnostic Center" onClick={this.handleOpenErrorCenter} />
                   <Button icon="reset" text="Restart WinCommander" onClick={() => window.location.reload()} />
                 </div>
               </div>

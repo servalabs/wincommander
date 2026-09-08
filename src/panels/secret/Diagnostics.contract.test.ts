@@ -5,7 +5,7 @@ declare const Bun: {
 };
 
 describe("Secret Settings diagnostics", () => {
-    test("keeps debug actions in Dev Tools and moves runtime status above Error Center", async () => {
+    test("keeps debug actions in Dev Tools and moves runtime status above Diagnostic Center", async () => {
         const [devPanel, secretPanel] = await Promise.all([
             Bun.file("src/panels/dev/index.tsx").text(),
             Bun.file("src/panels/secret/index.tsx").text(),
@@ -16,7 +16,7 @@ describe("Secret Settings diagnostics", () => {
         expect(devPanel).not.toContain("fleet_status");
         expect(devPanel).toContain("Test Actions");
         expect(secretPanel.indexOf("<RuntimeStatusSection />")).toBeGreaterThan(-1);
-        expect(secretPanel.indexOf("<RuntimeStatusSection />") < secretPanel.indexOf('title="Error Center"')).toBe(true);
+        expect(secretPanel.indexOf("<RuntimeStatusSection />") < secretPanel.indexOf('title="Diagnostic Center"')).toBe(true);
     });
 
     test("uses the Pro handshake ok field and never starts that smoke test on mount", async () => {
@@ -31,17 +31,16 @@ describe("Secret Settings diagnostics", () => {
         expect(hook).not.toContain("void testProConnection()");
     });
 
-    test("lets Error Center consume remaining height and respond to its container", async () => {
-        const [secretStyles, logStyles] = await Promise.all([
+    test("keeps one Diagnostic Center below runtime status without the duplicate Error Center", async () => {
+        const [secretStyles, secretPanel] = await Promise.all([
             Bun.file("src/panels/secret/index.css").text(),
-            Bun.file("src/panels/privacy/LogViewer.css").text(),
+            Bun.file("src/panels/secret/index.tsx").text(),
         ]);
 
         expect(secretStyles).toContain("grid-template-rows: auto minmax(260px, 1fr)");
         expect(secretStyles).toContain(".secret-diagnostics-log-card > .section-collapse");
-        expect(logStyles).toContain("flex: 1 1 260px");
-        expect(logStyles).toContain("min-height: 0");
-        expect(logStyles).toContain("@container (max-width: 760px)");
-        expect(logStyles).not.toContain("max-height: 340px");
+        expect(secretPanel).toContain('title="Diagnostic Center"');
+        expect(secretPanel).not.toContain('title="Error Center"');
+        expect(secretPanel).not.toContain("LogViewer");
     });
 });

@@ -19,7 +19,6 @@ import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../..
 import useBackend from "../../hooks/useBackend";
 import useVisibility from "../../hooks/useVisibility";
 import useEntitlements from "../../hooks/useEntitlements";
-import LogViewer from "../privacy/LogViewer";
 import StartupPinConfig from "../privacy/StartupPinConfig";
 import LockdownConfigSection from "../privacy/LockdownConfigSection";
 import LockdownWordsSection from "../privacy/LockdownWordsSection";
@@ -691,7 +690,7 @@ function EmergencyToolsSection() {
 export default function SecretPanel() {
     const [activeTab, setActiveTab] = useSecretSessionState("secret.active-tab", "disguise");
 
-    // Deep link from PanelErrorBoundary's "Open Error Center" button (every
+    // Deep link from PanelErrorBoundary's "Open Diagnostic Center" button (every
     // panel's crash screen navigates here via navigate-panel/"secret" first,
     // then fires this once Secret Settings has mounted) — land on Diagnostics.
     useEffect(() => {
@@ -735,11 +734,8 @@ export default function SecretPanel() {
                 <TabsContent value="diagnostics" className="secret-diagnostics-tab">
                     <div className="secret-grid secret-diagnostics-grid">
                         <RuntimeStatusSection />
-                        <SectionCard title="Support Console" icon="document" className="secret-grid__wide secret-diagnostics-log-card">
+                        <SectionCard title="Diagnostic Center" icon="document" className="secret-grid__wide secret-diagnostics-log-card">
                             <SupportConsole />
-                        </SectionCard>
-                        <SectionCard title="Error Center" icon="document" className="secret-grid__wide secret-diagnostics-log-card">
-                            <LogViewer />
                         </SectionCard>
                     </div>
                 </TabsContent>

@@ -1,4 +1,5 @@
-// Pure filtering for the in-app Error Center (src/panels/privacy/LogViewer.tsx).
+// Legacy record utilities. The Diagnostic Center reads this older store beside
+// structured events until all writers have migrated.
 // Kept out of the component so the level + source + search logic is unit-testable.
 
 export interface LogRecord {

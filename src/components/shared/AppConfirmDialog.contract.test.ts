@@ -24,7 +24,6 @@ const guardedActionCallers = [
   "src/panels/dev/index.tsx",
   "src/components/settings/VersionManagementCard.tsx",
   "src/panels/privacy/CanaryTokensSection.tsx",
-  "src/panels/privacy/LogViewer.tsx",
   "src/panels/vault/RamDisksSection.tsx",
   "src/panels/privacy/AuthAnomalySection.tsx",
   "src/panels/privacy/PasteMonitorSection.tsx",

@@ -1,30 +1,40 @@
-import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useMemo, useState } from "react";
 import { Button } from "@/components/ui/bp";
+import { safeLegacyDiagnosticSource, sanitizeLegacyDiagnosticMessage } from "../../lib/diagnosticSanitizer";
+import { useDiagnosticCenter, type DiagnosticEvent } from "../../hooks/useDiagnosticCenter";
+import { showError, showSuccess } from "../../utils/toast";
 
-type DiagnosticEvent = {
-  eventId: string;
-  operationId: string;
+type LegacyRecord = { date: string; timestamp: string; level: string; source: string; message: string };
+
+type SourceFilter = "all" | "desktop" | "service" | "legacy";
+type SeverityFilter = "all" | "error" | "warn" | "info";
+
+type TimelineEvent = {
+  id: string;
   occurredAt: string;
-  feature: string;
-  action: string;
-  stage: string;
-  lifecycle: string;
-  outcome: string;
+  source: "desktop" | "service" | "legacy";
+  sourceDetail?: string;
+  severity: "error" | "warn" | "info";
+  summary: string;
+  operationId?: string;
+  detail?: string;
   errorCode?: string;
-  severity: string;
-  retryability: string;
-  suggestedNextAction: string;
-  durationMs?: number;
-  source?: "desktop" | "service";
+  nextAction?: string;
 };
 
-type DiagnosticsHealth = {
-  persistedEvents: number;
-  droppedEvents: number;
-  redactedFields: number;
-  healthy: boolean;
-};
+const SOURCE_FILTERS: Array<{ value: SourceFilter; label: string }> = [
+  { value: "all", label: "All sources" },
+  { value: "desktop", label: "Desktop" },
+  { value: "service", label: "Service" },
+  { value: "legacy", label: "Legacy" },
+];
+
+const SEVERITY_FILTERS: Array<{ value: SeverityFilter; label: string }> = [
+  { value: "all", label: "All severity" },
+  { value: "error", label: "Errors" },
+  { value: "warn", label: "Warnings" },
+  { value: "info", label: "Information" },
+];
 
 function readable(value: string): string {
   return value.replaceAll("_", " ");
@@ -35,52 +45,99 @@ function timestamp(value: string): string {
   return Number.isNaN(parsed) ? "Unknown time" : new Date(parsed).toLocaleString();
 }
 
+function normalizeSeverity(value: string): TimelineEvent["severity"] {
+  const normalized = value.toLowerCase();
+  if (normalized === "error" || normalized === "danger" || normalized === "critical") return "error";
+  if (normalized === "warn" || normalized === "warning" || normalized === "degraded") return "warn";
+  return "info";
+}
+
+function legacyTimestamp(record: LegacyRecord): string {
+  const parsed = Date.parse(`${record.date}T${record.timestamp}`);
+  return Number.isNaN(parsed) ? `${record.date}T${record.timestamp}` : new Date(parsed).toISOString();
+}
+
+function structuredTimelineEvent(event: DiagnosticEvent, source: "desktop" | "service"): TimelineEvent {
+  return {
+    id: `${source}:${event.eventId}`,
+    occurredAt: event.occurredAt,
+    source,
+    severity: normalizeSeverity(event.severity),
+    summary: `${readable(event.feature)} · ${readable(event.action)} · ${readable(event.stage)}`,
+    operationId: event.operationId,
+    detail: `${readable(event.lifecycle)} → ${readable(event.outcome)}${event.durationMs === undefined ? "" : ` · ${event.durationMs} ms`}`,
+    errorCode: event.errorCode,
+    nextAction: readable(event.suggestedNextAction),
+  };
+}
+
+function legacyTimelineEvent(record: LegacyRecord, index: number): TimelineEvent {
+  return {
+    id: `legacy:${record.date}:${record.timestamp}:${record.source}:${index}`,
+    occurredAt: legacyTimestamp(record),
+    source: "legacy",
+    sourceDetail: safeLegacyDiagnosticSource(record.source),
+    severity: normalizeSeverity(record.level),
+    summary: sanitizeLegacyDiagnosticMessage(record.message, record.source, record.level),
+  };
+}
+
+function copyPlaintext(events: TimelineEvent[]): string {
+  return events.map((event) => [
+    timestamp(event.occurredAt),
+    `[${event.severity.toUpperCase()}]`,
+    `[${event.sourceDetail ?? event.source.toUpperCase()}]`,
+    event.summary,
+    event.operationId ? `operation=${event.operationId}` : "",
+    event.errorCode ? `code=${event.errorCode}` : "",
+    event.detail ?? "",
+    event.nextAction ? `next=${event.nextAction}` : "",
+  ].filter(Boolean).join(" ")).join("\n");
+}
+
 export default function SupportConsole() {
-  const [events, setEvents] = useState<DiagnosticEvent[]>([]);
-  const [health, setHealth] = useState<DiagnosticsHealth | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [unavailable, setUnavailable] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
+  const { structuredEvents, legacyRecords, health, loading, unavailable, refresh } = useDiagnosticCenter();
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const timeline = useMemo(() => [
+    ...structuredEvents.map((event) => structuredTimelineEvent(event, event.source ?? "desktop")),
+    ...legacyRecords.map(legacyTimelineEvent),
+  ].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)), [legacyRecords, structuredEvents]);
+
+  const filteredTimeline = useMemo(() => timeline.filter((event) => (
+    (sourceFilter === "all" || event.source === sourceFilter)
+    && (severityFilter === "all" || event.severity === severityFilter)
+  )), [severityFilter, sourceFilter, timeline]);
+
+  const handleCopy = useCallback(async () => {
     try {
-      const [nextEvents, nextHealth, serviceEvents] = await Promise.all([
-        invoke<DiagnosticEvent[]>("get_diagnostic_events", { limit: 50 }),
-        invoke<DiagnosticsHealth>("get_diagnostics_health"),
-        invoke<DiagnosticEvent[]>("get_service_diagnostic_summaries", { limit: 50 }).catch(() => []),
-      ]);
-      const combined = [...nextEvents, ...serviceEvents.map(event => ({ ...event, lifecycle: "applied", source: "service" as const }))]
-        .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt));
-      setEvents(combined);
-      setHealth(nextHealth);
-      setUnavailable(false);
+      await navigator.clipboard.writeText(copyPlaintext(filteredTimeline));
+      showSuccess("Safe diagnostic text copied to clipboard.");
     } catch {
-      setEvents([]);
-      setHealth(null);
-      setUnavailable(true);
-    } finally {
-      setLoading(false);
+      showError("Could not copy diagnostic text.");
     }
-  }, []);
-
-  useEffect(() => { void refresh(); }, [refresh]);
+  }, [filteredTimeline]);
 
   if (unavailable) {
     return (
       <div className="text-[12px] leading-5 text-[var(--text-dim)]">
-        Support Console is unavailable in this installed build. Update WinCommander to view structured diagnostics.
+        Diagnostic Center is unavailable in this installed build. Update WinCommander to view diagnostics.
         <div className="mt-3"><Button text="Refresh" icon="refresh" className="compact-action-btn" loading={loading} onClick={refresh} /></div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="m-0 max-w-2xl text-[12px] leading-5 text-[var(--text-dim)]">
-          Safe operation history. This view never displays files, passwords, clipboard content, camera data, or raw system errors.
+          One safe diagnostic history for the retained seven-day window. Legacy free-text details are intentionally hidden because they have no privacy classification.
         </p>
-        <Button text="Refresh" icon="refresh" className="compact-action-btn" loading={loading} onClick={refresh} />
+        <div className="flex gap-2">
+          <Button text="Refresh" icon="refresh" className="compact-action-btn" loading={loading} onClick={refresh} />
+          <Button text="Copy safe text" icon="duplicate" className="compact-action-btn" disabled={filteredTimeline.length === 0} onClick={handleCopy} />
+        </div>
       </div>
 
       {health && (
@@ -92,34 +149,65 @@ export default function SupportConsole() {
         </div>
       )}
 
-      {!loading && events.length === 0 && (
-        <p className="m-0 text-[12px] text-[var(--text-mute)]">No structured diagnostic events have been recorded yet.</p>
+      <div className="flex flex-wrap gap-3" aria-label="Diagnostic filters">
+        <FilterGroup label="Source" options={SOURCE_FILTERS} selected={sourceFilter} onSelect={setSourceFilter} />
+        <FilterGroup label="Severity" options={SEVERITY_FILTERS} selected={severityFilter} onSelect={setSeverityFilter} />
+      </div>
+
+      {!loading && filteredTimeline.length === 0 && (
+        <p className="m-0 text-[12px] text-[var(--text-mute)]">No diagnostic records match these filters.</p>
       )}
 
-      <div className="flex max-h-[420px] flex-col gap-2 overflow-y-auto pr-1" aria-live="polite">
-        {events.map((event) => (
-          <article key={event.eventId} className="rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] p-3">
+      <div className="flex max-h-[520px] min-h-[220px] flex-col gap-2 overflow-y-auto pr-1" aria-live="polite" aria-label="Unified diagnostic timeline">
+        {filteredTimeline.map((event) => (
+          <article key={event.id} className="rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] p-3">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <span className="font-[family-name:var(--font-mono)] text-[10px] uppercase tracking-wider text-[var(--text-mute)]">
-                {event.operationId}
+                {event.sourceDetail ?? event.source} · {event.severity}
               </span>
               <span className="text-[10px] text-[var(--text-mute)]">{timestamp(event.occurredAt)}</span>
             </div>
-            <div className="mt-1 text-[13px] font-medium text-[var(--text)]">
-              {readable(event.feature)} · {readable(event.action)} · {readable(event.stage)}
-            </div>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[var(--text-dim)]">
-              <span>{readable(event.lifecycle)} → {readable(event.outcome)}</span>
-              {event.source === "service" && <span>Service record</span>}
-              <span>Severity: {readable(event.severity)}</span>
-              <span>Retry: {readable(event.retryability)}</span>
-              {event.durationMs !== undefined && <span>{event.durationMs} ms</span>}
-              {event.errorCode && <span>Code: {event.errorCode}</span>}
-            </div>
-            <div className="mt-1 text-[11px] text-[var(--text-mute)]">Next: {readable(event.suggestedNextAction)}</div>
+            <div className="mt-1 text-[13px] font-medium text-[var(--text)]">{event.summary}</div>
+            {event.operationId && <div className="mt-1 font-[family-name:var(--font-mono)] text-[10px] text-[var(--text-mute)]">Operation: {event.operationId}</div>}
+            {(event.detail || event.errorCode || event.nextAction) && (
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[var(--text-dim)]">
+                {event.detail && <span>{event.detail}</span>}
+                {event.errorCode && <span>Code: {event.errorCode}</span>}
+                {event.nextAction && <span>Next: {event.nextAction}</span>}
+              </div>
+            )}
           </article>
         ))}
       </div>
+    </div>
+  );
+}
+
+function FilterGroup<T extends string>({
+  label,
+  options,
+  selected,
+  onSelect,
+}: {
+  label: string;
+  options: Array<{ value: T; label: string }>;
+  selected: T;
+  onSelect: (value: T) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={`${label} filters`}>
+      <span className="text-[10px] uppercase tracking-wider text-[var(--text-mute)]">{label}</span>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={`rounded-[var(--r-sm)] border px-2 py-1 text-[10px] ${selected === option.value ? "border-[var(--accent)] bg-[var(--surface-3)] text-[var(--text)]" : "border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-mute)]"}`}
+          aria-pressed={selected === option.value}
+          onClick={() => onSelect(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   );
 }
