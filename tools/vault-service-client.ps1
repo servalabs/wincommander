@@ -1,7 +1,7 @@
 # Authenticated acceptance client for the local WinCommander SYSTEM service.
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('get-policy', 'get-status', 'capabilities', 'list', 'apply', 'mount', 'unmount', 'unknown-verb')]
+    [ValidateSet('get-policy', 'get-status', 'capabilities', 'list', 'diagnostics', 'apply', 'mount', 'unmount', 'unknown-verb')]
     [string]$Action,
 
     [string]$EntryId,
@@ -10,11 +10,44 @@ param(
     [ValidateSet('outer', 'hidden')]
     [string]$VolumeRole = 'outer',
 
+    # Read-only acceptance probes can relaunch themselves through Windows'
+    # explicit RunAs path.  Mutation and password-bearing actions are never
+    # forwarded this way, so no secret is written to a temporary file.
+    [switch]$Elevated,
+
     [Parameter(ValueFromPipeline = $true)]
     [string]$InputSecret
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Test-ElevatedToken {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if ($Elevated -and -not (Test-ElevatedToken)) {
+    $readOnlyActions = @('get-policy', 'get-status', 'capabilities', 'list', 'diagnostics')
+    if ($Action -notin $readOnlyActions) {
+        throw '-Elevated is restricted to read-only service probes.'
+    }
+    $resultPath = Join-Path $env:TEMP ("wincommander-vault-probe-{0}.json" -f [guid]::NewGuid().ToString('N'))
+    $escapedScript = $PSCommandPath.Replace("'", "''")
+    $escapedResult = $resultPath.Replace("'", "''")
+    $childCommand = "try { & '$escapedScript' -Action '$Action' | Set-Content -LiteralPath '$escapedResult' -NoNewline; exit 0 } catch { exit 1 }"
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+    try {
+        $process = Start-Process -FilePath powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand"
+        if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $resultPath)) {
+            throw 'The elevated read-only Vault probe did not return a result.'
+        }
+        Get-Content -LiteralPath $resultPath -Raw
+    } finally {
+        Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+    }
+    return
+}
 
 function Write-Frame([System.IO.Stream]$Stream, [string]$Json) {
     $body = [Text.Encoding]::UTF8.GetBytes($Json)
@@ -48,6 +81,7 @@ $feature = switch ($Action) {
     'get-status' { 'svc.vault.get_status' }
     'capabilities' { 'svc.vault.capabilities' }
     'list' { 'svc.vault.list_authorized' }
+    'diagnostics' { 'svc.diagnostics.query' }
     'apply' { 'svc.vault.apply_policy' }
     'mount' { 'svc.vault.mount' }
     'unmount' { 'svc.vault.unmount' }

@@ -95,6 +95,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const [status, setStatus] = useState<VaultPolicyStatus | null>(null);
   const [authorizedEntries, setAuthorizedEntries] = useState<VaultAuthorizedEntry[]>([]);
   const [canManagePolicy, setCanManagePolicy] = useState(false);
+  const [policyLoadUnavailable, setPolicyLoadUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [legacyNotice, setLegacyNotice] = useState<string | null>(null);
@@ -151,25 +152,44 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         await new Promise<void>(resolve => window.setTimeout(resolve, VAULT_LIST_RETRY_DELAY_MS));
         return listAuthorizedEntries();
       });
-      const capabilities = await getCapabilities().catch(() => ({ can_manage_policy: false }));
+      // A successful admin capability check must not be overwritten by a
+      // transient policy/status read.  Those are different operations: an
+      // unavailable policy read needs a retry message, not the misleading
+      // "not elevated" warning.
+      const capabilities = await getCapabilities().catch(async () => {
+        await new Promise<void>(resolve => window.setTimeout(resolve, VAULT_LIST_RETRY_DELAY_MS));
+        return getCapabilities();
+      });
       if (revision !== refreshRevision.current) return false;
       setAuthorizedEntries(entries);
       setMountResults({});
       setCanManagePolicy(capabilities.can_manage_policy);
+      setPolicyLoadUnavailable(false);
       if (capabilities.can_manage_policy) {
         try {
-          const [loadedPolicy, loadedStatus] = await Promise.all([
-            getPolicy().then(value => value ? normalizeVaultAccessPolicy(value) : null),
-            includeStatus ? getStatus() : Promise.resolve(null),
-          ]);
+          const loadedPolicy = await getPolicy().then(value => value ? normalizeVaultAccessPolicy(value) : null);
           if (revision !== refreshRevision.current) return false;
-        if (replaceDirtyDraft || !dirtyRef.current) replacePolicy(loadedPolicy, false);
-        else if (!draftBaseRef.current && loadedPolicy && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
-        if (loadedStatus) setStatus(loadedStatus);
+          if (replaceDirtyDraft || !dirtyRef.current) replacePolicy(loadedPolicy, false);
+          else if (!draftBaseRef.current && loadedPolicy && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
+
+          // Status is advisory.  A failure here must not hide an elevated
+          // administrator's policy editor or turn into an elevation warning.
+          if (includeStatus) {
+            try {
+              const loadedStatus = await getStatus();
+              if (revision !== refreshRevision.current) return false;
+              setStatus(loadedStatus);
+            } catch {
+              if (revision !== refreshRevision.current) return false;
+              setStatus(null);
+            }
+          }
         } catch {
-          // Preserve the usable caller-filtered list if elevation changed while
-          // this refresh was in flight; only the policy editor needs elevation.
-          setCanManagePolicy(false);
+          // Keep the verified capability.  Rendering an editable replacement
+          // policy after a failed read could overwrite real rules, so block
+          // editing until the original policy can be loaded again.
+          if (revision !== refreshRevision.current) return false;
+          setPolicyLoadUnavailable(true);
           setStatus(null);
         }
       } else {
@@ -525,7 +545,12 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         <div><strong>Run WinCommander as administrator to change Vault settings</strong><p>This account is an Administrator, but this app instance is not elevated. You can still view and mount Vaults assigned to this account.</p></div>
       </div>}
 
-      {canManagePolicy && <fieldset disabled={saving} className="contents">
+      {canManagePolicy && policyLoadUnavailable && <div className="fleet-vault-verification-warning" role="alert">
+        <Icon icon="warning-sign" size={16} />
+        <div><strong>Vault settings could not be loaded yet</strong><p>Your administrator permission is confirmed, but the local service did not return the saved settings. Refresh this page before making changes; your assigned Vaults can still be mounted normally.</p></div>
+      </div>}
+
+      {canManagePolicy && !policyLoadUnavailable && <fieldset disabled={saving} className="contents">
       <Card>
         <CardHeader>
           <CardTitle>Vault access</CardTitle>

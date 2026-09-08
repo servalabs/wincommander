@@ -182,7 +182,9 @@ describe("Fleet access-control panel contracts", () => {
     expect(vaultHook).not.toContain("volumePath");
     expect(vault).toContain("My vaults");
     expect(vault).toContain("Only Vaults that the service has authorized");
-    expect(vault).toContain("{canManagePolicy && <fieldset");
+    expect(vault).toContain("{canManagePolicy && !policyLoadUnavailable && <fieldset");
+    expect(vault).toContain("Vault settings could not be loaded yet");
+    expect(vault).toContain("const capabilities = await getCapabilities().catch(async () => {");
     expect(vault).toContain("passwordInputRef");
     expect(vault).toContain('if (input) input.value = ""');
     expect(vault).toContain('password = ""');
