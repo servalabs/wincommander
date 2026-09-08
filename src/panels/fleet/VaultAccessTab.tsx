@@ -60,6 +60,29 @@ function vaultListFailure(cause: unknown): { category: "service_connect" | "serv
   };
 }
 
+function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ELEVATION_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.APPLY_FAILED"; message: string } {
+  // Keep the service's transport/Windows detail out of the UI.  The service
+  // already makes the authorization decision; this only turns its fixed error
+  // categories into an action the person can take.
+  const detail = cause instanceof Error ? cause.message.toLowerCase() : "";
+  if (detail.includes("forbidden") || detail.includes("privileged")) {
+    return {
+      code: "VLT.POLICY.ELEVATION_REQUIRED",
+      message: "Vault settings require an elevated WinCommander window. Close this window, then start WinCommander with Run as administrator. Your assigned Vaults can still be mounted normally.",
+    };
+  }
+  if (detail.includes("version conflict") || detail.includes("changed elsewhere")) {
+    return {
+      code: "VLT.POLICY.VERSION_CONFLICT",
+      message: "Vault settings changed in another WinCommander window. Refresh this page before saving again.",
+    };
+  }
+  return {
+    code: "VLT.POLICY.APPLY_FAILED",
+    message: "Vault settings could not be saved. Refresh the Vault page and retry; use the reference below if it repeats.",
+  };
+}
+
 interface MountTarget {
   entryId: string;
   containerKind: VaultContainerKind;
@@ -281,8 +304,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         showSuccess("Vault settings saved. Future mounts only need the password.", undefined, { operationId });
       }
     } catch (cause) {
-      recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: "VLT.POLICY.APPLY_FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
-      showError("Vault settings could not be saved.", undefined, { operationId });
+      const failure = vaultPolicySaveFailure(cause);
+      recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: failure.code, severity: "error", retryability: "manual", suggestedNextAction: failure.code === "VLT.POLICY.ELEVATION_REQUIRED" ? "restart_elevated" : "retry", privacyClass: "local_sensitive" });
+      showError(failure.message, undefined, { operationId });
     } finally {
       saveInProgress.current = false;
       setSaving(false);
