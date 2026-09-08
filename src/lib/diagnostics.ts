@@ -1,9 +1,9 @@
 // Safe frontend producer for the encrypted diagnostic event store.
-// Features call this before showing an optional bell/toast projection. Never
+// Features call this before a policy-derived bell projection. Never
 // put user text, paths, camera data, clipboard content, or backend errors here.
 import { invoke } from "@tauri-apps/api/core";
-import { diagnosticBellProjection } from "./diagnosticNotification";
-import { pushNotification } from "./notificationStore";
+import { routeDiagnosticNotification } from "./diagnosticNotification";
+import { pushDiagnosticNotification } from "./notificationStore";
 
 export type DiagnosticLifecycle = "requested" | "delivered" | "acknowledged" | "applying" | "applied" | "verified";
 export type DiagnosticOutcome = "started" | "progress" | "succeeded" | "failed" | "degraded" | "recovered" | "cancelled" | "timed_out";
@@ -61,7 +61,7 @@ export function recordDiagnostic(input: SafeDiagnosticInput): string {
   const valid = SAFE_IDENTIFIER.test(input.feature) && SAFE_IDENTIFIER.test(input.action)
     && SAFE_IDENTIFIER.test(input.stage) && SAFE_IDENTIFIER.test(input.suggestedNextAction);
   if (!valid || (input.errorCode !== undefined && !SAFE_CODE.test(input.errorCode))) return operationId;
-  const projection = diagnosticBellProjection(input);
+  const route = routeDiagnosticNotification(input);
   void invoke("record_diagnostic_event", {
     event: {
       eventId: token("evt"), operationId,
@@ -77,7 +77,7 @@ export function recordDiagnostic(input: SafeDiagnosticInput): string {
   }).then(() => {
     // The bell is a projection of a durable event, never a parallel error path.
     // It contains only a stable operation reference; details stay encrypted.
-    if (projection) pushNotification(projection.severity, projection.message, undefined, projection.kind, operationId);
+    if (route.bell) pushDiagnosticNotification(route.bell, operationId);
   }).catch(() => {});
   return operationId;
 }

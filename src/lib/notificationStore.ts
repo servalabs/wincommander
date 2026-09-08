@@ -12,6 +12,8 @@
 // (monitors, lockdown, network detections) and must not be polluted with
 // transient UI errors. This store is plain localStorage, frontend-only.
 
+import type { DiagnosticBellProjection } from "./diagnosticNotification";
+
 export type NotifSeverity = "info" | "warn" | "danger";
 
 // Which section of the title-bar Alerts popover an item belongs to. "alert" =
@@ -85,7 +87,7 @@ function writeNotifs(list: AppNotification[]): void {
   window.dispatchEvent(new Event(NOTIF_CHANGED_EVENT));
 }
 
-/** Add a notification to the bell. Returns its id. Newest first. */
+/** Add a general UI notification to the bell. New diagnostic code must use pushDiagnosticNotification. */
 export function pushNotification(
   severity: NotifSeverity,
   message: string,
@@ -119,6 +121,15 @@ export function pushNotification(
   });
   writeNotifs(list);
   return id;
+}
+
+/**
+ * Diagnostic bell delivery. Callers supply the policy-produced projection,
+ * never a free-form message, so sensitive feature code cannot publish raw
+ * errors, paths, process names, camera data, or clipboard content to the bell.
+ */
+export function pushDiagnosticNotification(projection: DiagnosticBellProjection, operationId: string): string {
+  return pushNotification(projection.severity, projection.message, undefined, projection.kind, operationId);
 }
 
 /** All current bell notifications, newest first. */
