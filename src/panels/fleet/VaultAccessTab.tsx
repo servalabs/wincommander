@@ -28,6 +28,38 @@ function appliedAt(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleString();
 }
 
+const VAULT_LIST_RETRY_DELAY_MS = 300;
+
+function vaultListFailure(cause: unknown): { category: "service_connect" | "service_reply" | "service_denied" | "unknown"; message: string } {
+  // Do not put a backend error into the renderer or diagnostic store: a list
+  // request can fail while the service is restarting, and the original error
+  // may contain OS transport detail.  Keep the user-facing result actionable
+  // but bounded instead.
+  const detail = cause instanceof Error ? cause.message.toLowerCase() : "";
+  if (detail.includes("rejected request") || detail.includes("forbidden")) {
+    return {
+      category: "service_denied",
+      message: "The local Vault service denied this list request. Close every WinCommander window and open it again.",
+    };
+  }
+  if (detail.includes("reply") || detail.includes("signature") || detail.includes("unexpected")) {
+    return {
+      category: "service_reply",
+      message: "The local Vault service did not complete its secure reply. Refresh WinCommander after the service has finished starting.",
+    };
+  }
+  if (detail.includes("connect") || detail.includes("hello") || detail.includes("pipe") || detail.includes("timed out")) {
+    return {
+      category: "service_connect",
+      message: "WinCommander could not reach its local Vault service. It may still be starting; refresh in a moment.",
+    };
+  }
+  return {
+    category: "unknown",
+    message: "WinCommander could not load the Vault list. Refresh the Vault page; if it repeats, use the reference below when contacting support.",
+  };
+}
+
 interface MountTarget {
   entryId: string;
   containerKind: VaultContainerKind;
@@ -89,10 +121,14 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       // gives this app a standard token. Ask the service about this *process*
       // before making privileged policy calls; the ordinary authorised-vault
       // list must remain available either way.
-      const [entries, capabilities] = await Promise.all([
-        listAuthorizedEntries(),
-        getCapabilities().catch(() => ({ can_manage_policy: false })),
-      ]);
+      // A developer restart can launch the window a fraction before the
+      // restarted SYSTEM service accepts its pipe.  Retry this read once;
+      // access decisions remain entirely service-owned.
+      const entries = await listAuthorizedEntries().catch(async () => {
+        await new Promise<void>(resolve => window.setTimeout(resolve, VAULT_LIST_RETRY_DELAY_MS));
+        return listAuthorizedEntries();
+      });
+      const capabilities = await getCapabilities().catch(() => ({ can_manage_policy: false }));
       if (revision !== refreshRevision.current) return false;
       setAuthorizedEntries(entries);
       setMountResults({});
@@ -117,7 +153,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         setStatus(null);
       }
       return true;
-    } catch {
+    } catch (cause) {
       if (revision !== refreshRevision.current) return false;
       setAuthorizedEntries([]);
       setMountResults({});
@@ -125,7 +161,10 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       const now = Date.now();
       if (now - lastRefreshErrorAt.current > 30_000) {
         lastRefreshErrorAt.current = now;
-        showError("Your Vault list is unavailable.");
+        const failure = vaultListFailure(cause);
+        const operationId = newDiagnosticOperationId("vault");
+        recordDiagnostic({ operationId, feature: "vault", action: "list_authorized", stage: "service_read", lifecycle: "verified", outcome: "failed", errorCode: "VLT.LIST.UNAVAILABLE", severity: "warn", retryability: "automatic", suggestedNextAction: "refresh_status", privacyClass: "local_sensitive", context: { reason_category: failure.category, retry_count: 1 } });
+        showError(failure.message, undefined, { operationId });
       }
       return false;
     } finally {
