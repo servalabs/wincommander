@@ -26,6 +26,7 @@ import { shouldSkipStartupSplash } from "./lib/startupMode";
 import AppShell from "./components/AppShell";
 import { SearchProvider } from "./context/SearchContext";
 import BackgroundPollers from "./components/BackgroundPollers";
+import DiagnosticEventBridge from "./components/DiagnosticEventBridge";
 import CalculatorGate from "./components/startup/CalculatorGate";
 import { AuthModeProvider, useAuthMode, type AuthMode } from "./context/AuthModeContext";
 import ShredConfirmationDialog from "./components/ShredConfirmationDialog";
@@ -1417,6 +1418,7 @@ function AppContent() {
         onShredRequest={handleShredRequest}
         onPanelChange={handlePanelChange}
       />
+      <DiagnosticEventBridge />
       <UsbHidApprovalDialog />
 
       <RdpIdleWarningDialog
