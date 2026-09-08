@@ -25,19 +25,11 @@
  * still alive) could never run for the app's own session.
  */
 import { useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { executeBackendCommand } from "./useBackend";
 import { showError } from "../utils/toast";
 import { beginRdpOperation, recordRdpDiagnostic } from "./rdpDiagnostics";
 
 const POLL_MS = 10_000;
-
-// Write a state-transition event to the UNIFIED app log (Error Center) via
-// write_log_record — mirrors useRdpIdleDisconnect's logRdp helper so idle
-// sign-off failures are visible in the same place as other RDP events.
-function logRdp(level: "info" | "warn" | "error", message: string): void {
-  invoke("write_log_record", { level, message }).catch(() => {});
-}
 
 interface RdpSession {
   sessionId?: number;
@@ -150,7 +142,6 @@ export default function useRdpIncomingIdleSignout(
                   if (!succeeded) {
                     signedOffRef.current.delete(id);
                     console.warn(`[RdpIncomingSignout] Logoff ${id} failed (ok=${r.data?.ok}, success=${r.success}), will retry`);
-                    logRdp("warn", `RDP incoming idle sign-off failed for session ${id} ('${s.username ?? "?"}') — will retry`);
                     void showError("Could not sign off the idle RDP session — will retry.", undefined, { operationId });
                     recordRdpDiagnostic(operationId, "idle_signoff", "applied", "applied", "failed", "error", "RDP.SESSION.LOGOFF_FAILED");
                   } else {
@@ -160,8 +151,6 @@ export default function useRdpIncomingIdleSignout(
                 .catch(e => {
                   signedOffRef.current.delete(id); // IPC error — let the next poll retry
                   console.error(`[RdpIncomingSignout] Logoff ${id} error:`, e);
-                  const msg = e instanceof Error ? e.message : String(e);
-                  logRdp("error", `RDP incoming idle sign-off error for session ${id} ('${s.username ?? "?"}'): ${msg}`);
                   void showError("Could not sign off the idle RDP session — will retry.", undefined, { operationId });
                   recordRdpDiagnostic(operationId, "idle_signoff", "applied", "applied", "failed", "error", "RDP.SESSION.LOGOFF_FAILED");
                 });

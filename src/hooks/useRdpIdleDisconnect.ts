@@ -33,14 +33,6 @@ import { beginRdpOperation, recordRdpDiagnostic } from "./rdpDiagnostics";
 const POLL_MS = 5_000; // PowerShell: is mstsc running? (rdpOpen + remote hosts)
 const TICK_MS = 1_000; // native: system-wide idle seconds
 
-// Write a meaningful RDP-idle event to the UNIFIED app log (Error Center) via
-// the write_log_record command — not just the dev console. Only state
-// transitions are logged (start / warning / disconnect / failure / snooze),
-// never the per-second tick, so the log stays readable.
-function logRdp(level: "info" | "warn" | "error", message: string): void {
-  invoke("write_log_record", { level, message }).catch(() => {});
-}
-
 export interface RdpIdleState {
   secondsSinceActivity: number;
   isIdle: boolean;
@@ -106,7 +98,8 @@ export default function useRdpIdleDisconnect(
     setIsIdle(false);
     setWarningLeft(effectiveWarningSeconds);
     console.log("[RdpIdle] Snoozed for", effectiveWarningSeconds, "s");
-    logRdp("info", `RDP idle disconnect cancelled — snoozed ${effectiveWarningSeconds}s`);
+    const operationId = beginRdpOperation("idle_disconnect");
+    recordRdpDiagnostic(operationId, "idle_disconnect", "user_action", "applied", "cancelled", "info");
   }, [effectiveWarningSeconds, dropAlwaysOnTop]);
 
   useEffect(() => {
@@ -127,7 +120,8 @@ export default function useRdpIdleDisconnect(
     }
 
     console.log("[RdpIdle] Starting — timeout:", timeoutSeconds, "s | warning:", effectiveWarningSeconds, "s");
-    logRdp("info", `RDP idle monitor armed — disconnect after ${timeoutSeconds}s idle (warns ${effectiveWarningSeconds}s before)`);
+    const monitorOperationId = beginRdpOperation("session_monitor");
+    recordRdpDiagnostic(monitorOperationId, "session_monitor", "start", "applying", "started", "info");
 
     // ── PowerShell poll (5 s): does an RDP session exist right now? ──────────
     const poll = async () => {
@@ -236,8 +230,6 @@ export default function useRdpIdleDisconnect(
           const mins = Math.floor(effectiveIdle / 60);
           const secs = effectiveIdle % 60;
           const idleLabel = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-          logRdp("warn", `RDP idle ${idleLabel} — warning shown, disconnecting in ${effectiveWarningSeconds}s unless cancelled`);
-
           await executeBackendCommand("Hide-RDPClientWindow", {}).catch(() => {});
           try {
             const win = getCurrentWindow();
@@ -292,16 +284,9 @@ export default function useRdpIdleDisconnect(
               const killResult = await invoke<{ killed: boolean; code: number; msg: string }>("kill_mstsc_processes");
               console.log("[RdpIdle] kill_mstsc_processes result:", JSON.stringify(killResult));
             }
-            const extras = [
-              dismountVaultsOnDisconnect ? "remote vaults dismounted" : null,
-              clearCacheOnDisconnect ? "RDP history cleared" : null,
-              removeCredsOnDisconnect ? "saved credentials removed" : null,
-            ].filter(Boolean).join(", ");
-            logRdp("warn", `RDP session disconnected after ${timeoutSeconds}s idle${extras ? ` (${extras})` : ""}`);
             recordRdpDiagnostic(operationId, "idle_disconnect", "applied", "applied", "succeeded", "warn");
           } catch (e) {
             console.error("[RdpIdle] idle disconnect FAILED:", e);
-            logRdp("error", `RDP idle disconnect failed: ${e instanceof Error ? e.message : String(e)}`);
             killedRef.current = false; // let it retry next tick
             recordRdpDiagnostic(operationId, "idle_disconnect", "applied", "applied", "failed", "error", "RDP.DISCONNECT.FAILED");
           } finally {
