@@ -26,6 +26,7 @@ import PrivacyEventTable from './PrivacyEventTable';
 import type { RansomwareAction } from "../../types/settings";
 import TierGate from "../../components/shared/TierGate";
 import useEntitlements from "../../hooks/useEntitlements";
+import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 
 interface RansomwareDetection {
   count: number;
@@ -165,6 +166,7 @@ export default function RansomwareMonitorSection({
   };
 
   const onAddCustomDir = async () => {
+    const operationId = newDiagnosticOperationId("ransomware");
     try {
       const picked = await openDialog({
         multiple: false,
@@ -181,6 +183,9 @@ export default function RansomwareMonitorSection({
       // Refresh dir list shortly — Rust reconciles asynchronously.
       setTimeout(() => { refreshWatchedDirs(); }, 300);
     } catch (err) {
+      recordDiagnostic({ operationId, feature: "ransomware", action: "add_watch_directory", stage: "configuration",
+        lifecycle: "applied", outcome: "failed", errorCode: "RAN.WATCH_DIRECTORY.ADD_FAILED", severity: "warn",
+        retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
       showError(`Couldn't add folder: ${err}`);
     }
   };

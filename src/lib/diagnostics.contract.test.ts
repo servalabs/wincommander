@@ -120,4 +120,39 @@ describe("frontend diagnostics producer", () => {
       expect(source).toContain(code);
     }
   });
+
+  test("covered protected paths do not leave a DevTools-only or direct failure notification", async () => {
+    const protectedPaths = [
+      "src/components/BackgroundPollers.tsx",
+      "src/components/FlowActivityLogger.tsx",
+      "src/hooks/useAcquisitionWatch.ts",
+      "src/hooks/useAuthAnomalyMonitor.ts",
+      "src/hooks/useDecoyMonitor.ts",
+      "src/hooks/useDistressPhrases.ts",
+      "src/hooks/useLockdownWords.ts",
+      "src/hooks/usePasteMonitor.ts",
+      "src/hooks/useRansomwareMonitor.ts",
+      "src/hooks/useRdpIdleDisconnect.ts",
+      "src/hooks/useRdpIncomingDismount.ts",
+      "src/hooks/useRdpIncomingIdleSignout.ts",
+      "src/hooks/useRemoteAccessMonitor.ts",
+      "src/hooks/useWifiGuardMonitor.ts",
+      "src/panels/privacy/PasteMonitorSection.tsx",
+      "src/panels/privacy/PrivacyShieldCard.tsx",
+      "src/panels/privacy/RansomwareMonitorSection.tsx",
+      "src/panels/privacy/RemoteAccessMonitorSection.tsx",
+      "src/panels/privacy/UsbDevicesSection.tsx",
+    ];
+    const failureOutput = /console\.(?:warn|error)\(|showError\(/g;
+
+    for (const path of protectedPaths) {
+      const source = await Bun.file(path).text();
+      for (const match of source.matchAll(failureOutput)) {
+        const start = Math.max(0, match.index! - 900);
+        const nearby = source.slice(start, match.index! + 4_000);
+        expect(nearby, `${path} failure at offset ${match.index} must persist before DevTools or UI delivery`)
+          .toMatch(/record(?:Rdp)?Diagnostic|recordUsbFailure|\brecord\(/);
+      }
+    }
+  });
 });

@@ -39,6 +39,7 @@ import useEntitlements from '../../hooks/useEntitlements';
 import { useUsbHidApproval } from '../../context/UsbHidApprovalContext';
 import { DEFAULT_USB_HID_APPROVAL_TTL_SECS } from '../../lib/usbHidApproval';
 import UsbHidApprovalGateSettings from './UsbHidApprovalGateSettings';
+import { newDiagnosticOperationId, recordDiagnostic } from '../../lib/diagnostics';
 
 // U-C: shape returned by get_usb_hid_alerts (timing + device identity — no keystroke content).
 interface HidInjectionAlert {
@@ -303,6 +304,11 @@ export default function UsbDevicesSection() {
   const hidApprovalGateEnabled = appSettings?.ideal?.privacy?.usbSecurity?.hidApprovalGateEnabled === true;
   const hidApprovalTtlSecs = appSettings?.ideal?.privacy?.usbSecurity?.hidApprovalTtlSecs
     ?? DEFAULT_USB_HID_APPROVAL_TTL_SECS;
+  const recordUsbFailure = useCallback((action: string, errorCode: string) => {
+    recordDiagnostic({ operationId: newDiagnosticOperationId("usb"), feature: "usb", action, stage: "windows_apply",
+      lifecycle: "applied", outcome: "failed", errorCode, severity: "warn", retryability: "manual",
+      suggestedNextAction: "retry", privacyClass: "local_sensitive" });
+  }, []);
 
   // Fetch mounted USB volumes (Explorer-style names + drive letters). Isolated
   // from refresh() because it shells out to a potentially-slow PowerShell query;
@@ -550,11 +556,12 @@ export default function UsbDevicesSection() {
         await refresh();
       } catch (e) {
         setError(String(e));
+        recordUsbFailure("monitor", "USB.MONITOR.CONFIG_FAILED");
       } finally {
         setBusy(false);
       }
     },
-    [patchAppSettings, refresh],
+    [patchAppSettings, recordUsbFailure, refresh],
   );
 
   // U-C: toggle the low-confidence USB HID timing-anomaly guard.
@@ -570,11 +577,12 @@ export default function UsbDevicesSection() {
         await refresh();
       } catch (e) {
         setError(String(e));
+        recordUsbFailure("hid_guard", "USB.HID_GUARD.CONFIG_FAILED");
       } finally {
         setBusy(false);
       }
     },
-    [patchAppSettings, refresh],
+    [patchAppSettings, recordUsbFailure, refresh],
   );
 
   const clearHidAlerts = useCallback(async () => {
@@ -591,10 +599,11 @@ export default function UsbDevicesSection() {
       setHidAlerts([]);
     } catch (e) {
       setError(String(e));
+      recordUsbFailure("clear_hid_alerts", "USB.HID_ALERTS.CLEAR_FAILED");
     } finally {
       setBusy(false);
     }
-  }, [requestConfirm]);
+  }, [recordUsbFailure, requestConfirm]);
 
   const setHidSensitivityCmd = useCallback(async (sensitivity: 'lenient' | 'balanced' | 'strict') => {
     setBusy(true);
@@ -605,10 +614,11 @@ export default function UsbDevicesSection() {
       setHidThresholds({ humanFloorMs: next.humanFloorMs, minBurstKeys: next.minBurstKeys });
     } catch (e) {
       setError(String(e));
+      recordUsbFailure("set_hid_sensitivity", "USB.HID_GUARD.SENSITIVITY_FAILED");
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [recordUsbFailure]);
 
   const toggleNotify = useCallback(
     async (on: boolean) => {
@@ -619,11 +629,12 @@ export default function UsbDevicesSection() {
         setNotifyEnabled(on);
       } catch (e) {
         setError(String(e));
+        recordUsbFailure("set_notification", "USB.NOTIFICATION.CONFIG_FAILED");
       } finally {
         setBusy(false);
       }
     },
-    [],
+    [recordUsbFailure],
   );
 
   const toggleMetering = useCallback(
@@ -638,11 +649,12 @@ export default function UsbDevicesSection() {
         await refresh();
       } catch (e) {
         setError(String(e));
+        recordUsbFailure("metering", "USB.METERING.CONFIG_FAILED");
       } finally {
         setBusy(false);
       }
     },
-    [patchAppSettings, refresh],
+    [patchAppSettings, recordUsbFailure, refresh],
   );
 
   const setHidApprovalGateEnabled = useCallback(async (enabled: boolean) => {
@@ -658,11 +670,12 @@ export default function UsbDevicesSection() {
     } catch (reason) {
       const message = humanizeUsbError(reason);
       setError(message);
+      recordUsbFailure("hid_approval_gate", "USB.HID_APPROVAL.CONFIG_FAILED");
       void showError(`Keyboard approval setting failed: ${message}`);
     } finally {
       setHidApprovalBusy(false);
     }
-  }, [hidApprovalTtlSecs, patchAppSettings, startHidApprovalGate, stopHidApprovalGate]);
+  }, [hidApprovalTtlSecs, patchAppSettings, recordUsbFailure, startHidApprovalGate, stopHidApprovalGate]);
 
   const setHidApprovalTtlSecs = useCallback(async (approvalTtlSecs: number) => {
     setHidApprovalBusy(true);
@@ -673,11 +686,12 @@ export default function UsbDevicesSection() {
     } catch (reason) {
       const message = humanizeUsbError(reason);
       setError(message);
+      recordUsbFailure("hid_approval_window", "USB.HID_APPROVAL.TTL_FAILED");
       void showError(`Keyboard approval window failed to update: ${message}`);
     } finally {
       setHidApprovalBusy(false);
     }
-  }, [patchAppSettings, startHidApprovalGate]);
+  }, [patchAppSettings, recordUsbFailure, startHidApprovalGate]);
 
   // U-D: block / allow a device by its raw Windows InstanceId. U-A now exposes
   // `instanceId` on each timeline entry; we fall back to the device key only for
@@ -701,12 +715,13 @@ export default function UsbDevicesSection() {
       } catch (e) {
         const msg = humanizeUsbError(e);
         setError(msg);
+        recordUsbFailure("block_device", "USB.DEVICE.BLOCK_FAILED");
         void showError(`Block failed: ${msg}`);
       } finally {
         setBusy(false);
       }
     },
-    [refresh, requestConfirm, volumes],
+    [recordUsbFailure, refresh, requestConfirm, volumes],
   );
 
   const allowDevice = useCallback(
@@ -730,12 +745,13 @@ export default function UsbDevicesSection() {
       } catch (e) {
         const msg = humanizeUsbError(e);
         setError(msg);
+        recordUsbFailure("allow_device", "USB.DEVICE.ALLOW_FAILED");
         void showError(`Allow failed: ${msg}`);
       } finally {
         setBusy(false);
       }
     },
-    [hidApprovalGateEnabled, refresh, volumes],
+    [hidApprovalGateEnabled, recordUsbFailure, refresh, volumes],
   );
 
   // U-E: set a mounted storage volume read-only via diskpart.

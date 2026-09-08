@@ -29,7 +29,7 @@ import useAutoHeal from "../hooks/useAutoHeal";
 import useAdoptCurrentState from "../hooks/useAdoptCurrentState";
 import { privacyShieldBlurTriggers, resolvePrivacyShieldMode } from "../lib/privacyShieldMode";
 import { resolveFleetPrivacyShieldControl } from "../lib/fleetPrivacyShieldControl";
-import { recordDiagnostic } from "../lib/diagnostics";
+import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
 import type { PanelId } from "../types/panels";
 
 interface PasteMonitorDetected {
@@ -395,12 +395,20 @@ export default function BackgroundPollers({
     // Fires when user clicks "Enable Shield" in the system tray menu.
     // Gate: only act if the privacyShield module is enabled.
     const unlistenTrayShield = listen("tray-shield-toggle-requested", async () => {
+      const operationId = newDiagnosticOperationId("privacy_shield");
       if (appSettingsRef.current?.ideal?.privacy?.privacyShield?.fleetManaged === true) {
+        recordDiagnostic({ operationId, feature: "privacy_shield", action: "tray_start", stage: "authorization",
+          lifecycle: "acknowledged", outcome: "failed", errorCode: "PSH.FLEET.MANAGED", severity: "warn",
+          retryability: "never", suggestedNextAction: "contact_administrator", privacyClass: "restricted",
+          context: { state: "fleet_managed" } });
         showWarning("Privacy Shield is managed by Fleet.");
         return;
       }
       if (!isModuleEnabled(modulesRef.current, 'privacyShield')) return;
       try {
+        recordDiagnostic({ operationId, feature: "privacy_shield", action: "tray_start", stage: "request",
+          lifecycle: "requested", outcome: "started", severity: "info", retryability: "automatic",
+          suggestedNextAction: "await_result", privacyClass: "restricted", context: { state: "requested" } });
         const shield = appSettingsRef.current?.ideal?.privacy?.privacyShield;
         const mode = resolvePrivacyShieldMode({ fleetManaged: false, localMode: shield?.notifyMode });
         const detectorTriggers = {
@@ -412,18 +420,33 @@ export default function BackgroundPollers({
         const res = await startPrivacyShield(0, detectorTriggers.gaze, detectorTriggers.faces, detectorTriggers.device, false, false, shield?.modelSize ?? "medium", shield?.confidenceThreshold ?? 0.5, shield?.blurOpacity ?? 200, shield?.wakeDelaySeconds ?? 150, shield?.deviceWakeMultiplier ?? 5, shield?.multiFaceWakeMultiplier ?? 5, shield?.detectionBufferFrames ?? 2, shield?.captureSpeed ?? 1, blurTriggers.gaze, blurTriggers.faces, blurTriggers.device);
         if (res.success) {
           await invoke("update_tray_shield_label", { running: true });
+          recordDiagnostic({ operationId, feature: "privacy_shield", action: "tray_start", stage: "process",
+            lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+            suggestedNextAction: "none", privacyClass: "restricted", context: { state: "running" } });
           showSuccess("Privacy Shield enabled.");
         } else {
           await invoke("update_tray_shield_label", { running: false }).catch(() => {});
           // Toggle result → Notifications tab, not System Alerts.
+          recordDiagnostic({ operationId, feature: "privacy_shield", action: "tray_start", stage: "process",
+            lifecycle: "applied", outcome: "failed", errorCode: "PSH.START.FAILED", severity: "error",
+            retryability: "manual", suggestedNextAction: "review_status", privacyClass: "restricted",
+            context: { state: "start_failed" } });
           showError(res.error || "Failed to start Privacy Shield.", undefined, { kind: "notification" });
         }
       } catch {
         await invoke("update_tray_shield_label", { running: false }).catch(() => {});
+        recordDiagnostic({ operationId, feature: "privacy_shield", action: "tray_start", stage: "process",
+          lifecycle: "applied", outcome: "failed", errorCode: "PSH.START.FAILED", severity: "error",
+          retryability: "automatic", suggestedNextAction: "retry", privacyClass: "restricted",
+          context: { state: "start_failed" } });
         showError("Failed to start Privacy Shield.", undefined, { kind: "notification" });
       }
     });
     const unlistenFleetShieldDenied = listen("fleet-privacy-shield-control-denied", () => {
+      recordDiagnostic({ feature: "privacy_shield", action: "fleet_control", stage: "authorization",
+        lifecycle: "acknowledged", outcome: "failed", errorCode: "PSH.FLEET.MANAGED", severity: "warn",
+        retryability: "never", suggestedNextAction: "contact_administrator", privacyClass: "restricted",
+        context: { state: "fleet_managed" } });
       showWarning("Privacy Shield was started by Fleet and can only be stopped by a Fleet administrator.");
     });
     // The Fleet master policy sends only an alarm class and small counters —

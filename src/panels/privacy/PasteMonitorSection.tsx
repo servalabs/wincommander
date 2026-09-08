@@ -40,6 +40,7 @@ import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import PrivacyEventTable from './PrivacyEventTable';
 import LocalClipboardRulesEditor from "./LocalClipboardRulesEditor";
+import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 
 interface DetectionRow {
   pattern: string;
@@ -179,19 +180,27 @@ export default function PasteMonitorSection({
   };
 
   const onSnooze = async (minutes: number) => {
+    const operationId = newDiagnosticOperationId("clipboard");
     try {
       await invoke("snooze_paste_monitor", { minutes });
     } catch (err) {
       console.warn("[PasteMonitor] snooze failed:", err);
+      recordDiagnostic({ operationId, feature: "clipboard", action: "snooze_monitor", stage: "runtime",
+        lifecycle: "applied", outcome: "failed", errorCode: "CLP.SNOOZE.FAILED", severity: "warn",
+        retryability: "manual", suggestedNextAction: "retry", privacyClass: "restricted" });
     }
     refreshSnooze();
   };
 
   const onCancelSnooze = async () => {
+    const operationId = newDiagnosticOperationId("clipboard");
     try {
       await invoke("cancel_paste_monitor_snooze");
     } catch (err) {
       console.warn("[PasteMonitor] cancel snooze failed:", err);
+      recordDiagnostic({ operationId, feature: "clipboard", action: "cancel_snooze", stage: "runtime",
+        lifecycle: "applied", outcome: "failed", errorCode: "CLP.SNOOZE.CANCEL_FAILED", severity: "warn",
+        retryability: "manual", suggestedNextAction: "retry", privacyClass: "restricted" });
     }
     refreshSnooze();
   };
@@ -203,10 +212,14 @@ export default function PasteMonitorSection({
       confirmLabel: "Clear detections",
     });
     if (!accepted) return;
+    const operationId = newDiagnosticOperationId("clipboard");
     try {
       await invoke("clear_paste_monitor_recent");
     } catch (err) {
       console.warn("[PasteMonitor] clear recent failed:", err);
+      recordDiagnostic({ operationId, feature: "clipboard", action: "clear_recent", stage: "local_store",
+        lifecycle: "applied", outcome: "failed", errorCode: "CLP.RECENT.CLEAR_FAILED", severity: "warn",
+        retryability: "manual", suggestedNextAction: "retry", privacyClass: "restricted" });
     }
     refreshRecent();
   };

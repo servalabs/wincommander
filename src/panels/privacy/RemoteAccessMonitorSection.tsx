@@ -29,6 +29,7 @@ import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import { useAppState } from "../../context/AppContext";
 import { applyMachineSetting } from "../../hooks/machineSettingsClient";
 import PrivacyEventTable from './PrivacyEventTable';
+import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 
 interface ToolEntry {
   id: string;
@@ -149,6 +150,7 @@ export default function RemoteAccessMonitorSection({
   if (searchQuery.trim()) return null;
 
   const onToggleTool = async (toolId: string, next: boolean) => {
+    const operationId = newDiagnosticOperationId("remote_access");
     // Optimistic catalogue update + persist the override map.
     setTools((prev) => prev.map((t) => (t.id === toolId ? { ...t, enabled: next } : t)));
     onPatch({ tools: { ...(toolOverrides ?? {}), [toolId]: next } });
@@ -156,6 +158,10 @@ export default function RemoteAccessMonitorSection({
       await invoke("set_remote_access_tool_enabled", { toolId, enabled: next });
     } catch (err) {
       await refreshTools();
+      recordDiagnostic({ operationId, feature: "remote_access", action: "configure_tool", stage: "runtime",
+        lifecycle: "applied", outcome: "failed", errorCode: "REMOTE.ACCESS.TOOL_CONFIG_FAILED", severity: "warn",
+        retryability: "manual", suggestedNextAction: "retry", privacyClass: "restricted",
+        context: { state: next ? "enable" : "disable" } });
       showError(`Couldn't update ${toolId}: ${err}`);
     }
   };
