@@ -150,8 +150,7 @@ describe("frontend diagnostics producer", () => {
       for (const match of source.matchAll(failureOutput)) {
         const start = Math.max(0, match.index! - 900);
         const nearby = source.slice(start, match.index! + 4_000);
-        expect(nearby, `${path} failure at offset ${match.index} must persist before DevTools or UI delivery`)
-          .toMatch(/record(?:Rdp)?Diagnostic|recordUsbFailure|\brecord\(/);
+        expect(nearby).toMatch(/record(?:Rdp)?Diagnostic|recordUsbFailure|\brecord\(/);
       }
     }
   });
