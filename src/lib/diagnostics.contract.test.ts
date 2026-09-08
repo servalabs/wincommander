@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { diagnosticBellProjection, type DiagnosticNotificationInput } from "./diagnosticNotification";
+
+const baseEvent: DiagnosticNotificationInput = {
+  feature: "vault", action: "mount", outcome: "failed", privacyClass: "local_sensitive",
+};
 
 describe("frontend diagnostics producer", () => {
   test("keeps diagnostic events structured and limits context to the writer allowlist", async () => {
@@ -8,6 +13,27 @@ describe("frontend diagnostics producer", () => {
     expect(source).toContain('"reason_category"');
     expect(source).toContain('"state"');
     expect(source).not.toContain("console.error");
+    expect(source).toContain("diagnosticBellProjection");
+    expect(source).toContain("pushNotification(projection.severity");
+  });
+
+  test("projects only terminal attention outcomes into a safe bell message", () => {
+    expect(diagnosticBellProjection(baseEvent)).toEqual({
+      severity: "danger", kind: "notification", message: "Vault mount failed",
+    });
+    expect(diagnosticBellProjection({ ...baseEvent, outcome: "degraded" })).toEqual({
+      severity: "warn", kind: "notification", message: "Vault mount needs attention",
+    });
+    expect(diagnosticBellProjection({ ...baseEvent, outcome: "succeeded" })).toBeUndefined();
+  });
+
+  test("never puts restricted detail or caller-controlled tokens in the bell", () => {
+    const projection = diagnosticBellProjection({
+      ...baseEvent, feature: "alice_private_vault", action: "C_users_alice_secret", privacyClass: "restricted",
+      outcome: "timed_out",
+    });
+    expect(projection).toEqual({ severity: "danger", kind: "notification", message: "A protected operation failed" });
+    expect(JSON.stringify(projection)).not.toContain("alice");
   });
 
   test("Privacy Shield, Flow, monitor, and Fleet producers use the shared writer", async () => {

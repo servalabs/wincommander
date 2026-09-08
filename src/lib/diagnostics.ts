@@ -2,6 +2,8 @@
 // Features call this before showing an optional bell/toast projection. Never
 // put user text, paths, camera data, clipboard content, or backend errors here.
 import { invoke } from "@tauri-apps/api/core";
+import { diagnosticBellProjection } from "./diagnosticNotification";
+import { pushNotification } from "./notificationStore";
 
 export type DiagnosticLifecycle = "requested" | "delivered" | "acknowledged" | "applying" | "applied" | "verified";
 export type DiagnosticOutcome = "started" | "progress" | "succeeded" | "failed" | "degraded" | "recovered" | "cancelled" | "timed_out";
@@ -32,6 +34,7 @@ const SAFE_IDENTIFIER = /^[a-z0-9_-]{1,128}$/;
 const SAFE_CODE = /^[A-Z0-9._-]{1,128}$/;
 const CONTEXT_KEYS = new Set(["attempt", "build_version", "capability", "driver_state", "health", "os_error_code", "policy_version", "reason_category", "retry_count", "state"]);
 
+
 function token(prefix: string): string {
   const suffix = globalThis.crypto?.randomUUID?.().replaceAll("-", "")
     ?? `${Date.now()}${Math.random().toString(36).slice(2)}`;
@@ -58,6 +61,7 @@ export function recordDiagnostic(input: SafeDiagnosticInput): string {
   const valid = SAFE_IDENTIFIER.test(input.feature) && SAFE_IDENTIFIER.test(input.action)
     && SAFE_IDENTIFIER.test(input.stage) && SAFE_IDENTIFIER.test(input.suggestedNextAction);
   if (!valid || (input.errorCode !== undefined && !SAFE_CODE.test(input.errorCode))) return operationId;
+  const projection = diagnosticBellProjection(input);
   void invoke("record_diagnostic_event", {
     event: {
       eventId: token("evt"), operationId,
@@ -70,6 +74,10 @@ export function recordDiagnostic(input: SafeDiagnosticInput): string {
       durationMs: Number.isFinite(input.durationMs) && input.durationMs! >= 0 ? Math.round(input.durationMs!) : undefined,
       privacyClass: input.privacyClass, redactedContext: safeContext(input.context),
     },
+  }).then(() => {
+    // The bell is a projection of a durable event, never a parallel error path.
+    // It contains only a stable operation reference; details stay encrypted.
+    if (projection) pushNotification(projection.severity, projection.message, undefined, projection.kind, operationId);
   }).catch(() => {});
   return operationId;
 }
