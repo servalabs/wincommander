@@ -19,6 +19,7 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { StartupProtectionOperation } from "../lib/startupProtectionReadiness";
+import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
 
 export default function useRemoteAccessMonitor(
   enabled: boolean,
@@ -31,6 +32,8 @@ export default function useRemoteAccessMonitor(
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
+    const operationId = newDiagnosticOperationId("remote_access");
+    const startedAt = Date.now();
     const fingerprint = `${enabled}|${JSON.stringify(
       Object.entries(toolOverrides ?? {}).sort(),
     )}`;
@@ -38,7 +41,9 @@ export default function useRemoteAccessMonitor(
       if (cancelled) return;
       try {
         if (!enabled) {
+          recordDiagnostic({ operationId, feature: "remote_access", action: "stop", stage: "sidecar", lifecycle: "applying", outcome: "started", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "restricted", context: { state: "disabled", retry_count: attempt } });
           await invoke("stop_remote_access_monitor");
+          recordDiagnostic({ operationId, feature: "remote_access", action: "stop", stage: "sidecar", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "restricted", context: { state: "disabled", retry_count: attempt } });
           lastReconciled.current = fingerprint;
           return;
         }
@@ -49,16 +54,20 @@ export default function useRemoteAccessMonitor(
             await invoke("set_remote_access_tool_enabled", { toolId, enabled: on });
           }
         }
+        recordDiagnostic({ operationId, feature: "remote_access", action: "start", stage: "sidecar", lifecycle: "applying", outcome: "started", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "restricted", context: { state: "enabled", retry_count: attempt } });
         await invoke("start_remote_access_monitor");
         if (cancelled) return;
         lastReconciled.current = fingerprint;
+        recordDiagnostic({ operationId, feature: "remote_access", action: "start", stage: "sidecar", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "restricted", context: { state: "enabled", retry_count: attempt } });
         onStartupRearm?.("remote-access-monitor", true);
       } catch (err) {
         console.warn("[useRemoteAccessMonitor] reconcile failed:", err);
+        recordDiagnostic({ operationId, feature: "remote_access", action: enabled ? "start" : "stop", stage: "sidecar", lifecycle: "applied", outcome: "failed", errorCode: enabled ? "REMOTE.ACCESS.START_FAILED" : "REMOTE.ACCESS.STOP_FAILED", severity: "warn", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "restricted", context: { state: enabled ? "enabled" : "disabled", retry_count: attempt } });
         attempt += 1;
         if (!cancelled && attempt < 3) {
           retryTimer = setTimeout(() => { void reconcile(); }, attempt * 5_000);
         } else if (!cancelled && enabled) {
+          recordDiagnostic({ operationId, feature: "remote_access", action: "start", stage: "sidecar", lifecycle: "applied", outcome: "degraded", errorCode: "REMOTE.ACCESS.STARTUP_DEGRADED", severity: "warn", retryability: "manual", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "restricted", context: { state: "enabled", retry_count: attempt } });
           onStartupRearm?.("remote-access-monitor", false);
         }
       }

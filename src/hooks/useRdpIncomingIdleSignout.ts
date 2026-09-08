@@ -170,9 +170,17 @@ export default function useRdpIncomingIdleSignout(
             // dismount can never run. Dismount FIRST, then sign off.
             if (dismountOnEmpty && s.isCurrentSession) {
               console.log(`[RdpIncomingSignout] session ${id} is this app's session — dismounting vaults before sign-off`);
+              const dismountOperationId = beginRdpOperation("dismount");
+              recordRdpDiagnostic(dismountOperationId, "dismount", "requested", "requested", "started", "warn");
               void executeBackendCommand("Dismount-LocalVaults", {})
-                .then(r => console.log("[RdpIncomingSignout] Pre-sign-off dismount result:", JSON.stringify(r)))
-                .catch(e => console.error("[RdpIncomingSignout] Pre-sign-off dismount error:", e))
+                .then(r => {
+                  console.log("[RdpIncomingSignout] Pre-sign-off dismount result:", JSON.stringify(r));
+                  recordRdpDiagnostic(dismountOperationId, "dismount", "applied", "applied", r.success === false ? "failed" : "succeeded", r.success === false ? "error" : "warn", r.success === false ? "VLT.DISMOUNT.FAILED" : undefined);
+                })
+                .catch(e => {
+                  console.error("[RdpIncomingSignout] Pre-sign-off dismount error:", e);
+                  recordRdpDiagnostic(dismountOperationId, "dismount", "applied", "applied", "failed", "error", "VLT.DISMOUNT.FAILED");
+                })
                 .finally(signOff);
             } else {
               void signOff();
@@ -181,6 +189,8 @@ export default function useRdpIncomingIdleSignout(
         }
       } catch (e) {
         console.error("[RdpIncomingSignout] Poll exception:", e);
+        const operationId = beginRdpOperation("session_monitor");
+        recordRdpDiagnostic(operationId, "session_monitor", "readback", "verified", "failed", "warn", "RDP.SESSION.READBACK_FAILED");
       } finally {
         inFlightRef.current = false;
       }

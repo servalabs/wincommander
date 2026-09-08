@@ -141,6 +141,8 @@ export default function useRdpIdleDisconnect(
 
         if (!res.success || res.data == null) {
           console.warn("[RdpIdle] Poll failed:", JSON.stringify(res));
+          const operationId = beginRdpOperation("session_monitor");
+          recordRdpDiagnostic(operationId, "session_monitor", "readback", "verified", "failed", "warn", "RDP.SESSION.READBACK_FAILED");
           return;
         }
 
@@ -170,6 +172,8 @@ export default function useRdpIdleDisconnect(
         rdpActiveRef.current = true;
       } catch (e) {
         console.error("[RdpIdle] Poll exception:", e);
+        const operationId = beginRdpOperation("session_monitor");
+        recordRdpDiagnostic(operationId, "session_monitor", "readback", "verified", "failed", "warn", "RDP.SESSION.READBACK_FAILED");
       }
     };
 
@@ -191,6 +195,8 @@ export default function useRdpIdleDisconnect(
           idle = await invoke<number>("get_system_idle_seconds");
         } catch (e) {
           console.warn("[RdpIdle] native idle probe failed:", e);
+          const operationId = beginRdpOperation("idle_probe");
+          recordRdpDiagnostic(operationId, "idle_probe", "readback", "verified", "failed", "warn", "RDP.IDLE.PROBE_FAILED");
           return; // never advance the counter on a failed reading
         }
         if (!mountedRef.current || killedRef.current || !rdpActiveRef.current) return;
@@ -244,6 +250,8 @@ export default function useRdpIdleDisconnect(
           invoke("show_rdp_idle_warning_native", {
             idleTime: idleLabel,
             secondsLeft: effectiveWarningSeconds,
+          }).then(() => {
+            recordRdpDiagnostic(operationId, "idle_warning", "notification", "applied", "succeeded", "warn");
           }).catch((err) => {
             console.warn("[RdpIdle] custom warning notification failed", err);
             recordRdpDiagnostic(operationId, "idle_warning", "notification", "applied", "failed", "warn", "RDP.WARNING.DELIVERY_FAILED");

@@ -171,6 +171,8 @@ export default function useRdpIncomingDismount(
         prevTotalRef.current = total;
       } catch (e) {
         console.error("[RdpIncomingDismount] Poll exception:", e);
+        const operationId = beginRdpOperation("session_monitor");
+        recordRdpDiagnostic(operationId, "session_monitor", "readback", "verified", "failed", "warn", "RDP.SESSION.READBACK_FAILED");
       } finally {
         inFlightRef.current = false;
       }

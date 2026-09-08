@@ -48,6 +48,21 @@ describe("frontend diagnostics producer", () => {
     }
   });
 
+  test("frontend monitor and RDP enforcement failures use durable safe diagnostics", async () => {
+    for (const [path, failureCode] of [
+      ["src/hooks/useWifiGuardMonitor.ts", "WIFI.GUARD.START_FAILED"],
+      ["src/hooks/useAuthAnomalyMonitor.ts", "AUTH.MONITOR.START_FAILED"],
+      ["src/hooks/useRemoteAccessMonitor.ts", "REMOTE.ACCESS.START_FAILED"],
+      ["src/hooks/useRdpIncomingIdleSignout.ts", "RDP.SESSION.READBACK_FAILED"],
+      ["src/hooks/useRdpIncomingDismount.ts", "RDP.SESSION.READBACK_FAILED"],
+      ["src/hooks/useRdpIdleDisconnect.ts", "RDP.IDLE.PROBE_FAILED"],
+    ]) {
+      const source = await Bun.file(path).text();
+      expect(source).toMatch(/record(?:Rdp)?Diagnostic/);
+      expect(source).toContain(failureCode);
+    }
+  });
+
   test("native monitor producers persist safe detections before UI delivery", async () => {
     for (const [path, code] of [
       ["src-tauri/commander-free/src/ransomware_monitor.rs", "RAN.DETECTION"],

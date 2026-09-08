@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { WifiGuardBaselineEntry } from "../types/settings";
 import { showWarning } from "../utils/toast";
 import type { StartupProtectionOperation } from "../lib/startupProtectionReadiness";
+import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
 
 export const DEFAULT_WIFI_GUARD_LEARNING_WINDOW_SECS = 24 * 60 * 60;
 export const DEFAULT_WIFI_GUARD_POLL_INTERVAL_SECS = 30;
@@ -59,12 +60,38 @@ export default function useWifiGuardMonitor(
 
   useEffect(() => {
     let cancelled = false;
+    const operationId = newDiagnosticOperationId("wifi_guard");
+    const startedAt = Date.now();
+    const record = (
+      action: "start" | "stop" | "configure",
+      outcome: "started" | "succeeded" | "failed" | "degraded",
+      errorCode?: string,
+      attempt?: number,
+    ) => recordDiagnostic({
+      operationId,
+      feature: "wifi_guard",
+      action,
+      stage: "sidecar",
+      lifecycle: outcome === "started" ? "applying" : "applied",
+      outcome,
+      errorCode,
+      severity: outcome === "failed" || outcome === "degraded" ? "warn" : "info",
+      retryability: outcome === "failed" || outcome === "degraded" ? "automatic" : "never",
+      suggestedNextAction: outcome === "failed" || outcome === "degraded" ? "retry" : "none",
+      durationMs: Date.now() - startedAt,
+      privacyClass: "restricted",
+      context: { state: enabled ? "enabled" : "disabled", retry_count: attempt },
+    });
     const reconcile = async () => {
       // Stopping is deliberately independent of configuration: a bad saved
       // policy must never prevent the operator from disarming the detector.
       if (!enabled) {
-        await invoke("stop_wifi_guard").catch((error) => {
+        record("stop", "started");
+        await invoke("stop_wifi_guard").then(() => {
+          record("stop", "succeeded");
+        }).catch((error) => {
           console.warn("[useWifiGuardMonitor] stop failed:", error);
+          record("stop", "failed", "WIFI.GUARD.STOP_FAILED");
         });
         return;
       }
@@ -75,12 +102,13 @@ export default function useWifiGuardMonitor(
       // The sidecar can still be coming up during desktop startup. Retry a
       // bounded number of times with short backoff, then surface one clear
       // warning instead of leaving a persisted “on” switch silently inert.
-      for (const delayMs of [0, 1_500, 5_000]) {
+      for (const [attempt, delayMs] of [0, 1_500, 5_000].entries()) {
         if (delayMs > 0) {
           await new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
         }
         if (cancelled) return;
         try {
+          record("configure", "started", undefined, attempt);
           await invoke("configure_wifi_guard", {
             config: {
               learningWindowSecs: policy.learningWindowSecs,
@@ -91,23 +119,28 @@ export default function useWifiGuardMonitor(
             },
           });
           configured = true;
+          record("configure", "succeeded", undefined, attempt);
           appliedBaselineRef.current = baselineFingerprint;
         } catch (error) {
           lastError = error;
           console.warn("[useWifiGuardMonitor] policy sync failed:", error);
+          record("configure", "failed", "WIFI.GUARD.CONFIG_FAILED", attempt);
         }
         try {
           // Still attempt a start if policy sync failed: the sidecar's safe
           // defaults are better than silently dropping requested coverage.
+          record("start", "started", undefined, attempt);
           await invoke("start_wifi_guard");
           started = true;
         } catch (error) {
           lastError = error;
           console.warn("[useWifiGuardMonitor] start failed:", error);
+          record("start", "failed", "WIFI.GUARD.START_FAILED", attempt);
         }
         if (cancelled) return;
         if (configured && started) {
           degradedWarningShownRef.current = false;
+          record("start", "succeeded", undefined, attempt);
           onStartupRearm?.("wifi-guard", true);
           return;
         }
@@ -119,6 +152,7 @@ export default function useWifiGuardMonitor(
           12_000,
         );
         console.warn("[useWifiGuardMonitor] detector remains degraded:", lastError);
+        record("start", "degraded", "WIFI.GUARD.STARTUP_DEGRADED");
       }
       if (!cancelled) onStartupRearm?.("wifi-guard", false);
     };
