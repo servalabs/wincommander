@@ -95,9 +95,18 @@ export function pushNotification(
 ): string {
   const list = readNotifs();
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const safeOperationId = normalizeOperationId(operationId);
   // Dedup identical back-to-back messages (same severity + text as the newest).
   if (list[0] && list[0].severity === severity && list[0].message === message) {
     return list[0].id;
+  }
+  // A frontend event may already have projected its bell item before the
+  // persisted-event bridge observes the same durable record. An operation ID
+  // makes that projection idempotent without retaining diagnostic detail here.
+  if (safeOperationId) {
+    const duplicate = list.find((item) => item.operationId === safeOperationId
+      && item.severity === severity && item.message === message);
+    if (duplicate) return duplicate.id;
   }
   list.unshift({
     id,
@@ -105,7 +114,7 @@ export function pushNotification(
     message,
     detail,
     kind,
-    operationId: normalizeOperationId(operationId),
+    operationId: safeOperationId,
     time: new Date().toISOString(),
   });
   writeNotifs(list);
