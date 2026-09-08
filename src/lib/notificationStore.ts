@@ -32,8 +32,22 @@ export interface AppNotification {
   detail?: string;
   /** Explicit section override; absent falls back to the severity-based default. */
   kind?: NotifKind;
+  /** Safe reference to the durable diagnostic case for this notification. */
+  operationId?: string;
   /** ISO-8601 timestamp. */
   time: string;
+}
+
+/**
+ * Bell notifications are intentionally short and safe. Accept only a bounded,
+ * opaque operation reference here; diagnostic detail stays in the encrypted
+ * store that will own the case timeline.
+ */
+export function normalizeOperationId(operationId?: string): string | undefined {
+  const value = operationId?.trim();
+  return value && value.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(value)
+    ? value
+    : undefined;
 }
 
 /**
@@ -72,14 +86,28 @@ function writeNotifs(list: AppNotification[]): void {
 }
 
 /** Add a notification to the bell. Returns its id. Newest first. */
-export function pushNotification(severity: NotifSeverity, message: string, detail?: string, kind?: NotifKind): string {
+export function pushNotification(
+  severity: NotifSeverity,
+  message: string,
+  detail?: string,
+  kind?: NotifKind,
+  operationId?: string,
+): string {
   const list = readNotifs();
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   // Dedup identical back-to-back messages (same severity + text as the newest).
   if (list[0] && list[0].severity === severity && list[0].message === message) {
     return list[0].id;
   }
-  list.unshift({ id, severity, message, detail, kind, time: new Date().toISOString() });
+  list.unshift({
+    id,
+    severity,
+    message,
+    detail,
+    kind,
+    operationId: normalizeOperationId(operationId),
+    time: new Date().toISOString(),
+  });
   writeNotifs(list);
   return id;
 }

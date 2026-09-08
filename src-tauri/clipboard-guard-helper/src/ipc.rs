@@ -173,6 +173,7 @@ mod win32 {
         let request = Envelope::Request(Request {
             request_id: 1,
             feature_id: verb.to_string(),
+            diagnostic_operation_id: None,
             args,
         });
         let signed = request.sign(&token);

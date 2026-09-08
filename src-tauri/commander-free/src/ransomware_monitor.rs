@@ -35,7 +35,7 @@
 // length crossed the threshold. After firing, a 5-minute snooze
 // prevents toast-spam from a sustained attack.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -45,6 +45,10 @@ use notify::{Event, EventKind};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+use wincmd_shared::diagnostics::{
+    DiagnosticEvent, DiagnosticLifecycle, DiagnosticOutcome, DiagnosticPrivacyClass,
+    DiagnosticRetryability, DiagnosticSeverity,
+};
 
 // ── State ───────────────────────────────────────────────────────────
 //
@@ -510,6 +514,31 @@ fn handle_fs_event(app: &AppHandle, event: Event) {
         }
 
         let _ = app2.emit("ransomware-detected", &detection);
+        // Persist the detection before its optional native notification or UI
+        // listener. Counts only: file paths, process names, PIDs and raw
+        // attribution stay out of the encrypted diagnostic record too.
+        let _ = crate::diagnostics::record(DiagnosticEvent {
+            event_id: format!("evt-ransomware-{}", chrono::Utc::now().timestamp_millis()),
+            operation_id: format!("RANSOMWARE-{}", chrono::Utc::now().timestamp_millis()),
+            parent_operation_id: None,
+            occurred_at: chrono::Utc::now().to_rfc3339(),
+            component: "free_monitor".into(),
+            feature: "ransomware".into(),
+            action: "detection".into(),
+            stage: "monitor".into(),
+            lifecycle: DiagnosticLifecycle::Applied,
+            outcome: DiagnosticOutcome::Failed,
+            error_code: Some("RAN.DETECTION".into()),
+            severity: DiagnosticSeverity::Critical,
+            retryability: DiagnosticRetryability::Manual,
+            suggested_next_action: "disconnect_network".into(),
+            duration_ms: None,
+            privacy_class: DiagnosticPrivacyClass::LocalSensitive,
+            redacted_context: BTreeMap::from([
+                ("reason_category".into(), "mass_modification".into()),
+                ("state".into(), "detected".into()),
+            ]),
+        });
 
         // Name the culprit + what we did, when Pro attributed it.
         let culprit = if image_name.is_empty() {

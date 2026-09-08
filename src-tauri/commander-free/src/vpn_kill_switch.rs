@@ -20,11 +20,16 @@
 // (treated as UNKNOWN), so a VPN that hasn't connected yet at app launch
 // doesn't trigger a spurious block.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+use wincmd_shared::diagnostics::{
+    DiagnosticEvent, DiagnosticLifecycle, DiagnosticOutcome, DiagnosticPrivacyClass,
+    DiagnosticRetryability, DiagnosticSeverity,
+};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -227,6 +232,29 @@ fn spawn_watcher(app: AppHandle, my_epoch: u64) {
                     if crate::network_toggle::internet_kill_switch_set_internal(true).is_ok() {
                         FIRED.store(true, Ordering::SeqCst);
                         LAST_FIRED_AT.store(now_secs(), Ordering::SeqCst);
+                        let stamp = chrono::Utc::now();
+                        let _ = crate::diagnostics::record(DiagnosticEvent {
+                            event_id: format!("evt-vpn-{}", stamp.timestamp_millis()),
+                            operation_id: format!("VPN-{}", stamp.timestamp_millis()),
+                            parent_operation_id: None,
+                            occurred_at: stamp.to_rfc3339(),
+                            component: "free_monitor".into(),
+                            feature: "vpn".into(),
+                            action: "kill_switch_block".into(),
+                            stage: "enforcement".into(),
+                            lifecycle: DiagnosticLifecycle::Applied,
+                            outcome: DiagnosticOutcome::Succeeded,
+                            error_code: Some("VPN.TUNNEL.DROPPED".into()),
+                            severity: DiagnosticSeverity::Critical,
+                            retryability: DiagnosticRetryability::Manual,
+                            suggested_next_action: "restore_tunnel".into(),
+                            duration_ms: None,
+                            privacy_class: DiagnosticPrivacyClass::LocalSensitive,
+                            redacted_context: BTreeMap::from([
+                                ("state".into(), "blocked".into()),
+                                ("reason_category".into(), "tunnel_drop".into()),
+                            ]),
+                        });
                         crate::fleet_agent::report_required_device_alert(
                             "vpn_kill_switch",
                             "tunnel_dropped",
@@ -245,6 +273,29 @@ fn spawn_watcher(app: AppHandle, my_epoch: u64) {
                     // Only auto-release the block if WE engaged it.
                     if FIRED.swap(false, Ordering::SeqCst) {
                         let _ = crate::network_toggle::internet_kill_switch_set_internal(false);
+                        let stamp = chrono::Utc::now();
+                        let _ = crate::diagnostics::record(DiagnosticEvent {
+                            event_id: format!("evt-vpn-{}", stamp.timestamp_millis()),
+                            operation_id: format!("VPN-{}", stamp.timestamp_millis()),
+                            parent_operation_id: None,
+                            occurred_at: stamp.to_rfc3339(),
+                            component: "free_monitor".into(),
+                            feature: "vpn".into(),
+                            action: "kill_switch_release".into(),
+                            stage: "recovery".into(),
+                            lifecycle: DiagnosticLifecycle::Verified,
+                            outcome: DiagnosticOutcome::Recovered,
+                            error_code: None,
+                            severity: DiagnosticSeverity::Info,
+                            retryability: DiagnosticRetryability::Never,
+                            suggested_next_action: "none".into(),
+                            duration_ms: None,
+                            privacy_class: DiagnosticPrivacyClass::LocalSensitive,
+                            redacted_context: BTreeMap::from([
+                                ("state".into(), "released".into()),
+                                ("reason_category".into(), "tunnel_restored".into()),
+                            ]),
+                        });
                         let _ = app.emit("vpn-kill-switch-fired", false);
                         crate::log_message(
                             "info",

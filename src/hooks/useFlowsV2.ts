@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Rule } from "../panels/flows/rules";
+import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
 
 export interface FlowLogEntry {
   id: number;
@@ -122,30 +123,62 @@ export function useFlowsV2(hasPaid: boolean) {
 
   const saveRule = useCallback(
     async (rule: Rule) => {
-      await withTimeout(invoke("flow_save_rule", { rule }), RULE_MUTATION_TIMEOUT_MS, "Saving flow");
-      await reload();
+      const operationId = newDiagnosticOperationId("flow");
+      recordDiagnostic({ operationId, feature: "flow", action: "save_rule", stage: "request", lifecycle: "requested", outcome: "started", severity: "info", retryability: "automatic", suggestedNextAction: "await_result", privacyClass: "local_sensitive", context: { state: "requested" } });
+      try {
+        await withTimeout(invoke("flow_save_rule", { rule }), RULE_MUTATION_TIMEOUT_MS, "Saving flow");
+        recordDiagnostic({ operationId, feature: "flow", action: "save_rule", stage: "persistence", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive", context: { state: "saved" } });
+        await reload();
+      } catch (error) {
+        recordDiagnostic({ operationId, feature: "flow", action: "save_rule", stage: "persistence", lifecycle: "applied", outcome: "failed", errorCode: "FLW.RULE.SAVE_FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive", context: { reason_category: "persistence" } });
+        throw error;
+      }
     },
     [reload],
   );
 
   const deleteRule = useCallback(
     async (ruleId: string) => {
-      await withTimeout(invoke("flow_delete_rule", { ruleId }), RULE_MUTATION_TIMEOUT_MS, "Deleting flow");
-      await reload();
+      const operationId = newDiagnosticOperationId("flow");
+      recordDiagnostic({ operationId, feature: "flow", action: "delete_rule", stage: "request", lifecycle: "requested", outcome: "started", severity: "info", retryability: "automatic", suggestedNextAction: "await_result", privacyClass: "local_sensitive", context: { state: "requested" } });
+      try {
+        await withTimeout(invoke("flow_delete_rule", { ruleId }), RULE_MUTATION_TIMEOUT_MS, "Deleting flow");
+        recordDiagnostic({ operationId, feature: "flow", action: "delete_rule", stage: "persistence", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive", context: { state: "deleted" } });
+        await reload();
+      } catch (error) {
+        recordDiagnostic({ operationId, feature: "flow", action: "delete_rule", stage: "persistence", lifecycle: "applied", outcome: "failed", errorCode: "FLW.RULE.DELETE_FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive", context: { reason_category: "persistence" } });
+        throw error;
+      }
     },
     [reload],
   );
 
   const setEnabled = useCallback(
     async (ruleId: string, enabled: boolean) => {
-      await withTimeout(invoke("flow_set_enabled", { ruleId, enabled }), RULE_MUTATION_TIMEOUT_MS, "Updating flow");
-      await reload();
+      const operationId = newDiagnosticOperationId("flow");
+      recordDiagnostic({ operationId, feature: "flow", action: "set_enabled", stage: "request", lifecycle: "requested", outcome: "started", severity: "info", retryability: "automatic", suggestedNextAction: "await_result", privacyClass: "local_sensitive", context: { state: enabled ? "enabled" : "disabled" } });
+      try {
+        await withTimeout(invoke("flow_set_enabled", { ruleId, enabled }), RULE_MUTATION_TIMEOUT_MS, "Updating flow");
+        recordDiagnostic({ operationId, feature: "flow", action: "set_enabled", stage: "persistence", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive", context: { state: enabled ? "enabled" : "disabled" } });
+        await reload();
+      } catch (error) {
+        recordDiagnostic({ operationId, feature: "flow", action: "set_enabled", stage: "persistence", lifecycle: "applied", outcome: "failed", errorCode: "FLW.RULE.UPDATE_FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive", context: { reason_category: "persistence" } });
+        throw error;
+      }
     },
     [reload],
   );
 
   const fireNow = useCallback(async (ruleId: string) => {
-    await invoke("flow_fire_now", { ruleId });
+    const operationId = newDiagnosticOperationId("flow");
+    recordDiagnostic({ operationId, feature: "flow", action: "execute", stage: "request", lifecycle: "requested", outcome: "started", severity: "info", retryability: "automatic", suggestedNextAction: "await_result", privacyClass: "local_sensitive", context: { state: "requested" } });
+    try {
+      await invoke("flow_fire_now", { ruleId });
+      recordDiagnostic({ operationId, feature: "flow", action: "execute", stage: "delivery", lifecycle: "delivered", outcome: "progress", severity: "info", retryability: "automatic", suggestedNextAction: "await_result", privacyClass: "local_sensitive", context: { state: "delivered" } });
+    } catch (error) {
+      recordDiagnostic({ operationId, feature: "flow", action: "execute", stage: "delivery", lifecycle: "delivered", outcome: "failed", errorCode: "FLW.ACTION.DISPATCH_FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive", context: { reason_category: "dispatch" } });
+      throw error;
+    }
   }, []);
 
   return { ...state, reload, saveRule, deleteRule, setEnabled, fireNow };

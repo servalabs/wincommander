@@ -6,6 +6,7 @@ import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
+import { newDiagnosticOperationId, recordDiagnostic } from "@/lib/diagnostics";
 import {
   clearVaultAccessDraft, readVaultAccessDraftSnapshot, rebaseVaultAccessDraft, writeVaultAccessDraft,
 } from "./vaultAccessDraft";
@@ -190,6 +191,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     if (!policy) return;
     if (error) return void showError(error);
     saveInProgress.current = true;
+    const operationId = newDiagnosticOperationId("vault");
+    recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "requested", lifecycle: "requested", outcome: "started", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
     setSaving(true);
     ++refreshRevision.current;
     setAuthorizedEntries([]);
@@ -211,18 +214,23 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       // returned status is already current; avoid an immediate duplicate read.
       const refreshed = await refresh(true, false);
       if (!refreshed) {
-        showError("Vault settings were saved, but current access could not be verified. Refresh before mounting.");
+        recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "windows_readback", lifecycle: "verified", outcome: "failed", errorCode: "VLT.POLICY.READBACK_FAILED", severity: "warn", retryability: "manual", suggestedNextAction: "refresh_status", privacyClass: "local_sensitive" });
+        showError("Vault settings were saved, but current access could not be verified. Refresh before mounting.", undefined, { operationId });
         return;
       }
       if (removed) {
-        showSuccess("Vault policy removed and shared access revoked.");
+        recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
+        showSuccess("Vault policy removed and shared access revoked.", undefined, { operationId });
       } else if (appliedStatus.validation_state === "degraded") {
-        showError("Vault settings were saved with warnings. Fix the listed access problems before mounting.");
+        recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "degraded", errorCode: "VLT.POLICY.DEGRADED", severity: "warn", retryability: "manual", suggestedNextAction: "review_status", privacyClass: "local_sensitive" });
+        showError("Vault settings were saved with warnings. Fix the listed access problems before mounting.", undefined, { operationId });
       } else {
-        showSuccess("Vault settings saved. Future mounts only need the password.");
+        recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "verified", lifecycle: "verified", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
+        showSuccess("Vault settings saved. Future mounts only need the password.", undefined, { operationId });
       }
     } catch (cause) {
-      showError(cause instanceof Error ? cause.message : String(cause));
+      recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: "VLT.POLICY.APPLY_FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
+      showError("Vault settings could not be saved.", undefined, { operationId });
     } finally {
       saveInProgress.current = false;
       setSaving(false);
@@ -332,16 +340,24 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     if (hiddenProtectionInput) hiddenProtectionInput.value = "";
     setMountTarget(null);
     setMountingEntryId(entryId);
+    const operationId = newDiagnosticOperationId("vault");
+    recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "requested", lifecycle: "requested", outcome: "started", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
     try {
-      const mountRequest = mountEntry(entryId, password, requestedRole, hiddenProtectionPassword || undefined);
+      const mountRequest = mountEntry(entryId, password, requestedRole, hiddenProtectionPassword || undefined, operationId);
       password = "";
       hiddenProtectionPassword = "";
       const result = await mountRequest;
       recordMountResult(result);
-      if (result.state === "mounted") showSuccess(vaultMountResultLabel(result));
-      else showError(vaultMountResultLabel(result));
+      if (result.state === "mounted") {
+        recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
+        showSuccess(vaultMountResultLabel(result), undefined, { operationId });
+      } else {
+        recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: "VLT.MOUNT.FAILED", severity: "error", retryability: "manual", suggestedNextAction: "review_status", privacyClass: "local_sensitive" });
+        showError(vaultMountResultLabel(result), undefined, { operationId });
+      }
     } catch {
-      showError("The Vault mount request could not be completed.");
+      recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: "VLT.MOUNT.FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
+      showError("The Vault mount request could not be completed.", undefined, { operationId });
     } finally {
       password = "";
       hiddenProtectionPassword = "";
@@ -351,13 +367,21 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
   const unmountSelectedEntry = async (entryId: string) => {
     setUnmountingEntryId(entryId);
+    const operationId = newDiagnosticOperationId("vault");
+    recordDiagnostic({ operationId, feature: "vault", action: "dismount", stage: "requested", lifecycle: "requested", outcome: "started", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
     try {
-      const result = await unmountEntry(entryId);
+      const result = await unmountEntry(entryId, operationId);
       recordMountResult(result);
-      if (result.state === "unmounted") showSuccess(vaultMountResultLabel(result));
-      else showError(vaultMountResultLabel(result));
+      if (result.state === "unmounted") {
+        recordDiagnostic({ operationId, feature: "vault", action: "dismount", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
+        showSuccess(vaultMountResultLabel(result), undefined, { operationId });
+      } else {
+        recordDiagnostic({ operationId, feature: "vault", action: "dismount", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: "VLT.DISMOUNT.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry_cleanup", privacyClass: "local_sensitive" });
+        showError(vaultMountResultLabel(result), undefined, { operationId });
+      }
     } catch {
-      showError("The Vault unmount request could not be completed.");
+      recordDiagnostic({ operationId, feature: "vault", action: "dismount", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: "VLT.DISMOUNT.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry_cleanup", privacyClass: "local_sensitive" });
+      showError("The Vault unmount request could not be completed.", undefined, { operationId });
     } finally {
       setUnmountingEntryId(null);
     }
@@ -435,6 +459,14 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             </div>
           </div>}
           {activePolicy && <p className="fleet-field-hint">{draftDirty ? "Draft auto-saved on this PC — not yet applied to Windows." : "Showing the policy saved by the security service."}</p>}
+          {activePolicy && draftDirty && status && <div className="fleet-vault-verification-warning" role="status">
+            <Icon icon="info-sign" size={16} />
+            <div>
+              <strong>Saved Vault settings are available</strong>
+              <p>Windows already has a saved Vault policy. Your local draft has not been applied yet.</p>
+              <Button variant="outline" size="sm" onClick={() => void discardDraftAndReload()}>Show saved settings</Button>
+            </div>
+          </div>}
           {activePolicy?.entries.map((entry, entryIndex) => {
             const authorized = authorizedById.get(entry.id);
             const mountResult = mountResults[entry.id];

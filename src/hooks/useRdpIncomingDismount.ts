@@ -29,6 +29,7 @@
  */
 import { useEffect, useRef } from "react";
 import { executeBackendCommand } from "./useBackend";
+import { beginRdpOperation, recordRdpDiagnostic } from "./rdpDiagnostics";
 
 const POLL_MS = 10_000;
 
@@ -89,6 +90,8 @@ export default function useRdpIncomingDismount(
 
         if (!res.success || res.data == null) {
           console.warn("[RdpIncomingDismount] Poll failed:", JSON.stringify(res));
+          const operationId = beginRdpOperation("session_monitor");
+          recordRdpDiagnostic(operationId, "session_monitor", "readback", "verified", "failed", "warn", "RDP.SESSION.READBACK_FAILED");
           return;
         }
 
@@ -121,13 +124,21 @@ export default function useRdpIncomingDismount(
         const attendedDrained = prevAttended !== null && prevAttended > 0 && attended === 0;
         const totalDrained = prevTotal !== null && prevTotal > 0 && total === 0;
         if (dismountOnEmpty && (attendedDrained || totalDrained)) {
+          const operationId = beginRdpOperation("dismount");
+          recordRdpDiagnostic(operationId, "dismount", "requested", "requested", "started", "info");
           console.log(
             `[RdpIncomingDismount] No attended RDP user remaining — dismounting local vaults ` +
               `(attendedDrained=${attendedDrained}, totalDrained=${totalDrained})`
           );
           executeBackendCommand("Dismount-LocalVaults", {})
-            .then(r => console.log("[RdpIncomingDismount] Dismount result:", JSON.stringify(r)))
-            .catch(e => console.error("[RdpIncomingDismount] Dismount error:", e));
+            .then(r => {
+              console.log("[RdpIncomingDismount] Dismount result:", JSON.stringify(r));
+              recordRdpDiagnostic(operationId, "dismount", "applied", "applied", r.success === false ? "failed" : "succeeded", r.success === false ? "error" : "info", r.success === false ? "VLT.DISMOUNT.FAILED" : undefined);
+            })
+            .catch(e => {
+              console.error("[RdpIncomingDismount] Dismount error:", e);
+              recordRdpDiagnostic(operationId, "dismount", "applied", "applied", "failed", "error", "VLT.DISMOUNT.FAILED");
+            });
         }
 
         if (signOffOnDisconnect) {
@@ -140,12 +151,18 @@ export default function useRdpIncomingDismount(
             const id = session.sessionId;
             if (typeof id !== "number") continue;
             signOffInFlightRef.current.add(id);
+            const operationId = beginRdpOperation("idle_signoff");
+            recordRdpDiagnostic(operationId, "idle_signoff", "requested", "requested", "started", "info");
             console.log(`[RdpIncomingDismount] Signing off disconnected RDP session ${id}`);
             executeBackendCommand("Logoff-RdpIncomingSession", { SessionId: id })
-              .then(r => console.log(`[RdpIncomingDismount] Logoff ${id} result:`, JSON.stringify(r)))
+              .then(r => {
+                console.log(`[RdpIncomingDismount] Logoff ${id} result:`, JSON.stringify(r));
+                recordRdpDiagnostic(operationId, "idle_signoff", "applied", "applied", r.success === false ? "failed" : "succeeded", r.success === false ? "error" : "info", r.success === false ? "RDP.SESSION.LOGOFF_FAILED" : undefined);
+              })
               .catch(e => {
                 signOffInFlightRef.current.delete(id);
                 console.error(`[RdpIncomingDismount] Logoff ${id} error:`, e);
+                recordRdpDiagnostic(operationId, "idle_signoff", "applied", "applied", "failed", "error", "RDP.SESSION.LOGOFF_FAILED");
               });
           }
         }

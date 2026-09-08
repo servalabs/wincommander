@@ -46,10 +46,17 @@
 // single unused HBRUSH field) and GWLP_WNDPROC subclassing installs our
 // handler after creation.
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    OnceLock,
+};
 
 use tauri::AppHandle;
+use wincmd_shared::diagnostics::{
+    DiagnosticEvent, DiagnosticLifecycle, DiagnosticOutcome, DiagnosticPrivacyClass,
+    DiagnosticRetryability, DiagnosticSeverity,
+};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::RemoteDesktop::{
     WTSRegisterSessionNotification, NOTIFY_FOR_THIS_SESSION,
@@ -63,6 +70,47 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 /// AppHandle stashed for the window-proc callback (a plain `extern "system"`
 /// fn — it can't capture anything) to reach `run_backend_script` from.
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+static NEXT_DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(1);
+
+fn record_rdp_event(
+    action: &str,
+    stage: &str,
+    lifecycle: DiagnosticLifecycle,
+    outcome: DiagnosticOutcome,
+    severity: DiagnosticSeverity,
+    error_code: Option<&str>,
+) {
+    let id = NEXT_DIAGNOSTIC_ID.fetch_add(1, Ordering::Relaxed);
+    let event = DiagnosticEvent {
+        event_id: format!("evt-rdp-session-{id}"),
+        operation_id: format!("RDP-session-{id}"),
+        parent_operation_id: None,
+        occurred_at: chrono::Utc::now().to_rfc3339(),
+        component: "desktop".into(),
+        feature: "rdp".into(),
+        action: action.into(),
+        stage: stage.into(),
+        lifecycle,
+        outcome,
+        error_code: error_code.map(str::to_string),
+        severity,
+        retryability: if error_code.is_some() {
+            DiagnosticRetryability::Automatic
+        } else {
+            DiagnosticRetryability::Never
+        },
+        suggested_next_action: if error_code.is_some() {
+            "retry"
+        } else {
+            "none"
+        }
+        .into(),
+        duration_ms: None,
+        privacy_class: DiagnosticPrivacyClass::LocalSensitive,
+        redacted_context: BTreeMap::new(),
+    };
+    let _ = crate::diagnostics::record(event);
+}
 
 fn encode_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -109,6 +157,14 @@ fn run_watch_thread() {
         )
     };
     if hwnd.is_null() {
+        record_rdp_event(
+            "session_monitor",
+            "registration",
+            DiagnosticLifecycle::Applying,
+            DiagnosticOutcome::Failed,
+            DiagnosticSeverity::Warn,
+            Some("RDP.SESSION.WATCH_UNAVAILABLE"),
+        );
         crate::log_message_src(
             "warn",
             "core",
@@ -128,6 +184,14 @@ fn run_watch_thread() {
     unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, proc_ptr as usize as isize) };
 
     if unsafe { WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) } == 0 {
+        record_rdp_event(
+            "session_monitor",
+            "registration",
+            DiagnosticLifecycle::Applying,
+            DiagnosticOutcome::Failed,
+            DiagnosticSeverity::Warn,
+            Some("RDP.SESSION.WATCH_UNAVAILABLE"),
+        );
         crate::log_message_src(
             "warn",
             "core",
@@ -181,6 +245,14 @@ fn on_session_ending(reason: u32) {
     } else {
         "disconnect"
     };
+    record_rdp_event(
+        "session_end",
+        "detected",
+        DiagnosticLifecycle::Acknowledged,
+        DiagnosticOutcome::Progress,
+        DiagnosticSeverity::Info,
+        None,
+    );
     crate::log_message_src(
         "info",
         "core",
@@ -203,6 +275,14 @@ async fn maybe_dismount_on_session_end(app: AppHandle, label: &str) {
                 && rdp.incoming_dismount_on_empty.unwrap_or(false)
         }
         Err(e) => {
+            record_rdp_event(
+                "session_monitor",
+                "settings",
+                DiagnosticLifecycle::Verified,
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Warn,
+                Some("RDP.SETTINGS.READBACK_FAILED"),
+            );
             crate::log_message_src(
                 "warn",
                 "core",
@@ -228,6 +308,14 @@ async fn maybe_dismount_on_session_end(app: AppHandle, label: &str) {
     {
         Ok(v) => v,
         Err(e) => {
+            record_rdp_event(
+                "session_monitor",
+                "readback",
+                DiagnosticLifecycle::Verified,
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Warn,
+                Some("RDP.SESSION.READBACK_FAILED"),
+            );
             crate::log_message_src(
                 "warn",
                 "core",
@@ -238,6 +326,14 @@ async fn maybe_dismount_on_session_end(app: AppHandle, label: &str) {
     };
 
     if other_attended_session_remains(&sessions) {
+        record_rdp_event(
+            "dismount",
+            "session_gate",
+            DiagnosticLifecycle::Verified,
+            DiagnosticOutcome::Progress,
+            DiagnosticSeverity::Info,
+            None,
+        );
         crate::log_message_src(
             "info",
             "core",
@@ -257,6 +353,14 @@ async fn maybe_dismount_on_session_end(app: AppHandle, label: &str) {
             label
         ),
     );
+    record_rdp_event(
+        "dismount",
+        "requested",
+        DiagnosticLifecycle::Requested,
+        DiagnosticOutcome::Started,
+        DiagnosticSeverity::Info,
+        None,
+    );
     match crate::backend::run_backend_script(
         app,
         "Dismount-LocalVaults".to_string(),
@@ -265,6 +369,14 @@ async fn maybe_dismount_on_session_end(app: AppHandle, label: &str) {
     .await
     {
         Ok(v) if v.get("success").and_then(|s| s.as_bool()) == Some(false) => {
+            record_rdp_event(
+                "dismount",
+                "applied",
+                DiagnosticLifecycle::Applied,
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Error,
+                Some("VLT.DISMOUNT.FAILED"),
+            );
             crate::log_message_src(
                 "warn",
                 "core",
@@ -274,8 +386,23 @@ async fn maybe_dismount_on_session_end(app: AppHandle, label: &str) {
                 ),
             );
         }
-        Ok(_) => {}
+        Ok(_) => record_rdp_event(
+            "dismount",
+            "applied",
+            DiagnosticLifecycle::Applied,
+            DiagnosticOutcome::Succeeded,
+            DiagnosticSeverity::Info,
+            None,
+        ),
         Err(e) => {
+            record_rdp_event(
+                "dismount",
+                "applied",
+                DiagnosticLifecycle::Applied,
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Error,
+                Some("VLT.DISMOUNT.FAILED"),
+            );
             crate::log_message_src(
                 "warn",
                 "core",

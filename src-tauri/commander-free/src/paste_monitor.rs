@@ -72,7 +72,7 @@
 //   - Recent detections — last 10 in memory, surfaces "caught N this
 //     session" feedback.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -95,6 +95,10 @@ use clipboard_guard_helper::read::{ClipboardTextSource, ReadOutcome, Win32TextSo
 use clipboard_guard_helper::report::build_report;
 use wincmd_clip_rules::{
     Action, BuiltinPattern, MatchKind, Rule, RuleId, Severity, StructuredKind, Verdict,
+};
+use wincmd_shared::diagnostics::{
+    DiagnosticEvent, DiagnosticLifecycle, DiagnosticOutcome, DiagnosticPrivacyClass,
+    DiagnosticRetryability, DiagnosticSeverity,
 };
 use wincmd_shared::fleet::ClipboardEventReport;
 
@@ -1158,6 +1162,32 @@ fn handle_combined_emit(
         detected_at: chrono::Utc::now().to_rfc3339(),
     };
     let _ = app.emit("paste-monitor-detected", &payload);
+    // The clipboard match must exist outside the ephemeral frontend event.
+    // Do not record the pattern name: custom rule names can reveal sensitive
+    // policy intent. The content is never retained by this monitor.
+    let stamp = chrono::Utc::now();
+    let _ = crate::diagnostics::record(DiagnosticEvent {
+        event_id: format!("evt-clipboard-{}", stamp.timestamp_millis()),
+        operation_id: format!("CLIPBOARD-{}", stamp.timestamp_millis()),
+        parent_operation_id: None,
+        occurred_at: stamp.to_rfc3339(),
+        component: "free_monitor".into(),
+        feature: "clipboard".into(),
+        action: "policy_detection".into(),
+        stage: "monitor".into(),
+        lifecycle: DiagnosticLifecycle::Applied,
+        outcome: DiagnosticOutcome::Degraded,
+        error_code: Some("CLP.POLICY.DETECTED".into()),
+        severity: DiagnosticSeverity::Warn,
+        retryability: DiagnosticRetryability::Automatic,
+        suggested_next_action: "review_status".into(),
+        duration_ms: None,
+        privacy_class: DiagnosticPrivacyClass::Restricted,
+        redacted_context: BTreeMap::from([
+            ("reason_category".into(), "policy_match".into()),
+            ("state".into(), "detected".into()),
+        ]),
+    });
 
     // Schedule auto-clear if enabled — same trigger/timing as before.
     if AUTO_CLEAR_ENABLED.load(Ordering::SeqCst) {
@@ -1428,6 +1458,29 @@ pub async fn start_paste_monitor(app: AppHandle) -> Result<(), String> {
                         detected_at: chrono::Utc::now().to_rfc3339(),
                     };
                     let _ = app.emit("paste-monitor-detected", &payload);
+                    let stamp = chrono::Utc::now();
+                    let _ = crate::diagnostics::record(DiagnosticEvent {
+                        event_id: format!("evt-clipboard-{}", stamp.timestamp_millis()),
+                        operation_id: format!("CLIPBOARD-{}", stamp.timestamp_millis()),
+                        parent_operation_id: None,
+                        occurred_at: stamp.to_rfc3339(),
+                        component: "free_monitor".into(),
+                        feature: "clipboard".into(),
+                        action: "swap_detection".into(),
+                        stage: "monitor".into(),
+                        lifecycle: DiagnosticLifecycle::Applied,
+                        outcome: DiagnosticOutcome::Failed,
+                        error_code: Some("CLP.SWAP.DETECTED".into()),
+                        severity: DiagnosticSeverity::Critical,
+                        retryability: DiagnosticRetryability::Manual,
+                        suggested_next_action: "verify_destination".into(),
+                        duration_ms: None,
+                        privacy_class: DiagnosticPrivacyClass::Restricted,
+                        redacted_context: BTreeMap::from([
+                            ("reason_category".into(), "address_swap".into()),
+                            ("state".into(), "detected".into()),
+                        ]),
+                    });
                     let body = format!(
                         "Your clipboard's {} address just changed to a different one without you copying it. \
                             Clipboard-hijack malware is the most likely cause. DO NOT send — verify the address character-by-character.",

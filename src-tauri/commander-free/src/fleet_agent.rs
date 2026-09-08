@@ -20,9 +20,55 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use std::sync::RwLock;
 use url::Url;
+use wincmd_shared::diagnostics::{
+    DiagnosticEvent, DiagnosticLifecycle, DiagnosticOutcome, DiagnosticPrivacyClass,
+    DiagnosticRetryability, DiagnosticSeverity,
+};
 use wincmd_shared::fleet::ClipboardEventReport;
+
+fn record_fleet_lifecycle(
+    operation_id: &str,
+    lifecycle: DiagnosticLifecycle,
+    outcome: DiagnosticOutcome,
+    stage: &str,
+    error_code: Option<&str>,
+) {
+    let stamp = chrono::Utc::now();
+    let _ = crate::diagnostics::record(DiagnosticEvent {
+        event_id: format!("evt-fleet-{}", stamp.timestamp_millis()),
+        operation_id: operation_id.to_string(),
+        parent_operation_id: None,
+        occurred_at: stamp.to_rfc3339(),
+        component: "fleet_agent".into(),
+        feature: "fleet".into(),
+        action: "policy_sync".into(),
+        stage: stage.into(),
+        lifecycle,
+        outcome,
+        error_code: error_code.map(str::to_string),
+        severity: if error_code.is_some() {
+            DiagnosticSeverity::Warn
+        } else {
+            DiagnosticSeverity::Info
+        },
+        retryability: if error_code.is_some() {
+            DiagnosticRetryability::Automatic
+        } else {
+            DiagnosticRetryability::Never
+        },
+        suggested_next_action: if error_code.is_some() {
+            "retry".into()
+        } else {
+            "none".into()
+        },
+        duration_ms: None,
+        privacy_class: DiagnosticPrivacyClass::LocalSensitive,
+        redacted_context: BTreeMap::from([("state".into(), stage.into())]),
+    });
+}
 
 /// Canonicalize the operator-entered Fleet base URL before it is persisted or
 /// handed to Pro.  In particular, a Windows-style accidental extra slash in
@@ -495,6 +541,14 @@ async fn apply_remote_command_updates(resp: &Value) -> Result<usize, ApplyError>
 /// KT: the apply loop uses this to distinguish genuine "Pro unreachable" from
 /// reachable-but-policy-rejected so backoff/status are not mis-escalated.
 pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, ApplyError> {
+    let operation_id = format!("FLEET-{}", chrono::Utc::now().timestamp_millis());
+    record_fleet_lifecycle(
+        &operation_id,
+        DiagnosticLifecycle::Requested,
+        DiagnosticOutcome::Started,
+        "requested",
+        None,
+    );
     crate::license::require_service_feature("fleet").map_err(ApplyError::PolicyError)?;
 
     // The dispatch call is the ONLY place a transport failure can originate.
@@ -502,6 +556,13 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
         crate::sidecar::dispatch_paid_command("fleet_agent_pending_epoch", serde_json::Value::Null)
             .await
             .map_err(|e| {
+                record_fleet_lifecycle(
+                    &operation_id,
+                    DiagnosticLifecycle::Delivered,
+                    DiagnosticOutcome::Failed,
+                    "delivery",
+                    Some("FLT.DELIVERY.FAILED"),
+                );
                 // KT: classify by error string; see is_transport_err for the heuristics.
                 if is_transport_err(&e) {
                     ApplyError::TransportFailure(e)
@@ -510,6 +571,23 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
                     ApplyError::PolicyError(e)
                 }
             })?;
+    record_fleet_lifecycle(
+        &operation_id,
+        DiagnosticLifecycle::Delivered,
+        DiagnosticOutcome::Progress,
+        "delivered",
+        None,
+    );
+    // The sidecar has returned an authenticated Fleet response. This is a
+    // receipt only; it is deliberately separate from Windows application and
+    // later verification below.
+    record_fleet_lifecycle(
+        &operation_id,
+        DiagnosticLifecycle::Acknowledged,
+        DiagnosticOutcome::Progress,
+        "acknowledged",
+        None,
+    );
 
     let epoch = resp
         .get("epoch")
@@ -517,6 +595,13 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
         .unwrap_or(serde_json::Value::Null);
     if epoch.is_null() {
         let remote_updates_applied = apply_remote_command_updates(&resp).await?;
+        record_fleet_lifecycle(
+            &operation_id,
+            DiagnosticLifecycle::Verified,
+            DiagnosticOutcome::Succeeded,
+            "verified",
+            None,
+        );
         return Ok(serde_json::json!({
             "applied": remote_updates_applied > 0,
             "remoteUpdatesApplied": remote_updates_applied,
@@ -529,6 +614,13 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
     let applied = settings.policy.master_config_version.unwrap_or(0) as i64;
     if version <= applied {
         let remote_updates_applied = apply_remote_command_updates(&resp).await?;
+        record_fleet_lifecycle(
+            &operation_id,
+            DiagnosticLifecycle::Verified,
+            DiagnosticOutcome::Succeeded,
+            "verified",
+            None,
+        );
         return Ok(serde_json::json!({
             "applied": remote_updates_applied > 0,
             "remoteUpdatesApplied": remote_updates_applied,
@@ -541,6 +633,13 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
     // KT: no pinned key is a reachable config state (device enrolled without key);
     // this is a PolicyError, NOT a transport failure.
     if settings.policy.fleet_signing_key.is_none() {
+        record_fleet_lifecycle(
+            &operation_id,
+            DiagnosticLifecycle::Acknowledged,
+            DiagnosticOutcome::Failed,
+            "authorization",
+            Some("FLT.SIGNING_KEY.MISSING"),
+        );
         return Err(ApplyError::PolicyError(
             "cannot apply fleet policy: no pinned fleet signing key".to_string(),
         ));
@@ -581,6 +680,13 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
         .map(String::from);
 
     // apply_admin_config_cmd can fail on signature verification — also a PolicyError.
+    record_fleet_lifecycle(
+        &operation_id,
+        DiagnosticLifecycle::Applying,
+        DiagnosticOutcome::Progress,
+        "applying",
+        None,
+    );
     let updated = crate::settings::apply_admin_config_cmd(
         config,
         locked_paths,
@@ -592,12 +698,35 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
         target_id,
         Some(managed),
     )
-    .map_err(ApplyError::PolicyError)?;
+    .map_err(|error| {
+        record_fleet_lifecycle(
+            &operation_id,
+            DiagnosticLifecycle::Applying,
+            DiagnosticOutcome::Failed,
+            "applying",
+            Some("FLT.POLICY.APPLY_FAILED"),
+        );
+        ApplyError::PolicyError(error)
+    })?;
+    record_fleet_lifecycle(
+        &operation_id,
+        DiagnosticLifecycle::Applied,
+        DiagnosticOutcome::Succeeded,
+        "applied",
+        None,
+    );
 
     // A cached epoch may predate a command that executed moments ago. Apply
     // the verified command handoff last so it is the deterministic last writer
     // and cannot be immediately overwritten by older policy intent.
     let remote_updates_applied = apply_remote_command_updates(&resp).await?;
+    record_fleet_lifecycle(
+        &operation_id,
+        DiagnosticLifecycle::Verified,
+        DiagnosticOutcome::Succeeded,
+        "verified",
+        None,
+    );
 
     Ok(serde_json::json!({
         "applied": true,

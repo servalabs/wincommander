@@ -302,6 +302,7 @@ pub async fn vault_call(
         let mut request = Envelope::Request(Request {
             request_id,
             feature_id: feature_id.into(),
+            diagnostic_operation_id: None,
             args,
         })
         .sign(&session_token);

@@ -28,6 +28,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { clearCommand } from "../lib/commandIds";
 import { executeBackendCommand } from "./useBackend";
+import { beginRdpOperation, recordRdpDiagnostic } from "./rdpDiagnostics";
 
 const POLL_MS = 5_000; // PowerShell: is mstsc running? (rdpOpen + remote hosts)
 const TICK_MS = 1_000; // native: system-wide idle seconds
@@ -223,6 +224,8 @@ export default function useRdpIdleDisconnect(
         setIsIdle(shouldKill);
 
         if (inWarning && !nativeWarnedRef.current) {
+          const operationId = beginRdpOperation("idle_warning");
+          recordRdpDiagnostic(operationId, "idle_warning", "threshold", "applying", "progress", "warn");
           nativeWarnedRef.current = true;
           const mins = Math.floor(effectiveIdle / 60);
           const secs = effectiveIdle % 60;
@@ -243,6 +246,7 @@ export default function useRdpIdleDisconnect(
             secondsLeft: effectiveWarningSeconds,
           }).catch((err) => {
             console.warn("[RdpIdle] custom warning notification failed", err);
+            recordRdpDiagnostic(operationId, "idle_warning", "notification", "applied", "failed", "warn", "RDP.WARNING.DELIVERY_FAILED");
           });
         }
 
@@ -251,6 +255,8 @@ export default function useRdpIdleDisconnect(
         );
 
         if (shouldKill && !killedRef.current) {
+          const operationId = beginRdpOperation("idle_disconnect");
+          recordRdpDiagnostic(operationId, "idle_disconnect", "requested", "requested", "started", "warn");
           killedRef.current = true;
           killInFlightRef.current = true; // keep the kill from being undone mid-flight
           setIsIdle(false);
@@ -284,10 +290,12 @@ export default function useRdpIdleDisconnect(
               removeCredsOnDisconnect ? "saved credentials removed" : null,
             ].filter(Boolean).join(", ");
             logRdp("warn", `RDP session disconnected after ${timeoutSeconds}s idle${extras ? ` (${extras})` : ""}`);
+            recordRdpDiagnostic(operationId, "idle_disconnect", "applied", "applied", "succeeded", "warn");
           } catch (e) {
             console.error("[RdpIdle] idle disconnect FAILED:", e);
             logRdp("error", `RDP idle disconnect failed: ${e instanceof Error ? e.message : String(e)}`);
             killedRef.current = false; // let it retry next tick
+            recordRdpDiagnostic(operationId, "idle_disconnect", "applied", "applied", "failed", "error", "RDP.DISCONNECT.FAILED");
           } finally {
             killInFlightRef.current = false;
           }

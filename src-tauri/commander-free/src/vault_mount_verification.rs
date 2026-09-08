@@ -7,7 +7,48 @@
 // presented as usable to the signed-in person.
 
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use wincmd_shared::diagnostics::{
+    DiagnosticEvent, DiagnosticLifecycle, DiagnosticOutcome, DiagnosticPrivacyClass,
+    DiagnosticRetryability, DiagnosticSeverity,
+};
+
+static NEXT_VERIFICATION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn record_verification(
+    outcome: DiagnosticOutcome,
+    severity: DiagnosticSeverity,
+    error_code: Option<&str>,
+) {
+    let id = NEXT_VERIFICATION_ID.fetch_add(1, Ordering::Relaxed);
+    let event = DiagnosticEvent {
+        event_id: format!("evt-vlt-verify-{id}"),
+        operation_id: format!("VLT-verify-{id}"),
+        parent_operation_id: None,
+        occurred_at: chrono::Utc::now().to_rfc3339(),
+        component: "desktop".into(),
+        feature: "vault".into(),
+        action: "verify".into(),
+        stage: "windows_readback".into(),
+        lifecycle: DiagnosticLifecycle::Verified,
+        outcome,
+        error_code: error_code.map(str::to_string),
+        severity,
+        retryability: DiagnosticRetryability::Manual,
+        suggested_next_action: if error_code.is_some() {
+            "refresh_status"
+        } else {
+            "none"
+        }
+        .into(),
+        duration_ms: None,
+        privacy_class: DiagnosticPrivacyClass::LocalSensitive,
+        redacted_context: BTreeMap::new(),
+    };
+    let _ = crate::diagnostics::record(event);
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,11 +73,36 @@ fn drive_root(raw: &str) -> Result<(char, String), String> {
 
 #[tauri::command]
 pub fn verify_vault_drive(drive: String) -> Result<VaultDriveVerification, String> {
-    let (letter, root) = drive_root(&drive)?;
-    let metadata = std::fs::metadata(Path::new(&root)).map_err(|error| {
-        format!("Drive {letter}: is not available in this signed-in Windows session: {error}")
-    })?;
+    let (letter, root) = match drive_root(&drive) {
+        Ok(value) => value,
+        Err(error) => {
+            record_verification(
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Warn,
+                Some("VLT.VERIFY.REQUEST_INVALID"),
+            );
+            return Err(error);
+        }
+    };
+    let metadata = match std::fs::metadata(Path::new(&root)) {
+        Ok(value) => value,
+        Err(error) => {
+            record_verification(
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Error,
+                Some("VLT.VERIFY.DRIVE_UNAVAILABLE"),
+            );
+            return Err(format!(
+                "Drive {letter}: is not available in this signed-in Windows session: {error}"
+            ));
+        }
+    };
     if !metadata.is_dir() {
+        record_verification(
+            DiagnosticOutcome::Failed,
+            DiagnosticSeverity::Error,
+            Some("VLT.VERIFY.DRIVE_UNAVAILABLE"),
+        );
         return Err(format!(
             "Drive {letter}: is not available as an encrypted-volume root in this signed-in Windows session"
         ));
@@ -44,14 +110,32 @@ pub fn verify_vault_drive(drive: String) -> Result<VaultDriveVerification, Strin
     // Metadata can still be returned for a stale driver slot. Opening the
     // directory is the minimum operation File Explorer needs before it can
     // show the mounted container's contents.
-    let mut entries = std::fs::read_dir(Path::new(&root)).map_err(|error| {
-        format!("Drive {letter}: cannot be opened in this signed-in Windows session: {error}")
-    })?;
+    let mut entries = match std::fs::read_dir(Path::new(&root)) {
+        Ok(value) => value,
+        Err(error) => {
+            record_verification(
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Error,
+                Some("VLT.VERIFY.READBACK_FAILED"),
+            );
+            return Err(format!(
+                "Drive {letter}: cannot be opened in this signed-in Windows session: {error}"
+            ));
+        }
+    };
     if let Some(entry) = entries.next() {
-        entry.map_err(|error| {
-            format!("Drive {letter}: cannot be read in this signed-in Windows session: {error}")
-        })?;
+        if let Err(error) = entry {
+            record_verification(
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Error,
+                Some("VLT.VERIFY.READBACK_FAILED"),
+            );
+            return Err(format!(
+                "Drive {letter}: cannot be read in this signed-in Windows session: {error}"
+            ));
+        }
     }
+    record_verification(DiagnosticOutcome::Succeeded, DiagnosticSeverity::Info, None);
     Ok(VaultDriveVerification {
         drive: format!("{letter}:"),
         accessible: true,

@@ -38,6 +38,7 @@ import BrandingLicensingSection from "./BrandingLicensingSection";
 import ManagedPolicyBanner from "../../components/shared/ManagedPolicyBanner";
 import { useSecretSessionState } from "./secretSessionState";
 import RuntimeStatusSection from "./RuntimeStatusSection";
+import SupportConsole from "./SupportConsole";
 import { DEFAULT_BORROWED_PANELS } from "../../lib/visibilityDefaults";
 import "./index.css";
 import "../privacy/index.css";
@@ -734,6 +735,9 @@ export default function SecretPanel() {
                 <TabsContent value="diagnostics" className="secret-diagnostics-tab">
                     <div className="secret-grid secret-diagnostics-grid">
                         <RuntimeStatusSection />
+                        <SectionCard title="Support Console" icon="document" className="secret-grid__wide secret-diagnostics-log-card">
+                            <SupportConsole />
+                        </SectionCard>
                         <SectionCard title="Error Center" icon="document" className="secret-grid__wide secret-diagnostics-log-card">
                             <LogViewer />
                         </SectionCard>

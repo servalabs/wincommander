@@ -1466,6 +1466,7 @@ async fn try_dispatch_via_agent(
         let req = Request {
             request_id: next_request_id(),
             feature_id: feature_id.to_string(),
+            diagnostic_operation_id: None,
             args: args.clone(),
         };
         match dispatch_request(&mut session, req).await {
@@ -1663,6 +1664,7 @@ pub async fn dispatch_paid_command(
         let req = Request {
             request_id: next_request_id(),
             feature_id: feature_id.to_string(),
+            diagnostic_operation_id: None,
             args: args.clone(),
         };
 

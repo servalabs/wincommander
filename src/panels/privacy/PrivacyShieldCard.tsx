@@ -16,6 +16,7 @@ import { useShieldQuotaQuery, useShieldQuotaTicker, useInvalidateShieldQuota } f
 import PrivacyShieldIntro from "./PrivacyShieldIntro";
 import SectionCard from "../../components/shared/SectionCard";
 import { privacyShieldBlurTriggers, resolvePrivacyShieldMode } from "../../lib/privacyShieldMode";
+import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 
 // Module-level cache — survives panel unmount/remount
 let _shieldRunningCache: boolean | null = null;
@@ -292,7 +293,13 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 if (typeof shield.data.cameraAvailable === "boolean") {
                     setCameraAvailable(shield.data.cameraAvailable);
                     setCameraMessage(shield.data.cameraMessage ?? null);
-                    if (!shield.data.cameraAvailable) setAiRuntimeInstalled(null);
+                    if (!shield.data.cameraAvailable) {
+                        setAiRuntimeInstalled(null);
+                        recordDiagnostic({ feature: "privacy_shield", action: "camera_check", stage: "capability",
+                            lifecycle: "verified", outcome: "degraded", errorCode: "PSH.CAMERA.UNAVAILABLE",
+                            severity: "warn", retryability: "manual", suggestedNextAction: "connect_camera",
+                            privacyClass: "local_sensitive", context: { capability: "camera", state: "unavailable" } });
+                    }
                 }
                 await invoke("update_tray_shield_label", { running: shield.data.running }).catch(() => {});
             }
@@ -303,6 +310,10 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 setPrivacyShieldRunning(null);
                 setCameraAvailable(null);
                 setCameraMessage("Privacy Shield status could not be confirmed. Refresh and try again.");
+                recordDiagnostic({ feature: "privacy_shield", action: "status_read", stage: "verification",
+                    lifecycle: "verified", outcome: "failed", errorCode: "PSH.STATUS.UNAVAILABLE",
+                    severity: "warn", retryability: "automatic", suggestedNextAction: "retry",
+                    privacyClass: "local_sensitive", context: { health: "unknown" } });
             }
         } catch {
             // A failed probe is also unknown state, not evidence that the last
@@ -310,6 +321,10 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             setPrivacyShieldRunning(null);
             setCameraAvailable(null);
             setCameraMessage("Privacy Shield status could not be confirmed. Refresh and try again.");
+            recordDiagnostic({ feature: "privacy_shield", action: "status_read", stage: "verification",
+                lifecycle: "verified", outcome: "failed", errorCode: "PSH.STATUS.UNAVAILABLE",
+                severity: "warn", retryability: "automatic", suggestedNextAction: "retry",
+                privacyClass: "local_sensitive", context: { health: "unknown" } });
         }
     };
     const checkStatus = useCallback(() => checkStatusRef.current(), []);
@@ -439,25 +454,33 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     }, [privacyShieldRunning, localLoading]);
 
     const handleToggle = async () => {
+        const operationId = newDiagnosticOperationId("privacy_shield");
         if (fleetShieldSessionLocked) {
+            recordDiagnostic({ operationId, feature: "privacy_shield", action: "stop", stage: "authorization", lifecycle: "acknowledged", outcome: "failed", errorCode: "PSH.FLEET.MANAGED", severity: "warn", retryability: "never", suggestedNextAction: "contact_administrator", privacyClass: "local_sensitive", context: { state: "fleet_managed" } });
             showError("Privacy Shield was started by Fleet and can only be stopped by a Fleet administrator.");
             return;
         }
         if (!privacyShieldRunning && fleetPolicyManaged) {
+            recordDiagnostic({ operationId, feature: "privacy_shield", action: "start", stage: "authorization", lifecycle: "acknowledged", outcome: "failed", errorCode: "PSH.FLEET.MANAGED", severity: "warn", retryability: "never", suggestedNextAction: "contact_administrator", privacyClass: "local_sensitive", context: { state: "fleet_managed" } });
             showError("Privacy Shield activation is managed by Fleet. The device will start it after the Fleet policy arrives.");
             return;
         }
         const targetState = !privacyShieldRunning;
         if (targetState && !privacyConfig.blurOnLookAway && !privacyConfig.blurOnMultipleFaces && !privacyConfig.blurOnCamera) {
+            recordDiagnostic({ operationId, feature: "privacy_shield", action: "start", stage: "configuration", lifecycle: "acknowledged", outcome: "failed", errorCode: "PSH.CONFIG.NO_TRIGGER", severity: "warn", retryability: "manual", suggestedNextAction: "configure_trigger", privacyClass: "local_sensitive", context: { state: "invalid" } });
             showError("Enable at least one detection trigger before starting the Privacy Shield.");
             return;
         }
         if (targetState && cameraAvailable === false) {
+            recordDiagnostic({ operationId, feature: "privacy_shield", action: "start", stage: "capability", lifecycle: "verified", outcome: "failed", errorCode: "PSH.CAMERA.UNAVAILABLE", severity: "warn", retryability: "manual", suggestedNextAction: "connect_camera", privacyClass: "local_sensitive", context: { capability: "camera", state: "unavailable" } });
             showError(cameraMessage || "No camera detected — Privacy Shield requires a webcam.");
             return;
         }
         if (targetState && quota && !quota.is_unlimited && quota.minutes_remaining <= 0) { openShieldPaywall(); return; }
         setLocalLoading(true);
+        const action = targetState ? "start" : "stop";
+        const startedAt = Date.now();
+        recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "request", lifecycle: "requested", outcome: "started", severity: "info", retryability: "automatic", suggestedNextAction: "await_result", privacyClass: "local_sensitive", context: { state: targetState ? "start" : "stop" } });
         // Hard ceiling: if the Rust IPC call hangs (dep install stuck,
         // WMI timeout, etc.) free the button after 60 seconds so the
         // user can re-try / open the log. The status poll continues
@@ -487,6 +510,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     blurTriggers.device,
                 );
                 if (res.success) {
+                    recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "running" } });
                     await showSuccess("Privacy Shield activated.");
                     setPrivacyShieldRunning(true);
                     setAiRuntimeInstalled(true);
@@ -511,12 +535,13 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                         showError(res.error || "No camera detected — Privacy Shield requires a webcam.");
                     }
                     else showError(res.error || "Failed to start Privacy Shield.");
+                    recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: err.includes("camera") || err.includes("webcam") ? "PSH.CAMERA.UNAVAILABLE" : "PSH.START.FAILED", severity: "error", retryability: "manual", suggestedNextAction: err.includes("camera") || err.includes("webcam") ? "connect_camera" : "review_status", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: err.includes("camera") || err.includes("webcam") ? "camera" : "start" } });
                 }
             } else {
                 const res = await executeBackendCommand<{ success: boolean; message?: string }>("Stop-PrivacyShield", {});
                 await consumeElapsedSession();
                 invalidateShieldQuota();
-                if (res.success) { setPrivacyShieldRunning(false); await invoke("update_tray_shield_label", { running: false }); showSuccess("Privacy Shield deactivated."); }
+                if (res.success) { recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "stopped" } }); setPrivacyShieldRunning(false); await invoke("update_tray_shield_label", { running: false }); showSuccess("Privacy Shield deactivated."); }
                 else {
                     // Belt-and-braces: also call the Rust-side process killer
                     // so a stuck Python that the PS Stop-Process missed still
@@ -525,9 +550,10 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     setPrivacyShieldRunning(false);
                     await invoke("update_tray_shield_label", { running: false }).catch(() => {});
                     showSuccess("Privacy Shield force-stopped.");
+                    recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "recovery", lifecycle: "applied", outcome: "recovered", errorCode: "PSH.STOP.FORCED", severity: "warn", retryability: "never", suggestedNextAction: "review_status", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { state: "force_stopped" } });
                 }
             }
-        } catch (e) { showError(e instanceof Error ? e.message : "Operation failed"); }
+        } catch (e) { recordDiagnostic({ operationId, feature: "privacy_shield", action, stage: "process", lifecycle: "applied", outcome: "failed", errorCode: "PSH.OPERATION.FAILED", severity: "error", retryability: "automatic", suggestedNextAction: "retry", durationMs: Date.now() - startedAt, privacyClass: "local_sensitive", context: { reason_category: "operation" } }); showError(e instanceof Error ? e.message : "Operation failed"); }
         finally {
             clearTimeout(loadingTimeout);
             setLocalLoading(false);

@@ -23,17 +23,19 @@ export interface NotifyArgs {
   timeout?: number;
   /** Bell-tab override for operational warn/danger results (else severity-derived). */
   kind?: NotifKind;
+  /** Opaque, safe reference to the diagnostic operation behind this notice. */
+  operationId?: string;
   /** Operation-overlay options (mode/accent/doneTitle/…). */
   operation?: RunOperationOptions;
 }
 
 export function notify(args: NotifyArgs) {
-  const { type = "info", message, steps, operation, kind } = args;
+  const { type = "info", message, steps, operation, kind, operationId } = args;
   if (type === "operation") {
     return runOperation(message, steps ?? [], operation);
   }
   const severity = type === "danger" ? "danger" : type === "warning" ? "warn" : "info";
-  return pushNotification(severity, message, undefined, kind);
+  return pushNotification(severity, message, undefined, kind, operationId);
 }
 
 export default notify;

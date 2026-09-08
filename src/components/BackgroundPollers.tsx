@@ -29,6 +29,7 @@ import useAutoHeal from "../hooks/useAutoHeal";
 import useAdoptCurrentState from "../hooks/useAdoptCurrentState";
 import { privacyShieldBlurTriggers, resolvePrivacyShieldMode } from "../lib/privacyShieldMode";
 import { resolveFleetPrivacyShieldControl } from "../lib/fleetPrivacyShieldControl";
+import { recordDiagnostic } from "../lib/diagnostics";
 import type { PanelId } from "../types/panels";
 
 interface PasteMonitorDetected {
@@ -176,6 +177,18 @@ export default function BackgroundPollers({
       // transition forever, leaving Fleet with stale Shield state.
       try {
         await invoke("fleet_report_privacy_shield_status", { status, detail, commandId });
+        const lifecycle = status === "received" ? "delivered"
+          : status === "applying" ? "applying"
+            : ["running_fleet_session", "disabled_by_policy", "stopped"].includes(status) ? "applied"
+              : "verified";
+        const failed = ["camera_unavailable", "windows_server_camera_unavailable", "camera_busy", "start_failed", "quota_exhausted"].includes(status);
+        recordDiagnostic({ operationId: commandId ?? undefined, feature: "fleet", action: "privacy_shield_command",
+          stage: status === "received" ? "delivery" : lifecycle,
+          lifecycle, outcome: failed ? "failed" : status === "applying" ? "progress" : "succeeded",
+          errorCode: failed ? `PSH.FLEET.${status.toUpperCase()}` : undefined,
+          severity: failed ? "warn" : "info", retryability: failed ? "automatic" : "never",
+          suggestedNextAction: failed ? "retry" : "none", privacyClass: "local_sensitive",
+          context: { state: status, reason_category: failed ? "managed_outcome" : "managed_state" } });
         fleetShieldReportedStateRef.current = key;
         return true;
       } catch {

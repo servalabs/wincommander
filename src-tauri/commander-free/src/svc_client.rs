@@ -44,24 +44,36 @@ fn next_request_id() -> u64 {
 
 /// Call a service verb through the production pipe.
 pub async fn call(feature_id: &str, args: Value) -> Result<Value, String> {
+    call_with_diagnostic_operation(feature_id, args, None).await
+}
+
+pub async fn call_with_diagnostic_operation(
+    feature_id: &str,
+    args: Value,
+    diagnostic_operation_id: Option<String>,
+) -> Result<Value, String> {
     call_via_with_timeout(
         wincmd_shared::svc::SVC_PIPE_NAME,
         feature_id,
         args,
         request_timeout_for(feature_id),
+        diagnostic_operation_id,
     )
     .await
 }
 
-/// Vault mounting may take up to two minutes in the engine.  Keep its UI pipe
-/// open long enough to receive the final bounded result; read-only service
-/// RPCs retain the short five-second deadline.
-pub async fn call_vault_mount(args: Value) -> Result<Value, String> {
+/// Carries an opaque desktop operation ID in the signed service envelope.
+/// It is never placed in the secret Vault request body.
+pub async fn call_vault_mount_with_operation(
+    args: Value,
+    diagnostic_operation_id: Option<String>,
+) -> Result<Value, String> {
     call_via_with_timeout(
         wincmd_shared::svc::SVC_PIPE_NAME,
         "svc.vault.mount",
         args,
         request_timeout_for("svc.vault.mount"),
+        diagnostic_operation_id,
     )
     .await
 }
@@ -87,7 +99,14 @@ pub async fn apply_machine_setting(
 /// named-pipe peer and apply its own capability gate.
 #[cfg(windows)]
 pub async fn call_via(pipe_name: &str, feature_id: &str, args: Value) -> Result<Value, String> {
-    call_via_with_timeout(pipe_name, feature_id, args, request_timeout_for(feature_id)).await
+    call_via_with_timeout(
+        pipe_name,
+        feature_id,
+        args,
+        request_timeout_for(feature_id),
+        None,
+    )
+    .await
 }
 
 #[cfg(windows)]
@@ -96,6 +115,7 @@ async fn call_via_with_timeout(
     feature_id: &str,
     args: Value,
     request_timeout: std::time::Duration,
+    diagnostic_operation_id: Option<String>,
 ) -> Result<Value, String> {
     use tokio::net::windows::named_pipe::{ClientOptions, PipeMode};
     use tokio::time::timeout;
@@ -130,6 +150,7 @@ async fn call_via_with_timeout(
     let mut request = wincmd_shared::Envelope::Request(wincmd_shared::Request {
         request_id,
         feature_id: feature_id.to_string(),
+        diagnostic_operation_id,
         args,
     })
     .sign(&session_token);
@@ -227,6 +248,7 @@ mod tests {
         let mut envelope = wincmd_shared::Envelope::Request(wincmd_shared::Request {
             request_id: 1,
             feature_id: "svc.vault.mount".into(),
+            diagnostic_operation_id: None,
             args: serde_json::json!({"entry_id":"shared","password":"canary-secret"}),
         })
         .sign("session-token");
@@ -291,6 +313,7 @@ async fn call_via_with_timeout(
     _feature_id: &str,
     _args: Value,
     _request_timeout: std::time::Duration,
+    _diagnostic_operation_id: Option<String>,
 ) -> Result<Value, String> {
     Err("Vault access service is available only on Windows".to_string())
 }

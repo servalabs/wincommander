@@ -12,7 +12,11 @@ import { pushNotification, getNotificationsHidden, getPopupAlertsEnabled, getPop
 // Optional per-call routing override. Operational warn/danger results (mount,
 // paste, toggle, update) pass { kind: "notification" } so they land in the
 // Notifications tab instead of the default System Alerts.
-interface NotifyOpts { kind?: NotifKind }
+export interface NotifyOpts {
+    kind?: NotifKind;
+    /** Opaque, safe reference to the diagnostic operation behind this notice. */
+    operationId?: string;
+}
 
 type ToastIntent = "none" | "primary" | "success" | "warning" | "danger";
 
@@ -74,25 +78,25 @@ async function maybeToast(intent: ToastIntent, message: string, timeout: number)
 }
 
 export async function showSuccess(message: string, timeout = 4000, opts?: NotifyOpts): Promise<string> {
-    const id = pushNotification("info", message, undefined, opts?.kind);
+    const id = pushNotification("info", message, undefined, opts?.kind, opts?.operationId);
     void maybeToast("success", message, timeout);
     return id;
 }
 
 export async function showError(message: string, timeout = 6000, opts?: NotifyOpts): Promise<string> {
-    const id = pushNotification("danger", message, undefined, opts?.kind);
+    const id = pushNotification("danger", message, undefined, opts?.kind, opts?.operationId);
     void maybeToast("danger", message, timeout);
     return id;
 }
 
 export async function showWarning(message: string, timeout = 5000, opts?: NotifyOpts): Promise<string> {
-    const id = pushNotification("warn", message, undefined, opts?.kind);
+    const id = pushNotification("warn", message, undefined, opts?.kind, opts?.operationId);
     void maybeToast("warning", message, timeout);
     return id;
 }
 
 export async function showInfo(message: string, timeout = 4000, opts?: NotifyOpts): Promise<string> {
-    const id = pushNotification("info", message, undefined, opts?.kind);
+    const id = pushNotification("info", message, undefined, opts?.kind, opts?.operationId);
     void maybeToast("primary", message, timeout);
     return id;
 }

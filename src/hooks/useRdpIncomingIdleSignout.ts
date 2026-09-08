@@ -28,6 +28,7 @@ import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { executeBackendCommand } from "./useBackend";
 import { showError } from "../utils/toast";
+import { beginRdpOperation, recordRdpDiagnostic } from "./rdpDiagnostics";
 
 const POLL_MS = 10_000;
 
@@ -91,6 +92,8 @@ export default function useRdpIncomingIdleSignout(
 
         if (!res.success || res.data == null) {
           console.warn("[RdpIncomingSignout] Poll failed:", JSON.stringify(res));
+          const operationId = beginRdpOperation("session_monitor");
+          recordRdpDiagnostic(operationId, "session_monitor", "readback", "verified", "failed", "warn", "RDP.SESSION.READBACK_FAILED");
           return;
         }
 
@@ -132,6 +135,8 @@ export default function useRdpIncomingIdleSignout(
               `idle=${idleSec}s / threshold=${timeoutSeconds}s${reached ? " — REACHED" : ""}`
           );
           if (reached && !signedOffRef.current.has(id)) {
+            const operationId = beginRdpOperation("idle_signoff");
+            recordRdpDiagnostic(operationId, "idle_signoff", "requested", "requested", "started", "warn");
             signedOffRef.current.add(id); // optimistic: blocks duplicate in-flight logoffs
             const signOff = () => {
               console.log(`[RdpIncomingSignout] Signing off idle session ${id} ('${s.username ?? "?"}')`);
@@ -146,7 +151,10 @@ export default function useRdpIncomingIdleSignout(
                     signedOffRef.current.delete(id);
                     console.warn(`[RdpIncomingSignout] Logoff ${id} failed (ok=${r.data?.ok}, success=${r.success}), will retry`);
                     logRdp("warn", `RDP incoming idle sign-off failed for session ${id} ('${s.username ?? "?"}') — will retry`);
-                    void showError(`Could not sign off idle RDP session ${id} ('${s.username ?? "?"}') — will retry`);
+                    void showError("Could not sign off the idle RDP session — will retry.", undefined, { operationId });
+                    recordRdpDiagnostic(operationId, "idle_signoff", "applied", "applied", "failed", "error", "RDP.SESSION.LOGOFF_FAILED");
+                  } else {
+                    recordRdpDiagnostic(operationId, "idle_signoff", "applied", "applied", "succeeded", "warn");
                   }
                 })
                 .catch(e => {
@@ -154,7 +162,8 @@ export default function useRdpIncomingIdleSignout(
                   console.error(`[RdpIncomingSignout] Logoff ${id} error:`, e);
                   const msg = e instanceof Error ? e.message : String(e);
                   logRdp("error", `RDP incoming idle sign-off error for session ${id} ('${s.username ?? "?"}'): ${msg}`);
-                  void showError(`Error signing off idle RDP session ${id} ('${s.username ?? "?"}') — will retry`);
+                  void showError("Could not sign off the idle RDP session — will retry.", undefined, { operationId });
+                  recordRdpDiagnostic(operationId, "idle_signoff", "applied", "applied", "failed", "error", "RDP.SESSION.LOGOFF_FAILED");
                 });
             };
             // Logging off our OWN session kills this app, so the post-sign-off

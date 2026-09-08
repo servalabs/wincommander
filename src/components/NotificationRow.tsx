@@ -54,6 +54,11 @@ export function NotificationRow({ notification: n, onDismiss }: NotificationRowP
       <div className="flex flex-1 flex-col gap-0.5 min-w-0">
         <div className="text-[12px] text-[var(--text)] break-words">{n.message}</div>
         {n.detail ? <div className="text-[10.5px] text-[var(--text-mute)] break-words">{n.detail}</div> : null}
+        {n.operationId ? (
+          <div className="font-[family-name:var(--font-mono)] text-[9.5px] text-[var(--text-mute)]">
+            Operation {n.operationId}
+          </div>
+        ) : null}
         <div className="font-[family-name:var(--font-mono)] text-[9.5px] text-[var(--text-mute)]">{relativeTime(n.time)}</div>
       </div>
       <button
