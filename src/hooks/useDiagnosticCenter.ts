@@ -16,7 +16,7 @@ export type DiagnosticEvent = {
   retryability: string;
   suggestedNextAction: string;
   durationMs?: number;
-  source?: "desktop" | "service";
+  source?: "desktop" | "service" | "pro";
 };
 
 export type DiagnosticsHealth = {
@@ -36,16 +36,18 @@ export function useDiagnosticCenter() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [nextEvents, nextHealth, serviceEvents, nextLegacyRecords] = await Promise.all([
+      const [nextEvents, nextHealth, serviceEvents, proEvents, nextLegacyRecords] = await Promise.all([
         invoke<DiagnosticEvent[]>("get_diagnostic_events", { limit: 500 }).catch(() => null),
         invoke<DiagnosticsHealth>("get_diagnostics_health").catch(() => null),
         invoke<DiagnosticEvent[]>("get_service_diagnostic_summaries", { limit: 500 }).catch(() => []),
+        invoke<DiagnosticEvent[]>("get_pro_diagnostic_summaries", { limit: 500 }).catch(() => []),
         invoke<LogRecord[]>("get_log_records", { limit: 500, levels: null }).catch(() => null),
       ]);
       if (nextEvents === null && nextLegacyRecords === null) throw new Error("No diagnostic source is available");
       setStructuredEvents([
         ...(nextEvents ?? []).map((event) => ({ ...event, source: "desktop" as const })),
         ...serviceEvents.map((event) => ({ ...event, source: "service" as const, lifecycle: "applied" })),
+        ...proEvents.map((event) => ({ ...event, source: "pro" as const })),
       ]);
       setLegacyRecords(nextLegacyRecords ?? []);
       setHealth(nextHealth);

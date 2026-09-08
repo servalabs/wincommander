@@ -71,11 +71,12 @@ export default function DiagnosticEventBridge() {
   useEffect(() => {
     let active = true;
     const refresh = async () => {
-      const [desktop, service] = await Promise.all([
+      const [desktop, service, pro] = await Promise.all([
         invoke<unknown[]>("get_diagnostic_events", { limit: 100 }).catch(() => []),
         invoke<unknown[]>("get_service_diagnostic_summaries", { limit: 100 }).catch(() => []),
+        invoke<unknown[]>("get_pro_diagnostic_summaries", { limit: 100 }).catch(() => []),
       ]);
-      if (active) projectPersistedDiagnostics([...desktop, ...service]);
+      if (active) projectPersistedDiagnostics([...desktop, ...service, ...pro]);
     };
     void refresh();
     const timer = window.setInterval(() => { void refresh(); }, POLL_MS);

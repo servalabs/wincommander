@@ -6,13 +6,13 @@ import { showError, showSuccess } from "../../utils/toast";
 
 type LegacyRecord = { date: string; timestamp: string; level: string; source: string; message: string };
 
-type SourceFilter = "all" | "desktop" | "service" | "legacy";
+type SourceFilter = "all" | "desktop" | "service" | "pro" | "legacy";
 type SeverityFilter = "all" | "error" | "warn" | "info";
 
 type TimelineEvent = {
   id: string;
   occurredAt: string;
-  source: "desktop" | "service" | "legacy";
+  source: "desktop" | "service" | "pro" | "legacy";
   sourceDetail?: string;
   severity: "error" | "warn" | "info";
   summary: string;
@@ -26,6 +26,7 @@ const SOURCE_FILTERS: Array<{ value: SourceFilter; label: string }> = [
   { value: "all", label: "All sources" },
   { value: "desktop", label: "Desktop" },
   { value: "service", label: "Service" },
+  { value: "pro", label: "Pro" },
   { value: "legacy", label: "Legacy" },
 ];
 
@@ -57,7 +58,7 @@ function legacyTimestamp(record: LegacyRecord): string {
   return Number.isNaN(parsed) ? `${record.date}T${record.timestamp}` : new Date(parsed).toISOString();
 }
 
-function structuredTimelineEvent(event: DiagnosticEvent, source: "desktop" | "service"): TimelineEvent {
+function structuredTimelineEvent(event: DiagnosticEvent, source: "desktop" | "service" | "pro"): TimelineEvent {
   return {
     id: `${source}:${event.eventId}`,
     occurredAt: event.occurredAt,

@@ -827,6 +827,18 @@ async fn argus_monitoring_mirror() -> Result<serde_json::Value, String> {
     crate::sidecar::dispatch_paid_command("argus_monitoring_mirror", serde_json::Value::Null).await
 }
 
+/// Reads only the redacted Pro diagnostic summary contract. The WebView never
+/// chooses a sidecar verb or receives Pro diagnostic context/ciphertext.
+#[tauri::command]
+async fn get_pro_diagnostic_summaries(limit: Option<usize>) -> Result<serde_json::Value, String> {
+    crate::license::require_paid("Pro diagnostic summaries")?;
+    crate::sidecar::dispatch_paid_command(
+        "get_pro_diagnostic_summaries",
+        serde_json::json!({ "limit": limit.unwrap_or(100).min(500) }),
+    )
+    .await
+}
+
 /// Spawn an elevated PowerShell child (via UAC prompt) that renames
 /// the Start Menu .lnk and rewrites the HKLM uninstall DisplayName.
 /// Returns Ok the moment the outer (unelevated) launcher process is
@@ -2526,6 +2538,7 @@ pub fn run() {
             diagnostics::record_diagnostic_event,
             diagnostics::get_diagnostic_events,
             diagnostics::get_diagnostics_health,
+            get_pro_diagnostic_summaries,
             native_notify::show_native_test_notification,
             native_notify::notification_renderer_ready,
             native_notify::present_notification_window,
