@@ -39,6 +39,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const [policy, setPolicy] = useState<VaultAccessPolicy | null>(initialDraft?.policy ?? null);
   const [status, setStatus] = useState<VaultPolicyStatus | null>(null);
   const [authorizedEntries, setAuthorizedEntries] = useState<VaultAuthorizedEntry[]>([]);
+  const [canManagePolicy, setCanManagePolicy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [legacyNotice, setLegacyNotice] = useState<string | null>(null);
@@ -60,7 +61,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const refreshRevision = useRef(0);
   const saveInProgress = useRef(false);
   const [draftDirty, setDraftDirty] = useState(initialDraft !== null);
-  const { getPolicy, getStatus, applyPolicy, mountEntry, unmountEntry, listAuthorizedEntries } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
+  const { getPolicy, getStatus, applyPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
   const error = useMemo(() => policy ? validateVaultAccessIntent(policy) : null, [policy]);
 
   const replacePolicy = useCallback((next: VaultAccessPolicy | null, dirty: boolean, basePolicy?: VaultAccessPolicy | null) => {
@@ -84,23 +85,35 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const refresh = useCallback(async (replaceDirtyDraft = false, includeStatus = true) => {
     const revision = ++refreshRevision.current;
     try {
-      if (isAdmin) {
-        const [entries, loadedPolicy, loadedStatus] = await Promise.all([
-          listAuthorizedEntries(),
-          getPolicy().then(value => value ? normalizeVaultAccessPolicy(value) : null),
-          includeStatus ? getStatus() : Promise.resolve(null),
-        ]);
-        if (revision !== refreshRevision.current) return false;
-        setAuthorizedEntries(entries);
-        setMountResults({});
+      // Windows can report that an account belongs to Administrators while UAC
+      // gives this app a standard token. Ask the service about this *process*
+      // before making privileged policy calls; the ordinary authorised-vault
+      // list must remain available either way.
+      const [entries, capabilities] = await Promise.all([
+        listAuthorizedEntries(),
+        getCapabilities().catch(() => ({ can_manage_policy: false })),
+      ]);
+      if (revision !== refreshRevision.current) return false;
+      setAuthorizedEntries(entries);
+      setMountResults({});
+      setCanManagePolicy(capabilities.can_manage_policy);
+      if (capabilities.can_manage_policy) {
+        try {
+          const [loadedPolicy, loadedStatus] = await Promise.all([
+            getPolicy().then(value => value ? normalizeVaultAccessPolicy(value) : null),
+            includeStatus ? getStatus() : Promise.resolve(null),
+          ]);
+          if (revision !== refreshRevision.current) return false;
         if (replaceDirtyDraft || !dirtyRef.current) replacePolicy(loadedPolicy, false);
         else if (!draftBaseRef.current && loadedPolicy && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
         if (loadedStatus) setStatus(loadedStatus);
+        } catch {
+          // Preserve the usable caller-filtered list if elevation changed while
+          // this refresh was in flight; only the policy editor needs elevation.
+          setCanManagePolicy(false);
+          setStatus(null);
+        }
       } else {
-        const entries = await listAuthorizedEntries();
-        if (revision !== refreshRevision.current) return false;
-        setAuthorizedEntries(entries);
-        setMountResults({});
         setStatus(null);
       }
       return true;
@@ -118,7 +131,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     } finally {
       setLoading(false);
     }
-  }, [getPolicy, getStatus, isAdmin, listAuthorizedEntries, replacePolicy]);
+  }, [getCapabilities, getPolicy, getStatus, listAuthorizedEntries, replacePolicy]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -398,16 +411,16 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     <div className="fleet-admin-stack">
       <Card>
         <CardHeader>
-          <CardTitle>{isAdmin ? "Saved vaults" : "My vaults"}</CardTitle>
+          <CardTitle>{canManagePolicy ? "Saved vaults" : "My vaults"}</CardTitle>
           <CardDescription>
-            {isAdmin
+            {canManagePolicy
               ? "Saved vault settings stay on this PC. Mounting asks only for the password, which is never stored."
               : "Only Vaults that the service has authorized for this Windows account appear here; mounting asks only for the password."}
           </CardDescription>
         </CardHeader>
         <CardContent className="fleet-admin-stack">
           {authorizedEntries.length === 0 && (
-            <p className="fleet-field-hint">{isAdmin ? "No vault has been saved and assigned to this account yet." : "No Vault access is currently assigned to this Windows account."}</p>
+            <p className="fleet-field-hint">{canManagePolicy ? "No vault has been saved and assigned to this account yet." : "No Vault access is currently assigned to this Windows account."}</p>
           )}
           {authorizedEntries.map(entry => {
             const mountGate = vaultMountGate({ authorized: entry, entryResult: status?.entries.find(item => item.id === entry.entry_id)?.result, draftDirty: false });
@@ -444,7 +457,12 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         </CardContent>
       </Card>
 
-      {isAdmin && <fieldset disabled={saving} className="contents">
+      {isAdmin && !canManagePolicy && <div className="fleet-vault-verification-warning" role="alert">
+        <Icon icon="warning-sign" size={16} />
+        <div><strong>Run WinCommander as administrator to change Vault settings</strong><p>This account is an Administrator, but this app instance is not elevated. You can still view and mount Vaults assigned to this account.</p></div>
+      </div>}
+
+      {canManagePolicy && <fieldset disabled={saving} className="contents">
       <Card>
         <CardHeader>
           <CardTitle>Vault access</CardTitle>

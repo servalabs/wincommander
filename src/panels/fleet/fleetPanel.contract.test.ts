@@ -182,7 +182,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(vaultHook).not.toContain("volumePath");
     expect(vault).toContain("My vaults");
     expect(vault).toContain("Only Vaults that the service has authorized");
-    expect(vault).toContain("{isAdmin && <>");
+    expect(vault).toContain("{canManagePolicy && <fieldset");
     expect(vault).toContain("passwordInputRef");
     expect(vault).toContain('if (input) input.value = ""');
     expect(vault).toContain('password = ""');
