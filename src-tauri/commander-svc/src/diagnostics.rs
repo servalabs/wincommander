@@ -1,10 +1,11 @@
 //! Service-owned encrypted terminal diagnostics. No plaintext fallback exists.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rand::{rngs::OsRng, RngCore};
@@ -19,27 +20,85 @@ use wincmd_shared::vault_access::{
 const EVENT_FILE: &str = "service-diagnostic-events.log";
 const MATERIAL_FILE: &str = "service-diagnostics.material";
 const MAX_EVENT_BYTES: usize = 16 * 1024;
+const RETENTION_DAYS: i64 = 7;
+const MAX_EMERGENCY_FAILURES: usize = 32;
 static PERSISTED_EVENTS: AtomicU64 = AtomicU64::new(0);
 static DROPPED_EVENTS: AtomicU64 = AtomicU64::new(0);
 static STORAGE_FAILURES: AtomicU64 = AtomicU64::new(0);
+static RETENTION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Default)]
+struct StorageHealthState {
+    pruned_events: u64,
+    corrupt_events: u64,
+    recovery_events: u64,
+    last_failure_code: Option<&'static str>,
+    pending_recovery: bool,
+    emergency_failure_codes: VecDeque<&'static str>,
+}
+
+fn storage_health() -> &'static Mutex<StorageHealthState> {
+    static STATE: OnceLock<Mutex<StorageHealthState>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(StorageHealthState::default()))
+}
+
+fn storage_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DiagnosticsHealth {
     pub(crate) persisted_events: u64,
     pub(crate) dropped_persistence_events: u64,
     pub(crate) storage_failures: u64,
+    pub(crate) pruned_events: u64,
+    pub(crate) corrupt_events: u64,
+    pub(crate) recovery_events: u64,
+    pub(crate) emergency_failure_count: usize,
+    pub(crate) last_failure_code: Option<&'static str>,
     pub(crate) encrypted_persistence_available: bool,
 }
 
 pub(crate) fn health() -> DiagnosticsHealth {
+    let state = storage_health().lock().ok();
     DiagnosticsHealth {
         persisted_events: PERSISTED_EVENTS.load(Ordering::Relaxed),
         dropped_persistence_events: DROPPED_EVENTS.load(Ordering::Relaxed),
         storage_failures: STORAGE_FAILURES.load(Ordering::Relaxed),
+        pruned_events: state.as_ref().map_or(0, |value| value.pruned_events),
+        corrupt_events: state.as_ref().map_or(0, |value| value.corrupt_events),
+        recovery_events: state.as_ref().map_or(0, |value| value.recovery_events),
+        emergency_failure_count: state
+            .as_ref()
+            .map_or(0, |value| value.emergency_failure_codes.len()),
+        last_failure_code: state.and_then(|value| value.last_failure_code),
         encrypted_persistence_available: cfg!(windows),
     }
 }
 
+pub(crate) fn prune_retained_diagnostics() {
+    let _lock = match storage_lock().lock() {
+        Ok(lock) => lock,
+        Err(_) => {
+            record_storage_failure("DIAGNOSTICS.PRUNE.LOCK_FAILED");
+            return;
+        }
+    };
+    let result = diagnostics_dir()
+        .map_err(|_| "DIAGNOSTICS.PRUNE.PATH_FAILED")
+        .and_then(|dir| prune_diagnostics_at(&dir));
+    match result {
+        Ok(retention) => record_prune_result(&retention),
+        Err(code) => record_storage_failure(code),
+    }
+}
+#[derive(Default)]
+struct RetentionResult {
+    pruned: u64,
+    corrupt: u64,
+    content: String,
+}
 /// Safe projection for the authenticated service pipe. Context, ciphertext,
 /// storage errors, and service filesystem details never cross this boundary.
 #[derive(Clone, Debug, serde::Serialize)]
@@ -65,10 +124,22 @@ pub(crate) fn recent_summaries(
     operation_id: Option<&str>,
     limit: usize,
 ) -> Result<Vec<DiagnosticSummary>, String> {
-    let dir = diagnostics_dir()?;
-    recent_summaries_at(&dir, operation_id, limit)
+    let _lock = storage_lock()
+        .lock()
+        .map_err(|_| "DIAGNOSTICS.READ.LOCK_FAILED".to_string())?;
+    let dir = diagnostics_dir().map_err(|_| "DIAGNOSTICS.READ.PATH_FAILED".to_string())?;
+    match prune_diagnostics_at(&dir) {
+        Ok(retention) => record_prune_result(&retention),
+        Err(code) => {
+            record_storage_failure(code);
+            return Err(code.to_string());
+        }
+    }
+    recent_summaries_at(&dir, operation_id, limit).map_err(|_| {
+        record_storage_failure("DIAGNOSTICS.READ.FAILED");
+        "DIAGNOSTICS.READ.FAILED".to_string()
+    })
 }
-
 fn recent_summaries_at(
     dir: &Path,
     operation_id: Option<&str>,
@@ -116,23 +187,220 @@ fn recent_summaries_at(
 pub(crate) fn record_event(event: DiagnosticEvent) -> Result<(), String> {
     event.validate()?;
     let payload =
-        serde_json::to_vec(&event).map_err(|_| "encode diagnostic event failed".to_string())?;
+        serde_json::to_vec(&event).map_err(|_| "DIAGNOSTICS.ENCODE_FAILED".to_string())?;
     if payload.len() > MAX_EVENT_BYTES {
-        return record_failure("diagnostic event exceeds the size limit");
+        record_storage_failure("DIAGNOSTICS.EVENT.TOO_LARGE");
+        return Err("DIAGNOSTICS.EVENT.TOO_LARGE".to_string());
     }
+    let _lock = storage_lock()
+        .lock()
+        .map_err(|_| "DIAGNOSTICS.STORAGE.LOCK_FAILED".to_string())?;
     let result = (|| {
-        let dir = diagnostics_dir()?;
-        persist_event_at(&dir, &event, &payload)
+        let dir = diagnostics_dir().map_err(|_| "DIAGNOSTICS.STORAGE.PATH_FAILED")?;
+        let retention = prune_diagnostics_at(&dir)?;
+        persist_event_at(&dir, &event, &payload).map_err(|_| "DIAGNOSTICS.STORAGE.WRITE_FAILED")?;
+        Ok::<_, &'static str>((dir, retention))
     })();
     match result {
-        Ok(()) => {
+        Ok((dir, retention)) => {
             PERSISTED_EVENTS.fetch_add(1, Ordering::Relaxed);
+            record_prune_result(&retention);
+            record_recovery_if_needed(&dir);
             Ok(())
         }
-        Err(error) => record_failure(&error),
+        Err(code) => {
+            record_storage_failure(code);
+            Err(code.to_string())
+        }
+    }
+}
+fn retention_cutoff() -> String {
+    // Retain today and the preceding six UTC calendar dates: exactly seven dates.
+    utc_date_from_days((unix_ms() / 86_400_000) as i64 - (RETENTION_DAYS - 1))
+}
+
+fn parse_envelope_date(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("D1:")?;
+    let date = rest.get(..10)?;
+    if rest.as_bytes().get(10) != Some(&b':') || !is_valid_date(date) {
+        return None;
+    }
+    Some(date)
+}
+
+fn is_valid_date(value: &str) -> bool {
+    if value.len() != 10
+        || value.as_bytes().get(4) != Some(&b'-')
+        || value.as_bytes().get(7) != Some(&b'-')
+    {
+        return false;
+    }
+    let year = value.get(..4).and_then(|part| part.parse::<i32>().ok());
+    let month = value.get(5..7).and_then(|part| part.parse::<u32>().ok());
+    let day = value.get(8..10).and_then(|part| part.parse::<u32>().ok());
+    let (Some(year), Some(month), Some(day)) = (year, month, day) else {
+        return false;
+    };
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => return false,
+    };
+    day >= 1 && day <= days
+}
+
+fn retain_diagnostic_records<F>(content: &str, cutoff: String, mut decrypt: F) -> RetentionResult
+where
+    F: FnMut(&str) -> Option<Vec<u8>>,
+{
+    let mut result = RetentionResult::default();
+    for line in content.lines() {
+        let Some(date) = parse_envelope_date(line) else {
+            result.corrupt += 1;
+            continue;
+        };
+        if date < cutoff.as_str() {
+            result.pruned += 1;
+            continue;
+        }
+        let Some(body) = decrypt(line) else {
+            result.corrupt += 1;
+            continue;
+        };
+        let Ok(event) = serde_json::from_slice::<DiagnosticEvent>(&body) else {
+            result.corrupt += 1;
+            continue;
+        };
+        if event.occurred_at.get(..10) != Some(&line[3..13]) {
+            result.corrupt += 1;
+            continue;
+        }
+        result.content.push_str(line);
+        result.content.push('\n');
+    }
+    result
+}
+
+fn atomic_replace(path: &Path, content: &[u8]) -> Result<(), &'static str> {
+    let parent = path.parent().ok_or("DIAGNOSTICS.PRUNE.WRITE_FAILED")?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("DIAGNOSTICS.PRUNE.WRITE_FAILED")?;
+    let sequence = RETENTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(".{file_name}.{sequence}.tmp"));
+    let write_result = (|| {
+        let mut file =
+            fs::File::create(&temporary).map_err(|_| "DIAGNOSTICS.PRUNE.WRITE_FAILED")?;
+        file.write_all(content)
+            .map_err(|_| "DIAGNOSTICS.PRUNE.WRITE_FAILED")?;
+        file.sync_all()
+            .map_err(|_| "DIAGNOSTICS.PRUNE.WRITE_FAILED")?;
+        fs::rename(&temporary, path).map_err(|_| "DIAGNOSTICS.PRUNE.REPLACE_FAILED")
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result
+}
+
+fn record_prune_result(result: &RetentionResult) {
+    if let Ok(mut state) = storage_health().lock() {
+        state.pruned_events += result.pruned;
+        state.corrupt_events += result.corrupt;
     }
 }
 
+fn record_storage_failure(code: &'static str) {
+    DROPPED_EVENTS.fetch_add(1, Ordering::Relaxed);
+    STORAGE_FAILURES.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut state) = storage_health().lock() {
+        state.last_failure_code = Some(code);
+        state.pending_recovery = true;
+        if state.emergency_failure_codes.len() == MAX_EMERGENCY_FAILURES {
+            state.emergency_failure_codes.pop_front();
+        }
+        state.emergency_failure_codes.push_back(code);
+    }
+}
+
+fn prune_diagnostics_at(dir: &Path) -> Result<RetentionResult, &'static str> {
+    let path = dir.join(EVENT_FILE);
+    let content = match fs::read_to_string(&path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RetentionResult::default())
+        }
+        Err(_) => return Err("DIAGNOSTICS.PRUNE.READ_FAILED"),
+    };
+    let key = service_key(dir).map_err(|_| "DIAGNOSTICS.PRUNE.KEY_UNAVAILABLE")?;
+    let result = retain_diagnostic_records(&content, retention_cutoff(), |line| {
+        open_diagnostic_record(&key, "service", line)
+    });
+    if result.content != content {
+        atomic_replace(&path, result.content.as_bytes())?;
+    }
+    Ok(result)
+}
+
+fn recovery_event() -> DiagnosticEvent {
+    let sequence = RETENTION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    DiagnosticEvent {
+        event_id: format!("svc-diag-recovery-{sequence}"),
+        operation_id: format!("DIA-SVC-RECOVERY-{sequence}"),
+        parent_operation_id: None,
+        occurred_at: format!("{}T00:00:00Z", today_utc()),
+        component: "service".into(),
+        feature: "diagnostics".into(),
+        action: "storage".into(),
+        stage: "recovery".into(),
+        lifecycle: DiagnosticLifecycle::Applied,
+        outcome: DiagnosticOutcome::Recovered,
+        error_code: Some("DIAGNOSTICS.STORAGE.RECOVERED".into()),
+        severity: DiagnosticSeverity::Warn,
+        retryability: DiagnosticRetryability::Automatic,
+        suggested_next_action: "none".into(),
+        duration_ms: None,
+        privacy_class: DiagnosticPrivacyClass::LocalSensitive,
+        redacted_context: BTreeMap::new(),
+    }
+}
+
+fn record_recovery_if_needed(dir: &Path) {
+    let should_record = storage_health()
+        .lock()
+        .map(|mut state| {
+            let pending = state.pending_recovery;
+            if pending {
+                state.pending_recovery = false;
+                state.last_failure_code = None;
+            }
+            pending
+        })
+        .unwrap_or(false);
+    if !should_record {
+        return;
+    }
+    let event = recovery_event();
+    let payload = match serde_json::to_vec(&event) {
+        Ok(payload) => payload,
+        Err(_) => {
+            record_storage_failure("DIAGNOSTICS.ENCODE_FAILED");
+            return;
+        }
+    };
+    match persist_event_at(dir, &event, &payload) {
+        Ok(()) => {
+            PERSISTED_EVENTS.fetch_add(1, Ordering::Relaxed);
+            if let Ok(mut state) = storage_health().lock() {
+                state.recovery_events += 1;
+            }
+        }
+        Err(_) => record_storage_failure("DIAGNOSTICS.STORAGE.RECOVERY_WRITE_FAILED"),
+    }
+}
 fn persist_event_at(dir: &Path, event: &DiagnosticEvent, payload: &[u8]) -> Result<(), String> {
     let key = service_key(dir)?;
     let mut nonce = [0u8; 12];
@@ -230,12 +498,6 @@ fn vault_event(
         privacy_class: DiagnosticPrivacyClass::Restricted,
         redacted_context: context,
     }
-}
-
-fn record_failure(error: &str) -> Result<(), String> {
-    DROPPED_EVENTS.fetch_add(1, Ordering::Relaxed);
-    STORAGE_FAILURES.fetch_add(1, Ordering::Relaxed);
-    Err(error.to_string())
 }
 
 fn diagnostics_dir() -> Result<PathBuf, String> {
@@ -463,8 +725,11 @@ fn unix_ms() -> u128 {
         .unwrap_or_default()
 }
 fn today_utc() -> String {
-    let days = unix_ms() / 86_400_000;
-    let z = days as i64 + 719_468;
+    utc_date_from_days((unix_ms() / 86_400_000) as i64)
+}
+
+fn utc_date_from_days(days: i64) -> String {
+    let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
@@ -523,6 +788,78 @@ mod tests {
     #[test]
     fn time_has_a_valid_date_prefix() {
         assert_eq!(today_utc().len(), 10);
+    }
+    fn retention_event(date: &str) -> DiagnosticEvent {
+        let mut event = vault_event(
+            "VLT-retention-1",
+            "mount",
+            DiagnosticOutcome::Succeeded,
+            "VLT.MOUNT.COMPLETED",
+            DiagnosticSeverity::Info,
+            false,
+            "none",
+            Instant::now(),
+            BTreeMap::new(),
+        );
+        event.occurred_at = format!("{date}T00:00:00Z");
+        event
+    }
+
+    fn retention_line(date: &str) -> String {
+        let body = serde_json::to_string(&retention_event(date)).unwrap();
+        format!("D1:{date}:test-{date}:{body}")
+    }
+
+    #[test]
+    fn retention_keeps_the_seventh_calendar_day_and_removes_older_records() {
+        let cutoff = "2026-09-01".to_string();
+        let oldest_kept = retention_line("2026-09-01");
+        let expired = retention_line("2026-08-31");
+        let content = format!("{oldest_kept}\n{expired}\n");
+        let retained = retain_diagnostic_records(&content, cutoff, |line| {
+            line.find('{')
+                .and_then(|index| line.get(index..))
+                .map(|body| body.as_bytes().to_vec())
+        });
+        assert_eq!(retained.pruned, 1);
+        assert_eq!(retained.corrupt, 0);
+        assert_eq!(retained.content, format!("{oldest_kept}\n"));
+    }
+
+    #[test]
+    fn retention_removes_malformed_and_corrupt_current_records() {
+        let cutoff = "2026-09-01".to_string();
+        let valid = retention_line("2026-09-01");
+        let content = format!("{valid}\nD1:2026-09-01:corrupt\nnot-a-record\n");
+        let retained = retain_diagnostic_records(&content, cutoff, |line| {
+            line.find('{')
+                .and_then(|index| line.get(index..))
+                .map(|body| body.as_bytes().to_vec())
+        });
+        assert_eq!(retained.corrupt, 2);
+        assert_eq!(retained.content, format!("{valid}\n"));
+    }
+
+    #[test]
+    fn atomic_replace_reports_write_failures_without_exposing_a_path() {
+        let target = std::env::temp_dir()
+            .join(format!("wincmd-service-retention-{}", unix_ms()))
+            .join("missing")
+            .join("diagnostics.log");
+        assert_eq!(
+            atomic_replace(&target, b"safe"),
+            Err("DIAGNOSTICS.PRUNE.WRITE_FAILED")
+        );
+    }
+    #[test]
+    fn recovery_record_contains_only_stable_diagnostic_fields() {
+        let event = recovery_event();
+        assert_eq!(event.outcome, DiagnosticOutcome::Recovered);
+        assert_eq!(
+            event.error_code.as_deref(),
+            Some("DIAGNOSTICS.STORAGE.RECOVERED")
+        );
+        assert!(event.redacted_context.is_empty());
     }
     #[test]
     fn safe_summary_never_returns_context_or_ciphertext() {

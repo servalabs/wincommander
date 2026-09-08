@@ -1671,6 +1671,7 @@ pub fn run() {
             #[cfg(not(debug_assertions))]
             log::migrate_plaintext_logs(&log_file);
             log::purge_old_log_records(&log_file, 7);
+            diagnostics::prune_retained_diagnostics();
         }
     }
     startup_trace::pre_window_milestone("pre-builder.complete");

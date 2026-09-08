@@ -128,7 +128,8 @@ fn logging_enabled() -> bool {
 /// Handles both the new `L:YYYY-MM-DD:` encrypted format and the legacy
 /// `[YYYY-MM-DD` plaintext format. Only rewrites when lines are removed.
 pub fn purge_old_log_records(log_file: &Path, keep_days: u64) {
-    let cutoff = chrono::Local::now().date_naive() - chrono::Duration::days(keep_days as i64);
+    let cutoff = chrono::Utc::now().date_naive()
+        - chrono::Duration::days(keep_days.saturating_sub(1) as i64);
 
     let content = match std::fs::read_to_string(log_file) {
         Ok(c) => c,
@@ -138,26 +139,7 @@ pub fn purge_old_log_records(log_file: &Path, keep_days: u64) {
     let total = content.lines().count();
     let kept: Vec<&str> = content
         .lines()
-        .filter(|line| {
-            // Encrypted format: L:YYYY-MM-DD:...
-            if let Some(rest) = line.strip_prefix("L:") {
-                if rest.len() >= 10 {
-                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&rest[..10], "%Y-%m-%d") {
-                        return date >= cutoff;
-                    }
-                }
-                return true;
-            }
-            // Legacy plaintext: [YYYY-MM-DD ...
-            if let Some(rest) = line.strip_prefix('[') {
-                if rest.len() >= 10 {
-                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&rest[..10], "%Y-%m-%d") {
-                        return date >= cutoff;
-                    }
-                }
-            }
-            true
-        })
+        .filter(|line| should_keep_log_record(line, cutoff))
         .collect();
 
     if kept.len() < total {
@@ -166,6 +148,17 @@ pub fn purge_old_log_records(log_file: &Path, keep_days: u64) {
     }
 }
 
+fn should_keep_log_record(line: &str, cutoff: chrono::NaiveDate) -> bool {
+    let date = if let Some(rest) = line.strip_prefix("L:") {
+        rest.get(..10)
+    } else if let Some(rest) = line.strip_prefix('[') {
+        rest.get(..10)
+    } else {
+        return true;
+    };
+    date.and_then(|value| chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+        .is_none_or(|value| value >= cutoff)
+}
 /// Re-encrypt any plaintext log lines left from before the encryption
 /// migration. Called once at startup before purge_old_log_records in release
 /// builds. Debug builds deliberately use the inverse migration below so a
@@ -793,6 +786,20 @@ mod log_record_tests {
         );
     }
 
+    #[test]
+    fn legacy_retention_keeps_the_seventh_utc_calendar_day() {
+        let cutoff = chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+        assert!(should_keep_log_record("L:2026-09-01:ciphertext", cutoff));
+        assert!(!should_keep_log_record("L:2026-08-31:ciphertext", cutoff));
+        assert!(should_keep_log_record(
+            "[2026-09-01 12:00:00] [INFO] kept",
+            cutoff
+        ));
+        assert!(!should_keep_log_record(
+            "[2026-08-31 12:00:00] [INFO] expired",
+            cutoff
+        ));
+    }
     #[test]
     fn parse_body_with_source_token() {
         // Pro line: a [pro] source token precedes the message's own [pro/module] prefix.

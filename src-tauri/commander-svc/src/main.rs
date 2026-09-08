@@ -243,6 +243,7 @@ fn run_runtime(stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
 /// Async service body — starts the four background loops and the pipe server.
 #[cfg(windows)]
 async fn run(mut stop_rx: Option<tokio::sync::watch::Receiver<bool>>) {
+    diagnostics::prune_retained_diagnostics();
     // ── Durable policy store (plan §3: "the SYSTEM service owns durable
     // state") ────────────────────────────────────────────────────────────
     //
