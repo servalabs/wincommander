@@ -434,8 +434,7 @@ pub async fn run_checkin_cycle_inner(
     };
     let mut req = CheckinRequest {
         device_id: device_id.clone(),
-        hostname,
-        posture: "nominal".to_string(),
+        posture: None,
         ts: now,
         nonce,
         hmac_version: HMAC_VERSION_V2,
@@ -444,6 +443,7 @@ pub async fn run_checkin_cycle_inner(
         decoy,
         resources,
         health,
+        ..Default::default()
     };
     req.hmac = match compute_request_hmac_v2(&checkin_secret, "POST", "/v1/agents/checkin", &req) {
         Ok(hmac) => hmac,

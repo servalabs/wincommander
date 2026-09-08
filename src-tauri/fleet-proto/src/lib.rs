@@ -757,9 +757,9 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
 
 /// Lifecycle of a remote command. `pending` awaits multi-party approval;
 /// `approved` is signed and pollable; `dispatched` was handed to the agent;
-/// `acked` proves only that the agent responded; `applied` requires an
-/// explicit device-side postcondition receipt. `failed`/`rejected`/`expired`
-/// are terminal results.
+/// `acked` proves only that the agent responded; `applying` means execution is
+/// still in progress; `applied` requires an explicit device-side postcondition
+/// receipt. `failed`/`rejected`/`expired` are terminal results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-codegen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-codegen", ts(export, export_to = "fleet.ts"))]
@@ -769,6 +769,7 @@ pub enum CommandStatus {
     Approved,
     Dispatched,
     Acked,
+    Applying,
     Applied,
     Failed,
     Rejected,
@@ -824,6 +825,20 @@ pub struct CommandView {
     pub required_approvals: i32,
     pub requested_by: String,
     pub created_at: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub approved_at: Option<String>,
+    #[serde(default)]
+    pub dispatched_at: Option<String>,
+    #[serde(default)]
+    pub acknowledged_at: Option<String>,
+    #[serde(default)]
+    pub applying_at: Option<String>,
+    #[serde(default)]
+    pub applied_at: Option<String>,
+    #[serde(default)]
+    pub terminal_at: Option<String>,
     /// Stable request/correlation id supplied when the command was created.
     /// This is distinct from the server-assigned `command_id`.
     #[serde(default)]
