@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useAuthMode } from "../context/AuthModeContext";
 import { showWarning } from "../utils/toast";
 import type { StartupProtectionOperation } from "../lib/startupProtectionReadiness";
+import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
 
 const MAX_REARM_ATTEMPTS = 3;
 
@@ -38,6 +39,7 @@ export default function useDecoyMonitor(
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
+    const operationId = newDiagnosticOperationId("decoy");
     const fingerprint = `${enabled}|${readAuditEnabled}|${fleetAlertEnabled}|${[...enrolledPaths].sort().join("\n")}`;
     if (fingerprint === lastReconciled.current) return;
 
@@ -72,9 +74,17 @@ export default function useDecoyMonitor(
         // being permanently hidden by a render-level fingerprint dedupe.
         lastReconciled.current = fingerprint;
         warnedFailures.current.delete("reconcile");
+        recordDiagnostic({ operationId, feature: "decoy", action: "monitor_reconcile", stage: "runtime",
+          lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+          suggestedNextAction: "none", privacyClass: "local_sensitive",
+          context: { state: enabled ? "armed" : "stopped" } });
         if (enabled) onStartupRearm?.("decoy-monitor", true);
       } catch (error) {
         if (cancelled) return;
+        recordDiagnostic({ operationId, feature: "decoy", action: "monitor_reconcile", stage: "runtime",
+          lifecycle: "applying", outcome: "failed", errorCode: "DEC.MONITOR.RECONCILE_FAILED",
+          severity: "warn", retryability: "automatic", suggestedNextAction: "retry",
+          privacyClass: "local_sensitive", context: { attempt: attempt + 1, state: enabled ? "arming" : "stopping" } });
         warnOnce(
           "reconcile",
           enabled

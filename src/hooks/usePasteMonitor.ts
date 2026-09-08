@@ -15,6 +15,7 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { PasteMonitorCategories } from "../types/settings";
+import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
 
 export interface PasteMonitorRustCategories {
   cloudApi: boolean;
@@ -77,13 +78,30 @@ export default function usePasteMonitor(
 ) {
   // Start / stop the watcher.
   useEffect(() => {
+    const operationId = newDiagnosticOperationId("clipboard");
     if (enabled) {
-      invoke("start_paste_monitor").catch((err) => {
+      invoke("start_paste_monitor").then(() => {
+        recordDiagnostic({ operationId, feature: "clipboard", action: "paste_monitor", stage: "runtime",
+          lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+          suggestedNextAction: "none", privacyClass: "restricted", context: { state: "armed" } });
+      }).catch((err) => {
         console.warn("[usePasteMonitor] start failed:", err);
+        recordDiagnostic({ operationId, feature: "clipboard", action: "paste_monitor", stage: "runtime",
+          lifecycle: "applying", outcome: "failed", errorCode: "CLP.MONITOR.START_FAILED",
+          severity: "warn", retryability: "manual", suggestedNextAction: "retry",
+          privacyClass: "restricted", context: { state: "arming" } });
       });
     } else {
-      invoke("stop_paste_monitor").catch((err) => {
+      invoke("stop_paste_monitor").then(() => {
+        recordDiagnostic({ operationId, feature: "clipboard", action: "paste_monitor", stage: "runtime",
+          lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+          suggestedNextAction: "none", privacyClass: "restricted", context: { state: "stopped" } });
+      }).catch((err) => {
         console.warn("[usePasteMonitor] stop failed:", err);
+        recordDiagnostic({ operationId, feature: "clipboard", action: "paste_monitor", stage: "runtime",
+          lifecycle: "applying", outcome: "failed", errorCode: "CLP.MONITOR.STOP_FAILED",
+          severity: "warn", retryability: "automatic", suggestedNextAction: "retry",
+          privacyClass: "restricted", context: { state: "stopping" } });
       });
     }
   }, [enabled]);
@@ -92,8 +110,17 @@ export default function usePasteMonitor(
   // on `enabled` so the categories are always in sync — when the
   // watcher next starts, it picks up the right mask immediately.
   useEffect(() => {
-    invoke("set_paste_monitor_categories", { categories }).catch((err) => {
+    const operationId = newDiagnosticOperationId("clipboard");
+    invoke("set_paste_monitor_categories", { categories }).then(() => {
+      recordDiagnostic({ operationId, feature: "clipboard", action: "paste_category_sync", stage: "runtime",
+        lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+        suggestedNextAction: "none", privacyClass: "restricted", context: { state: "synced" } });
+    }).catch((err) => {
       console.warn("[usePasteMonitor] sync categories failed:", err);
+      recordDiagnostic({ operationId, feature: "clipboard", action: "paste_category_sync", stage: "runtime",
+        lifecycle: "applying", outcome: "failed", errorCode: "CLP.CATEGORY.SYNC_FAILED",
+        severity: "warn", retryability: "manual", suggestedNextAction: "review_settings",
+        privacyClass: "restricted", context: { state: "sync_failed" } });
     });
   }, [
     categories.cloudApi,
@@ -109,25 +136,52 @@ export default function usePasteMonitor(
 
   // Sync the crypto-swap toggle.
   useEffect(() => {
-    invoke("set_paste_monitor_crypto_swap", { enabled: cryptoSwapEnabled }).catch((err) => {
+    const operationId = newDiagnosticOperationId("clipboard");
+    invoke("set_paste_monitor_crypto_swap", { enabled: cryptoSwapEnabled }).then(() => {
+      recordDiagnostic({ operationId, feature: "clipboard", action: "crypto_swap_sync", stage: "runtime",
+        lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+        suggestedNextAction: "none", privacyClass: "restricted", context: { state: "synced" } });
+    }).catch((err) => {
       console.warn("[usePasteMonitor] sync crypto-swap failed:", err);
+      recordDiagnostic({ operationId, feature: "clipboard", action: "crypto_swap_sync", stage: "runtime",
+        lifecycle: "applying", outcome: "failed", errorCode: "CLP.CRYPTO_SWAP.SYNC_FAILED",
+        severity: "warn", retryability: "manual", suggestedNextAction: "review_settings",
+        privacyClass: "restricted", context: { state: "sync_failed" } });
     });
   }, [cryptoSwapEnabled]);
 
   // Sync the auto-clear config.
   useEffect(() => {
+    const operationId = newDiagnosticOperationId("clipboard");
     invoke("set_paste_monitor_auto_clear", {
       enabled: autoClearEnabled,
       seconds: autoClearSeconds,
+    }).then(() => {
+      recordDiagnostic({ operationId, feature: "clipboard", action: "auto_clear_sync", stage: "runtime",
+        lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+        suggestedNextAction: "none", privacyClass: "restricted", context: { state: "synced" } });
     }).catch((err) => {
       console.warn("[usePasteMonitor] sync auto-clear failed:", err);
+      recordDiagnostic({ operationId, feature: "clipboard", action: "auto_clear_sync", stage: "runtime",
+        lifecycle: "applying", outcome: "failed", errorCode: "CLP.AUTO_CLEAR.SYNC_FAILED",
+        severity: "warn", retryability: "manual", suggestedNextAction: "review_settings",
+        privacyClass: "restricted", context: { state: "sync_failed" } });
     });
   }, [autoClearEnabled, autoClearSeconds]);
 
   // Sync the auto-clear-on-lock toggle.
   useEffect(() => {
-    invoke("set_paste_monitor_auto_clear_on_lock", { enabled: autoClearOnLock }).catch((err) => {
+    const operationId = newDiagnosticOperationId("clipboard");
+    invoke("set_paste_monitor_auto_clear_on_lock", { enabled: autoClearOnLock }).then(() => {
+      recordDiagnostic({ operationId, feature: "clipboard", action: "auto_clear_on_lock_sync", stage: "runtime",
+        lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+        suggestedNextAction: "none", privacyClass: "restricted", context: { state: "synced" } });
+    }).catch((err) => {
       console.warn("[usePasteMonitor] sync auto-clear-on-lock failed:", err);
+      recordDiagnostic({ operationId, feature: "clipboard", action: "auto_clear_on_lock_sync", stage: "runtime",
+        lifecycle: "applying", outcome: "failed", errorCode: "CLP.AUTO_CLEAR_ON_LOCK.SYNC_FAILED",
+        severity: "warn", retryability: "manual", suggestedNextAction: "review_settings",
+        privacyClass: "restricted", context: { state: "sync_failed" } });
     });
   }, [autoClearOnLock]);
 }

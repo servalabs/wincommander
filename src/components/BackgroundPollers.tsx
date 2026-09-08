@@ -452,6 +452,10 @@ export default function BackgroundPollers({
       (event) => {
         const pattern = event.payload?.pattern ?? "credential";
         const severity = event.payload?.severity ?? "warning";
+        recordDiagnostic({ feature: "clipboard", action: "paste_detection", stage: "monitor",
+          lifecycle: "verified", outcome: "succeeded", severity: severity === "danger" ? "critical" : "warn",
+          retryability: "never", suggestedNextAction: "review_status", privacyClass: "restricted",
+          context: { reason_category: severity === "danger" ? "dangerous_paste" : "credential_pattern", state: "detected" } });
         recordEvidence("monitor", severity === "danger" ? "danger" : "warn", `Clipboard monitor: ${pattern}`);
         if (severity === "danger") {
           // ClickFix / pastejacking — the user is being actively
@@ -483,6 +487,10 @@ export default function BackgroundPollers({
         // Strip to basename for toast brevity; full path lives in the
         // Privacy panel's recent log.
         const baseName = fullPath.split(/[/\\]/).filter(Boolean).pop() ?? fullPath;
+        recordDiagnostic({ feature: "decoy", action: "file_detection", stage: "monitor",
+          lifecycle: "verified", outcome: "succeeded", severity: "critical", retryability: "never",
+          suggestedNextAction: "review_status", privacyClass: "local_sensitive",
+          context: { reason_category: "decoy_access", state: "detected" } });
         recordEvidence("monitor", "danger", `Decoy file ${kind}: ${baseName}`, fullPath);
         showError(
           `⚠ Decoy file ${kind}: ${baseName}. Investigate — possible malware or someone scanning for sensitive files.`,
@@ -513,6 +521,10 @@ export default function BackgroundPollers({
           : act === "suspend_failed" || act === "kill_failed" ? `Couldn't stop ${who} — end it manually in Task Manager.`
           : who ? `${who} is the likely culprit — end it in Task Manager.`
           : "End any unfamiliar process in Task Manager.";
+        recordDiagnostic({ feature: "ransomware", action: "mass_modification_detection", stage: "monitor",
+          lifecycle: "verified", outcome: "succeeded", severity: "critical", retryability: "never",
+          suggestedNextAction: "disconnect_network", privacyClass: "local_sensitive",
+          context: { reason_category: act === "suspend_failed" || act === "kill_failed" ? "response_failed" : "mass_modification", state: "detected" } });
         recordEvidence(
           "monitor",
           "danger",
@@ -549,6 +561,10 @@ export default function BackgroundPollers({
         // (most likely cause: phrase isn't registered, or the
         // matcher's strict-no-Enter rule was tripped).
         console.log("[panic-phrase] event received; firing cascade");
+        recordDiagnostic({ feature: "lockdown", action: "coercion_phrase_detection", stage: "monitor",
+          lifecycle: "verified", outcome: "succeeded", severity: "critical", retryability: "never",
+          suggestedNextAction: "review_status", privacyClass: "restricted",
+          context: { reason_category: "coercion_trigger", state: "detected" } });
         recordEvidence("lockdown", "danger", "Lockdown triggered (coercion phrase)");
         // Rust owns and executes the authorized action; this event is
         // informational only and never carries an authorization secret.
@@ -566,6 +582,10 @@ export default function BackgroundPollers({
         const tool = event.payload?.tool ?? "a remote-access tool";
         const conf = event.payload?.confidence ?? "info";
         const peer = event.payload?.peer;
+        recordDiagnostic({ feature: "remote_access", action: "session_detection", stage: "monitor",
+          lifecycle: "verified", outcome: "succeeded", severity: conf === "high" ? "critical" : "warn",
+          retryability: "never", suggestedNextAction: "review_status", privacyClass: "restricted",
+          context: { reason_category: conf === "high" ? "incoming_session" : "tool_detected", state: "detected" } });
         recordEvidence("network", conf === "high" ? "danger" : "info", `Remote access: ${tool}${peer ? ` (${peer})` : ""}`);
         if (conf === "high") {
           showError(
@@ -592,6 +612,10 @@ export default function BackgroundPollers({
       (event) => {
         const tool = event.payload?.tool ?? "A screen-capture tool";
         if ((event.payload?.confidence ?? "high") !== "high") return;
+        recordDiagnostic({ feature: "privacy", action: "screen_capture_detection", stage: "monitor",
+          lifecycle: "verified", outcome: "succeeded", severity: "warn", retryability: "never",
+          suggestedNextAction: "review_status", privacyClass: "restricted",
+          context: { reason_category: "screen_capture", state: "detected" } });
         recordEvidence("privacy", "warn", `Screen-capture tool active: ${tool}`);
         showWarning(
           `${tool} is running — your screen may be recorded. Sensitive windows can be hidden in Privacy → Screen Capture.`,
@@ -617,6 +641,10 @@ export default function BackgroundPollers({
       (event) => {
         const name = event.payload?.name ?? "A device";
         const text = event.payload?.problemText ?? "driver problem";
+        recordDiagnostic({ feature: "driver", action: "health_detection", stage: "monitor",
+          lifecycle: "verified", outcome: "succeeded", severity: "warn", retryability: "never",
+          suggestedNextAction: "review_status", privacyClass: "local_sensitive",
+          context: { reason_category: "critical_problem", state: "detected" } });
         recordEvidence("system", "warn", `Driver problem: ${name}`, text);
         showError(`Driver problem: ${name} — ${text}`, 12_000);
         reportConfiguredFleetAlert("driver_health", { class: "critical_problem", severity: "warning" });
@@ -624,6 +652,10 @@ export default function BackgroundPollers({
     );
 
     const unlistenWifiGuard = listen("wifi-guard-detected", () => {
+      recordDiagnostic({ feature: "wifi", action: "rogue_access_point_detection", stage: "monitor",
+        lifecycle: "verified", outcome: "succeeded", severity: "warn", retryability: "never",
+        suggestedNextAction: "review_status", privacyClass: "local_sensitive",
+        context: { reason_category: "rogue_access_point", state: "detected" } });
       reportConfiguredFleetAlert(
         "wifi_guard",
         { class: "rogue_access_point", severity: "warning" },
@@ -631,6 +663,10 @@ export default function BackgroundPollers({
       );
     });
     const unlistenNetworkHoneypot = listen("network-honeypot-detected", () => {
+      recordDiagnostic({ feature: "network", action: "honeypot_detection", stage: "monitor",
+        lifecycle: "verified", outcome: "succeeded", severity: "warn", retryability: "never",
+        suggestedNextAction: "review_status", privacyClass: "local_sensitive",
+        context: { reason_category: "honeypot_connection", state: "detected" } });
       reportConfiguredFleetAlert("network_honeypot", { class: "connection", severity: "warning" });
     });
 
@@ -644,6 +680,10 @@ export default function BackgroundPollers({
       "panic-trigger-test",
       (event) => {
         const source = event.payload?.source ?? "unknown";
+        recordDiagnostic({ feature: "lockdown", action: "trigger_test", stage: "verification",
+          lifecycle: "verified", outcome: "succeeded", severity: "info", retryability: "never",
+          suggestedNextAction: "none", privacyClass: "restricted",
+          context: { reason_category: source === "panic_phrase" ? "panic_phrase" : "test_trigger", state: "received" } });
         const friendly = source === "panic_phrase" ? "Lockdown-word trigger"
           : "Trigger";
         showWarning(
@@ -677,7 +717,10 @@ export default function BackgroundPollers({
           await invoke("start_driver_watch", { intervalSecs: drivers?.watchIntervalSecs ?? null });
         }
       } catch {
-        // Best-effort; don't block startup (unlicensed / no Pro → no-op).
+        recordDiagnostic({ feature: "driver", action: "startup_watch", stage: "runtime",
+          lifecycle: "applying", outcome: "failed", errorCode: "DRV.STARTUP.FAILED",
+          severity: "warn", retryability: "automatic", suggestedNextAction: "retry",
+          privacyClass: "local_sensitive", context: { state: "startup_failed" } });
       }
     }, 6000);
 
@@ -703,6 +746,10 @@ export default function BackgroundPollers({
         })();
         if (!installed) {
           console.log('[BackgroundPollers] RAM disk autostart skipped — ImDisk not installed');
+          recordDiagnostic({ feature: "ramdisk", action: "autostart", stage: "preflight",
+            lifecycle: "verified", outcome: "degraded", errorCode: "RAM.PREREQUISITE.MISSING",
+            severity: "warn", retryability: "manual", suggestedNextAction: "install_prerequisite",
+            privacyClass: "local_sensitive", context: { state: "prerequisite_missing" } });
           return;
         }
         const mountRequest = savedRamDiskMountRequest(cfg);
@@ -726,12 +773,20 @@ export default function BackgroundPollers({
 
         if (isOccupied) {
           console.log(`[BackgroundPollers] RAM disk autostart skipped — ${letter}: drive letter is already occupied`);
+          recordDiagnostic({ feature: "ramdisk", action: "autostart", stage: "preflight",
+            lifecycle: "verified", outcome: "degraded", errorCode: "RAM.DRIVE_LETTER.OCCUPIED",
+            severity: "warn", retryability: "manual", suggestedNextAction: "review_settings",
+            privacyClass: "local_sensitive", context: { state: "drive_letter_occupied" } });
           return;
         }
         // Never turn a missing/corrupt saved size into a surprise 256 MB disk.
         // The user must explicitly save the size they chose in the RAM Disks
         // panel.  The backend still enforces the total-RAM minus 3 GB cap.
         if (!mountRequest) {
+          recordDiagnostic({ feature: "ramdisk", action: "autostart", stage: "preflight",
+            lifecycle: "verified", outcome: "failed", errorCode: "RAM.AUTOSTART.SPEC_MISSING",
+            severity: "warn", retryability: "manual", suggestedNextAction: "review_settings",
+            privacyClass: "local_sensitive", context: { state: "saved_spec_missing" } });
           showError(
             "RAM disk autostart needs a saved size. Open RAM Disks, choose the size, and save the startup spec.",
             undefined,
@@ -742,13 +797,24 @@ export default function BackgroundPollers({
         const { SizeMB: sizeMB } = mountRequest;
         const r = await createRamDisk(mountRequest);
         if (r?.success) {
+          recordDiagnostic({ feature: "ramdisk", action: "autostart", stage: "runtime",
+            lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+            suggestedNextAction: "none", privacyClass: "local_sensitive", context: { state: "mounted" } });
           showSuccess(`RAM disk auto-started at ${letter}: (${sizeMB} MB).`);
         } else {
+          recordDiagnostic({ feature: "ramdisk", action: "autostart", stage: "runtime",
+            lifecycle: "applying", outcome: "failed", errorCode: "RAM.AUTOSTART.MOUNT_FAILED",
+            severity: "error", retryability: "manual", suggestedNextAction: "retry",
+            privacyClass: "local_sensitive", context: { state: "mount_failed" } });
           // RAM-disk mount result → Notifications tab, not System Alerts.
           showError((r?.error as string | undefined) || `RAM disk autostart failed at ${letter}:.`, undefined, { kind: "notification" });
         }
       } catch (err) {
         console.warn('[BackgroundPollers] RAM disk autostart failed:', err);
+        recordDiagnostic({ feature: "ramdisk", action: "autostart", stage: "runtime",
+          lifecycle: "applying", outcome: "failed", errorCode: "RAM.AUTOSTART.FAILED",
+          severity: "error", retryability: "automatic", suggestedNextAction: "retry",
+          privacyClass: "local_sensitive", context: { state: "startup_failed" } });
       }
     }, 6000);
 
@@ -767,9 +833,21 @@ export default function BackgroundPollers({
       if (!hasPaidRef.current) return;
       try {
         const status = await executeBackendCommand<{ cameraAvailable?: boolean }>("Get-PrivacyShieldStatus");
-        if (!status.success || status.data?.cameraAvailable !== true) return;
+        if (!status.success || status.data?.cameraAvailable !== true) {
+          recordDiagnostic({ feature: "privacy", action: "shield_autostart", stage: "preflight",
+            lifecycle: "verified", outcome: "degraded", errorCode: "PSH.CAMERA.UNAVAILABLE",
+            severity: "warn", retryability: "manual", suggestedNextAction: "review_status",
+            privacyClass: "restricted", context: { state: "camera_unavailable" } });
+          return;
+        }
         const ai = await getAIDependenciesStatus();
-        if (!ai.success || !ai.data?.installed) return;
+        if (!ai.success || !ai.data?.installed) {
+          recordDiagnostic({ feature: "privacy", action: "shield_autostart", stage: "preflight",
+            lifecycle: "verified", outcome: "degraded", errorCode: "PSH.RUNTIME.UNAVAILABLE",
+            severity: "warn", retryability: "manual", suggestedNextAction: "install_prerequisite",
+            privacyClass: "restricted", context: { state: "runtime_unavailable" } });
+          return;
+        }
 
         const shield = appSettingsRef.current?.ideal?.privacy?.privacyShield;
         const mode = resolvePrivacyShieldMode({ fleetManaged: false, localMode: shield?.notifyMode });
@@ -781,11 +859,22 @@ export default function BackgroundPollers({
         const blurTriggers = privacyShieldBlurTriggers(mode, detectorTriggers);
         const r = await startPrivacyShield(0, detectorTriggers.gaze, detectorTriggers.faces, detectorTriggers.device, false, false, shield?.modelSize ?? "medium", shield?.confidenceThreshold ?? 0.5, shield?.blurOpacity ?? 200, shield?.wakeDelaySeconds ?? 150, shield?.deviceWakeMultiplier ?? 5, shield?.multiFaceWakeMultiplier ?? 5, shield?.detectionBufferFrames ?? 2, shield?.captureSpeed ?? 1, blurTriggers.gaze, blurTriggers.faces, blurTriggers.device);
         if (r.success) {
+          recordDiagnostic({ feature: "privacy", action: "shield_autostart", stage: "runtime",
+            lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+            suggestedNextAction: "none", privacyClass: "restricted", context: { state: "running" } });
           await invoke("update_tray_shield_label", { running: true }).catch(() => {});
           showSuccess("Privacy Shield auto-started.");
+        } else {
+          recordDiagnostic({ feature: "privacy", action: "shield_autostart", stage: "runtime",
+            lifecycle: "applying", outcome: "failed", errorCode: "PSH.AUTOSTART.FAILED",
+            severity: "error", retryability: "automatic", suggestedNextAction: "retry",
+            privacyClass: "restricted", context: { state: "start_failed" } });
         }
       } catch {
-        // Best-effort — do not block startup
+        recordDiagnostic({ feature: "privacy", action: "shield_autostart", stage: "runtime",
+          lifecycle: "applying", outcome: "failed", errorCode: "PSH.AUTOSTART.FAILED",
+          severity: "error", retryability: "automatic", suggestedNextAction: "retry",
+          privacyClass: "restricted", context: { state: "start_failed" } });
       }
     }, 6000);
 

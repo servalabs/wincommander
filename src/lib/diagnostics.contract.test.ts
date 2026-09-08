@@ -63,6 +63,30 @@ describe("frontend diagnostics producer", () => {
     }
   });
 
+  test("background monitor reconciliation and failure paths persist safe diagnostics", async () => {
+    for (const [path, requiredCodes] of [
+      ["src/hooks/useDecoyMonitor.ts", ["DEC.MONITOR.RECONCILE_FAILED", "recordDiagnostic"]],
+      ["src/hooks/useDistressPhrases.ts", ["PRV.DISTRESS.SYNC_FAILED", "recordDiagnostic"]],
+      ["src/hooks/useLockdownWords.ts", ["LCK.MONITOR.START_FAILED", "recordDiagnostic"]],
+      ["src/hooks/usePasteMonitor.ts", ["CLP.MONITOR.START_FAILED", "recordDiagnostic"]],
+      ["src/hooks/useRansomwareMonitor.ts", ["RAN.MONITOR.RECONCILE_FAILED", "recordDiagnostic"]],
+      ["src/hooks/useAcquisitionWatch.ts", ["VLT.ACQUISITION.DISMOUNT_FAILED", "recordDiagnostic"]],
+    ] as const) {
+      const source = await Bun.file(path).text();
+      for (const required of requiredCodes) expect(source).toContain(required);
+    }
+
+    const background = await Bun.file("src/components/BackgroundPollers.tsx").text();
+    for (const action of [
+      "paste_detection", "file_detection", "mass_modification_detection",
+      "coercion_phrase_detection", "session_detection", "screen_capture_detection",
+      "health_detection", "rogue_access_point_detection", "honeypot_detection",
+    ]) expect(background).toContain(action);
+    expect(background).toContain('privacyClass: "restricted"');
+    expect(background).not.toContain("context: { fullPath");
+    expect(background).not.toContain("context: { peer");
+  });
+
   test("native monitor producers persist safe detections before UI delivery", async () => {
     for (const [path, code] of [
       ["src-tauri/commander-free/src/ransomware_monitor.rs", "RAN.DETECTION"],

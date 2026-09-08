@@ -18,6 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { RansomwareAction } from "../types/settings";
 import { showWarning } from "../utils/toast";
 import type { StartupProtectionOperation } from "../lib/startupProtectionReadiness";
+import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
 
 export const DEFAULT_RANSOMWARE_THRESHOLD = 50;
 export const DEFAULT_RANSOMWARE_WINDOW_SECONDS = 30;
@@ -53,6 +54,7 @@ export default function useRansomwareMonitor(
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
+    const operationId = newDiagnosticOperationId("ransomware");
     const reconcile = async () => {
       try {
         await invoke("set_ransomware_config", {
@@ -75,8 +77,16 @@ export default function useRansomwareMonitor(
         await invoke(enabled ? "start_ransomware_monitor" : "stop_ransomware_monitor");
         if (cancelled) return;
         warnedFailures.current.delete("reconcile");
+        recordDiagnostic({ operationId, feature: "ransomware", action: "monitor_reconcile", stage: "runtime",
+          lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never",
+          suggestedNextAction: "none", privacyClass: "local_sensitive",
+          context: { state: enabled ? "armed" : "stopped" } });
         if (enabled) onStartupRearm?.("ransomware-monitor", true);
       } catch (err) {
+        recordDiagnostic({ operationId, feature: "ransomware", action: "monitor_reconcile", stage: "runtime",
+          lifecycle: "applying", outcome: "failed", errorCode: "RAN.MONITOR.RECONCILE_FAILED",
+          severity: "warn", retryability: "automatic", suggestedNextAction: "retry",
+          privacyClass: "local_sensitive", context: { attempt: attempt + 1, state: enabled ? "arming" : "stopping" } });
         warnOnce(
           "reconcile",
           enabled
