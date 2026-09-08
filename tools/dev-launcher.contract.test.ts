@@ -79,6 +79,7 @@ ConvertTo-Json -Compress -InputObject @($results)
     expect(devLauncher).toContain("[switch]$Elevated");
     expect(devLauncher).toContain("Test-ElevatedToken");
     expect(devLauncher).toContain("Start-Process -FilePath powershell.exe -Verb RunAs");
+    expect(devLauncher).toContain("-NoExit -NoProfile");
     expect(devLauncher).toContain("-File $scriptPath -Elevated");
   });
 

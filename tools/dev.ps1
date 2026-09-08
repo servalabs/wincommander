@@ -23,7 +23,9 @@ if ($Elevated -and -not (Test-ElevatedToken)) {
     # slider.  Ask Windows for an explicit elevated parent process, then let
     # the debug executable inherit that token.
     $scriptPath = '"' + $PSCommandPath.Replace('"', '""') + '"'
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File $scriptPath -Elevated"
+    # Keep the elevated terminal open after an error so a developer can see
+    # the real build/service failure instead of getting a vanished window.
+    $arguments = "-NoExit -NoProfile -ExecutionPolicy Bypass -File $scriptPath -Elevated"
     if ($ServerOnly) { $arguments += " -ServerOnly" }
     Start-Process -FilePath powershell.exe -Verb RunAs -ArgumentList $arguments
     exit 0
