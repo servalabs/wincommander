@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback } from "react";
 import type { AccessGroupReconcileRequest, AccessGroupReconcileResponse } from "@/panels/fleet/accessControlTypes";
 import type { VaultAccessCapabilities, VaultAuthorizedEntry, VaultMountEntryResult, VaultVolumeRole } from "@/panels/fleet/vaultAccessTypes";
+import { newDiagnosticOperationId } from "@/lib/diagnostics";
 
 /** Typed renderer boundary for the service-owned Vault Access policy. */
 export default function useVaultAccess<Policy, Status>() {
@@ -18,12 +19,12 @@ export default function useVaultAccess<Policy, Status>() {
     [],
   );
   const mountEntry = useCallback(
-    (entryId: string, password: string, volumeRole: VaultVolumeRole, hiddenProtectionPassword?: string) =>
-      invoke<VaultMountEntryResult>("vault_mount_entry", { entryId, password, volumeRole, hiddenProtectionPassword }),
+    (entryId: string, password: string, volumeRole: VaultVolumeRole, hiddenProtectionPassword?: string, operationId = newDiagnosticOperationId("vault")) =>
+      invoke<VaultMountEntryResult>("vault_mount_entry", { entryId, password, volumeRole, hiddenProtectionPassword, diagnosticOperationId: operationId }),
     [],
   );
   const unmountEntry = useCallback(
-    (entryId: string) => invoke<VaultMountEntryResult>("vault_unmount_entry", { entryId }),
+    (entryId: string, operationId = newDiagnosticOperationId("vault")) => invoke<VaultMountEntryResult>("vault_unmount_entry", { entryId, diagnosticOperationId: operationId }),
     [],
   );
   const listAuthorizedEntries = useCallback(

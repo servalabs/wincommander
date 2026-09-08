@@ -176,8 +176,9 @@ describe("Fleet access-control panel contracts", () => {
 
   test("gives non-admin users a caller-filtered Vault mount surface", () => {
     expect(vaultHook).toContain('invoke<VaultAuthorizedEntry[]>("vault_list_authorized_entries")');
-    expect(vaultHook).toContain('invoke<VaultMountEntryResult>("vault_mount_entry", { entryId, password, volumeRole, hiddenProtectionPassword })');
-    expect(vaultHook).toContain('invoke<VaultMountEntryResult>("vault_unmount_entry", { entryId })');
+    expect(vaultHook).toContain('invoke<VaultMountEntryResult>("vault_mount_entry", { entryId, password, volumeRole, hiddenProtectionPassword, diagnosticOperationId: operationId })');
+    expect(vaultHook).toContain('newDiagnosticOperationId("vault")');
+    expect(vaultHook).toContain('invoke<VaultMountEntryResult>("vault_unmount_entry", { entryId, diagnosticOperationId: operationId })');
     expect(vaultHook).not.toContain("volumePath");
     expect(vault).toContain("My vaults");
     expect(vault).toContain("Only Vaults that the service has authorized");

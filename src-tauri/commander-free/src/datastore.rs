@@ -544,6 +544,35 @@ fn cached_log_key() -> Result<[u8; DERIVED_KEY_LEN], String> {
         .ok_or_else(|| "log key cache unavailable".to_string())
 }
 
+/// Writes new structured diagnostic events in the shared D1 envelope. Unlike
+/// the legacy general-log helper below, this has no plaintext fallback.
+pub(crate) fn diagnostic_encrypt_line(date: &str, body: &str) -> Result<String, String> {
+    let key = cached_log_key()?;
+    let mut nonce = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce);
+    wincmd_shared::diagnostics::seal_diagnostic_record(
+        &key,
+        date,
+        "desktop",
+        body.as_bytes(),
+        nonce,
+    )
+}
+
+/// Reads D1 diagnostic records and the historic L2/L log envelopes. Existing
+/// diagnostic history stays visible while all new diagnostics use D1.
+pub(crate) fn diagnostic_decrypt_line(line: &str) -> Option<(String, String)> {
+    if let Some(rest) = line.strip_prefix("D1:") {
+        let (date, _) = rest.split_once(':')?;
+        let key = cached_log_key().ok()?;
+        let plaintext = wincmd_shared::diagnostics::open_diagnostic_record(&key, "desktop", line)?;
+        return String::from_utf8(plaintext)
+            .ok()
+            .map(|body| (date.to_string(), body));
+    }
+    log_decrypt_line(line)
+}
+
 /// Encrypt one log body into an on-disk `L2:<date>:<b64>` line.
 /// `date` = `YYYY-MM-DD`; `body` = `[HH:MM:SS] [LEVEL] message`.
 /// Falls back to an unencrypted marker on key failure so the app never panics.
