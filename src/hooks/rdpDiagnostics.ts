@@ -1,7 +1,7 @@
 import { newDiagnosticOperationId, recordDiagnostic } from "../lib/diagnostics";
 
 type Lifecycle = "requested" | "applying" | "applied" | "verified";
-type Outcome = "started" | "progress" | "succeeded" | "failed" | "degraded" | "timed_out";
+type Outcome = "started" | "progress" | "succeeded" | "failed" | "degraded" | "cancelled" | "timed_out";
 type Severity = "info" | "warn" | "error";
 
 /**
