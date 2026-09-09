@@ -38,7 +38,7 @@ describe("generated WinCommander CLI catalog", () => {
   // truth; test the single public rendering so a catalog change cannot stale it.
   test("matches the command totals quoted in the CLI docs", () => {
     const totals = commandTotals(catalog.commands as Entry[]);
-    expect(totals).toEqual({ total: 1278, tauri: 472, backend: 806, releaseExecutable: 1274 });
+    expect(totals).toEqual({ total: 1283, tauri: 477, backend: 806, releaseExecutable: 1279 });
 
     const total = grouped(totals.total);
     const tauri = grouped(totals.tauri);

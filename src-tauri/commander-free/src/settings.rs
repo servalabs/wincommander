@@ -2662,6 +2662,19 @@ pub fn invalidate_cache() {
 /// TOCTOU races. Without this, concurrent calls (e.g. user click + background probe)
 /// can overwrite each other's changes because both read the same snapshot.
 pub fn patch_settings(patch: serde_json::Value) -> Result<AppSettings, String> {
+    // Device identity probes must not hold the shared settings mutex on cold boot.
+    let paid = crate::license::has_paid_entitlement();
+    patch_settings_with(patch, paid, write_settings_internal, |old, new| {
+        crate::flow_bridge::on_settings_written(old, new);
+    })
+}
+
+fn patch_settings_with(
+    patch: serde_json::Value,
+    paid: bool,
+    persist: impl FnOnce(&AppSettings) -> Result<(), String>,
+    notify: impl FnOnce(&serde_json::Value, &serde_json::Value),
+) -> Result<AppSettings, String> {
     let mut cache = SETTINGS_CACHE
         .lock()
         .map_err(|_| "Settings cache lock poisoned".to_string())?;
@@ -2687,19 +2700,21 @@ pub fn patch_settings(patch: serde_json::Value) -> Result<AppSettings, String> {
     crate::set_logging_enabled_flag(updated.app.logging_enabled.unwrap_or(true));
     // Capture the pre-write tree for the settings-changed diff (paid-gated;
     // skipped entirely for free installs to avoid the double-serialize cost).
-    let old_json = if crate::license::has_paid_entitlement() {
+    let old_json = if paid {
         serde_json::to_value(&settings).ok()
     } else {
         None
     };
-    write_settings_internal(&updated)?;
+    persist(&updated)?;
     *cache = Some(updated.clone());
+    // Flow observers read settings themselves; calling them under this lock deadlocks.
+    drop(cache);
 
     // M3: fire the flows settings-changed source. Only reached on a successful
     // write, i.e. never in decoy mode (write_settings_internal refuses there).
     if let Some(old_json) = old_json {
         if let Ok(new_json) = serde_json::to_value(&updated) {
-            crate::flow_bridge::on_settings_written(&old_json, &new_json);
+            notify(&old_json, &new_json);
         }
     }
 
@@ -2863,7 +2878,13 @@ pub fn import_settings(json: &str) -> Result<AppSettings, String> {
 
 /// Get the full settings object.
 #[tauri::command]
-pub fn get_settings() -> Result<serde_json::Value, String> {
+pub async fn get_settings() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(get_settings_sync)
+        .await
+        .map_err(|error| format!("Settings task failed: {error}"))?
+}
+
+fn get_settings_sync() -> Result<serde_json::Value, String> {
     let settings = read_settings()?;
     let v = serde_json::to_value(&settings).map_err(|e| format!("Serialization error: {}", e))?;
     Ok(v)
@@ -2871,7 +2892,13 @@ pub fn get_settings() -> Result<serde_json::Value, String> {
 
 /// Replace the full settings object.
 #[tauri::command]
-pub fn set_settings(settings: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn set_settings(settings: serde_json::Value) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || set_settings_sync(settings))
+        .await
+        .map_err(|error| format!("Settings task failed: {error}"))?
+}
+
+fn set_settings_sync(settings: serde_json::Value) -> Result<serde_json::Value, String> {
     let parsed: AppSettings =
         serde_json::from_value(settings).map_err(|e| format!("Invalid settings format: {}", e))?;
     // Capture the pre-write tree for the settings-changed diff (paid-gated).
@@ -2928,7 +2955,13 @@ pub fn is_native_notifications_disabled() -> bool {
 
 /// Patch settings with a partial JSON object (deep merge).
 #[tauri::command]
-pub fn patch_settings_cmd(patch: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn patch_settings_cmd(patch: serde_json::Value) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || patch_settings_cmd_sync(patch))
+        .await
+        .map_err(|error| format!("Settings task failed: {error}"))?
+}
+
+fn patch_settings_cmd_sync(patch: serde_json::Value) -> Result<serde_json::Value, String> {
     // Read-only in decoy mode: the decoy view shows appSettings=null, and this
     // backend backstop refuses every write — even direct/programmatic patch
     // calls — so a coerced decoy session can't mutate or leak the real config.
@@ -2978,7 +3011,13 @@ pub fn patch_settings_cmd(patch: serde_json::Value) -> Result<serde_json::Value,
 
 /// Get a single setting value by dot-path (e.g., "privacy.telemetry.windowsDisabled").
 #[tauri::command]
-pub fn get_setting(path: String) -> Result<serde_json::Value, String> {
+pub async fn get_setting(path: String) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || get_setting_sync(path))
+        .await
+        .map_err(|error| format!("Settings task failed: {error}"))?
+}
+
+pub(crate) fn get_setting_sync(path: String) -> Result<serde_json::Value, String> {
     let settings = read_settings()?;
     let json =
         serde_json::to_value(&settings).map_err(|e| format!("Serialization error: {}", e))?;
@@ -2994,13 +3033,21 @@ pub fn get_setting(path: String) -> Result<serde_json::Value, String> {
 
 /// Get the settings hash for sync comparison.
 #[tauri::command]
-pub fn get_settings_hash_cmd() -> Result<String, String> {
-    get_settings_hash()
+pub async fn get_settings_hash_cmd() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(get_settings_hash)
+        .await
+        .map_err(|error| format!("Settings task failed: {error}"))?
 }
 
 /// Get device identity info for registration/heartbeat.
 #[tauri::command]
-pub fn get_device_identity() -> Result<serde_json::Value, String> {
+pub async fn get_device_identity() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(get_device_identity_sync)
+        .await
+        .map_err(|error| format!("Settings task failed: {error}"))?
+}
+
+fn get_device_identity_sync() -> Result<serde_json::Value, String> {
     let settings = read_settings()?;
     Ok(serde_json::json!({
         "deviceId": settings.device_id,
@@ -4002,7 +4049,13 @@ pub fn compute_drift(settings: &AppSettings) -> Result<Vec<DriftItem>, String> {
 
 /// Get the drift report: list of all settings where ideal ≠ current.
 #[tauri::command]
-pub fn get_drift_report() -> Result<serde_json::Value, String> {
+pub async fn get_drift_report() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(get_drift_report_sync)
+        .await
+        .map_err(|error| format!("Settings task failed: {error}"))?
+}
+
+pub(crate) fn get_drift_report_sync() -> Result<serde_json::Value, String> {
     let settings = read_settings()?;
     let drifts = compute_drift(&settings)?;
     serde_json::to_value(&drifts).map_err(|e| format!("Serialization error: {}", e))
@@ -4010,10 +4063,14 @@ pub fn get_drift_report() -> Result<serde_json::Value, String> {
 
 /// Update the current state from a probe result (called after Get-WCSystemProbe).
 #[tauri::command]
-pub fn update_current_state(probe: serde_json::Value) -> Result<serde_json::Value, String> {
-    let patch = serde_json::json!({"current": probe});
-    let updated = patch_settings(patch)?;
-    serde_json::to_value(&updated).map_err(|e| format!("Serialization error: {}", e))
+pub async fn update_current_state(probe: serde_json::Value) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let patch = serde_json::json!({"current": probe});
+        let updated = patch_settings(patch)?;
+        serde_json::to_value(&updated).map_err(|e| format!("Serialization error: {}", e))
+    })
+    .await
+    .map_err(|error| format!("Settings task failed: {error}"))?
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -4335,6 +4392,48 @@ mod tests {
         assert_eq!(reread.policy.locked_paths, locked_paths);
     }
 
+    #[test]
+    fn patch_observers_can_read_committed_settings_without_deadlocking() {
+        let _lock = GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        warm_cache_with_defaults();
+        let result = patch_settings_with(
+            serde_json::json!({"app": {"theme": "light"}}),
+            true,
+            |_| Ok(()),
+            |_, updated| {
+                let cache = SETTINGS_CACHE
+                    .try_lock()
+                    .expect("observer must not inherit the write lock");
+                let actual = serde_json::to_value(cache.as_ref().unwrap()).unwrap();
+                assert_eq!(actual, *updated);
+                drop(cache);
+                assert!(read_settings().is_ok());
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn failed_patch_does_not_notify_observers_or_replace_cached_settings() {
+        let _lock = GLOBAL_STATE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        warm_cache_with_defaults();
+        let before = serde_json::to_value(read_settings().unwrap()).unwrap();
+        let result = patch_settings_with(
+            serde_json::json!({"app": {"theme": "light"}}),
+            true,
+            |_| Err("test persistence failure".to_string()),
+            |_, _| panic!("a failed write must not notify observers"),
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            serde_json::to_value(read_settings().unwrap()).unwrap(),
+            before
+        );
+    }
     // ── Decoy-mode write refusal (write_settings_internal choke point) ──
     //
     // DECOY_MODE and SETTINGS_CACHE are process-global statics shared by every
@@ -4379,7 +4478,7 @@ mod tests {
         warm_cache_with_defaults();
 
         let payload = serde_json::to_value(create_default_settings()).unwrap();
-        let result = set_settings(payload);
+        let result = set_settings_sync(payload);
 
         assert!(
             result.is_err(),

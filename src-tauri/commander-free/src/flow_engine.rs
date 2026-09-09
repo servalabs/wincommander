@@ -1419,6 +1419,20 @@ fn start_all_listeners(app: &AppHandle) {
     );
     for flow in &flows {
         if flow.enabled {
+            // The desktop shell owns the emergency Ctrl+Shift+Q registration.
+            // The built-in Flow remains visible as an explanation of the
+            // safety behaviour, but must not try to claim the same global
+            // shortcut a second time.  Double registration produced a startup
+            // error on every launch and left the Windows message loop unstable.
+            if flow.system && flow.id == "panic-hotkey" {
+                flow_engine_log(
+                    "info",
+                    Some(&flow.id),
+                    "bootstrap",
+                    "Using the desktop-owned panic hotkey listener",
+                );
+                continue;
+            }
             if let Err(err) = validate_flow(flow) {
                 flow_engine_log(
                     "error",

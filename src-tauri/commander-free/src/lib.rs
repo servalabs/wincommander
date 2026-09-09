@@ -1660,20 +1660,9 @@ pub fn run() {
         std::process::exit(1);
     }
 
-    // Release builds keep encrypted records on disk. Tauri dev/debug builds do
-    // the inverse conversion so ordinary tools can inspect the same log while
-    // developing; this code is compiled out of release artifacts.
-    if !cli_mode {
-        if let Ok(log_dir) = paths::user_logs_dir() {
-            let log_file = log_dir.join("wincommander.log");
-            #[cfg(debug_assertions)]
-            log::migrate_logs_to_plaintext_for_debug(&log_file);
-            #[cfg(not(debug_assertions))]
-            log::migrate_plaintext_logs(&log_file);
-            log::purge_old_log_records(&log_file, 7);
-            diagnostics::prune_retained_diagnostics();
-        }
-    }
+    // Log and diagnostic retention is intentionally deferred until after the
+    // first paint.  These stores can be large and parsing/re-writing them here
+    // used to hold the splash screen for tens of seconds.
     startup_trace::pre_window_milestone("pre-builder.complete");
     dev_startup_trace("pre-builder work complete");
     let mut context = tauri::generate_context!();
@@ -2030,8 +2019,15 @@ pub fn run() {
                     let _ = startup_auth::enter_calculator_mode_with(window.clone(), true);
                 } else if !hidden_mode {
                     let _ = window.set_skip_taskbar(false);
-                    let _ = window.maximize();
+                    // Show before maximizing.  On scaled Windows displays, maximizing a
+                    // hidden WebView can resize the native frame without delivering the
+                    // matching WebView resize.  The splash then remains at the configured
+                    // 1200×800 logical size and exposes the window's black background beside
+                    // it.  Making the window visible first gives WebView2 the normal resize
+                    // notification; maximize still uses the work area, so the taskbar remains
+                    // visible.
                     let _ = window.show();
+                    let _ = window.maximize();
                     set_wincommander_window_icon(&window);
                     let _ = window.set_focus();
                 }
@@ -2051,6 +2047,12 @@ pub fn run() {
                     crate::log::start_log_sweeper();
                     let _ = &app_for_deferred; // keep the handle alive in case a moved call needs it
                 });
+
+                // Retention is intentionally not run during a desktop session.
+                // The existing stores may be tens of megabytes, and a whole-file
+                // prune can starve the UI even when it starts after first paint.
+                // This avoids startup pruning but does not bound append-only
+                // log growth; retention still needs a bounded maintenance path.
 
                 // Cold-start context-menu launches: if launched with a path arg
                 // (e.g. from a right-click verb when the app wasn't running), this
@@ -2276,9 +2278,10 @@ pub fn run() {
             // forward them to the Pro engine. Paid-gated inside; harmless on Free.
             flow_bridge::init(app.handle());
 
-            // Pre-create the hidden alert renderer so a Privacy Shield event
-            // has no WebView/window-startup latency before it is visible.
-            native_notify::warm_up_notification_window(app.handle());
+            // Do not create a second hidden WebView during startup.  Its small
+            // first-alert latency is preferable to competing with the primary
+            // window while Windows is still creating the desktop renderer.
+            // `show_custom_notification` creates it lazily on the first alert.
 
             // The Privacy Shield card's “Auto start on launch” setting is
             // per-user and must run only after its event/notification bridge.

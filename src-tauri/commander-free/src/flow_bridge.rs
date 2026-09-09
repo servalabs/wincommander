@@ -73,6 +73,19 @@ fn read_pro_flows() -> Result<Vec<Value>, String> {
     Ok(crate::settings::read_settings()?.app.pro_flows)
 }
 
+fn enabled_rule_count(rules: &[Value]) -> usize {
+    rules
+        .iter()
+        .filter(|rule| rule.get("enabled").and_then(Value::as_bool) == Some(true))
+        .count()
+}
+
+fn has_enabled_rules() -> bool {
+    read_pro_flows()
+        .map(|rules| enabled_rule_count(&rules) > 0)
+        .unwrap_or(false)
+}
+
 /// True if fleet policy locks the flows rule set on this (managed) device.
 /// Mirrors the `patch_settings_cmd` guard so the CRUD path — which writes via
 /// internal `patch_settings` and would otherwise bypass that guard — refuses
@@ -217,17 +230,27 @@ pub async fn ingest_and_execute(app: &AppHandle, event: Value, world: Value) {
     // doesn't fire", with no error. Shipping the rules with the event makes the
     // ingest correct regardless of which pooled process handles it.
     let rules = read_pro_flows().unwrap_or_default();
+    let enabled_rules = enabled_rule_count(&rules);
+    // With no enabled automation there is nothing for the Pro engine to
+    // evaluate. Previously every settings write still spawned/awakened Pro
+    // and sent the complete command catalogue plus the world snapshot. That
+    // made ordinary startup changes compete with the desktop window for CPU.
+    if enabled_rules == 0 {
+        return;
+    }
     let catalog = crate::backend::list_all_commands();
-    let enabled_rules = rules
-        .iter()
-        .filter(|r| r.get("enabled").and_then(Value::as_bool) == Some(true))
-        .count();
+    let event_type = event
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let event_path = event.get("path").and_then(Value::as_str).unwrap_or("");
     flow_trace(format!(
-        "ingest: dispatching to Pro — {} rule(s) in proFlows ({} enabled), {} command(s) in catalog. event={}",
+        "ingest: dispatching to Pro — {} rule(s) in proFlows ({} enabled), {} command(s) in catalog. type={} path={}",
         rules.len(),
         enabled_rules,
         catalog.len(),
-        serde_json::to_string(&event).unwrap_or_default()
+        event_type,
+        event_path,
     ));
     let resp = match dispatch_paid_command(
         "Flow-Ingest-Event",
@@ -250,9 +273,8 @@ pub async fn ingest_and_execute(app: &AppHandle, event: Value, world: Value) {
         .unwrap_or_default();
 
     flow_trace(format!(
-        "ingest: Pro responded — {} dispatch(es). raw={}",
-        dispatches.len(),
-        serde_json::to_string(&resp).unwrap_or_default()
+        "ingest: Pro responded — {} dispatch(es)",
+        dispatches.len()
     ));
 
     crate::log_message_src(
@@ -568,6 +590,11 @@ pub fn forward_setting_changes(changes: Vec<SettingChange>) {
         );
         return;
     }
+    // Avoid constructing the full world snapshot (which includes cached app
+    // inventory) or waking a Pro session when the person has no active rule.
+    if !has_enabled_rules() {
+        return;
+    }
     let Some(app) = crate::sidecar::app_handle() else {
         crate::log_message_src(
             "warn",
@@ -636,6 +663,9 @@ pub fn forward_event(app: &AppHandle, event: Value) {
                 "[flows] '{event_type}' event suppressed — decoy mode active (flows are intentionally inert under duress)"
             ),
         );
+        return;
+    }
+    if !has_enabled_rules() {
         return;
     }
 
@@ -935,5 +965,17 @@ mod tests {
     fn public_fleet_signing_key_is_not_redacted() {
         // signingKeyPub is the PUBLIC key — fine to surface; only the priv is secret.
         assert!(!path_is_secret("app.fleet.signingKeyPub"));
+    }
+
+    #[test]
+    fn enabled_rule_count_ignores_disabled_or_malformed_rules() {
+        let rules = vec![
+            json!({ "id": "disabled", "enabled": false }),
+            json!({ "id": "enabled", "enabled": true }),
+            json!({ "id": "missing" }),
+            Value::Null,
+        ];
+
+        assert_eq!(enabled_rule_count(&rules), 1);
     }
 }

@@ -68,7 +68,7 @@ fn is_security_path(path: &str) -> bool {
 /// Read the drift report and return (slimmed items capped, total count,
 /// high-risk count). High-risk = security-relevant path.
 fn collect_drift(sort_security_first: bool) -> (Vec<Value>, usize, usize) {
-    let drifts: Vec<Value> = crate::settings::get_drift_report()
+    let drifts: Vec<Value> = crate::settings::get_drift_report_sync()
         .ok()
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default();
@@ -221,7 +221,7 @@ fn region_from_locale(locale: &str) -> Option<String> {
 /// "foreign jurisdiction" signal stays meaningful for non-Indian customers
 /// too.
 fn resolve_home_country() -> String {
-    crate::settings::get_setting("current.device.systemLocale".to_string())
+    crate::settings::get_setting_sync("current.device.systemLocale".to_string())
         .ok()
         .and_then(|v| v.as_str().and_then(region_from_locale))
         .unwrap_or_else(|| DEFAULT_HOME_COUNTRY.to_string())

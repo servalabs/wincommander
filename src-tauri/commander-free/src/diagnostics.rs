@@ -301,17 +301,18 @@ pub(crate) fn record(mut event: DiagnosticEvent) -> Result<DiagnosticEvent, Stri
         let _lock = crate::paths::acquire_machine_state_lock("diagnostic-events")
             .map_err(|_| "DIAGNOSTICS.STORAGE.LOCK_FAILED")?;
         let path = diagnostic_path().map_err(|_| "DIAGNOSTICS.STORAGE.PATH_FAILED")?;
-        let retention = prune_diagnostic_store(&path)?;
         persist_event(&path, &event)?;
-        Ok::<_, &'static str>((path, retention))
+        // Retention is deliberately deferred to idle startup maintenance.  Reading,
+        // decrypting and rewriting the entire event store for every event caused the
+        // desktop process to stall as the store grew.
+        Ok::<_, &'static str>(path)
     })();
     match result {
-        Ok((path, retention)) => {
+        Ok(path) => {
             if let Ok(mut state) = health_state().lock() {
                 state.persisted += 1;
                 state.redacted_fields += removed as u64;
             }
-            record_prune_result(&retention);
             record_recovery_if_needed(&path);
             Ok(event)
         }
@@ -323,12 +324,23 @@ pub(crate) fn record(mut event: DiagnosticEvent) -> Result<DiagnosticEvent, Stri
 }
 
 #[tauri::command]
-pub(crate) fn record_diagnostic_event(event: DiagnosticEvent) -> Result<DiagnosticEvent, String> {
-    record(event)
+pub(crate) async fn record_diagnostic_event(event: DiagnosticEvent) -> Result<DiagnosticEvent, String> {
+    tauri::async_runtime::spawn_blocking(move || record(event))
+        .await
+        .map_err(|_| "DIAGNOSTICS.STORAGE.TASK_FAILED".to_string())?
 }
 
 #[tauri::command]
-pub(crate) fn get_diagnostic_events(
+pub(crate) async fn get_diagnostic_events(
+    operation_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<DiagnosticEvent>, String> {
+    tauri::async_runtime::spawn_blocking(move || read_diagnostic_events(operation_id, limit))
+        .await
+        .map_err(|_| "DIAGNOSTICS.READ.TASK_FAILED".to_string())?
+}
+
+fn read_diagnostic_events(
     operation_id: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<DiagnosticEvent>, String> {

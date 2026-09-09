@@ -343,7 +343,13 @@ pub struct VpnKsStatus {
 }
 
 #[tauri::command]
-pub fn vpn_kill_switch_status() -> VpnKsStatus {
+pub async fn vpn_kill_switch_status() -> Result<VpnKsStatus, String> {
+    tauri::async_runtime::spawn_blocking(read_status)
+        .await
+        .map_err(|error| format!("VPN status task failed: {error}"))
+}
+
+fn read_status() -> VpnKsStatus {
     let armed = ARMED.load(Ordering::SeqCst);
     let state = if armed {
         let cfg = read_config();

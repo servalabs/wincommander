@@ -7621,9 +7621,7 @@
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
-      "frontendReferences": [
-        "src/panels/privacy/LogViewer.tsx"
-      ]
+      "frontendReferences": []
     },
     {
       "id": "tauri:clear_network_honeypot_recent",
@@ -8709,6 +8707,27 @@
       ]
     },
     {
+      "id": "tauri:get_diagnostic_events",
+      "name": "get_diagnostic_events",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/DiagnosticEventBridge.tsx",
+        "src/hooks/useDiagnosticCenter.ts"
+      ]
+    },
+    {
+      "id": "tauri:get_diagnostics_health",
+      "name": "get_diagnostics_health",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useDiagnosticCenter.ts"
+      ]
+    },
+    {
       "id": "tauri:get_disk_children",
       "name": "get_disk_children",
       "transport": "tauri",
@@ -8865,7 +8884,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/panels/privacy/LogViewer.tsx"
+        "src/hooks/useDiagnosticCenter.ts"
       ]
     },
     {
@@ -9036,6 +9055,17 @@
       ]
     },
     {
+      "id": "tauri:get_pro_diagnostic_summaries",
+      "name": "get_pro_diagnostic_summaries",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/DiagnosticEventBridge.tsx",
+        "src/hooks/useDiagnosticCenter.ts"
+      ]
+    },
+    {
       "id": "tauri:get_pro_install_status",
       "name": "get_pro_install_status",
       "transport": "tauri",
@@ -9163,6 +9193,17 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useBackend.ts"
+      ]
+    },
+    {
+      "id": "tauri:get_service_diagnostic_summaries",
+      "name": "get_service_diagnostic_summaries",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/components/DiagnosticEventBridge.tsx",
+        "src/hooks/useDiagnosticCenter.ts"
       ]
     },
     {
@@ -9486,6 +9527,7 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/components/Sidebar.tsx",
+        "src/hooks/useAutomaticUpdate.ts",
         "src/panels/dev/index.tsx"
       ]
     },
@@ -10005,6 +10047,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
+      "id": "tauri:record_diagnostic_event",
+      "name": "record_diagnostic_event",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/lib/diagnostics.ts"
       ]
     },
     {
@@ -11748,8 +11800,6 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/useRdpIdleDisconnect.ts",
-        "src/hooks/useRdpIncomingIdleSignout.ts",
         "src/lib/logger.ts"
       ]
     },
