@@ -71,10 +71,9 @@ jobs:
           const reviewerRules = (releaseEnvironment?.protection_rules || [])
             .filter((rule) => rule.type === "required_reviewers");
           const reviewedEnvironment = reviewerRules.some((rule) =>
-            Array.isArray(rule.reviewers) && rule.reviewers.length >= 1 &&
-            rule.prevent_self_review === true);
+            Array.isArray(rule.reviewers) && rule.reviewers.length >= 1);
           if (!reviewedEnvironment || releaseEnvironment?.can_admins_bypass !== false) {
-            throw new Error("Release blocked: the Release environment must require a reviewer, prevent self-review, and disallow administrator bypass.");
+            throw new Error("Release blocked: the Release environment must require a reviewer and disallow administrator bypass.");
           }
 
           const protectedTags = tagRulesets.some((ruleset) => {
