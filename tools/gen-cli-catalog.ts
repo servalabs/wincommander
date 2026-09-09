@@ -36,7 +36,7 @@ const ROOT = resolve(import.meta.dir, "..");
 const LIB_RS = resolve(ROOT, "src-tauri/commander-free/src/lib.rs");
 const BACKEND_RS = resolve(ROOT, "src-tauri/commander-free/src/backend.rs");
 const OUT = resolve(ROOT, "src-tauri/commander-free/src/cli_catalog.generated.json");
-const INTERNAL_TAURI_HANDLERS = new Set(["mark_tauri_cli_ready", "complete_tauri_cli"]);
+const INTERNAL_TAURI_HANDLERS = new Set(["mark_tauri_cli_ready", "complete_tauri_cli", "startup_window_ready"]);
 
 function normalizePath(path: string): string {
   return relative(ROOT, path).replaceAll("\\", "/");
@@ -165,6 +165,7 @@ async function buildCatalog(): Promise<CommandCatalog> {
     // type). Match lazily through its closing `>` rather than treating `;` as
     // a terminator, otherwise a real invoke disappears from the catalog.
     for (const match of file.source.matchAll(/\binvoke(?:<[\s\S]{0,500}?>)?\(\s*["']([a-z][a-z0-9_]*)["']/g)) {
+      if (INTERNAL_TAURI_HANDLERS.has(match[1])) continue;
       addReference(tauriRefs, match[1], file.path);
     }
     for (const match of file.source.matchAll(/\bexecuteBackendCommand(?:<[\s\S]{0,500}?>)?\(\s*["']([^"']+)["']/g)) {

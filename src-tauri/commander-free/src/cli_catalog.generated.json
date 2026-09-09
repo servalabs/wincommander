@@ -9224,6 +9224,7 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/context/ThemeContext.tsx",
+        "src/hooks/startupWindow.ts",
         "src/hooks/useSettings.ts"
       ]
     },

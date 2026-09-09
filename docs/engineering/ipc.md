@@ -93,6 +93,7 @@ or arbitrary diagnostic/error text.
 | `report_startup_phase` | — | Record one allowlisted launch phase such as DOM ready, cache hydrated, dashboard visible, fresh probe complete, or background idle. |
 | `report_startup_milestone` | — | Record queued/start/completed/timeout/cancel/failure for one allowlisted startup job. Durations are capped at one hour. |
 | `get_startup_trace` | `{ launchId, elapsedMs, events[] }` | Read the bounded in-memory trace for local performance diagnosis. |
+| `startup_window_ready` | `boolean` | Main-window-only first-paint acknowledgement. Reveals a normal desktop launch once its themed splash has painted; background launches remain suppressed. Excluded from the CLI catalog. |
 
 Native listeners can subscribe to `startup://phase` and
 `startup://milestone`. The trace is not persisted or uploaded by this layer.

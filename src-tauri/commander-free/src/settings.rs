@@ -959,10 +959,7 @@ fn default_true() -> bool {
 }
 
 fn default_theme() -> String {
-    // KT: Dark is the working default. Light mode CSS is not fully implemented (Plan bug #1).
-    // Returning "light" here caused blank screen on fresh settings.json because ThemeContext
-    // reads this value async on mount and switches the entire app to broken light mode.
-    "dark".to_string()
+    "system".to_string()
 }
 
 fn default_last_panel() -> String {
@@ -4080,6 +4077,18 @@ pub async fn update_current_state(probe: serde_json::Value) -> Result<serde_json
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_settings_follow_system_theme_without_overwriting_saved_preferences() {
+        assert_eq!(AppPreferences::default().theme, "system");
+        for theme in ["dark", "light", "system"] {
+            let parsed: AppPreferences = serde_json::from_value(serde_json::json!({
+                "theme": theme
+            }))
+            .unwrap();
+            assert_eq!(parsed.theme, theme);
+        }
+    }
 
     #[test]
     fn ramdisk_autostart_preserves_the_typescript_size_mb_key() {

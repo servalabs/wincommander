@@ -8,13 +8,16 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
 
 - A small startup entry mounts the actual animated splash before loading the
   application modules. The application updates that same animation instance;
-  there is no separate text loading screen. Saved theme retrieval does not
-  gate rendering. The splash waits for startup readiness and does not replay
+  there is no separate text loading screen. A bounded saved-theme read selects
+  one appearance for splash and dashboard. The splash waits for startup readiness and does not replay
   after calculator lock/unlock.
 - Splash appearance is fixed for each launch and isolated from dashboard CSS.
   Settings hydration cannot restart the rain, title scramble, or CSS animation
   clocks. Cached branding is used on the next launch. Error/retry pauses and
   resumes the same animation; it does not initialize a second canvas.
+- Packaged startup uses a bundled stylesheet accepted by the release CSP.
+  The native window is revealed only after splash styles, artwork and fonts
+  load; animation clocks wait for that reveal. Suppressed launches stay hidden.
 - Settings hydrate from the local cache before background system probes.
   A failed initial read has one bounded recovery wait, then the splash offers
   Retry startup while the dashboard remains gated.
@@ -53,3 +56,8 @@ It requires Playwright; `WINCOMMANDER_PLAYWRIGHT_MODULE` can point to an existin
 installation. It checks canvas identity, animation clocks, late styles/settings,
 error recovery, and one completion. This is browser evidence, not installed
 Windows startup timing.
+
+`tools/check-startup-release.cjs` checks built assets against the packaged CSP
+constraints across dark, light, system and stale-cache themes. This detects
+runtime inline-style rejection that an unrestricted Vite test cannot detect.
+It does not replace launching the release EXE on a clean Windows machine.

@@ -27,6 +27,7 @@
     box-sizing: border-box;
 }
 
+.splash-screen--waiting *,
 .splash-screen--failed * {
     animation-play-state: paused !important;
 }

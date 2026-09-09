@@ -35,6 +35,7 @@ export interface StartupAnimationProps {
     reducedMotion: boolean;
     onComplete: () => void;
     isAppReady: boolean;
+    isWindowVisible?: boolean;
     startupError: string | null;
     onRetry: () => void;
 }
@@ -52,15 +53,15 @@ function scrambleWord(target: string, resolved: number): string {
 
 const rc = () => RAIN_CHARS[Math.floor(Math.random() * RAIN_CHARS.length)];
 
-export default function StartupAnimation({ onComplete, isAppReady, startupError, onRetry, branding, isLight, reducedMotion }: StartupAnimationProps) {
+export default function StartupAnimation({ onComplete, isAppReady, isWindowVisible = true, startupError, onRetry, branding, isLight, reducedMotion }: StartupAnimationProps) {
     const calledRef = useRef(false);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const animRef = useRef<number>(0);
     const [logoReady] = useState(true);
     const [scrambleText, setScrambleText] = useState(() => scrambleWord(branding.companyLabel, 0));
     const [animDone, setAnimDone] = useState(false);
-    const pausedRef = useRef(Boolean(startupError));
-    pausedRef.current = Boolean(startupError);
+    const pausedRef = useRef(Boolean(startupError) || !isWindowVisible);
+    pausedRef.current = Boolean(startupError) || !isWindowVisible;
 
     // Canvas matrix rain — brightness-grid approach.
     // Every cell has a float brightness [0..1] that decays each frame; drops
@@ -225,26 +226,27 @@ export default function StartupAnimation({ onComplete, isAppReady, startupError,
     // Dismissal still requires startup readiness; an animation timer must not
     // bypass the protection/settings readiness gate.
     useEffect(() => {
-        if (!logoReady) return;
+        if (!logoReady || !isWindowVisible) return;
         const scrambleMs = branding.companyLabel.length * SCRAMBLE_HOLD_TICKS * SCRAMBLE_TICK_MS;
         const holdMs = reducedMotion
             ? 500
             : Math.max(SPLASH_DURATION_MS, scrambleMs + 400);
         const t = setTimeout(() => setAnimDone(true), holdMs);
         return () => clearTimeout(t);
-    }, [logoReady, reducedMotion, branding.companyLabel]);
+    }, [logoReady, reducedMotion, branding.companyLabel, isWindowVisible]);
 
     // Gate: dismiss only when animation is done AND app data is ready.
     useEffect(() => {
-        if (!animDone || !isAppReady || startupError) return;
+        if (!animDone || !isAppReady || startupError || !isWindowVisible) return;
         if (!calledRef.current) {
             calledRef.current = true;
             onComplete();
         }
-    }, [animDone, isAppReady, startupError, onComplete]);
+    }, [animDone, isAppReady, startupError, onComplete, isWindowVisible]);
 
     useEffect(() => {
         const target = branding.companyLabel;
+        if (!isWindowVisible) return;
         // Reduced motion: show the resolved brand text immediately, no scramble.
         if (reducedMotion) {
             setScrambleText(target);
@@ -263,10 +265,10 @@ export default function StartupAnimation({ onComplete, isAppReady, startupError,
             setScrambleText(scrambleWord(target, resolved));
         }, SCRAMBLE_TICK_MS);
         return () => clearInterval(id);
-    }, [branding.companyLabel, reducedMotion]);
+    }, [branding.companyLabel, reducedMotion, isWindowVisible]);
 
     return (
-        <div className={`splash-screen${isLight ? ' splash-screen--light' : ''}${reducedMotion ? ' splash-screen--reduced' : ''}${startupError ? ' splash-screen--failed' : ''}`}>
+        <div className={`splash-screen${isLight ? ' splash-screen--light' : ''}${reducedMotion ? ' splash-screen--reduced' : ''}${startupError ? ' splash-screen--failed' : ''}${!isWindowVisible ? ' splash-screen--waiting' : ''}`}>
             <div className="sp-scanlines" />
             <div className="sp-glow" />
             <div className="sp-grid" />

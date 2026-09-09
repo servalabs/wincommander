@@ -111,6 +111,7 @@ mod sidecar_process_auth;
 mod startup_auth;
 mod startup_maintenance;
 mod startup_trace;
+mod startup_window;
 mod storage_probe;
 mod svc_client;
 // This is an executable-free admission contract, covered by its unit tests.
@@ -1710,6 +1711,7 @@ pub fn run() {
                 };
             }
             dev_startup_trace("setup entered");
+            app.manage(startup_window::StartupWindow::new());
             startup_trace::milestone(app.handle(), "native_setup_entered");
             log_message(
                 "info",
@@ -2017,22 +2019,13 @@ pub fn run() {
                     // same native path. Divergent setup here caused a second
                     // transition after React mounted in packaged builds.
                     let _ = startup_auth::enter_calculator_mode_with(window.clone(), true);
-                } else if !hidden_mode {
+                } else if not_minimized && !hidden_mode {
                     let _ = window.set_skip_taskbar(false);
-                    // Show before maximizing.  On scaled Windows displays, maximizing a
-                    // hidden WebView can resize the native frame without delivering the
-                    // matching WebView resize.  The splash then remains at the configured
-                    // 1200×800 logical size and exposes the window's black background beside
-                    // it.  Making the window visible first gives WebView2 the normal resize
-                    // notification; maximize still uses the work area, so the taskbar remains
-                    // visible.
-                    let _ = window.show();
-                    let _ = window.maximize();
-                    set_wincommander_window_icon(&window);
-                    let _ = window.set_focus();
+                    // Native setup can finish before bundled scripts have painted.
+                    app.state::<startup_window::StartupWindow>().arm();
                 }
-                dev_startup_trace("main window reveal requested");
-                startup_trace::milestone(app.handle(), "main_window_show_requested");
+                dev_startup_trace("main window reveal prepared");
+                startup_trace::milestone(app.handle(), "main_window_reveal_prepared");
 
                 // Deferred: nothing here gates the window appearing. license/entitlement probes
                 // and hide re-enforcement spawn PowerShell (cold WMI = tens of seconds on a
@@ -2522,6 +2515,7 @@ pub fn run() {
             startup_trace::get_startup_trace,
             startup_trace::report_startup_milestone,
             startup_trace::report_startup_phase,
+            startup_window::startup_window_ready,
             exit_app,
             reveal_main_window_for_security_alert,
             open_log_file,

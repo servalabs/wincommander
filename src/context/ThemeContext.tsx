@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { applyStartupTheme, getStartupTheme, resolveStartupTheme } from '../lib/startupTheme';
 
 type Theme = 'dark' | 'light';
 
@@ -28,6 +29,8 @@ function applyThemeClass(theme: Theme) {
 // choice. The inline script in index.html already applied the class to <html>
 // before React mounted; this just keeps React state in sync with that.
 function readCachedTheme(): Theme {
+    const launchTheme = getStartupTheme();
+    if (launchTheme) return launchTheme;
     try {
         const cached = localStorage.getItem(THEME_STORAGE_KEY);
         if (cached === 'dark' || cached === 'light') return cached;
@@ -40,11 +43,15 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     const [theme, setThemeState] = useState<Theme>(readCachedTheme);
     // Settings IPC must never hold the entire window blank before the splash.
     useEffect(() => {
+        if (getStartupTheme()) {
+            applyThemeClass(getStartupTheme()!);
+            window.document.documentElement.setAttribute('data-theme-ready', 'true');
+            return;
+        }
         invoke<string>('get_setting', { path: 'app.theme' })
             .then((settingsTheme) => {
-                const resolvedTheme = settingsTheme === 'dark' || settingsTheme === 'light'
-                    ? settingsTheme
-                    : readCachedTheme();
+                const system = window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                const resolvedTheme = resolveStartupTheme(settingsTheme, readCachedTheme(), system);
                 applyThemeClass(resolvedTheme);
                 setThemeState(resolvedTheme);
                 try { localStorage.setItem(THEME_STORAGE_KEY, resolvedTheme); } catch { /* */ }
@@ -75,6 +82,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     }, []);
 
     const persist = useCallback((newTheme: Theme) => {
+        applyStartupTheme(newTheme);
         try { localStorage.setItem(THEME_STORAGE_KEY, newTheme); } catch { /* */ }
         invoke('patch_settings_cmd', { patch: { app: { theme: newTheme } } }).catch(() => { });
     }, []);
