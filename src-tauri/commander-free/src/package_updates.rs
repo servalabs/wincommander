@@ -63,14 +63,19 @@ impl Manager {
             Self::Chocolatey => {
                 vec![format!("{program_data}\\chocolatey\\bin\\choco.exe")]
             }
-            Self::Scoop => vec![format!(
-                "{program_data}\\WinCommander\\scoop\\shims\\scoop.cmd"
-            )],
+            Self::Scoop => vec![
+                format!("{program_data}\\WinCommander\\scoop\\shims\\scoop.cmd"),
+                format!(
+                    "{}\\scoop\\shims\\scoop.cmd",
+                    std::env::var("USERPROFILE").unwrap_or_default()
+                ),
+            ],
             Self::Npm => vec![format!("{program_files}\\nodejs\\npm.cmd")],
         }
     }
-    /// Resolve to a runnable path. Chocolatey, Scoop, and npm prefer their machine
-    /// locations; the other managers use PATH before their fallback candidates.
+    /// Resolve to a runnable path. Chocolatey and npm prefer their machine
+    /// locations; Scoop can be installed per-user, so its supported user shim is
+    /// considered before PATH. None of these probes installs a manager.
     fn resolve(self) -> String {
         let name = self.executable();
         if matches!(self, Self::Chocolatey | Self::Scoop | Self::Npm) {
@@ -342,6 +347,15 @@ mod tests {
             parsing::parse_text("scoop", "git 2.45 2.46"),
             vec![("git".into(), "2.45".into(), "2.46".into())]
         );
+    }
+    #[test]
+    fn finds_an_approved_user_scoop_install_without_bootstrapping() {
+        let fallback = Manager::Scoop.fallback_paths();
+        let user_scoop = format!(
+            "{}\\scoop\\shims\\scoop.cmd",
+            std::env::var("USERPROFILE").unwrap_or_default()
+        );
+        assert!(fallback.contains(&user_scoop));
     }
     #[test]
     fn rejects_npm_non_json() {

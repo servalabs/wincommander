@@ -118,14 +118,6 @@ function Get-DependencyRegistry {
             canHide  = $false
         },
         @{
-            id       = 'scoop'
-            name     = 'Scoop'
-            wingetId = $null    # Installed via its own bootstrap script, not winget
-            panelId  = 'apps'
-            canStart = $false
-            canHide  = $false
-        },
-        @{
             id       = 'powershell7'
             name     = 'PowerShell 7'
             wingetId = 'Microsoft.PowerShell'
@@ -341,6 +333,9 @@ function Test-ChocolateyInstalled {
 
 function Get-LocalScoopPath {
     $roots = @(
+        # Scoop's supported default is per-user.  Check it first so a normal
+        # user installation is visible to Packages & Apps without elevation.
+        "$env:USERPROFILE\scoop",
         "$env:ProgramData\WinCommander\scoop",
         "$env:ProgramData\scoop"
     )
@@ -975,29 +970,10 @@ function Install-Chocolatey {
 }
 
 function Install-Scoop {
-    Assert-IsAdmin
-    $status = Test-ScoopInstalled
-    if ($status.installed) { return @{ success = $true; message = "Scoop already installed." } }
-
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-    $tmpScript = Join-Path $env:TEMP "scoop_install_$([Guid]::NewGuid().ToString('N').Substring(0,8)).ps1"
-
-    try {
-        Invoke-WebRequest -Uri 'https://get.scoop.sh' -OutFile $tmpScript -UseBasicParsing -ErrorAction Stop
-        Unblock-File -LiteralPath $tmpScript -ErrorAction SilentlyContinue
-        Set-ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
-        & $tmpScript -RunAsAdmin -ScoopDir "$env:ProgramData\WinCommander\scoop" -ScoopGlobalDir "$env:ProgramData\scoop"
-    } catch {
-        throw "Failed to install Scoop: $($_.Exception.Message)"
-    } finally {
-        Remove-Item -LiteralPath $tmpScript -Force -ErrorAction SilentlyContinue
-    }
-
-    $status = Test-ScoopInstalled
-    if (-not $status.installed) {
-        throw "Scoop installer finished but scoop.cmd was not detected."
-    }
-    return @{ success = $true; message = "Scoop installed for machine-wide apps." }
+    # Scoop is deliberately optional.  Its bootstrap is a remote PowerShell
+    # script with no package identity or pinned hash that WinCommander can
+    # verify.  Do not download or execute it from a background/helper path.
+    throw 'Scoop is optional. WinCommander does not run Scoop bootstrap scripts. Install it through your organization-approved process, then refresh Packages & Apps.'
 }
 
 function Install-PowerShell7 {
@@ -1738,6 +1714,13 @@ function Install-Dependency {
         [string]$Id,
         [string]$Target = $null
     )
+
+    # Scoop is not a WinCommander engine and has no approved unattended
+    # installer.  Refuse it before the generic elevation check so callers do
+    # not imply that administrator rights would make it available.
+    if ($Id -eq 'scoop') {
+        return @{ error = $true; id = $Id; message = 'Scoop is optional. WinCommander does not run Scoop bootstrap scripts. Install it through your organization-approved process, then refresh Packages & Apps.' }
+    }
 
     Assert-IsAdmin
 

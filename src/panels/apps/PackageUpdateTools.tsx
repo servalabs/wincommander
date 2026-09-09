@@ -11,9 +11,10 @@ import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/p
 import { useAppState } from "../../context/AppContext";
 import { filterCatalogDuplicates } from "./packageUpdateDisplay";
 
-// Managers that can be installed deliberately from this screen. They are not
-// part of the engine readiness grid or its bulk-install action.
-const INSTALLABLE_MANAGERS: Record<string, string> = { chocolatey: "chocolatey", scoop: "scoop" };
+// Managers that have a reviewed, product-owned installer. They are not part of
+// the engine readiness grid or its bulk-install action. Scoop is intentionally
+// absent: its upstream bootstrap is a remote script WinCommander cannot verify.
+const INSTALLABLE_MANAGERS: Record<string, string> = { chocolatey: "chocolatey" };
 
 // Display labels for the manager ids the backend reports (package_updates.rs
 // `Manager::label`) — always winget/chocolatey/scoop/npm, in that order.
@@ -135,8 +136,11 @@ export function PackageUpdateTools() {
 
 function PackageManager({ manager, hiddenUpdateCount, selected, toggle: onToggle, onInstallManager, installingManagers }: { manager: ManagerInventory; hiddenUpdateCount: number; selected: Set<string>; toggle: (id: string) => void; onInstallManager: (manager: string) => void; installingManagers: Set<string> }) {
   if (!manager.available) {
-    // Chocolatey and Scoop are optional package-manager choices. Winget/npm keep
-    // the passive notice because this panel cannot install them safely here.
+    if (manager.manager === "scoop") {
+      return <Notice tone="warning" text="Scoop is optional and is not available on this device. Scoop-only updates are unavailable; other package managers remain available." />;
+    }
+    // Chocolatey is an optional package-manager choice. Winget/npm keep the
+    // passive notice because this panel cannot install them safely here.
     if (manager.manager in INSTALLABLE_MANAGERS) {
       const installing = installingManagers.has(manager.manager);
       return <Card><CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">

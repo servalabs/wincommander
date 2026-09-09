@@ -12,7 +12,7 @@ const CRITICAL_ENGINES = new Set([
 ]);
 const OPTIONAL_ENGINES = new Set([
   "meshVpn", "productivityEngine", "privacyShieldAI",
-  "metadataScrubber", "localLlm", "vcredist", "chocolatey", "scoop",
+  "metadataScrubber", "localLlm", "vcredist", "chocolatey",
 ]);
 
 const ENGINE_DESCRIPTIONS: Record<string, string> = {
@@ -23,7 +23,6 @@ const ENGINE_DESCRIPTIONS: Record<string, string> = {
   winget:              "Windows Package Manager for app installs",
   powershell7:         "Modern PowerShell runtime for all scripts",
   chocolatey:          "Community package manager for app installs & updates",
-  scoop:               "Machine-wide portable app installer and updater",
   meshVpn:             "Peer-to-peer encrypted mesh networking",
   productivityEngine:  "Virtual desktop & focus-mode features",
   privacyShieldAI:     "AI-powered behaviour analysis shield",
@@ -42,7 +41,6 @@ const ENGINE_ICONS: Record<string, string> = {
   winget:             "cube",
   powershell7:        "console",
   chocolatey:         "shopping-cart",
-  scoop:              "archive",
   meshVpn:            "globe-network",
   productivityEngine: "desktop",
   privacyShieldAI:    "shield",

@@ -17,15 +17,25 @@ describe("Packages and Apps layout", () => {
     expect(installer).toContain("{updatesTools &&");
   });
 
-  test("keeps optional managers out of engine readiness and removes obsolete package surfaces", async () => {
+  test("keeps Scoop out of engine readiness and removes obsolete package surfaces", async () => {
     const engines = await read("src/panels/apps/components/EnginesSection.tsx");
     const panel = await read("src/panels/apps/index.tsx");
 
     expect(engines).toContain('"chocolatey"');
-    expect(engines).toContain('"scoop"');
+    expect(engines).not.toContain('"scoop"');
     expect(engines).not.toContain('"encryptionEngine"');
     expect(panel).not.toContain("ClassicWindowsApps");
     expect(panel).not.toContain("classic-photo-viewer");
+  });
+
+  test("keeps Scoop optional when it is unavailable", async () => {
+    const updates = await read("src/panels/apps/PackageUpdateTools.tsx");
+    const dependencies = await read("src-tauri/commander-free/scripts/modules/dependencies/dependencies.ps1");
+
+    expect(updates).toContain('Scoop is optional and is not available on this device.');
+    expect(updates).not.toContain('scoop: "scoop"');
+    expect(dependencies).toContain("WinCommander does not run Scoop bootstrap scripts");
+    expect(dependencies).not.toContain("https://get.scoop.sh");
   });
 
   test("moves successful installs to Installed without waiting for the inventory refresh", async () => {

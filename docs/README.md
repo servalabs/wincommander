@@ -18,7 +18,8 @@ operational limits are in [security](../SECURITY.md).
   [settings and toggle reference](frontend/settings-reference.md).
 - [product/](product/) — detailed product-area references, including the
   [automation flows reference](product/flows.md) and the
-  [privacy-hygiene/Nyx-family contract](product/privacy-hygiene.md).
+  [privacy-hygiene/Nyx-family contract](product/privacy-hygiene.md) and
+  [package-manager behavior](product/package-managers.md).
 
 Add new detailed documentation to the narrowest relevant folder. Keep
 repository-wide product truth and core architecture/security references at the
