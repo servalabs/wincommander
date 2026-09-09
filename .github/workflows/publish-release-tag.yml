@@ -163,6 +163,13 @@ jobs:
           }
           NODE
 
+          release_token_login="$(GH_TOKEN="${RELEASE_TOKEN}" gh api user --jq .login)"
+          if [[ -z "${release_token_login}" ]]; then
+            echo "::error::RELEASE_AUTOMATION_TOKEN did not identify a GitHub account." >&2
+            exit 1
+          fi
+          echo "Release tag credential authenticated as ${release_token_login}."
+
           git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           if git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null; then
             echo "Tag v${version} already exists." >&2
@@ -171,5 +178,9 @@ jobs:
           git config user.name "WinCommander release automation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v${version}" -m "release: v${version}"
+          if ! git push --dry-run origin "v${version}"; then
+            echo "::error::Release token account ${release_token_login} cannot create protected v* tags. Add that exact account, team, or GitHub App to the protect-release-tags bypass list with Always allow." >&2
+            exit 1
+          fi
           git push origin "v${version}"
           echo "Created ${GITHUB_REPOSITORY} tag v${version}. The tag push starts the signed NSIS setup release."
