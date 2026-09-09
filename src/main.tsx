@@ -8,6 +8,8 @@ import "@fontsource/space-grotesk/600.css";
 import "@fontsource/space-grotesk/700.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { applyMotionClass } from "./lib/motionPolicy";
+import { showStartupAnimation } from "./startup/animationRoot";
+import { getDisplayBranding } from "./lib/branding";
 
 const hasNativeBackend = Boolean((window as typeof window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 
@@ -35,5 +37,18 @@ if (isNotificationWindow) {
 } else if (windowLabel === "search-overlay") {
   void import("./entries/searchOverlay").then(({ mountSearchOverlay }) => mountSearchOverlay());
 } else {
-  void import("./entries/mainWindow").then(({ mountMainWindow }) => mountMainWindow());
+  void import("./entries/mainWindow")
+    .then(({ mountMainWindow }) => mountMainWindow())
+    .catch((error: unknown) => {
+      console.error("Unable to load the main window", error);
+      showStartupAnimation({
+        branding: getDisplayBranding(null),
+        isLight: document.documentElement.classList.contains('light'),
+        reducedMotion: document.documentElement.classList.contains('wc-no-motion'),
+        isAppReady: false,
+        startupError: 'WinCommander could not start. Retry to reload the app.',
+        onComplete: () => {},
+        onRetry: () => location.reload(),
+      });
+    });
 }

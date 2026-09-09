@@ -9,7 +9,7 @@ describe("startup logo", () => {
     const [entry, asset, splash, styles] = await Promise.all([
       Bun.file("src/main.tsx").text(),
       Bun.file("src/assets/logoUrl.ts").text(),
-      Bun.file("src/components/SplashScreen.tsx").text(),
+      Bun.file("src/components/StartupAnimation.tsx").text(),
       Bun.file("src/components/SplashScreen.css").text(),
     ]);
 

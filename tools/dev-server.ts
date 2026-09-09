@@ -71,7 +71,38 @@ function freeVitePort(): void {
   }
 }
 
+function activeVitePortOwner(): string | null {
+  const netstat = spawnSync("netstat", ["-ano"], { cwd: ROOT, encoding: "utf8", shell: false });
+  if (netstat.status !== 0) return null;
+  return netstat.stdout
+    .split(/\r?\n/)
+    .map((line) => line.match(/:1420\s+\S+\s+LISTENING\s+(\d+)\s*$/i))
+    .find((match): match is RegExpMatchArray => match !== null)?.[1] ?? null;
+}
+
+function desktopDevWindowIsRunning(): boolean {
+  if (process.platform !== "win32") return false;
+  const tasklist = spawnSync("tasklist", ["/FI", "IMAGENAME eq wincommander-free.exe", "/NH"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    shell: false,
+  });
+  return tasklist.status === 0 && /wincommander-free\.exe/i.test(tasklist.stdout);
+}
+
 async function main(): Promise<void> {
+  // A second `tauri dev` starts another beforeDevCommand.  Previously that
+  // command killed the Vite server used by the first desktop window, leaving
+  // its WebView with stale React modules and orphaned IPC calls.  Refuse the
+  // second launch before it changes any shared process.
+  const existingViteOwner = activeVitePortOwner();
+  if (PRESERVE_WINCOMMANDER && existingViteOwner && desktopDevWindowIsRunning()) {
+    throw new Error(
+      `an existing WinCommander development session is already using port 1420 (PID ${existingViteOwner}). ` +
+      "Close that session or run `bun run kill:dev` before starting a fresh one.",
+    );
+  }
+
   console.log("[dev-server] kill:dev and bun install running in parallel...");
 
   const steps: Array<{ name: string; promise: Promise<number> }> = [

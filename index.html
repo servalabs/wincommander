@@ -45,15 +45,12 @@
   </script>
   <style>
     html, body { margin: 0; width: 100%; height: 100%; background: #0a0f12; }
-    /* Do not reveal a stale cached theme before ThemeProvider reads the
-       authoritative setting. The React splash is the sole startup animation. */
-    html:not([data-theme-ready]) body { background: #0a0f12 !important; }
   </style>
 </head>
 
 <body>
   <div id="root"></div>
-  <script type="module" src="/src/main.tsx"></script>
+  <script type="module" src="/src/startup.tsx"></script>
 </body>
 
 </html>

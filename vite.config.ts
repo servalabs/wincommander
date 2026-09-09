@@ -179,9 +179,8 @@ export default defineConfig(({ command }): UserConfig => ({
         manualChunks: (id: string) => {
           if (!id.includes("node_modules")) return undefined;
           if (id.includes("@xyflow")) return "vendor-flows";
-          if (id.includes("@radix-ui") || id.includes("cmdk")) return "vendor-radix";
-          if (id.includes("framer-motion")) return "vendor-motion";
-          if (id.includes("@tanstack/react-query")) return "vendor-query";
+          // Let UI libraries split at their consumers; grouping them manually
+          // pulled React into those chunks and delayed the startup animation.
           if (id.includes("@tauri-apps")) return "vendor-tauri";
           if (id.includes("react-dom") || id.includes("/react/")) return "vendor-react";
           return undefined;

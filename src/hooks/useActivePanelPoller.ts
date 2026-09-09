@@ -72,7 +72,6 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
     const appState = useAppState();
     const {
         appSettings,
-        refreshSystem,
         refreshDriveHealth,
         refreshPrivacy,
         refreshNetwork,
@@ -149,8 +148,14 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
         if (paused) return;
         if (activePanel !== 'dashboard') return;
         if (driveHealthChecked) return;
-        driveHealthChecked = true;
-        refreshDriveHealth();
+        // Let the dashboard paint and navigation settle before starting another
+        // native hardware process. Leaving the dashboard cancels this pending
+        // probe; the next visit gets a fresh idle window.
+        const timer = setTimeout(() => {
+            driveHealthChecked = true;
+            void refreshDriveHealth();
+        }, 30_000);
+        return () => clearTimeout(timer);
     }, [activePanel, refreshDriveHealth, paused]);
 
     // ── All panels: PS-backed data at 10s (only the active panel) ──────────
@@ -161,10 +166,8 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
         // ── One-shot on panel entry ──
         if (prevPanelRef.current !== activePanel) {
             prevPanelRef.current = activePanel;
-            if (activePanel === 'dashboard') {
-                // Populate static hardware info (cpu model, hostname, RAM string, etc.)
-                refreshSystem(true);
-            }
+            // AppProvider owns the once-per-launch hardware refresh. Returning
+            // to the dashboard must not start another PowerShell hardware scan.
             if (refreshFn) void runRefreshIfIdle(panelRefreshInFlightRef, refreshFn);
         }
 
@@ -180,6 +183,5 @@ export function useActivePanelPoller({ activePanel, paused = false }: { activePa
         activePanel,
         getPanelRefresh,
         paused,
-        refreshSystem,
     ]);
 }

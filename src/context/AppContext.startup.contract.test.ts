@@ -8,7 +8,8 @@ describe("AppContext startup coordination", () => {
 
     expect(source).toMatch(/id:\s*['"]settings-cache['"]/);
     expect(source).toMatch(/cached\.outcome !== ['"]completed['"] \|\| !cached\.value/);
-    expect(source).toContain("hydratedSettings = await initSettings(false)");
+    expect(source).toContain("hydratedSettings = await hydrateWithinBudget(");
+    expect(source).toContain("setStartupError('WinCommander could not load its settings. Retry to continue.')");
     expect(source).toContain("reportStartupPhase('settings_cache_hydrated')");
     expect(source).toMatch(/id:\s*['"]system-probe['"]/);
     expect(source).toMatch(/id:\s*['"]startup-status['"]/);

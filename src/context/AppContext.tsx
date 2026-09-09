@@ -23,7 +23,9 @@ import { _getOperationHandlers } from './TaskStatusContext';
 import { getDefaultModules } from '../types/modules';
 import type { ModuleConfig } from '../types/modules';
 import { getStartupStaggerStep } from '../lib/performancePolicy';
+import { isAppInventoryRefreshDue } from '../lib/appInventoryStartup';
 import { waitForSoftTimeout } from '../lib/softTimeout';
+import { hydrateWithinBudget } from '../lib/startupHydration';
 import { canRunStartupJob, type StartupEligibility } from '../lib/startupJobPolicy';
 import { createStartupCoordinator, type StartupCoordinator, type StartupJob, type StartupJobResult } from '../services/startupCoordinator';
 import { createStartupProbeStore } from '../services/startupProbeStore';
@@ -79,6 +81,8 @@ interface AppState {
     };
 
     startupComplete: boolean;
+    startupError: string | null;
+    retryStartup: () => void;
     /** Whether startup surfaces cached settings, a fresh probe, or stale data. */
     startupDataState: 'loading' | 'cached' | 'refreshing' | 'ready' | 'stale';
 
@@ -102,7 +106,7 @@ interface AppState {
     refreshProductivity: (silent?: boolean) => Promise<void>;
     /** Run the unified app inventory scan (Get-AppInventory).
      * Auto-persists to settings.json → current.apps.inventory.
-     * Called on startup, every 60 min, and after install/upgrade/uninstall. */
+     * Called when the startup cache is stale and after install/upgrade/uninstall. */
     runAppInventoryScan: (silent?: boolean) => Promise<void>;
     /** Refresh dependency status (Get-DependencyStatus). Called on startup. */
     refreshDependencies: (silent?: boolean) => Promise<void>;
@@ -159,6 +163,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const { mode: authMode } = useAuthMode();
     const { data: startupLicense } = useLicenseQuery();
     const startupCoordinatorRef = useRef<StartupCoordinator | null>(null);
+    const settingsReadStoreRef = useRef(createStartupProbeStore<AppSettings>());
     const systemProbeStoreRef = useRef(createStartupProbeStore<unknown>());
     const startupStatusStoreRef = useRef(createStartupProbeStore<unknown>());
     const {
@@ -227,6 +232,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const [startupComplete, setStartupComplete] = useState(false);
+    const [startupError, setStartupError] = useState<string | null>(null);
+    const [startupAttempt, setStartupAttempt] = useState(0);
+    const retryStartup = useCallback(() => {
+        setStartupError(null);
+        setStartupAttempt(attempt => attempt + 1);
+    }, []);
     const [startupDataState, setStartupDataState] = useState<'loading' | 'cached' | 'refreshing' | 'ready' | 'stale'>('loading');
 
     const normalizeModulesConfig = useCallback((
@@ -780,7 +791,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     //
     // TRIGGERS:
     //   1. App startup (after settings load, delayed so it doesn't block UI)
-    //   2. Every 60 minutes (configurable via ideal.apps.scanIntervalMinutes)
     //   3. After install/upgrade/uninstall actions (caller invokes this)
     //   4. Manual refresh button in Apps panel
     // ────────────────────────────────────────────────────────────────────
@@ -941,7 +951,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const initSettings = useCallback(async (runProbe = true, cachedSettings?: AppSettings, signal?: AbortSignal): Promise<AppSettings | null> => {
         try {
             // Phase 1: Fast cache read (~1-5ms) — seeds state for instant score
-            let settings = cachedSettings ?? await invoke<AppSettings>('get_settings');
+            let settings = cachedSettings ?? await settingsReadStoreRef.current.refresh(
+                () => invoke<AppSettings>('get_settings'), signal ?? new AbortController().signal,
+            );
             if (signal?.aborted) return null;
 
             // Heal sparse/legacy module maps so missing keys do NOT default to false on restart.
@@ -954,6 +966,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 });
             }
 
+            if (signal?.aborted) return null;
             setAppSettings(settings);
             appSettingsRef.current = settings;
             seedFromCachedSettings(settings);
@@ -1173,18 +1186,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (cancelled) return;
             let hydratedSettings = cached.outcome === 'completed' ? cached.value : null;
             if (cached.outcome !== 'completed' || !cached.value) {
-                // The coordinator's 1.5s budget keeps a cold/contended settings
-                // read from holding the splash indefinitely. A timeout aborts the
-                // result consumer, though, and the old path never retried — the
-                // shell appeared with appSettings=null, so Sidebar intentionally
-                // rendered zero rows and the dashboard score stayed at 0%.
-                // Recover outside the startup budget while the already-visible
-                // shell remains responsive. This is a single retry, not a loop;
-                // genuine backend failures stay in the explicit stale state.
+                // Reuse the native read if it is still pending; retry only the
+                // consumer with a bounded budget. Failure stays on the splash,
+                // with an explicit retry instead of an empty dashboard.
                 setStartupDataState('stale');
-                hydratedSettings = await initSettings(false);
-                if (cancelled || !hydratedSettings) return;
-                reportStartupPhase('settings_cache_hydrated');
+                hydratedSettings = await hydrateWithinBudget(signal => initSettings(false, undefined, signal));
+                if (cancelled) return;
+                if (!hydratedSettings) {
+                    setStartupError('WinCommander could not load its settings. Retry to continue.');
+                    return;
+                }
             }
 
             // Cached settings are enough to begin the native readiness check,
@@ -1206,14 +1217,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 setStartupDataState(result.outcome === 'completed' && result.value === true ? 'ready' : 'stale');
                 setStartupComplete(true);
             });
-            void runStartupJob({
-                id: 'system-probe', priority: 'background', cost: 'expensive', timeoutMs: 30_000,
-                run: (signal) => systemProbeStoreRef.current.refresh(
-                    () => initSettings(true, hydratedSettings ?? undefined, signal), signal,
-                ),
-            }).then((result) => {
-                if (!cancelled && result.outcome === 'completed') reportStartupPhase('fresh_system_probe_complete');
-            });
 
             emitProgress(95, 'refreshing system data');
 
@@ -1234,27 +1237,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }
             });
 
-            // Lazy hardware refresh: re-run Get-SystemInfo to refresh the cached
-            // CPU/GPU/RAM/disk fields in current.device.* without blocking load.
-            // Warm cache (normal launch): defer 15s — the UI already shows last
-            // session's values. Cold cache (first run): fetch in 1.5s so the
-            // hardware labels fill in promptly instead of sitting blank.
+            // Keep the settings and hardware probes in the same expensive lane.
+            // Previously Get-SystemInfo bypassed the coordinator, then ran again
+            // on dashboard entry while the startup probes were still busy.
             const sysInfoDelay = deviceCacheWarm ? 15_000 : 1_500;
             scheduleAfter(sysInfoDelay, () => {
-                void getSystemInfo().then(async (res) => {
-                    if (cancelled || !res.success || !res.data) return;
-                    const incoming = res.data as any;
-                    setSystemInfo(prev => ({
-                        ...(prev ?? {}),
-                        ...incoming,
-                        // Preserve live Rust metrics — don't overwrite with PS stale values.
-                        cpuUsage: prev?.cpuUsage ?? incoming.cpuUsage ?? 0,
-                        cpuTemp: prev?.cpuTemp ?? incoming.cpuTemp ?? 0,
-                        ramUsage: prev?.ramUsage ?? incoming.ramUsage ?? 0,
-                        disks: mergeDiskHealth(incoming.disks ?? [], smartHealthCache),
-                    } as any));
-                    await persistProbeToSettings({ systemInfo: incoming });
-                }).catch(() => {});
+                void runStartupJob({
+                    id: 'system-probe', priority: 'background', cost: 'expensive', timeoutMs: 30_000,
+                    run: async (signal) => {
+                        await systemProbeStoreRef.current.refresh(
+                            () => initSettings(true, hydratedSettings ?? undefined, signal), signal,
+                        );
+                        if (cancelled || signal.aborted) return;
+                        const res = await getSystemInfo();
+                        if (cancelled || signal.aborted || !res.success || !res.data) return;
+                        const incoming = res.data;
+                        setSystemInfo(prev => ({
+                            ...incoming,
+                            cpuUsage: prev?.cpuUsage ?? incoming.cpuUsage ?? 0,
+                            cpuTemp: prev?.cpuTemp ?? incoming.cpuTemp ?? 0,
+                            ramUsage: prev?.ramUsage ?? incoming.ramUsage ?? 0,
+                            disks: mergeDiskHealth(incoming.disks ?? [], smartHealthCache),
+                        }));
+                        await persistProbeToSettings({ systemInfo: incoming });
+                    },
+                }).then((result) => {
+                    if (!cancelled && result.outcome === 'completed') reportStartupPhase('fresh_system_probe_complete');
+                });
             });
 
             // Do not block startup completion on winget inventory. It is the
@@ -1262,8 +1271,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             // dashboard has rendered and lighter checks have had their turn.
             const inventoryStep = getStartupStaggerStep("inventory");
             scheduleWhenIdle(inventoryStep.delayMs, () => {
-                if (canRunStartupJob('app-inventory', { ...startupEligibilityRef.current, hasIdleWindow: true })) {
-                    void runStartupJob({ id: 'app-inventory', priority: 'idle', cost: 'expensive', timeoutMs: APP_INVENTORY_SOFT_TIMEOUT_MS, run: () => runAppInventoryScan(true) })
+                const cachedInventoryAt = appSettingsRef.current?.current?.apps?.inventory?.lastScanAt;
+                const inventoryRefreshDue = isAppInventoryRefreshDue(cachedInventoryAt);
+                if (
+                    inventoryRefreshDue &&
+                    canRunStartupJob('app-inventory', { ...startupEligibilityRef.current, hasIdleWindow: true })
+                ) {
+                    void runStartupJob({ id: 'app-inventory', priority: 'idle', cost: 'expensive', timeoutMs: APP_INVENTORY_SOFT_TIMEOUT_MS, run: async () => {
+                        await runAppInventoryScan(true);
+                        // The public refresh returns after its UI timeout. Keep
+                        // the coordinator occupied until native scanning drains.
+                        await appInventoryBackendInFlightRef.current;
+                    } })
                         .then((result) => {
                             // A frontend timeout cannot kill winget/native work.
                             // Do not claim idle while that underlying operation drains.
@@ -1279,6 +1298,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         runStartupSequence().catch((err) => {
             console.error('Startup sequence failed:', err);
+            if (!cancelled) {
+                setStartupDataState('stale');
+                setStartupError('WinCommander could not finish loading. Retry to continue.');
+            }
         });
 
         return () => {
@@ -1289,19 +1312,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 idleCallbacks.forEach((handle) => win.cancelIdleCallback!(handle));
             }
         };
-    }, [initializeApp, initSettings, refreshMesh, runAppInventoryScan, refreshDependencies, refreshBranding, getSystemInfo, mergeDiskHealth, persistProbeToSettings, runStartupJob]);
-
-    // Periodic app inventory refresh — keeps the radar's "APP UPDATES PENDING"
-    // count and the Update All Apps button current without requiring the user
-    // to manually refresh the Apps panel. 30 min mirrors the original module
-    // contract ("startup + 60 min interval") halved so newly published winget
-    // updates surface within ~30 min of the publisher cutting them.
-    useEffect(() => {
-        const interval = setInterval(() => {
-            void runAppInventoryScan(true);
-        }, 30 * 60 * 1000);
-        return () => clearInterval(interval);
-    }, [runAppInventoryScan]);
+    }, [initializeApp, initSettings, refreshMesh, runAppInventoryScan, refreshDependencies, refreshBranding, getSystemInfo, mergeDiskHealth, persistProbeToSettings, runStartupJob, startupAttempt]);
 
     const ctx = useMemo(() => ({
         systemInfo,
@@ -1323,6 +1334,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         forceRefreshDeps,
         loading,
         startupComplete,
+        startupError,
+        retryStartup,
         startupDataState,
         refreshAll,
         refreshSystem,
@@ -1359,6 +1372,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         forceRefreshDeps,
         loading,
         startupComplete,
+        startupError,
+        retryStartup,
         startupDataState,
         refreshAll,
         refreshSystem,
@@ -1391,3 +1406,9 @@ export const useAppState = () => {
     }
     return context;
 };
+
+// Providers which only enhance presentation may be refreshed independently by
+// Vite.  They must not turn a temporary provider-boundary mismatch into a
+// full-window crash; callers that require application state should continue to
+// use useAppState above.
+export const useOptionalAppState = () => useContext(AppContext);

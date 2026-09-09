@@ -13,6 +13,7 @@ describe("startup performance policy", () => {
     expect(delays[0] > 0).toBe(true);
     expect(delays[1] > delays[0]).toBe(true);
     expect(delays[2] > delays[1]).toBe(true);
+    expect(STARTUP_STAGGER_PLAN.find((step) => step.stage === "inventory")?.delayMs).toBe(120_000);
     expect(STARTUP_STAGGER_PLAN.find((step) => step.stage === "inventory")?.runWhenIdle).toBe(true);
   });
 });

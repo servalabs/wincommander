@@ -14,6 +14,8 @@ export interface StartupJob<T = unknown> {
   priority: StartupPriority;
   cost: StartupCost;
   timeoutMs: number;
+  /** Bound admission separately from execution; native work may never drain. */
+  queueTimeoutMs?: number;
   run(signal: AbortSignal): Promise<T>;
 }
 
@@ -140,6 +142,7 @@ export function createStartupCoordinator(
     const existing = flights.get(job.id) as StartupFlight | undefined;
     if (existing) return existing.result as Promise<StartupJobResult<T>>;
 
+    const queuedAt = now();
     report(options.reportToNative, job.id, "queued", 0);
 
     let scheduled: Promise<StartupJobResult<T>>;
@@ -151,11 +154,37 @@ export function createStartupCoordinator(
         releaseExpensive = resolve;
       });
       drain = expensiveTail;
-      scheduled = previousExpensive.then(() => {
+      // A hung native job still owns the lane, but queued UI callers must be
+      // able to settle. Expired jobs are skipped when that lane finally drains.
+      let expired: "timed-out" | "cancelled" | undefined;
+      let queueTimer: ReturnType<typeof setTimeout>;
+      let cancelQueued: () => void;
+      const admission = new Promise<StartupJobResult<T>>((resolve) => {
+        const stopWaiting = (outcome: "timed-out" | "cancelled") => {
+          expired = outcome;
+          report(options.reportToNative, job.id, outcome, now() - queuedAt);
+          resolve({ id: job.id, outcome });
+        };
+        queueTimer = setTimeout(() => stopWaiting("timed-out"), job.queueTimeoutMs ?? 60_000);
+        cancelQueued = () => stopWaiting("cancelled");
+        controller.signal.addEventListener("abort", cancelQueued, { once: true });
+        if (controller.signal.aborted) cancelQueued();
+      });
+      const stopAdmission = () => {
+        clearTimeout(queueTimer);
+        controller.signal.removeEventListener("abort", cancelQueued);
+      };
+      const admitted = previousExpensive.then(() => {
+        stopAdmission();
+        if (expired) {
+          releaseExpensive();
+          return { id: job.id, outcome: expired } as StartupJobResult<T>;
+        }
         const execution = execute(job);
         void execution.drain.finally(releaseExpensive);
         return execution.result;
       });
+      scheduled = Promise.race([admitted, admission]).finally(stopAdmission);
     } else {
       const execution = execute(job);
       scheduled = execution.result;

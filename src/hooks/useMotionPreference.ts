@@ -16,7 +16,7 @@
 
 import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAuthMode } from "../context/AuthModeContext";
-import { useAppState } from "../context/AppContext";
+import { useOptionalAppState } from "../context/AppContext";
 import { applyMotionClass, shouldReduceMotionForSystem } from "../lib/motionPolicy";
 
 export type MotionPreference = "full" | "reduced";
@@ -54,7 +54,10 @@ function resolvedWantsReduced(): boolean {
  */
 export function MotionPreferenceProvider({ children }: { children: ReactNode }) {
   const { mode } = useAuthMode();
-  const { systemInfo } = useAppState();
+  // A Vite refresh can briefly replace this presentation provider before its
+  // parent context module. Motion is an enhancement, so retain the OS/user
+  // preference rather than crashing the whole window during that boundary.
+  const systemInfo = useOptionalAppState()?.systemInfo;
 
   // Snapshot initial state so the first render is already correct.
   const [reduced, setReduced] = useState<boolean>(

@@ -32,16 +32,13 @@ function readCachedTheme(): Theme {
         const cached = localStorage.getItem(THEME_STORAGE_KEY);
         if (cached === 'dark' || cached === 'light') return cached;
     } catch { /* localStorage may be unavailable */ }
-    return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    return typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches
+        ? 'light' : 'dark';
 }
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
     const [theme, setThemeState] = useState<Theme>(readCachedTheme);
-    const [themeReady, setThemeReady] = useState(false);
-
-    // The splash must start only after the persisted setting has won over a
-    // stale WebView cache. Otherwise it starts light, is corrected to dark,
-    // and visibly restarts mid-animation in packaged builds.
+    // Settings IPC must never hold the entire window blank before the splash.
     useEffect(() => {
         invoke<string>('get_setting', { path: 'app.theme' })
             .then((settingsTheme) => {
@@ -55,7 +52,6 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
             .catch(() => applyThemeClass(readCachedTheme()))
             .finally(() => {
                 window.document.documentElement.setAttribute('data-theme-ready', 'true');
-                setThemeReady(true);
             });
     }, []);
 
@@ -98,7 +94,7 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children }) => {
 
     return (
         <ThemeContext.Provider value={{ theme, toggleTheme, setTheme }}>
-            {themeReady ? children : null}
+            {children}
         </ThemeContext.Provider>
     );
 };

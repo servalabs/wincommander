@@ -14,7 +14,11 @@ describe("native and UI-audit entrypoints", () => {
       read("src-tauri/commander-free/src/cli.rs"),
     ]);
 
-    expect(rootHtml).toContain('src="/src/main.tsx"');
+    expect(rootHtml).toContain('src="/src/startup.tsx"');
+    expect(rootHtml).not.toContain('Starting WinCommander');
+    const startup = await read('src/startup.tsx');
+    expect(startup).toContain("showStartupAnimation(initialAnimation)");
+    expect(startup).toContain("import('./main')");
     expect(rootHtml).not.toContain("uiAuditBootstrap");
     expect(auditHtml).toContain('src="/src/dev/uiAuditBootstrap.ts"');
     expect(cliHtml).not.toContain("/src/main.tsx");

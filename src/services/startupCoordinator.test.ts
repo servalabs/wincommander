@@ -148,3 +148,43 @@ describe("startup coordinator", () => {
     expect(queuedCalls).toBe(0);
   });
 });
+
+
+test("queued jobs time out without starting after a hung predecessor drains", async () => {
+  const coordinator = createStartupCoordinator();
+  const blocked = deferred<void>();
+  const first = coordinator.run({
+    id: "system-probe", priority: "background", cost: "expensive", timeoutMs: 5,
+    run: () => blocked.promise,
+  });
+  await first;
+  let calls = 0;
+  const queued = await coordinator.run({
+    id: "dependencies", priority: "background", cost: "expensive",
+    timeoutMs: 100, queueTimeoutMs: 5,
+    run: async () => { calls++; },
+  });
+  expect(queued.outcome).toBe("timed-out");
+  blocked.resolve();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(calls).toBe(0);
+});
+
+test("cancellation settles queued callers even if native work never resolves", async () => {
+  const coordinator = createStartupCoordinator();
+  const blocked = deferred<void>();
+  const first = coordinator.run({
+    id: "system-probe", priority: "background", cost: "expensive", timeoutMs: 100,
+    run: () => blocked.promise,
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  const queued = coordinator.run({
+    id: "dependencies", priority: "background", cost: "expensive", timeoutMs: 100,
+    run: async () => { throw new Error("must not start"); },
+  });
+  coordinator.cancel();
+  expect((await queued).outcome).toBe("cancelled");
+  expect((await first).outcome).toBe("cancelled");
+  blocked.resolve();
+});

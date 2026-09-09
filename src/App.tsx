@@ -193,7 +193,10 @@ function PanelRoute({
   return <LazyPanel />;
 }
 
-function AppContent() {
+function AppContent({ splashDone, onSplashComplete }: {
+  splashDone: boolean;
+  onSplashComplete: () => void;
+}) {
   const tourActive = useTourActive();
   // Chromium's stock menu exposes developer tooling in packaged builds. Keep
   // it available to the dev server, but suppress the browser menu in releases.
@@ -209,9 +212,6 @@ function AppContent() {
     return requested && PANEL_MANIFESTS.some((panel) => panel.id === requested) ? requested : "dashboard";
   });
   const [panelRecoveryGeneration, setPanelRecoveryGeneration] = useState(0);
-  const [splashDone, setSplashDone] = useState(() =>
-    shouldSkipStartupSplash(import.meta.env.DEV, window.location.pathname),
-  );
   const { playStartupSound } = useStartupSound();
   const [hiddenPanelsUnlocked, setHiddenPanelsUnlocked] = useState(false);
   const [shredPaths, setShredPaths] = useState<string[]>([]);
@@ -236,7 +236,7 @@ function AppContent() {
   // that are used directly in this component. Declared here (before
   // lockHiddenPanels) so the borrowed-panel redirect can read lockedPanelIds.
   const appState = useAppState();
-  const { productivityStatus, appSettings, patchAppSettings, startupComplete, startupDataState, runStartupJob } = appState;
+  const { productivityStatus, appSettings, patchAppSettings, startupComplete, startupError, retryStartup, startupDataState, runStartupJob } = appState;
   const panelPrefetchRef = useRef<PanelPrefetchQueue | null>(null);
   const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
   useAutomaticUpdate(automaticUpdatesEnabled, canUpdatePro);
@@ -1101,9 +1101,20 @@ function AppContent() {
     }
   }, [activePanel, appSettings?.app?.modules, tourActive]);
 
-  const handleSplashComplete = useCallback(() => {
-    setSplashDone(true);
-  }, []);
+  const prioritizePanel = useCallback((panel: PanelId) => {
+    const manifest = PANEL_MANIFESTS.find((candidate) => candidate.id === panel);
+    if (!manifest) return;
+
+    // A deliberate navigation wins over speculative idle prefetches.  The
+    // selected module and its declared data refresh begin now, while queued
+    // work for panels the person did not select is discarded.
+    panelPrefetchRef.current?.keepRelevant(panel);
+    panelPrefetchRef.current?.enqueueIntent(manifest.id, manifest.importFn);
+    if (manifest.refreshKey) {
+      const refreshFn = (appState as unknown as Record<string, unknown>)[manifest.refreshKey];
+      if (typeof refreshFn === "function") void (refreshFn as (force: boolean) => unknown)(true);
+    }
+  }, [appState]);
 
   const preloadDiskCleanup = useCallback((priority: "background" | "idle") => {
     void runStartupJob({
@@ -1208,14 +1219,14 @@ function AppContent() {
       window.dispatchEvent(new Event("panel-scroll-top"));
       return;
     }
-    panelPrefetchRef.current?.keepRelevant(panel);
+    prioritizePanel(panel);
     if (panel === "maintenance" || panel === "cleanup") {
       preloadDiskCleanup("background");
     }
     setActivePanel(panel);
     // KT: Persist to settings.json so next session resumes on the same panel
     patchAppSettings({ app: { lastPanel: panel } }).catch(reportSettingsWriteFailure);
-  }, [activePanel, patchAppSettings, appSettings?.app?.modules, canUseDevTools, preloadDiskCleanup]);
+  }, [activePanel, patchAppSettings, appSettings?.app?.modules, canUseDevTools, preloadDiskCleanup, prioritizePanel]);
 
   useEffect(() => {
     if (activePanel === "flows" && !canUseDevTools) setActivePanel("dashboard");
@@ -1359,7 +1370,7 @@ function AppContent() {
     <MotionConfig reducedMotion={motionPref === "reduced" ? "always" : "user"}>
     <SearchProvider>
     <>
-      {isLoading && <SplashScreen onComplete={handleSplashComplete} isAppReady={startupComplete} />}
+      {isLoading && <SplashScreen onComplete={onSplashComplete} isAppReady={startupComplete} startupError={startupError} onRetry={retryStartup} />}
 
       <div
         className="app-container"
@@ -1585,6 +1596,11 @@ function StartupAuthGate({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
+  // Calculator lock replaces AppContent; its remount must not replay startup.
+  const [splashDone, setSplashDone] = useState(() =>
+    shouldSkipStartupSplash(import.meta.env.DEV, window.location.pathname),
+  );
+  const completeSplash = useCallback(() => setSplashDone(true), []);
   return (
     <AuthModeProvider>
       <LiveMetricsProvider>
@@ -1592,7 +1608,7 @@ function App() {
           <MotionPreferenceProvider>
             <TaskStatusProvider>
               <StartupAuthGate>
-                <AppContent />
+                <AppContent splashDone={splashDone} onSplashComplete={completeSplash} />
               </StartupAuthGate>
             </TaskStatusProvider>
           </MotionPreferenceProvider>
