@@ -804,7 +804,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <DialogHeader>
             <DialogTitle>Add existing Vault</DialogTitle>
             <DialogDescription>
-              Select or enter an encrypted container file already on this PC. A filename extension is not required; WinCommander verifies the file safely when you save the policy.
+              Select or enter an encrypted container file already on this PC. A filename extension is not required. WinCommander checks the file path and access when you save; it verifies the encrypted container when you unlock it.
             </DialogDescription>
           </DialogHeader>
           <label className="fleet-field"><span>Container file</span>
