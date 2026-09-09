@@ -21,7 +21,59 @@ const APP_DISPLAY_NAME: &str = match option_env!("WINCMD_APP_NAME") {
 const MACHINE_STATE_SUBDIR: &str = "machine-state";
 static MACHINE_STATE_ACL_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 static MACHINE_DATA_ACL_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+static USER_DATA_ACL_CACHE: std::sync::Mutex<DirectoryAclCache> =
+    std::sync::Mutex::new(DirectoryAclCache(Vec::new()));
 const MACHINE_STATE_LOCK_TIMEOUT_MS: u32 = 5_000;
+
+#[derive(Default)]
+struct DirectoryAclCache(Vec<(PathBuf, (u64, u64))>);
+
+impl DirectoryAclCache {
+    fn ensure(
+        &mut self,
+        path: &std::path::Path,
+        identity: Option<(u64, u64)>,
+        apply: impl FnOnce() -> bool,
+    ) {
+        if identity.is_some_and(|id| self.0.iter().any(|(p, cached)| p == path && *cached == id)) {
+            return;
+        }
+        self.0.retain(|(p, _)| p != path);
+        if apply() {
+            if let Some(identity) = identity {
+                self.0.push((path.to_path_buf(), identity));
+            }
+        }
+    }
+}
+
+fn directory_identity(path: &std::path::Path) -> Option<(u64, u64)> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+        };
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .ok()?;
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+            return None;
+        }
+        Some((
+            info.dwVolumeSerialNumber as u64,
+            ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+        ))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        None
+    }
+}
 
 /// The base display name (e.g. "WinCommander").
 pub fn app_display_name() -> &'static str {
@@ -80,7 +132,9 @@ pub fn install_dir() -> Result<PathBuf, String> {
 pub fn user_data_dir() -> Result<PathBuf, String> {
     let dir = env_path("LOCALAPPDATA")?.join(APP_DIR_NAME);
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create user data directory: {}", e))?;
-    harden_dir_acl(&dir);
+    // Repeated settings/log accesses must not launch another icacls process.
+    let mut cache = USER_DATA_ACL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache.ensure(&dir, directory_identity(&dir), || harden_dir_acl_result(&dir));
     Ok(dir)
 }
 
@@ -94,6 +148,10 @@ pub fn user_data_dir() -> Result<PathBuf, String> {
 /// on directory (re)creation (see `file_search::open_engine`, which hardens the
 /// index dir only when it (re)opens the engine).
 pub fn harden_dir_acl(dir: &std::path::Path) {
+    let _ = harden_dir_acl_result(dir);
+}
+
+fn harden_dir_acl_result(dir: &std::path::Path) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -113,7 +171,7 @@ pub fn harden_dir_acl(dir: &std::path::Path) {
         let dir_str = dir.to_string_lossy();
         let grant_user = format!("{}:(OI)(CI)F", user);
 
-        let _ = std::process::Command::new("icacls")
+        std::process::Command::new("icacls")
             .args([
                 dir_str.as_ref(),
                 "/inheritance:r",
@@ -123,11 +181,13 @@ pub fn harden_dir_acl(dir: &std::path::Path) {
                 grant_user.as_str(),
             ])
             .creation_flags(CREATE_NO_WINDOW)
-            .output();
+            .output()
+            .is_ok_and(|output| output.status.success())
     }
     #[cfg(not(windows))]
     {
         let _ = dir; // no-op on non-Windows
+        true
     }
 }
 
@@ -487,6 +547,65 @@ mod tests {
         is_valid_machine_state_resource, is_valid_state_filename, state_file_from_dir,
         MACHINE_DATA_ACL_GRANTS,
     };
+
+    #[test]
+    fn user_directory_acl_is_applied_once_per_directory_identity() {
+        let mut cache = super::DirectoryAclCache::default();
+        let path = std::path::Path::new("user-data");
+        let mut attempts = 0;
+        for identity in [Some((1, 10)), Some((1, 10)), Some((1, 11))] {
+            cache.ensure(path, identity, || {
+                attempts += 1;
+                true
+            });
+        }
+        assert_eq!(attempts, 2, "recreated directories must be hardened again");
+    }
+
+    #[test]
+    fn user_directory_acl_retries_failures_and_unknown_identities() {
+        let mut cache = super::DirectoryAclCache::default();
+        let path = std::path::Path::new("user-data");
+        let mut attempts = 0;
+        for (identity, success) in [
+            (Some((1, 10)), false),
+            (Some((1, 10)), true),
+            (None, true),
+            (None, true),
+            (Some((1, 10)), true),
+        ] {
+            cache.ensure(path, identity, || {
+                attempts += 1;
+                success
+            });
+        }
+        assert_eq!(attempts, 5);
+    }
+
+    #[test]
+    fn user_directory_acl_cache_keeps_paths_separate() {
+        let mut cache = super::DirectoryAclCache::default();
+        let mut attempts = 0;
+        for path in ["user-a", "user-b", "user-a"] {
+            cache.ensure(std::path::Path::new(path), Some((1, 10)), || {
+                attempts += 1;
+                true
+            });
+        }
+        assert_eq!(attempts, 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn user_directory_identity_changes_when_path_is_recreated() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("user-data");
+        std::fs::create_dir(&path).unwrap();
+        let original = super::directory_identity(&path).unwrap();
+        std::fs::rename(&path, temp.path().join("old-user-data")).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert_ne!(super::directory_identity(&path).unwrap(), original);
+    }
 
     #[test]
     fn machine_data_acl_keeps_users_read_only() {
