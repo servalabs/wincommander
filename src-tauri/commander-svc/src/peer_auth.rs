@@ -82,16 +82,13 @@
 //!   resulting clipboard event / receipt / installed epoch must store
 //!   `trust_origin` alongside the record (D-2's "trust-origin marker").
 //!
-//! # A known placeholder
+//! # Binary-name contract
 //!
-//! [`ALLOWED_SESSION_HELPER_FILENAMES`] lists the per-user Clipboard Guard
-//! helper and Ink Receipt bridge under working-name filenames -- neither
-//! binary exists yet (both are later-phase deliverables per the plan).
-//! Whoever names and ships those binaries for real must reconcile this list
-//! with the actual filenames before `SessionHelper` traffic can ever reach
-//! them; until then every peer claiming to be one of them is correctly
-//! denied by [`PeerAuthError::PathNotAllowed`], which is the fail-closed
-//! default this module always prefers over guessing.
+//! [`ALLOWED_SESSION_HELPER_FILENAMES`] must match the filenames that the
+//! shipped per-user helpers actually produce. A name mismatch is fail-closed
+//! at the path pin, which is correct for an unknown executable but would also
+//! prevent the genuine helper from fetching policy or submitting its
+//! content-free result.
 //!
 //! # Cargo.toml dependency note
 //!
@@ -130,13 +127,14 @@ use windows_sys::Win32::System::Threading::{
 
 /// Leaf filenames allowed to call in as a `SessionHelper`, all expected
 /// directly under the resolved install directory (no subdirectories --
-/// keeping the allow-list flat avoids a second traversal surface). See the
-/// module-level "known placeholder" note: the helper/bridge names below are
-/// working names pending the binaries that will actually carry them.
+/// keeping the allow-list flat avoids a second traversal surface). Keep this
+/// list synchronized with each helper crate's `[[bin]] name; accepting a new
+/// name still requires the existing canonical-path, interactive-session, and
+/// rate-limit checks.
 pub const ALLOWED_SESSION_HELPER_FILENAMES: &[&str] = &[
     "wincommander-free.exe",
     "wincommander-pro.exe",
-    "wincmd-clip-helper.exe",
+    "wincommander-clipboard-guard.exe",
     "wincmd-ink-receipt-bridge.exe",
 ];
 
@@ -596,6 +594,18 @@ mod tests {
         assert_eq!(
             gate.authorize_at(1, TEST_VERB, Instant::now()),
             Err(PeerAuthError::PathNotAllowed)
+        );
+    }
+
+    #[test]
+    fn allows_the_shipped_clipboard_guard_helper_name() {
+        let mut identity = ok_identity();
+        identity.canonical_image_path =
+            PathBuf::from(TEST_ROOT).join("wincommander-clipboard-guard.exe");
+        let gate = gate_with(fixed_probe(Ok(identity), Ok(7)));
+        assert_eq!(
+            gate.authorize_at(1, TEST_VERB, Instant::now()),
+            Ok(TrustOrigin::SessionHelperPinned)
         );
     }
 

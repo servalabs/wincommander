@@ -98,6 +98,25 @@ them “cleanup.”
 - This feature adds no Tauri capability, general-purpose command runner, new
   deletion backend, or plaintext PowerShell payload.
 
+## Clipboard Guard availability and privacy boundary
+
+Clipboard Guard keeps user-authored rules in a per-user DPAPI store and keeps
+Fleet rules as a separately signed source. A failed local-rule read is shown as
+an unavailable custom-rule store; WinCommander does not replace it with an
+empty policy or permit a save that could overwrite the previous protected data.
+
+The per-user helper is admitted to the Windows service only when its shipped
+filename, protected install location, interactive session, and request rate all
+pass the existing authorization checks. This prevents an unrecognized process
+from posing as the helper while allowing the actual
+`wincommander-clipboard-guard.exe` helper to request policy and submit results.
+
+Clipboard text is never included in helper/service/Fleet reports. Reports carry
+only content-free rule and action outcomes. Clearing or quarantining is an
+attempted response, not a promise that every Windows application cannot paste;
+the interface must retain that limitation and show degraded monitoring or policy
+state honestly.
+
 ## Relationship to deeper cleanup
 
 WinCommander can expose deeper cleanup and secure-erasure capabilities outside the

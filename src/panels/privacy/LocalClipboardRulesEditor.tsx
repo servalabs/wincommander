@@ -5,8 +5,10 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { CheckboxControl } from "@/components/ui/bp";
 import type { Rule, Severity } from "../../types/generated/fleet";
+import type { ClipboardGuardRuleLoadState } from "../../hooks/useClipboardGuardRules";
 import {
   LOCAL_RULE_SEVERITIES,
+  canEditLocalClipboardRules,
   createLocalClipboardRule,
   editableMatcherValue,
   ensureLocalActions,
@@ -18,20 +20,36 @@ import {
 interface Props {
   localRules: Rule[];
   fleetRules: Rule[];
+  loadState?: ClipboardGuardRuleLoadState;
   onChangeLocalRules: (rules: Rule[]) => void | Promise<void>;
 }
 
 export default function LocalClipboardRulesEditor({
   localRules,
   fleetRules,
+  loadState = "ready",
   onChangeLocalRules,
 }: Props) {
   const [draft, setDraft] = useState<Rule | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const canEdit = canEditLocalClipboardRules(loadState);
   const allIds = useMemo(
     () => new Set([...localRules, ...fleetRules].map((rule) => rule.id)),
     [fleetRules, localRules],
   );
+
+  const persistRules = async (rules: Rule[]): Promise<boolean> => {
+    try {
+      await onChangeLocalRules(rules);
+      setError(null);
+      return true;
+    } catch {
+      // Backend failures are intentionally not surfaced verbatim: a matcher
+      // value must never be reflected into a rendered error message.
+      setError("Local rules could not be saved. Check that Clipboard Guard is available, then try again.");
+      return false;
+    }
+  };
 
   const startAdd = () => {
     setError(null);
@@ -59,22 +77,20 @@ export default function LocalClipboardRulesEditor({
     }
     const existed = localRules.some((rule) => rule.id === draft.id);
     const saved = { ...draft, revision: existed ? draft.revision + 1 : 1, locked: false };
-    try {
-      await onChangeLocalRules(
-        existed
-          ? localRules.map((rule) => rule.id === saved.id ? saved : rule)
-          : [...localRules, saved],
-      );
-      setDraft(null);
-      setError(null);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
+    const didSave = await persistRules(
+      existed
+        ? localRules.map((rule) => rule.id === saved.id ? saved : rule)
+        : [...localRules, saved],
+    );
+    if (!didSave) return;
+    setDraft(null);
+    setError(null);
   };
 
   const removeRule = async (id: string) => {
-    await onChangeLocalRules(localRules.filter((rule) => rule.id !== id));
-    if (draft?.id === id) setDraft(null);
+    if (await persistRules(localRules.filter((rule) => rule.id !== id))) {
+      if (draft?.id === id) setDraft(null);
+    }
   };
 
   return (
@@ -88,17 +104,31 @@ export default function LocalClipboardRulesEditor({
             Local rules stay on this device. Fleet rules are managed by your organization and are locked here.
           </p>
         </div>
-        <Button size="sm" onClick={startAdd}><Icon icon="plus" />Add local rule</Button>
+        <Button size="sm" disabled={!canEdit} onClick={startAdd}><Icon icon="plus" />Add local rule</Button>
       </div>
 
-      {localRules.map((rule) => (
+      {loadState === "loading" && (
+        <p className="rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[10px] text-[var(--shield-text-muted)]">
+          Loading local rules…
+        </p>
+      )}
+      {loadState === "degraded" && (
+        <p role="alert" className="rounded border border-[var(--color-warning)]/50 px-3 py-2 text-[10px] text-[var(--color-warning)]">
+          Local rules could not be loaded. Built-in secret checks may still run, but saved custom rules are unavailable until this is resolved.
+        </p>
+      )}
+      {error && !draft && <p role="alert" className="text-[10px] text-[var(--color-danger)]">{error}</p>}
+
+      {loadState === "ready" && localRules.map((rule) => (
         <RuleRow
           key={`local-${rule.id}`}
           rule={rule}
           source="Local"
-          onToggle={(enabled) => onChangeLocalRules(localRules.map((item) =>
-            item.id === rule.id ? { ...item, enabled, revision: item.revision + 1 } : item
-          ))}
+          onToggle={(enabled) => {
+            void persistRules(localRules.map((item) =>
+              item.id === rule.id ? { ...item, enabled, revision: item.revision + 1 } : item
+            ));
+          }}
           onEdit={() => startEdit(rule)}
           onRemove={() => removeRule(rule.id)}
         />
@@ -106,7 +136,7 @@ export default function LocalClipboardRulesEditor({
       {fleetRules.map((rule) => (
         <RuleRow key={`fleet-${rule.id}`} rule={rule} source="Fleet" />
       ))}
-      {localRules.length === 0 && fleetRules.length === 0 && (
+      {loadState === "ready" && localRules.length === 0 && fleetRules.length === 0 && (
         <p className="rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[10px] text-[var(--shield-text-muted)]">
           No custom rules yet. WinCommander's built-in secret checks remain active.
         </p>

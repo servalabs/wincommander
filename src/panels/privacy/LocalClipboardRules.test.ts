@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Rule } from "../../types/generated/fleet";
 import {
+  canEditLocalClipboardRules,
   createLocalClipboardRule,
   editableMatcherValue,
   ensureLocalActions,
@@ -26,6 +27,12 @@ function validRule(): Rule {
 }
 
 describe("local clipboard rule contract", () => {
+  test("does not allow an unavailable local store to be overwritten", () => {
+    expect(canEditLocalClipboardRules("loading")).toBe(false);
+    expect(canEditLocalClipboardRules("degraded")).toBe(false);
+    expect(canEditLocalClipboardRules("ready")).toBe(true);
+  });
+
   test("repairs an actionless legacy rule to a visible local notification", () => {
     expect(ensureLocalActions([])).toEqual(["notify_user"]);
   });

@@ -424,8 +424,10 @@ Persisted under `ideal.privacy.*`. Several are paid (Pro sidecar). See
 
 User-authored Clipboard Guard rules are intentionally outside `AppSettings`,
 because that store is machine-wide. They live in the signed-in Windows user's
-DPAPI-encrypted `%LOCALAPPDATA%\WinCommander\clipboard-rules.dat`; managed
-organization rules remain a separate Fleet-delivered source.
+DPAPI-encrypted `%LOCALAPPDATA%\WinCommander\clipboard-guard-rules.dat`; managed
+organization rules remain a separate Fleet-delivered source. If this local store
+cannot be read, the editor reports a degraded state and prevents saves rather
+than presenting an empty rule list or overwriting the previous policy.
 
 Calculator-PIN gate (`startupPin`) and distress phrases (`distressPhrases`) are
 also persisted here as hashed values; plaintext is never stored.

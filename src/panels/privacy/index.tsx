@@ -85,7 +85,7 @@ export default function PrivacyPanel() {
     const pasteAutoClearEnabled = appSettings?.ideal?.privacy?.clipboard?.pasteMonitorAutoClearEnabled ?? null;
     const pasteAutoClearSeconds = appSettings?.ideal?.privacy?.clipboard?.pasteMonitorAutoClearSeconds ?? null;
     const pasteAutoClearOnLock = appSettings?.ideal?.privacy?.clipboard?.pasteMonitorAutoClearOnLock ?? null;
-    const { localRules, fleetRules, saveLocalRules } = useClipboardGuardRules();
+    const { localRules, fleetRules, localRuleLoadState, saveLocalRules } = useClipboardGuardRules();
     const patchClipboard = (patch: Record<string, unknown>) =>
         patchAppSettings({ ideal: { privacy: { clipboard: patch } } } as any).catch(reportSettingsWriteFailure);
 
@@ -424,6 +424,7 @@ export default function PrivacyPanel() {
                                                     autoClearOnLock={pasteAutoClearOnLock}
                                                     customRules={localRules}
                                                     fleetRules={fleetRules}
+                                                    localRuleLoadState={localRuleLoadState}
                                                     onChangeLocalRules={saveLocalRules}
                                                     onPatchClipboard={patchClipboard}
                                                 />

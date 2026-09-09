@@ -7,6 +7,8 @@ export interface ClipboardGuardPolicy {
   rules: Rule[];
 }
 
+export type ClipboardGuardRuleLoadState = "loading" | "ready" | "degraded";
+
 export function localClipboardGuardPolicy(rules: Rule[]): ClipboardGuardPolicy {
   return { policy_version: 0, rules };
 }
@@ -27,6 +29,7 @@ export async function saveLocalClipboardRules(
 export default function useClipboardGuardRules() {
   const [localRules, setLocalRules] = useState<Rule[]>([]);
   const [fleetRules, setFleetRules] = useState<Rule[]>([]);
+  const [localRuleLoadState, setLocalRuleLoadState] = useState<ClipboardGuardRuleLoadState>("loading");
 
   const saveLocalRules = useCallback(async (rules: Rule[]) => {
     await saveLocalClipboardRules(
@@ -34,16 +37,22 @@ export default function useClipboardGuardRules() {
       (policy) => invoke<void>("save_local_clipboard_guard_rules", { policy }),
     );
     setLocalRules(rules);
+    setLocalRuleLoadState("ready");
   }, []);
 
   useEffect(() => {
     let active = true;
     invoke<ClipboardGuardPolicy>("load_local_clipboard_guard_rules")
       .then((policy) => {
-        if (active) setLocalRules(policy.rules);
+        if (active) {
+          setLocalRules(policy.rules);
+          setLocalRuleLoadState("ready");
+        }
       })
       .catch(() => {
-        // Keep any already-loaded local state if a subsequent read fails.
+        // Do not show an unavailable encrypted store as an empty rules list.
+        // Built-in checks remain separate from this custom-rule state.
+        if (active) setLocalRuleLoadState("degraded");
       });
     invoke<ClipboardGuardPolicy>("get_managed_clipboard_guard_rules")
       .then((policy) => {
@@ -56,5 +65,5 @@ export default function useClipboardGuardRules() {
     return () => { active = false; };
   }, []);
 
-  return { localRules, fleetRules, saveLocalRules };
+  return { localRules, fleetRules, localRuleLoadState, saveLocalRules };
 }

@@ -2,6 +2,7 @@ import type { Action, MatchKind, Rule, Severity } from "../../types/generated/fl
 import { newUuidV4 } from "../../lib/uuid";
 
 export type ClipboardRuleSource = "local" | "fleet";
+export type LocalClipboardRuleLoadState = "loading" | "ready" | "degraded";
 export type LocalClipboardAction = Extract<Action, "notify_user" | "clear_clipboard" | "quarantine_clipboard">;
 export type EditableMatchKind = Extract<MatchKind, { kind: "phrase" | "regex" }>;
 
@@ -16,6 +17,10 @@ export interface LocalRuleValidation {
 }
 
 const LOCAL_ACTIONS = new Set<Action>(["notify_user", "clear_clipboard", "quarantine_clipboard"]);
+
+export function canEditLocalClipboardRules(loadState: LocalClipboardRuleLoadState): boolean {
+  return loadState === "ready";
+}
 
 export function ensureLocalActions(actions: ReadonlyArray<Action>): LocalClipboardAction[] {
   const safe = actions.filter((action): action is LocalClipboardAction => LOCAL_ACTIONS.has(action));

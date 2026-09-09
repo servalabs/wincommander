@@ -40,6 +40,7 @@ import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 import PrivacyEventTable from './PrivacyEventTable';
 import LocalClipboardRulesEditor from "./LocalClipboardRulesEditor";
+import type { ClipboardGuardRuleLoadState } from "../../hooks/useClipboardGuardRules";
 import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 
 interface DetectionRow {
@@ -87,6 +88,7 @@ interface Props {
   autoClearOnLock?: boolean | null | undefined;
   customRules?: Rule[] | null | undefined;
   fleetRules?: Rule[] | null | undefined;
+  localRuleLoadState?: ClipboardGuardRuleLoadState;
   onChangeLocalRules?: (rules: Rule[]) => void | Promise<void>;
   onPatchClipboard: (patch: Record<string, unknown>) => void;
   /** Controlled expand for accordion behaviour in monitoring/safeguards grids. */
@@ -105,6 +107,7 @@ export default function PasteMonitorSection({
   autoClearOnLock,
   customRules,
   fleetRules,
+  localRuleLoadState,
   onChangeLocalRules,
   onPatchClipboard,
   expanded: expandedProp,
@@ -347,6 +350,7 @@ export default function PasteMonitorSection({
                   <LocalClipboardRulesEditor
                     localRules={customRules ?? []}
                     fleetRules={fleetRules ?? []}
+                    loadState={localRuleLoadState}
                     onChangeLocalRules={onChangeLocalRules}
                   />
                 )}
