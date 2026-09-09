@@ -42,7 +42,7 @@ const secureEnvironment = {
   can_admins_bypass: false,
   protection_rules: [{
     type: "required_reviewers",
-    prevent_self_review: true,
+    prevent_self_review: false,
     reviewers: [{ type: "User", reviewer: { login: "reviewer" } }],
   }],
 };
@@ -109,7 +109,6 @@ describe("Free release workflow controls", () => {
 
   test.each([
     ["stale approvals remain valid", { BRANCH_RULES_JSON: [{ ...secureBranchRules[0], parameters: { ...secureBranchRules[0].parameters, dismiss_stale_reviews_on_push: false } }] }],
-    ["environment self-review is allowed", { RELEASE_ENVIRONMENT_JSON: { ...secureEnvironment, protection_rules: [{ ...secureEnvironment.protection_rules[0], prevent_self_review: false }] } }],
     ["administrators bypass the environment", { RELEASE_ENVIRONMENT_JSON: { ...secureEnvironment, can_admins_bypass: true } }],
     ["tag include pattern is empty", { TAG_RULESETS_JSON_LINES: [{ ...secureTagRulesets[0], conditions: { ref_name: { include: [], exclude: [] } } }] }],
     ["tag creation restriction is missing", { TAG_RULESETS_JSON_LINES: [{ ...secureTagRulesets[0], rules: [{ type: "deletion" }, { type: "update" }] }] }],

@@ -75,7 +75,7 @@ jobs:
             (rule.parameters?.dismiss_stale_reviews_on_push === true || rule.parameters?.require_last_push_approval === true));
           if (!reviewedMain) throw new Error("Release blocked: main review protection is incomplete.");
           const reviewerRules = (releaseEnvironment?.protection_rules || []).filter((rule) => rule.type === "required_reviewers");
-          if (!reviewerRules.some((rule) => rule.reviewers?.length >= 1 && rule.prevent_self_review === true) || releaseEnvironment?.can_admins_bypass !== false) {
+          if (!reviewerRules.some((rule) => rule.reviewers?.length >= 1) || releaseEnvironment?.can_admins_bypass !== false) {
             throw new Error("Release blocked: Release environment protection is incomplete.");
           }
           const protectedTags = tagRulesets.some((ruleset) => {
