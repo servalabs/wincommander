@@ -45,6 +45,17 @@ describe("privacy shield device guardrails", () => {
     expect(pollers).toContain('update_tray_shield_label", { running: false');
   });
 
+  test("Fleet receives unavailable-camera truth before an unmanaged stopped state", async () => {
+    const pollers = await read("src/components/BackgroundPollers.tsx");
+    const unavailable = pollers.indexOf('if (!running && status.success && status.data?.cameraAvailable === false)');
+    const unmanaged = pollers.indexOf('if (!shieldControl.managed || !shieldControl.enabled)');
+
+    expect(unavailable).toBeGreaterThan(-1);
+    expect(unmanaged).toBeGreaterThan(unavailable);
+    expect(pollers.slice(unavailable, unmanaged)).toContain('"camera_unavailable"');
+    expect(pollers.slice(unavailable, unmanaged)).toContain('"windows_server_camera_unavailable"');
+  });
+
   test("fleet policy stop retains ownership until the local process really stops", async () => {
     const pollers = await read("src/components/BackgroundPollers.tsx");
 

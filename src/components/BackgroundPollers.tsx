@@ -227,6 +227,20 @@ export default function BackgroundPollers({
       try {
         const status = await executeBackendCommand<{ running?: boolean; cameraAvailable?: boolean; cameraMessage?: string; isWindowsServer?: boolean }>("Get-PrivacyShieldStatus");
         const running = status.success && status.data?.running === true;
+        // Capability comes before lifecycle policy. A stopped Shield on a
+        // camera-less device is not the same as a stopped Shield on a device
+        // where an administrator can start it. Report the endpoint's real,
+        // media-free camera fact before the unmanaged branch can emit
+        // `stopped` and overwrite it in Fleet.
+        if (!running && status.success && status.data?.cameraAvailable === false) {
+          await report(
+            status.data.isWindowsServer === true
+              ? "windows_server_camera_unavailable"
+              : "camera_unavailable",
+            status.data.cameraMessage ?? "Camera protection is unavailable.",
+          );
+          return;
+        }
         const stopOwnedSession = async () => {
           if (running) {
             const stopped = await executeBackendCommand<{ success?: boolean; message?: string }>("Stop-PrivacyShield", {});
@@ -279,17 +293,6 @@ export default function BackgroundPollers({
           } else {
             await report("running_fleet_session");
           }
-          return;
-        }
-        if (status.success && status.data?.cameraAvailable === false) {
-          // Fixed, content-free capability classification: no camera name,
-          // installed application, or image leaves the endpoint.
-          await report(
-            status.data.isWindowsServer === true
-              ? "windows_server_camera_unavailable"
-              : "camera_unavailable",
-            status.data.cameraMessage ?? "Camera protection is unavailable.",
-          );
           return;
         }
         await report("applying");
