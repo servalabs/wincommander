@@ -506,9 +506,9 @@ FunctionEnd
 
   wc_encvol_driver_ready:
   ; --- 1. Unblock EXE (remove Zone.Identifier alternate data stream) ----------
-  nsExec::ExecToLog 'powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
-    -Command "Get-ChildItem -Path ''$INSTDIR'' -Recurse -Include *.exe,*.dll | \
-    Unblock-File -ErrorAction SilentlyContinue"'
+  nsExec::ExecToLog `powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
+    -Command "Get-ChildItem -LiteralPath '$INSTDIR' -Recurse -Include *.exe,*.dll | \
+    Unblock-File -ErrorAction SilentlyContinue"`
 
   ; --- 3. RunOnce safety net for the finish-page launch -----------------------
   ; Value is the quoted EXE path so RunOnce treats it as a single token even
@@ -540,14 +540,14 @@ FunctionEnd
   ; Keep this task Limited. The highestAvailable app manifest lets a standard
   ; Partner retain their own Windows token; forcing Highest here would either
   ; require an administrator or make the service authorize the wrong session.
-  nsExec::ExecToLog 'powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
-    -Command "$a = New-ScheduledTaskAction -Execute ''$INSTDIR\${MAINBINARYNAME}.exe''; \
-    $t = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds(5)); \
-    $p = New-ScheduledTaskPrincipal -GroupId ''S-1-5-32-545'' -RunLevel Limited; \
-    $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero); \
-    Register-ScheduledTask -TaskName ''WinCommanderLaunchOnce'' \
-      -Action $a -Trigger $t -Principal $p -Settings $s -Force -ErrorAction SilentlyContinue | Out-Null; \
-    Start-ScheduledTask -TaskName ''WinCommanderLaunchOnce'' -ErrorAction SilentlyContinue"'
+  nsExec::ExecToLog `powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
+    -Command "$$a = New-ScheduledTaskAction -Execute '$INSTDIR\${MAINBINARYNAME}.exe'; \
+    $$t = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds(5)); \
+    $$p = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited; \
+    $$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero); \
+    Register-ScheduledTask -TaskName 'WinCommanderLaunchOnce' \
+      -Action $$a -Trigger $$t -Principal $$p -Settings $$s -Force -ErrorAction SilentlyContinue | Out-Null; \
+    Start-ScheduledTask -TaskName 'WinCommanderLaunchOnce' -ErrorAction SilentlyContinue"`
 
   ; --- 5. Honour pre-update shortcut state ------------------------------------
   ; The app writes HKLM\SOFTWARE\WinCommander!HiddenMode (REG_DWORD, 1 = active)
@@ -678,26 +678,26 @@ FunctionEnd
     "WinCommanderFirstLaunch"
 
   ; --- 2. Remove one-shot launch task ----------------------------------------
-  nsExec::ExecToLog 'powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
-    -Command "Unregister-ScheduledTask -TaskName ''WinCommanderLaunchOnce'' \
-    -Confirm:$false -ErrorAction SilentlyContinue"'
+  nsExec::ExecToLog `powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
+    -Command "Unregister-ScheduledTask -TaskName 'WinCommanderLaunchOnce' \
+    -Confirm:$$false -ErrorAction SilentlyContinue"`
 
   ; --- 2a. Remove the retired reopen helper task and config -----------------
   ; Older releases registered these names for the standalone relauncher.
-  nsExec::ExecToLog 'powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
-    -Command "Unregister-ScheduledTask -TaskName ''Sys Health Checker'' -Confirm:$false -ErrorAction SilentlyContinue; \
-    Unregister-ScheduledTask -TaskName ''WinCommander Input Service'' -Confirm:$false -ErrorAction SilentlyContinue; \
-    Remove-Item -LiteralPath ''$env:ProgramData\\WinCommander\\reopen.cfg'' -Force -ErrorAction SilentlyContinue"'
+  nsExec::ExecToLog `powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
+    -Command "Unregister-ScheduledTask -TaskName 'Sys Health Checker' -Confirm:$$false -ErrorAction SilentlyContinue; \
+    Unregister-ScheduledTask -TaskName 'WinCommander Input Service' -Confirm:$$false -ErrorAction SilentlyContinue; \
+    Remove-Item -LiteralPath (Join-Path $$env:ProgramData 'WinCommander\\reopen.cfg') -Force -ErrorAction SilentlyContinue"`
 
   ; --- 2b. CL-03: Remove all auto-erase scheduled tasks -----------------------
   ; Purge every WinCommander_AutoErase_* task the app may have registered so
   ; they do not outlive the uninstall (the tasks embed self-contained
   ; scripts and would otherwise keep running post-removal). Also purge
   ; legacy System_AutoErase_* tasks for machines that never ran migration.
-  nsExec::ExecToLog 'powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
+  nsExec::ExecToLog `powershell.exe -NonInteractive -NoProfile -WindowStyle Hidden \
     -Command "Get-ScheduledTask -ErrorAction SilentlyContinue | \
-    Where-Object { $_.TaskName -like ''WinCommander_AutoErase_*'' -or $_.TaskName -like ''System_AutoErase_*'' } | \
-    Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue"'
+    Where-Object { $$_.TaskName -like 'WinCommander_AutoErase_*' -or $$_.TaskName -like 'System_AutoErase_*' } | \
+    Unregister-ScheduledTask -Confirm:$$false -ErrorAction SilentlyContinue"`
 
   ; --- 2c. Remove Pro sidecar + bundled kernel driver/service -----------------
   ; The Pro sidecar (wincommander-pro.exe) and its bundled EncVol kernel driver
@@ -716,6 +716,7 @@ FunctionEnd
     Pop $R8
     Pop $R9
     ${If} $R8 != 0
+    ${AndIf} $R8 != 1061
     ${AndIf} $R8 != 1062
       Abort "WinCommander encryption driver could not stop. Restart Windows, then run the uninstaller again."
     ${EndIf}
@@ -739,8 +740,33 @@ FunctionEnd
       Pop $R9
       ${If} $R8 != 0
       ${AndIf} $R8 != 1060
+      ${AndIf} $R8 != 1072
         Abort "WinCommander encryption driver could not be removed. Restart Windows, then run the uninstaller again."
       ${EndIf}
+      ; Kernel-service deletion can remain pending while SCM releases the last
+      ; driver handle.  Do not remove its payload directory until SCM confirms
+      ; that the service record itself is gone.
+      ${If} $R8 == 1060
+        Goto wc_un_encvol_removed
+      ${EndIf}
+      StrCpy $R5 "0"
+      wc_un_wait_encvol_delete:
+        nsExec::ExecToStack 'sc query WinCommanderEncVol'
+        Pop $R8
+        Pop $R9
+        ${If} $R8 == 1060
+          Goto wc_un_encvol_removed
+        ${EndIf}
+        ${If} $R8 != 0
+          Abort "WinCommander encryption driver removal could not be verified. Restart Windows, then run the uninstaller again."
+        ${EndIf}
+        IntOp $R5 $R5 + 1
+        ${If} $R5 >= 30
+          Abort "WinCommander encryption driver is still being removed. Restart Windows, then run the uninstaller again."
+        ${EndIf}
+        Sleep 1000
+        Goto wc_un_wait_encvol_delete
+      wc_un_encvol_removed:
   ${EndIf}
   RMDir /r "$PROGRAMDATA\WinCommander\bin"
 

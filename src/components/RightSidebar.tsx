@@ -254,7 +254,10 @@ export default function RightSidebar() {
               volumeKind: "standard",
               volumeRole: "standard",
               password: qmPassword,
-              readOnly: true,
+              // The shortcut is an ordinary personal mount, so it must retain
+              // the same read/write capability the user expects in Explorer.
+              // Hidden-volume protection is not enabled for this flow.
+              readOnly: false,
               protectHidden: false,
               scope: "per-user",
               hardenAcl: true,
@@ -1113,6 +1116,7 @@ export default function RightSidebar() {
                                                     {quickMountSlots[qmSelectedIdx].filePath}
                                                 </span>
                                             )}
+                                            <span className="qm-hint">Mounts read/write in this Windows sign-in.</span>
                                         </div>
 
                                         <div className="qm-field">

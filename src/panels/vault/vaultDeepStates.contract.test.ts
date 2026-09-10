@@ -89,7 +89,8 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).toContain("setMountedVolume(result.data)");
     expect(vaultSource).toContain('icon="warning-sign"');
     expect(sidebarSource).toContain('scope: "per-user"');
-    expect(sidebarSource).toContain('readOnly: true');
+    expect(sidebarSource).toContain('readOnly: false');
+    expect(sidebarSource).toContain("Mounts read/write in this Windows sign-in.");
     expect(sidebarSource).toContain("hardenAcl: true");
     expect(sidebarSource).toContain("await verifyVaultDrive(r.data.drive)");
     expect(backendSource).toContain('invoke<{ drive: string; accessible: boolean }>("verify_vault_drive"');

@@ -167,6 +167,12 @@ describe("public service release packaging", () => {
     expect(stop).toBeGreaterThanOrEqual(0);
     expect(stopped).toBeGreaterThan(stop);
     expect(remove).toBeGreaterThan(stopped);
+    expect(uninstallHooks).toContain("${AndIf} $R8 != 1061");
+    expect(uninstallHooks).toContain("${AndIf} $R8 != 1072");
+    expect(uninstallHooks).toContain("wc_un_wait_encvol_delete:");
+    expect(uninstallHooks).toContain("wc_un_encvol_removed:");
+    expect(uninstallHooks.indexOf("wc_un_wait_encvol_delete:")).toBeGreaterThan(remove);
+    expect(uninstallHooks.indexOf("wc_un_encvol_removed:")).toBeGreaterThan(uninstallHooks.indexOf("wc_un_wait_encvol_delete:"));
     expect(hooks).toContain("Restart Windows, then run the uninstaller again.");
   });
 
@@ -195,6 +201,16 @@ describe("public service release packaging", () => {
     expect(buildScript).toContain('const HIGHEST_AVAILABLE_LEVEL: &str = r#"level="highestAvailable""#;');
     expect(buildScript).toContain('replacen(HIGHEST_AVAILABLE_LEVEL, r#"level="asInvoker""#, 1)');
     expect(hooks).toContain("-RunLevel Limited");
+  });
+
+  test("passes valid quoted PowerShell task and path arguments to NSIS", () => {
+    expect(hooks).toContain("-LiteralPath '$INSTDIR'");
+    expect(hooks).toContain("$$a = New-ScheduledTaskAction -Execute '$INSTDIR\\${MAINBINARYNAME}.exe'");
+    expect(hooks).toContain("-TaskName 'WinCommanderLaunchOnce'");
+    expect(hooks).toContain("-Confirm:$$false");
+    expect(hooks).toContain("$$_.TaskName -like 'WinCommander_AutoErase_*");
+    expect(hooks).not.toContain("''$INSTDIR");
+    expect(hooks).not.toContain("''WinCommanderLaunchOnce''");
   });
 
   test("bundles the non-elevating Explorer helper separately from the primary app", () => {
