@@ -104,6 +104,7 @@ describe("public service release packaging", () => {
     // The probe-verified NSIS form compiles to `\"\\\"path\\\"\"`, the
     // one argument sc.exe needs for a quoted Program Files ImagePath.
     const scmImagePathArgument = String.raw`"\$\"` + '${WC_SERVICE_EXE}' + String.raw`\$\""`;
+    const uninstaller = hooks.slice(hooks.indexOf("!macro NSIS_HOOK_PREUNINSTALL"));
 
     expect(hooks).toContain('!define WC_SERVICE_EXE "${WC_INSTALL_DIR}\\wincommander-svc.exe"');
     expect(hooks).toContain('!define WC_BUNDLED_SERVICE "$INSTDIR\\resources\\wincommander-svc.exe"');
@@ -143,6 +144,12 @@ describe("public service release packaging", () => {
     expect(hooks).toContain("sc failure WinCommanderSvc reset= 86400 actions= restart/5000/restart/5000/none/0");
     expect(hooks).toContain("sc start WinCommanderSvc");
     expect(hooks).toContain("sc delete WinCommanderSvc");
+    expect(hooks).toContain("${AndIf} $R8 != 1072");
+    expect(hooks).toContain("wc_un_wait_svc_delete:");
+    expect(hooks).toContain("sc query WinCommanderSvc");
+    expect(hooks).toContain("wc_un_svc_removed:");
+    expect(uninstaller.indexOf("wc_un_wait_svc_delete:")).toBeGreaterThan(uninstaller.indexOf("sc delete WinCommanderSvc"));
+    expect(uninstaller.indexOf('Delete "${WC_SERVICE_EXE}"')).toBeGreaterThan(uninstaller.indexOf("wc_un_svc_removed:"));
     expect(hooks).toContain('Delete "${WC_SERVICE_EXE}"');
   });
 

@@ -648,8 +648,30 @@ FunctionEnd
   Pop $R9
   ${If} $R8 != 0
   ${AndIf} $R8 != 1060
+  ${AndIf} $R8 != 1072
     Abort "WinCommander service could not be removed."
   ${EndIf}
+  ; DeleteService is asynchronous: SCM may accept the request while a stale
+  ; service handle still keeps the record (and its executable) locked.  Do not
+  ; continue as if removal succeeded until SCM reports ERROR_SERVICE_DOES_NOT_EXIST.
+  StrCpy $R5 "0"
+  wc_un_wait_svc_delete:
+    nsExec::ExecToStack 'sc query WinCommanderSvc'
+    Pop $R8
+    Pop $R9
+    ${If} $R8 == 1060
+      Goto wc_un_svc_removed
+    ${EndIf}
+    ${If} $R8 != 0
+      Abort "WinCommander service removal could not be verified. Restart Windows, then run the uninstaller again."
+    ${EndIf}
+    IntOp $R5 $R5 + 1
+    ${If} $R5 >= 30
+      Abort "WinCommander service is still being removed. Close any Services windows, restart Windows, then run the uninstaller again."
+    ${EndIf}
+    Sleep 1000
+    Goto wc_un_wait_svc_delete
+  wc_un_svc_removed:
   Delete "${WC_SERVICE_EXE}"
   ; --- 1. Remove RunOnce safety-net entry -------------------------------------
   DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\RunOnce" \
