@@ -165,3 +165,4 @@ target-codex-personal-vault
 
 .codex-diagnostics-target/
 target-diagnostics-check/
+src-tauri/target-scoop/
