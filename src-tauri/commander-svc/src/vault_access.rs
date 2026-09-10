@@ -971,20 +971,33 @@ impl VaultAccessStore {
             .normalize_personal_creation_path(Path::new(container_path))?;
         let normalized_key = personal_key(&normalized.to_string_lossy());
         // Older services persisted ordinary DOS/UNC paths without the prefix.
+        // Retain the caller spelling too: Windows canonicalization can change
+        // more than the verbatim prefix (for example, a junction's spelling).
         let legacy_key = personal_key_alias(&normalized_key);
+        let requested_key = personal_key(container_path);
+        let requested_legacy_key = personal_key_alias(&requested_key);
         let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
         if !state.personal_registry_healthy {
             return Err(VaultError::Persistence);
         }
-        if state.personal.contains_key(&normalized_key) && state.personal.contains_key(&legacy_key)
-        {
-            return Err(VaultError::Persistence);
+        let candidate_keys = [
+            normalized_key,
+            legacy_key,
+            requested_key,
+            requested_legacy_key,
+        ];
+        let mut record = None;
+        for (index, key) in candidate_keys.iter().enumerate() {
+            if candidate_keys[..index].contains(key) {
+                continue;
+            }
+            if let Some(candidate) = state.personal.get(key) {
+                if record.is_some() {
+                    return Err(VaultError::Persistence);
+                }
+                record = Some(candidate.clone());
+            }
         }
-        let record = state
-            .personal
-            .get(&normalized_key)
-            .or_else(|| state.personal.get(&legacy_key))
-            .cloned();
         drop(state);
         let Some(record) = record else {
             return Ok(None);
