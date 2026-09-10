@@ -28,7 +28,7 @@ let root;
 window.renderVaultFixture = state => {
   root?.unmount();
   localStorage.clear();
-  const entry = {id:'example-vault',label:'Example vault',container_path:'',container_kind:state === 'dual' ? 'dual' : 'standard',owner_account:'ExampleUser',grants:[{principal_name:'ExampleTeam',access:'read'},{principal_name:'ExampleUser',access:'write'}],mount:{presentation:'machine'}};
+  const entry = {id:'example-vault',label:'Example vault',container_path:'',container_kind:state === 'dual' ? 'dual' : 'standard',owner_account:'ExampleUser',grants:[{principal_name:'ExampleTeam',access:'read'},{principal_name:'ExampleUser',access:'write'},{principal_name:'ExampleReader',access:'read'}],mount:{presentation:'machine'}};
   const policy = {schema:1,policy_id:'example-policy',version:1,entries:[entry]};
   const status = {policy_id:policy.policy_id,version:1,validation_state:state === 'degraded' ? 'degraded' : 'current',applied_at:1,entries:[{id:entry.id,result:state === 'degraded' ? 'acl_readback_failed' : 'applied'}]};
   const authorized = {entry_id:entry.id,label:entry.label,access:'write',presentation:'machine',container_kind:entry.container_kind,mount_state:state === 'mounted' ? 'mounted' : 'unmounted',drive_letter:null};
@@ -41,7 +41,7 @@ window.renderVaultFixture = state => {
     applyPolicy:blocked,mountEntry:blocked,unmountEntry:blocked
   };
   if(state === 'draft') writeVaultAccessDraft({...policy,entries:[{...entry,label:'Example draft'}]},undefined,policy);
-  const directory = {schema:1,users:[{id:'example-user',username:'ExampleUser',displayName:'Example user'}],groups:[{id:'example-group',name:'Example team',localGroup:'ExampleTeam',userIds:[]}]};
+  const directory = {schema:1,users:[{id:'example-user',username:'ExampleUser',displayName:'Example user'},{id:'example-reader',username:'ExampleReader',displayName:'Example reader'}],groups:[{id:'example-group',name:'Example team',localGroup:'ExampleTeam',userIds:[]}]};
   root = createRoot(document.getElementById('fixture'));
   root.render(React.createElement('div',{className:'panel-container fleet-panel fixture-panel'},React.createElement(VaultAccessTab,{isAdmin:true,directory})));
 };
@@ -113,6 +113,7 @@ async function main() {
     await page.keyboard.press('ArrowDown');
     assert.equal(await page.getByLabel('Grant 1 access', { exact: true }).inputValue(), 'write', 'Keyboard can edit access');
     assert.equal(await page.getByText('Draft auto-saved on this PC — not yet applied to Windows.').isVisible(), true);
+    console.log('Vault UI PASS: disclosure, hover/focus/Escape, keyboard and named controls.');
 
     for (const width of [1440, 720, 360]) {
       await reset('saved');
@@ -138,6 +139,7 @@ async function main() {
       assert.ok(popup.x >= 0 && popup.x + popup.width <= width + 1, `Info fits at ${width}px`);
       await page.keyboard.press('Escape');
     }
+    console.log('Vault UI PASS: 1440px, 720px and 360px geometry; no nested editor scrolling.');
 
     await page.setViewportSize({ width: 1440, height: 900 });
     for (const [state, text] of [
@@ -167,7 +169,7 @@ async function main() {
     await page.keyboard.press('Escape');
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
     assert.deepEqual(browserErrors, [], 'Fixture must not produce browser exceptions');
-    console.log('Vault UI PASS: disclosure, hover/focus/Escape, accessibility, keyboard, 3 widths, warnings, saved/draft/unauthorized/degraded/mounted states, modal Escape.');
+    console.log('Vault UI PASS: visible warnings, saved/draft/unauthorized/degraded/mounted states, modal Escape.');
   } finally {
     await browser.close();
   }
