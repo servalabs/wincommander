@@ -36,7 +36,7 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": "nsis",
-    "publisher": "Secure Health",
+    "publisher": "ServaLabs",
     "homepage": "https://servalabs.com",
     "resources": [
       "scripts/core/*.enc",
@@ -69,7 +69,7 @@
       "endpoints": [
         "https://winupdates.servalabs.com/free/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI4ODY4MjkxOUU5QjJGNUEKUldSYUw1dWVrWUtHdUpyNURuLzFwQ2kwbDBzM0VmZUZtczIzU2EwNUpyaFFjMTRKOWVFUkMxRGkK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaW5pIHB1YmxpYyBrZXk6IEI4ODY4MjkxOUU5QjJGNUEKUldSYUw1dWVrWUtHdUpyNURuLzFwQ2kwbDBzM0VmZUZtczIzU2EwNUpyaFFjMTRKOWVFUkMxRGkK"
     }
   }
 }
