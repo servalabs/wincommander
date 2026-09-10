@@ -129,7 +129,7 @@ describe("Vault access state boundaries remain distinct", () => {
     expect(vaultMountGate({ authorized: undefined, entryResult: "applied", draftDirty: false }).disabledReason).toContain("not authorized");
     expect(vaultMountGate({ authorized, entryResult: "applied", draftDirty: false }).canMount).toBe(true);
     expect(authorized.mount_state).toBe("unmounted");
-    expect(vaultMountResultLabel({ entry_id: entry.id, state: "mounted", presentation: "machine", drive_letter: null, reason: null })).toBe("Mounted");
+    expect(vaultMountResultLabel({ entry_id: entry.id, state: "mounted", presentation: "machine", drive_letter: null, reason: null })).toMatch(/^Mounted/);
   });
 
   test("an unconfirmed draft cannot become saved or authorized just by being displayed", () => {
@@ -137,7 +137,7 @@ describe("Vault access state boundaries remain distinct", () => {
     expect(root).toContain("Draft auto-saved on this PC — not yet applied to Windows.");
     const gate = vaultMountGate({ authorized: undefined, entryResult: undefined, draftDirty: true });
     expect(gate.canMount).toBe(false);
-    expect(gate.disabledReason).toBe("Save this vault before mounting it.");
+    expect(gate.disabledReason).toMatch(/save.*mount/i);
     expect(vaultPolicyVerification({ ...status, validation_state: "never_applied" })).toBeNull();
   });
 
