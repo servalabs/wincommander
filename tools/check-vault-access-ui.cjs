@@ -1,52 +1,20 @@
-// Run against a loopback Vite server. All service results below are synthetic;
-// no native IPC, credentials, actual Vaults, screenshots, or private paths are used.
+// Run against a loopback Vite server. Fixtures contain no native IPC,
+// credentials, actual Vaults, screenshots, or private paths.
 const assert = require('node:assert/strict');
 const { chromium } = require(process.env.WINCOMMANDER_PLAYWRIGHT_MODULE || 'playwright');
 const origin = new URL(process.argv[2] || 'http://127.0.0.1:5173');
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname)) {
   throw new Error('Vault UI fixtures require a loopback server');
 }
-
-const fixture = `<!doctype html><html class="dark"><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>
-<div id="fixture"></div><script type="module">
+const fixture = `<!doctype html><html class="dark"><head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script type="module">
 import RefreshRuntime from '/@react-refresh';
 RefreshRuntime.injectIntoGlobalHook(window);
 window.$RefreshReg$ = () => {};
 window.$RefreshSig$ = () => type => type;
 window.__vite_plugin_react_preamble_installed__ = true;
-await import('/src/index.css');
-await import('/src/styles/v2-theme.css');
-await import('/src/panels/fleet/index.css');
-const React = await import('/node_modules/.vite/deps/react.js');
-const { createRoot } = await import('/node_modules/.vite/deps/react-dom_client.js');
-const { default: VaultAccessTab } = await import('/src/panels/fleet/VaultAccessTab.tsx');
-const { writeVaultAccessDraft } = await import('/src/panels/fleet/vaultAccessDraft.ts');
-const style = document.createElement('style');
-style.textContent = 'html,body,#fixture{height:100%;margin:0} #fixture{overflow-y:auto} .fixture-panel{min-height:100%;height:auto;padding:16px;box-sizing:border-box}';
-document.head.append(style);
-let root;
-window.renderVaultFixture = state => {
-  root?.unmount();
-  localStorage.clear();
-  const entry = {id:'example-vault',label:'Example vault',container_path:'',container_kind:state === 'dual' ? 'dual' : 'standard',owner_account:'ExampleUser',grants:[{principal_name:'ExampleTeam',access:'read'},{principal_name:'ExampleUser',access:'write'},{principal_name:'ExampleReader',access:'read'}],mount:{presentation:'machine'}};
-  const policy = {schema:1,policy_id:'example-policy',version:1,entries:[entry]};
-  const status = {policy_id:policy.policy_id,version:1,validation_state:state === 'degraded' ? 'degraded' : 'current',applied_at:1,entries:[{id:entry.id,result:state === 'degraded' ? 'acl_readback_failed' : 'applied'}]};
-  const authorized = {entry_id:entry.id,label:entry.label,access:'write',presentation:'machine',container_kind:entry.container_kind,mount_state:state === 'mounted' ? 'mounted' : 'unmounted',drive_letter:null};
-  const blocked = async () => { throw new Error('Native mutation blocked by UI fixture'); };
-  window.__vaultUiService = {
-    getPolicy:async () => { if(state === 'unavailable') throw new Error('Synthetic unavailable state'); return structuredClone(policy); },
-    getStatus:async () => structuredClone(status),
-    getCapabilities:async () => ({can_manage_policy:state !== 'unelevated'}),
-    listAuthorizedEntries:async () => state === 'unauthorized' ? [] : [structuredClone(authorized)],
-    applyPolicy:blocked,mountEntry:blocked,unmountEntry:blocked
-  };
-  if(state === 'draft') writeVaultAccessDraft({...policy,entries:[{...entry,label:'Example draft'}]},undefined,policy);
-  const directory = {schema:1,users:[{id:'example-user',username:'ExampleUser',displayName:'Example user'},{id:'example-reader',username:'ExampleReader',displayName:'Example reader'}],groups:[{id:'example-group',name:'Example team',localGroup:'ExampleTeam',userIds:[]}]};
-  root = createRoot(document.getElementById('fixture'));
-  root.render(React.createElement('div',{className:'panel-container fleet-panel fixture-panel'},React.createElement(VaultAccessTab,{isAdmin:true,directory})));
-};
-window.renderVaultFixture('saved');
-</script></body></html>`;
+</script></head><body><div id="fixture"></div></body></html>`;
 
 async function main() {
   const browser = await chromium.launch({ headless: true });
@@ -66,7 +34,14 @@ async function main() {
   const closed = () => page.locator('.vault-access-details').evaluate(element => !element.open);
   try {
     await page.goto(new URL('/__vault_access_ui__', origin).href);
+    await page.waitForFunction(() => window.__vite_plugin_react_preamble_installed__ === true);
+    await page.evaluate(async () => {
+      const fixtureModule = await import('/tools/fixtures/vault-access-ui.js');
+      window.renderVaultFixture = fixtureModule.renderVaultFixture;
+      window.renderVaultFixture('saved');
+    });
     await page.locator('.vault-access-editor').waitFor();
+    console.log('Vault UI fixture rendered.');
     const details = page.locator('.vault-access-details');
     const summary = details.locator('summary');
     assert.equal(await closed(), true, 'Details must start closed');
