@@ -30,7 +30,7 @@
     "build:fleet-kit": "bun run tools/make-fleet-kit.ts --release",
     "build:fleet-kit:debug": "bun run tools/make-fleet-kit.ts",
     "preview": "bun x vite preview",
-    "tauri": "bun x tauri",
+    "tauri": "bun x --package @tauri-apps/cli@2.11.4 tauri",
     "gen:types": "bun run tools/gen-types.ts",
     "gen:types:check": "bun run tools/gen-types.ts --check",
     "gen:cli-catalog": "bun run tools/gen-cli-catalog.ts",

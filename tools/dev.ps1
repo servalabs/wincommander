@@ -53,11 +53,12 @@ try {
     if ($ServerOnly) {
         & $bun run dev:server
     } else {
-        # Release an old debug executable before Tauri starts its build.  The
-        # beforeDevCommand intentionally preserves the new app startup, so
-        # this outer entry point owns stale-window cleanup.
+        # Release an old debug executable before Tauri starts its build. The
+        # beforeDevCommand also handles stale processes for direct CLI starts.
         & (Join-Path $PSScriptRoot "kill-dev.ps1")
-        & $bun x tauri dev --config src-tauri/commander-free/tauri.conf.json
+        # `bun x tauri` resolves an unrelated package when node_modules is not
+        # materialized. Pin the project's Tauri CLI package and invoke its bin.
+        & $bun x --package "@tauri-apps/cli@2.11.4" tauri dev --config src-tauri/commander-free/tauri.conf.json
     }
     $exitCode = $LASTEXITCODE
 } finally {

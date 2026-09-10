@@ -73,6 +73,8 @@ ConvertTo-Json -Compress -InputObject @($results)
     const tauri = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8"));
     expect(tauri.build.beforeDevCommand).toContain('dev:server');
     expect(devLauncher).toContain('& $bun run dev:server');
+    expect(devLauncher).toContain('@tauri-apps/cli@2.11.4');
+    expect(packageJson.scripts.tauri).toContain('@tauri-apps/cli@2.11.4');
   });
 
   test("releases a stale Pro sidecar before rebuilding it", () => {

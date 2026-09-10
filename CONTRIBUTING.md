@@ -71,7 +71,7 @@ first-run / fresh-install behaviour.
 
 A fresh clone has no `.enc` blobs — they are gitignored. The
 `build.rs` compile step calls `include_bytes!` on each `.enc` file, so
-`cargo build` (and `bun x tauri dev`) will fail until the blobs exist.
+`cargo build` (and `bun run tauri -- dev`) will fail until the blobs exist.
 
 **Run this once after cloning, and again after any edit to
 `src-tauri/commander-free/scripts/**/*.ps1`:**
@@ -115,7 +115,7 @@ bun run dev:tauri:free
 ```
 
 `bun run dev:tauri:free` is an alias for `bun run dev:tauri` (both
-invoke the same bootstrap, which runs `bun x tauri dev --config src-tauri/commander-free/tauri.conf.json`).
+invoke the same bootstrap, which runs `bun run tauri -- dev --config src-tauri/commander-free/tauri.conf.json`).
 The `beforeDevCommand` will error when it hits `build:pro` and there is
 no `../commander-pro` sibling, but by that point Vite is already
 serving from terminal 1, and Tauri connects to it successfully. The
