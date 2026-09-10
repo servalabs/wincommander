@@ -265,6 +265,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     setSelectedEntryId(entryId);
     setEditorMode(mode);
     window.requestAnimationFrame(() => {
+      const details = editorRef.current?.querySelector<HTMLDetailsElement>(".vault-access-details");
+      if (details) details.open = false;
       editorRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       const target = mode === "access"
         ? editorRef.current?.querySelector<HTMLElement>(".fleet-vault-grants select, .fleet-vault-grants button")
@@ -530,7 +532,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       }
     } catch {
       recordDiagnostic({ operationId, feature: "vault", action: "mount", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: "VLT.MOUNT.FAILED", severity: "error", retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
-      showError("The Vault mount request could not be completed.");
+      showError("The Vault mount request could not be completed.", undefined, { operationId });
     } finally {
       password = "";
       hiddenProtectionPassword = "";
@@ -714,7 +716,6 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 <Button variant="outline" size="sm" onClick={() => removeEntry(entry.id)}>Remove</Button>
               </div>
               <VaultAccessEditor
-                key={editorMode}
                 entry={entry}
                 entryIndex={entryIndex}
                 directory={directory}
