@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Checkout required Risk Matrix source
+      - name: Checkout required shared sources and product assets
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: servalabs/assets
@@ -37,22 +37,17 @@ jobs:
             entities
             editorial
             softwares
+            products
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile
-      - name: Focused ESLint
+      - name: Focused ESLint and browser-script syntax
         id: lint
         continue-on-error: true
-        run: >-
-          bun x eslint --max-warnings=0
-          src/panels/fleet/VaultAccessTab.tsx
-          src/panels/fleet/VaultAccessEditor.tsx
-          src/panels/fleet/VaultAccessEditor.test.tsx
-          src/panels/fleet/VaultAccessInfo.tsx
-          src/panels/fleet/VaultAccessPatternPicker.tsx
-          src/panels/fleet/fleetPanel.contract.test.ts
-          tools/check-vault-access-ui.cjs
+        run: |
+          bun x eslint --max-warnings=0 src/panels/fleet/VaultAccessTab.tsx src/panels/fleet/VaultAccessEditor.tsx src/panels/fleet/VaultAccessEditor.test.tsx src/panels/fleet/VaultAccessInfo.tsx src/panels/fleet/VaultAccessPatternPicker.tsx src/panels/fleet/fleetPanel.contract.test.ts
+          node --check tools/check-vault-access-ui.cjs
       - name: Typecheck
         id: types
         continue-on-error: true
@@ -73,13 +68,14 @@ jobs:
         id: browser
         continue-on-error: true
         run: |
-          bun x vite --host 127.0.0.1 > "$RUNNER_TEMP/vault-vite.log" 2>&1 &
+          bun x vite --host 127.0.0.1 --port 5173 --strictPort > "$RUNNER_TEMP/vault-vite.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 60); do
-            if curl --silent --fail http://127.0.0.1:5173/ > /dev/null; then break; fi
+          for attempt in $(seq 1 30); do
+            if curl --max-time 2 --silent --fail http://127.0.0.1:5173/ > /dev/null; then break; fi
             sleep 1
           done
+          curl --max-time 2 --silent --fail http://127.0.0.1:5173/ > /dev/null || { cat "$RUNNER_TEMP/vault-vite.log"; exit 1; }
           WINCOMMANDER_PLAYWRIGHT_MODULE="$RUNNER_TEMP/vault-ui-browser/node_modules/playwright" node tools/check-vault-access-ui.cjs http://127.0.0.1:5173
       - name: Require all focused checks
         if: always()
