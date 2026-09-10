@@ -11,6 +11,7 @@ on:
       - 'src/panels/fleet/fleetPanel.contract.test.ts'
       - 'src/components/ui/tooltip.tsx'
       - 'tools/check-vault-access-ui.cjs'
+      - 'tools/fixtures/vault-access-ui.js'
 
 permissions:
   contents: read
@@ -48,6 +49,7 @@ jobs:
         run: |
           bun x eslint --max-warnings=0 src/panels/fleet/VaultAccessTab.tsx src/panels/fleet/VaultAccessEditor.tsx src/panels/fleet/VaultAccessEditor.test.tsx src/panels/fleet/VaultAccessInfo.tsx src/panels/fleet/VaultAccessPatternPicker.tsx src/panels/fleet/fleetPanel.contract.test.ts
           node --check tools/check-vault-access-ui.cjs
+          node --check tools/fixtures/vault-access-ui.js
       - name: Typecheck
         id: types
         continue-on-error: true
