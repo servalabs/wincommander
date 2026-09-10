@@ -6,7 +6,7 @@ import '../../src/index.css';
 import '../../src/styles/v2-theme.css';
 import '../../src/panels/fleet/index.css';
 import VaultAccessTab from '../../src/panels/fleet/VaultAccessTab';
-import { writeVaultAccessDraft } from '../../src/panels/fleet/vaultAccessDraft';
+import { readVaultAccessDraftSnapshot, writeVaultAccessDraft } from '../../src/panels/fleet/vaultAccessDraft';
 
 const style = document.createElement('style');
 style.textContent = 'html,body,#fixture{height:100%;margin:0} #fixture{overflow-y:auto} .fixture-panel{min-height:100%;height:auto;padding:16px;box-sizing:border-box}';
@@ -26,7 +26,7 @@ export function renderVaultFixture(state) {
     ],
     mount: { presentation: 'machine' },
   };
-  const policy = { schema: 1, policy_id: 'example-policy', version: 1, entries: [entry] };
+  const policy = { schema_version: 1, policy_id: 'example-policy', version: 1, expected_previous_version: 0, entries: [entry] };
   const status = {
     policy_id: policy.policy_id, version: 1, applied_at: 1,
     validation_state: state === 'degraded' ? 'degraded' : 'current',
@@ -49,6 +49,9 @@ export function renderVaultFixture(state) {
   };
   if (state === 'draft') {
     writeVaultAccessDraft({ ...policy, entries: [{ ...entry, label: 'Example draft' }] }, undefined, policy);
+    if (readVaultAccessDraftSnapshot()?.policy.entries[0]?.label !== 'Example draft') {
+      throw new Error('Synthetic recovery draft did not round-trip through its existing storage API');
+    }
   }
   const directory = {
     schema: 1,
