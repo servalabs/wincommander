@@ -14,46 +14,42 @@
   font-weight: 650;
 }
 
-.vault-access-pattern-picker > p {
-  margin: 0;
-  color: var(--text-mute);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
 .vault-access-pattern-picker__options {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
-.vault-access-pattern-picker__option,
-.vault-access-pattern-picker__custom {
-  display: grid;
+.vault-access-pattern-picker__choice {
+  display: flex;
+  align-items: center;
   min-width: 0;
-  gap: 4px;
-  padding: 12px;
+  padding-right: 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface-2);
-  color: var(--text);
-  text-align: left;
 }
 
-.vault-access-pattern-picker__option {
-  cursor: pointer;
-  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
-}
-
-.vault-access-pattern-picker__option:hover {
-  border-color: var(--border-strong);
-  background: var(--surface-3);
-}
-
-.vault-access-pattern-picker__option.is-selected {
+.vault-access-pattern-picker__choice.is-selected {
   border-color: var(--accent-line);
   background: var(--accent-soft);
 }
+
+.vault-access-pattern-picker__option {
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  padding: 10px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.vault-access-pattern-picker__option:hover { background: var(--surface-3); }
 
 .vault-access-pattern-picker__option:focus-visible {
   outline: 2px solid var(--accent);
@@ -61,21 +57,26 @@
 }
 
 .vault-access-pattern-picker__option strong,
-.vault-access-pattern-picker__custom strong {
-  font-size: 12px;
+.vault-access-pattern-picker__custom strong { font-size: 12px; }
+
+.vault-access-pattern-picker__custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  color: var(--text);
 }
 
-.vault-access-pattern-picker__option span,
 .vault-access-pattern-picker__custom span {
-  color: var(--text-mute);
+  color: var(--text-dim);
   font-size: 11px;
   line-height: 1.45;
 }
 
-.vault-access-pattern-picker__custom {
-  border-style: dashed;
+@container (max-width: 600px) {
+  .vault-access-pattern-picker__options { grid-template-columns: minmax(0, 1fr); }
 }
 
-@media (max-width: 760px) {
-  .vault-access-pattern-picker__options { grid-template-columns: 1fr; }
+@media (max-width: 600px) {
+  .vault-access-pattern-picker__options { grid-template-columns: minmax(0, 1fr); }
 }
