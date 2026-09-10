@@ -40,8 +40,8 @@ describe("Vault access editor presentation", () => {
   test("renders a native, initially closed Access details disclosure", () => {
     const html = renderEditor();
     const detailsTag = html.match(/<details\b[^>]*>/)?.[0];
-    expect(detailsTag).toBeDefined();
-    expect(detailsTag).not.toMatch(/\bopen(?:=|\s|>)/);
+    expect(Boolean(detailsTag)).toBe(true);
+    expect(/\bopen(?:=|\s|>)/.test(detailsTag ?? "")).toBe(false);
     expect(html).toContain("<summary>Access details</summary>");
     expect(html).toContain("Who can access this vault");
   });
@@ -117,7 +117,7 @@ describe("Vault access editor presentation", () => {
     expect(css).toContain("@container (max-width: 600px)");
     expect(css).toContain("overflow-wrap: anywhere");
     expect(css).toContain(":focus-visible");
-    expect(css).not.toMatch(/overflow(?:-[xy])?\s*:\s*(?:auto|scroll|hidden|clip)/);
+    expect(/overflow(?:-[xy])?\s*:\s*(?:auto|scroll|hidden|clip)/.test(css)).toBe(false);
     expect(editorSource).not.toContain("ScrollArea");
     // Real bounding-box and scroll-owner assertions live in the browser check.
   });
@@ -129,7 +129,7 @@ describe("Vault access state boundaries remain distinct", () => {
     expect(vaultMountGate({ authorized: undefined, entryResult: "applied", draftDirty: false }).disabledReason).toContain("not authorized");
     expect(vaultMountGate({ authorized, entryResult: "applied", draftDirty: false }).canMount).toBe(true);
     expect(authorized.mount_state).toBe("unmounted");
-    expect(vaultMountResultLabel({ entry_id: entry.id, state: "mounted", presentation: "machine", drive_letter: null, reason: null })).toMatch(/^Mounted/);
+    expect(/^Mounted/.test(vaultMountResultLabel({ entry_id: entry.id, state: "mounted", presentation: "machine", drive_letter: null, reason: null }))).toBe(true);
   });
 
   test("an unconfirmed draft cannot become saved or authorized just by being displayed", () => {
@@ -137,7 +137,7 @@ describe("Vault access state boundaries remain distinct", () => {
     expect(root).toContain("Draft auto-saved on this PC — not yet applied to Windows.");
     const gate = vaultMountGate({ authorized: undefined, entryResult: undefined, draftDirty: true });
     expect(gate.canMount).toBe(false);
-    expect(gate.disabledReason).toMatch(/save.*mount/i);
+    expect(/save.*mount/i.test(gate.disabledReason ?? "")).toBe(true);
     expect(vaultPolicyVerification({ ...status, validation_state: "never_applied" })).toBeNull();
   });
 
