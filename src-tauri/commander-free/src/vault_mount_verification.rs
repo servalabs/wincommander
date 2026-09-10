@@ -123,17 +123,15 @@ pub fn verify_vault_drive(drive: String) -> Result<VaultDriveVerification, Strin
             ));
         }
     };
-    if let Some(entry) = entries.next() {
-        if let Err(error) = entry {
-            record_verification(
-                DiagnosticOutcome::Failed,
-                DiagnosticSeverity::Error,
-                Some("VLT.VERIFY.READBACK_FAILED"),
-            );
-            return Err(format!(
-                "Drive {letter}: cannot be read in this signed-in Windows session: {error}"
-            ));
-        }
+    if let Some(Err(error)) = entries.next() {
+        record_verification(
+            DiagnosticOutcome::Failed,
+            DiagnosticSeverity::Error,
+            Some("VLT.VERIFY.READBACK_FAILED"),
+        );
+        return Err(format!(
+            "Drive {letter}: cannot be read in this signed-in Windows session: {error}"
+        ));
     }
     record_verification(DiagnosticOutcome::Succeeded, DiagnosticSeverity::Info, None);
     Ok(VaultDriveVerification {

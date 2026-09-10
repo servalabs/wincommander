@@ -1,7 +1,7 @@
 // Safe frontend producer for the encrypted diagnostic event store.
 // Features call this before a policy-derived bell projection. Never
 // put user text, paths, camera data, clipboard content, or backend errors here.
-import { invoke } from "@tauri-apps/api/core";
+import { recordDiagnosticEvent, type DiagnosticEventRequest } from "../hooks/useDiagnosticsIpc";
 import { routeDiagnosticNotification } from "./diagnosticNotification";
 import { pushDiagnosticNotification } from "./notificationStore";
 
@@ -62,8 +62,7 @@ export function recordDiagnostic(input: SafeDiagnosticInput): string {
     && SAFE_IDENTIFIER.test(input.stage) && SAFE_IDENTIFIER.test(input.suggestedNextAction);
   if (!valid || (input.errorCode !== undefined && !SAFE_CODE.test(input.errorCode))) return operationId;
   const route = routeDiagnosticNotification(input);
-  void invoke("record_diagnostic_event", {
-    event: {
+  const event: DiagnosticEventRequest = {
       eventId: token("evt"), operationId,
       parentOperationId: input.parentOperationId && SAFE_TOKEN.test(input.parentOperationId) ? input.parentOperationId : undefined,
       occurredAt: new Date().toISOString(), component: "desktop_ui",
@@ -73,8 +72,8 @@ export function recordDiagnostic(input: SafeDiagnosticInput): string {
       suggestedNextAction: input.suggestedNextAction,
       durationMs: Number.isFinite(input.durationMs) && input.durationMs! >= 0 ? Math.round(input.durationMs!) : undefined,
       privacyClass: input.privacyClass, redactedContext: safeContext(input.context),
-    },
-  }).then(() => {
+  };
+  void recordDiagnosticEvent(event).then(() => {
     // The bell is a projection of a durable event, never a parallel error path.
     // It contains only a stable operation reference; details stay encrypted.
     if (route.bell) pushDiagnosticNotification(route.bell, operationId);

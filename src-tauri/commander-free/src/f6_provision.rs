@@ -72,6 +72,18 @@ pub fn f6_provision_wipe_usb(usb_root: String) -> Result<Value, String> {
 /// The actual provisioning write — extracted so tests can call it directly
 /// with a synthetic device_id and a temp dir path.
 pub(crate) fn provision_impl(usb_root: &str, device_id: &str) -> Result<Value, String> {
+    let pubkey_bytes = crate::f6_keystore::device_verifying_key_bytes()?;
+    provision_with_pubkey(usb_root, device_id, &pubkey_bytes)
+}
+
+/// Filesystem-only provisioning core. Keeping the device-key lookup outside
+/// this function lets tests verify USB writes without touching ProgramData or
+/// requiring permission to alter its production ACL.
+fn provision_with_pubkey(
+    usb_root: &str,
+    device_id: &str,
+    pubkey_bytes: &[u8; 32],
+) -> Result<Value, String> {
     use std::path::Path;
 
     let root = Path::new(usb_root);
@@ -81,7 +93,6 @@ pub(crate) fn provision_impl(usb_root: &str, device_id: &str) -> Result<Value, S
         .map_err(|e| format!("create wipe dir '{}': {e}", wipe_dir.display()))?;
 
     // Write pubkey.bin — 32 raw bytes of this device's Ed25519 verifying key.
-    let pubkey_bytes = crate::f6_keystore::device_verifying_key_bytes()?;
     let pubkey_path = wipe_dir.join("pubkey.bin");
     std::fs::write(&pubkey_path, pubkey_bytes).map_err(|e| format!("write pubkey.bin: {e}"))?;
 
@@ -230,6 +241,8 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    const TEST_PUBKEY: [u8; 32] = [7; 32];
+
     // ── Test: provision writes pubkey.bin (32 bytes) and device_id.txt ──
     #[test]
     fn provision_writes_pubkey_and_device_id() {
@@ -237,7 +250,7 @@ mod tests {
         let usb_root = dir.path().to_str().expect("path").to_string();
 
         // Call the inner logic directly (bypass the Tauri command + require_paid).
-        let result = provision_impl(&usb_root, "test-device-uuid-1234");
+        let result = provision_with_pubkey(&usb_root, "test-device-uuid-1234", &TEST_PUBKEY);
         assert!(result.is_ok(), "provision_impl must succeed: {:?}", result);
 
         let wipe_dir = dir.path().join("wipe");
@@ -291,7 +304,7 @@ mod tests {
     fn device_id_written_matches_settings_device_id_format() {
         let dir = TempDir::new().expect("tempdir");
         let device_id = "550e8400-e29b-41d4-a716-446655440000"; // valid UUID v4
-        provision_impl(dir.path().to_str().unwrap(), device_id).expect("ok");
+        provision_with_pubkey(dir.path().to_str().unwrap(), device_id, &TEST_PUBKEY).expect("ok");
         let written =
             std::fs::read_to_string(dir.path().join("wipe").join("device_id.txt")).expect("read");
         // Must match character-for-character with no trailing newline
@@ -302,8 +315,8 @@ mod tests {
     fn provision_idempotent_overwrites() {
         let dir = TempDir::new().expect("tempdir");
         let path = dir.path().to_str().unwrap();
-        provision_impl(path, "device-a").expect("first write");
-        provision_impl(path, "device-b").expect("second write must not error");
+        provision_with_pubkey(path, "device-a", &TEST_PUBKEY).expect("first write");
+        provision_with_pubkey(path, "device-b", &TEST_PUBKEY).expect("second write must not error");
         let written =
             std::fs::read_to_string(dir.path().join("wipe").join("device_id.txt")).expect("read");
         assert_eq!(written, "device-b", "second write must overwrite first");

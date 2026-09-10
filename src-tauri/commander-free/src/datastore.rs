@@ -69,7 +69,7 @@ fn store_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn section_path(section: &str) -> Result<PathBuf, String> {
+fn validate_section_name(section: &str) -> Result<(), String> {
     if !section
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
@@ -78,6 +78,11 @@ fn section_path(section: &str) -> Result<PathBuf, String> {
             "Invalid section name '{section}': only alphanumeric, '-', '_' allowed"
         ));
     }
+    Ok(())
+}
+
+fn section_path(section: &str) -> Result<PathBuf, String> {
+    validate_section_name(section)?;
     Ok(store_dir()?.join(format!("{section}.dat")))
 }
 
@@ -771,9 +776,9 @@ mod tests {
 
     #[test]
     fn invalid_section_name_rejected() {
-        assert!(section_path("../etc/passwd").is_err());
-        assert!(section_path("foo/bar").is_err());
-        assert!(section_path("valid-name_123").is_ok());
+        assert!(validate_section_name("../etc/passwd").is_err());
+        assert!(validate_section_name("foo/bar").is_err());
+        assert!(validate_section_name("valid-name_123").is_ok());
     }
 
     #[test]

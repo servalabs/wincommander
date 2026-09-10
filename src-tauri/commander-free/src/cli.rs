@@ -1291,7 +1291,7 @@ mod tests {
         // Keep this snapshot count intentional: the generated catalog is the
         // authority, but a count change must be reviewed with the handler
         // registrations rather than silently widening the CLI surface.
-        assert_eq!(tauri_commands.len(), 472);
+        assert_eq!(tauri_commands.len(), 477);
         assert!(tauri_commands.iter().all(|entry| entry.registered));
         for name in [
             "decoy_read_audit_status",
@@ -1329,7 +1329,7 @@ mod tests {
                 .iter()
                 .filter(|entry| available_in_this_build(entry))
                 .count(),
-            if cfg!(debug_assertions) { 472 } else { 468 }
+            if cfg!(debug_assertions) { 477 } else { 473 }
         );
     }
 

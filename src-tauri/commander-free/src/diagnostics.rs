@@ -281,6 +281,7 @@ fn record_recovery_if_needed(path: &Path) {
     }
 }
 
+#[allow(dead_code)] // Retained for the scheduled diagnostics maintenance entrypoint.
 pub(crate) fn prune_retained_diagnostics() {
     let result = (|| {
         let _lock = crate::paths::acquire_machine_state_lock("diagnostic-events")
@@ -324,7 +325,9 @@ pub(crate) fn record(mut event: DiagnosticEvent) -> Result<DiagnosticEvent, Stri
 }
 
 #[tauri::command]
-pub(crate) async fn record_diagnostic_event(event: DiagnosticEvent) -> Result<DiagnosticEvent, String> {
+pub(crate) async fn record_diagnostic_event(
+    event: DiagnosticEvent,
+) -> Result<DiagnosticEvent, String> {
     tauri::async_runtime::spawn_blocking(move || record(event))
         .await
         .map_err(|_| "DIAGNOSTICS.STORAGE.TASK_FAILED".to_string())?

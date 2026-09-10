@@ -102,11 +102,11 @@ fn parse_package(xml: &[u8]) -> (HashMap<String, String>, Vec<String>) {
                 let attrs: HashMap<_, _> = e
                     .attributes()
                     .flatten()
-                    .filter_map(|attr| {
-                        Some((
+                    .map(|attr| {
+                        (
                             attr.key.local_name().as_ref().to_string(),
                             attr.value.as_ref().to_string(),
-                        ))
+                        )
                     })
                     .collect();
                 if attrs.get("media-type").is_some_and(|kind| {

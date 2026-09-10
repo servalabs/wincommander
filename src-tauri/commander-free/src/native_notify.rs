@@ -256,6 +256,7 @@ fn ensure_notification_window(app: &AppHandle) -> Result<WebviewWindow, String> 
 /// Start the hidden alert renderer during application bootstrap. Privacy
 /// Shield's first detection must only deliver an event, never pay the cost of
 /// creating a WebView/React window on the critical detection path.
+#[allow(dead_code)] // Optional startup optimization for callers that opt in.
 pub fn warm_up_notification_window(app: &AppHandle) {
     if let Err(error) = ensure_notification_window(app) {
         crate::log_message(

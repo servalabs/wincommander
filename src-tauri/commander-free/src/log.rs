@@ -127,6 +127,7 @@ fn logging_enabled() -> bool {
 /// Trim log records older than `keep_days` from `wincommander.log`.
 /// Handles both the new `L:YYYY-MM-DD:` encrypted format and the legacy
 /// `[YYYY-MM-DD` plaintext format. Only rewrites when lines are removed.
+#[allow(dead_code)] // Retained for the scheduled log-maintenance entrypoint.
 pub fn purge_old_log_records(log_file: &Path, keep_days: u64) {
     let cutoff = chrono::Utc::now().date_naive()
         - chrono::Duration::days(keep_days.saturating_sub(1) as i64);
@@ -148,6 +149,7 @@ pub fn purge_old_log_records(log_file: &Path, keep_days: u64) {
     }
 }
 
+#[allow(dead_code)] // Used by the scheduled log-maintenance entrypoint.
 fn should_keep_log_record(line: &str, cutoff: chrono::NaiveDate) -> bool {
     let date = if let Some(rest) = line.strip_prefix("L:") {
         rest.get(..10)
@@ -210,6 +212,7 @@ pub(crate) fn migrate_plaintext_logs(log_file: &Path) {
 /// binary cannot enable plaintext logging through a setting or environment
 /// variable. An unreadable record is retained rather than silently discarded.
 #[cfg(debug_assertions)]
+#[allow(dead_code)] // Explicitly opt-in recovery tool; never invoked automatically.
 pub(crate) fn migrate_logs_to_plaintext_for_debug(log_file: &Path) {
     let content = match std::fs::read_to_string(log_file) {
         Ok(content) => content,

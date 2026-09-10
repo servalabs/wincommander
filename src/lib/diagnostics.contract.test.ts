@@ -12,7 +12,9 @@ const baseEvent: DiagnosticNotificationInput = {
 describe("frontend diagnostics producer", () => {
   test("keeps diagnostic events structured and limits context to the writer allowlist", async () => {
     const source = await Bun.file("src/lib/diagnostics.ts").text();
-    expect(source).toContain('invoke("record_diagnostic_event"');
+    const ipcSource = await Bun.file("src/hooks/useDiagnosticsIpc.ts").text();
+    expect(source).toContain("recordDiagnosticEvent(event)");
+    expect(ipcSource).toContain('invoke("record_diagnostic_event"');
     expect(source).toContain('const CONTEXT_KEYS');
     expect(source).toContain('"reason_category"');
     expect(source).toContain('"state"');

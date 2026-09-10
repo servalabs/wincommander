@@ -47,6 +47,7 @@ fn storage_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+#[allow(dead_code)] // Kept for the service health endpoint contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DiagnosticsHealth {
     pub(crate) persisted_events: u64,
@@ -60,6 +61,7 @@ pub(crate) struct DiagnosticsHealth {
     pub(crate) encrypted_persistence_available: bool,
 }
 
+#[allow(dead_code)] // Called by the service health endpoint when it is enabled.
 pub(crate) fn health() -> DiagnosticsHealth {
     let state = storage_health().lock().ok();
     DiagnosticsHealth {
@@ -160,7 +162,7 @@ fn recent_summaries_at(
         let Ok(event) = serde_json::from_slice::<DiagnosticEvent>(&plaintext) else {
             continue;
         };
-        if operation_id.is_none_or(|id| id == event.operation_id) {
+        if operation_id.map_or(true, |id| id == event.operation_id) {
             summaries.push(DiagnosticSummary {
                 event_id: event.event_id,
                 operation_id: event.operation_id,
@@ -407,7 +409,7 @@ fn persist_event_at(dir: &Path, event: &DiagnosticEvent, payload: &[u8]) -> Resu
     let key = service_key(dir)?;
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
-    let line = seal_diagnostic_record(&key, &event.occurred_at[..10], "service", &payload, nonce)?;
+    let line = seal_diagnostic_record(&key, &event.occurred_at[..10], "service", payload, nonce)?;
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -466,6 +468,7 @@ pub(crate) fn record_vault_failure(
     ));
 }
 
+#[allow(clippy::too_many_arguments)] // Stable diagnostic fields are intentionally explicit at call sites.
 fn vault_event(
     operation_id: &str,
     action: &'static str,
@@ -777,7 +780,7 @@ fn utc_date_from_days(days: i64) -> String {
     format!(
         "{:04}-{:02}-{:02}",
         y + (mp < 10) as i64,
-        (mp + if mp < 10 { 3 } else { -9 }) as i64,
+        mp + if mp < 10 { 3 } else { -9 },
         doy - (153 * mp + 2) / 5 + 1
     )
 }

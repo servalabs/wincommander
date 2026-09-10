@@ -42,6 +42,7 @@ fn requested_operation_id(candidate: Option<String>, action: &str) -> String {
         .unwrap_or_else(|| next_operation_id(action))
 }
 
+#[allow(clippy::too_many_arguments)] // The audit schema stays explicit at each policy boundary.
 fn record_vault_event(
     operation_id: &str,
     action: &str,

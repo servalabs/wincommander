@@ -2,7 +2,11 @@
 // The source event is already durable and redacted. This component stores only
 // opaque event IDs as an idempotency cursor; it is not a second diagnostic log.
 import { useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import {
+  getDiagnosticEvents,
+  getProDiagnosticSummaries,
+  getServiceDiagnosticSummaries,
+} from "../hooks/useDiagnosticsIpc";
 import { diagnosticBellProjection } from "../lib/diagnosticNotification";
 import { pushNotification } from "../lib/notificationStore";
 
@@ -72,9 +76,9 @@ export default function DiagnosticEventBridge() {
     let active = true;
     const refresh = async () => {
       const [desktop, service, pro] = await Promise.all([
-        invoke<unknown[]>("get_diagnostic_events", { limit: 100 }).catch(() => []),
-        invoke<unknown[]>("get_service_diagnostic_summaries", { limit: 100 }).catch(() => []),
-        invoke<unknown[]>("get_pro_diagnostic_summaries", { limit: 100 }).catch(() => []),
+        getDiagnosticEvents().catch(() => []),
+        getServiceDiagnosticSummaries().catch(() => []),
+        getProDiagnosticSummaries().catch(() => []),
       ]);
       if (active) projectPersistedDiagnostics([...desktop, ...service, ...pro]);
     };

@@ -872,23 +872,18 @@ mod tests {
 
         let mut req_a = CheckinRequest {
             device_id: device_id.to_string(),
-            hostname: "host-a".to_string(),
-            posture: "nominal".to_string(),
             ts,
             nonce: nonce.to_string(),
             hmac_version: HMAC_VERSION_V2,
             hmac: String::new(),
             padding: make_padding(512, 0),
             decoy: false,
-            resources: None,
-            health: None,
+            ..CheckinRequest::default()
         };
         req_a.hmac = compute_request_hmac_v2(secret, "POST", "/v1/agents/checkin", &req_a).unwrap();
 
         let mut req_b = CheckinRequest {
             device_id: device_id.to_string(),
-            hostname: "host-b-different-length".to_string(),
-            posture: "nominal".to_string(),
             ts,
             nonce: nonce.to_string(),
             hmac_version: HMAC_VERSION_V2,
@@ -904,6 +899,7 @@ mod tests {
                 os_version: Some("Windows 11 Pro 24H2".to_string()),
                 sovereignty_score: Some(50),
             }),
+            ..CheckinRequest::default()
         };
 
         req_b.hmac = compute_request_hmac_v2(secret, "POST", "/v1/agents/checkin", &req_b).unwrap();
