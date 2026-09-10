@@ -75,6 +75,15 @@ ConvertTo-Json -Compress -InputObject @($results)
     expect(devLauncher).toContain('& $bun run dev:server');
   });
 
+  test("releases a stale Pro sidecar before rebuilding it", () => {
+    // A second active desktop session is rejected before this point. A fresh
+    // launch must not preserve a stale wincommander-pro.exe because Cargo has
+    // to replace that exact debug binary before Vite is exposed.
+    expect(devServer).toContain("desktopDevWindowIsRunning()");
+    expect(devServer).toContain('"tools/build-pro.ts"');
+    expect(devServer).not.toContain('PRESERVE_WINCOMMANDER ? ["-PreserveWinCommander"]');
+  });
+
   test("offers an explicit elevated launcher for privileged development checks", () => {
     expect(devLauncher).toContain("[switch]$Elevated");
     expect(devLauncher).toContain("Test-ElevatedToken");
