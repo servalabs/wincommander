@@ -28,8 +28,14 @@ async function main() {
   await page.route('**/__vault_access_ui__', route => route.fulfill({ contentType: 'text/html', body: fixture }));
   const reset = async state => {
     await page.evaluate(value => window.renderVaultFixture(value), state);
+    if (state === 'unelevated') {
+      await page.getByRole('alert').filter({ hasText: 'Run WinCommander as administrator' }).waitFor();
+    } else if (state === 'unavailable') {
+      await page.getByRole('alert').filter({ hasText: 'Vault settings could not be loaded yet' }).waitFor();
+    } else {
+      await page.locator('.vault-access-editor').waitFor();
+    }
     await page.getByText('Loading your Vault access…').waitFor({ state: 'hidden' });
-    if (!['unelevated', 'unavailable'].includes(state)) await page.locator('.vault-access-editor').waitFor();
   };
   const closed = () => page.locator('.vault-access-details').evaluate(element => !element.open);
   try {
@@ -125,7 +131,9 @@ async function main() {
     ]) {
       await reset(state);
       assert.equal(await closed(), true);
+      await page.getByText(text, { exact: true }).waitFor();
       assert.equal(await page.getByText(text, { exact: true }).isVisible(), true, `${state} message remains visible`);
+      console.log(`Vault UI PASS: ${state} state.`);
     }
     await reset('degraded');
     assert.equal(await closed(), true);
@@ -138,6 +146,7 @@ async function main() {
     await reset('mounted');
     assert.equal(await page.locator('.fleet-vault-workspace').getByText('Mounted for this Windows session', { exact: true }).isVisible(), true);
     await reset('saved');
+    assert.equal(await page.locator('.fleet-validation-errors').isVisible(), true, 'Required-field validation is not hidden in help');
     const mount = page.locator('.fleet-vault-workspace').getByRole('button', { name: 'Mount', exact: true });
     await mount.click();
     await page.getByRole('dialog').waitFor();
