@@ -1,0 +1,92 @@
+name: Fleet Vault access UI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/fleet-vault-access-ui.yml'
+      - 'src/panels/fleet/VaultAccess*'
+      - 'src/panels/fleet/VaultPrincipalPicker.tsx'
+      - 'src/panels/fleet/vaultAccess*'
+      - 'src/panels/fleet/fleetPanel.contract.test.ts'
+      - 'src/components/ui/tooltip.tsx'
+      - 'tools/check-vault-access-ui.cjs'
+      - 'tools/fixtures/vault-access-ui.js'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fleet-vault-ui-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  vault-ui:
+    name: Vault access UI checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout required shared sources and product assets
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: servalabs/assets
+          ref: ff5e7829981b5ace5e9de0658b9ad9404d808064
+          path: assets
+          sparse-checkout: |
+            components/risk-matrix
+            entities
+            editorial
+            softwares
+            products
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Focused ESLint and browser-script syntax
+        id: lint
+        continue-on-error: true
+        run: |
+          bun x eslint --max-warnings=0 src/panels/fleet/VaultAccessTab.tsx src/panels/fleet/VaultAccessEditor.tsx src/panels/fleet/VaultAccessEditor.test.tsx src/panels/fleet/VaultAccessInfo.tsx src/panels/fleet/VaultAccessPatternPicker.tsx src/panels/fleet/fleetPanel.contract.test.ts
+          node --check tools/check-vault-access-ui.cjs
+          node --check tools/fixtures/vault-access-ui.js
+      - name: Typecheck
+        id: types
+        continue-on-error: true
+        run: bun x tsc --noEmit
+      - name: Focused unit tests
+        id: unit
+        continue-on-error: true
+        run: bun test src/panels/fleet/VaultAccessEditor.test.tsx src/panels/fleet/fleetPanel.contract.test.ts src/panels/fleet/vaultAccessPresentation.test.ts src/panels/fleet/vaultAccessUiState.test.ts
+      - name: Frontend production build
+        id: build
+        continue-on-error: true
+        run: bun x vite build
+      - name: Install isolated browser test dependency
+        run: |
+          npm install --prefix "$RUNNER_TEMP/vault-ui-browser" --ignore-scripts --no-audit --no-fund --package-lock=false playwright@1.56.1
+          "$RUNNER_TEMP/vault-ui-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Browser interaction and layout
+        id: browser
+        continue-on-error: true
+        run: |
+          bun x vite --host 127.0.0.1 --port 5173 --strictPort > "$RUNNER_TEMP/vault-vite.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --max-time 2 --silent --fail http://127.0.0.1:5173/ > /dev/null; then break; fi
+            sleep 1
+          done
+          curl --max-time 2 --silent --fail http://127.0.0.1:5173/ > /dev/null || { cat "$RUNNER_TEMP/vault-vite.log"; exit 1; }
+          WINCOMMANDER_PLAYWRIGHT_MODULE="$RUNNER_TEMP/vault-ui-browser/node_modules/playwright" node tools/check-vault-access-ui.cjs http://127.0.0.1:5173
+      - name: Require all focused checks
+        if: always()
+        env:
+          LINT: ${{ steps.lint.outcome }}
+          TYPES: ${{ steps.types.outcome }}
+          UNIT: ${{ steps.unit.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          BROWSER: ${{ steps.browser.outcome }}
+        run: |
+          printf 'Lint: %s\nTypes: %s\nUnit: %s\nBuild: %s\nBrowser: %s\n' "$LINT" "$TYPES" "$UNIT" "$BUILD" "$BROWSER" >> "$GITHUB_STEP_SUMMARY"
+          test "$LINT" = success && test "$TYPES" = success && test "$UNIT" = success && test "$BUILD" = success && test "$BROWSER" = success

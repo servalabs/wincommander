@@ -19,9 +19,8 @@ import {
   type VaultMountEntryResult,
   type VaultAccess, type VaultAccessEntry, type VaultAccessPolicy, type VaultPolicyStatus, type VaultContainerKind, type VaultVolumeRole,
 } from "./vaultAccessTypes";
-import { applyVaultAccessPreset, VAULT_ACCESS_PRESETS, vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
-import VaultAccessPatternPicker from "./VaultAccessPatternPicker";
-import VaultPrincipalPicker from "./VaultPrincipalPicker";
+import { applyVaultAccessPreset, vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
+import VaultAccessEditor from "./VaultAccessEditor";
 import { vaultEntryResultLabel, vaultPolicyVerification } from "./vaultAccessPresentation";
 import { patchAuthorizedEntriesFromMountResult, vaultMountGate } from "./vaultAccessUiState";
 
@@ -266,6 +265,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     setSelectedEntryId(entryId);
     setEditorMode(mode);
     window.requestAnimationFrame(() => {
+      const details = editorRef.current?.querySelector<HTMLDetailsElement>(".vault-access-details");
+      if (details) details.open = false;
       editorRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       const target = mode === "access"
         ? editorRef.current?.querySelector<HTMLElement>(".fleet-vault-grants select, .fleet-vault-grants button")
@@ -682,7 +683,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       <Card>
         <CardHeader>
           <CardTitle>Vault access</CardTitle>
-          <CardDescription>Set the vault details, choose an everyday access pattern, and add the Windows users or groups who need it. WinCommander verifies the names and applies the matching security settings.</CardDescription>
+          <CardDescription>Choose who can access this vault. Save vault settings to apply your changes.</CardDescription>
         </CardHeader>
         <CardContent className="fleet-admin-stack">
           {!activePolicy && <div className="fleet-vault-empty-setup">
@@ -707,35 +708,21 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             const authorized = authorizedById.get(entry.id);
             const mountResult = mountResults[entry.id];
             const isMounted = mountResult?.state === "mounted" || authorized?.mount_state === "mounted";
-            const accessPreset = vaultAccessPreset(entry);
-            const isDualContainer = entry.container_kind === "dual";
             const entryResult = status?.entries.find(item => item.id === entry.id)?.result;
             const mountGate = vaultMountGate({ authorized, entryResult, draftDirty });
             return <div className="fleet-vault-workspace" key={entry.id} ref={editorRef} data-vault-editor-mode={editorMode}>
               <div className="fleet-vault-workspace-header">
-                <div><span className="fleet-vault-step">{editorMode === "access" ? "Manage access" : "1. Vault details"}</span><strong>Vault {entryIndex + 1}</strong></div>
+                <div><span className="fleet-vault-step">{editorMode === "access" ? "Manage access" : "Vault details"}</span><strong>{entry.label || `Vault ${entryIndex + 1}`}</strong></div>
                 <Button variant="outline" size="sm" onClick={() => removeEntry(entry.id)}>Remove</Button>
               </div>
-              <div className="fleet-owner-inputs">
-                <label className="fleet-field"><span>Vault name</span><Input aria-label={`Vault ${entryIndex + 1} label`} value={entry.label} placeholder="Shared vault" onChange={event => updateEntry(entry.id, { label: event.target.value })} /><small>The label people recognize.</small></label>
-                <label className="fleet-field"><span>Container file</span><Input aria-label={`Vault ${entryIndex + 1} container path`} value={entry.container_path} placeholder="D:\\Vaults\\shared.hc" onChange={event => updateEntry(entry.id, { container_path: event.target.value })} /><small>The encrypted .hc file on this PC. Keep each managed Vault in its own dedicated parent folder.</small></label>
-                <label className="fleet-field"><span>Container type</span><select aria-label={`Vault ${entryIndex + 1} container type`} value={entry.container_kind} onChange={event => updateEntry(entry.id, { container_kind: event.target.value as VaultContainerKind })}><option value="standard">Standard container</option><option value="dual">Outer + hidden container</option></select><small>{isDualContainer ? "Choose outer or hidden only when mounting. A writable outer mount requires the hidden protection password for that one request." : "Standard containers can be private or shared."}</small></label>
-                <label className="fleet-field"><span>Primary owner</span><Input aria-label={`Vault ${entryIndex + 1} owner`} value={entry.owner_account} placeholder="SERVER\\shrey" onChange={event => setOwnerAccount(entry.id, event.target.value)} /><small>The Windows account responsible for this Vault. Use PC-or-domain\username.</small></label>
-                <label className="fleet-field"><span>Drive letter</span><Input aria-label={`Vault ${entryIndex + 1} preferred drive letter`} value={entry.mount.preferred_letter ?? ""} maxLength={1} placeholder="V" onChange={event => updateEntry(entry.id, { mount: { ...entry.mount, preferred_letter: event.target.value.toUpperCase() || undefined } })} /><small>The preferred letter in File Explorer. Leave blank for Windows to choose.</small></label>
-              </div>
-              <VaultAccessPatternPicker value={accessPreset} onChange={preset => setAccessPreset(entry.id, preset)} />
-              <div className="fleet-vault-grants">
-                <strong>{accessPreset === "private" ? "3. Confirm owner access" : "3. Add Windows users or groups"}</strong>
-                {accessPreset !== "private" && <p className="fleet-field-hint">A Windows user or group gives that account or team the access selected above.</p>}
-                {accessPreset === "private"
-                  ? <p className="fleet-field-hint">Only the primary owner can mount or edit this vault. Its drive appears only in that Windows session.</p>
-                  : entry.grants.map((grant, grantIndex) => <div className="fleet-vault-grant-row" key={`${entry.id}-${grantIndex}`}>
-                    <label className="fleet-field"><span>Windows user or group</span><VaultPrincipalPicker ariaLabel={`Grant ${grantIndex + 1} principal`} value={grant.principal_name} directory={directory} onChange={value => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, principal_name: value } : current) })} /><small>{accessPreset === "custom" ? "This person has the level selected beside them." : VAULT_ACCESS_PRESETS[accessPreset].label}</small></label>
-                    {accessPreset === "custom" && <label className="fleet-field"><span>Access</span><select aria-label={`Grant ${grantIndex + 1} access`} value={grant.access} onChange={event => updateEntry(entry.id, { grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, access: event.target.value as "read" | "write" } : current) })}><option value="write">Can edit</option><option value="read">View only</option></select></label>}
-                    <Button variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: entry.grants.filter((_, index) => index !== grantIndex) })}>Remove</Button>
-                  </div>)}
-                {accessPreset !== "private" && <Button className="fleet-vault-add-grant" variant="outline" size="sm" onClick={() => updateEntry(entry.id, { grants: [...entry.grants, { principal_name: "", access: entry.grants[0]?.access ?? "write" }] })}>Add person or group</Button>}
-              </div>
+              <VaultAccessEditor
+                entry={entry}
+                entryIndex={entryIndex}
+                directory={directory}
+                onEntryChange={patch => updateEntry(entry.id, patch)}
+                onOwnerChange={owner => setOwnerAccount(entry.id, owner)}
+                onPresetChange={preset => setAccessPreset(entry.id, preset)}
+              />
               <div className="fleet-vault-lifecycle">
                 <div>
                   <strong>{vaultPresentationLabel(entry.mount.presentation)}</strong>

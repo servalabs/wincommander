@@ -1,4 +1,5 @@
 import { VAULT_ACCESS_PRESETS, type VaultAccessPreset } from "./vaultAccessPresets";
+import VaultAccessInfo from "./VaultAccessInfo";
 import "./VaultAccessPatternPicker.css";
 
 interface VaultAccessPatternPickerProps {
@@ -11,27 +12,27 @@ const PATTERN_ORDER: Exclude<VaultAccessPreset, "custom">[] = ["private", "share
 export default function VaultAccessPatternPicker({ value, onChange }: VaultAccessPatternPickerProps) {
   return (
     <fieldset className="vault-access-pattern-picker">
-      <legend>2. Choose who can use this vault</legend>
-      <p>Pick the closest everyday outcome. You can change it before saving.</p>
+      <legend>Access pattern</legend>
       <div className="vault-access-pattern-picker__options">
         {PATTERN_ORDER.map(pattern => {
           const definition = VAULT_ACCESS_PRESETS[pattern];
-          return <button
-            type="button"
-            key={pattern}
-            className={`vault-access-pattern-picker__option${value === pattern ? " is-selected" : ""}`}
-            aria-pressed={value === pattern}
-            onClick={() => onChange(pattern)}
-          >
-            <strong>{definition.label}</strong>
-            <span>{definition.description}</span>
-          </button>;
+          return <div className={`vault-access-pattern-picker__choice${value === pattern ? " is-selected" : ""}`} key={pattern}>
+            <button
+              type="button"
+              className="vault-access-pattern-picker__option"
+              aria-pressed={value === pattern}
+              onClick={() => onChange(pattern)}
+            >
+              <strong>{definition.label}</strong>
+            </button>
+            <VaultAccessInfo label={`About ${definition.label.toLowerCase()}`}>{definition.description}</VaultAccessInfo>
+          </div>;
         })}
-        {value === "custom" && <div className="vault-access-pattern-picker__custom" role="status">
-          <strong>Custom access</strong>
-          <span>This saved vault has different levels for different people. Its current permissions have not been changed.</span>
-        </div>}
       </div>
+      {value === "custom" && <div className="vault-access-pattern-picker__custom" role="status">
+        <strong>Custom access</strong>
+        <span>Mixed access levels. Review each row before saving.</span>
+      </div>}
     </fieldset>
   );
 }
