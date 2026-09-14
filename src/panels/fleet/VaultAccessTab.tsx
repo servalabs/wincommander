@@ -60,7 +60,7 @@ function vaultListFailure(cause: unknown): { category: "service_connect" | "serv
   };
 }
 
-function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ELEVATION_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.APPLY_FAILED"; message: string } {
+function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ELEVATION_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.APPLY_FAILED"; message: string } {
   // Keep the service's transport/Windows detail out of the UI.  The service
   // already makes the authorization decision; this only turns its fixed error
   // categories into an action the person can take.
@@ -75,6 +75,12 @@ function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ELEVATION_R
     return {
       code: "VLT.POLICY.VERSION_CONFLICT",
       message: "Vault settings changed in another WinCommander window. Refresh this page before saving again.",
+    };
+  }
+  if (detail.includes("container identity")) {
+    return {
+      code: "VLT.POLICY.CONTAINER_UNAVAILABLE",
+      message: "The saved Vault container file is missing, moved, or not readable. Choose the encrypted file itself in Edit, then save again.",
     };
   }
   return {
@@ -108,6 +114,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const [existingVaultLabel, setExistingVaultLabel] = useState("");
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(initialDraft?.policy?.entries[0]?.id ?? null);
   const [editorMode, setEditorMode] = useState<"details" | "access">("details");
+  // A saved policy is primarily a status table.  Keep the editable access
+  // workspace closed until the administrator deliberately chooses Edit or
+  // Manage access for one Vault, so opening this tab cannot invite an
+  // accidental policy change.
+  const [editorOpen, setEditorOpen] = useState(false);
   const [mountingEntryId, setMountingEntryId] = useState<string | null>(null);
   const [unmountingEntryId, setUnmountingEntryId] = useState<string | null>(null);
   const [mountResults, setMountResults] = useState<Record<string, VaultMountEntryResult>>({});
@@ -264,6 +275,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const openEntryEditor = (entryId: string, mode: "details" | "access") => {
     setSelectedEntryId(entryId);
     setEditorMode(mode);
+    setEditorOpen(true);
     window.requestAnimationFrame(() => {
       const details = editorRef.current?.querySelector<HTMLDetailsElement>(".vault-access-details");
       if (details) details.open = false;
@@ -435,6 +447,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const createSharedDraft = () => {
     if (policyRef.current) return void setDraftConfirmation("replace");
     replaceWithSharedDraft();
+    setEditorOpen(true);
   };
 
   const reloadSavedPolicy = async () => {
@@ -474,7 +487,10 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const confirmDraftChange = () => {
     const action = draftConfirmation;
     setDraftConfirmation(null);
-    if (action === "replace") replaceWithSharedDraft();
+    if (action === "replace") {
+      replaceWithSharedDraft();
+      setEditorOpen(true);
+    }
     if (action === "discard") void reloadSavedPolicy();
   };
 
@@ -682,15 +698,28 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       {canManagePolicy && !policyLoadUnavailable && <fieldset disabled={saving} className="contents">
       <Card>
         <CardHeader>
-          <CardTitle>Vault access</CardTitle>
-          <CardDescription>Choose who can access this vault. Save vault settings to apply your changes.</CardDescription>
+          <div className="fleet-vault-management-header">
+            <div>
+              <CardTitle>Vault access</CardTitle>
+              <CardDescription>{editorOpen ? "Choose who can access this vault. Save vault settings to apply your changes." : "Choose Edit or Manage access on a saved Vault to open its policy."}</CardDescription>
+            </div>
+            {editorOpen && <Button variant="outline" size="sm" onClick={() => setEditorOpen(false)}>Close editor</Button>}
+          </div>
         </CardHeader>
-        <CardContent className="fleet-admin-stack">
+        {!editorOpen ? <CardContent className="fleet-admin-stack">
+          {!activePolicy ? <div className="fleet-vault-empty-setup">
+            <div><strong>No vault access is configured yet</strong><span>Create a Vault policy to start assigning Windows users or groups.</span></div>
+            <div className="fleet-action-row">
+              <Button onClick={createSharedDraft}>Create first shared vault</Button>
+              <Button variant="outline" onClick={() => { editPolicy(current => current ?? newVaultPolicy()); setEditorOpen(true); }}>Use three-vault starter</Button>
+            </div>
+          </div> : <p className="fleet-field-hint">Policies stay collapsed until you choose Edit or Manage access for a saved Vault above.</p>}
+        </CardContent> : <CardContent className="fleet-admin-stack">
           {!activePolicy && <div className="fleet-vault-empty-setup">
             <div><strong>No vault access is configured yet</strong><span>Start with one shared vault, or use the recommended personal-and-shared starter.</span></div>
             <div className="fleet-action-row">
               <Button onClick={createSharedDraft}>Create first shared vault</Button>
-              <Button variant="outline" onClick={() => editPolicy(current => current ?? newVaultPolicy())}>Use three-vault starter</Button>
+              <Button variant="outline" onClick={() => { editPolicy(current => current ?? newVaultPolicy()); setEditorOpen(true); }}>Use three-vault starter</Button>
             </div>
           </div>}
           {activePolicy && <p className="fleet-field-hint">{draftDirty ? "Draft auto-saved on this PC — not yet applied to Windows." : "Showing the policy saved by the security service."}</p>}
@@ -775,7 +804,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             </div>
             {legacyNotice && <span className="fleet-field-hint">{legacyNotice}</span>}
           </details>
-        </CardContent>
+        </CardContent>}
       </Card>
 
       </fieldset>}

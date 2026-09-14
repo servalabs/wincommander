@@ -113,12 +113,36 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).not.toContain("Validation: {status?.validation_state");
   });
 
+  test("turns a missing Vault container into an actionable save error", () => {
+    expect(vault).toContain('detail.includes("container identity")');
+    expect(vault).toContain("The saved Vault container file is missing, moved, or not readable.");
+    expect(vault).toContain("VLT.POLICY.CONTAINER_UNAVAILABLE");
+  });
+
   test("offers one compact manual refresh action", () => {
     expect(vault.match(/onClick=\{\(\) => void refresh\(\)\}/g)).toHaveLength(1);
     expect(vault).toContain('<Icon icon="refresh" size={14} />');
     expect(vault).toContain(">Refresh</Button>");
     expect(vault).not.toContain("Refresh Vault access");
     expect(vault).not.toContain("Refresh status");
+  });
+
+  test("hydrates and saves access groups through the protected service instead of browser storage", () => {
+    expect(panel).toContain("getAccessDirectory");
+    expect(panel).toContain("saveAccessDirectory(toVaultAccessDirectory(candidate))");
+    expect(panel).toContain("fromVaultAccessDirectory(saved.directory)");
+    expect(access).toContain("onSave: (directory: FleetAccessDirectory) => Promise<VaultSaveAccessDirectoryResponse>");
+    expect(access).toContain("await onSave(directory)");
+    expect(vaultHook).toContain('invoke<VaultAccessDirectory>("get_vault_access_directory")');
+    expect(vaultHook).toContain('invoke<VaultSaveAccessDirectoryResponse>("save_vault_access_directory", { directory })');
+  });
+
+  test("keeps the Vault policy editor closed until an administrator chooses an edit action", () => {
+    expect(vault).toContain("const [editorOpen, setEditorOpen] = useState(false)");
+    expect(vault).toContain("Choose Edit or Manage access on a saved Vault to open its policy.");
+    expect(vault).toContain("!editorOpen ? <CardContent");
+    expect(vault).toContain("setEditorOpen(true);");
+    expect(vault).toContain(">Close editor</Button>");
   });
 
   test("keeps the user and group editor separate from the permissions table layout", () => {

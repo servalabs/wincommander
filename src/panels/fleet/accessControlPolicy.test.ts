@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
-  buildAccessGroupReconcilePlan, describeReconcileFailure, mergeAccessUsers,
+  buildAccessGroupReconcilePlan, describeReconcileFailure, fromVaultAccessDirectory, mergeAccessUsers,
   reconcileAccessDirectoryUsers, summarizeReconcileResults, validateAccessDirectory,
+  toVaultAccessDirectory,
 } from "./accessControlPolicy";
 import type { AccessGroupReconcileResult, FleetAccessDirectory } from "./accessControlTypes";
 
@@ -9,13 +10,31 @@ describe("Fleet universal access groups", () => {
   test("allows one Windows user in several groups", () => {
     const directory: FleetAccessDirectory = {
       schema: 1,
-      users: [{ id: "alex", username: "Alex" }],
+      users: [{ id: "alex", username: "Alex", sid: "S-1-5-21-1001" }],
       groups: [
         { id: "marketing", name: "Marketing", localGroup: "WC_Marketing", userIds: ["alex"] },
         { id: "developers", name: "Developers", localGroup: "WC_Developers", userIds: ["alex"] },
       ],
     };
     expect(validateAccessDirectory(directory)).toEqual([]);
+  });
+
+  test("round-trips access groups through the protected service directory by Windows SID", () => {
+    const local: FleetAccessDirectory = {
+      schema: 1,
+      users: [{ id: "sid:s-1", username: "Alex", displayName: "Alex Morgan", sid: "S-1" }],
+      groups: [{ id: "engineering", name: "Engineering", localGroup: "WC_Engineering", userIds: ["sid:s-1"] }],
+    };
+    const service = toVaultAccessDirectory(local);
+    expect(service).toEqual({
+      schema_version: 1,
+      users: [{ sid: "S-1", username: "Alex", display_name: "Alex Morgan" }],
+      groups: [{ id: "engineering", name: "Engineering", local_group: "WC_Engineering", member_sids: ["S-1"] }],
+    });
+    expect(fromVaultAccessDirectory(service)).toMatchObject({
+      users: [{ id: "sid:s-1", username: "Alex", sid: "S-1" }],
+      groups: [{ id: "engineering", localGroup: "WC_Engineering", userIds: ["sid:s-1"] }],
+    });
   });
 
   test("rejects duplicate group names and missing Windows users", () => {

@@ -38,6 +38,15 @@ const boundedMountError = (error: unknown) => {
   if (normalized.includes("vault_acl_apply_failed") || normalized.includes("vault_acl_readback_failed")) {
     return "The installed WinCommander service still requires an NTFS permission check for this personal mount, so it safely unmounted the volume. Repair or update the WinCommander service, then mount it again from Secure Storage.";
   }
+  if (normalized.includes("vault_policy_managed")) {
+    return "This container is managed by a Vault permission. Open Fleet, choose Vault permissions, then mount the assigned Vault there.";
+  }
+  if (normalized.includes("vault_policy_identity_changed")) {
+    return "This container was replaced after its Vault permission was saved. In Fleet, edit that Vault permission to select and save the current container before mounting it.";
+  }
+  if (normalized.includes("vault_policy_unavailable")) {
+    return "A Vault permission controls this container but could not be verified. Open Fleet, review the Vault permission, then try again.";
+  }
   if (normalized.includes("vault_not_authorized")) {
     return "This Windows account is not authorized to mount that container. Select the original container and use its original account, password, PIM, and keyfile.";
   }
@@ -84,6 +93,9 @@ const vaultMountErrorCode = (error: unknown) => {
   if (message.includes("vault_engine_unlock_failed")) return "VLT.UNLOCK.FAILED";
   if (message.includes("vault_engine_drive_letter_unavailable")) return "VLT.DRIVE_LETTER.UNAVAILABLE";
   if (message.includes("vault_acl_")) return "VLT.ACL.FAILED";
+  if (message.includes("vault_policy_managed")) return "VLT.POLICY.MANAGED";
+  if (message.includes("vault_policy_identity_changed")) return "VLT.POLICY.IDENTITY_CHANGED";
+  if (message.includes("vault_policy_unavailable")) return "VLT.POLICY.UNAVAILABLE";
   if (message.includes("vault_not_authorized")) return "VLT.AUTHORIZATION.DENIED";
   if (message.includes("vault_driver_unavailable")) return "VLT.DRIVER.UNAVAILABLE";
   if (message.includes("vault_session_unavailable")) return "VLT.SESSION.UNAVAILABLE";

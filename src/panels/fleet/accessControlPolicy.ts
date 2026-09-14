@@ -1,6 +1,6 @@
 import type {
   AccessGroupReconcileRequest, AccessGroupReconcileResult,
-  FleetAccessDirectory, FleetAccessGroup, FleetAccessUser,
+  FleetAccessDirectory, FleetAccessGroup, FleetAccessUser, VaultAccessDirectory,
 } from "./accessControlTypes";
 
 export const ACCESS_CONTROL_STORAGE_KEY = "wincommander.fleet.access-control.v1";
@@ -133,8 +133,52 @@ export function loadAccessDirectory(): FleetAccessDirectory {
   return DEFAULT_ACCESS_DIRECTORY;
 }
 
-export function saveAccessDirectory(directory: FleetAccessDirectory) {
-  localStorage.setItem(ACCESS_CONTROL_STORAGE_KEY, JSON.stringify(directory));
+/** The old renderer cache is a migration aid only. Once the service accepts
+ * a directory, remove it so it can never overwrite a later service record. */
+export function clearLegacyAccessDirectory() {
+  localStorage.removeItem(ACCESS_CONTROL_STORAGE_KEY);
+}
+
+/** Convert the renderer's presentation model to the protected service record.
+ * Membership crosses the boundary only as Windows SIDs, never as mutable names. */
+export function toVaultAccessDirectory(directory: FleetAccessDirectory): VaultAccessDirectory {
+  const users = directory.users.flatMap(user => user.sid?.trim() ? [{
+    sid: user.sid.trim(),
+    username: user.username,
+    ...(user.displayName ? { display_name: user.displayName } : {}),
+  }] : []);
+  const sidByUserId = new Map(directory.users.map(user => [user.id, user.sid?.trim()]));
+  return {
+    schema_version: 1,
+    users,
+    groups: directory.groups.map(group => ({
+      id: group.id,
+      name: group.name,
+      local_group: group.localGroup,
+      member_sids: group.userIds.flatMap(id => sidByUserId.get(id) ? [sidByUserId.get(id)!] : []),
+    })),
+  };
+}
+
+/** Rebuild UI-only fields from the service source of truth after a restart. */
+export function fromVaultAccessDirectory(directory: VaultAccessDirectory): FleetAccessDirectory {
+  const users = directory.users.map(user => ({
+    id: sidId(user.sid)!,
+    username: user.username,
+    ...(user.display_name ? { displayName: user.display_name } : {}),
+    sid: user.sid,
+  }));
+  const idBySid = new Map(users.map(user => [user.sid.toLocaleLowerCase(), user.id]));
+  return {
+    schema: 1,
+    users,
+    groups: directory.groups.map(group => ({
+      id: group.id,
+      name: group.name,
+      localGroup: group.local_group,
+      userIds: group.member_sids.flatMap(sid => idBySid.get(sid.toLocaleLowerCase()) ?? []),
+    })),
+  };
 }
 
 export function validateAccessDirectory(directory: FleetAccessDirectory): string[] {
@@ -156,6 +200,9 @@ export function validateAccessDirectory(directory: FleetAccessDirectory): string
   if (directory.groups.some(group => group.userIds.some(id =>
     directory.users.find(user => user.id === id)?.isAvailable === false))) {
     errors.push("A group contains a Windows account that is disabled or deleted.");
+  }
+  if (directory.groups.some(group => group.userIds.some(id => !directory.users.find(user => user.id === id)?.sid))) {
+    errors.push("Refresh Windows users before saving: every group member needs a Windows security identity.");
   }
   return errors;
 }

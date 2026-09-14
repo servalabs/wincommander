@@ -103,6 +103,9 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.list_authorized"
             | "svc.vault.capabilities"
             | "svc.vault.reconcile_access_groups"
+            | "svc.vault.get_access_directory"
+            | "svc.vault.save_access_directory"
+            | "svc.vault.personal_status"
     )
 }
 
@@ -322,7 +325,9 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // explicitly (the wildcard arm below would already classify it
         // Privileged) so it reads alongside the rest of the vault verb
         // table.
-        "svc.vault.reconcile_access_groups" => CapabilityClass::Privileged,
+        "svc.vault.reconcile_access_groups"
+        | "svc.vault.get_access_directory"
+        | "svc.vault.save_access_directory" => CapabilityClass::Privileged,
 
         // All other verbs — including mutations, dispatches, fleet toggles,
         // and any future verb not yet added above — are Privileged.
@@ -378,6 +383,8 @@ mod tests {
             "svc.set_fleet_enabled",
             "svc.vault.create_personal",
             "svc.vault.reconcile_access_groups",
+            "svc.vault.get_access_directory",
+            "svc.vault.save_access_directory",
             APPLY_MACHINE_SETTING_VERB,
         ] {
             assert_eq!(
@@ -440,6 +447,8 @@ mod tests {
             "svc.vault.list_authorized",
             "svc.vault.capabilities",
             "svc.vault.reconcile_access_groups",
+            "svc.vault.get_access_directory",
+            "svc.vault.save_access_directory",
         ] {
             assert!(
                 is_known_verb(verb),

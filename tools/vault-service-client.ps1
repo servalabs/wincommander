@@ -1,10 +1,12 @@
 # Authenticated acceptance client for the local WinCommander SYSTEM service.
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('get-policy', 'get-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe', 'apply', 'mount', 'unmount', 'unknown-verb')]
+    [ValidateSet('get-policy', 'get-status', 'get-access-directory', 'personal-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe', 'apply', 'mount', 'unmount', 'unknown-verb')]
     [string]$Action,
 
     [string]$EntryId,
+
+    [string]$ContainerPath,
     [string]$PolicyPath,
 
     [ValidateSet('outer', 'hidden')]
@@ -28,14 +30,19 @@ function Test-ElevatedToken {
 }
 
 if ($Elevated -and -not (Test-ElevatedToken)) {
-    $readOnlyActions = @('get-policy', 'get-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe')
+    $readOnlyActions = @('get-policy', 'get-status', 'get-access-directory', 'personal-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe')
     if ($Action -notin $readOnlyActions) {
         throw '-Elevated is restricted to read-only service probes.'
     }
     $resultPath = Join-Path $env:TEMP ("wincommander-vault-probe-{0}.json" -f [guid]::NewGuid().ToString('N'))
     $escapedScript = $PSCommandPath.Replace("'", "''")
     $escapedResult = $resultPath.Replace("'", "''")
-    $childCommand = "try { & '$escapedScript' -Action '$Action' | Set-Content -LiteralPath '$escapedResult' -NoNewline; exit 0 } catch { exit 1 }"
+    $childArguments = @("-Action '$Action'")
+    if (-not [string]::IsNullOrWhiteSpace($ContainerPath)) {
+        $escapedContainerPath = $ContainerPath.Replace("'", "''")
+        $childArguments += "-ContainerPath '$escapedContainerPath'"
+    }
+    $childCommand = "try { & '$escapedScript' $($childArguments -join ' ') | Set-Content -LiteralPath '$escapedResult' -NoNewline; exit 0 } catch { exit 1 }"
     $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
     try {
         $process = Start-Process -FilePath powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand"
@@ -149,6 +156,8 @@ if ($Action -eq 'broker-log') {
 $feature = switch ($Action) {
     'get-policy' { 'svc.vault.get_policy' }
     'get-status' { 'svc.vault.get_status' }
+    'get-access-directory' { 'svc.vault.get_access_directory' }
+    'personal-status' { 'svc.vault.personal_status' }
     'capabilities' { 'svc.vault.capabilities' }
     'list' { 'svc.vault.list_authorized' }
     'diagnostics' { 'svc.diagnostics.query' }
@@ -167,6 +176,9 @@ try {
     if ($Action -eq 'apply') {
         if (-not $PolicyPath) { throw '-PolicyPath is required for apply.' }
         $argsValue = Get-Content -LiteralPath $PolicyPath -Raw | ConvertFrom-Json
+    } elseif ($Action -eq 'personal-status') {
+        if (-not $ContainerPath) { throw '-ContainerPath is required for personal-status.' }
+        $argsValue = [ordered]@{ container_path = $ContainerPath }
     } elseif ($Action -eq 'mount') {
         if (-not $EntryId) { throw '-EntryId is required for mount.' }
         $secretInput = if (-not [string]::IsNullOrEmpty($InputSecret)) { $InputSecret } else { [Console]::In.ReadToEnd() }

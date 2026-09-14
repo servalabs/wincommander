@@ -9,7 +9,10 @@ import useVaultAccess from "@/hooks/useVaultAccess";
 import AccessControlTab from "./AccessControlTab";
 import FleetConnectView from "./FleetConnectView";
 import VaultAccessTab from "./VaultAccessTab";
-import { loadAccessDirectory, saveAccessDirectory } from "./accessControlPolicy";
+import {
+  clearLegacyAccessDirectory, DEFAULT_ACCESS_DIRECTORY, fromVaultAccessDirectory, loadAccessDirectory,
+  toVaultAccessDirectory,
+} from "./accessControlPolicy";
 import type { FleetAccessDirectory } from "./accessControlTypes";
 import "./index.css";
 
@@ -18,8 +21,8 @@ export default function FleetPanel() {
   const [capabilityRefresh, setCapabilityRefresh] = useState(0);
   const [activeTab, setActiveTab] = useState("vault");
   const lastCapability = useRef<boolean | null>(null);
-  const { getCapabilities } = useVaultAccess<never, never>();
-  const [directory, setDirectory] = useState<FleetAccessDirectory>(loadAccessDirectory);
+  const { getCapabilities, getAccessDirectory, saveAccessDirectory } = useVaultAccess<never, never>();
+  const [directory, setDirectory] = useState<FleetAccessDirectory>(DEFAULT_ACCESS_DIRECTORY);
   const isAdmin = capabilityState === "admin";
 
   useEffect(() => {
@@ -56,6 +59,30 @@ export default function FleetPanel() {
     };
   }, [capabilityRefresh, getCapabilities]);
 
+  useEffect(() => {
+    if (!isAdmin) return;
+    let active = true;
+    void getAccessDirectory().then(serviceDirectory => {
+      if (!active) return;
+      const restored = fromVaultAccessDirectory(serviceDirectory);
+      // This is a one-time migration bridge for the previous renderer-only
+      // directory. A non-empty protected service record always wins; after
+      // Save groups the browser cache is no longer the source of truth.
+      if (restored.users.length === 0 && restored.groups.length === 0) {
+        const legacy = loadAccessDirectory();
+        if (legacy.users.length > 0 || legacy.groups.length > 0) {
+          setDirectory(legacy);
+          return;
+        }
+      }
+      setDirectory(restored);
+    }).catch(() => {
+      // Never replace a protected record with browser data when the service
+      // cannot be reached. The permission check above remains the retry path.
+    });
+    return () => { active = false; };
+  }, [getAccessDirectory, isAdmin]);
+
   const updateDirectory = useCallback((action: SetStateAction<FleetAccessDirectory>) => {
     setDirectory(current => {
       const next = typeof action === "function" ? action(current) : action;
@@ -63,9 +90,12 @@ export default function FleetPanel() {
     });
   }, []);
 
-  const saveDirectory = () => {
-    saveAccessDirectory(directory);
-  };
+  const saveDirectory = useCallback(async (candidate: FleetAccessDirectory) => {
+    const saved = await saveAccessDirectory(toVaultAccessDirectory(candidate));
+    clearLegacyAccessDirectory();
+    setDirectory(fromVaultAccessDirectory(saved.directory));
+    return saved;
+  }, [saveAccessDirectory]);
 
   return (
     <div className="panel-container fleet-panel">

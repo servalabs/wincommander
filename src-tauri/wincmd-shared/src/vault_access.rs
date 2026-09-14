@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
 pub const VAULT_ACCESS_SCHEMA_VERSION: u32 = 1;
+/// Versioned, machine-owned directory behind Fleet's reusable access groups.
+/// Unlike a renderer draft, this record survives a WebView profile reset and
+/// is only readable/writable through the privileged service pipe.
+pub const VAULT_ACCESS_DIRECTORY_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -141,10 +145,12 @@ pub struct VaultMountRequest {
     pub hidden_protection_password: Option<String>,
 }
 
-/// A personal container request is deliberately separate from the managed
-/// access-policy wire.  The service derives the owner SID, session, mounted
-/// root DACL and presentation; the caller may only name the backing file and
-/// supply credentials/options for its own registered container.
+/// An ordinary container request is deliberately separate from the managed
+/// access-policy wire. The service classifies the selected file first: an
+/// unmanaged file mounts in the caller's session using normal file access and
+/// supplied credentials, while a policy-managed file is never allowed to
+/// bypass its Vault permission. The caller may only name the backing file and
+/// supply its unlock options.
 #[derive(PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PersonalVaultMountRequest {
@@ -598,6 +604,57 @@ pub struct VaultAccessGroupResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VaultReconcileAccessGroupsResponse {
+    pub results: Vec<VaultAccessGroupResult>,
+}
+
+/// A Windows account remembered by the Fleet access directory.  The SID is
+/// the identity; the names only make a restored directory understandable in
+/// the UI and are refreshed from Windows on the next discovery pass.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultAccessDirectoryUser {
+    pub sid: String,
+    pub username: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// One reusable admin-authored Windows local group. `member_sids` are the
+/// durable membership identities; `id` and `name` are the stable UI-facing
+/// identifiers and labels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultAccessDirectoryGroup {
+    pub id: String,
+    pub name: String,
+    pub local_group: String,
+    pub member_sids: Vec<String>,
+}
+
+/// Service-owned source of truth for Fleet access groups. This intentionally
+/// stays separate from a Vault policy: access groups are reusable by future
+/// Fleet features and do not themselves grant Vault access.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultAccessDirectory {
+    pub schema_version: u32,
+    pub users: Vec<VaultAccessDirectoryUser>,
+    pub groups: Vec<VaultAccessDirectoryGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultSaveAccessDirectoryRequest {
+    pub directory: VaultAccessDirectory,
+}
+
+/// A successful save is durable even if a particular Windows group could not
+/// be reconciled immediately. The caller must surface each failed result and
+/// retry rather than claiming the OS membership is current.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultSaveAccessDirectoryResponse {
+    pub directory: VaultAccessDirectory,
     pub results: Vec<VaultAccessGroupResult>,
 }
 

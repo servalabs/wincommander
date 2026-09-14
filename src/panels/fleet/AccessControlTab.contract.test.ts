@@ -30,22 +30,19 @@ describe("AccessControlTab avoids clobbering discovered users with a stale onCha
   });
 });
 
-describe("Save groups reconciles real Windows groups instead of only writing localStorage", () => {
-  test("save() persists locally, then reconciles through the Vault access service", () => {
-    const save = source.slice(source.indexOf("const save = ()"), source.lastIndexOf("return ("));
-    expect(save).toContain("onSave()");
-    expect(save).toContain("reconcileGroups()");
+describe("Save groups persists through the protected Vault access service", () => {
+  test("save() delegates the current directory to its service-backed parent callback", () => {
+    const save = source.slice(source.indexOf("const save = async ()"), source.lastIndexOf("return ("));
+    expect(save).toContain("await onSave(directory)");
   });
 
-  test("reconcileGroups sends SIDs built by the shared plan builder and reports honest per-group outcomes", () => {
-    expect(source).toContain("buildAccessGroupReconcilePlan(directory)");
-    expect(source).toContain("reconcileAccessGroups(requests)");
+  test("reports the service's per-group Windows reconciliation outcomes honestly", () => {
     expect(source).toContain("summarizeReconcileResults(results)");
     expect(source).toContain('outcome.intent === "danger"');
   });
 
   test("a rejected call is classified instead of surfacing a raw or silent failure", () => {
-    expect(source).toContain("describeReconcileFailure(cause)");
+    expect(source).toContain("Access groups were not saved to the Windows security service.");
   });
 
   test("does not invent a manual account row (that regression is Access Control's other rule)", () => {

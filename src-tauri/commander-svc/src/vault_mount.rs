@@ -435,6 +435,60 @@ impl VaultMountBroker {
         caller_sid: &str,
         caller_authentication_id: (u32, i32),
     ) -> Result<(String, u8, bool), VaultMountReason> {
+        self.mount_personal_with_entry_id_locked(
+            operation_id,
+            store,
+            record,
+            request,
+            caller_token,
+            session_id,
+            caller_sid,
+            caller_authentication_id,
+            personal_mount_entry_id(record),
+        )
+    }
+
+    /// Mount an ordinary, unmanaged file without creating a durable owner
+    /// record. The identity-only key prevents different local accounts from
+    /// concurrently mounting the same writable container.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mount_unmanaged_authorized_locked(
+        &self,
+        operation_id: u64,
+        store: &VaultAccessStore,
+        record: &PersonalVaultRecord,
+        request: &mut PersonalVaultMountRequest,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        session_id: u32,
+        caller_sid: &str,
+        caller_authentication_id: (u32, i32),
+    ) -> Result<(String, u8, bool), VaultMountReason> {
+        self.mount_personal_with_entry_id_locked(
+            operation_id,
+            store,
+            record,
+            request,
+            caller_token,
+            session_id,
+            caller_sid,
+            caller_authentication_id,
+            unmanaged_mount_entry_id(record),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn mount_personal_with_entry_id_locked(
+        &self,
+        operation_id: u64,
+        store: &VaultAccessStore,
+        record: &PersonalVaultRecord,
+        request: &mut PersonalVaultMountRequest,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        session_id: u32,
+        caller_sid: &str,
+        caller_authentication_id: (u32, i32),
+        entry_id: String,
+    ) -> Result<(String, u8, bool), VaultMountReason> {
         if record.owner_sid != caller_sid
             || record.scope != VaultPresentation::PerUser
             || session_id == 0
@@ -443,7 +497,6 @@ impl VaultMountBroker {
             request.zeroize_secrets();
             return Err(VaultMountReason::NotAuthorized);
         }
-        let entry_id = personal_mount_entry_id(record);
         if !self.recovery_allows_entry(&entry_id, store) {
             request.zeroize_secrets();
             return Err(VaultMountReason::DismountFailed);
@@ -1248,6 +1301,19 @@ fn personal_mount_entry_id(record: &PersonalVaultRecord) -> String {
     )
 }
 
+fn unmanaged_mount_entry_id(record: &PersonalVaultRecord) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"unmanaged\0");
+    digest.update(record.container_identity.as_bytes());
+    format!(
+        "unmanaged-{}",
+        digest.finalize()[..24]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
 fn mounted_root_acl_sddl(grants: &[ResolvedGrant]) -> MountedRootAclSddl {
     // OI+CI makes the proven root policy flow to files and directories
     // created after mount. Without it, a Partner-created file receives the
@@ -1678,6 +1744,22 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn unmanaged_mount_key_is_shared_by_users_of_the_same_container() {
+        let first = personal_record();
+        let mut second = first.clone();
+        second.owner_sid = "S-1-5-21-other".into();
+
+        assert_ne!(
+            personal_mount_entry_id(&first),
+            personal_mount_entry_id(&second)
+        );
+        assert_eq!(
+            unmanaged_mount_entry_id(&first),
+            unmanaged_mount_entry_id(&second)
+        );
     }
 
     #[test]
