@@ -2911,6 +2911,7 @@ pub fn run() {
             search_actions::search_open_in_vscode,
             search_actions::search_delete_to_recycle_bin,
             search_actions::search_shred_direct,
+            context_menu_shred::secure_shred,
             search_actions::search_rename_file,
             search_actions::search_show_properties,
             backend::is_path_dir,

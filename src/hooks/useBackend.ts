@@ -2244,13 +2244,14 @@ export function useBackend() {
     safePastePrepare: (destDir: string) => invoke<SafePasteResult>("safe_paste_prepare", { destDir }),
     scrubMetadataPaths: (paths: string[], options: ScrubMetadataOptions) =>
       invoke<ScrubReportSummary>("scrub_metadata_paths", { paths, options }),
-    // The secure shredder command accepts Type in {File, Registry,
-    // RegistryProperty, Folder}; the "File" branch handles directories
-    // internally via PSIsContainer recursion, so we always pass "File"
-    // regardless of whether the target is a file or a folder.
     invoke7Erase: async (path: string, _type: 'File' | 'Directory' = 'File') => {
       const capabilityToken = await requestDestructiveCapability({ command: "secure_erase", path });
-      return execute(invokeCommand("7Erase"), { Path: path, Type: 'File', CapabilityToken: capabilityToken });
+      try {
+        await invoke("secure_shred", { path, capabilityToken });
+        return { success: true };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
     },
 
     // App Licensing

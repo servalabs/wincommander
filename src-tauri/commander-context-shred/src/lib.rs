@@ -3,17 +3,16 @@
 //! Delete in Explorer must never grant additional access through UAC or SYSTEM.
 
 use std::{
-    collections::HashSet,
     fs,
     fs::OpenOptions,
     io::{self, Write},
     path::{Path, PathBuf},
+    thread,
+    time::Duration,
 };
 
 #[cfg(windows)]
 use std::io::{Read, Seek, SeekFrom};
-#[cfg(not(windows))]
-use std::{thread, time::Duration};
 
 use rand::{rngs::OsRng, RngCore};
 
@@ -117,14 +116,10 @@ fn validate_target(raw_path: &str) -> Result<PathBuf, String> {
     }
     let target = fs::canonicalize(&raw)
         .map_err(|error| format!("cannot resolve Explorer target: {error}"))?;
-    if !fs::metadata(&target)
-        .map_err(|error| format!("cannot inspect Explorer target: {error}"))?
-        .is_file()
-    {
-        return Err(
-            "folder shredding is disabled because handle-safe recursive deletion is unavailable"
-                .into(),
-        );
+    let metadata = fs::metadata(&target)
+        .map_err(|error| format!("cannot inspect Explorer target: {error}"))?;
+    if !metadata.is_file() && !metadata.is_dir() {
+        return Err("refused unsupported Explorer target type".into());
     }
     if is_target_or_ancestor_of_protected_root(&target, &protected_roots())
         || is_descendant_of_system_root(&target, &system_roots())
@@ -146,15 +141,39 @@ fn validate_selection(raw_paths: &[String]) -> Result<Vec<PathBuf>, String> {
             "refused Explorer selection larger than {MAX_CONTEXT_TARGETS} items"
         ));
     }
-    let mut seen = HashSet::new();
-    let mut targets = Vec::with_capacity(raw_paths.len());
+    let mut targets: Vec<PathBuf> = Vec::with_capacity(raw_paths.len());
     for raw_path in raw_paths {
         let target = validate_target(raw_path)?;
-        if seen.insert(normalized(&target)) {
-            targets.push(target);
+        let target_key = normalized(&target);
+        if targets.iter().any(|existing| {
+            let existing_key = normalized(existing);
+            target_key == existing_key || target_key.starts_with(&(existing_key + "\\"))
+        }) {
+            continue;
         }
+        targets.retain(|existing| {
+            let existing_key = normalized(existing);
+            !(existing_key == target_key || existing_key.starts_with(&(target_key.clone() + "\\")))
+        });
+        targets.push(target);
     }
     Ok(targets)
+}
+
+fn remove_empty_directory_with_retries(path: &Path) -> io::Result<()> {
+    let mut last_error = None;
+    for _ in 0..4 {
+        if has_reparse_point(path).unwrap_or(true) {
+            return Err(io::Error::other("refused linked or reparse-point directory"));
+        }
+        match fs::remove_dir(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        thread::sleep(Duration::from_millis(150));
+    }
+    Err(last_error.unwrap_or_else(|| io::Error::other("directory removal failed")))
 }
 
 #[cfg(not(windows))]
@@ -272,6 +291,47 @@ fn overwrite_and_delete_file(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn secure_erase_directory(root: &Path) -> Result<(), String> {
+    let mut files = Vec::new();
+    let mut directories = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+
+    // Inspect the complete tree before overwriting anything. A junction or an
+    // unsupported item therefore leaves the whole requested folder intact.
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!("cannot inspect erase target '{}': {error}", path.display())
+        })?;
+        if has_reparse_point(&path)? {
+            return Err("refused linked or reparse-point erase target".into());
+        }
+        if metadata.is_file() {
+            files.push(path);
+        } else if metadata.is_dir() {
+            directories.push(path.clone());
+            for child in fs::read_dir(&path)
+                .map_err(|error| format!("cannot read folder '{}': {error}", path.display()))?
+            {
+                let child = child.map_err(|error| {
+                    format!("cannot inspect folder '{}': {error}", path.display())
+                })?;
+                pending.push(child.path());
+            }
+        } else {
+            return Err(format!("refused unsupported erase target '{}'", path.display()));
+        }
+    }
+
+    for file in files {
+        overwrite_and_delete_file(&file)?;
+    }
+    for directory in directories.into_iter().rev() {
+        remove_empty_directory_with_retries(&directory)
+            .map_err(|error| format!("cannot delete folder '{}': {error}", directory.display()))?;
+    }
+    Ok(())
+}
+
 fn secure_erase_path(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("cannot inspect erase target '{}': {error}", path.display()))?;
@@ -279,12 +339,12 @@ fn secure_erase_path(path: &Path) -> Result<(), String> {
         return Err("refused linked or reparse-point erase target".into());
     }
     if metadata.is_dir() {
-        return Err(
-            "folder shredding is disabled because handle-safe recursive deletion is unavailable"
-                .into(),
-        );
+        secure_erase_directory(path)
+    } else if metadata.is_file() {
+        overwrite_and_delete_file(path)
+    } else {
+        Err(format!("refused unsupported erase target '{}'", path.display()))
     }
-    overwrite_and_delete_file(path)
 }
 
 fn secure_erase_target(target: PathBuf) -> Result<(), String> {
@@ -353,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_folder_batch_before_erasing_any_file() {
+    fn securely_erases_mixed_file_and_folder_batches() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("erase-file.txt");
         let folder = directory.path().join("erase-folder");
@@ -361,15 +421,31 @@ mod tests {
         fs::create_dir_all(folder.join("nested")).unwrap();
         fs::write(folder.join("nested").join("inside.txt"), b"sensitive").unwrap();
 
-        let error = execute_cli(vec![
+        execute_cli(vec![
             file.to_string_lossy().into_owned(),
             folder.to_string_lossy().into_owned(),
         ])
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.contains("folder shredding is disabled"));
-        assert!(file.exists());
-        assert!(folder.exists());
+        assert!(!file.exists());
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn erases_a_folder_once_when_its_child_is_also_selected() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory.path().join("erase-folder");
+        let child = folder.join("nested").join("inside.txt");
+        fs::create_dir_all(child.parent().unwrap()).unwrap();
+        fs::write(&child, b"sensitive").unwrap();
+
+        execute_cli(vec![
+            child.to_string_lossy().into_owned(),
+            folder.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+
+        assert!(!folder.exists());
     }
 
     #[test]
