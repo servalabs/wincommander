@@ -144,6 +144,22 @@ public class WC_PolicyRefresh {
             [WC_PolicyRefresh]::RefreshPolicyEx($true, 1) | Out-Null
         } catch {}
 
+        # A registry write can be rejected by an administrator-owned policy
+        # even from an elevated process. Read Windows' effective decision back
+        # before reporting success so the UI never claims a failed Allow worked.
+        $effective = Get-AppCapabilityAccessStatus -Capability $Capability
+        $effectiveAccess = if ($effective.disabled) { 'Deny' } else { 'Allow' }
+        if ($effectiveAccess -ne $Access) {
+            return @{
+                error          = $true
+                message        = "Windows still reports $Capability as $effectiveAccess after requesting $Access. The policy change did not take effect."
+                capability     = $Capability
+                requestedValue = $Access
+                value          = $effectiveAccess
+                entriesTouched = $touched
+            }
+        }
+
         @{ status = "updated"; capability = $Capability; value = $Access; entriesTouched = $touched }
     }
     catch {

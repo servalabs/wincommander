@@ -74,7 +74,10 @@ const CAPABILITY_TOGGLES_RAW: ToggleDef[] = [
     enableCmd: "Set-AppCapabilityAccess",
     disableCmd: "Set-AppCapabilityAccess",
     tier: "free",
-    needsAdmin: false,
+    // This writes/removes machine-enforced Camera and AppPrivacy policy
+    // values in addition to ConsentStore.  Do not let the UI present a
+    // successful-looking toggle when its backend cannot elevate.
+    needsAdmin: true,
     irreversible: false,
     reducesSecurity: false,
     defenderFlagged: false,

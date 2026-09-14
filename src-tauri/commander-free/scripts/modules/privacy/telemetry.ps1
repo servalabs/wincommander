@@ -500,6 +500,22 @@ public class WC_PolicyRefresh {
             try { Set-LocationServiceMaster -Access $Access; $touched++ } catch {}
         }
 
+        # A registry write can be rejected by an administrator-owned policy
+        # even from an elevated process. Read Windows' effective decision back
+        # before reporting success so the UI never claims a failed Allow worked.
+        $effective = Get-AppCapabilityAccessStatus -Capability $Capability
+        $effectiveAccess = if ($effective.disabled) { 'Deny' } else { 'Allow' }
+        if ($effectiveAccess -ne $Access) {
+            return @{
+                error          = $true
+                message        = "Windows still reports $Capability as $effectiveAccess after requesting $Access. The policy change did not take effect."
+                capability     = $Capability
+                requestedValue = $Access
+                value          = $effectiveAccess
+                entriesTouched = $touched
+            }
+        }
+
         @{ status = "updated"; capability = $Capability; value = $Access; entriesTouched = $touched }
     }
     catch {
@@ -513,13 +529,37 @@ function Get-AppCapabilityAccessStatus {
     )
 
     try {
-        $path = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$Capability"
-        $value = (Get-ItemProperty -Path $path -Name "Value" -ErrorAction SilentlyContinue).Value
-        if ([string]::IsNullOrWhiteSpace($value)) { $value = "Allow" }
+        # Return the effective Windows decision. Capability changes can update
+        # more than the current-user ConsentStore, so that value alone cannot
+        # confirm an Allow request removed a camera policy.
+        $consentDenied = $false
+        $hardDenied = $false
+        $mixedAppAccess = $false
+        $desktopAppsValue = $null
+        foreach ($root in @(
+            "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore",
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore"
+        )) {
+            $value = (Get-ItemProperty -Path (Join-Path $root $Capability) -Name "Value" -ErrorAction SilentlyContinue).Value
+            if ($value -eq "Deny") { $consentDenied = $true }
+        }
+        if ($Capability -eq 'webcam') {
+            # ConsentStore roots are defaults. A child app entry can explicitly
+            # allow camera use, so surface that mixed state rather than calling
+            # the entire device blocked.
+            $desktopAppsValue = (Get-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam\NonPackaged' -Name 'Value' -ErrorAction SilentlyContinue).Value
+            $appValues = @(Get-ChildItem -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam' -Recurse -ErrorAction SilentlyContinue | ForEach-Object { (Get-ItemProperty -Path $_.PSPath -Name 'Value' -ErrorAction SilentlyContinue).Value } | Where-Object { $_ -in @('Allow', 'Deny') })
+            $mixedAppAccess = $consentDenied -and ($appValues -contains 'Allow')
+            $hardDenied = ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) -or ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) -or ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}' -Name 'Value' -ErrorAction SilentlyContinue).Value -eq 'Deny')
+        }
+        $denied = $hardDenied -or ($consentDenied -and -not $mixedAppAccess)
+        $value = if ($denied) { "Deny" } else { "Allow" }
         @{
             capability = $Capability
             value      = $value
-            disabled   = ($value -eq "Deny")
+            disabled   = $denied
+            desktop_apps_allowed = if ($Capability -eq 'webcam' -and $desktopAppsValue -eq 'Allow') { $true } elseif ($Capability -eq 'webcam' -and $desktopAppsValue -eq 'Deny') { $false } else { $null }
+            app_access_mixed = $mixedAppAccess
         }
     }
     catch {

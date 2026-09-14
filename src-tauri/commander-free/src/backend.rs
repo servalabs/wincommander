@@ -5504,13 +5504,27 @@ pub async fn kill_privacy_shield_process(app: AppHandle) -> Result<(), String> {
         "[PrivacyShield] Attempting to kill Privacy Shield process...",
     );
     let script = r#"
-        $proc = Get-WmiObject Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-            ($_.Name -in @('pythonw.exe', 'python.exe')) -and ($_.CommandLine -like "*--wc-privacy-shield*")
+        $markerRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+        $markerPath = Join-Path $markerRoot "WinCommander\logs\privacy_shield.pid"
+        $target = $null
+        if (Test-Path -LiteralPath $markerPath) {
+            try {
+                $candidatePid = [int](Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop).Trim()
+                $target = Get-Process -Id $candidatePid -ErrorAction SilentlyContinue
+            } catch {}
         }
-        if ($proc) {
-            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+        if (-not $target) {
+            $target = Get-CimInstance -ClassName Win32_Process `
+                -Filter "Name='python.exe' OR Name='pythonw.exe'" `
+                -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine -like "*--wc-privacy-shield*" } |
+                Select-Object -First 1
+        }
+        if ($target) {
+            Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue
             Write-Output "killed"
         }
+        Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
     "#;
 
     let (mut cmd, ps_exe) = build_powershell_command();

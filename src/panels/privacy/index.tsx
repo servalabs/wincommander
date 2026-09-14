@@ -46,6 +46,7 @@ import {
 } from "../../hooks/useAuthAnomalyMonitor";
 import type { AuthAnomalyTimeBasis, RansomwareAction } from "../../types/settings";
 import useClipboardGuardRules from "../../hooks/useClipboardGuardRules";
+import { executeBackendCommand } from "../../hooks/useBackend";
 import './index.css';
 
 export default function PrivacyPanel() {
@@ -76,6 +77,19 @@ export default function PrivacyPanel() {
     useEffect(() => {
         if (tourActive) setActiveTab("monitor");
     }, [tourActive, setActiveTab]);
+
+    // Start the two independent physical-privacy probes together as soon as
+    // Monitor is opened. Browser Hardening and Privacy Shield each retain
+    // their own card-level loading/error UI; the shared backend request map
+    // joins those card requests to these in-flight probes rather than starting
+    // a second PowerShell process for the same command.
+    useEffect(() => {
+        if (!showMonitoring || activeTab !== "monitor") return;
+        void Promise.allSettled([
+            executeBackendCommand("Get-InstalledBrowsersJson"),
+            executeBackendCommand("Get-PrivacyShieldStatus"),
+        ]);
+    }, [activeTab, showMonitoring]);
 
     const privacyToggles = PRIVACY_TOGGLES;
 
@@ -320,13 +334,6 @@ export default function PrivacyPanel() {
 
                     {showMonitoring && (
                         <TabsContent value="monitor" className="flex flex-col gap-4">
-                            {showExpertPrivacy && (
-                                <BrowserHardeningSection
-                                    isAdvanced={isAdvanced}
-                                    searchQuery={searchQuery}
-                                />
-                            )}
-
                             {monitoringMatchesSearch && (
                                 <SectionCard title="Alerts & Monitoring">
                                     {/* Two STATIC columns, not a CSS grid and not CSS multi-column.
@@ -434,6 +441,16 @@ export default function PrivacyPanel() {
                                     </div>
                                     </div>
                                 </SectionCard>
+                            )}
+
+                            {/* Keep the live camera control first: browser discovery may take
+                              * longer on machines with many profiles, but it must never delay
+                              * the Shield's Activate control appearing in this tab. */}
+                            {showExpertPrivacy && (
+                                <BrowserHardeningSection
+                                    isAdvanced={isAdvanced}
+                                    searchQuery={searchQuery}
+                                />
                             )}
                         </TabsContent>
                     )}

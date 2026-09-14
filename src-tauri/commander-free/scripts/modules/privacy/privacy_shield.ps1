@@ -84,16 +84,59 @@ function Get-PrivacyShieldCameraAvailability {
         }
 
         $names = @($devices | Sort-Object -Unique)
+        $policyBlockers = @()
+        try {
+            if ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) {
+                $policyBlockers += 'Your user Camera policy disables camera access (HKCU AllowCamera=0).'
+            }
+            if ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Camera' -Name 'AllowCamera' -ErrorAction SilentlyContinue).AllowCamera -eq 0) {
+                $policyBlockers += 'The device Camera policy disables camera access (HKLM AllowCamera=0).'
+            }
+            if ((Get-ItemProperty -Path 'HKCU:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) {
+                $policyBlockers += 'Your user App Privacy policy forces apps to be denied camera access (HKCU LetAppsAccessCamera=2).'
+            }
+            if ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy' -Name 'LetAppsAccessCamera' -ErrorAction SilentlyContinue).LetAppsAccessCamera -eq 2) {
+                $policyBlockers += 'The device App Privacy policy forces apps to be denied camera access (HKLM LetAppsAccessCamera=2).'
+            }
+            if ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceAccess\Global\{E5323777-F976-4f5b-9B55-B94699C46E44}' -Name 'Value' -ErrorAction SilentlyContinue).Value -eq 'Deny') {
+                $policyBlockers += 'The Windows device camera master switch is set to Deny.'
+            }
+        } catch {}
+        $blockedByPolicy = $policyBlockers.Count -gt 0
         @{
-            available = ($names.Count -gt 0)
+            available = ($names.Count -gt 0) -and -not $blockedByPolicy
             devices   = $names
-            message   = if ($names.Count -gt 0) { "Camera available." } else { "No usable camera detected." }
+            message   = if ($blockedByPolicy) { "Camera is blocked by Windows policy: " + ($policyBlockers -join ' ') } elseif ($names.Count -gt 0) { "Camera available." } else { "No usable camera detected." }
+            blockedByPolicy = $blockedByPolicy
+            policyBlockers = @($policyBlockers)
             isWindowsServer = $isWindowsServer
         }
     }
     catch {
         @{ available = $false; devices = @(); message = $_.Exception.Message; isWindowsServer = $false }
     }
+}
+
+function Get-PrivacyShieldPidMarkerPath {
+    $root = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+    Join-Path $root "WinCommander\logs\privacy_shield.pid"
+}
+
+function Get-PrivacyShieldPidFromMarker {
+    $path = Get-PrivacyShieldPidMarkerPath
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try {
+        $candidatePid = [int](Get-Content -LiteralPath $path -Raw -ErrorAction Stop).Trim()
+        if ($candidatePid -gt 0 -and (Get-Process -Id $candidatePid -ErrorAction SilentlyContinue)) {
+            return $candidatePid
+        }
+    } catch {}
+    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    return $null
+}
+
+function Clear-PrivacyShieldPidMarker {
+    Remove-Item -LiteralPath (Get-PrivacyShieldPidMarkerPath) -Force -ErrorAction SilentlyContinue
 }
 
 function Get-PrivacyShieldStatus {
@@ -122,6 +165,17 @@ function Get-PrivacyShieldStatus {
             }
         }
 
+        # CommandLine is unavailable for some elevated or cross-integrity
+        # Python processes. The detector writes its own PID marker, which lets
+        # status and Stop remain correct without guessing at unrelated Python.
+        if (-not $running) {
+            $markerPid = Get-PrivacyShieldPidFromMarker
+            if ($markerPid) {
+                $running = $true
+                $processId = $markerPid
+            }
+        }
+
         # NOTE: the old "last-ditch fallback" that grabbed the first
         # python.exe via Get-Process was removed. It didn't check the
         # --wc-privacy-shield marker and therefore produced false positives
@@ -135,6 +189,7 @@ function Get-PrivacyShieldStatus {
             cameraAvailable = [bool]$camera.available
             cameraDevices   = @($camera.devices)
             cameraMessage   = $camera.message
+            cameraPolicyBlockers = @($camera.policyBlockers)
             isWindowsServer = [bool]$camera.isWindowsServer
         }
     }
@@ -174,7 +229,7 @@ function Start-PrivacyShield {
         if ($status.cameraAvailable -ne $true) {
             return @{
                 error = $true
-                message = "No camera detected - Privacy Shield requires a webcam."
+                message = if ($status.cameraMessage) { $status.cameraMessage } else { "No camera detected - Privacy Shield requires a webcam." }
                 cameraAvailable = $false
                 cameraDevices = @()
             }
@@ -244,6 +299,7 @@ CAPTURES_DIR = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", 
 # WinCommander; this file survives the wrapper and is tailed live by the
 # Rust backend (backend.rs shield event reader).
 EVENTS_FILE = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", "logs", "privacy_shield_events.ndjson")
+PID_FILE = os.path.join(os.environ.get("LOCALAPPDATA", ""), "WinCommander", "logs", "privacy_shield.pid")
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
 def log(msg):
@@ -265,52 +321,23 @@ def emit_event(name, reason=""):
     except Exception:
         pass
 
-
-# --- Parent-PID watchdog ---
-# Backstop for the Rust-side kill-on-close Job Object. If WinCommander
-# is end-tasked or BSODs, this thread notices the parent process is
-# gone and self-terminates. Without it the Python shield can outlive
-# its owner indefinitely (the PowerShell wrapper that spawned us has
-# already exited, so our OS parent is services.exe -- the Job Object
-# is the only thing holding us; if the OS denies job assignment
-# (nested-job restriction) we never get killed).
-def _parent_watchdog(parent_pid):
-    if not parent_pid or parent_pid <= 0:
-        return
-    # Open the parent with SYNCHRONIZE so we can WaitForSingleObject
-    # on it. When the parent dies, the wait returns and we exit.
-    PROCESS_SYNCHRONIZE = 0x00100000
-    INFINITE = 0xFFFFFFFF
+def write_pid_marker():
     try:
-        kernel32 = ctypes.windll.kernel32
-        h = kernel32.OpenProcess(PROCESS_SYNCHRONIZE, False, int(parent_pid))
-        if not h:
-            # OpenProcess failed (parent already gone? insufficient
-            # rights?). Fall back to polling.
-            log(f"watchdog: OpenProcess({parent_pid}) failed, polling instead")
-            while True:
-                time.sleep(3)
-                try:
-                    os.kill(int(parent_pid), 0)
-                except OSError:
-                    log(f"watchdog: parent PID {parent_pid} gone (poll); exiting")
-                    os._exit(0)
-                    return
-        # Block until the parent exits.
-        kernel32.WaitForSingleObject(h, INFINITE)
-        kernel32.CloseHandle(h)
-        log(f"watchdog: parent PID {parent_pid} exited; shield exiting")
-        os._exit(0)
+        temporary = PID_FILE + ".tmp"
+        with open(temporary, "w", encoding="ascii") as handle:
+            handle.write(str(os.getpid()))
+        os.replace(temporary, PID_FILE)
     except Exception as e:
-        log(f"watchdog error: {e}")
+        log(f"Could not write detector PID marker: {e}")
 
+def clear_pid_marker():
+    try:
+        os.remove(PID_FILE)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        log(f"Could not remove detector PID marker: {e}")
 
-def _start_parent_watchdog(parent_pid):
-    if not parent_pid:
-        return
-    t = threading.Thread(target=_parent_watchdog, args=(parent_pid,), daemon=True)
-    t.start()
-    log(f"watchdog: monitoring parent PID {parent_pid}")
 
 # --- Dependency Imports ---
 try:
@@ -595,6 +622,27 @@ class ShieldWorker(QThread):
             self.init_failed.emit("No camera detected - webcam not found or in use by another app")
             return
 
+        # A device can open successfully while returning only black frames,
+        # commonly because its physical shutter is closed or the camera is
+        # reserved by another application. Treat that as an unavailable feed;
+        # otherwise every frame becomes a false NO FACE alert and blacks out
+        # the user's display.
+        black_frames = 0
+        sampled_frames = 0
+        for _ in range(20):
+            ok, sample = cap.read()
+            if not ok or sample is None:
+                continue
+            sampled_frames += 1
+            if float(sample.mean()) < 5.0:
+                black_frames += 1
+        if sampled_frames == 0 or black_frames >= 16:
+            cap.release()
+            self.status_msg.emit("Camera feed is black")
+            log(f"Camera feed unavailable: {black_frames}/{sampled_frames} sampled frames were black")
+            self.init_failed.emit("Camera is delivering black frames - open its privacy shutter or close another camera app")
+            return
+
         self.status_msg.emit("Shield Active")
         
         last_ts = time.monotonic()
@@ -832,18 +880,9 @@ class ShieldApp(QObject):
         parser.add_argument('--capture-speed', type=int, default=1, help='Video playback speed: 1=real-time, 2=2x, 3=3x, 4=4x')
         # Ignored for now but kept for API compat if needed
         parser.add_argument('--mode', type=str, default='')
-        # WinCommander process PID -- if set, we start a watchdog thread
-        # that self-exits when this PID disappears. Backstop for the
-        # Job Object orphan-killer on the Rust side.
-        parser.add_argument('--parent-pid', type=int, default=0)
-
         self.args, _ = parser.parse_known_args()
 
-        # Start the parent-PID watchdog before doing any heavy init so
-        # we can never get stuck in an init-blocked state where the
-        # only thing holding us alive is our own UI thread.
-        if self.args.parent_pid:
-            _start_parent_watchdog(self.args.parent_pid)
+        write_pid_marker()
 
         log(f"Shield starting: camera={self.args.camera}, gaze={self.args.check_gaze}, faces={self.args.check_faces}, phone={self.args.check_phone}, model={self.args.model_level}, wake_delay_ms={self.args.wake_delay_ms}, device_multiplier={self.args.device_wake_multiplier}, multi_face_multiplier={self.args.multi_face_wake_multiplier}, buffer_frames={self.args.buffer_frames}")
 
@@ -901,10 +940,13 @@ class ShieldApp(QObject):
         # control visual enforcement; an unchecked toggle never silences an
         # attention event.
         self._emit_look_event(is_clear, reason)
-        should_blur = is_clear or (
-            (("LOOK AWAY" in reason) or ("NO FACE" in reason)) and self.args.blur_gaze
-        ) or (("MULTIPLE FACES" in reason) and self.args.blur_faces) or (
-            ("PHONE DETECTED" in reason) and self.args.blur_phone
+        # `is_clear` means the user is attentive. It must clear the overlay,
+        # not satisfy a blur condition; otherwise every successful camera
+        # startup immediately blacks out the screen.
+        should_blur = (not is_clear) and (
+            ((("LOOK AWAY" in reason) or ("NO FACE" in reason)) and self.args.blur_gaze)
+            or (("MULTIPLE FACES" in reason) and self.args.blur_faces)
+            or (("PHONE DETECTED" in reason) and self.args.blur_phone)
         )
         self.overlay.update_state(is_clear or not should_blur, reason)
 
@@ -916,6 +958,7 @@ class ShieldApp(QObject):
 
     def handle_init_fail(self, msg):
         log(f"Shield init failed: {msg}")
+        clear_pid_marker()
         self.app.quit()
         sys.exit(1)
         
@@ -936,17 +979,6 @@ if __name__ == "__main__":
             Remove-ItemSecure -Path (Join-Path $env:APPDATA "WinCommander\privacy_shield.py") -Force -ErrorAction SilentlyContinue
         }
 
-        # The PowerShell host that's running this script was spawned
-        # directly by WinCommander (backend.rs -> std::process::Command),
-        # so this process's parent IS the WinCommander PID we want the
-        # Python watchdog to track.
-        $wcPid = 0
-        try {
-            $wcPid = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID" `
-                -ErrorAction SilentlyContinue).ParentProcessId
-        } catch {}
-        if (-not $wcPid) { $wcPid = 0 }
-
         $pythonArgs = @(
             "-",
             "$shieldProcessMarker",
@@ -958,8 +990,7 @@ if __name__ == "__main__":
             "--device-wake-multiplier", "$DeviceWakeMultiplier",
             "--multi-face-wake-multiplier", "$MultiFaceWakeMultiplier",
             "--buffer-frames", "$BufferFrames",
-            "--capture-speed", "$CaptureSpeed",
-            "--parent-pid", "$wcPid"
+            "--capture-speed", "$CaptureSpeed"
         )
         if ($CheckGaze) { $pythonArgs += "--check-gaze" }
         if ($CheckFaces) { $pythonArgs += "--check-faces" }
@@ -1003,7 +1034,9 @@ if __name__ == "__main__":
             $exitMessage = "Failed to start Privacy Shield - process exited unexpectedly."
             if ($logPath -and (Test-Path $logPath)) {
                 $logTail = (Get-Content $logPath -Tail 30 | Out-String).Trim()
-                if ($logTail -imatch "no camera|camera open|webcam|videocapture|camera not|camera timed out") {
+                if ($logTail -imatch "black frames|camera feed unavailable") {
+                    $exitMessage = "Camera feed is black - open its privacy shutter or close another camera app."
+                } elseif ($logTail -imatch "no camera|camera open|webcam|videocapture|camera not|camera timed out") {
                     $exitMessage = "No camera detected - Privacy Shield requires a webcam."
                 } elseif ($logTail -imatch "missing python dependency|importerror|module not found") {
                     $exitMessage = "Missing Python dependency - please reinstall the AI runtime."
@@ -1030,9 +1063,7 @@ function Stop-PrivacyShield {
         if ($status.running) {
             Stop-Process -Id $status.processId -Force -ErrorAction SilentlyContinue
         }
-        
-        # Cleanup any stragglers
-        Get-Process -Name "pythonw", "python" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*$shieldProcessMarker*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+        Clear-PrivacyShieldPidMarker
 
         return @{ success = $true; message = "Stopped." }
     }

@@ -18,6 +18,68 @@ describe("privacy shield device guardrails", () => {
     expect(shield).toContain("-Filter \"PNPClass='$className'\"");
     expect(shield).toContain("cameraAvailable");
     expect(shield).toContain("Privacy Shield requires a webcam");
+    expect(shield).toContain("blockedByPolicy");
+    expect(shield).toContain("Camera is blocked by Windows policy:");
+    expect(shield).toContain("HKCU AllowCamera=0");
+    expect(shield).toContain("HKLM AllowCamera=0");
+    expect(shield).toContain("HKCU LetAppsAccessCamera=2");
+    expect(shield).toContain("HKLM LetAppsAccessCamera=2");
+    expect(shield).toContain("policyBlockers");
+  });
+
+  test("the camera capability toggle requires elevation for its policy writes", async () => {
+    const toggles = await read("src/registry/capabilities.toggles.ts");
+    const webcam = toggles.slice(toggles.indexOf('id: "cap-webcam"'), toggles.indexOf('id: "cap-microphone"'));
+
+    expect(webcam).toContain("needsAdmin: true");
+  });
+
+  test("capability changes fail when Windows still reports the opposite effective access", async () => {
+    const freeModule = await read("src-tauri/commander-free/scripts/modules/privacy/telemetry.ps1");
+    const sharedModule = await read("src-tauri/wincmd-shared/scripts/capability-access.ps1");
+
+    for (const source of [freeModule, sharedModule]) {
+      expect(source).toContain("$effective = Get-AppCapabilityAccessStatus -Capability $Capability");
+      expect(source).toContain("$effectiveAccess -ne $Access");
+      expect(source).toContain("The policy change did not take effect.");
+      expect(source).not.toContain("catch {}\n        }\n\n        @{ status = \"updated\"; capability = $Capability");
+    }
+  });
+
+  test("an attentive camera result clears the Privacy Shield overlay", async () => {
+    const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
+
+    expect(shield).toContain("should_blur = (not is_clear) and (");
+    expect(shield).toContain("self.overlay.update_state(is_clear or not should_blur, reason)");
+    expect(shield).not.toContain("should_blur = is_clear or (");
+  });
+
+  test("detector lifetime is not tied to the transient PowerShell launcher", async () => {
+    const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
+
+    expect(shield).not.toContain("--parent-pid");
+    expect(shield).not.toContain("_parent_watchdog");
+    expect(shield).not.toContain("watchdog: parent PID");
+  });
+
+  test("black camera frames fail startup before a false look-away blackout", async () => {
+    const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
+
+    expect(shield).toContain("black_frames >= 16");
+    expect(shield).toContain("Camera is delivering black frames");
+    expect(shield).toContain("open its privacy shutter or close another camera app");
+    expect(shield).toContain("Camera feed is black - open its privacy shutter or close another camera app.");
+  });
+
+  test("stop paths use the detector PID marker when command-line inspection is unavailable", async () => {
+    const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
+    const backend = await read("src-tauri/commander-free/src/backend.rs");
+
+    expect(shield).toContain("privacy_shield.pid");
+    expect(shield).toContain("Get-PrivacyShieldPidFromMarker");
+    expect(shield).toContain("Clear-PrivacyShieldPidMarker");
+    expect(backend).toContain("privacy_shield.pid");
+    expect(backend).toContain("Get-CimInstance -ClassName Win32_Process");
   });
 
   test("start command does not optimistically persist active state", async () => {
