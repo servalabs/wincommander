@@ -110,14 +110,6 @@ function Get-DependencyRegistry {
             canHide  = $false
         },
         @{
-            id       = 'chocolatey'
-            name     = 'Chocolatey'
-            wingetId = $null    # Installed via its own bootstrap script, not winget
-            panelId  = 'apps'
-            canStart = $false
-            canHide  = $false
-        },
-        @{
             id       = 'powershell7'
             name     = 'PowerShell 7'
             wingetId = 'Microsoft.PowerShell'
@@ -313,47 +305,6 @@ function Test-WingetDependencyInstalled {
     }
 
     return @{ installed = $installed; version = $version; missing = @() }
-}
-
-function Get-LocalChocolateyPath {
-    $candidate = Join-Path "$env:ProgramData\chocolatey" "bin\choco.exe"
-    if (Test-Path $candidate) { return $candidate }
-    return $null
-}
-
-function Test-ChocolateyInstalled {
-    $chocoCmd = Get-LocalChocolateyPath
-    $installed = $null -ne $chocoCmd
-    $version = $null
-    if ($installed) {
-        $version = try { (& $chocoCmd --version 2>$null | Select-Object -First 1) } catch { $null }
-    }
-    return @{ installed = $installed; version = $version }
-}
-
-function Get-LocalScoopPath {
-    $roots = @(
-        # Scoop's supported default is per-user.  Check it first so a normal
-        # user installation is visible to Packages & Apps without elevation.
-        "$env:USERPROFILE\scoop",
-        "$env:ProgramData\WinCommander\scoop",
-        "$env:ProgramData\scoop"
-    )
-    foreach ($root in $roots) {
-        $candidate = Join-Path $root "shims\scoop.cmd"
-        if (Test-Path $candidate) { return $candidate }
-    }
-    return $null
-}
-
-function Test-ScoopInstalled {
-    $scoopCmd = Get-LocalScoopPath
-    $installed = $null -ne $scoopCmd
-    $version = $null
-    if ($installed) {
-        $version = try { (& $scoopCmd --version 2>$null | Select-Object -First 1) } catch { $null }
-    }
-    return @{ installed = $installed; version = $version }
 }
 
 function Find-Python312Exe {
@@ -944,36 +895,6 @@ function Install-WingetDependency {
     Repair-WinGetPackageManager -ErrorAction SilentlyContinue
 
     return @{ success = $true; message = "Winget installed." }
-}
-
-function Install-Chocolatey {
-    Assert-IsAdmin
-    $status = Test-ChocolateyInstalled
-    if ($status.installed) { return @{ success = $true; message = "Chocolatey already installed." } }
-
-    try {
-        # The bootstrap script honours ChocolateyInstall. Pin it to ProgramData
-        # so a user-level environment override cannot redirect the engine.
-        $env:ChocolateyInstall = "$env:ProgramData\chocolatey"
-        Set-ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-    } catch {
-        throw "Failed to install Chocolatey: $($_.Exception.Message)"
-    }
-
-    $status = Test-ChocolateyInstalled
-    if (-not $status.installed) {
-        throw "Chocolatey installer finished but choco.exe was not detected."
-    }
-    return @{ success = $true; message = "Chocolatey installed." }
-}
-
-function Install-Scoop {
-    # Scoop is deliberately optional.  Its bootstrap is a remote PowerShell
-    # script with no package identity or pinned hash that WinCommander can
-    # verify.  Do not download or execute it from a background/helper path.
-    throw 'Scoop is optional. WinCommander does not run Scoop bootstrap scripts. Install it through your organization-approved process, then refresh Packages & Apps.'
 }
 
 function Install-PowerShell7 {
@@ -1664,8 +1585,6 @@ function Get-DependencyStatus {
             'meshVpn' { Test-MeshVpnInstalled }
             'productivityEngine' { Test-ProductivityEngineInstalled }
             'winget' { Test-WingetDependencyInstalled }
-            'chocolatey' { Test-ChocolateyInstalled }
-            'scoop' { Test-ScoopInstalled }
             'privacyShieldAI' { Test-PrivacyShieldAIInstalled }
             'powershell7' { Test-PowerShell7Installed }
             'vcredist' { Test-VCRedistInstalled }
@@ -1704,8 +1623,8 @@ function Install-Dependency {
         Install a single dependency by ID.
         After installing, automatically hides and starts the app if applicable.
     .PARAMETER Id
-        One of: meshVpn, productivityEngine, winget, chocolatey, scoop,
-        privacyShieldAI, powershell7, vcredist, systemCleaner, instantSearch, diskHealthEngine
+        One of: meshVpn, productivityEngine, winget, privacyShieldAI,
+        powershell7, vcredist, systemCleaner, instantSearch, diskHealthEngine
     .PARAMETER Target
         Optional sub-target (for privacyShieldAI: specific package name)
     #>
@@ -1715,11 +1634,11 @@ function Install-Dependency {
         [string]$Target = $null
     )
 
-    # Scoop is not a WinCommander engine and has no approved unattended
-    # installer.  Refuse it before the generic elevation check so callers do
-    # not imply that administrator rights would make it available.
-    if ($Id -eq 'scoop') {
-        return @{ error = $true; id = $Id; message = 'Scoop is optional. WinCommander does not run Scoop bootstrap scripts. Install it through your organization-approved process, then refresh Packages & Apps.' }
+    # Chocolatey and Scoop are optional package-manager choices, not
+    # WinCommander engines. Refuse installation before the generic elevation
+    # check so callers do not imply that administrator rights make them needed.
+    if ($Id -eq 'chocolatey' -or $Id -eq 'scoop') {
+        return @{ error = $true; id = $Id; message = "$Id is optional. WinCommander does not install package managers. Install it through your organization-approved process, then refresh Packages & Apps." }
     }
 
     Assert-IsAdmin
@@ -1739,8 +1658,6 @@ function Install-Dependency {
             'meshVpn' { Install-MeshVpn }
             'productivityEngine' { Install-ProductivityEngine }
             'winget' { Install-WingetDependency }
-            'chocolatey' { Install-Chocolatey }
-            'scoop' { Install-Scoop }
             'privacyShieldAI' { Install-PrivacyShieldAI -Target $Target }
             'powershell7' { Install-PowerShell7 }
             'vcredist' { Install-VCRedist }

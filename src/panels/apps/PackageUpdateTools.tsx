@@ -6,15 +6,10 @@ import { Icon } from "../../components/ui/icon";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { resolveAvailableTab } from "../../components/ui/tabSelection";
 import type { ManagerInventory, PackageUpdateInventory } from "../../hooks/useBackend";
-import { executeBackendCommand, useBackend } from "../../hooks/useBackend";
+import { useBackend } from "../../hooks/useBackend";
 import { releasePackageOperation, tryAcquirePackageOperation } from "../../lib/packageOperationLock";
 import { useAppState } from "../../context/AppContext";
 import { filterCatalogDuplicates } from "./packageUpdateDisplay";
-
-// Managers that have a reviewed, product-owned installer. They are not part of
-// the engine readiness grid or its bulk-install action. Scoop is intentionally
-// absent: its upstream bootstrap is a remote script WinCommander cannot verify.
-const INSTALLABLE_MANAGERS: Record<string, string> = { chocolatey: "chocolatey" };
 
 // Display labels for the manager ids the backend reports (package_updates.rs
 // `Manager::label`) — always winget/chocolatey/scoop/npm, in that order.
@@ -44,7 +39,6 @@ export function PackageUpdateTools() {
   const [activeManager, setActiveManager] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
-  const [installingManagers, setInstallingManagers] = useState<Set<string>>(new Set());
   const displayedManagers = useMemo(
     () => packages ? filterCatalogDuplicates(packages.managers, appInventory) : [],
     [appInventory, packages],
@@ -104,20 +98,6 @@ export function PackageUpdateTools() {
   };
   const cancel = async () => { await backendRef.current.packageUpdatesCancel(); };
 
-  const installManager = async (manager: string) => {
-    setInstallingManagers((prev) => new Set(prev).add(manager));
-    try {
-      const result = await executeBackendCommand<unknown>("Install-Dependency", { Id: INSTALLABLE_MANAGERS[manager] });
-      setMessage(result.success ? `${manager} installed.` : (result.error || `Failed to install ${manager}.`));
-      if (result.success) {
-        await runAppInventoryScan(true);
-        await inspectPackages();
-      }
-    } finally {
-      setInstallingManagers((prev) => { const next = new Set(prev); next.delete(manager); return next; });
-    }
-  };
-
   const displayedUpdateCount = displayedManagers.reduce((count, manager) => count + manager.updates.length, 0);
 
   return <section id="package-updates" className="flex scroll-mt-4 flex-col gap-4">
@@ -127,26 +107,18 @@ export function PackageUpdateTools() {
     </Card>
     {visibleActiveManager && <Tabs value={visibleActiveManager} onValueChange={setActiveManager}>
       <TabsList className="w-full flex-wrap justify-start">{displayedManagers.map((manager) => <TabsTrigger key={manager.manager} value={manager.manager} className="gap-1.5">{MANAGER_LABELS[manager.manager] ?? manager.manager}<Badge tone={manager.updates.length ? "accent" : "neutral"}>{manager.updates.length}</Badge></TabsTrigger>)}</TabsList>
-      {displayedManagers.map((manager) => <TabsContent key={manager.manager} value={manager.manager}><PackageManager manager={manager} hiddenUpdateCount={hiddenUpdateCounts.get(manager.manager) ?? 0} selected={packageIds} toggle={(id) => setPackageIds(toggle(packageIds, id))} onInstallManager={installManager} installingManagers={installingManagers} /></TabsContent>)}
+      {displayedManagers.map((manager) => <TabsContent key={manager.manager} value={manager.manager}><PackageManager manager={manager} hiddenUpdateCount={hiddenUpdateCounts.get(manager.manager) ?? 0} selected={packageIds} toggle={(id) => setPackageIds(toggle(packageIds, id))} /></TabsContent>)}
     </Tabs>}
     {!!packageIds.size && <div className="flex justify-end"><Button variant="primary" disabled={busy} onClick={() => void applyPackages()}>Update {packageIds.size} selected</Button></div>}
     {message && <Notice tone={message.includes("failed") ? "warning" : "success"} text={message} />}
   </section>;
 }
 
-function PackageManager({ manager, hiddenUpdateCount, selected, toggle: onToggle, onInstallManager, installingManagers }: { manager: ManagerInventory; hiddenUpdateCount: number; selected: Set<string>; toggle: (id: string) => void; onInstallManager: (manager: string) => void; installingManagers: Set<string> }) {
+function PackageManager({ manager, hiddenUpdateCount, selected, toggle: onToggle }: { manager: ManagerInventory; hiddenUpdateCount: number; selected: Set<string>; toggle: (id: string) => void }) {
   if (!manager.available) {
-    if (manager.manager === "scoop") {
-      return <Notice tone="warning" text="Scoop is optional and is not available on this device. Scoop-only updates are unavailable; other package managers remain available." />;
-    }
-    // Chocolatey is an optional package-manager choice. Winget/npm keep the
-    // passive notice because this panel cannot install them safely here.
-    if (manager.manager in INSTALLABLE_MANAGERS) {
-      const installing = installingManagers.has(manager.manager);
-      return <Card><CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
-        <p className="text-sm text-[var(--text-dim)]">{manager.manager}: {manager.error ?? "not available"}</p>
-        <Button variant="primary" disabled={installing} onClick={() => onInstallManager(manager.manager)}><Icon icon="download" />{installing ? "Installing…" : `Install ${manager.manager}`}</Button>
-      </CardContent></Card>;
+    if (manager.manager === "chocolatey" || manager.manager === "scoop") {
+      const label = MANAGER_LABELS[manager.manager] ?? manager.manager;
+      return <Notice tone="warning" text={`${label} is optional and is not available on this device. Its updates are unavailable; other package managers remain available.`} />;
     }
     return <Notice tone="warning" text={`${manager.manager}: ${manager.error ?? "not available"}`} />;
   }

@@ -17,25 +17,26 @@ describe("Packages and Apps layout", () => {
     expect(installer).toContain("{updatesTools &&");
   });
 
-  test("keeps Scoop out of engine readiness and removes obsolete package surfaces", async () => {
+  test("keeps optional package managers out of engine readiness and removes obsolete package surfaces", async () => {
     const engines = await read("src/panels/apps/components/EnginesSection.tsx");
     const panel = await read("src/panels/apps/index.tsx");
 
-    expect(engines).toContain('"chocolatey"');
+    expect(engines).not.toContain('"chocolatey"');
     expect(engines).not.toContain('"scoop"');
     expect(engines).not.toContain('"encryptionEngine"');
     expect(panel).not.toContain("ClassicWindowsApps");
     expect(panel).not.toContain("classic-photo-viewer");
   });
 
-  test("keeps Scoop optional when it is unavailable", async () => {
+  test("keeps Chocolatey and Scoop optional when unavailable", async () => {
     const updates = await read("src/panels/apps/PackageUpdateTools.tsx");
     const dependencies = await read("src-tauri/commander-free/scripts/modules/dependencies/dependencies.ps1");
 
-    expect(updates).toContain('Scoop is optional and is not available on this device.');
-    expect(updates).not.toContain('scoop: "scoop"');
-    expect(dependencies).toContain("WinCommander does not run Scoop bootstrap scripts");
-    expect(dependencies).not.toContain("https://get.scoop.sh");
+    expect(updates).toContain('manager.manager === "chocolatey" || manager.manager === "scoop"');
+    expect(updates).not.toContain('INSTALLABLE_MANAGERS');
+    expect(dependencies).toContain("$Id -eq 'chocolatey' -or $Id -eq 'scoop'");
+    expect(dependencies).not.toContain("Install-Chocolatey");
+    expect(dependencies).not.toContain("Install-Scoop");
   });
 
   test("moves successful installs to Installed without waiting for the inventory refresh", async () => {

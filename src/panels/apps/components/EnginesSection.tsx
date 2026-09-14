@@ -12,7 +12,7 @@ const CRITICAL_ENGINES = new Set([
 ]);
 const OPTIONAL_ENGINES = new Set([
   "meshVpn", "productivityEngine", "privacyShieldAI",
-  "metadataScrubber", "localLlm", "vcredist", "chocolatey",
+  "metadataScrubber", "localLlm", "vcredist",
 ]);
 
 const ENGINE_DESCRIPTIONS: Record<string, string> = {
@@ -22,7 +22,6 @@ const ENGINE_DESCRIPTIONS: Record<string, string> = {
   systemCleaner:       "Deep junk removal beyond Disk Cleanup",
   winget:              "Windows Package Manager for app installs",
   powershell7:         "Modern PowerShell runtime for all scripts",
-  chocolatey:          "Community package manager for app installs & updates",
   meshVpn:             "Peer-to-peer encrypted mesh networking",
   productivityEngine:  "Virtual desktop & focus-mode features",
   privacyShieldAI:     "AI-powered behaviour analysis shield",
@@ -40,7 +39,6 @@ const ENGINE_ICONS: Record<string, string> = {
   systemCleaner:      "eraser",
   winget:             "cube",
   powershell7:        "console",
-  chocolatey:         "shopping-cart",
   meshVpn:            "globe-network",
   productivityEngine: "desktop",
   privacyShieldAI:    "shield",
