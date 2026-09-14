@@ -14,6 +14,22 @@ pub(crate) async fn execute(_app: AppHandle, raw_paths: Vec<String>) -> Result<(
         .map_err(|error| format!("secure erase worker failed: {error}"))?
 }
 
+#[tauri::command]
+pub(crate) async fn secure_shred(
+    path: String,
+    capability_token: Option<String>,
+) -> Result<(), String> {
+    let canonical_path = crate::authz::canonical_path(&path);
+    crate::authz::consume_required(
+        capability_token.as_deref(),
+        crate::authz::DestructiveAction::DiskDelete,
+        &crate::authz::secure_erase_args(&canonical_path),
+    )?;
+    tokio::task::spawn_blocking(move || execute_cli(vec![canonical_path]))
+        .await
+        .map_err(|error| format!("secure erase worker failed: {error}"))?
+}
+
 pub(crate) fn log_result(result: Result<(), String>) {
     match result {
         Ok(()) => crate::log_message_src("info", "core", "[ContextShred] completed"),
@@ -44,5 +60,7 @@ mod tests {
     fn in_app_and_explorer_paths_share_the_same_native_core() {
         let source = include_str!("context_menu_shred.rs");
         assert!(source.contains("commander_context_shred::execute_cli(raw_paths)"));
+        assert!(source.contains("pub(crate) async fn secure_shred"));
+        assert!(source.contains("DestructiveAction::DiskDelete"));
     }
 }

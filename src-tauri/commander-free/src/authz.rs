@@ -12,7 +12,7 @@ mod trusted;
 
 pub use arguments::{
     canonical_path, decoy_delete_args, disk_delete_args, full_lockdown_args, kill_switch_args,
-    lockdown_args, LockdownPlanSnapshot,
+    lockdown_args, secure_erase_args, LockdownPlanSnapshot,
 };
 pub use capability::{consume, consume_required, DestructiveAction};
 pub use dispatch::{
@@ -35,7 +35,7 @@ pub async fn request_destructive_confirmation(
 }
 
 #[cfg(test)]
-use arguments::{free_space_erase_args, secure_erase_args};
+use arguments::free_space_erase_args;
 #[cfg(test)]
 use capability::mint;
 #[cfg(test)]

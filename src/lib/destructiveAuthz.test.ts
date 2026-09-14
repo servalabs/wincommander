@@ -22,7 +22,7 @@ describe("destructive confirmation request", () => {
       /invokeUnallocatedSpaceErase:[\s\S]*requestDestructiveCapability\([\s\S]*command: "free_space_erase"[\s\S]*CapabilityToken: capabilityToken/,
     );
     expect(source).toMatch(
-      /invoke7Erase:[\s\S]*requestDestructiveCapability\(\{ command: "secure_erase", path \}\)[\s\S]*CapabilityToken: capabilityToken/,
+      /invoke7Erase:[\s\S]*requestDestructiveCapability\(\{ command: "secure_erase", path \}\)[\s\S]*invoke\("secure_shred", \{ path, capabilityToken \}\)/,
     );
   });
 
