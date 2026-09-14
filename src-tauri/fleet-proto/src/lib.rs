@@ -1042,6 +1042,14 @@ pub struct RemoteSearchResult {
     pub command_id: String,
     pub rows: Vec<RemoteSearchResultRow>,
     pub index_status: Option<Value>,
+    /// The server-signed cap the device accepted after applying its independent
+    /// local bounds. `None` means the reporting agent predates cap receipts.
+    #[serde(default)]
+    pub accepted_result_limit: Option<usize>,
+    /// `true` only when additional eligible rows existed beyond the accepted
+    /// cap. This must never be inferred from `rows.len()`.
+    #[serde(default)]
+    pub cap_reached: Option<bool>,
     /// Whether this device actually evaluated `RemoteSearchRequest::predicates`.
     ///
     /// Serde ignores unknown fields, so an agent older than the predicate

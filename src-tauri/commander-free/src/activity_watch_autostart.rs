@@ -25,6 +25,48 @@ use sysinfo::{ProcessesToUpdate, System};
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Bounded, content-free local diagnosis that the Fleet reporter can carry
+/// without exposing an ActivityWatch bucket, window title, URL, file path, or
+/// the operating system's process error text. The reporting bridge owns the
+/// timestamped delivery receipt; this supervisor owns only process/API facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActivityWatchSupervisorCode {
+    NotInstalled,
+    LocalApiUnreachable,
+    WatchersUnhealthy,
+    StartupDisabled,
+    StartupFailed,
+}
+
+impl ActivityWatchSupervisorCode {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotInstalled => "not_installed",
+            Self::LocalApiUnreachable => "local_api_unreachable",
+            Self::WatchersUnhealthy => "watchers_unhealthy",
+            Self::StartupDisabled => "startup_disabled",
+            Self::StartupFailed => "startup_failed",
+        }
+    }
+}
+
+/// Translate internal or OS-originated failures to the small public-safe
+/// reason vocabulary. Keep this mapping string-only and side-effect free so
+/// it can be used by a check-in producer without re-running supervision.
+pub(crate) fn activity_watch_supervisor_code(error: &str) -> ActivityWatchSupervisorCode {
+    if error == "ActivityWatch is not installed" {
+        ActivityWatchSupervisorCode::NotInstalled
+    } else if error.contains("API is unreachable") || error.contains("did not become ready") {
+        ActivityWatchSupervisorCode::LocalApiUnreachable
+    } else if error.contains("watchers did not become healthy") {
+        ActivityWatchSupervisorCode::WatchersUnhealthy
+    } else if error.contains("disabled in Productivity settings") {
+        ActivityWatchSupervisorCode::StartupDisabled
+    } else {
+        ActivityWatchSupervisorCode::StartupFailed
+    }
+}
+
 /// Begin the one-shot ActivityWatch supervisor without delaying app startup.
 pub fn init() {
     #[cfg(windows)]
@@ -45,7 +87,11 @@ pub fn init() {
                         &format!("[ActivityWatch] auto-start attempt {attempt}/3 skipped: {error}"),
                     );
                     // A missing installation cannot heal during this launch.
-                    if error == "ActivityWatch is not installed" || attempt == 3 {
+                    if matches!(
+                        activity_watch_supervisor_code(&error),
+                        ActivityWatchSupervisorCode::NotInstalled
+                    ) || attempt == 3
+                    {
                         return;
                     }
                     thread::sleep(Duration::from_secs(attempt as u64 * 5));
@@ -124,6 +170,15 @@ fn ensure_started() -> Result<(), String> {
     }
     if !running.iter().any(|name| name == "aw-watcher-window") {
         start(&binaries.window)?;
+    }
+
+    // Process spawn only tells us Windows accepted the launch request. Wait a
+    // bounded amount for BOTH required watchers before declaring a healthy
+    // instance; otherwise the collector could silently read a server with no
+    // fresh window/AFK activity. Subsequent retries re-scan first, so this
+    // cannot spawn a duplicate watcher while one is still starting.
+    if !watchers_ready() {
+        return Err("ActivityWatch watchers did not become healthy".to_string());
     }
 
     crate::log_message(
@@ -220,6 +275,20 @@ fn server_ready() -> bool {
 }
 
 #[cfg(windows)]
+fn watchers_ready() -> bool {
+    for _ in 0..20 {
+        let running = running_processes();
+        let afk = running.iter().any(|name| name == "aw-watcher-afk");
+        let window = running.iter().any(|name| name == "aw-watcher-window");
+        if afk && window {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    false
+}
+
+#[cfg(windows)]
 fn start(executable: &Path) -> Result<(), String> {
     let working_directory = executable
         .parent()
@@ -229,7 +298,39 @@ fn start(executable: &Path) -> Result<(), String> {
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map(|_| ())
-        .map_err(|error| format!("start {}: {error}", executable.display()))
+        // The raw OS error can include a user-specific installation path.
+        // A local caller only needs the safe category; detailed diagnostics
+        // remain in the local process log, never in Fleet delivery metadata.
+        .map_err(|_| "ActivityWatch process could not be started".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supervisor_errors_map_to_bounded_safe_codes() {
+        assert_eq!(
+            activity_watch_supervisor_code("ActivityWatch is not installed").as_str(),
+            "not_installed"
+        );
+        assert_eq!(
+            activity_watch_supervisor_code(
+                "ActivityWatch server process is running but its API is unreachable"
+            )
+            .as_str(),
+            "local_api_unreachable"
+        );
+        assert_eq!(
+            activity_watch_supervisor_code("ActivityWatch watchers did not become healthy")
+                .as_str(),
+            "watchers_unhealthy"
+        );
+        assert_eq!(
+            activity_watch_supervisor_code("start C:\\Users\\example: access denied").as_str(),
+            "startup_failed"
+        );
+    }
 }
 
 #[cfg(windows)]

@@ -29,6 +29,46 @@ export class AwUnavailableError extends Error {
   }
 }
 
+/** Safe, bounded diagnosis for local UI and Fleet-adjacent reporting. Never
+ * display or forward the originating exception: an OS error can contain a
+ * user path, and an HTTP/body error can contain untrusted ActivityWatch data.
+ */
+export type ActivityWatchFailureCode =
+  | "startup_disabled"
+  | "not_installed"
+  | "watchers_unhealthy"
+  | "local_api_unreachable"
+  | "local_response_invalid"
+  | "unknown";
+
+export function activityWatchFailureCode(error: unknown): ActivityWatchFailureCode {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const normalized = message.toLowerCase();
+  if (normalized.includes("disabled in productivity settings")) return "startup_disabled";
+  if (normalized.includes("not installed")) return "not_installed";
+  if (normalized.includes("watchers") && (normalized.includes("unhealthy") || normalized.includes("missing") || normalized.includes("did not become healthy"))) return "watchers_unhealthy";
+  if (normalized.includes("oversized") || normalized.includes("invalid json") || normalized.includes("empty response")) return "local_response_invalid";
+  if (normalized.includes("not running") || normalized.includes("unreachable") || normalized.includes("did not become ready") || normalized.includes("returned http")) return "local_api_unreachable";
+  return "unknown";
+}
+
+export function activityWatchFailureMessage(error: unknown): string {
+  switch (activityWatchFailureCode(error)) {
+    case "startup_disabled":
+      return "ActivityWatch startup is disabled in Productivity settings.";
+    case "not_installed":
+      return "ActivityWatch is not installed. Install it, then retry.";
+    case "watchers_unhealthy":
+      return "ActivityWatch is running, but one or more required watchers are unhealthy. Restart or repair ActivityWatch, then retry.";
+    case "local_api_unreachable":
+      return "ActivityWatch is installed, but its local API could not be reached. Restart ActivityWatch, then retry.";
+    case "local_response_invalid":
+      return "ActivityWatch returned an invalid local response. Restart ActivityWatch, then retry.";
+    case "unknown":
+      return "ActivityWatch could not be started or reached. Check Productivity settings, then retry.";
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }

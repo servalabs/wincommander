@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { ensureActivityWatchStarted } from "./activityWatchIpc";
 import {
   activeIntervals,
+  activityWatchFailureMessage,
   AW_BUCKET_FETCH_CONCURRENCY,
   clipEventInterval,
   dayBoundsLocal,
@@ -172,11 +173,11 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
     (async () => {
       try {
         await ensureActivityWatchStarted();
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           setState({
             status: "unavailable",
-            message: "ActivityWatch could not be started or reached. Check Productivity settings, then retry.",
+            message: activityWatchFailureMessage(error),
           });
         }
         return;
@@ -188,11 +189,11 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
       let buckets: AwBucketsMap;
       try {
         buckets = await fetchBuckets(controller.signal);
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           setState({
             status: "unavailable",
-            message: "ActivityWatch is not installed or not running. Install it from activitywatch.net, or start it, to see activity here.",
+            message: activityWatchFailureMessage(error),
           });
         }
         return;
@@ -297,11 +298,11 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
             generic,
           },
         });
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           setState({
             status: "unavailable",
-            message: "Couldn't read ActivityWatch data for this device — the local server stopped responding.",
+            message: activityWatchFailureMessage(error),
           });
         }
       }
