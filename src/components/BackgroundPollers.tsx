@@ -225,7 +225,7 @@ export default function BackgroundPollers({
         if (await report("received")) fleetShieldReceivedStateRef.current = receiptKey;
       }
       try {
-        const status = await executeBackendCommand<{ running?: boolean; cameraAvailable?: boolean; cameraMessage?: string; isWindowsServer?: boolean }>("Get-PrivacyShieldStatus");
+        const status = await executeBackendCommand<{ running?: boolean; cameraAvailable?: boolean; cameraMessage?: string; cameraStatus?: string }>("Get-PrivacyShieldStatus");
         const running = status.success && status.data?.running === true;
         // Capability comes before lifecycle policy. A stopped Shield on a
         // camera-less device is not the same as a stopped Shield on a device
@@ -233,12 +233,19 @@ export default function BackgroundPollers({
         // media-free camera fact before the unmanaged branch can emit
         // `stopped` and overwrite it in Fleet.
         if (!running && status.success && status.data?.cameraAvailable === false) {
-          await report(
-            status.data.isWindowsServer === true
-              ? "windows_server_camera_unavailable"
-              : "camera_unavailable",
-            status.data.cameraMessage ?? "Camera protection is unavailable.",
-          );
+          // This is a closed, media-free protocol value — never the raw
+          // camera message.  Fleet must distinguish a Windows policy block
+          // from missing hardware so it never asks an operator to fix the
+          // wrong thing.
+          const cameraStatus = status.data.cameraStatus;
+          const issue = cameraStatus === "windows_camera_policy_denied"
+            || cameraStatus === "app_camera_permission_denied"
+            || cameraStatus === "hardware_unavailable"
+            || cameraStatus === "camera_busy"
+            || cameraStatus === "camera_feed_unavailable"
+            ? cameraStatus
+            : "camera_status_unknown";
+          await report(issue);
           return;
         }
         const stopOwnedSession = async () => {
@@ -335,8 +342,18 @@ export default function BackgroundPollers({
           await invoke("update_tray_shield_label", { running: true }).catch(() => {});
           await report("running_fleet_session");
         } else {
-          const detail = result.error ?? "Privacy Shield did not start.";
-          await report(/camera|webcam|videocapture|in use/i.test(detail) ? "camera_busy" : "start_failed", detail);
+          // Start failures are deliberately classified by the current
+          // structured probe. Raw stderr must never become Fleet telemetry.
+          const statusAfterFailure = await executeBackendCommand<{ cameraStatus?: string }>("Get-PrivacyShieldStatus");
+          const cameraStatus = statusAfterFailure.success ? statusAfterFailure.data?.cameraStatus : undefined;
+          const issue = cameraStatus === "windows_camera_policy_denied"
+            || cameraStatus === "app_camera_permission_denied"
+            || cameraStatus === "hardware_unavailable"
+            || cameraStatus === "camera_busy"
+            || cameraStatus === "camera_feed_unavailable"
+            ? cameraStatus
+            : "start_failed";
+          await report(issue);
         }
       } catch {
         // The next tick retries. Never surface a noisy local toast for an

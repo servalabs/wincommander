@@ -80,6 +80,36 @@ export type ActivityWatchDayState =
   | { status: "empty"; deviceName: string; dateLabel: string }
   | { status: "ready"; day: ActivityDayData };
 
+/** Native supervision returns stable codes rather than executable paths or OS
+ * errors. Keep the local explanation actionable without leaking diagnostics
+ * that could later be copied into a Fleet status report. */
+export function activityWatchStartupMessage(error: unknown): string {
+  const code = typeof error === "string" ? error : error instanceof Error ? error.message : "";
+  switch (code) {
+    case "activitywatch_disabled":
+      return "ActivityWatch startup is disabled in Productivity settings.";
+    case "activitywatch_not_installed":
+      return "ActivityWatch isn't installed. Install it, then reopen Productivity.";
+    case "activitywatch_local_api_unreachable":
+      return "ActivityWatch started but its local service isn't responding. Wait a moment, then retry.";
+    case "activitywatch_duplicate_server":
+      return "More than one ActivityWatch server is running in this Windows session. No new tracker was started.";
+    case "activitywatch_duplicate_afk_watcher":
+    case "activitywatch_duplicate_window_watcher":
+      return "More than one ActivityWatch watcher is running in this Windows session. No new tracker was started.";
+    case "activitywatch_watchers_unhealthy":
+      return "ActivityWatch's watcher pair did not become healthy. No duplicate watcher was started.";
+    case "activitywatch_server_owned_elsewhere":
+      return "Another Windows session owns the local ActivityWatch server. This session didn't attach a watcher to it.";
+    case "activitywatch_session_unavailable":
+      return "Windows didn't provide a safe session identity for ActivityWatch, so startup was stopped.";
+    case "activitywatch_start_failed":
+      return "ActivityWatch couldn't be started. Check that its installation is intact, then retry.";
+    default:
+      return "ActivityWatch could not be started or reached. Check Productivity settings, then retry.";
+  }
+}
+
 /** Buckets with no hostname recorded are assumed local — most non-window
  * ActivityWatch watchers (web/vscode/input) don't stamp one on a
  * single-machine install. Only an EXPLICIT mismatch excludes a bucket, so a
@@ -172,11 +202,11 @@ export function useActivityWatchDay(date: Date, hostname: string | null): Activi
     (async () => {
       try {
         await ensureActivityWatchStarted();
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           setState({
             status: "unavailable",
-            message: "ActivityWatch could not be started or reached. Check Productivity settings, then retry.",
+            message: activityWatchStartupMessage(error),
           });
         }
         return;

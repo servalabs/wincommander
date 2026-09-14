@@ -20,7 +20,7 @@ use std::{
 use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
-use sysinfo::{ProcessesToUpdate, System};
+use sysinfo::{Pid, ProcessesToUpdate, System};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -45,7 +45,7 @@ pub fn init() {
                         &format!("[ActivityWatch] auto-start attempt {attempt}/3 skipped: {error}"),
                     );
                     // A missing installation cannot heal during this launch.
-                    if error == "ActivityWatch is not installed" || attempt == 3 {
+                    if error == "activitywatch_not_installed" || attempt == 3 {
                         return;
                     }
                     thread::sleep(Duration::from_secs(attempt as u64 * 5));
@@ -76,23 +76,68 @@ struct Binaries {
 }
 
 #[cfg(windows)]
+#[derive(Clone, Copy)]
+enum ActivityWatchProcess {
+    Server,
+    AfkWatcher,
+    WindowWatcher,
+}
+
+#[cfg(windows)]
+#[derive(Default, Debug, PartialEq, Eq)]
+struct SessionProcesses {
+    server: usize,
+    afk_watcher: usize,
+    window_watcher: usize,
+    unknown_session: usize,
+}
+
+#[cfg(windows)]
+impl SessionProcesses {
+    fn add(&mut self, process: ActivityWatchProcess) {
+        match process {
+            ActivityWatchProcess::Server => self.server += 1,
+            ActivityWatchProcess::AfkWatcher => self.afk_watcher += 1,
+            ActivityWatchProcess::WindowWatcher => self.window_watcher += 1,
+        }
+    }
+
+    fn validate(&self) -> Result<(), &'static str> {
+        if self.unknown_session > 0 {
+            return Err("activitywatch_session_unavailable");
+        }
+        if self.server > 1 {
+            return Err("activitywatch_duplicate_server");
+        }
+        if self.afk_watcher > 1 {
+            return Err("activitywatch_duplicate_afk_watcher");
+        }
+        if self.window_watcher > 1 {
+            return Err("activitywatch_duplicate_window_watcher");
+        }
+        Ok(())
+    }
+
+    fn watcher_pair_running(&self) -> bool {
+        self.afk_watcher == 1 && self.window_watcher == 1
+    }
+}
+
+#[cfg(windows)]
 fn ensure_started() -> Result<(), String> {
     static START_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let _guard = START_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .map_err(|_| "ActivityWatch start lock unavailable".to_string())?;
-    let running = running_processes();
-    let server_running = running
-        .iter()
-        .any(|name| name == "aw-server" || name == "aw-server-rust");
+        .map_err(|_| "activitywatch_lock_unavailable".to_string())?;
+    let running = running_processes().map_err(str::to_string)?;
+    running.validate().map_err(str::to_string)?;
     let server_healthy = server_ready();
-    let afk_running = running.iter().any(|name| name == "aw-watcher-afk");
-    let window_running = running.iter().any(|name| name == "aw-watcher-window");
 
-    // A healthy existing instance wins. Do not require its original installer
-    // path just to use it, and never start a second server process.
-    if server_healthy && afk_running && window_running {
+    // A healthy existing pair wins. We wait for watchers after launching them
+    // below, so a second panel open cannot mistake a still-starting watcher
+    // for a missing one and add another tray process.
+    if server_healthy && running.server == 1 && running.watcher_pair_running() {
         crate::log_message(
             "info",
             "[ActivityWatch] existing server and watchers are healthy",
@@ -100,31 +145,41 @@ fn ensure_started() -> Result<(), String> {
         return Ok(());
     }
 
-    let binaries =
-        discover_binaries().ok_or_else(|| "ActivityWatch is not installed".to_string())?;
+    if server_healthy && running.server == 0 {
+        // Port 5600 is owned by a server outside this Windows session. Do not
+        // attach this user's watchers to it or start a competing server.
+        return Err("activitywatch_server_owned_elsewhere".to_string());
+    }
+
+    let binaries = discover_binaries().ok_or_else(|| "activitywatch_not_installed".to_string())?;
     if !server_healthy {
-        if server_running {
-            return Err(
-                "ActivityWatch server process is running but its API is unreachable".to_string(),
-            );
+        if running.server == 1 {
+            return Err("activitywatch_local_api_unreachable".to_string());
         }
         start(&binaries.server)?;
         // Watchers need the REST API to be accepting connections; starting
         // them before the server is ready can leave them disconnected.
         if !server_ready() {
-            return Err("ActivityWatch server did not become ready on port 5600".to_string());
+            return Err("activitywatch_local_api_unreachable".to_string());
         }
     }
 
-    // Re-scan after server readiness so a concurrent launcher cannot cause us
-    // to spawn a duplicate watcher between the initial health check and here.
-    let running = running_processes();
-    if !running.iter().any(|name| name == "aw-watcher-afk") {
+    // Re-scan after server readiness and then wait for the started processes.
+    // The lock serializes callers in this app; the re-scan closes the gap with
+    // the external ActivityWatch launcher without terminating its processes.
+    let running = running_processes().map_err(str::to_string)?;
+    running.validate().map_err(str::to_string)?;
+    if !server_ready() || running.server != 1 {
+        return Err("activitywatch_local_api_unreachable".to_string());
+    }
+    if running.afk_watcher == 0 {
         start(&binaries.afk)?;
     }
-    if !running.iter().any(|name| name == "aw-watcher-window") {
+    if running.window_watcher == 0 {
         start(&binaries.window)?;
     }
+
+    wait_for_watcher_pair()?;
 
     crate::log_message(
         "info",
@@ -141,32 +196,61 @@ pub async fn activity_watch_ensure_started() -> Result<(), String> {
     #[cfg(windows)]
     {
         if !is_configured() {
-            return Err("ActivityWatch startup is disabled in Productivity settings".to_string());
+            return Err("activitywatch_disabled".to_string());
         }
         ensure_started()
     }
     #[cfg(not(windows))]
     {
-        Err("ActivityWatch supervision is available only on Windows".to_string())
+        Err("activitywatch_windows_only".to_string())
     }
 }
 
 #[cfg(windows)]
-fn running_processes() -> Vec<String> {
+fn running_processes() -> Result<SessionProcesses, &'static str> {
     let mut system = System::new();
     system.refresh_processes(ProcessesToUpdate::All, false);
+    let current_session = system
+        .process(Pid::from_u32(std::process::id()))
+        .and_then(|process| process.session_id())
+        .ok_or("activitywatch_session_unavailable")?;
+    let mut result = SessionProcesses::default();
     system
         .processes()
         .values()
-        .map(|process| {
-            process
-                .name()
-                .to_string_lossy()
-                .to_ascii_lowercase()
-                .trim_end_matches(".exe")
-                .to_string()
+        .filter_map(|process| {
+            let process_kind = activity_watch_process(process.name().to_string_lossy().as_ref())?;
+            Some((process_kind, process.session_id()))
         })
-        .collect()
+        .for_each(|(process_kind, session)| match session {
+            Some(session) if session == current_session => result.add(process_kind),
+            Some(_) => {}
+            None => result.unknown_session += 1,
+        });
+    Ok(result)
+}
+
+#[cfg(windows)]
+fn activity_watch_process(name: &str) -> Option<ActivityWatchProcess> {
+    match name.to_ascii_lowercase().trim_end_matches(".exe") {
+        "aw-server" | "aw-server-rust" => Some(ActivityWatchProcess::Server),
+        "aw-watcher-afk" => Some(ActivityWatchProcess::AfkWatcher),
+        "aw-watcher-window" => Some(ActivityWatchProcess::WindowWatcher),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_watcher_pair() -> Result<(), String> {
+    for _ in 0..20 {
+        let running = running_processes().map_err(str::to_string)?;
+        running.validate().map_err(str::to_string)?;
+        if server_ready() && running.server == 1 && running.watcher_pair_running() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    Err("activitywatch_watchers_unhealthy".to_string())
 }
 
 /// Reads ActivityWatch's loopback API from Rust so the WebView is not blocked
@@ -229,7 +313,7 @@ fn start(executable: &Path) -> Result<(), String> {
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map(|_| ())
-        .map_err(|error| format!("start {}: {error}", executable.display()))
+        .map_err(|_| "activitywatch_start_failed".to_string())
 }
 
 #[cfg(windows)]
@@ -282,4 +366,49 @@ fn discover_binaries() -> Option<Binaries> {
             window,
         })
     })
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::{activity_watch_process, ActivityWatchProcess, SessionProcesses};
+
+    #[test]
+    fn classifies_only_the_supported_activitywatch_components() {
+        assert!(matches!(
+            activity_watch_process("aw-server.exe"),
+            Some(ActivityWatchProcess::Server)
+        ));
+        assert!(matches!(
+            activity_watch_process("AW-WATCHER-AFK"),
+            Some(ActivityWatchProcess::AfkWatcher)
+        ));
+        assert!(matches!(
+            activity_watch_process("aw-watcher-window.exe"),
+            Some(ActivityWatchProcess::WindowWatcher)
+        ));
+        assert!(activity_watch_process("aw-watcher-web").is_none());
+    }
+
+    #[test]
+    fn rejects_duplicate_watchers_without_terminating_them() {
+        let state = SessionProcesses {
+            server: 1,
+            afk_watcher: 2,
+            window_watcher: 1,
+            unknown_session: 0,
+        };
+        assert_eq!(state.validate(), Err("activitywatch_duplicate_afk_watcher"));
+    }
+
+    #[test]
+    fn accepts_exactly_one_server_and_watcher_pair() {
+        let state = SessionProcesses {
+            server: 1,
+            afk_watcher: 1,
+            window_watcher: 1,
+            unknown_session: 0,
+        };
+        assert_eq!(state.validate(), Ok(()));
+        assert!(state.watcher_pair_running());
+    }
 }

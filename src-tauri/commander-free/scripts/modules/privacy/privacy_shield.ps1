@@ -103,17 +103,40 @@ function Get-PrivacyShieldCameraAvailability {
             }
         } catch {}
         $blockedByPolicy = $policyBlockers.Count -gt 0
+        # This is deliberately a closed, content-free vocabulary.  The Fleet
+        # path may use it for operator guidance, but must never receive camera
+        # names, registry values, frames, or application details.
+        $cameraStatus = if ($policyBlockers -match 'App Privacy') {
+            'app_camera_permission_denied'
+        } elseif ($blockedByPolicy) {
+            'windows_camera_policy_denied'
+        } elseif ($names.Count -eq 0) {
+            'hardware_unavailable'
+        } else {
+            'available'
+        }
+        $policyScope = if ($policyBlockers -match 'Your user') {
+            'user'
+        } elseif ($blockedByPolicy) {
+            'device'
+        } else {
+            $null
+        }
         @{
             available = ($names.Count -gt 0) -and -not $blockedByPolicy
             devices   = $names
             message   = if ($blockedByPolicy) { "Camera is blocked by Windows policy: " + ($policyBlockers -join ' ') } elseif ($names.Count -gt 0) { "Camera available." } else { "No usable camera detected." }
             blockedByPolicy = $blockedByPolicy
             policyBlockers = @($policyBlockers)
+            cameraStatus = $cameraStatus
+            cameraPolicyScope = $policyScope
             isWindowsServer = $isWindowsServer
         }
     }
     catch {
-        @{ available = $false; devices = @(); message = $_.Exception.Message; isWindowsServer = $false }
+        # Registry/WMI probe failures are not evidence that the hardware is
+        # absent.  Keep the diagnosis honest and do not echo exception text.
+        @{ available = $false; devices = @(); message = 'Camera status could not be read.'; cameraStatus = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
     }
 }
 
@@ -190,12 +213,45 @@ function Get-PrivacyShieldStatus {
             cameraDevices   = @($camera.devices)
             cameraMessage   = $camera.message
             cameraPolicyBlockers = @($camera.policyBlockers)
+            cameraStatus = $camera.cameraStatus
+            cameraPolicyScope = $camera.cameraPolicyScope
+            shieldLifecycle = if ($running) { 'running' } else { 'stopped' }
             isWindowsServer = [bool]$camera.isWindowsServer
         }
     }
     catch {
-        @{ error = $true; message = $_.Exception.Message }
+        # A status-read failure is different from a stopped shield.  The
+        # console must not show an invented lifecycle or hardware diagnosis.
+        @{ error = $true; message = 'Privacy Shield status could not be read.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown' }
     }
+}
+
+function Get-PrivacyShieldStartFailure {
+    param([string]$LogTail)
+
+    # Do not return the log tail: it can contain implementation-specific
+    # details.  These short messages and codes are safe for the local UI and
+    # Fleet receipt, while keeping a camera busy distinct from missing
+    # hardware or a policy denial.
+    if ($LogTail -imatch 'device or resource busy|camera.*(?:already|currently).*in use|camera.*busy') {
+        return @{ code = 'camera_busy'; message = 'Camera is currently being used by another application.' }
+    }
+    if ($LogTail -imatch 'black frames|camera feed unavailable') {
+        return @{ code = 'camera_feed_unavailable'; message = 'Camera feed is black - open its privacy shutter or close another camera app.' }
+    }
+    if ($LogTail -imatch 'no camera|webcam|videocapture|camera not found|camera timed out') {
+        return @{ code = 'hardware_unavailable'; message = 'No usable camera detected for Privacy Shield.' }
+    }
+    if ($LogTail -imatch 'missing python dependency|importerror|module not found') {
+        return @{ code = 'runtime_dependency_missing'; message = 'Privacy Shield AI runtime is unavailable.' }
+    }
+    if ($LogTail -imatch 'model preparation|failed to download|model download') {
+        return @{ code = 'model_download_failed'; message = 'Privacy Shield model preparation failed.' }
+    }
+    if ($LogTail -imatch 'detector init|flatbuffer|not a valid') {
+        return @{ code = 'model_invalid'; message = 'Privacy Shield model could not be loaded.' }
+    }
+    return @{ code = 'shield_start_failed'; message = 'Privacy Shield could not start.' }
 }
 
 function Start-PrivacyShield {
@@ -224,7 +280,7 @@ function Start-PrivacyShield {
     try {
         $status = Get-PrivacyShieldStatus
         if ($status.running) {
-            return @{ error = $true; message = "Shield is already running." }
+            return @{ error = $true; message = "Shield is already running."; cameraStatus = $status.cameraStatus; shieldLifecycle = 'running'; diagnosticCode = 'already_running' }
         }
         if ($status.cameraAvailable -ne $true) {
             return @{
@@ -232,12 +288,16 @@ function Start-PrivacyShield {
                 message = if ($status.cameraMessage) { $status.cameraMessage } else { "No camera detected - Privacy Shield requires a webcam." }
                 cameraAvailable = $false
                 cameraDevices = @()
+                cameraStatus = if ($status.cameraStatus) { $status.cameraStatus } else { 'unknown' }
+                cameraPolicyScope = $status.cameraPolicyScope
+                shieldLifecycle = 'stopped'
+                diagnosticCode = if ($status.cameraStatus) { $status.cameraStatus } else { 'unknown' }
             }
         }
 
         $pythonExe = Resolve-PythonPath
         if (-not $pythonExe) {
-            return @{ error = $true; message = "Python is required." }
+            return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = 'available'; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_unavailable' }
         }
 
         # Check dependencies (Quietly)
@@ -258,7 +318,7 @@ function Start-PrivacyShield {
                 }
                 & $pythonExe -c "import $importName" *>$null
                 if ($LASTEXITCODE -ne 0) {
-                    return @{ error = $true; message = "Missing Python dependency: $pkg" }
+                    return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = 'available'; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_dependency_missing' }
                 }
             }
             catch {}
@@ -1031,28 +1091,25 @@ if __name__ == "__main__":
             $logRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
             $logPath = if ($logRoot) { Join-Path $logRoot "WinCommander\logs\privacy_shield.log" } else { $null }
             $logTail = ""
-            $exitMessage = "Failed to start Privacy Shield - process exited unexpectedly."
+            $failure = Get-PrivacyShieldStartFailure -LogTail $logTail
             if ($logPath -and (Test-Path $logPath)) {
                 $logTail = (Get-Content $logPath -Tail 30 | Out-String).Trim()
-                if ($logTail -imatch "black frames|camera feed unavailable") {
-                    $exitMessage = "Camera feed is black - open its privacy shutter or close another camera app."
-                } elseif ($logTail -imatch "no camera|camera open|webcam|videocapture|camera not|camera timed out") {
-                    $exitMessage = "No camera detected - Privacy Shield requires a webcam."
-                } elseif ($logTail -imatch "missing python dependency|importerror|module not found") {
-                    $exitMessage = "Missing Python dependency - please reinstall the AI runtime."
-                } elseif ($logTail -imatch "model preparation|failed to download|model download") {
-                    $exitMessage = "Model download failed - check your internet connection."
-                } elseif ($logTail -imatch "detector init|flatbuffer|not a valid") {
-                    $exitMessage = "Model file is corrupt - restart to trigger a re-download."
-                }
+                $failure = Get-PrivacyShieldStartFailure -LogTail $logTail
             }
-            return @{ error = $true; message = $exitMessage; debugInfo = $logTail }
+            $cameraStatus = if ($failure.code -in @('camera_busy', 'camera_feed_unavailable', 'hardware_unavailable')) {
+                $failure.code
+            } else {
+                # The preflight succeeded, so a dependency/model failure is
+                # not evidence that camera hardware disappeared.
+                'available'
+            }
+            return @{ error = $true; message = $failure.message; cameraStatus = $cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = $failure.code }
         }
 
-        @{ success = $true; processId = $process.Id }
+        @{ success = $true; processId = $process.Id; cameraStatus = 'available'; shieldLifecycle = 'running' }
     }
     catch {
-        @{ error = $true; message = $_.Exception.Message }
+        @{ error = $true; message = 'Privacy Shield could not start.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown'; diagnosticCode = 'shield_start_failed' }
     }
 }
 

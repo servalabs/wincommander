@@ -24,9 +24,11 @@ pub(crate) async fn local_monitors(app: AppHandle, paid: bool) -> Vec<Value> {
         Some(Duration::from_secs(5)),
     )
     .await;
-    let shield_issue = shield_status
+    let shield_issue_code = shield_status
         .as_ref()
-        .is_ok_and(|status| status.get("cameraAvailable").and_then(Value::as_bool) == Some(false));
+        .ok()
+        .and_then(privacy_shield_issue_code);
+    let shield_issue = shield_issue_code.is_some();
     rows.push(local_row(
         "privacy-shield",
         "Privacy Gaze Shield",
@@ -39,11 +41,7 @@ pub(crate) async fn local_monitors(app: AppHandle, paid: bool) -> Vec<Value> {
         None,
         None,
         shield_issue,
-        if shield_issue {
-            Some("camera_unavailable")
-        } else {
-            None
-        },
+        shield_issue_code,
     ));
 
     let paste_status = bool_status(crate::paste_monitor::paste_monitor_status().await);
@@ -251,6 +249,22 @@ fn running(result: &Result<Value, String>) -> bool {
         .unwrap_or(false)
 }
 
+/// Convert the Privacy Shield script's closed diagnostic vocabulary into the
+/// monitor DTO. This remains deliberately narrower than the local script:
+/// camera names, registry paths, exception text, and application identity do
+/// not cross the dashboard boundary.
+fn privacy_shield_issue_code(status: &Value) -> Option<&'static str> {
+    match status.get("cameraStatus").and_then(Value::as_str) {
+        Some("available") => None,
+        Some("hardware_unavailable") => Some("camera_hardware_unavailable"),
+        Some("windows_camera_policy_denied") => Some("windows_camera_policy_denied"),
+        Some("app_camera_permission_denied") => Some("app_camera_permission_denied"),
+        Some("camera_busy") => Some("camera_busy"),
+        Some("camera_feed_unavailable") => Some("camera_feed_unavailable"),
+        Some("unknown") | None | Some(_) => Some("camera_status_unknown"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +274,37 @@ mod tests {
         let result = bool_status(Ok(true)).unwrap();
         assert_eq!(result["running"], true);
         assert!(bool_status(Err("private error".to_string())).is_err());
+    }
+
+    #[test]
+    fn privacy_shield_status_keeps_policy_and_hardware_blocks_distinct() {
+        assert_eq!(
+            privacy_shield_issue_code(&json!({ "cameraStatus": "windows_camera_policy_denied" })),
+            Some("windows_camera_policy_denied")
+        );
+        assert_eq!(
+            privacy_shield_issue_code(&json!({ "cameraStatus": "app_camera_permission_denied" })),
+            Some("app_camera_permission_denied")
+        );
+        assert_eq!(
+            privacy_shield_issue_code(&json!({ "cameraStatus": "hardware_unavailable" })),
+            Some("camera_hardware_unavailable")
+        );
+        assert_eq!(
+            privacy_shield_issue_code(&json!({ "cameraStatus": "available" })),
+            None
+        );
+    }
+
+    #[test]
+    fn privacy_shield_unknown_does_not_claim_missing_hardware() {
+        assert_eq!(
+            privacy_shield_issue_code(&json!({ "cameraStatus": "unrecognised" })),
+            Some("camera_status_unknown")
+        );
+        assert_eq!(
+            privacy_shield_issue_code(&json!({})),
+            Some("camera_status_unknown")
+        );
     }
 }

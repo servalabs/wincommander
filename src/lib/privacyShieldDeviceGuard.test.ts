@@ -114,8 +114,10 @@ describe("privacy shield device guardrails", () => {
 
     expect(unavailable).toBeGreaterThan(-1);
     expect(unmanaged).toBeGreaterThan(unavailable);
-    expect(pollers.slice(unavailable, unmanaged)).toContain('"camera_unavailable"');
-    expect(pollers.slice(unavailable, unmanaged)).toContain('"windows_server_camera_unavailable"');
+    const capabilityBranch = pollers.slice(unavailable, unmanaged);
+    expect(capabilityBranch).toContain('"windows_camera_policy_denied"');
+    expect(capabilityBranch).toContain('"hardware_unavailable"');
+    expect(capabilityBranch).toContain('"camera_status_unknown"');
   });
 
   test("fleet policy stop retains ownership until the local process really stops", async () => {
