@@ -103,8 +103,9 @@ try {
 
     $current = (& node -e "const fs=require('fs'); process.stdout.write(JSON.parse(fs.readFileSync('package.json','utf8')).version)" --input-type=commonjs 2>$null).Trim()
     if ($LASTEXITCODE -ne 0) { Stop-Release 'Could not read package.json version.' }
-    if ($current -eq $Version) {
-        Stop-Release "origin/main already declares $Version. This script only prepares a new version."
+    $versionAlreadyPrepared = $current -eq $Version
+    if ($versionAlreadyPrepared -and -not $ReplaceUnpublishedTag) {
+        Stop-Release "origin/main already declares $Version. Re-run with -ReplaceUnpublishedTag only to recover an unpublished failed tag."
     }
 
     $update = @'
@@ -129,10 +130,12 @@ const updatedLock = lock.replace(/(\[\[package\]\]\r?\nname = "commander-free"\r
 if (updatedLock === lock) throw new Error('Free Cargo.lock package version was not found.');
 fs.writeFileSync(lockPath, updatedLock);
 '@
-    $env:WINCOMMANDER_RELEASE_VERSION = $Version
-    $update | node --input-type=commonjs -
-    if ($LASTEXITCODE -ne 0) { Stop-Release 'Could not update all four release version files.' }
-    Remove-Item Env:WINCOMMANDER_RELEASE_VERSION
+    if (-not $versionAlreadyPrepared) {
+        $env:WINCOMMANDER_RELEASE_VERSION = $Version
+        $update | node --input-type=commonjs -
+        if ($LASTEXITCODE -ne 0) { Stop-Release 'Could not update all four release version files.' }
+        Remove-Item Env:WINCOMMANDER_RELEASE_VERSION
+    }
 
     $versionCheck = @'
 const fs = require('fs');
@@ -152,9 +155,11 @@ if (![packageVersion, tauriVersion, cargoVersion, lockVersion].every((value) => 
     Remove-Item Env:WINCOMMANDER_RELEASE_VERSION
     if ($LASTEXITCODE -ne 0) { Stop-Release 'Release version verification failed.' }
 
-    Invoke-Git @('-C', $worktree, 'add', 'package.json', 'src-tauri/commander-free/tauri.conf.json', 'src-tauri/commander-free/Cargo.toml', 'src-tauri/Cargo.lock')
-    Invoke-Git @('-C', $worktree, '-c', 'user.name=WinCommander release operator', '-c', 'user.email=release@users.noreply.github.com', 'commit', '-m', "release: v$Version")
-    Invoke-Git @('-C', $worktree, 'push', 'origin', 'HEAD:main')
+    if (-not $versionAlreadyPrepared) {
+        Invoke-Git @('-C', $worktree, 'add', 'package.json', 'src-tauri/commander-free/tauri.conf.json', 'src-tauri/commander-free/Cargo.toml', 'src-tauri/Cargo.lock')
+        Invoke-Git @('-C', $worktree, '-c', 'user.name=WinCommander release operator', '-c', 'user.email=release@users.noreply.github.com', 'commit', '-m', "release: v$Version")
+        Invoke-Git @('-C', $worktree, 'push', 'origin', 'HEAD:main')
+    }
 
     if ($remoteTag) {
         Invoke-Git @('-C', $worktree, 'push', 'origin', ":refs/tags/$tag")
