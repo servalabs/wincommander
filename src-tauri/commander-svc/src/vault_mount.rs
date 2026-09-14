@@ -423,6 +423,7 @@ impl VaultMountBroker {
     /// The pipe keeps drive-letter inspection and the broker call inside the
     /// same operation gate, so a second mount cannot invalidate preflight in
     /// the gap before the encrypted driver receives the request.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn mount_personal_authorized_locked(
         &self,
@@ -650,26 +651,6 @@ impl VaultMountBroker {
             let _ = self.retain_cleanup_mount(store, &entry_id, active);
             Err(VaultMountReason::DismountFailed)
         }
-    }
-
-    /// A legacy mount isn't authorized to remain visible until its durable
-    /// personal record has been written. Remove only that new presentation if
-    /// final identity verification or persistence fails.
-    pub(crate) fn dismount_personal_registration_failure_locked(
-        &self,
-        operation_id: u64,
-        store: &VaultAccessStore,
-        record: &PersonalVaultRecord,
-        caller_token: windows_sys::Win32::Foundation::HANDLE,
-    ) -> bool {
-        self.dismount_entry_locked_for_client(
-            operation_id,
-            store,
-            &personal_mount_entry_id(record),
-            Some(caller_token),
-        )
-        .state
-            == VaultMountState::Unmounted
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1287,6 +1268,7 @@ fn valid_durable_mount(entry_id: &str, mount: &ActiveMount) -> bool {
         && mount.mounted_at > 0
 }
 
+#[cfg(test)]
 fn personal_mount_entry_id(record: &PersonalVaultRecord) -> String {
     let mut digest = Sha256::new();
     digest.update(record.owner_sid.as_bytes());

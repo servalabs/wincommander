@@ -284,6 +284,7 @@ pub struct AclSnapshot {
     pub dacl_protected: bool,
 }
 
+#[cfg(test)]
 pub struct LegacyAclPreparation {
     container: PathBuf,
     identity: String,
@@ -292,15 +293,10 @@ pub struct LegacyAclPreparation {
     _lock: Option<std::fs::File>,
 }
 
+#[cfg(test)]
 pub struct LegacyPersonalMountPreparation {
     record: PersonalVaultRecord,
     acl: LegacyAclPreparation,
-}
-
-impl LegacyPersonalMountPreparation {
-    pub fn record(&self) -> &PersonalVaultRecord {
-        &self.record
-    }
 }
 
 /// An implementation must leave neither a broad inherited DACL nor an
@@ -317,6 +313,7 @@ pub trait AclApplier: Send + Sync {
     ) -> Result<(), VaultError> {
         self.restore(snapshots)
     }
+    #[cfg(test)]
     fn inspect_legacy_personal(
         &self,
         _container: &Path,
@@ -325,6 +322,7 @@ pub trait AclApplier: Send + Sync {
     ) -> Result<LegacyAclPreparation, VaultError> {
         Err(VaultError::AclReadback)
     }
+    #[cfg(test)]
     fn apply_legacy_personal(
         &self,
         _preparation: &LegacyAclPreparation,
@@ -1140,6 +1138,7 @@ impl VaultAccessStore {
 
     /// Returns only a caller-owned, identity-stable personal container.  The
     /// service never accepts an owner SID or scope supplied by the renderer.
+    #[cfg(test)]
     pub fn personal_for_owner(
         &self,
         container_path: &str,
@@ -1303,6 +1302,7 @@ impl VaultAccessStore {
     /// Prepares an existing, unregistered container for one-time adoption.
     /// The ACL implementation proves access through the authenticated caller
     /// token and retains a no-delete-share handle until commit or rollback.
+    #[cfg(test)]
     pub fn prepare_legacy_personal_mount(
         &self,
         container_path: &str,
@@ -1398,6 +1398,7 @@ impl VaultAccessStore {
         }
     }
 
+    #[cfg(test)]
     pub fn commit_legacy_personal_mount(
         &self,
         preparation: &LegacyPersonalMountPreparation,
@@ -1450,6 +1451,7 @@ impl VaultAccessStore {
         Ok(record.clone())
     }
 
+    #[cfg(test)]
     pub fn restore_legacy_personal_mount(
         &self,
         preparation: LegacyPersonalMountPreparation,
@@ -1472,13 +1474,6 @@ impl VaultAccessStore {
             return Err(VaultError::Persistence);
         }
         Ok(())
-    }
-
-    pub fn mark_personal_recovery_uncertain(&self) {
-        self.state
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .personal_registry_healthy = false;
     }
 
     fn persist_personal(
@@ -2889,6 +2884,7 @@ impl AclApplier for WindowsAclApplier {
         }
         self.restore(snapshots)
     }
+    #[cfg(test)]
     fn inspect_legacy_personal(
         &self,
         container: &Path,
@@ -2905,6 +2901,7 @@ impl AclApplier for WindowsAclApplier {
             _lock: Some(lock),
         })
     }
+    #[cfg(test)]
     fn apply_legacy_personal(
         &self,
         preparation: &LegacyAclPreparation,
@@ -3006,7 +3003,7 @@ impl AclApplier for WindowsAclApplier {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn open_legacy_container_as_caller(
     path: &Path,
     caller_token: windows_sys::Win32::Foundation::HANDLE,
