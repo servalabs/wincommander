@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback } from "react";
-import type { AccessGroupReconcileRequest, AccessGroupReconcileResponse } from "@/panels/fleet/accessControlTypes";
+import type {
+  AccessGroupReconcileRequest, AccessGroupReconcileResponse, VaultAccessDirectory,
+  VaultSaveAccessDirectoryResponse,
+} from "@/panels/fleet/accessControlTypes";
 import type { VaultAccessCapabilities, VaultAuthorizedEntry, VaultMountEntryResult, VaultVolumeRole } from "@/panels/fleet/vaultAccessTypes";
 import { newDiagnosticOperationId } from "@/lib/diagnostics";
 
@@ -40,9 +43,18 @@ export default function useVaultAccess<Policy, Status>() {
       invoke<AccessGroupReconcileResponse>("reconcile_vault_access_groups", { groups }),
     [],
   );
+  const getAccessDirectory = useCallback(
+    () => invoke<VaultAccessDirectory>("get_vault_access_directory"),
+    [],
+  );
+  const saveAccessDirectory = useCallback(
+    (directory: VaultAccessDirectory) =>
+      invoke<VaultSaveAccessDirectoryResponse>("save_vault_access_directory", { directory }),
+    [],
+  );
 
   return {
     getPolicy, getStatus, applyPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities,
-    reconcileAccessGroups,
+    reconcileAccessGroups, getAccessDirectory, saveAccessDirectory,
   };
 }

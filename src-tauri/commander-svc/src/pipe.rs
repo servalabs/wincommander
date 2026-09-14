@@ -582,6 +582,9 @@ async fn dispatch_verb(
         "svc.vault.reconcile_access_groups" => {
             handle_vault_reconcile_access_groups(vault_access, args)
         }
+        "svc.vault.get_access_directory" => handle_vault_get_access_directory(vault_access, args),
+        "svc.vault.save_access_directory" => handle_vault_save_access_directory(vault_access, args),
+        "svc.vault.personal_status" => handle_personal_vault_status(vault_access, args, peer),
 
         // The connection loop checks `is_known_verb` before authorization.
         // Keep this second guard so direct tests or future internal callers of
@@ -828,6 +831,99 @@ fn handle_vault_reconcile_access_groups(
     })
 }
 
+/// Reads the durable, machine-owned Access control directory. This stays a
+/// privileged operation because it contains local account SIDs and group
+/// membership, rather than a Vault member's filtered mount projection.
+fn handle_vault_get_access_directory(
+    vault_access: &VaultAccessStore,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, VerbError> {
+    if !args.is_null() && args != serde_json::json!({}) {
+        return Err(VerbError::new(
+            "vault_validation_failed",
+            "access directory request is invalid",
+        ));
+    }
+    vault_access
+        .access_directory()
+        .and_then(|directory| {
+            serde_json::to_value(directory)
+                .map_err(|_| crate::vault_access::VaultError::Persistence)
+        })
+        .map_err(|error| VerbError::new("vault_directory_unavailable", vault_error_message(error)))
+}
+
+/// Saves the UI's reusable group directory to the protected service policy
+/// store before reconciling Windows group membership. Per-group failure is
+/// returned in-band, so a durable directory can be retried on the next save
+/// without the UI pretending every group was created successfully.
+fn handle_vault_save_access_directory(
+    vault_access: &VaultAccessStore,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, VerbError> {
+    let request: wincmd_shared::vault_access::VaultSaveAccessDirectoryRequest =
+        serde_json::from_value(args).map_err(|_| {
+            VerbError::new(
+                "vault_validation_failed",
+                "access directory request is invalid",
+            )
+        })?;
+    let (directory, results) = vault_access
+        .save_access_directory(request.directory)
+        .map_err(|error| {
+            VerbError::new("vault_directory_save_failed", vault_error_message(error))
+        })?;
+    serde_json::to_value(
+        wincmd_shared::vault_access::VaultSaveAccessDirectoryResponse { directory, results },
+    )
+    .map_err(|_| {
+        VerbError::new(
+            "vault_internal_error",
+            "access directory response could not be created",
+        )
+    })
+}
+
+/// Read-only, caller-scoped diagnostic for a manually selected personal Vault.
+/// The response is a fixed state label: it never discloses an owner SID,
+/// container identity, ACL, or secret.
+fn handle_personal_vault_status(
+    vault_access: &VaultAccessStore,
+    args: serde_json::Value,
+    peer: Option<&AuthenticatedPipePeer>,
+) -> Result<serde_json::Value, VerbError> {
+    let path = args
+        .get("container_path")
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| {
+            VerbError::new("vault_validation_failed", "personal vault path is invalid")
+        })?;
+    let peer = peer.ok_or_else(|| {
+        VerbError::new(
+            PERSONAL_VAULT_SESSION_ABSENT,
+            "no interactive Windows session",
+        )
+    })?;
+    let state = vault_access
+        .personal_registration_state(path, peer.caller_sid())
+        .map_err(|_| {
+            VerbError::new(
+                "vault_personal_status_failed",
+                "personal vault status unavailable",
+            )
+        })?;
+    let state = match state {
+        crate::vault_access::PersonalVaultRegistrationState::CallerOwned => "caller_owned",
+        crate::vault_access::PersonalVaultRegistrationState::RegisteredElsewhere => {
+            "registered_elsewhere"
+        }
+        crate::vault_access::PersonalVaultRegistrationState::IdentityChanged => "identity_changed",
+        crate::vault_access::PersonalVaultRegistrationState::Unregistered => "unregistered",
+    };
+    Ok(serde_json::json!({ "state": state }))
+}
+
 fn handle_vault_authorize(
     vault_access: &VaultAccessStore,
     args: serde_json::Value,
@@ -1009,17 +1105,45 @@ async fn handle_personal_vault_mount(
             "no interactive Windows session",
         ));
     }
-    let registered =
-        match vault_access.personal_for_owner(&request.container_path, peer.caller_sid()) {
-            Ok(record) => record,
-            Err(_) => {
-                zeroize_personal_mount(&mut request);
+    let record = match vault_access.selected_container_mount_route(
+        &request.container_path,
+        peer.caller_sid(),
+        peer.session_id(),
+    ) {
+        Ok(crate::vault_access::SelectedContainerMountRoute::Unmanaged { record }) => record,
+        Ok(crate::vault_access::SelectedContainerMountRoute::Managed { entry_id }) => {
+            let authorization = crate::vault_access::authorize_mount_for_token(
+                vault_access,
+                &entry_id,
+                peer.token(),
+            );
+            zeroize_personal_mount(&mut request);
+            if authorization.allowed {
                 return Err(VerbError::new(
-                    PERSONAL_VAULT_UNAUTHORIZED,
-                    "caller is not authorized for this personal vault",
+                    "vault_policy_managed",
+                    "selected container is governed by Vault permissions",
                 ));
             }
-        };
+            return Err(VerbError::new(
+                PERSONAL_VAULT_UNAUTHORIZED,
+                "caller is not authorized for this Vault policy",
+            ));
+        }
+        Err(crate::vault_access::VaultError::ContainerIdentity) => {
+            zeroize_personal_mount(&mut request);
+            return Err(VerbError::new(
+                "vault_policy_identity_changed",
+                "the Vault policy no longer matches the selected container",
+            ));
+        }
+        Err(_) => {
+            zeroize_personal_mount(&mut request);
+            return Err(VerbError::new(
+                "vault_policy_unavailable",
+                "the selected Vault policy could not be verified",
+            ));
+        }
+    };
     let driver = tokio::task::spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)
         .await
         .unwrap_or(Err(
@@ -1032,112 +1156,29 @@ async fn handle_personal_vault_mount(
             error.public_message(),
         ));
     }
-    let mount_result = vault_mount.with_exclusive_operation(|| {
-        let legacy = if registered.is_none() {
-            match vault_access.prepare_legacy_personal_mount(
-                &request.container_path,
-                peer.caller_sid(),
-                peer.session_id(),
+    // Unmanaged containers have no durable owner record. The caller's normal
+    // Windows access and the engine's password/PIM/keyfile verification are
+    // the authority checks; the short-lived record only pins this mount to the
+    // authenticated session and identity.
+    let (drive_letter, internal_drive, acl_attested) = vault_mount
+        .with_exclusive_operation(|| {
+            vault_mount.mount_unmanaged_authorized_locked(
+                operation_id,
+                vault_access,
+                &record,
+                &mut request,
                 peer.token(),
-            ) {
-                Ok(preparation) => Some(preparation),
-                Err(_) => {
-                    zeroize_personal_mount(&mut request);
-                    return Err(VerbError::new(
-                        PERSONAL_VAULT_UNAUTHORIZED,
-                        "caller is not authorized for this personal vault",
-                    ));
-                }
-            }
-        } else {
-            None
-        };
-        let record = match (registered.as_ref(), legacy.as_ref()) {
-            (Some(record), _) => record,
-            (None, Some(preparation)) => preparation.record(),
-            (None, None) => {
-                zeroize_personal_mount(&mut request);
-                return Err(VerbError::new(
-                    PERSONAL_VAULT_UNAUTHORIZED,
-                    "caller is not authorized for this personal vault",
-                ));
-            }
-        };
-        // The service runs in Session 0, where a DOS-device query cannot
-        // authoritatively describe the caller's per-user device namespace. The
-        // authenticated broker and native engine run in the requested desktop
-        // session and reject an occupied presentation letter immediately before
-        // linking it. Do not turn a Session-0 lookup failure into a false
-        // "drive letter unavailable" result for a genuinely free letter.
-        let mounted = vault_mount.mount_personal_authorized_locked(
-            operation_id,
-            vault_access,
-            record,
-            &mut request,
-            peer.token(),
-            peer.session_id(),
-            peer.caller_sid(),
-            peer.authentication_id(),
-        );
-        let mounted = match mounted {
-            Ok(mounted) => mounted,
-            Err(reason) => {
-                if let Some(preparation) = legacy {
-                    if reason == wincmd_shared::vault_access::VaultMountReason::DismountFailed {
-                        vault_access.mark_personal_recovery_uncertain();
-                        drop(preparation);
-                        return Err(VerbError::new(
-                            VaultMountBroker::personal_mount_failure_code(reason),
-                            "personal vault cleanup could not be confirmed",
-                        ));
-                    }
-                    if vault_access
-                        .restore_legacy_personal_mount(preparation)
-                        .is_err()
-                    {
-                        return Err(VerbError::new(
-                            "vault_owner_record_failed",
-                            "personal vault recovery could not be rolled back",
-                        ));
-                    }
-                }
-                return Err(VerbError::new(
-                    VaultMountBroker::personal_mount_failure_code(reason),
-                    "personal vault mount failed",
-                ));
-            }
-        };
-        if let Some(preparation) = legacy {
-            if vault_access
-                .commit_legacy_personal_mount(&preparation, peer.caller_sid(), peer.session_id())
-                .is_err()
-            {
-                let dismounted = vault_mount.dismount_personal_registration_failure_locked(
-                    operation_id,
-                    vault_access,
-                    preparation.record(),
-                    peer.token(),
-                );
-                let restored = dismounted
-                    && vault_access
-                        .restore_legacy_personal_mount(preparation)
-                        .is_ok();
-                if !restored {
-                    vault_access.mark_personal_recovery_uncertain();
-                }
-                return Err(VerbError::new(
-                    "vault_owner_record_failed",
-                    if dismounted && restored {
-                        "personal vault ownership could not be recorded"
-                    } else {
-                        "personal vault recovery could not be rolled back"
-                    },
-                ));
-            }
-        }
-        Ok(mounted)
-    });
-    let (drive_letter, internal_drive, acl_attested) = mount_result?;
+                peer.session_id(),
+                peer.caller_sid(),
+                peer.authentication_id(),
+            )
+        })
+        .map_err(|reason| {
+            VerbError::new(
+                VaultMountBroker::personal_mount_failure_code(reason),
+                "unmanaged vault mount failed",
+            )
+        })?;
     Ok(serde_json::json!({
         "status": "mounted",
         "drive": drive_letter,
@@ -3337,6 +3378,35 @@ mod integration {
             Envelope::Response(_) => {}
             other => panic!("unexpected reply: {:?}", other),
         }
+    }
+
+    #[test]
+    fn vault_access_directory_pipe_save_then_get_round_trips_durable_shape() {
+        let store = crate::vault_access::test_store();
+        let request = serde_json::json!({
+            "directory": {
+                "schema_version": 1,
+                "users": [{
+                    "sid": "S-1-5-21-101",
+                    "username": "Alex",
+                    "display_name": "Alex Example"
+                }],
+                "groups": [{
+                    "id": "sales",
+                    "name": "Sales",
+                    "local_group": "WC_Sales",
+                    "member_sids": ["S-1-5-21-101"]
+                }]
+            }
+        });
+        let saved = super::handle_vault_save_access_directory(&store, request).unwrap();
+        assert_eq!(saved["directory"]["groups"][0]["local_group"], "WC_Sales");
+        assert_eq!(saved["results"][0]["state"], "unchanged");
+
+        let loaded =
+            super::handle_vault_get_access_directory(&store, serde_json::json!({})).unwrap();
+        assert_eq!(loaded["users"][0]["sid"], "S-1-5-21-101");
+        assert_eq!(loaded["groups"][0]["member_sids"][0], "S-1-5-21-101");
     }
 
     #[tokio::test]

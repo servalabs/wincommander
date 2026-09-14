@@ -21,6 +21,8 @@ const UNMOUNT: &str = "svc.vault.unmount";
 const LIST_AUTHORIZED: &str = "svc.vault.list_authorized";
 const CAPABILITIES: &str = "svc.vault.capabilities";
 const RECONCILE_ACCESS_GROUPS: &str = "svc.vault.reconcile_access_groups";
+const GET_ACCESS_DIRECTORY: &str = "svc.vault.get_access_directory";
+const SAVE_ACCESS_DIRECTORY: &str = "svc.vault.save_access_directory";
 const QUERY_SERVICE_DIAGNOSTICS: &str = "svc.diagnostics.query";
 
 static NEXT_DIAGNOSTIC_OPERATION: AtomicU64 = AtomicU64::new(1);
@@ -394,6 +396,10 @@ fn reconcile_access_groups_payload(groups: Value) -> Value {
     json!({ "groups": groups })
 }
 
+fn save_access_directory_payload(directory: Value) -> Value {
+    json!({ "directory": directory })
+}
+
 /// Reconcile Windows local groups (create/update membership) for the given
 /// access-control groups. Privileged: the service rejects an unprivileged
 /// caller. The bridge passes the `groups` array through untouched and
@@ -404,6 +410,26 @@ pub async fn reconcile_vault_access_groups(groups: Value) -> Result<Value, Strin
     crate::svc_client::call(
         RECONCILE_ACCESS_GROUPS,
         reconcile_access_groups_payload(groups),
+    )
+    .await
+}
+
+/// Read the durable service-owned Fleet Access control directory. This does
+/// not fall back to WebView storage: that cache is only a one-time legacy
+/// migration source and must never be mistaken for saved Windows policy.
+#[tauri::command]
+pub async fn get_vault_access_directory() -> Result<Value, String> {
+    crate::svc_client::call(GET_ACCESS_DIRECTORY, json!({})).await
+}
+
+/// Persist the complete Access control directory and reconcile its Windows
+/// local groups. The service returns the durable record plus each group
+/// outcome so the renderer can accurately show a partial failure.
+#[tauri::command]
+pub async fn save_vault_access_directory(directory: Value) -> Result<Value, String> {
+    crate::svc_client::call(
+        SAVE_ACCESS_DIRECTORY,
+        save_access_directory_payload(directory),
     )
     .await
 }
@@ -421,6 +447,8 @@ mod tests {
         assert_eq!(LIST_AUTHORIZED, "svc.vault.list_authorized");
         assert_eq!(CAPABILITIES, "svc.vault.capabilities");
         assert_eq!(RECONCILE_ACCESS_GROUPS, "svc.vault.reconcile_access_groups");
+        assert_eq!(GET_ACCESS_DIRECTORY, "svc.vault.get_access_directory");
+        assert_eq!(SAVE_ACCESS_DIRECTORY, "svc.vault.save_access_directory");
         assert_eq!(QUERY_SERVICE_DIAGNOSTICS, "svc.diagnostics.query");
     }
 
@@ -450,6 +478,25 @@ mod tests {
         let payload = reconcile_access_groups_payload(groups.clone());
         assert_eq!(payload, json!({ "groups": groups }));
         assert_eq!(payload.as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn access_directory_payload_is_wrapped_once() {
+        let directory = json!({
+            "schema_version": 1,
+            "users": [],
+            "groups": []
+        });
+        assert_eq!(
+            save_access_directory_payload(directory),
+            json!({
+                "directory": {
+                    "schema_version": 1,
+                    "users": [],
+                    "groups": []
+                }
+            })
+        );
     }
 
     #[test]

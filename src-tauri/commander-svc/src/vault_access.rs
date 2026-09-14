@@ -9,14 +9,20 @@ use std::sync::Mutex;
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use wincmd_shared::vault_access::{
-    PersonalVaultRecord, VaultAccess, VaultAccessEntry, VaultAccessPolicy,
+    PersonalVaultRecord, VaultAccess, VaultAccessDirectory, VaultAccessEntry, VaultAccessPolicy,
     VaultAuthorizeMountResponse, VaultEntryResult, VaultEntryStatus, VaultMountDenial,
-    VaultPolicyStatus, VaultPresentation, VaultValidationState, VAULT_ACCESS_SCHEMA_VERSION,
+    VaultPolicyStatus, VaultPresentation, VaultValidationState,
+    VAULT_ACCESS_DIRECTORY_SCHEMA_VERSION, VAULT_ACCESS_SCHEMA_VERSION,
 };
 
 const POLICY_FILE: &str = "vault-access-v1.json";
 const ACTIVE_MOUNTS_FILE: &str = "vault-active-mounts-v1.json";
 const PERSONAL_VAULTS_FILE: &str = "vault-personal-v1.json";
+const ACCESS_DIRECTORY_FILE: &str = "vault-access-directory-v1.json";
+/// Builtin Users. An unmanaged encrypted container is intentionally usable by
+/// every local account; its password/PIM/keyfile, rather than a retired Vault
+/// policy ACL, remains the access boundary.
+const BUILTIN_USERS_SID: &str = "S-1-5-32-545";
 const MAX_ENTRIES: usize = 64;
 const MAX_GRANTS: usize = 32;
 const PERSONAL_CREATION_TTL_SECS: i64 = 10 * 60;
@@ -112,6 +118,11 @@ pub trait LocalGroupReconciler: Send + Sync {
         &self,
         plans: &[GroupMembershipPlan],
     ) -> Result<Vec<GroupMembershipSnapshot>, VaultError>;
+    /// Remove a deterministic service-owned group and prove that it is gone.
+    /// Callers must only use this for the reserved `WC-Vault-*` namespace;
+    /// administrator-authored Access Control groups are intentionally never
+    /// deleted as a side effect of a Vault-policy edit.
+    fn delete_service_owned_group(&self, group: &str) -> Result<(), VaultError>;
     fn restore(&self, snapshots: &[GroupMembershipSnapshot]) -> Result<(), VaultError>;
 }
 
@@ -133,6 +144,9 @@ impl LocalGroupReconciler for NoopLocalGroupReconciler {
                 existed: true,
             })
             .collect())
+    }
+    fn delete_service_owned_group(&self, _: &str) -> Result<(), VaultError> {
+        Ok(())
     }
     fn restore(&self, _: &[GroupMembershipSnapshot]) -> Result<(), VaultError> {
         Ok(())
@@ -391,6 +405,66 @@ struct State {
     personal_pending: HashMap<String, PendingPersonalVault>,
     legacy_recoveries: HashMap<String, LegacyRecoveryRecord>,
     personal_registry_healthy: bool,
+    access_directory: VaultAccessDirectory,
+    access_directory_healthy: bool,
+}
+
+fn empty_access_directory() -> VaultAccessDirectory {
+    VaultAccessDirectory {
+        schema_version: VAULT_ACCESS_DIRECTORY_SCHEMA_VERSION,
+        users: vec![],
+        groups: vec![],
+    }
+}
+
+fn valid_access_directory(directory: &VaultAccessDirectory) -> bool {
+    if directory.schema_version != VAULT_ACCESS_DIRECTORY_SCHEMA_VERSION
+        || directory.groups.len() > MAX_RECONCILE_GROUPS
+        || directory.users.len() > MAX_RECONCILE_GROUP_MEMBERS
+    {
+        return false;
+    }
+    let mut user_sids = HashSet::new();
+    if directory.users.iter().any(|user| {
+        user.sid.trim().is_empty()
+            || user.sid.len() > 184
+            || !user
+                .sid
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            || user.username.trim().is_empty()
+            || user.username.len() > 256
+            || user
+                .display_name
+                .as_ref()
+                .is_some_and(|name| name.len() > 256)
+            || !user_sids.insert(user.sid.to_ascii_lowercase())
+    }) {
+        return false;
+    }
+    let mut ids = HashSet::new();
+    let mut local_groups = HashSet::new();
+    directory.groups.iter().all(|group| {
+        !group.id.trim().is_empty()
+            && group.id.len() <= 128
+            && group
+                .id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            && ids.insert(group.id.to_ascii_lowercase())
+            && !group.name.trim().is_empty()
+            && group.name.len() <= 128
+            && valid_admin_group_name(&group.local_group)
+            && local_groups.insert(group.local_group.to_ascii_lowercase())
+            && group.member_sids.len() <= MAX_RECONCILE_GROUP_MEMBERS
+            && {
+                let mut members = HashSet::new();
+                group.member_sids.iter().all(|sid| {
+                    user_sids.contains(&sid.to_ascii_lowercase())
+                        && members.insert(sid.to_ascii_lowercase())
+                })
+            }
+    })
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -507,7 +581,29 @@ pub struct VaultAccessStore {
     groups: Box<dyn LocalGroupReconciler>,
     path: PathBuf,
     personal_path: PathBuf,
+    access_directory_path: PathBuf,
     state: Mutex<State>,
+}
+
+/// Bounded personal-container registration state for the authenticated caller.
+/// It deliberately reveals no owner SID, ACL, or credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersonalVaultRegistrationState {
+    CallerOwned,
+    RegisteredElsewhere,
+    IdentityChanged,
+    Unregistered,
+}
+
+/// The service-owned decision for an ordinary file picked in Secure Storage.
+/// A managed file never falls through to the ordinary path: its resolved
+/// policy identity remains the authorization boundary. All other files use a
+/// short-lived per-user record and rely on normal Windows file access plus the
+/// container credentials; selecting one does not create an ownership policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectedContainerMountRoute {
+    Managed { entry_id: String },
+    Unmanaged { record: PersonalVaultRecord },
 }
 
 impl VaultAccessStore {
@@ -541,6 +637,7 @@ impl VaultAccessStore {
             groups,
             path: dir.join(POLICY_FILE),
             personal_path: dir.join(PERSONAL_VAULTS_FILE),
+            access_directory_path: dir.join(ACCESS_DIRECTORY_FILE),
             state: Mutex::new(State {
                 active: None,
                 status: empty_status(),
@@ -548,6 +645,8 @@ impl VaultAccessStore {
                 personal_pending: HashMap::new(),
                 legacy_recoveries: HashMap::new(),
                 personal_registry_healthy: true,
+                access_directory: empty_access_directory(),
+                access_directory_healthy: true,
             }),
         }
     }
@@ -561,6 +660,7 @@ impl VaultAccessStore {
         &self,
         recovered_mount_identities: &HashSet<String>,
     ) {
+        self.load_access_directory_at_startup();
         let mut loaded: Option<PersistedPolicy> = self
             .fs
             .read(&self.path)
@@ -600,11 +700,16 @@ impl VaultAccessStore {
                 state.active = Some(policy);
             }
             Some(policy) => {
-                state.status = status_for(
-                    &policy,
-                    VaultValidationState::Degraded,
-                    VaultEntryResult::AclReadbackFailed,
-                );
+                let failure = revalidated
+                    .as_ref()
+                    .err()
+                    .map(startup_validation_result)
+                    // A malformed persisted record has no safe, specific
+                    // entry diagnosis. Keep the conservative ACL wording in
+                    // that defensive fallback rather than claiming a file is
+                    // missing when it may not be.
+                    .unwrap_or(VaultEntryResult::AclReadbackFailed);
+                state.status = status_for(&policy, VaultValidationState::Degraded, failure);
                 state.active = Some(policy);
             }
             None => {}
@@ -700,6 +805,82 @@ impl VaultAccessStore {
         {
             state.personal_registry_healthy = false;
         }
+    }
+
+    /// Loads the reusable Fleet access directory separately from any Vault
+    /// policy. A malformed protected record is never replaced with an empty
+    /// directory: that would make durable groups appear deleted. Instead the
+    /// access-directory APIs fail closed until an administrator repairs it.
+    fn load_access_directory_at_startup(&self) {
+        let loaded = match self.fs.read(&self.access_directory_path) {
+            Ok(bytes) => serde_json::from_slice::<VaultAccessDirectory>(&bytes)
+                .ok()
+                .filter(valid_access_directory),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Some(empty_access_directory())
+            }
+            Err(_) => None,
+        };
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        match loaded {
+            Some(directory) => {
+                state.access_directory = directory;
+                state.access_directory_healthy = true;
+            }
+            None => state.access_directory_healthy = false,
+        }
+    }
+
+    /// Returns the protected, service-owned source of truth for the Access
+    /// control tab. The caller's pipe authorization keeps account SIDs and
+    /// membership data from leaking to ordinary Vault users.
+    pub fn access_directory(&self) -> Result<VaultAccessDirectory, VaultError> {
+        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        if !state.access_directory_healthy {
+            return Err(VaultError::Persistence);
+        }
+        Ok(state.access_directory.clone())
+    }
+
+    /// Durably save the directory before reconciling Windows local groups.
+    /// A per-group reconcile error remains visible in the result, but does not
+    /// discard the administrator's durable configuration. On the next save
+    /// it is retried from that configuration rather than browser storage.
+    pub fn save_access_directory(
+        &self,
+        directory: VaultAccessDirectory,
+    ) -> Result<
+        (
+            VaultAccessDirectory,
+            Vec<wincmd_shared::vault_access::VaultAccessGroupResult>,
+        ),
+        VaultError,
+    > {
+        if !valid_access_directory(&directory) {
+            return Err(VaultError::Validation);
+        }
+        let bytes = serde_json::to_vec(&directory).map_err(|_| VaultError::Persistence)?;
+        {
+            let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+            self.fs
+                .atomic_write(&self.access_directory_path, &bytes)
+                .map_err(|_| VaultError::Persistence)?;
+            state.access_directory = directory.clone();
+            state.access_directory_healthy = true;
+        }
+        let requests = directory
+            .groups
+            .iter()
+            .map(|group| wincmd_shared::vault_access::VaultAccessGroupInput {
+                local_group: group.local_group.clone(),
+                member_sids: group.member_sids.clone(),
+            })
+            .collect::<Vec<_>>();
+        let results = self.reconcile_access_groups(&requests)?;
+        Ok((directory, results))
     }
 
     /// Reserves durable service-owned registration before the caller-session
@@ -1009,6 +1190,114 @@ impl VaultAccessStore {
             .fs
             .stable_file_identity(Path::new(&record.container_path))?;
         Ok((identity == record.container_identity).then_some(record))
+    }
+
+    /// Diagnose why a caller-selected personal container cannot proceed to a
+    /// mount. This is read-only and bounded so the UI/support path can
+    /// distinguish a lost registration from an intentionally different owner.
+    pub fn personal_registration_state(
+        &self,
+        container_path: &str,
+        caller_sid: &str,
+    ) -> Result<PersonalVaultRegistrationState, VaultError> {
+        let normalized = self
+            .fs
+            .normalize_personal_creation_path(Path::new(container_path))?;
+        let normalized_key = personal_key(&normalized.to_string_lossy());
+        let legacy_key = personal_key_alias(&normalized_key);
+        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        if !state.personal_registry_healthy {
+            return Err(VaultError::Persistence);
+        }
+        if state.personal.contains_key(&normalized_key) && state.personal.contains_key(&legacy_key)
+        {
+            return Err(VaultError::Persistence);
+        }
+        let record = state
+            .personal
+            .get(&normalized_key)
+            .or_else(|| state.personal.get(&legacy_key))
+            .cloned();
+        drop(state);
+        let Some(record) = record else {
+            return Ok(PersonalVaultRegistrationState::Unregistered);
+        };
+        if record.owner_sid != caller_sid || record.scope != VaultPresentation::PerUser {
+            return Ok(PersonalVaultRegistrationState::RegisteredElsewhere);
+        }
+        let identity = self
+            .fs
+            .stable_file_identity(Path::new(&record.container_path))?;
+        Ok(if identity == record.container_identity {
+            PersonalVaultRegistrationState::CallerOwned
+        } else {
+            PersonalVaultRegistrationState::IdentityChanged
+        })
+    }
+
+    /// Classify an ordinary picker selection before any personal ownership
+    /// lookup. A current policy wins by normalized path *and* stable file
+    /// identity, so an old personal record cannot block an unmanaged file and
+    /// a replaced policy container cannot bypass its policy.
+    pub fn selected_container_mount_route(
+        &self,
+        container_path: &str,
+        caller_sid: &str,
+        caller_session: u32,
+    ) -> Result<SelectedContainerMountRoute, VaultError> {
+        if caller_sid.is_empty() || caller_session == 0 {
+            return Err(VaultError::Validation);
+        }
+        let normalized = self
+            .fs
+            .normalize_existing_container_path(Path::new(container_path))?;
+        let normalized_path = normalized.to_string_lossy().into_owned();
+        let selected_key = container_policy_key(&normalized_path);
+        let selected_alias = container_policy_key(&personal_key_alias(&selected_key));
+        let identity = self.fs.stable_file_identity(&normalized)?;
+        let managed = {
+            let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+            match state.active.as_ref() {
+                Some(active) => active.policy.entries.iter().find_map(|entry| {
+                    let entry_key = container_policy_key(&entry.container_path);
+                    let entry_alias = container_policy_key(&personal_key_alias(&entry_key));
+                    ((entry_key == selected_key)
+                        || (entry_key == selected_alias)
+                        || (entry_alias == selected_key))
+                        .then(|| {
+                            let expected_identity = active
+                                .resolved
+                                .iter()
+                                .find(|resolved| resolved.id == entry.id)
+                                .map(|resolved| resolved.identity.clone());
+                            (
+                                state.status.validation_state.clone(),
+                                entry.id.clone(),
+                                expected_identity,
+                            )
+                        })
+                }),
+                None => None,
+            }
+        };
+        if let Some((validation_state, entry_id, expected_identity)) = managed {
+            if validation_state != VaultValidationState::Current {
+                return Err(VaultError::AclReadback);
+            }
+            if expected_identity.as_deref() != Some(identity.as_str()) {
+                return Err(VaultError::ContainerIdentity);
+            }
+            return Ok(SelectedContainerMountRoute::Managed { entry_id });
+        }
+        Ok(SelectedContainerMountRoute::Unmanaged {
+            record: PersonalVaultRecord {
+                container_path: normalized_path,
+                container_identity: identity,
+                owner_sid: caller_sid.to_owned(),
+                scope: VaultPresentation::PerUser,
+                created_by_session: caller_session,
+            },
+        })
     }
 
     /// Prepares an existing, unregistered container for one-time adoption.
@@ -1545,13 +1834,13 @@ impl VaultAccessStore {
         for group in &removed_group_plans {
             // Do not create an unused deterministic group merely to remove
             // it. Only groups proven to have existed in the pre-edit
-            // snapshot need their memberships cleared.
+            // snapshot are service-owned Windows policy state to delete.
             let existed = group_snapshots
                 .iter()
                 .find(|snapshot| snapshot.group == group.group)
                 .is_some_and(|snapshot| snapshot.existed);
             if existed {
-                if let Err(error) = self.groups.reconcile_exact_members(&group.group, &[]) {
+                if let Err(error) = self.groups.delete_service_owned_group(&group.group) {
                     self.rollback_after_apply(&mut state, &snapshots);
                     let _ = self.groups.restore(&group_snapshots);
                     return Err(error);
@@ -1692,7 +1981,7 @@ impl VaultAccessStore {
             }
         }
         for group in group_snapshots.iter().filter(|group| group.existed) {
-            if let Err(error) = self.groups.reconcile_exact_members(&group.group, &[]) {
+            if let Err(error) = self.groups.delete_service_owned_group(&group.group) {
                 self.rollback_after_apply(&mut state, &snapshots);
                 let _ = self.groups.restore(&group_snapshots);
                 return Err(error);
@@ -2380,6 +2669,13 @@ impl LocalGroupReconciler for WindowsLocalGroupReconciler {
             })
             .collect()
     }
+    fn delete_service_owned_group(&self, group: &str) -> Result<(), VaultError> {
+        delete_local_group(group)?;
+        if local_group_members(group)?.is_some() {
+            return Err(VaultError::PrincipalResolution(group.to_string()));
+        }
+        Ok(())
+    }
     fn restore(&self, snapshots: &[GroupMembershipSnapshot]) -> Result<(), VaultError> {
         for snapshot in snapshots {
             if snapshot.existed {
@@ -2674,7 +2970,22 @@ impl AclApplier for WindowsAclApplier {
             // Include this target before mutating it so a failed application
             // or readback restores the current target as well as earlier ones.
             snapshots.push(snapshot);
-            if let Err(error) = apply_one_acl(path, &[]).and_then(|_| verify_one_acl(path, &[])) {
+            // Removing a Vault permission returns the backing file to normal
+            // local use. The parent only needs traversal/list access, whereas
+            // a normally mounted container must also be writable by the
+            // signed-in user. The encrypted volume credentials remain
+            // mandatory at unlock time.
+            let unmanaged_grants = [ResolvedGrant {
+                sid: BUILTIN_USERS_SID.to_owned(),
+                access: if path == &plan.parent {
+                    VaultAccess::Read
+                } else {
+                    VaultAccess::Write
+                },
+            }];
+            if let Err(error) = apply_one_acl(path, &unmanaged_grants)
+                .and_then(|_| verify_one_acl(path, &unmanaged_grants))
+            {
                 let _ = self.restore(&snapshots);
                 return Err(error);
             }
@@ -3311,6 +3622,19 @@ fn status_for(
             .collect(),
     }
 }
+
+/// Preserve the reason a durable policy was rejected during boot. The UI can
+/// then distinguish a missing/moved container from a real ACL mismatch instead
+/// of sending an administrator down the wrong repair path.
+fn startup_validation_result(error: &VaultError) -> VaultEntryResult {
+    match error {
+        VaultError::Validation | VaultError::VersionConflict => VaultEntryResult::ValidationFailed,
+        VaultError::PrincipalResolution(_) => VaultEntryResult::PrincipalResolutionFailed,
+        VaultError::ContainerIdentity => VaultEntryResult::ContainerIdentityFailed,
+        VaultError::AclApply => VaultEntryResult::AclApplyFailed,
+        VaultError::AclReadback | VaultError::Persistence => VaultEntryResult::AclReadbackFailed,
+    }
+}
 fn denied(reason: VaultMountDenial) -> VaultAuthorizeMountResponse {
     VaultAuthorizeMountResponse {
         allowed: false,
@@ -3413,6 +3737,10 @@ mod tests {
                     },
                 })
                 .collect())
+        }
+        fn delete_service_owned_group(&self, group: &str) -> Result<(), VaultError> {
+            self.0.lock().unwrap().remove(group);
+            Ok(())
         }
         fn restore(&self, snapshots: &[GroupMembershipSnapshot]) -> Result<(), VaultError> {
             let mut current = self.0.lock().unwrap();
@@ -3946,7 +4274,10 @@ mod tests {
             .unwrap()
             .contains_key(&PathBuf::from("/policy").join(POLICY_FILE)));
         assert!(applied_grants.lock().unwrap().last().unwrap().is_empty());
-        assert!(memberships.lock().unwrap().values().all(Vec::is_empty));
+        assert!(
+            memberships.lock().unwrap().is_empty(),
+            "removing a policy must delete its service-owned Windows groups"
+        );
     }
 
     #[test]
@@ -3954,10 +4285,13 @@ mod tests {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let acl = RecordingAcl::default();
         let restored = Arc::clone(&acl.restored);
-        let store = VaultAccessStore::open(
+        let groups = Groups::default();
+        let memberships = Arc::clone(&groups.0);
+        let store = VaultAccessStore::open_with_groups(
             Box::new(RemoveFailFs(Arc::clone(&files))),
             Box::new(Resolver),
             Box::new(acl),
+            Box::new(groups),
             PathBuf::from("/policy"),
         );
         store.apply(policy(1, 0), 7).unwrap();
@@ -3967,6 +4301,14 @@ mod tests {
         assert_eq!(store.clear(removal), Err(VaultError::Persistence));
         assert!(restored.load(Ordering::SeqCst));
         assert_eq!(store.policy().unwrap().version, 1);
+        assert!(
+            memberships
+                .lock()
+                .unwrap()
+                .values()
+                .any(|members| !members.is_empty()),
+            "a failed deletion must restore the policy's local-group membership"
+        );
         assert!(files
             .lock()
             .unwrap()
@@ -4028,6 +4370,10 @@ mod tests {
             restarted.status().validation_state,
             VaultValidationState::Degraded
         );
+        assert_eq!(
+            restarted.status().entries[0].result,
+            VaultEntryResult::PrincipalResolutionFailed
+        );
         let mut removal = policy(2, 1);
         removal.entries.clear();
         assert!(restarted.clear(removal).is_ok());
@@ -4056,6 +4402,10 @@ mod tests {
         assert_eq!(
             restarted.status().validation_state,
             VaultValidationState::Degraded
+        );
+        assert_eq!(
+            restarted.status().entries[0].result,
+            VaultEntryResult::ContainerIdentityFailed
         );
         let mut removal = policy(2, 1);
         removal.entries.clear();
@@ -4212,6 +4562,18 @@ mod tests {
             .personal_for_owner(&picker_path, "S-1-5-21-owner")
             .unwrap()
             .is_none());
+        assert_eq!(
+            store
+                .personal_registration_state(&picker_path, "S-1-5-21-owner")
+                .unwrap(),
+            PersonalVaultRegistrationState::IdentityChanged
+        );
+        assert_eq!(
+            store
+                .personal_registration_state(&picker_path, "S-1-5-21-other")
+                .unwrap(),
+            PersonalVaultRegistrationState::RegisteredElsewhere
+        );
         assert!(matches!(
             store.prepare_legacy_personal_mount(&picker_path, "S-1-5-21-owner", 1, 1 as _),
             Err(VaultError::Validation)
@@ -4824,6 +5186,57 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_picker_uses_policy_only_for_the_current_matching_container() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = store(files);
+        let path = "D:\\Vault\\sales";
+
+        let unmanaged = store
+            .selected_container_mount_route(path, "S-1-test-Alex", 7)
+            .unwrap();
+        assert!(matches!(
+            unmanaged,
+            SelectedContainerMountRoute::Unmanaged { ref record }
+                if record.owner_sid == "S-1-test-Alex" && record.container_path == path
+        ));
+
+        // Historical personal ownership must not turn an ordinary selected
+        // file into an access-policy object. The active Vault policy is the
+        // only source that may do that.
+        let stale = PersonalVaultRecord {
+            container_path: path.into(),
+            container_identity: "old-file".into(),
+            owner_sid: "S-1-test-Other".into(),
+            scope: VaultPresentation::PerUser,
+            created_by_session: 3,
+        };
+        store
+            .state
+            .lock()
+            .unwrap()
+            .personal
+            .insert(personal_key(path), stale);
+        assert!(matches!(
+            store
+                .selected_container_mount_route(path, "S-1-test-Alex", 7)
+                .unwrap(),
+            SelectedContainerMountRoute::Unmanaged { .. }
+        ));
+
+        let mut managed_policy = policy(1, 0);
+        managed_policy.entries[0].container_path = path.into();
+        store.apply(managed_policy, 7).unwrap();
+        assert_eq!(
+            store
+                .selected_container_mount_route(path, "S-1-test-Alex", 7)
+                .unwrap(),
+            SelectedContainerMountRoute::Managed {
+                entry_id: "shared".into()
+            }
+        );
+    }
+
+    #[test]
     fn duplicate_existing_container_identity_is_rejected_before_acl_changes() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let mut duplicate = policy(1, 0);
@@ -4901,12 +5314,11 @@ mod tests {
             &[PathBuf::from("D:\\Vaults\\retired\\sales")]
         );
         assert!(
-            memberships
+            !memberships
                 .lock()
                 .unwrap()
-                .get(&managed_group_name("retired", VaultAccess::Write))
-                .is_some_and(Vec::is_empty),
-            "removing a policy entry must empty its write group, even if Windows retains the empty local group"
+                .contains_key(&managed_group_name("retired", VaultAccess::Write)),
+            "removing a policy entry must delete its service-owned Windows group"
         );
         assert_eq!(s.policy().unwrap().entries.len(), 1);
     }
@@ -5235,6 +5647,62 @@ mod tests {
 
     use wincmd_shared::vault_access::{VaultAccessGroupInput, VaultAccessGroupState};
 
+    fn access_directory() -> VaultAccessDirectory {
+        VaultAccessDirectory {
+            schema_version: VAULT_ACCESS_DIRECTORY_SCHEMA_VERSION,
+            users: vec![wincmd_shared::vault_access::VaultAccessDirectoryUser {
+                sid: "S-1-5-21-101".into(),
+                username: "Alex".into(),
+                display_name: Some("Alex Example".into()),
+            }],
+            groups: vec![wincmd_shared::vault_access::VaultAccessDirectoryGroup {
+                id: "sales".into(),
+                name: "Sales".into(),
+                local_group: "WC_Sales".into(),
+                member_sids: vec!["S-1-5-21-101".into()],
+            }],
+        }
+    }
+
+    #[test]
+    fn access_directory_is_durable_across_service_restart() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let groups = Groups::default();
+        let membership = Arc::clone(&groups.0);
+        let installed = store_with_groups(files.clone(), groups);
+        let expected = access_directory();
+
+        let (saved, results) = installed.save_access_directory(expected.clone()).unwrap();
+        assert_eq!(saved, expected);
+        assert_eq!(results[0].state, VaultAccessGroupState::Created);
+        assert_eq!(
+            membership.lock().unwrap().get("WC_Sales"),
+            Some(&vec!["S-1-5-21-101".to_string()])
+        );
+
+        let restarted = store_with_groups(files, Groups(membership));
+        restarted.load_at_startup();
+        assert_eq!(restarted.access_directory().unwrap(), expected);
+    }
+
+    #[test]
+    fn access_directory_rejects_unknown_member_or_reserved_group_name() {
+        let store = store_with_groups(Arc::new(Mutex::new(HashMap::new())), Groups::default());
+        let mut unknown_member = access_directory();
+        unknown_member.groups[0].member_sids = vec!["S-1-5-21-missing".into()];
+        assert_eq!(
+            store.save_access_directory(unknown_member),
+            Err(VaultError::Validation)
+        );
+
+        let mut reserved_name = access_directory();
+        reserved_name.groups[0].local_group = "WC-Vault-conflict-W".into();
+        assert_eq!(
+            store.save_access_directory(reserved_name),
+            Err(VaultError::Validation)
+        );
+    }
+
     #[test]
     fn reconcile_access_groups_creates_then_reports_unchanged_then_updates_exactly() {
         let groups = Groups::default();
@@ -5361,6 +5829,13 @@ mod tests {
                         existed: false,
                     })
                     .collect())
+            }
+            fn delete_service_owned_group(&self, group: &str) -> Result<(), VaultError> {
+                if group == self.fail_for {
+                    Err(VaultError::PrincipalResolution(group.to_string()))
+                } else {
+                    Ok(())
+                }
             }
             fn restore(&self, _: &[GroupMembershipSnapshot]) -> Result<(), VaultError> {
                 Ok(())

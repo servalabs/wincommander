@@ -41,3 +41,29 @@ export interface AccessGroupReconcileResult {
 export interface AccessGroupReconcileResponse {
   results: AccessGroupReconcileResult[];
 }
+
+/** Protected service representation of the reusable Fleet directory.
+ * Unlike the UI model, it contains only stable Windows identities. */
+export interface VaultAccessDirectoryUser {
+  sid: string;
+  username: string;
+  display_name?: string;
+}
+
+export interface VaultAccessDirectoryGroup {
+  id: string;
+  name: string;
+  local_group: string;
+  member_sids: string[];
+}
+
+export interface VaultAccessDirectory {
+  schema_version: 1;
+  users: VaultAccessDirectoryUser[];
+  groups: VaultAccessDirectoryGroup[];
+}
+
+export interface VaultSaveAccessDirectoryResponse {
+  directory: VaultAccessDirectory;
+  results: AccessGroupReconcileResult[];
+}

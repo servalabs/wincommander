@@ -8,20 +8,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import useBackend from "@/hooks/useBackend";
-import useVaultAccess from "@/hooks/useVaultAccess";
 import { showError, showSuccess } from "@/utils/toast";
 import {
-  buildAccessGroupReconcilePlan, createAccessGroup, describeReconcileFailure, membershipCount,
-  reconcileAccessDirectoryUsers, summarizeReconcileResults, validateAccessDirectory,
+  createAccessGroup, membershipCount, reconcileAccessDirectoryUsers, summarizeReconcileResults,
+  validateAccessDirectory,
 } from "./accessControlPolicy";
-import type { FleetAccessDirectory, FleetAccessGroup } from "./accessControlTypes";
+import type { FleetAccessDirectory, FleetAccessGroup, VaultSaveAccessDirectoryResponse } from "./accessControlTypes";
 import FleetField from "./FleetField";
 import FleetInfoPopover from "./FleetInfoPopover";
 
 interface AccessControlTabProps {
   directory: FleetAccessDirectory;
   onChange: Dispatch<SetStateAction<FleetAccessDirectory>>;
-  onSave: () => void;
+  onSave: (directory: FleetAccessDirectory) => Promise<VaultSaveAccessDirectoryResponse>;
 }
 
 export default function AccessControlTab({ directory, onChange, onSave }: AccessControlTabProps) {
@@ -30,9 +29,9 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
   const [userSearch, setUserSearch] = useState("");
   const [pendingDelete, setPendingDelete] = useState<FleetAccessGroup>();
   const [discovering, setDiscovering] = useState(false);
+  const [saving, setSaving] = useState(false);
   const discoveredOnce = useRef(false);
   const { getFleetAccessUsers } = useBackend();
-  const { reconcileAccessGroups } = useVaultAccess<never, never>();
   const errors = useMemo(() => validateAccessDirectory(directory), [directory]);
   const selectedGroup = directory.groups.find(group => group.id === selectedGroupId);
 
@@ -114,27 +113,20 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
       })
     : [];
 
-  const reconcileGroups = async () => {
-    const { requests, skippedMembers } = buildAccessGroupReconcilePlan(directory);
-    const skippedNote = skippedMembers
-      .map(entry => `${entry.count} member${entry.count === 1 ? "" : "s"} of ${entry.groupName} skipped (no Windows SID)`)
-      .join("; ");
-    try {
-      const { results } = await reconcileAccessGroups(requests);
-      const outcome = summarizeReconcileResults(results);
-      const message = skippedNote ? `${outcome.message} ${skippedNote}.` : outcome.message;
-      if (outcome.intent === "danger") void showError(message);
-      else void showSuccess(message);
-    } catch (cause) {
-      const message = describeReconcileFailure(cause);
-      void showError(skippedNote ? `${message} ${skippedNote}.` : message);
-    }
-  };
-
-  const save = () => {
+  const save = async () => {
     if (errors.length) return void showError(errors[0]);
-    onSave();
-    void reconcileGroups();
+    setSaving(true);
+    try {
+      const { results } = await onSave(directory);
+      const outcome = summarizeReconcileResults(results);
+      if (outcome.intent === "danger") void showError(outcome.message);
+      else void showSuccess(outcome.message);
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      void showError(`Access groups were not saved to the Windows security service. ${detail}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -219,7 +211,7 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
             {errors.length > 0 && <p className="fleet-inline-error">{errors[0]}</p>}
             <div className="fleet-access-actions">
               <Button size="sm" variant="danger" onClick={() => setPendingDelete(selectedGroup)}><Icon icon="trash" />Delete group</Button>
-              <Button size="sm" variant="primary" onClick={save}>Save groups</Button>
+              <Button size="sm" variant="primary" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save groups"}</Button>
             </div>
           </CardContent>
         </> : <CardContent className="fleet-access-empty fleet-access-empty-main"><Icon icon="people" size={28} /><strong>Select or create a group</strong><small>All group details and Windows users will stay in this pane.</small></CardContent>}
