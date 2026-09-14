@@ -82,7 +82,7 @@ const compare = (left, right) => {
   return 0;
 };
 const target = process.env.WINCOMMANDER_RELEASE_VERSION;
-const published = process.env.WINCOMMANDER_PUBLISHED_TAGS.split('\n').filter(Boolean);
+const published = process.env.WINCOMMANDER_PUBLISHED_TAGS.split(/\r?\n/).map((tag) => tag.trim()).filter(Boolean);
 if (published.some((tag) => compare(target, tag) <= 0)) {
   throw new Error(`Release ${target} must be newer than every published release.`);
 }
