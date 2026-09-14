@@ -26,12 +26,15 @@
 // Usage: bun run tools/dev-server.ts [--free]
 //   --free: skip build:pro entirely (matches the old dev:free script, which
 //           never built the Pro sidecar at all).
+//   WINCOMMANDER_DEV_FREE_ONLY=1: selected by tools/dev.ps1 when a public
+//           checkout has no private Pro sibling. This lets `bun run dev`
+//           start the Free desktop instead of failing before Vite starts.
 
 import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
-const FREE_ONLY = process.argv.includes("--free");
+const FREE_ONLY = process.argv.includes("--free") || process.env.WINCOMMANDER_DEV_FREE_ONLY === "1";
 const MULTI_USER = process.argv.includes("--multi-user");
 // Tauri runs this script as its beforeDevCommand. A genuine second desktop
 // session is refused below before it changes shared state; otherwise this is a
