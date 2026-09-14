@@ -159,6 +159,10 @@ if (![packageVersion, tauriVersion, cargoVersion, lockVersion].every((value) => 
     if ($remoteTag) {
         Invoke-Git @('-C', $worktree, 'push', 'origin', ":refs/tags/$tag")
     }
+    $localTag = (& git -C $worktree rev-parse -q --verify "refs/tags/$tag" | Out-String).Trim()
+    if ($localTag) {
+        Invoke-Git @('-C', $worktree, 'tag', '-d', $tag)
+    }
     Invoke-Git @('-C', $worktree, 'tag', '-a', $tag, '-m', "release: $tag")
     Invoke-Git @('-C', $worktree, 'push', 'origin', "refs/tags/$tag")
     Write-Output "Started Free release $tag. The tag push triggered the release workflow."
