@@ -46,8 +46,12 @@ if ($origin -notmatch 'github\.com[/:](?<owner>[^/]+)/(?<name>[^/.]+)(?:\.git)?$
 }
 $repository = "$($Matches.owner)/$($Matches.name)"
 
+$priorErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 $published = & gh release view $tag --repo $repository 2>$null
-if ($LASTEXITCODE -eq 0) {
+$publishedExitCode = $LASTEXITCODE
+$ErrorActionPreference = $priorErrorActionPreference
+if ($publishedExitCode -eq 0) {
     Stop-Release "$tag is already published and cannot be replaced. Choose a newer version."
 }
 $publishedTags = (& gh api "repos/$repository/releases" --paginate --jq '.[] | select(.draft == false) | .tag_name' | Out-String).Trim()
