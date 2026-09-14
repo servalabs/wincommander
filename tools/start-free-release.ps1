@@ -125,7 +125,7 @@ const updatedCargo = cargo.replace(/^version = "[^"]+"$/m, `version = "${version
 if (updatedCargo === cargo) throw new Error('Free Cargo package version was not found.');
 fs.writeFileSync(cargoPath, updatedCargo);
 const lock = fs.readFileSync(lockPath, 'utf8');
-const updatedLock = lock.replace(/(\[\[package\]\]\nname = "commander-free"\nversion = ")[^"]+(")/, `$1${version}$2`);
+const updatedLock = lock.replace(/(\[\[package\]\]\r?\nname = "commander-free"\r?\nversion = ")[^"]+(")/, `$1${version}$2`);
 if (updatedLock === lock) throw new Error('Free Cargo.lock package version was not found.');
 fs.writeFileSync(lockPath, updatedLock);
 '@
@@ -142,7 +142,7 @@ const tauriVersion = JSON.parse(fs.readFileSync('src-tauri/commander-free/tauri.
 const cargo = fs.readFileSync('src-tauri/commander-free/Cargo.toml', 'utf8');
 const lock = fs.readFileSync('src-tauri/Cargo.lock', 'utf8');
 const cargoVersion = (cargo.match(/^version = "([^"]+)"/m) || [])[1];
-const lockVersion = (lock.match(/\[\[package\]\]\nname = "commander-free"\nversion = "([^"]+)"/) || [])[1];
+const lockVersion = (lock.match(/\[\[package\]\]\r?\nname = "commander-free"\r?\nversion = "([^"]+)"/) || [])[1];
 if (![packageVersion, tauriVersion, cargoVersion, lockVersion].every((value) => value === version)) {
   throw new Error(`Release version fields are not all ${version}.`);
 }
