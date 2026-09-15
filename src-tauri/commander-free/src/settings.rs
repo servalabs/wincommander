@@ -2259,6 +2259,11 @@ fn default_merge_strategy() -> String {
 // ═══════════════════════════════════════════════════════════════════════
 
 static SETTINGS_CACHE: Mutex<Option<AppSettings>> = Mutex::new(None);
+// The startup theme read and the full React settings hydration can arrive at
+// the native process together.  A cold cache must be populated once: letting
+// both callers decrypt, migrate, and rewrite the stores concurrently makes a
+// normal logon look like a settings timeout on slower disks.
+static SETTINGS_INITIALIZATION_GATE: Mutex<()> = Mutex::new(());
 
 fn generate_device_id() -> String {
     Uuid::new_v4().to_string()
@@ -2545,6 +2550,17 @@ fn load_settings_from_store() -> Result<AppSettings, String> {
 /// Read settings from disk, or create defaults if file doesn't exist.
 pub fn read_settings() -> Result<AppSettings, String> {
     let res = (|| {
+        if let Ok(guard) = SETTINGS_CACHE.lock() {
+            if let Some(ref cached) = *guard {
+                return Ok(cached.clone());
+            }
+        }
+
+        // Serialize only the cold path.  Recheck after waiting because another
+        // startup caller may have populated the cache while this call waited.
+        let _initialization = SETTINGS_INITIALIZATION_GATE
+            .lock()
+            .map_err(|_| "Settings initialization lock poisoned".to_string())?;
         if let Ok(guard) = SETTINGS_CACHE.lock() {
             if let Some(ref cached) = *guard {
                 return Ok(cached.clone());

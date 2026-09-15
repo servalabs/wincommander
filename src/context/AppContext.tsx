@@ -1193,8 +1193,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 hydratedSettings = await hydrateWithinBudget(signal => initSettings(false, undefined, signal));
                 if (cancelled) return;
                 if (!hydratedSettings) {
-                    setStartupError('WinCommander could not load its settings. Retry to continue.');
-                    return;
+                    // A soft timeout only bounds the splash's first attempt; it
+                    // cannot cancel a native DPAPI/filesystem read.  Keep one
+                    // shared read alive instead of presenting a false
+                    // "settings" failure while that normal cold-start work is
+                    // still completing.  A real read error still reaches the
+                    // recovery screen below.
+                    setStartupDataState('loading');
+                    hydratedSettings = await initSettings(false);
+                    if (cancelled) return;
+                    if (!hydratedSettings) {
+                        setStartupError('WinCommander could not load its settings. Retry to continue.');
+                        return;
+                    }
                 }
             }
 
