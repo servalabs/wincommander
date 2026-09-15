@@ -1065,9 +1065,18 @@ fn fleet_shield_start_params(
 
 fn fleet_shield_requires_reconfiguration(
     applied_revision: Option<i64>,
+    applied_command_id: Option<&str>,
     state: &crate::settings::FleetShieldDesiredState,
 ) -> bool {
-    applied_revision != Some(state.revision)
+    if applied_revision != Some(state.revision) {
+        return true;
+    }
+    // A reset/re-enrolment checkpoint may replay a revision number. Only an
+    // organization default without a command id can rely on revision alone.
+    state
+        .command_id
+        .as_deref()
+        .is_some_and(|command_id| applied_command_id != Some(command_id))
 }
 
 async fn privacy_shield_status(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
@@ -1120,6 +1129,7 @@ async fn apply_fleet_privacy_shield_policy(
             "app": { "fleet": {
                 "privacyShieldSessionOwned": false,
                 "privacyShieldAppliedRevision": state.revision,
+                "privacyShieldAppliedCommandId": state.command_id,
             } }
         }))?;
         crate::set_tray_shield_running(app, false);
@@ -1134,6 +1144,11 @@ async fn apply_fleet_privacy_shield_policy(
     let settings = crate::settings::read_settings()?;
     let needs_reconfigure = fleet_shield_requires_reconfiguration(
         settings.app.fleet.privacy_shield_applied_revision,
+        settings
+            .app
+            .fleet
+            .privacy_shield_applied_command_id
+            .as_deref(),
         &state,
     );
     if running && !needs_reconfigure {
@@ -1195,6 +1210,7 @@ async fn apply_fleet_privacy_shield_policy(
         "app": { "fleet": {
             "privacyShieldSessionOwned": true,
             "privacyShieldAppliedRevision": state.revision,
+            "privacyShieldAppliedCommandId": state.command_id,
         } }
     }))?;
     crate::set_tray_shield_running(app, true);
@@ -1444,7 +1460,7 @@ mod tests {
     }
 
     #[test]
-    fn native_fleet_supervisor_reconfigures_only_for_a_new_shield_revision() {
+    fn native_fleet_supervisor_requires_command_identity_after_revision_replay() {
         let state = crate::settings::FleetShieldDesiredState {
             enabled: true,
             mode: "notify_only".to_string(),
@@ -1454,10 +1470,22 @@ mod tests {
         };
         assert!(super::fleet_shield_requires_reconfiguration(
             Some(9),
+            Some("command-9"),
             &state
         ));
         assert!(!super::fleet_shield_requires_reconfiguration(
             Some(10),
+            Some("command-10"),
+            &state
+        ));
+        assert!(super::fleet_shield_requires_reconfiguration(
+            Some(10),
+            Some("pre-reset-command"),
+            &state
+        ));
+        assert!(super::fleet_shield_requires_reconfiguration(
+            Some(10),
+            None,
             &state
         ));
     }

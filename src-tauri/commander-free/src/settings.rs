@@ -662,6 +662,11 @@ pub struct FleetSettings {
     /// running detector once, rather than claiming an old blur mode matches.
     #[serde(default)]
     pub privacy_shield_applied_revision: Option<i64>,
+    /// Command identity paired with `privacy_shield_applied_revision`. A
+    /// recovery can replay a revision, so revision alone cannot acknowledge a
+    /// different device command. Absent legacy data safely causes one read-back.
+    #[serde(default)]
+    pub privacy_shield_applied_command_id: Option<String>,
 }
 
 /// Paid: decoy-mode preference. Defaults OFF with an empty `display_name`,
