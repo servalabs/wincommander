@@ -4170,6 +4170,13 @@ pub(crate) async fn run_backend_script_with_timeout(
 
     cmd.env("WINCMD_COMMAND", &command);
     cmd.env("WINCMD_PARAMS_JSON", &params_json);
+    // The Python detector intentionally outlives this short-lived PowerShell
+    // wrapper, so give it the real Free owner rather than the wrapper PID.
+    // It fails closed if that owner disappears, even if a late Job assignment
+    // is unavailable (for example because of a nested-job policy).
+    if command == "Start-PrivacyShield" {
+        cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string());
+    }
     if let Ok(exe_path) = std::env::current_exe() {
         cmd.env("WINCMD_EXE_PATH", exe_path);
     }

@@ -957,6 +957,10 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.kill_on_drop(true);
+    // Pro can launch the local Privacy Shield on Free's behalf. Preserve
+    // Free's PID through that child tree so only the session owned by this
+    // Free process opts into the detector's fail-closed lifecycle.
+    cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string());
     #[cfg(windows)]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);

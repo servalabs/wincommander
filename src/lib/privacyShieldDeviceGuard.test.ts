@@ -54,12 +54,17 @@ describe("privacy shield device guardrails", () => {
     expect(shield).not.toContain("should_blur = is_clear or (");
   });
 
-  test("detector lifetime is not tied to the transient PowerShell launcher", async () => {
+  test("a managed detector exits with its WinCommander owner, not its transient PowerShell launcher", async () => {
     const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
+    const backend = await read("src-tauri/commander-free/src/backend.rs");
+    const sidecar = await read("src-tauri/commander-free/src/sidecar.rs");
 
     expect(shield).not.toContain("--parent-pid");
-    expect(shield).not.toContain("_parent_watchdog");
-    expect(shield).not.toContain("watchdog: parent PID");
+    expect(shield).toContain("--owner-pid");
+    expect(shield).toContain("owner_process_is_alive");
+    expect(shield).toContain("Shield owner exited; stopping managed detector");
+    expect(backend).toContain('cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string())');
+    expect(sidecar).toContain('cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string())');
   });
 
   test("long-lived detector does not hold the backend command output pipe open", async () => {

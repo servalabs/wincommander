@@ -398,6 +398,25 @@ def clear_pid_marker():
     except Exception as e:
         log(f"Could not remove detector PID marker: {e}")
 
+def owner_process_is_alive(pid):
+    """Check the trusted WinCommander Free owner, never the PS launcher."""
+    if not pid or pid <= 0 or sys.platform != "win32":
+        return False
+    SYNCHRONIZE = 0x00100000
+    WAIT_TIMEOUT = 0x00000102
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if not handle:
+            return False
+        try:
+            return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        # We cannot verify ownership, so do not keep using the camera.
+        return False
+
 
 # --- Dependency Imports ---
 try:
@@ -938,9 +957,17 @@ class ShieldApp(QObject):
         parser.add_argument('--multi-face-wake-multiplier', type=int, default=2)
         parser.add_argument('--buffer-frames', type=int, default=6)
         parser.add_argument('--capture-speed', type=int, default=1, help='Video playback speed: 1=real-time, 2=2x, 3=3x, 4=4x')
+        # Supplied only by WinCommander Free, never the transient PS wrapper.
+        parser.add_argument('--owner-pid', type=int, default=0)
         # Ignored for now but kept for API compat if needed
         parser.add_argument('--mode', type=str, default='')
         self.args, _ = parser.parse_known_args()
+
+        self._owner_watchdog = None
+        if self.args.owner_pid and not owner_process_is_alive(self.args.owner_pid):
+            log("Shield owner is unavailable; refusing unmanaged start")
+            clear_pid_marker()
+            raise RuntimeError("WinCommander owner process is unavailable")
 
         write_pid_marker()
 
@@ -993,7 +1020,21 @@ class ShieldApp(QObject):
         self.worker.status_msg.connect(lambda msg: log(f"Status: {msg}"))
         self.worker.init_failed.connect(self.handle_init_fail)
         self.worker.start()
+        if self.args.owner_pid:
+            self._owner_watchdog = QTimer(self)
+            self._owner_watchdog.setInterval(1000)
+            self._owner_watchdog.timeout.connect(self._stop_when_owner_exits)
+            self._owner_watchdog.start()
         log("Shield worker started")
+
+    def _stop_when_owner_exits(self):
+        if owner_process_is_alive(self.args.owner_pid):
+            return
+        log("Shield owner exited; stopping managed detector")
+        clear_pid_marker()
+        self.worker._running = False
+        self.overlay.update_state(True, "")
+        self.app.quit()
 
     def _handle_state(self, is_clear, reason):
         # Fleet/flow receives every transition. The local blur toggles only
@@ -1039,6 +1080,14 @@ if __name__ == "__main__":
             Remove-ItemSecure -Path (Join-Path $env:APPDATA "WinCommander\privacy_shield.py") -Force -ErrorAction SilentlyContinue
         }
 
+        # The Python process is intentionally detached from this short-lived
+        # PowerShell wrapper. Carry Free's identity into it instead so it can
+        # stop if Free is ended, even when Windows cannot assign its Job.
+        $ownerPid = 0
+        if ($env:WINCMD_SHIELD_OWNER_PID -match '^[1-9][0-9]*$') {
+            $ownerPid = [int]$env:WINCMD_SHIELD_OWNER_PID
+        }
+
         $pythonArgs = @(
             "-",
             "$shieldProcessMarker",
@@ -1060,6 +1109,7 @@ if __name__ == "__main__":
         if ($BlurPhone) { $pythonArgs += "--blur-phone" }
         if ($CaptureOnDevice) { $pythonArgs += "--capture-on-device" }
         if ($CaptureOnMultiFace) { $pythonArgs += "--capture-on-multi-face" }
+        if ($ownerPid -gt 0) { $pythonArgs += "--owner-pid"; $pythonArgs += "$ownerPid" }
 
         # Use resolved python executable (must be python.exe, NOT pythonw.exe)
         # pythonw.exe often blocks OpenCV/Media Foundation from connecting to the camera.
