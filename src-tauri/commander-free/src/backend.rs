@@ -5140,33 +5140,67 @@ fn fleet_privacy_alert_rate() -> &'static Mutex<FleetPrivacyAlertRate> {
     RATE.get_or_init(|| Mutex::new(FleetPrivacyAlertRate::default()))
 }
 
-fn fleet_privacy_event_is_enabled(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FleetPrivacyAlertGate {
+    Allowed,
+    FleetDisconnected,
+    NoFleetManagedSession,
+    UnknownEventClass,
+    RateLimited,
+}
+
+impl FleetPrivacyAlertGate {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::FleetDisconnected => "Fleet is not configured on this device",
+            Self::NoFleetManagedSession => {
+                "the current Privacy Shield session was started locally, not by Fleet"
+            }
+            Self::UnknownEventClass => "the detector emitted an unsupported aggregate class",
+            Self::RateLimited => "the signed Fleet notification limit is reached",
+        }
+    }
+}
+
+fn fleet_privacy_event_gate(
     fleet_enabled: bool,
+    fleet_session_owned: bool,
     shield: &crate::settings::PrivacyShieldSettings,
     event_class: &str,
-) -> bool {
-    if !fleet_enabled
-        || shield.fleet_managed != Some(true)
-        || shield.fleet_monitoring_enabled != Some(true)
-    {
-        return false;
+) -> FleetPrivacyAlertGate {
+    if !fleet_enabled {
+        return FleetPrivacyAlertGate::FleetDisconnected;
+    }
+    // An explicitly Fleet-started device session is allowed to report even
+    // when the organisation-wide default is off. It is distinct from a local
+    // session: `privacy_shield_session_owned` is set only after the signed
+    // device command has reached the local app and started the Shield.
+    let org_policy_active =
+        shield.fleet_managed == Some(true) && shield.fleet_monitoring_enabled == Some(true);
+    if !fleet_session_owned && !org_policy_active {
+        return FleetPrivacyAlertGate::NoFleetManagedSession;
     }
     // Blur switches are local enforcement preferences, not alert opt-outs.
     // Fleet policy explicitly keeps monitoring and Fleet alerts active when a
     // blur switch is off; only its global monitoring switch and alert rate
     // limit govern the aggregate notification channel.
-    matches!(
+    if matches!(
         event_class,
         "look_away" | "no_face" | "multiple_faces" | "secondary_device"
-    )
+    ) {
+        FleetPrivacyAlertGate::Allowed
+    } else {
+        FleetPrivacyAlertGate::UnknownEventClass
+    }
 }
 
-async fn allow_fleet_privacy_alert(event_class: &str) -> bool {
+async fn fleet_privacy_alert_gate(event_class: &str) -> FleetPrivacyAlertGate {
     let Ok(settings) = crate::settings::read_settings() else {
         // A settings read failure must not affect the local detector. Fleet
         // reporting fails closed because an admin has not confirmed that this
         // particular detector class is enabled for Fleet notification.
-        return false;
+        return FleetPrivacyAlertGate::FleetDisconnected;
     };
     // First-sync catch-up: a device can be enrolled (`fleet.enabled == true`)
     // moments before its first `fleet_apply_pending_epoch` tick lands, so
@@ -5177,30 +5211,38 @@ async fn allow_fleet_privacy_alert(event_class: &str) -> bool {
     // background apply loop had caught up, would report correctly. Give this
     // first event one chance to force that sync itself before deciding.
     let shield = &settings.ideal.privacy.privacy_shield;
-    let unsynced = settings.app.fleet.enabled && shield.fleet_managed.is_none();
+    let unsynced = settings.app.fleet.enabled
+        && !settings.app.fleet.privacy_shield_session_owned
+        && shield.fleet_managed.is_none();
     let settings = if unsynced {
         let _ = crate::fleet_agent::fleet_apply_pending_epoch_typed().await;
         match crate::settings::read_settings() {
             Ok(s) => s,
-            Err(_) => return false,
+            Err(_) => return FleetPrivacyAlertGate::FleetDisconnected,
         }
     } else {
         settings
     };
     let shield = &settings.ideal.privacy.privacy_shield;
-    if !fleet_privacy_event_is_enabled(settings.app.fleet.enabled, shield, event_class) {
-        return false;
+    let gate = fleet_privacy_event_gate(
+        settings.app.fleet.enabled,
+        settings.app.fleet.privacy_shield_session_owned,
+        shield,
+        event_class,
+    );
+    if gate != FleetPrivacyAlertGate::Allowed {
+        return gate;
     }
     let limit = shield.fleet_notification_limit.unwrap_or(0).min(1000);
     if limit == 0 {
-        return true;
+        return FleetPrivacyAlertGate::Allowed;
     }
     let window_secs = shield
         .fleet_notification_window_seconds
         .unwrap_or(60)
         .clamp(1, 86_400);
     let Ok(mut rate) = fleet_privacy_alert_rate().lock() else {
-        return true;
+        return FleetPrivacyAlertGate::Allowed;
     };
     let config = (limit, window_secs);
     if rate.config != Some(config) {
@@ -5210,15 +5252,15 @@ async fn allow_fleet_privacy_alert(event_class: &str) -> bool {
     let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(window_secs as u64);
     rate.sent.retain(|at| *at > cutoff);
     if rate.sent.len() >= limit as usize {
-        return false;
+        return FleetPrivacyAlertGate::RateLimited;
     }
     rate.sent.push(std::time::Instant::now());
-    true
+    FleetPrivacyAlertGate::Allowed
 }
 
 #[cfg(test)]
 mod fleet_privacy_alert_tests {
-    use super::fleet_privacy_event_is_enabled;
+    use super::{fleet_privacy_event_gate, FleetPrivacyAlertGate};
     use crate::settings::PrivacyShieldSettings;
 
     fn enabled_policy() -> PrivacyShieldSettings {
@@ -5235,27 +5277,50 @@ mod fleet_privacy_alert_tests {
     #[test]
     fn fleet_alerts_remain_enabled_when_a_local_blur_switch_is_off() {
         let mut policy = enabled_policy();
-        assert!(fleet_privacy_event_is_enabled(true, &policy, "look_away"));
-        assert!(fleet_privacy_event_is_enabled(
-            true,
-            &policy,
-            "multiple_faces"
-        ));
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &policy, "look_away"),
+            FleetPrivacyAlertGate::Allowed
+        );
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &policy, "multiple_faces",),
+            FleetPrivacyAlertGate::Allowed
+        );
 
         policy.anti_peeping_enabled = Some(false);
-        assert!(fleet_privacy_event_is_enabled(
-            true,
-            &policy,
-            "multiple_faces"
-        ));
-        assert!(fleet_privacy_event_is_enabled(true, &policy, "look_away"));
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &policy, "multiple_faces",),
+            FleetPrivacyAlertGate::Allowed
+        );
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &policy, "look_away"),
+            FleetPrivacyAlertGate::Allowed
+        );
     }
 
     #[test]
-    fn fleet_alerts_require_an_active_fleet_policy_and_known_event_class() {
+    fn local_shield_sessions_do_not_upload_attention_events() {
         let policy = enabled_policy();
-        assert!(!fleet_privacy_event_is_enabled(false, &policy, "look_away"));
-        assert!(!fleet_privacy_event_is_enabled(true, &policy, "untrusted"));
+        assert_eq!(
+            fleet_privacy_event_gate(false, false, &policy, "look_away"),
+            FleetPrivacyAlertGate::FleetDisconnected
+        );
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &PrivacyShieldSettings::default(), "look_away"),
+            FleetPrivacyAlertGate::NoFleetManagedSession
+        );
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &policy, "untrusted"),
+            FleetPrivacyAlertGate::UnknownEventClass
+        );
+    }
+
+    #[test]
+    fn fleet_started_device_session_reports_when_org_default_is_off() {
+        let policy = PrivacyShieldSettings::default();
+        assert_eq!(
+            fleet_privacy_event_gate(true, true, &policy, "look_away"),
+            FleetPrivacyAlertGate::Allowed
+        );
     }
 }
 
@@ -5403,7 +5468,8 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                 // best-effort work off the reader loop: it must never
                                 // delay the protected user's local notification.
                                 tauri::async_runtime::spawn(async move {
-                                    if allow_fleet_privacy_alert(gaze_kind).await {
+                                    let fleet_gate = fleet_privacy_alert_gate(gaze_kind).await;
+                                    if fleet_gate == FleetPrivacyAlertGate::Allowed {
                                         if let Err(error) = crate::sidecar::dispatch_paid_command(
                                             "record_privacy_shield_event",
                                             serde_json::json!({ "class": gaze_kind }),
@@ -5416,9 +5482,10 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                             ));
                                         }
                                     } else {
-                                        crate::flow_bridge::flow_trace(
-                                            "shield-reader: Fleet attention event rate-limited by signed policy",
-                                        );
+                                        crate::flow_bridge::flow_trace(format!(
+                                            "shield-reader: Fleet attention event not queued: {}",
+                                            fleet_gate.reason(),
+                                        ));
                                     }
                                 });
                             }
