@@ -1129,7 +1129,7 @@ async fn apply_fleet_privacy_shield_policy(
             "app": { "fleet": {
                 "privacyShieldSessionOwned": false,
                 "privacyShieldAppliedRevision": state.revision,
-                "privacyShieldAppliedCommandId": state.command_id,
+                "privacyShieldAppliedCommandId": state.command_id.clone(),
             } }
         }))?;
         crate::set_tray_shield_running(app, false);
@@ -1210,7 +1210,7 @@ async fn apply_fleet_privacy_shield_policy(
         "app": { "fleet": {
             "privacyShieldSessionOwned": true,
             "privacyShieldAppliedRevision": state.revision,
-            "privacyShieldAppliedCommandId": state.command_id,
+            "privacyShieldAppliedCommandId": state.command_id.clone(),
         } }
     }))?;
     crate::set_tray_shield_running(app, true);
