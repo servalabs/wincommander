@@ -1071,9 +1071,21 @@ if __name__ == "__main__":
         $startInfo.UseShellExecute = $false
         $startInfo.CreateNoWindow = $true
         $startInfo.RedirectStandardInput = $true
+        # The detector is deliberately long-lived.  Do not let it inherit this
+        # one-shot command runner's stdout/stderr handles: Rust waits for the
+        # runner's output EOF, and inherited handles kept a Fleet Start
+        # lifecycle stuck at "applying" until the detector was stopped.
+        # Drain both streams asynchronously rather than letting an occasional
+        # native-library warning fill a redirected pipe and stall detection.
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
         
         $process = [System.Diagnostics.Process]::Start($startInfo)
         if ($process -and -not $process.HasExited) {
+            $process.add_OutputDataReceived({ param($sender, $eventArgs) })
+            $process.add_ErrorDataReceived({ param($sender, $eventArgs) })
+            $process.BeginOutputReadLine()
+            $process.BeginErrorReadLine()
             $process.StandardInput.Write($embeddedScript)
             $process.StandardInput.Close()
         }

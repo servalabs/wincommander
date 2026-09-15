@@ -1259,6 +1259,12 @@ fn update_tray_shield_label(app: tauri::AppHandle, running: bool) -> Result<(), 
     Ok(())
 }
 
+/// Keep the tray affordance truthful when the native Fleet policy supervisor
+/// changes Shield state while no WebView exists.
+pub(crate) fn set_tray_shield_running(app: &tauri::AppHandle, running: bool) {
+    let _ = update_tray_shield_label(app.clone(), running);
+}
+
 #[cfg(debug_assertions)]
 #[tauri::command]
 fn open_devtools(window: tauri::WebviewWindow) {
@@ -2279,6 +2285,11 @@ pub fn run() {
             // The Privacy Shield card's “Auto start on launch” setting is
             // per-user and must run only after its event/notification bridge.
             backend::start_privacy_shield_if_enabled_on_launch(app.handle().clone());
+
+            // Fleet Policy must also be enforced by a scheduled/tray instance
+            // with no WebView.  The supervisor consumes only Pro-verified
+            // desired state and reports a command-correlated read-back.
+            fleet_agent::start_privacy_shield_policy_supervisor(app.handle().clone());
 
             // Bootstrap the inactivity-timer watchdog. Idempotent —
             // safe to call repeatedly. Auto-resets the timer on startup.

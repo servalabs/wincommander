@@ -62,6 +62,15 @@ describe("privacy shield device guardrails", () => {
     expect(shield).not.toContain("watchdog: parent PID");
   });
 
+  test("long-lived detector does not hold the backend command output pipe open", async () => {
+    const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
+
+    expect(shield).toContain("$startInfo.RedirectStandardOutput = $true");
+    expect(shield).toContain("$startInfo.RedirectStandardError = $true");
+    expect(shield).toContain("$process.BeginOutputReadLine()");
+    expect(shield).toContain("$process.BeginErrorReadLine()");
+  });
+
   test("black camera frames fail startup before a false look-away blackout", async () => {
     const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
 
