@@ -17,9 +17,9 @@ describe("Privacy Monitor preflight", () => {
     expect(preflight).toContain('executeBackendCommand("Get-PrivacyShieldStatus")');
   });
 
-  test("renders Privacy Shield before slow browser hardening discovery", async () => {
+  test("places Browser Hardening first while Shield status keeps loading in parallel", async () => {
     const source = await Bun.file("src/panels/privacy/index.tsx").text();
 
-    expect(source.indexOf("<PrivacyShieldCard />") < source.indexOf("<BrowserHardeningSection")).toBe(true);
+    expect(source.indexOf("<BrowserHardeningSection") < source.indexOf("<PrivacyShieldCard />")).toBe(true);
   });
 });

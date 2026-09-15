@@ -334,6 +334,14 @@ export default function PrivacyPanel() {
 
                     {showMonitoring && (
                         <TabsContent value="monitor" className="flex flex-col gap-4">
+                            {/* Browser discovery has its own loading state. The preflight above starts it
+                              * alongside Privacy Shield status, so this card never delays Shield controls. */}
+                            {showExpertPrivacy && (
+                                <BrowserHardeningSection
+                                    isAdvanced={isAdvanced}
+                                    searchQuery={searchQuery}
+                                />
+                            )}
                             {monitoringMatchesSearch && (
                                 <SectionCard title="Alerts & Monitoring">
                                     {/* Two STATIC columns, not a CSS grid and not CSS multi-column.
@@ -443,15 +451,6 @@ export default function PrivacyPanel() {
                                 </SectionCard>
                             )}
 
-                            {/* Keep the live camera control first: browser discovery may take
-                              * longer on machines with many profiles, but it must never delay
-                              * the Shield's Activate control appearing in this tab. */}
-                            {showExpertPrivacy && (
-                                <BrowserHardeningSection
-                                    isAdvanced={isAdvanced}
-                                    searchQuery={searchQuery}
-                                />
-                            )}
                         </TabsContent>
                     )}
                 </Tabs>
