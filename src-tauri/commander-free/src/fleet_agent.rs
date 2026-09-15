@@ -1063,6 +1063,13 @@ fn fleet_shield_start_params(
     Ok(params)
 }
 
+fn fleet_shield_requires_reconfiguration(
+    applied_revision: Option<i64>,
+    state: &crate::settings::FleetShieldDesiredState,
+) -> bool {
+    applied_revision != Some(state.revision)
+}
+
 async fn privacy_shield_status(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
     crate::backend::run_backend_script(
         app.clone(),
@@ -1110,7 +1117,10 @@ async fn apply_fleet_privacy_shield_policy(
             }
         }
         crate::settings::patch_settings(serde_json::json!({
-            "app": { "fleet": { "privacyShieldSessionOwned": false } }
+            "app": { "fleet": {
+                "privacyShieldSessionOwned": false,
+                "privacyShieldAppliedRevision": state.revision,
+            } }
         }))?;
         crate::set_tray_shield_running(app, false);
         report_fleet_shield_once(reported_for_command, command_id, "disabled_by_policy");
@@ -1121,7 +1131,12 @@ async fn apply_fleet_privacy_shield_policy(
         report_fleet_shield_once(reported_for_command, command_id, issue);
         return Ok(());
     }
-    if running {
+    let settings = crate::settings::read_settings()?;
+    let needs_reconfigure = fleet_shield_requires_reconfiguration(
+        settings.app.fleet.privacy_shield_applied_revision,
+        &state,
+    );
+    if running && !needs_reconfigure {
         crate::settings::patch_settings(serde_json::json!({
             "app": { "fleet": { "privacyShieldSessionOwned": true } }
         }))?;
@@ -1131,7 +1146,33 @@ async fn apply_fleet_privacy_shield_policy(
     }
 
     report_fleet_shield_once(reported_for_command, command_id, "applying");
-    let settings = crate::settings::read_settings()?;
+    if running {
+        // A mode is encoded in the long-lived detector launch flags.  A
+        // fresh Fleet revision therefore reconfigures a running session by
+        // stopping it, verifying that stop, then launching it with the new
+        // signed mode.  Never claim the new mode from a running bit alone.
+        let stopped = crate::backend::run_backend_script(
+            app.clone(),
+            "Stop-PrivacyShield".to_string(),
+            HashMap::new(),
+        )
+        .await?;
+        if stopped.get("success").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Err(
+                "Privacy Shield mode reconfiguration was not accepted by the device".to_string(),
+            );
+        }
+        let stopped_read_back = privacy_shield_status(app).await?;
+        if stopped_read_back
+            .get("running")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            return Err(
+                "Privacy Shield is still running before Fleet mode reconfiguration".to_string(),
+            );
+        }
+    }
     let params = fleet_shield_start_params(&state, &settings.ideal.privacy.privacy_shield)?;
     let started =
         crate::backend::run_backend_script(app.clone(), "Start-PrivacyShield".to_string(), params)
@@ -1151,7 +1192,10 @@ async fn apply_fleet_privacy_shield_policy(
         return Err("Privacy Shield start has not reached a running read-back yet".to_string());
     }
     crate::settings::patch_settings(serde_json::json!({
-        "app": { "fleet": { "privacyShieldSessionOwned": true } }
+        "app": { "fleet": {
+            "privacyShieldSessionOwned": true,
+            "privacyShieldAppliedRevision": state.revision,
+        } }
     }))?;
     crate::set_tray_shield_running(app, true);
     report_fleet_shield_once(reported_for_command, command_id, "running_fleet_session");
@@ -1397,6 +1441,25 @@ mod tests {
             &crate::settings::PrivacyShieldSettings::default(),
         )
         .is_err());
+    }
+
+    #[test]
+    fn native_fleet_supervisor_reconfigures_only_for_a_new_shield_revision() {
+        let state = crate::settings::FleetShieldDesiredState {
+            enabled: true,
+            mode: "notify_only".to_string(),
+            revision: 10,
+            updated_at: "2026-09-15T10:00:00Z".to_string(),
+            command_id: Some("command-10".to_string()),
+        };
+        assert!(super::fleet_shield_requires_reconfiguration(
+            Some(9),
+            &state
+        ));
+        assert!(!super::fleet_shield_requires_reconfiguration(
+            Some(10),
+            &state
+        ));
     }
 
     #[test]

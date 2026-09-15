@@ -657,6 +657,11 @@ pub struct FleetSettings {
     /// existing installs and before the first successful Fleet check-in.
     #[serde(default)]
     pub shield_desired_state: Option<FleetShieldDesiredState>,
+    /// Last Fleet Shield desired-state revision confirmed by a local
+    /// Start/Stop read-back. This lets a mode update safely reconfigure a
+    /// running detector once, rather than claiming an old blur mode matches.
+    #[serde(default)]
+    pub privacy_shield_applied_revision: Option<i64>,
 }
 
 /// Paid: decoy-mode preference. Defaults OFF with an empty `display_name`,
