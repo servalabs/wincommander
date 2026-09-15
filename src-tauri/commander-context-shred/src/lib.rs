@@ -164,7 +164,9 @@ fn remove_empty_directory_with_retries(path: &Path) -> io::Result<()> {
     let mut last_error = None;
     for _ in 0..4 {
         if has_reparse_point(path).unwrap_or(true) {
-            return Err(io::Error::other("refused linked or reparse-point directory"));
+            return Err(io::Error::other(
+                "refused linked or reparse-point directory",
+            ));
         }
         match fs::remove_dir(path) {
             Ok(()) => return Ok(()),
@@ -318,7 +320,10 @@ fn secure_erase_directory(root: &Path) -> Result<(), String> {
                 pending.push(child.path());
             }
         } else {
-            return Err(format!("refused unsupported erase target '{}'", path.display()));
+            return Err(format!(
+                "refused unsupported erase target '{}'",
+                path.display()
+            ));
         }
     }
 
@@ -343,7 +348,10 @@ fn secure_erase_path(path: &Path) -> Result<(), String> {
     } else if metadata.is_file() {
         overwrite_and_delete_file(path)
     } else {
-        Err(format!("refused unsupported erase target '{}'", path.display()))
+        Err(format!(
+            "refused unsupported erase target '{}'",
+            path.display()
+        ))
     }
 }
 

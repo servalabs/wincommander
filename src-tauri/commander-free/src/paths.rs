@@ -133,8 +133,12 @@ pub fn user_data_dir() -> Result<PathBuf, String> {
     let dir = env_path("LOCALAPPDATA")?.join(APP_DIR_NAME);
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create user data directory: {}", e))?;
     // Repeated settings/log accesses must not launch another icacls process.
-    let mut cache = USER_DATA_ACL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    cache.ensure(&dir, directory_identity(&dir), || harden_dir_acl_result(&dir));
+    let mut cache = USER_DATA_ACL_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    cache.ensure(&dir, directory_identity(&dir), || {
+        harden_dir_acl_result(&dir)
+    });
     Ok(dir)
 }
 
