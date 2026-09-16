@@ -682,7 +682,17 @@ function Get-FleetForensicProjection {
             'web_cache_database', 'thumbnail_icon_cache', 'notification_history',
             'peer_distribution_cache', 'diagnostics_timeline', 'timeline_cache',
             'rdp_bitmap_cache', 'servicing_logs', 'device_install_logs',
-            'usage_trace_logs', 'protection_history'
+            'usage_trace_logs', 'protection_history',
+            'wsl_data', 'docker_desktop_data', 'virtual_machine_artifacts', 'developer_caches',
+            'credential_manager', 'network_wizard_history', 'wer_history', 'inactive_user_protection_metadata',
+            'sticky_notes', 'onedrive_metadata', 'spotlight_cache', 'font_cache', 'legacy_icon_cache',
+            'game_captures', 'photos_cache', 'xbox_cache', 'communication_caches', 'editor_history',
+            'git_activity', 'ssh_state', 'remote_access_logs', 'password_manager_caches', 'game_launcher_logs',
+            'adobe_recent', 'office_temp_files', 'firewall_log', 'neighbor_cache', 'netbios_cache',
+            'geolocation_cache', 'vpn_phonebooks', 'proxy_cache', 'cloud_placeholders', 'bits_queue',
+            'cellular_history', 'app_launch_history', 'office_mru', 'embedded_web_cache',
+            'p2p_update_cache', 'reliability_history', 'explorer_search_history', 'search_personalization',
+            'process_review'
         )]
         [string]$Category = 'dns_cache'
     )
@@ -736,6 +746,17 @@ function Get-FleetForensicProjection {
             }
             @{ source = $Source; artifact = '[redacted]'; sizeKB = $sizeKB; modified = $modified }
         })
+    }
+
+    $metadataProjection = {
+        param([string]$ProjectionCategory, [string]$ProjectionLabel, [hashtable]$Result, [string]$Source)
+        # Each switch arm below calls its collector literally. This helper only
+        # normalises the already-returned, redacted metadata shape.
+        $items = @($Result.files)
+        if ($items.Count -eq 0) { $items = @($Result.entries) }
+        $records = & $metadataRows $items $Source
+        $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
+        return (New-FleetForensicProjection -Category $ProjectionCategory -Label $ProjectionLabel -Columns $columns -Records $records -Total $items.Count -Redacted $true)
     }
 
     $empty = {
@@ -1304,6 +1325,57 @@ function Get-FleetForensicProjection {
                 $records = & $metadataRows $sourceRows 'Protection history'
                 $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
                 return (New-FleetForensicProjection -Category 'protection_history' -Label 'Protection history' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+            }
+
+            'wsl_data' { $result = Get-WSLDataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read WSL-data summaries.') }; return (& $metadataProjection 'wsl_data' 'WSL data' $result 'WSL data') }
+            'docker_desktop_data' { $result = Get-DockerDesktopDataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Docker-data summaries.') }; return (& $metadataProjection 'docker_desktop_data' 'Docker Desktop data' $result 'Docker Desktop data') }
+            'virtual_machine_artifacts' { $result = Get-VirtualMachineArtifactsInfo; if ($result.error) { return (& $empty 'System Cleanup could not read virtual-machine summaries.') }; return (& $metadataProjection 'virtual_machine_artifacts' 'Virtual machine artifacts' $result 'Virtual machine artifact') }
+            'developer_caches' { $result = Get-DeveloperCachesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read developer-cache summaries.') }; return (& $metadataProjection 'developer_caches' 'Developer caches' $result 'Developer cache') }
+            'credential_manager' { $result = Get-CredentialManagerInfo; if ($result.error) { return (& $empty 'System Cleanup could not read credential-manager summaries.') }; return (& $metadataProjection 'credential_manager' 'Credential Manager' $result 'Credential metadata') }
+            'network_wizard_history' { $result = Get-NetworkWizardHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read network-wizard summaries.') }; return (& $metadataProjection 'network_wizard_history' 'Network wizard history' $result 'Network wizard metadata') }
+            'wer_history' { $result = Get-WERHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read WER-history summaries.') }; return (& $metadataProjection 'wer_history' 'Windows Error Reporting history' $result 'WER metadata') }
+            'inactive_user_protection_metadata' { $result = Get-InactiveUserProtectionMetadataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read inactive-user protection summaries.') }; return (& $metadataProjection 'inactive_user_protection_metadata' 'Inactive-user protection metadata' $result 'Protection metadata') }
+            'sticky_notes' { $result = Get-StickyNotesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Sticky Notes summaries.') }; return (& $metadataProjection 'sticky_notes' 'Sticky Notes' $result 'Sticky Notes metadata') }
+            'onedrive_metadata' { $result = Get-OneDriveMetadataInfo; if ($result.error) { return (& $empty 'System Cleanup could not read OneDrive metadata.') }; return (& $metadataProjection 'onedrive_metadata' 'OneDrive metadata' $result 'OneDrive metadata') }
+            'spotlight_cache' { $result = Get-SpotlightCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Spotlight-cache summaries.') }; return (& $metadataProjection 'spotlight_cache' 'Spotlight cache' $result 'Spotlight cache') }
+            'font_cache' { $result = Get-FontCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read font-cache summaries.') }; return (& $metadataProjection 'font_cache' 'Font cache' $result 'Font cache') }
+            'legacy_icon_cache' { $result = Get-LegacyIconCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read icon-cache summaries.') }; return (& $metadataProjection 'legacy_icon_cache' 'Legacy icon cache' $result 'Icon cache') }
+            'game_captures' { $result = Get-GameCapturesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read game-capture summaries.') }; return (& $metadataProjection 'game_captures' 'Game captures' $result 'Game capture metadata') }
+            'photos_cache' { $result = Get-PhotosCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read photo-cache summaries.') }; return (& $metadataProjection 'photos_cache' 'Photos cache' $result 'Photos cache') }
+            'xbox_cache' { $result = Get-XboxCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Xbox-cache summaries.') }; return (& $metadataProjection 'xbox_cache' 'Xbox cache' $result 'Xbox cache') }
+            'communication_caches' { $result = Get-CommunicationCachesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read communication-cache summaries.') }; return (& $metadataProjection 'communication_caches' 'Communication caches' $result 'Communication cache') }
+            'editor_history' { $result = Get-EditorHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read editor-history summaries.') }; return (& $metadataProjection 'editor_history' 'Editor history' $result 'Editor history metadata') }
+            'git_activity' { $result = Get-GitActivityInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Git-activity summaries.') }; return (& $metadataProjection 'git_activity' 'Git activity' $result 'Git activity metadata') }
+            'ssh_state' { $result = Get-SSHStateInfo; if ($result.error) { return (& $empty 'System Cleanup could not read SSH-state summaries.') }; return (& $metadataProjection 'ssh_state' 'SSH state' $result 'SSH metadata') }
+            'remote_access_logs' { $result = Get-RemoteAccessLogsInfo; if ($result.error) { return (& $empty 'System Cleanup could not read remote-access summaries.') }; return (& $metadataProjection 'remote_access_logs' 'Remote access logs' $result 'Remote access metadata') }
+            'password_manager_caches' { $result = Get-PasswordManagerCachesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read password-manager summaries.') }; return (& $metadataProjection 'password_manager_caches' 'Password-manager caches' $result 'Password-manager metadata') }
+            'game_launcher_logs' { $result = Get-GameLauncherLogsInfo; if ($result.error) { return (& $empty 'System Cleanup could not read game-launcher summaries.') }; return (& $metadataProjection 'game_launcher_logs' 'Game launcher logs' $result 'Game launcher log') }
+            'adobe_recent' { $result = Get-AdobeRecentInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Adobe-recent summaries.') }; return (& $metadataProjection 'adobe_recent' 'Adobe recent items' $result 'Adobe recent metadata') }
+            'office_temp_files' { $result = Get-OfficeTempFilesInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-temporary-file summaries.') }; return (& $metadataProjection 'office_temp_files' 'Office temporary files' $result 'Office temporary metadata') }
+            'firewall_log' { $result = Get-FirewallLogInfo; if ($result.error) { return (& $empty 'System Cleanup could not read firewall-log summaries.') }; return (& $metadataProjection 'firewall_log' 'Firewall log' $result 'Firewall log metadata') }
+            'neighbor_cache' { $result = Get-NeighborCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read neighbor-cache summaries.') }; return (& $metadataProjection 'neighbor_cache' 'Neighbor cache' $result 'Neighbor cache metadata') }
+            'netbios_cache' { $result = Get-NetBIOSCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read NetBIOS-cache summaries.') }; return (& $metadataProjection 'netbios_cache' 'NetBIOS cache' $result 'NetBIOS cache metadata') }
+            'geolocation_cache' { $result = Get-GeolocationCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read geolocation-cache summaries.') }; return (& $metadataProjection 'geolocation_cache' 'Geolocation cache' $result 'Geolocation metadata') }
+            'vpn_phonebooks' { $result = Get-VPNPhonebooksInfo; if ($result.error) { return (& $empty 'System Cleanup could not read VPN-phonebook summaries.') }; return (& $metadataProjection 'vpn_phonebooks' 'VPN phonebooks' $result 'VPN metadata') }
+            'proxy_cache' { $result = Get-ProxyCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read proxy-cache summaries.') }; return (& $metadataProjection 'proxy_cache' 'Proxy cache' $result 'Proxy metadata') }
+            'cloud_placeholders' { $result = Get-CloudPlaceholdersInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cloud-placeholder summaries.') }; return (& $metadataProjection 'cloud_placeholders' 'Cloud placeholders' $result 'Cloud placeholder metadata') }
+            'bits_queue' { $result = Get-BITSQueueInfo; if ($result.error) { return (& $empty 'System Cleanup could not read BITS-queue summaries.') }; return (& $metadataProjection 'bits_queue' 'BITS queue' $result 'BITS metadata') }
+            'cellular_history' { $result = Get-CellularHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read cellular-history summaries.') }; return (& $metadataProjection 'cellular_history' 'Cellular history' $result 'Cellular metadata') }
+            'app_launch_history' { $result = Get-AppLaunchHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read app-launch-history summaries.') }; return (& $metadataProjection 'app_launch_history' 'App launch history' $result 'App launch metadata') }
+            'office_mru' { $result = Get-OfficeMruInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Office-MRU summaries.') }; return (& $metadataProjection 'office_mru' 'Office MRU' $result 'Office MRU metadata') }
+            'embedded_web_cache' { $result = Get-EmbeddedWebCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read embedded-web-cache summaries.') }; return (& $metadataProjection 'embedded_web_cache' 'Embedded web cache' $result 'Embedded web metadata') }
+            'p2p_update_cache' { $result = Get-P2PUpdateCacheInfo; if ($result.error) { return (& $empty 'System Cleanup could not read peer-update-cache summaries.') }; return (& $metadataProjection 'p2p_update_cache' 'Peer update cache' $result 'Peer update metadata') }
+            'reliability_history' { $result = Get-ReliabilityHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read reliability-history summaries.') }; return (& $metadataProjection 'reliability_history' 'Reliability history' $result 'Reliability metadata') }
+            'explorer_search_history' { $result = Get-ExplorerSearchHistoryInfo; if ($result.error) { return (& $empty 'System Cleanup could not read Explorer-search-history summaries.') }; return (& $metadataProjection 'explorer_search_history' 'Explorer search metadata' $result 'Explorer search metadata') }
+            'search_personalization' { $result = Get-SearchPersonalizationInfo; if ($result.error) { return (& $empty 'System Cleanup could not read search-personalisation summaries.') }; return (& $metadataProjection 'search_personalization' 'Search personalisation' $result 'Search personalisation metadata') }
+
+            'process_review' {
+                $result = Get-ProcessIntelligence
+                if ($result.error) { return (& $empty 'System Cleanup could not read process summaries.') }
+                $sourceRows = @($result.processes)
+                $records = @($sourceRows | ForEach-Object { @{ name = (& $sanitizeText $_.name 128); pid = [int]$_.pid; signed = (& $sanitizeText $_.signed 32); signer = (& $sanitizeText $_.signer 128); elevated = (& $sanitizeText $_.elevated 16); path = '[redacted]' } })
+                $columns = @(@{ key = 'name'; label = 'Process'; type = 'text' }, @{ key = 'pid'; label = 'PID'; type = 'number' }, @{ key = 'signed'; label = 'Signature'; type = 'text' }, @{ key = 'signer'; label = 'Signer'; type = 'text' }, @{ key = 'elevated'; label = 'Elevated'; type = 'text' }, @{ key = 'path'; label = 'Path'; type = 'redacted' })
+                return (New-FleetForensicProjection -Category 'process_review' -Label 'Process review' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
             }
         }
     }
