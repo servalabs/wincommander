@@ -618,7 +618,10 @@ function New-FleetForensicProjection {
         [Parameter(Mandatory)][string]$Category,
         [Parameter(Mandatory)][string]$Label,
         [Parameter(Mandatory)][object[]]$Columns,
-        [Parameter(Mandatory)][object[]]$Records,
+        # A successful local collector may legitimately have no artifacts.  An
+        # empty table must remain a valid Fleet result (0 shown / 0 total), not
+        # be rejected by PowerShell's mandatory-parameter binder.
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Records,
         [Parameter(Mandatory)][int]$Total,
         [bool]$Truncated = $false,
         [bool]$Redacted = $false,

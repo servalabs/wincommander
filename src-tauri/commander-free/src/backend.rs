@@ -3771,6 +3771,10 @@ mod fleet_forensic_projection_tests {
         let envelope = function_body("New-FleetForensicProjection");
         assert!(projection.contains("$rowLimit = 200"));
         assert!(envelope.contains("$byteLimit = 512KB"));
+        assert!(
+            envelope.contains("[AllowEmptyCollection()][object[]]$Records"),
+            "a zero-row System Cleanup collector must produce an empty table, not fail binding"
+        );
         assert!(envelope.contains("category_id"));
         assert!(envelope.contains("datasets"));
         assert!(projection.contains("Get-DnsCacheEntries"));
