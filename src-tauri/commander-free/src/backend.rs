@@ -5241,17 +5241,18 @@ fn schedule_privacy_shield_reader_attach(app: AppHandle) {
 /// "PHONE DETECTED", "MULTIPLE FACES & LOOK AWAY") to the flow-core
 /// `GazeKind` string `flow_bridge::parse_gaze_kind` expects. Priority
 /// mirrors the detector's own combine-and-report order (device > multi-face
-/// > gaze > no-face) since a frame can trip more than one check at once.
-fn gaze_kind_from_reason(reason: &str) -> &'static str {
+/// > gaze). A no-face reading is absence/unknown, not a security event, so it
+/// deliberately maps to no event.
+fn gaze_kind_from_reason(reason: &str) -> Option<&'static str> {
     let upper = reason.to_ascii_uppercase();
     if upper.contains("PHONE DETECTED") {
-        "secondary_device"
+        Some("secondary_device")
     } else if upper.contains("MULTIPLE FACES") {
-        "multiple_faces"
+        Some("multiple_faces")
     } else if upper.contains("NO FACE") {
-        "no_face"
+        None
     } else {
-        "look_away"
+        Some("look_away")
     }
 }
 
@@ -5332,7 +5333,7 @@ fn fleet_privacy_event_gate(
     // limit govern the aggregate notification channel.
     if matches!(
         event_class,
-        "look_away" | "no_face" | "multiple_faces" | "secondary_device"
+        "look_away" | "multiple_faces" | "secondary_device"
     ) {
         FleetPrivacyAlertGate::Allowed
     } else {
@@ -5457,6 +5458,10 @@ mod fleet_privacy_alert_tests {
             fleet_privacy_event_gate(true, false, &policy, "untrusted"),
             FleetPrivacyAlertGate::UnknownEventClass
         );
+        assert_eq!(
+            fleet_privacy_event_gate(true, true, &policy, "no_face"),
+            FleetPrivacyAlertGate::UnknownEventClass
+        );
     }
 
     #[test]
@@ -5550,7 +5555,12 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                 // reached the flow engine (GazeTrigger flows never
                                 // fired) AND the whole reader loop stalled (the "log
                                 // gets stuck when Privacy Shield is on" symptom).
-                                let gaze_kind = gaze_kind_from_reason(reason);
+                                let Some(gaze_kind) = gaze_kind_from_reason(reason) else {
+                                    crate::flow_bridge::flow_trace(
+                                        "shield-reader: no-face reading ignored as presence unknown",
+                                    );
+                                    continue;
+                                };
                                 let first_look_away_in_episode = !locally_looking_away;
                                 locally_looking_away = true;
                                 crate::flow_bridge::flow_trace(format!(

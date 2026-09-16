@@ -754,7 +754,11 @@ class ShieldWorker(QThread):
                 device_triggered = False
                 multi_face_triggered = False
                 gaze_triggered = False
-                no_face_triggered = False
+                # A camera frame without landmarks is absence/unknown, not a
+                # threat.  It never creates a Shield event, alert, or blur.
+                # The debounced state below only prevents a one-frame dropout
+                # from clearing an already-alert-worthy condition.
+                presence_unknown = False
 
                 # 1. Check Phone/Object - require buffer_frames consecutive detections
                 if self.check_phone and self.obj_detector:
@@ -779,14 +783,13 @@ class ShieldWorker(QThread):
                         self._no_face_detected_streak += 1
                         self._face_recovery_streak = 0
                         if self.check_gaze:
-                            # Use the configured detector buffer for both
-                            # absence and recovery. This turns an absence
-                            # into one stable episode rather than a per-frame
-                            # event, and keeps Notify-only useful without a
-                            # Fleet/local notification storm.
+                            # Use the configured detector buffer for absence
+                            # and recovery.  Absence is intentionally not an
+                            # alert-worthy state: it is only held so a lone
+                            # face frame cannot clear a real threat episode.
                             if self._no_face_detected_streak >= self.buffer_frames:
                                 self._presence_loss_active = True
-                            no_face_triggered = self._presence_loss_active
+                            presence_unknown = self._presence_loss_active
                     else:
                         self._no_face_detected_streak = 0
                         if self._presence_loss_active:
@@ -795,10 +798,10 @@ class ShieldWorker(QThread):
                                 self._presence_loss_active = False
                                 self._face_recovery_streak = 0
                             else:
-                                # Hold the loss state until a real recovery;
-                                # a lone detected frame must not reset the
-                                # notification episode.
-                                no_face_triggered = True
+                                # Hold unknown presence until a real recovery;
+                                # a lone detected frame must not clear a real
+                                # alert episode.
+                                presence_unknown = True
                         else:
                             self._face_recovery_streak = 0
                         raw_multi = self.check_faces and len(landmarks) > 1
@@ -812,8 +815,10 @@ class ShieldWorker(QThread):
                             if not self._check_gaze(landmarks[0]):
                                 gaze_triggered = True
 
-                # Combine into is_clear and display reason (priority: device > multi-face > gaze > no-face)
-                if device_triggered or multi_face_triggered or gaze_triggered or no_face_triggered:
+                # Combine only explicit, configured threats.  "No face" is
+                # absence/unknown and must not be converted into LOOK AWAY,
+                # a local notification, a Fleet event, or a blur.
+                if device_triggered or multi_face_triggered or gaze_triggered:
                     is_clear = False
                     parts = []
                     if device_triggered:
@@ -822,8 +827,6 @@ class ShieldWorker(QThread):
                         parts.append("MULTIPLE FACES")
                     if gaze_triggered:
                         parts.append("LOOK AWAY")
-                    if no_face_triggered:
-                        parts.append("NO FACE")
                     reason = " & ".join(parts)
 
             except Exception as e:
@@ -846,7 +849,11 @@ class ShieldWorker(QThread):
                 self._attentive_ms = 0.0
             
             # Transition Logic
-            if self._is_locked:
+            if presence_unknown and not (device_triggered or multi_face_triggered or gaze_triggered):
+                # Preserve a genuine alert state through a short unknown
+                # camera interval, but never emit/blur solely for absence.
+                pass
+            elif self._is_locked:
                 device_in_reason = "PHONE DETECTED" in self._lock_reason
                 multi_in_reason = "MULTIPLE FACES" in self._lock_reason
                 device_clear = self.wake_delay_ms * self.device_wake_multiplier if device_in_reason else 0

@@ -85,15 +85,22 @@ describe("privacy shield device guardrails", () => {
     expect(shield).toContain("Camera feed is black - open its privacy shutter or close another camera app.");
   });
 
-  test("presence loss and recovery are debounced into one Shield alert episode", async () => {
+  test("presence loss is debounced as unknown and never becomes a Shield alert", async () => {
     const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
+    const backend = await read("src-tauri/commander-free/src/backend.rs");
 
     expect(shield).toContain("self._no_face_detected_streak = 0");
     expect(shield).toContain("self._face_recovery_streak = 0");
     expect(shield).toContain("self._presence_loss_active = False");
     expect(shield).toContain("self._no_face_detected_streak >= self.buffer_frames");
     expect(shield).toContain("self._face_recovery_streak >= self.buffer_frames");
-    expect(shield).toContain("Hold the loss state until a real recovery");
+    expect(shield).toContain("presence_unknown = self._presence_loss_active");
+    expect(shield).toContain("absence/unknown and must not be converted into LOOK AWAY");
+    expect(shield).toContain("if presence_unknown and not (device_triggered or multi_face_triggered or gaze_triggered):");
+    expect(shield).not.toContain('parts.append("NO FACE")');
+    expect(backend).toContain('"shield-reader: no-face reading ignored as presence unknown"');
+    expect(backend).toContain('"look_away" | "multiple_faces" | "secondary_device"');
+    expect(backend).not.toContain('"look_away" | "no_face" | "multiple_faces" | "secondary_device"');
   });
 
   test("stop paths use the detector PID marker when command-line inspection is unavailable", async () => {
@@ -170,7 +177,7 @@ describe("privacy shield device guardrails", () => {
     expect(backend).toContain("fn fleet_privacy_event_gate(");
     expect(backend).toContain("shield.fleet_managed == Some(true) && shield.fleet_monitoring_enabled == Some(true)");
     expect(backend).toContain("!fleet_session_owned && !org_policy_active");
-    expect(backend).toContain('"look_away" | "no_face" | "multiple_faces" | "secondary_device"');
+    expect(backend).toContain('"look_away" | "multiple_faces" | "secondary_device"');
     expect(backend).toContain("let fleet_gate = fleet_privacy_alert_gate(gaze_kind).await;");
   });
 
