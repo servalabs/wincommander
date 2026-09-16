@@ -166,3 +166,7 @@ target-codex-personal-vault
 .codex-diagnostics-target/
 target-diagnostics-check/
 src-tauri/target-scoop/
+/.target-privacy-shield/
+/.target-fleet-bridge/
+/target-privacy-shield-remote-test/
+/tmp-test-la/
