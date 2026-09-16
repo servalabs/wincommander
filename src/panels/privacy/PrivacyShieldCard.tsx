@@ -14,7 +14,11 @@ import useVisibility from "../../hooks/useVisibility";
 import { useShieldQuotaQuery, useShieldQuotaTicker, useInvalidateShieldQuota } from "../../hooks/useShieldQuota";
 import PrivacyShieldIntro from "./PrivacyShieldIntro";
 import SectionCard from "../../components/shared/SectionCard";
-import { privacyShieldBlurTriggers, resolvePrivacyShieldMode } from "../../lib/privacyShieldMode";
+import { privacyShieldBlurTriggers, resolvePrivacyShieldMode, type PrivacyShieldMode } from "../../lib/privacyShieldMode";
+import {
+    resolveFleetPrivacyShieldControl,
+    resolveLocalFleetPrivacyShieldControl,
+} from "../../lib/fleetPrivacyShieldControl";
 import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 
 // Module-level cache — survives panel unmount/remount
@@ -76,15 +80,22 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const { hasPaid } = useEntitlements();
     const { data: quota } = useShieldQuotaQuery();
     const invalidateShieldQuota = useInvalidateShieldQuota();
-    const fleetPolicyManaged = appSettings?.app?.fleet?.enabled === true
-        && appSettings?.ideal?.privacy?.privacyShield?.fleetManaged === true;
-    const fleetShieldMonitoring = fleetPolicyManaged
-        && appSettings?.ideal?.privacy?.privacyShield?.fleetMonitoringEnabled === true;
     // Resolved fleet desired-state (separate, non-policy_epoch channel — see
     // CheckinResponse.shield_state). Falls back to fleetShieldMonitoring when
     // the connected server predates this field.
     const fleetShieldDesiredState = appSettings?.app?.fleet?.shieldDesiredState ?? null;
     const shieldSettings = appSettings?.ideal?.privacy?.privacyShield;
+    // This dedicated device state supersedes the old policy epoch. The card
+    // must resolve it the same way as the supervisor, otherwise a freshly
+    // delivered Fleet command can show stale mode and ownership locally.
+    const fleetShieldControl = resolveFleetPrivacyShieldControl({
+        fleetEnabled: appSettings?.app?.fleet?.enabled === true,
+        legacyManaged: shieldSettings?.fleetManaged === true,
+        legacyMonitoringEnabled: shieldSettings?.fleetMonitoringEnabled === true,
+        desiredState: fleetShieldDesiredState,
+    });
+    const fleetPolicyManaged = fleetShieldControl.managed;
+    const fleetShieldMonitoring = fleetShieldControl.managed && fleetShieldControl.enabled;
     // Older Fleet servers expressed Notify Only by disabling all visual
     // triggers and did not send shieldDesiredState.mode. Preserve that
     // behavior until the endpoint receives the newer desired-state field.
@@ -95,15 +106,8 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // A Fleet policy controls whether it may start a session, but it must not
     // take over a session the local user had already started. Only the session
     // supervisor's explicit ownership receipt locks the local Stop control.
-    const fleetShieldSessionLocked = appSettings?.app?.fleet?.enabled === true
+    const fleetShieldSessionOwned = appSettings?.app?.fleet?.enabled === true
         && appSettings?.app?.fleet?.privacyShieldSessionOwned === true;
-    // Resolved shield mode ("blur_notify" | "notify_only"). Fleet-managed
-    // devices always take the admin's mode; otherwise the local choice below.
-    const resolvedShieldMode = resolvePrivacyShieldMode({
-        fleetManaged: fleetPolicyManaged,
-        fleetMode: fleetShieldDesiredState?.mode ?? (legacyFleetNotifyOnly ? 'notify_only' : undefined),
-        localMode: shieldSettings?.notifyMode,
-    });
 
     const { density } = useVisibility();
     const isAdvanced = density === 'expert';
@@ -123,11 +127,30 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
 
     const [privacyShieldRunning, _setShieldRunning] = useState<boolean | null>(_shieldRunningCache);
     const setPrivacyShieldRunning = (val: boolean | null) => { _shieldRunningCache = val; _setShieldRunning(val); };
+    const [activeShieldMode, setActiveShieldMode] = useState<PrivacyShieldMode | null>(null);
     const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(null);
     const [cameraMessage, setCameraMessage] = useState<string | null>(null);
     // Live look-away state surfaced by the backend shield reader. Only
     // meaningful while the shield is running.
     const [lookingAway, setLookingAway] = useState(false);
+    const localFleetControl = resolveLocalFleetPrivacyShieldControl({
+        running: privacyShieldRunning === true,
+        sessionOwned: fleetShieldSessionOwned,
+        fleetControl: fleetShieldControl,
+    });
+    const fleetShieldSessionLocked = localFleetControl.stopLocked;
+    // The requested mode is useful while a Fleet start is pending. Once a
+    // detector is running, its status probe is authoritative: this prevents
+    // stale local settings from displaying Blur + Notify for Notify only.
+    const resolvedShieldMode = resolvePrivacyShieldMode({
+        fleetManaged: localFleetControl.settingsLocked,
+        fleetMode: fleetShieldControl.mode ?? (legacyFleetNotifyOnly ? 'notify_only' : undefined),
+        localMode: shieldSettings?.notifyMode,
+    });
+    const presentedShieldMode = privacyShieldRunning === true && activeShieldMode
+        ? activeShieldMode
+        : resolvedShieldMode;
+    const activeModeConfirmed = privacyShieldRunning !== true || activeShieldMode !== null;
 
     // Session-anchored countdown.
     //
@@ -218,7 +241,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // Fleet-owned shield must immediately reflect the new policy and must not
     // write stale local state back over it.
     useEffect(() => {
-        if (!fleetPolicyManaged || !appSettings) return;
+        if (!localFleetControl.settingsLocked || !appSettings) return;
         const ps = appSettings.ideal.privacy?.privacyShield;
         if (!ps) return;
         setPrivacyConfig(prev => ({
@@ -230,7 +253,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             overlayOpacity: ps.blurOpacity ?? prev.overlayOpacity,
         }));
         setAutostart(ps.autostart ?? false);
-    }, [fleetPolicyManaged, appSettings]);
+    }, [localFleetControl.settingsLocked, appSettings]);
 
     // Persist toggle + slider changes to settings as the user edits them
     // (debounced). Without this, toggles flipped ON in the UI never make
@@ -240,7 +263,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // render before hydration completes.
     useEffect(() => {
         if (!_toggleHydratedFromSettings) return;
-        if (privacyShieldRunning === true || fleetPolicyManaged) return;
+        if (privacyShieldRunning === true || localFleetControl.settingsLocked) return;
         const t = setTimeout(() => {
             patchAppSettings({ ideal: { privacy: { privacyShield: {
                 gazeDetectionEnabled: privacyConfig.blurOnLookAway,
@@ -259,7 +282,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
         privacyConfig.blurOnLookAway, privacyConfig.blurOnMultipleFaces, privacyConfig.blurOnCamera,
         privacyConfig.confidence, privacyConfig.overlayOpacity, privacyConfig.wakeDelayMs,
         privacyConfig.modelLevel, privacyConfig.bufferFrames,
-        autostart, privacyShieldRunning, fleetPolicyManaged, patchAppSettings,
+        autostart, privacyShieldRunning, localFleetControl.settingsLocked, patchAppSettings,
     ]);
 
     // ── Status polling, ref-based stable callback ────────────────────
@@ -277,9 +300,18 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     const checkStatusRef = useRef<() => Promise<void>>(async () => {});
     checkStatusRef.current = async () => {
         try {
-            const shield = await executeBackendCommand<{ running: boolean; cameraAvailable?: boolean; cameraMessage?: string }>("Get-PrivacyShieldStatus");
+            const shield = await executeBackendCommand<{
+                running: boolean;
+                activeMode?: PrivacyShieldMode | null;
+                cameraAvailable?: boolean;
+                cameraMessage?: string;
+            }>("Get-PrivacyShieldStatus");
             if (shield.success && shield.data && typeof shield.data.running === "boolean") {
                 setPrivacyShieldRunning(shield.data.running);
+                setActiveShieldMode(shield.data.running
+                    && (shield.data.activeMode === "notify_only" || shield.data.activeMode === "blur_notify")
+                    ? shield.data.activeMode
+                    : null);
                 if (typeof shield.data.cameraAvailable === "boolean") {
                     setCameraAvailable(shield.data.cameraAvailable);
                     setCameraMessage(shield.data.cameraMessage ?? null);
@@ -298,6 +330,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             // Start/Stop action.
             else {
                 setPrivacyShieldRunning(null);
+                setActiveShieldMode(null);
                 setCameraAvailable(null);
                 setCameraMessage("Privacy Shield status could not be confirmed. Refresh and try again.");
                 recordDiagnostic({ feature: "privacy_shield", action: "status_read", stage: "verification",
@@ -309,6 +342,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             // A failed probe is also unknown state, not evidence that the last
             // observed running/camera value is still current.
             setPrivacyShieldRunning(null);
+            setActiveShieldMode(null);
             setCameraAvailable(null);
             setCameraMessage("Privacy Shield status could not be confirmed. Refresh and try again.");
             recordDiagnostic({ feature: "privacy_shield", action: "status_read", stage: "verification",
@@ -449,7 +483,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             recordDiagnostic({ operationId, feature: "privacy_shield", action: "stop", stage: "authorization", lifecycle: "acknowledged", outcome: "failed", errorCode: "PSH.FLEET.MANAGED", severity: "warn", retryability: "never", suggestedNextAction: "contact_administrator", privacyClass: "local_sensitive", context: { state: "fleet_managed" } });
             return;
         }
-        if (!privacyShieldRunning && fleetPolicyManaged) {
+        if (!privacyShieldRunning && localFleetControl.startLocked) {
             recordDiagnostic({ operationId, feature: "privacy_shield", action: "start", stage: "authorization", lifecycle: "acknowledged", outcome: "failed", errorCode: "PSH.FLEET.MANAGED", severity: "warn", retryability: "never", suggestedNextAction: "contact_administrator", privacyClass: "local_sensitive", context: { state: "fleet_managed" } });
             return;
         }
@@ -561,7 +595,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
             text={privacyShieldRunning ? (isAdvanced ? "Stop Shield" : "Turn Off") : (isAdvanced ? "Activate Shield" : "Turn On")}
             intent={privacyShieldRunning ? "danger" : "primary"}
             onClick={handleToggle}
-            disabled={fleetShieldSessionLocked || (!privacyShieldRunning && fleetPolicyManaged) || (privacyShieldRunning ? false : localLoading || cameraAvailable === false)}
+            disabled={fleetShieldSessionLocked || localFleetControl.startLocked || (privacyShieldRunning ? false : localLoading || cameraAvailable === false)}
             loading={privacyShieldRunning ? false : localLoading}
             className="shield-primary-btn physical-shield-header-btn"
         />
@@ -615,8 +649,18 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                 {privacyShieldRunning && (
                                     <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-success)]/15 text-[var(--color-success)] border border-[var(--color-success)]/30 flex-shrink-0">Active</span>
                                 )}
+                                {privacyShieldRunning && activeModeConfirmed && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--shield-inner-bg)] text-[var(--shield-text-subtle)] border border-[var(--shield-inner-border)] flex-shrink-0">
+                                        {presentedShieldMode === "notify_only" ? "Notify only" : "Blur + Notify"}
+                                    </span>
+                                )}
+                                {privacyShieldRunning && !activeModeConfirmed && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-warning-dim)] text-[var(--color-warning)] border border-[var(--color-warning)] flex-shrink-0">
+                                        Alert mode unconfirmed
+                                    </span>
+                                )}
                                 {privacyShieldRunning && lookingAway && (
-                                    <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-warning)]/15 text-[var(--color-warning)] border border-[var(--color-warning)]/30 flex-shrink-0">{resolvedShieldMode === "notify_only" ? "Looking away · notification sent" : "Looking away · visual shield active"}</span>
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--color-warning)]/15 text-[var(--color-warning)] border border-[var(--color-warning)]/30 flex-shrink-0">{presentedShieldMode === "notify_only" ? "Looking away · notification sent" : "Looking away · visual shield active"}</span>
                                 )}
                                 {!hasPaid && quota && !quota.is_unlimited && (
                                     <>
@@ -662,19 +706,23 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                             columns regardless of text length. */}
                         <div className="physical-shield-summary-row">
                             <p className="text-xs text-[var(--shield-text-subtle)] text-pretty">
-                                Blurs screen when unauthorized presence or threats are detected.
+                                {!activeModeConfirmed
+                                    ? "Privacy Shield is running, but its alert mode could not be confirmed from the detector."
+                                    : presentedShieldMode === "notify_only"
+                                    ? "Sends an alert when attention threats are detected; it does not blur your screen."
+                                    : "Blurs your screen and sends an alert when attention threats are detected."}
                             </p>
                             <p className="text-[10px] text-[var(--color-text-muted)] flex items-center gap-1.5">
                                 <Icon icon="lock" size={10} style={{ color: 'var(--color-success)' }} />
                                 100% on-device - no camera frames or data sent to the cloud.
                             </p>
                         </div>
-                        {fleetPolicyManaged && (
+                        {localFleetControl.settingsLocked && (
                             <p className="text-[10px] text-[var(--color-accent)] mt-1">
-                                Fleet policy managed · {fleetShieldSessionLocked
+                                Fleet managed · {fleetShieldSessionLocked
                                     ? "Privacy Shield was started by Fleet and can only be stopped by a Fleet administrator."
                                     : fleetShieldMonitoring
-                                        ? "the locked Fleet defaults will be used when Fleet starts the shield."
+                                        ? "Fleet has requested activation; local settings are locked until its state is confirmed."
                                         : "monitoring is off by Fleet policy."}
                             </p>
                         )}
@@ -691,16 +739,16 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                 )}
 
                 {cameraAvailable !== false && (
-                <div className={`rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] p-4 ${fleetPolicyManaged ? "pointer-events-none opacity-70" : ""}`}>
+                <div className={`rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] p-4 ${localFleetControl.settingsLocked ? "pointer-events-none opacity-70" : ""}`}>
                     {/* Blur conditions are intentionally kept together: these
                         are the three inputs that directly decide whether the
                         screen is obscured. */}
                     <div className="flex flex-col gap-3">
                         <span className="text-[10px] font-medium text-[var(--shield-text-muted)]">{isAdvanced ? "Blur triggers" : "Activation Triggers"}</span>
                         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,160px),1fr))] gap-3">
-                            <div><ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Detects when eyes are not directed at the screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true || fleetPolicyManaged} /></div>
-                            <div><ShieldOption label="Multiple faces" tooltip="Detects when more than one person is in view." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true || fleetPolicyManaged} /></div>
-                            <div><ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: detects a phone or camera pointed at the screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true || fleetPolicyManaged} /></div>
+                            <div><ShieldOption label={isAdvanced ? "Look away" : "Look Away"} tooltip="Detects when eyes are not directed at the screen." checked={privacyConfig.blurOnLookAway} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnLookAway: v }))} disabled={privacyShieldRunning === true || localFleetControl.settingsLocked} /></div>
+                            <div><ShieldOption label="Multiple faces" tooltip="Detects when more than one person is in view." checked={privacyConfig.blurOnMultipleFaces} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnMultipleFaces: v }))} disabled={privacyShieldRunning === true || localFleetControl.settingsLocked} /></div>
+                            <div><ShieldOption label={isAdvanced ? "Phone / camera" : "Camera Seen"} tooltip="Experimental: detects a phone or camera pointed at the screen." checked={privacyConfig.blurOnCamera} onChange={(v) => setPrivacyConfig(p => ({ ...p, blurOnCamera: v }))} disabled={privacyShieldRunning === true || localFleetControl.settingsLocked} /></div>
                         </div>
                     </div>
 
@@ -715,22 +763,28 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                     <Icon icon="info-sign" size={11} className="physical-shield-info-icon" />
                                 </Tooltip>
                             </span>
-                            <div className={privacyShieldRunning === true || fleetPolicyManaged ? 'opacity-50 pointer-events-none' : ''}>
-                                <Segmented
-                                    value={resolvedShieldMode}
-                                    onValueChange={(v) => {
-                                        if (privacyShieldRunning === true || fleetPolicyManaged) return;
-                                        patchAppSettings({ ideal: { privacy: { privacyShield: { notifyMode: v as 'blur_notify' | 'notify_only' } } } }).catch(reportSettingsWriteFailure);
-                                    }}
-                                    options={[
-                                        { value: 'blur_notify', label: 'Blur + Notify' },
-                                        { value: 'notify_only', label: 'Notify Only' },
-                                    ]}
-                                    size="sm"
-                                />
-                            </div>
+                            {!activeModeConfirmed ? (
+                                <span className="text-[10px] text-[var(--color-warning)]">
+                                    The running detector did not expose its alert mode. Refresh status before making a control decision.
+                                </span>
+                            ) : (
+                                <div className={privacyShieldRunning === true || localFleetControl.settingsLocked ? 'opacity-50 pointer-events-none' : ''}>
+                                    <Segmented
+                                        value={presentedShieldMode}
+                                        onValueChange={(v) => {
+                                            if (privacyShieldRunning === true || localFleetControl.settingsLocked) return;
+                                            patchAppSettings({ ideal: { privacy: { privacyShield: { notifyMode: v as 'blur_notify' | 'notify_only' } } } }).catch(reportSettingsWriteFailure);
+                                        }}
+                                        options={[
+                                            { value: 'blur_notify', label: 'Blur + Notify' },
+                                            { value: 'notify_only', label: 'Notify Only' },
+                                        ]}
+                                        size="sm"
+                                    />
+                                </div>
+                            )}
                         </div>
-                        {fleetPolicyManaged && (
+                        {localFleetControl.settingsLocked && (
                             <p className="text-[10px] text-[var(--color-text-muted)] -mt-1 mb-1">
                                 Alert mode is set by Fleet policy.
                             </p>
@@ -746,7 +800,7 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                                 if (v && !hasPaid) { openShieldPaywall(); return; }
                                 setAutostart(v);
                             }}
-                            disabled={fleetPolicyManaged}
+                            disabled={localFleetControl.settingsLocked}
                         />
 
                         <button type="button" className="flex w-full items-center justify-between cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setShowAdvanced(!showAdvanced)} aria-expanded={showAdvanced} aria-controls="privacy-shield-processing-parameters">

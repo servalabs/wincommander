@@ -167,6 +167,7 @@ function Get-PrivacyShieldStatus {
         $shieldProcessMarker = "--wc-privacy-shield"
         $running = $false
         $processId = $null
+        $activeMode = $null
         $camera = Get-PrivacyShieldCameraAvailability
 
         # Get-CimInstance works reliably on both PowerShell 5.1 (Windows
@@ -184,6 +185,14 @@ function Get-PrivacyShieldStatus {
             if ($proc.CommandLine -like "*$shieldProcessMarker*") {
                 $running = $true
                 $processId = $proc.ProcessId
+                # The process arguments are the detector's applied state.
+                # Do not infer mode from a delayed settings sync: that made a
+                # no-blur Notify only process appear as Blur + Notify locally.
+                $activeMode = if ($proc.CommandLine -match '(?:^|\s)--blur-(?:gaze|faces|phone)(?:\s|$)') {
+                    'blur_notify'
+                } else {
+                    'notify_only'
+                }
                 break
             }
         }
@@ -196,6 +205,8 @@ function Get-PrivacyShieldStatus {
             if ($markerPid) {
                 $running = $true
                 $processId = $markerPid
+                # A protected/elevated process can hide CommandLine. Its mode
+                # is intentionally unknown rather than guessed from cache.
             }
         }
 
@@ -209,6 +220,7 @@ function Get-PrivacyShieldStatus {
         @{
             running         = $running
             processId       = $processId
+            activeMode      = $activeMode
             cameraAvailable = [bool]$camera.available
             cameraDevices   = @($camera.devices)
             cameraMessage   = $camera.message
