@@ -259,6 +259,27 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
     CommandMeta { catalog_id: "forensics.connectivity_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted connectivity-history cleanup evidence", payload_schema: None },
     CommandMeta { catalog_id: "forensics.shadow_copies.view", action_class: ActionClass::Safe, summary: "Read bounded redacted shadow-copy cleanup evidence", payload_schema: None },
     CommandMeta { catalog_id: "forensics.ntfs_journals.view", action_class: ActionClass::Safe, summary: "Read bounded redacted NTFS-journal cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.amcache.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Amcache cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.nt_user_traces.view", action_class: ActionClass::Safe, summary: "Read bounded redacted NTUSER trace cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.notepad_state.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Notepad-state cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.compatibility_cache.view", action_class: ActionClass::Safe, summary: "Read bounded redacted compatibility-cache cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.crash_dumps.view", action_class: ActionClass::Safe, summary: "Read bounded crash-dump metadata without contents", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.search_index.view", action_class: ActionClass::Safe, summary: "Read bounded redacted search-index cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.print_spooler.view", action_class: ActionClass::Safe, summary: "Read bounded print-spooler metadata without document data", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.resource_usage_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted resource-usage cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.temp_database_files.view", action_class: ActionClass::Safe, summary: "Read bounded temporary-database metadata without contents", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.activity_timeline.view", action_class: ActionClass::Safe, summary: "Read bounded activity-timeline metadata without activity content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.web_cache_database.view", action_class: ActionClass::Safe, summary: "Read bounded web-cache metadata without browsing content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.thumbnail_icon_cache.view", action_class: ActionClass::Safe, summary: "Read bounded thumbnail-cache metadata without images", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.notification_history.view", action_class: ActionClass::Safe, summary: "Read bounded notification-history metadata without notification content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.peer_distribution_cache.view", action_class: ActionClass::Safe, summary: "Read bounded peer-distribution metadata without payload content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.diagnostics_timeline.view", action_class: ActionClass::Safe, summary: "Read bounded diagnostics-timeline metadata without log content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.timeline_cache.view", action_class: ActionClass::Safe, summary: "Read bounded timeline-cache metadata without activity content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.rdp_bitmap_cache.view", action_class: ActionClass::Safe, summary: "Read bounded RDP bitmap-cache metadata without image tiles", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.servicing_logs.view", action_class: ActionClass::Safe, summary: "Read bounded servicing-log metadata without log content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.device_install_logs.view", action_class: ActionClass::Safe, summary: "Read bounded device-install-log metadata without log content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.usage_trace_logs.view", action_class: ActionClass::Safe, summary: "Read bounded usage-trace-log metadata without log content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.protection_history.view", action_class: ActionClass::Safe, summary: "Read bounded protection-history metadata without event details", payload_schema: None },
     CommandMeta {
         catalog_id: "velociraptor.collect.client_info",
         action_class: ActionClass::Safe,
@@ -2796,6 +2817,41 @@ mod tests {
             "forensics.connectivity_history.view",
             "forensics.shadow_copies.view",
             "forensics.ntfs_journals.view",
+        ] {
+            let entry = COMMAND_METADATA
+                .iter()
+                .find(|entry| entry.catalog_id == catalog_id)
+                .unwrap_or_else(|| panic!("{catalog_id} must be catalogued"));
+            assert_eq!(entry.action_class, ActionClass::Safe, "{catalog_id}");
+            assert_eq!(entry.payload_schema, None, "{catalog_id}");
+        }
+    }
+
+    #[cfg(feature = "command-metadata")]
+    #[test]
+    fn deep_cleanup_forensics_views_are_safe_and_parameterless() {
+        for catalog_id in [
+            "forensics.amcache.view",
+            "forensics.nt_user_traces.view",
+            "forensics.notepad_state.view",
+            "forensics.compatibility_cache.view",
+            "forensics.crash_dumps.view",
+            "forensics.search_index.view",
+            "forensics.print_spooler.view",
+            "forensics.resource_usage_history.view",
+            "forensics.temp_database_files.view",
+            "forensics.activity_timeline.view",
+            "forensics.web_cache_database.view",
+            "forensics.thumbnail_icon_cache.view",
+            "forensics.notification_history.view",
+            "forensics.peer_distribution_cache.view",
+            "forensics.diagnostics_timeline.view",
+            "forensics.timeline_cache.view",
+            "forensics.rdp_bitmap_cache.view",
+            "forensics.servicing_logs.view",
+            "forensics.device_install_logs.view",
+            "forensics.usage_trace_logs.view",
+            "forensics.protection_history.view",
         ] {
             let entry = COMMAND_METADATA
                 .iter()

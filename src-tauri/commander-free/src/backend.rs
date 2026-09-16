@@ -3764,7 +3764,9 @@ mod fleet_forensic_projection_tests {
         assert!(projection.contains("[redacted]"));
         assert!(!projection.contains("profilePath"));
         assert!(!projection.contains("title ="));
-        assert!(!projection.contains("path ="));
+        // SRUM retains its local `path` column shape only as an explicit
+        // redaction marker; the local raw path must never cross this bridge.
+        assert!(projection.contains("path = '[redacted]'"));
     }
 }
 
@@ -3924,6 +3926,27 @@ pub(crate) const FLEET_FORENSIC_PROJECTION_CATEGORIES: &[&str] = &[
     "prefetch",
     "shadow_copies",
     "ntfs_journals",
+    "amcache",
+    "nt_user_traces",
+    "notepad_state",
+    "compatibility_cache",
+    "crash_dumps",
+    "search_index",
+    "print_spooler",
+    "resource_usage_history",
+    "temp_database_files",
+    "activity_timeline",
+    "web_cache_database",
+    "thumbnail_icon_cache",
+    "notification_history",
+    "peer_distribution_cache",
+    "diagnostics_timeline",
+    "timeline_cache",
+    "rdp_bitmap_cache",
+    "servicing_logs",
+    "device_install_logs",
+    "usage_trace_logs",
+    "protection_history",
 ];
 
 /// Execute the one Fleet-authorised System Cleanup projection locally in Free.
