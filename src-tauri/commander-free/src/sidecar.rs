@@ -424,10 +424,8 @@ fn fleet_forensic_projection_category(args: &serde_json::Value) -> Result<&'stat
         .get("category")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "collector category is required".to_string())?;
-    crate::backend::FLEET_FORENSIC_PROJECTION_CATEGORIES
-        .iter()
-        .copied()
-        .find(|allowed| *allowed == category)
+    crate::backend::fleet_forensic_projection_category(category)
+        .map(|allowed| allowed.id)
         .ok_or_else(|| "collector category is not allowed".to_string())
 }
 
@@ -452,13 +450,11 @@ async fn respond_to_free_forensic_projection(
         Err(message) => Envelope::Error(ErrorReply {
             request_id,
             kind: "free_collector_refused".to_string(),
-            // Do not pass raw PowerShell exceptions over this bridge.  The
-            // projection itself already returns a sanitised category error.
-            message: if message.contains("System Cleanup") {
-                "WinCommander could not prepare the requested cleanup records.".to_string()
-            } else {
-                message
-            },
+            // The Free runner returns only its bounded category-level failure
+            // vocabulary. Preserve it so Fleet can distinguish a disabled
+            // module, timeout, malformed table, and collector refusal without
+            // exposing an exception, path, or account name.
+            message,
         }),
     }
     .sign(&session_token);
@@ -1892,11 +1888,11 @@ mod tests {
 
     #[test]
     fn reverse_forensic_request_accepts_only_fixed_categories_and_shape() {
-        for &category in crate::backend::FLEET_FORENSIC_PROJECTION_CATEGORIES {
+        for category in crate::backend::FLEET_FORENSIC_PROJECTION_REGISTRY {
             assert_eq!(
-                fleet_forensic_projection_category(&serde_json::json!({ "category": category }))
+                fleet_forensic_projection_category(&serde_json::json!({ "category": category.id }))
                     .unwrap(),
-                category
+                category.id
             );
         }
         for args in [

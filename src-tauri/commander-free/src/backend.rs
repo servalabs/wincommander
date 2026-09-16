@@ -3744,11 +3744,29 @@ mod fleet_forensic_projection_tests {
     #[test]
     fn fleet_forensic_projection_keeps_a_bounded_safe_record_contract() {
         let projection = function_body("Get-FleetForensicProjection");
-        for category in FLEET_FORENSIC_PROJECTION_CATEGORIES {
+        for category in FLEET_FORENSIC_PROJECTION_REGISTRY {
             assert!(
-                projection.contains(category),
-                "missing fixed category {category}"
+                projection.contains(category.id),
+                "missing fixed category {}",
+                category.id,
             );
+            assert!(
+                projection.contains(category.label),
+                "missing local label for {}",
+                category.id,
+            );
+            assert!(
+                projection.contains(category.collector),
+                "{} must use its local {} collector",
+                category.id,
+                category.collector,
+            );
+            assert!(
+                category.fleet_command_id.starts_with("fleet.cleanup.inspect."),
+                "{} must have a static Fleet command ID",
+                category.id,
+            );
+            assert!(matches!(category.group, "standard" | "deep-dfir"));
         }
         let envelope = function_body("New-FleetForensicProjection");
         assert!(projection.contains("$rowLimit = 200"));
@@ -3767,6 +3785,31 @@ mod fleet_forensic_projection_tests {
         // SRUM retains its local `path` column shape only as an explicit
         // redaction marker; the local raw path must never cross this bridge.
         assert!(projection.contains("path = '[redacted]'"));
+    }
+
+    #[test]
+    fn fleet_forensic_registry_is_unique_and_covers_every_read_only_projection() {
+        let mut ids = std::collections::HashSet::new();
+        let mut command_ids = std::collections::HashSet::new();
+        for category in FLEET_FORENSIC_PROJECTION_REGISTRY {
+            assert!(ids.insert(category.id), "duplicate category {}", category.id);
+            assert!(
+                command_ids.insert(category.fleet_command_id),
+                "duplicate Fleet command ID {}",
+                category.fleet_command_id,
+            );
+            assert!(
+                !category.collector.starts_with("Clear-")
+                    && !category.collector.starts_with("Remove-")
+                    && !category.collector.starts_with("Erase-"),
+                "{} must remain an inspection-only collector",
+                category.id,
+            );
+        }
+        assert!(
+            FLEET_FORENSIC_PROJECTION_REGISTRY.len() >= 80,
+            "the Fleet registry must not regress to a DNS-only catalogue"
+        );
     }
 }
 
@@ -3907,89 +3950,125 @@ pub async fn run_backend_script(
 /// The sole set of Cleanup views that Fleet may request from the local Free
 /// process. Keep this list in lockstep with the PowerShell ValidateSet and the
 /// signed sidecar parser; it is intentionally not derived from caller input.
-pub(crate) const FLEET_FORENSIC_PROJECTION_CATEGORIES: &[&str] = &[
-    "shell_bags",
-    "usb_history",
-    "recycle_bin",
-    "dns_cache",
-    "clipboard_history",
-    "execution_audit",
-    "wlan_profiles",
-    "net_drives",
-    "event_log_summary",
-    "command_history",
-    "recent_files",
-    "rdp_history",
-    "jump_lists",
-    "connectivity_history",
-    "browser_footprints",
-    "prefetch",
-    "shadow_copies",
-    "ntfs_journals",
-    "amcache",
-    "nt_user_traces",
-    "notepad_state",
-    "compatibility_cache",
-    "crash_dumps",
-    "search_index",
-    "print_spooler",
-    "resource_usage_history",
-    "temp_database_files",
-    "activity_timeline",
-    "web_cache_database",
-    "thumbnail_icon_cache",
-    "notification_history",
-    "peer_distribution_cache",
-    "diagnostics_timeline",
-    "timeline_cache",
-    "rdp_bitmap_cache",
-    "servicing_logs",
-    "device_install_logs",
-    "usage_trace_logs",
-    "protection_history",
-    "wsl_data",
-    "docker_desktop_data",
-    "virtual_machine_artifacts",
-    "developer_caches",
-    "credential_manager",
-    "network_wizard_history",
-    "wer_history",
-    "inactive_user_protection_metadata",
-    "sticky_notes",
-    "onedrive_metadata",
-    "spotlight_cache",
-    "font_cache",
-    "legacy_icon_cache",
-    "game_captures",
-    "photos_cache",
-    "xbox_cache",
-    "communication_caches",
-    "editor_history",
-    "git_activity",
-    "ssh_state",
-    "remote_access_logs",
-    "password_manager_caches",
-    "game_launcher_logs",
-    "adobe_recent",
-    "office_temp_files",
-    "firewall_log",
-    "neighbor_cache",
-    "netbios_cache",
-    "geolocation_cache",
-    "vpn_phonebooks",
-    "proxy_cache",
-    "cloud_placeholders",
-    "bits_queue",
-    "cellular_history",
-    "app_launch_history",
-    "office_mru",
-    "embedded_web_cache",
-    "p2p_update_cache",
-    "reliability_history",
-    "explorer_search_history",
-    "search_personalization",
-    "process_review",
+/// Static source of truth for Fleet's read-only System Cleanup requests.
+///
+/// The command ID is intentionally derived from a literal category ID: it is
+/// a selector for this one collector, never a Windows command.  `collector`
+/// names the same PowerShell reader used by the local Cleanup screen; tests
+/// below prevent this registry, the PowerShell `ValidateSet`, and the switch
+/// that invokes each local reader from drifting apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FleetForensicProjectionCategory {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub group: &'static str,
+    pub fleet_command_id: &'static str,
+    pub collector: &'static str,
+}
+
+macro_rules! cleanup_category {
+    ($id:literal, $label:literal, $group:literal, $collector:literal) => {
+        FleetForensicProjectionCategory {
+            id: $id,
+            label: $label,
+            group: $group,
+            fleet_command_id: concat!("fleet.cleanup.inspect.", $id),
+            collector: $collector,
+        }
+    };
+}
+
+pub(crate) const FLEET_FORENSIC_PROJECTION_REGISTRY: &[FleetForensicProjectionCategory] = &[
+    cleanup_category!("shell_bags", "ShellBags", "standard", "Get-ShellBags"),
+    cleanup_category!("usb_history", "USB history", "standard", "Get-USBDeviceHistory"),
+    cleanup_category!("recycle_bin", "Recycle Bin", "standard", "Get-RecycleBinInfo"),
+    cleanup_category!("dns_cache", "DNS Cache", "standard", "Get-DnsCacheEntries"),
+    cleanup_category!("clipboard_history", "Clipboard history", "standard", "Get-ClipboardHistoryStatus"),
+    cleanup_category!("execution_audit", "Execution audit", "standard", "Get-ExecutionCache"),
+    cleanup_category!("wlan_profiles", "WLAN profiles", "standard", "Get-WlanProfiles"),
+    cleanup_category!("net_drives", "Network drives", "standard", "Get-NetworkDrives"),
+    cleanup_category!("event_log_summary", "Event log summary", "standard", "Get-EventLogSummary"),
+    cleanup_category!("command_history", "Command history", "standard", "Get-PSHistory"),
+    cleanup_category!("recent_files", "Recent files", "standard", "Get-RecentFiles"),
+    cleanup_category!("rdp_history", "RDP history", "standard", "Get-RDPHistory"),
+    cleanup_category!("jump_lists", "Jump Lists", "standard", "Get-JumpLists"),
+    cleanup_category!("connectivity_history", "Connectivity history", "standard", "Get-ConnectivityHistory"),
+    cleanup_category!("browser_footprints", "Browser footprints", "standard", "Get-BrowserFootprints"),
+    cleanup_category!("prefetch", "Prefetch", "standard", "Get-PrefetchFiles"),
+    cleanup_category!("shadow_copies", "Shadow copies", "standard", "Get-ShadowCopies"),
+    cleanup_category!("ntfs_journals", "NTFS journals", "standard", "Get-NTFSJournals"),
+    cleanup_category!("amcache", "Amcache", "deep-dfir", "Get-AmcacheEntries"),
+    cleanup_category!("nt_user_traces", "NTUSER traces", "deep-dfir", "Get-NTUserTraces"),
+    cleanup_category!("notepad_state", "Notepad state", "deep-dfir", "Get-NotepadStateFiles"),
+    cleanup_category!("compatibility_cache", "Compatibility cache", "deep-dfir", "Get-PCAInfo"),
+    cleanup_category!("crash_dumps", "Crash dumps", "deep-dfir", "Get-CrashDumpList"),
+    cleanup_category!("search_index", "Search index", "deep-dfir", "Get-SearchIndexInfo"),
+    cleanup_category!("print_spooler", "Print spooler", "deep-dfir", "Get-PrintSpoolerInfo"),
+    cleanup_category!("resource_usage_history", "Resource usage history", "deep-dfir", "Get-SRUMData"),
+    cleanup_category!("temp_database_files", "Temporary database files", "deep-dfir", "Get-SQLiteWALList"),
+    cleanup_category!("activity_timeline", "Activity timeline", "deep-dfir", "Get-RecallDatabaseInfo"),
+    cleanup_category!("web_cache_database", "Web cache database", "deep-dfir", "Get-WebCacheInfo"),
+    cleanup_category!("thumbnail_icon_cache", "Thumbnail and icon cache", "deep-dfir", "Get-ThumbnailCacheInfo"),
+    cleanup_category!("notification_history", "Notification history", "deep-dfir", "Get-NotificationDatabaseInfo"),
+    cleanup_category!("peer_distribution_cache", "Peer distribution cache", "deep-dfir", "Get-BranchCacheInfo"),
+    cleanup_category!("diagnostics_timeline", "Diagnostics timeline", "deep-dfir", "Get-EventTranscriptInfo"),
+    cleanup_category!("timeline_cache", "Timeline cache", "deep-dfir", "Get-ActivitiesTimelineInfo"),
+    cleanup_category!("rdp_bitmap_cache", "RDP bitmap cache", "deep-dfir", "Get-RdpBitmapCacheInfo"),
+    cleanup_category!("servicing_logs", "Servicing logs", "deep-dfir", "Get-ServicingLogsInfo"),
+    cleanup_category!("device_install_logs", "Device installation logs", "deep-dfir", "Get-DeviceInstallLogsInfo"),
+    cleanup_category!("usage_trace_logs", "Usage trace logs", "deep-dfir", "Get-UsageTraceLogsInfo"),
+    cleanup_category!("protection_history", "Protection history", "deep-dfir", "Get-DefenderHistoryInfo"),
+    cleanup_category!("wsl_data", "WSL data", "deep-dfir", "Get-WSLDataInfo"),
+    cleanup_category!("docker_desktop_data", "Docker Desktop data", "deep-dfir", "Get-DockerDesktopDataInfo"),
+    cleanup_category!("virtual_machine_artifacts", "Virtual machine artifacts", "deep-dfir", "Get-VirtualMachineArtifactsInfo"),
+    cleanup_category!("developer_caches", "Developer caches", "deep-dfir", "Get-DeveloperCachesInfo"),
+    cleanup_category!("credential_manager", "Credential Manager", "deep-dfir", "Get-CredentialManagerInfo"),
+    cleanup_category!("network_wizard_history", "Network wizard history", "deep-dfir", "Get-NetworkWizardHistoryInfo"),
+    cleanup_category!("wer_history", "Windows Error Reporting history", "deep-dfir", "Get-WERHistoryInfo"),
+    cleanup_category!("inactive_user_protection_metadata", "Inactive-user protection metadata", "deep-dfir", "Get-InactiveUserProtectionMetadataInfo"),
+    cleanup_category!("sticky_notes", "Sticky Notes", "deep-dfir", "Get-StickyNotesInfo"),
+    cleanup_category!("onedrive_metadata", "OneDrive metadata", "deep-dfir", "Get-OneDriveMetadataInfo"),
+    cleanup_category!("spotlight_cache", "Spotlight cache", "deep-dfir", "Get-SpotlightCacheInfo"),
+    cleanup_category!("font_cache", "Font cache", "deep-dfir", "Get-FontCacheInfo"),
+    cleanup_category!("legacy_icon_cache", "Legacy icon cache", "deep-dfir", "Get-LegacyIconCacheInfo"),
+    cleanup_category!("game_captures", "Game captures", "deep-dfir", "Get-GameCapturesInfo"),
+    cleanup_category!("photos_cache", "Photos cache", "deep-dfir", "Get-PhotosCacheInfo"),
+    cleanup_category!("xbox_cache", "Xbox cache", "deep-dfir", "Get-XboxCacheInfo"),
+    cleanup_category!("communication_caches", "Communication caches", "deep-dfir", "Get-CommunicationCachesInfo"),
+    cleanup_category!("editor_history", "Editor history", "deep-dfir", "Get-EditorHistoryInfo"),
+    cleanup_category!("git_activity", "Git activity", "deep-dfir", "Get-GitActivityInfo"),
+    cleanup_category!("ssh_state", "SSH state", "deep-dfir", "Get-SSHStateInfo"),
+    cleanup_category!("remote_access_logs", "Remote access logs", "deep-dfir", "Get-RemoteAccessLogsInfo"),
+    cleanup_category!("password_manager_caches", "Password-manager caches", "deep-dfir", "Get-PasswordManagerCachesInfo"),
+    cleanup_category!("game_launcher_logs", "Game launcher logs", "deep-dfir", "Get-GameLauncherLogsInfo"),
+    cleanup_category!("adobe_recent", "Adobe recent items", "deep-dfir", "Get-AdobeRecentInfo"),
+    cleanup_category!("office_temp_files", "Office temporary files", "deep-dfir", "Get-OfficeTempFilesInfo"),
+    cleanup_category!("firewall_log", "Firewall log", "deep-dfir", "Get-FirewallLogInfo"),
+    cleanup_category!("neighbor_cache", "Neighbor cache", "deep-dfir", "Get-NeighborCacheInfo"),
+    cleanup_category!("netbios_cache", "NetBIOS cache", "deep-dfir", "Get-NetBIOSCacheInfo"),
+    cleanup_category!("geolocation_cache", "Geolocation cache", "deep-dfir", "Get-GeolocationCacheInfo"),
+    cleanup_category!("vpn_phonebooks", "VPN phonebooks", "deep-dfir", "Get-VPNPhonebooksInfo"),
+    cleanup_category!("proxy_cache", "Proxy cache", "deep-dfir", "Get-ProxyCacheInfo"),
+    cleanup_category!("cloud_placeholders", "Cloud placeholders", "deep-dfir", "Get-CloudPlaceholdersInfo"),
+    cleanup_category!("bits_queue", "BITS queue", "deep-dfir", "Get-BITSQueueInfo"),
+    cleanup_category!("cellular_history", "Cellular history", "deep-dfir", "Get-CellularHistoryInfo"),
+    cleanup_category!("app_launch_history", "App launch history", "deep-dfir", "Get-AppLaunchHistoryInfo"),
+    cleanup_category!("office_mru", "Office MRU", "deep-dfir", "Get-OfficeMruInfo"),
+    cleanup_category!("embedded_web_cache", "Embedded web cache", "deep-dfir", "Get-EmbeddedWebCacheInfo"),
+    cleanup_category!("p2p_update_cache", "Peer update cache", "deep-dfir", "Get-P2PUpdateCacheInfo"),
+    cleanup_category!("reliability_history", "Reliability history", "deep-dfir", "Get-ReliabilityHistoryInfo"),
+    cleanup_category!("explorer_search_history", "Explorer search metadata", "deep-dfir", "Get-ExplorerSearchHistoryInfo"),
+    cleanup_category!("search_personalization", "Search personalisation", "deep-dfir", "Get-SearchPersonalizationInfo"),
+    cleanup_category!("process_review", "Process review", "deep-dfir", "Get-ProcessIntelligence"),
 ];
+
+pub(crate) fn fleet_forensic_projection_category(
+    category: &str,
+) -> Option<&'static FleetForensicProjectionCategory> {
+    FLEET_FORENSIC_PROJECTION_REGISTRY
+        .iter()
+        .find(|entry| entry.id == category)
+}
 
 /// Execute the one Fleet-authorised System Cleanup projection locally in Free.
 ///
@@ -4001,9 +4080,8 @@ pub(crate) const FLEET_FORENSIC_PROJECTION_CATEGORIES: &[&str] = &[
 pub(crate) async fn run_fleet_forensic_projection(
     category: &str,
 ) -> Result<serde_json::Value, String> {
-    if !FLEET_FORENSIC_PROJECTION_CATEGORIES.contains(&category) {
-        return Err("Fleet collector category is not allowed".to_string());
-    }
+    let registry_entry = fleet_forensic_projection_category(category)
+        .ok_or_else(|| "Fleet collector category is not allowed".to_string())?;
 
     let modules = settings::read_settings()
         .map(|settings| settings.app.modules)
@@ -4062,11 +4140,46 @@ pub(crate) async fn run_fleet_forensic_projection(
     if !output.status.success() {
         return Err("WinCommander could not prepare the requested cleanup records".to_string());
     }
-    let result = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+    let mut result = serde_json::from_slice::<serde_json::Value>(&output.stdout)
         .map_err(|_| "WinCommander returned an invalid cleanup record set".to_string())?;
     if result.get("error").and_then(serde_json::Value::as_bool) == Some(true) {
-        return Err("WinCommander could not prepare the requested cleanup records".to_string());
+        return Err(result
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .filter(|message| {
+                message.starts_with("System Cleanup could not ") && message.len() <= 240
+            })
+            .unwrap_or("WinCommander could not prepare the requested cleanup records")
+            .to_string());
     }
+    let source_matches = result.get("source").and_then(serde_json::Value::as_str)
+        == Some("wincommander.system_cleanup");
+    let category_matches = result.get("category_id").and_then(serde_json::Value::as_str)
+        == Some(registry_entry.id);
+    let label_matches = result.get("label").and_then(serde_json::Value::as_str)
+        == Some(registry_entry.label);
+    let is_structured = result.get("columns").and_then(serde_json::Value::as_array).is_some()
+        && result.get("records").and_then(serde_json::Value::as_array).is_some()
+        && result.get("datasets").and_then(serde_json::Value::as_array).is_some();
+    if !source_matches || !category_matches || !label_matches || !is_structured {
+        return Err("WinCommander returned an incomplete cleanup table".to_string());
+    }
+    let Some(record) = result.as_object_mut() else {
+        return Err("WinCommander returned an invalid cleanup record set".to_string());
+    };
+    // These values come only from the static registry above, never from a
+    // Fleet request or a PowerShell response.  They let the Console identify
+    // the local collector behind a persisted table without opening a generic
+    // remote-command path.
+    record.insert("group".to_string(), serde_json::json!(registry_entry.group));
+    record.insert(
+        "fleet_command_id".to_string(),
+        serde_json::json!(registry_entry.fleet_command_id),
+    );
+    record.insert(
+        "local_collector".to_string(),
+        serde_json::json!(registry_entry.collector),
+    );
     Ok(result)
 }
 
