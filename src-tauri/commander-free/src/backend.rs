@@ -3902,6 +3902,86 @@ pub async fn run_backend_script(
     run_backend_script_with_timeout(app, command, params, None).await
 }
 
+/// Execute the one Fleet-authorised System Cleanup projection locally in Free.
+///
+/// This is intentionally separate from `run_backend_script`: the latter can
+/// dispatch paid features back to Pro, while this function is called by the
+/// authenticated Pro -> Free pipe. Keeping this runner closed prevents a
+/// recursive IPC future and, more importantly, prevents that pipe from
+/// becoming a general local command executor.
+pub(crate) async fn run_fleet_forensic_projection(
+    category: &str,
+) -> Result<serde_json::Value, String> {
+    match category {
+        "dns_cache" | "browser_footprints" | "event_log_summary" | "prefetch" => {}
+        _ => return Err("Fleet collector category is not allowed".to_string()),
+    }
+
+    let modules = settings::read_settings()
+        .map(|settings| settings.app.modules)
+        .unwrap_or_default();
+    if !modules.get("cleanup").copied().unwrap_or(false) {
+        return Err("System Cleanup is disabled on this device".to_string());
+    }
+
+    let core_utils = load_module("core/utils")?;
+    let core_router = load_module("core/router")?;
+    let cleanup = load_module("privacy/cleanup")?;
+    // Browser footprints reuses the installed-browser discovery helper.  It is
+    // harmless to load for the other fixed projections and keeps the script
+    // shape independent of a caller-controlled category.
+    let security = load_module("tweaks/security")?;
+    let full_script = format!(
+        "{}\n\n{}\n\n{}\n\n{}\n\nInvoke-BackendCommand",
+        core_utils, security, cleanup, core_router
+    );
+
+    let (mut command, _ps_exe) = build_powershell_command();
+    command.env("WINCMD_COMMAND", "Get-FleetForensicProjection");
+    command.env(
+        "WINCMD_PARAMS_JSON",
+        serde_json::json!({ "Category": category }).to_string(),
+    );
+    let mut child = command
+        .spawn()
+        .map_err(|_| "WinCommander could not start the local cleanup collector".to_string())?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(full_script.as_bytes()).map_err(|_| {
+            "WinCommander could not prepare the local cleanup collector".to_string()
+        })?;
+    }
+
+    let child_pid = child.id();
+    let wait = tokio::task::spawn_blocking(move || child.wait_with_output());
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(60), wait).await {
+        Ok(Ok(Ok(output))) => output,
+        Ok(_) => return Err("WinCommander could not read the local cleanup records".to_string()),
+        Err(_) => {
+            let _ = tokio::task::spawn_blocking(move || {
+                let mut kill = Command::new("taskkill");
+                kill.args(["/F", "/T", "/PID", &child_pid.to_string()]);
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    kill.creation_flags(0x08000000);
+                }
+                kill.output()
+            })
+            .await;
+            return Err("The local cleanup collector timed out".to_string());
+        }
+    };
+    if !output.status.success() {
+        return Err("WinCommander could not prepare the requested cleanup records".to_string());
+    }
+    let result = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .map_err(|_| "WinCommander returned an invalid cleanup record set".to_string())?;
+    if result.get("error").and_then(serde_json::Value::as_bool) == Some(true) {
+        return Err("WinCommander could not prepare the requested cleanup records".to_string());
+    }
+    Ok(result)
+}
+
 /// Internal callers that render a live status surface may use a shorter
 /// deadline than the general-purpose backend command timeout. The same timeout
 /// path kills the PowerShell process tree, so a cancelled UI poll cannot leave

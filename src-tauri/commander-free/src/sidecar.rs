@@ -336,7 +336,12 @@ type InflightMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Val
 
 pub struct ProSession {
     /// Write half of the named pipe — owned by dispatch (only writes).
-    write: WriteHalf<NamedPipeServer>,
+    ///
+    /// The authenticated Free-owned forensic collector is the sole exception:
+    /// a verified Pro agent can request one fixed read-only projection and the
+    /// Free reader writes its signed reply on this same half.  The mutex keeps
+    /// that reply ordered with ordinary Free -> Pro requests.
+    write: Arc<Mutex<WriteHalf<NamedPipeServer>>>,
     child: Child,
     session_token: String,
     /// Shared with the reader task — dispatch inserts a sender keyed by
@@ -403,6 +408,77 @@ where
 /// without needing a Tauri context.
 type NotificationSink = Box<dyn Fn(String, serde_json::Value) + Send + Sync>;
 
+/// The only reverse request a verified Pro Fleet agent may make to Free.
+/// Keeping this identifier and its category list closed prevents the sidecar
+/// pipe from becoming a general local-command RPC surface.
+const FREE_FORENSIC_PROJECTION_FEATURE: &str = "free.system_cleanup.forensic_projection";
+
+fn fleet_forensic_projection_category(args: &serde_json::Value) -> Result<&'static str, String> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| "collector arguments must be an object".to_string())?;
+    if object.len() != 1 {
+        return Err("collector accepts only the category field".to_string());
+    }
+    let category = object
+        .get("category")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "collector category is required".to_string())?;
+    match category {
+        "dns_cache" | "browser_footprints" | "event_log_summary" | "prefetch" => {
+            Ok(match category {
+                "dns_cache" => "dns_cache",
+                "browser_footprints" => "browser_footprints",
+                "event_log_summary" => "event_log_summary",
+                "prefetch" => "prefetch",
+                _ => unreachable!("validated fixed forensic category"),
+            })
+        }
+        _ => Err("collector category is not allowed".to_string()),
+    }
+}
+
+async fn respond_to_free_forensic_projection(
+    request: Request,
+    session_token: String,
+    writer: Arc<Mutex<WriteHalf<NamedPipeServer>>>,
+) {
+    let request_id = request.request_id;
+    let response = async {
+        if request.feature_id != FREE_FORENSIC_PROJECTION_FEATURE {
+            return Err("reverse IPC feature is not allowed".to_string());
+        }
+        crate::license::require_service_feature("fleet")?;
+        let category = fleet_forensic_projection_category(&request.args)?;
+        crate::backend::run_fleet_forensic_projection(category).await
+    }
+    .await;
+
+    let envelope = match response {
+        Ok(result) => Envelope::Response(Response { request_id, result }),
+        Err(message) => Envelope::Error(ErrorReply {
+            request_id,
+            kind: "free_collector_refused".to_string(),
+            // Do not pass raw PowerShell exceptions over this bridge.  The
+            // projection itself already returns a sanitised category error.
+            message: if message.contains("System Cleanup") {
+                "WinCommander could not prepare the requested cleanup records.".to_string()
+            } else {
+                message
+            },
+        }),
+    }
+    .sign(&session_token);
+
+    let mut write = writer.lock().await;
+    if let Err(error) = write_envelope(&mut *write, &envelope).await {
+        crate::log_message(
+            "warn",
+            &format!("[ProReader] failed to reply to Free forensic request: {error}"),
+        );
+    }
+}
+
 /// Per-session reader loop. Reads framed envelopes off the pipe,
 /// verifies the HMAC tag with the session token, and routes:
 ///   - `Notification` → `on_notification(event, payload)`.
@@ -424,6 +500,7 @@ async fn reader_loop<R>(
     inflight: InflightMap,
     session_token: String,
     on_notification: NotificationSink,
+    free_forensic_writer: Option<Arc<Mutex<WriteHalf<NamedPipeServer>>>>,
 ) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -498,10 +575,26 @@ async fn reader_loop<R>(
                     "[ProReader] unexpected Hello mid-session — ignoring",
                 );
             }
-            Envelope::Request(_) => {
-                // Free is the only side that sends Requests. Receiving
-                // one from Pro is a protocol break.
-                crate::log_message("warn", "[ProReader] unexpected Request from Pro — ignoring");
+            Envelope::Request(request) => {
+                let Some(writer) = free_forensic_writer.clone() else {
+                    crate::log_message(
+                        "warn",
+                        "[ProReader] reverse Request is unavailable on this session",
+                    );
+                    continue;
+                };
+                if request.feature_id != FREE_FORENSIC_PROJECTION_FEATURE {
+                    crate::log_message(
+                        "warn",
+                        "[ProReader] rejected non-allowlisted reverse Request from Pro",
+                    );
+                    continue;
+                }
+                let token = session_token.clone();
+                // Box this arm because the local collector uses the backend
+                // runner, which also contains the ordinary Pro-dispatch path.
+                // The box breaks that otherwise-recursive async future type.
+                Box::pin(respond_to_free_forensic_projection(request, token, writer)).await;
             }
             Envelope::Signed(_) => {
                 // verify_and_unwrap already produced a non-Signed
@@ -550,11 +643,14 @@ fn pooled_child_is_running(session: &mut ProSession) -> bool {
 async fn stop_pro_session(mut session: ProSession) {
     // A worker has no durable state. Sending Bye gives a cooperative Pro a
     // chance to close its pipe; kill_on_drop remains the final backstop.
-    let _ = timeout(
-        Duration::from_secs(2),
-        write_envelope(&mut session.write, &Envelope::Bye),
-    )
-    .await;
+    {
+        let mut write = session.write.lock().await;
+        let _ = timeout(
+            Duration::from_secs(2),
+            write_envelope(&mut *write, &Envelope::Bye),
+        )
+        .await;
+    }
     let _ = session.child.start_kill();
     let _ = timeout(Duration::from_secs(2), session.child.wait()).await;
 }
@@ -1092,6 +1188,7 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
     // the per-poll level but yield while parked, so a parked read does
     // not block writes.
     let (read_half, write_half) = tokio::io::split(server);
+    let write_half = Arc::new(Mutex::new(write_half));
     let inflight: InflightMap = Arc::new(Mutex::new(HashMap::new()));
     // Production notification sink: re-emit via the global AppHandle.
     // If APP_HANDLE hasn't been set yet (would only happen if a paid
@@ -1178,6 +1275,7 @@ async fn spawn_pro_session_unlocked(role: SessionRole) -> Result<ProSession, Str
         inflight.clone(),
         token.clone(),
         on_notification,
+        Some(write_half.clone()),
     ));
 
     Ok(ProSession {
@@ -1222,7 +1320,11 @@ async fn dispatch_request(
     session.inflight.lock().await.insert(request_id, tx);
 
     let signed = Envelope::Request(req).sign(&session.session_token);
-    if let Err(e) = write_envelope(&mut session.write, &signed).await {
+    let write_result = {
+        let mut write = session.write.lock().await;
+        write_envelope(&mut *write, &signed).await
+    };
+    if let Err(e) = write_result {
         // Take our sender back out — reader would otherwise hold a
         // dangling entry forever for this id (no reply will arrive).
         session.inflight.lock().await.remove(&request_id);
@@ -1794,6 +1896,30 @@ pub async fn close_pro_session() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reverse_forensic_request_accepts_only_fixed_categories_and_shape() {
+        for category in [
+            "dns_cache",
+            "browser_footprints",
+            "event_log_summary",
+            "prefetch",
+        ] {
+            assert_eq!(
+                fleet_forensic_projection_category(&serde_json::json!({ "category": category }))
+                    .unwrap(),
+                category
+            );
+        }
+        for args in [
+            serde_json::json!({}),
+            serde_json::json!({ "category": "dns_cache", "path": "C:\\sensitive" }),
+            serde_json::json!({ "category": "arbitrary_command" }),
+            serde_json::json!(["dns_cache"]),
+        ] {
+            assert!(fleet_forensic_projection_category(&args).is_err());
+        }
+    }
     use tokio::io::AsyncWriteExt;
     use tokio::sync::mpsc;
 
@@ -1961,7 +2087,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink).await;
+            reader_loop(free_side, reader_inflight, reader_token, sink, None).await;
         });
 
         // Pro writes (in order):
@@ -2033,7 +2159,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink).await;
+            reader_loop(free_side, reader_inflight, reader_token, sink, None).await;
         });
 
         // Close Pro's side → reader hits EOF and exits.
@@ -2066,7 +2192,7 @@ mod tests {
         let reader_inflight = inflight.clone();
         let reader_token = token.to_string();
         let reader_task = tokio::spawn(async move {
-            reader_loop(free_side, reader_inflight, reader_token, sink).await;
+            reader_loop(free_side, reader_inflight, reader_token, sink, None).await;
         });
 
         // First frame: unsigned Response — reader must drop and keep reading.
