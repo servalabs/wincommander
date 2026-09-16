@@ -170,3 +170,4 @@ src-tauri/target-scoop/
 /.target-fleet-bridge/
 /target-privacy-shield-remote-test/
 /tmp-test-la/
+.target-fleet-full-detail/
