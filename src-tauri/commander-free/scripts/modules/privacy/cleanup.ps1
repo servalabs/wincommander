@@ -600,6 +600,203 @@ function Get-DnsCacheEntries {
     }
 }
 
+# Fleet may request a small, fixed projection of the same trace collectors
+# that power System Cleanup.  This is deliberately not a general-purpose
+# forensic export: it has a closed category list, a hard row limit, and never
+# returns paths, file contents, browser history, titles, or credentials.
+#
+# Keep the field names stable.  Fleet renders these records as a table, while
+# the desktop Cleanup viewer can keep its richer local-only output.
+function Get-FleetForensicProjection {
+    [CmdletBinding()]
+    param(
+        [ValidateSet('dns_cache', 'browser_footprints', 'event_log_summary', 'prefetch')]
+        [string]$Category = 'dns_cache'
+    )
+
+    $rowLimit = 200
+    $sanitizeText = {
+        param(
+            [object]$Value,
+            [int]$MaxLength = 256
+        )
+
+        if ($null -eq $Value) { return '' }
+        $text = ([string]$Value) -replace '[\r\n\t]+', ' '
+        $text = $text.Trim()
+        if ($text.Length -gt $MaxLength) {
+            return $text.Substring(0, $MaxLength) + '…'
+        }
+        return $text
+    }
+
+    $empty = {
+        param([string]$Message)
+        return @{
+            error = $true
+            message = $Message
+            source = 'wincommander.system_cleanup'
+            category = $Category
+            records = @()
+            total = 0
+            truncated = $false
+        }
+    }
+
+    try {
+        switch ($Category) {
+            'dns_cache' {
+                $result = Get-DnsCacheEntries
+                if ($result.error) { return (& $empty 'System Cleanup could not read the DNS cache.') }
+
+                $sourceRows = @($result.entries)
+                $records = @($sourceRows | Select-Object -First $rowLimit | ForEach-Object {
+                    $rawData = ([string]$_.data) -replace '[\r\n\t]+', ' '
+                    $dataLength = 0
+                    $ttl = 0
+                    try { $dataLength = [int]$_.dataLength } catch {}
+                    try { $ttl = [int]$_.ttl } catch {}
+                    @{
+                        name = (& $sanitizeText $_.name)
+                        dataLength = $dataLength
+                        'data' = (& $sanitizeText $_.data)
+                        dataTruncated = ($rawData.Trim().Length -gt 256)
+                        recordType = (& $sanitizeText $_.recordType 32)
+                        section = (& $sanitizeText $_.section 32)
+                        status = (& $sanitizeText $_.status 64)
+                        ttl = $ttl
+                    }
+                })
+                return @{
+                    source = 'wincommander.system_cleanup'
+                    category = 'dns_cache'
+                    label = 'DNS Cache'
+                    columns = @(
+                        @{ key = 'name'; label = 'Name'; type = 'text' },
+                        @{ key = 'dataLength'; label = 'Data length'; type = 'number' },
+                        @{ key = 'data'; label = 'Data'; type = 'text' },
+                        @{ key = 'recordType'; label = 'Type'; type = 'text' },
+                        @{ key = 'section'; label = 'Section'; type = 'text' },
+                        @{ key = 'status'; label = 'Status'; type = 'text' },
+                        @{ key = 'ttl'; label = 'TTL'; type = 'number' }
+                    )
+                    records = $records
+                    total = $sourceRows.Count
+                    truncated = ($sourceRows.Count -gt $records.Count)
+                }
+            }
+
+            'browser_footprints' {
+                $result = Get-BrowserFootprints
+                if ($result.error) { return (& $empty 'System Cleanup could not read browser footprint totals.') }
+
+                # Deliberately project browser artifact *kinds* and sizes only.
+                # Profile paths, history URLs, page titles, cookie values, and
+                # credential-bearing files remain local to the device.
+                $sourceRows = @(
+                    foreach ($browser in @($result.browsers)) {
+                        foreach ($artifact in @($browser.artifacts)) {
+                            $sizeKB = 0
+                            try { $sizeKB = [double]$artifact.sizeKB } catch {}
+                            @{
+                                browser = (& $sanitizeText $browser.browser 64)
+                                artifact = (& $sanitizeText $artifact.name 64)
+                                sizeKB = $sizeKB
+                            }
+                        }
+                    }
+                )
+                $records = @($sourceRows | Select-Object -First $rowLimit)
+                return @{
+                    source = 'wincommander.system_cleanup'
+                    category = 'browser_footprints'
+                    label = 'Browser footprints'
+                    columns = @(
+                        @{ key = 'browser'; label = 'Browser'; type = 'text' },
+                        @{ key = 'artifact'; label = 'Artifact'; type = 'text' },
+                        @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }
+                    )
+                    records = $records
+                    total = $sourceRows.Count
+                    truncated = ($sourceRows.Count -gt $records.Count)
+                }
+            }
+
+            'event_log_summary' {
+                $result = Get-EventLogSummary
+                if ($result.error) { return (& $empty 'System Cleanup could not read event-log totals.') }
+
+                $sourceRows = @($result.logs)
+                $records = @($sourceRows | Select-Object -First $rowLimit | ForEach-Object {
+                    $count = 0
+                    $sizeMb = 0
+                    try { $count = [int64]$_.count } catch {}
+                    try { $sizeMb = [double]$_.sizeMb } catch {}
+                    @{
+                        name = (& $sanitizeText $_.name 128)
+                        count = $count
+                        newest = (& $sanitizeText $_.newest 64)
+                        sizeMb = $sizeMb
+                    }
+                })
+                return @{
+                    source = 'wincommander.system_cleanup'
+                    category = 'event_log_summary'
+                    label = 'Event log summary'
+                    columns = @(
+                        @{ key = 'name'; label = 'Log'; type = 'text' },
+                        @{ key = 'count'; label = 'Records'; type = 'number' },
+                        @{ key = 'newest'; label = 'Newest'; type = 'timestamp' },
+                        @{ key = 'sizeMb'; label = 'Size (MB)'; type = 'number' }
+                    )
+                    records = $records
+                    total = $sourceRows.Count
+                    truncated = ($sourceRows.Count -gt $records.Count)
+                }
+            }
+
+            'prefetch' {
+                $result = Get-PrefetchFiles
+                if ($result.error) { return (& $empty 'System Cleanup could not read Prefetch summaries.') }
+
+                $sourceRows = @($result.entries)
+                $records = @($sourceRows | Select-Object -First $rowLimit | ForEach-Object {
+                    $sizeKB = 0
+                    try { $sizeKB = [double]$_.sizeKB } catch {}
+                    @{
+                        name = (& $sanitizeText $_.name 128)
+                        fileName = (& $sanitizeText $_.fileName 128)
+                        sizeKB = $sizeKB
+                        lastRun = (& $sanitizeText $_.lastRun 64)
+                        created = (& $sanitizeText $_.created 64)
+                    }
+                })
+                return @{
+                    source = 'wincommander.system_cleanup'
+                    category = 'prefetch'
+                    label = 'Prefetch'
+                    accessDenied = [bool]$result.accessDenied
+                    columns = @(
+                        @{ key = 'name'; label = 'Application'; type = 'text' },
+                        @{ key = 'fileName'; label = 'Prefetch file'; type = 'text' },
+                        @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' },
+                        @{ key = 'lastRun'; label = 'Last run'; type = 'timestamp' },
+                        @{ key = 'created'; label = 'Created'; type = 'timestamp' }
+                    )
+                    records = $records
+                    total = $sourceRows.Count
+                    truncated = ($sourceRows.Count -gt $records.Count)
+                }
+            }
+        }
+    }
+    catch {
+        # Fleet receives a category-level failure only.  Do not export raw
+        # exception text because it can include paths or account names.
+        return (& $empty 'System Cleanup could not prepare the requested forensic records.')
+    }
+}
+
 function Get-ProcessIntelligence {
     try {
         $entries = @()

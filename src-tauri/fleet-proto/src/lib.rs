@@ -244,6 +244,7 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
     CommandMeta { catalog_id: "forensics.browser_traces.view", action_class: ActionClass::Safe, summary: "Read bounded browser-trace cleanup evidence", payload_schema: None },
     CommandMeta { catalog_id: "forensics.event_log_remnants.view", action_class: ActionClass::Safe, summary: "Read bounded event-log cleanup evidence", payload_schema: None },
     CommandMeta { catalog_id: "forensics.prefetch_remnants.view", action_class: ActionClass::Safe, summary: "Read bounded prefetch cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.dns_cache.view", action_class: ActionClass::Safe, summary: "Read bounded DNS-cache records from System Cleanup", payload_schema: None },
     CommandMeta {
         catalog_id: "velociraptor.collect.client_info",
         action_class: ActionClass::Safe,
@@ -2750,6 +2751,17 @@ mod tests {
             deduped.len(),
             "COMMAND_METADATA has a duplicate catalog_id"
         );
+    }
+
+    #[cfg(feature = "command-metadata")]
+    #[test]
+    fn dns_cache_forensics_view_is_safe_and_parameterless() {
+        let entry = COMMAND_METADATA
+            .iter()
+            .find(|entry| entry.catalog_id == "forensics.dns_cache.view")
+            .expect("DNS Cache forensic view must be catalogued");
+        assert_eq!(entry.action_class, ActionClass::Safe);
+        assert_eq!(entry.payload_schema, None);
     }
 
     #[cfg(feature = "command-metadata")]

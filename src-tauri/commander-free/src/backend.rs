@@ -1440,6 +1440,7 @@ fn get_required_frontend_module(command: &str) -> Option<&'static str> {
         "Get-ShellBags"
         | "Get-USBDeviceHistory"
         | "Get-DnsCacheEntries" | "Clear-DnsCache"
+        | "Get-FleetForensicProjection"
         | "Get-ExecutionCache"
         | "Get-ProcessIntelligence"
         | "Get-EventLogSummary"
@@ -1953,6 +1954,10 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Clear-Clipboard" => Some("privacy/cleanup"),
         "Get-USBDeviceHistory" => Some("privacy/cleanup"),
         "Get-DnsCacheEntries" => Some("privacy/cleanup"),
+        // Fixed, bounded Fleet table projection. Its PowerShell implementation
+        // only accepts the closed category set in cleanup.ps1; it is not a
+        // general remote file or trace reader.
+        "Get-FleetForensicProjection" => Some("privacy/cleanup"),
         "Get-ExecutionCache" => Some("privacy/cleanup"),
         "Disable-ClipboardHistory" => Some("privacy/cleanup"),
         "Enable-ClipboardHistory" => Some("privacy/cleanup"),
@@ -3707,6 +3712,59 @@ mod module_dependency_tests {
     #[test]
     fn explorer_context_shred_uses_the_local_secure_erase_module() {
         assert_eq!(get_module_for_command("Invoke-7Erase"), Some("core/utils"));
+    }
+}
+
+#[cfg(test)]
+mod fleet_forensic_projection_tests {
+    use super::*;
+
+    fn function_body(name: &str) -> &'static str {
+        let script = std::str::from_utf8(PRIVACY_CLEANUP).expect("cleanup module is UTF-8");
+        let start = script
+            .find(&format!("function {name} {{"))
+            .unwrap_or_else(|| panic!("{name} must remain in privacy/cleanup.ps1"));
+        let after_start = &script[start..];
+        let end = after_start.find("\nfunction ").unwrap_or(after_start.len());
+        &after_start[..end]
+    }
+
+    #[test]
+    fn fleet_forensic_projection_is_a_fixed_cleanup_command() {
+        assert_eq!(
+            get_module_for_command("Get-FleetForensicProjection"),
+            Some("privacy/cleanup")
+        );
+        assert_eq!(
+            get_required_frontend_module("Get-FleetForensicProjection"),
+            Some("cleanup")
+        );
+    }
+
+    #[test]
+    fn fleet_forensic_projection_keeps_a_bounded_safe_record_contract() {
+        let projection = function_body("Get-FleetForensicProjection");
+        for category in [
+            "dns_cache",
+            "browser_footprints",
+            "event_log_summary",
+            "prefetch",
+        ] {
+            assert!(
+                projection.contains(category),
+                "missing fixed category {category}"
+            );
+        }
+        assert!(projection.contains("$rowLimit = 200"));
+        assert!(projection.contains("Get-DnsCacheEntries"));
+        assert!(projection.contains("Get-BrowserFootprints"));
+        assert!(projection.contains("Get-EventLogSummary"));
+        assert!(projection.contains("Get-PrefetchFiles"));
+        assert!(projection.contains("dataLength"));
+        assert!(projection.contains("dataTruncated"));
+        assert!(!projection.contains("profilePath"));
+        assert!(!projection.contains("title ="));
+        assert!(!projection.contains("path ="));
     }
 }
 
