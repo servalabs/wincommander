@@ -817,12 +817,22 @@ function Get-FleetForensicProjection {
                     $ttl = 0
                     try { $dataLength = [int]$_.dataLength } catch {}
                     try { $ttl = [int]$_.ttl } catch {}
+                    $data = (& $sanitizeText $_.data)
+                    if ([string]::IsNullOrWhiteSpace($data)) { $data = 'Not recorded locally' }
+                    # Get-DnsCacheEntries exposes the display type as a blank
+                    # string on current Windows builds but retains its numeric
+                    # recordTypeRaw field. Preserve that collector fact rather
+                    # than letting one blank cell redact the whole Fleet column.
+                    $recordType = (& $sanitizeText $_.recordType 32)
+                    if ([string]::IsNullOrWhiteSpace($recordType)) {
+                        $recordType = "Code $([int]$_.recordTypeRaw)"
+                    }
                     @{
                         name = (& $sanitizeText $_.name)
                         dataLength = $dataLength
-                        'data' = (& $sanitizeText $_.data)
+                        'data' = $data
                         dataTruncated = ($rawData.Trim().Length -gt 256)
-                        recordType = (& $sanitizeText $_.recordType 32)
+                        recordType = $recordType
                         section = (& $sanitizeText $_.section 32)
                         status = (& $sanitizeText $_.status 64)
                         ttl = $ttl
@@ -1022,11 +1032,16 @@ function Get-FleetForensicProjection {
             }
 
             'wlan_profiles' {
-                $result = Get-WlanProfiles
+                # Fleet needs profile evidence, never Wi-Fi credentials.
+                $result = Get-WlanProfiles -IncludeSecrets:$false
                 if ($result.error) { return (& $empty 'System Cleanup could not read WLAN-profile summaries.') }
                 $sourceRows = @($result.profiles)
-                $records = @($sourceRows | ForEach-Object { @{ name = (& $sanitizeText $_.name 128); password = (& $sanitizeText $_.password 256) } })
-                $columns = @(@{ key = 'name'; label = 'Profile'; type = 'text'; sensitive = $true }, @{ key = 'password'; label = 'Password'; type = 'text'; sensitive = $true })
+                $records = @($sourceRows | ForEach-Object {
+                    $name = (& $sanitizeText $_.name 128)
+                    if ([string]::IsNullOrWhiteSpace($name)) { $name = 'Not recorded locally' }
+                    @{ name = $name }
+                })
+                $columns = @(@{ key = 'name'; label = 'Profile'; type = 'text'; sensitive = $true })
                 return (New-FleetForensicProjection -Category 'wlan_profiles' -Label 'WLAN profiles' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
@@ -1086,13 +1101,23 @@ function Get-FleetForensicProjection {
                 if ($result.error) { return (& $empty 'System Cleanup could not read RDP-history summaries.') }
                 $sourceRows = @($result.entries)
                 $records = @($sourceRows | ForEach-Object {
-                    @{ type = (& $sanitizeText $_.type 32); endpoint = (& $sanitizeText $_.host 256); identity = (& $sanitizeText $_.username 128); lastModified = (& $sanitizeText $_.lastModified 64) }
+                    $endpoint = (& $sanitizeText $_.host 256)
+                    if ([string]::IsNullOrWhiteSpace($endpoint)) { $endpoint = 'Not recorded locally' }
+                    $identity = (& $sanitizeText $_.username 128)
+                    if ([string]::IsNullOrWhiteSpace($identity)) { $identity = 'Not recorded locally' }
+                    $lastModified = (& $sanitizeText $_.lastModified 64)
+                    if ([string]::IsNullOrWhiteSpace($lastModified)) { $lastModified = 'Not recorded locally' }
+                    @{ type = (& $sanitizeText $_.type 32); endpoint = $endpoint; identity = $identity; lastModified = $lastModified }
                 })
                 $columns = @(
                     @{ key = 'type'; label = 'Type'; type = 'text' },
                     @{ key = 'endpoint'; label = 'Endpoint'; type = 'text'; sensitive = $true },
                     @{ key = 'identity'; label = 'Identity'; type = 'text'; sensitive = $true },
-                    @{ key = 'lastModified'; label = 'Last modified'; type = 'timestamp' }
+                    # Windows may not retain a timestamp for every RDP entry.
+                    # A text field faithfully carries either the local timestamp
+                    # string or the explicit unavailable marker without making
+                    # the entire column permanently redacted.
+                    @{ key = 'lastModified'; label = 'Last modified'; type = 'text' }
                 )
                 return (New-FleetForensicProjection -Category 'rdp_history' -Label 'RDP history' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
@@ -1945,17 +1970,24 @@ function Get-ShellBags {
 }
 
 function Get-WlanProfiles {
+    param(
+        # The local System Cleanup viewer can request its existing key detail,
+        # but the authenticated Fleet projection must never collect credentials.
+        [bool]$IncludeSecrets = $true
+    )
     try {
         $profiles = @()
         $netshOutput = netsh wlan show profiles
         $profileNames = $netshOutput | Select-String "All User Profile" | ForEach-Object { ($_.ToString().Split(':'))[1].Trim() }
         
         foreach ($name in $profileNames) {
-            $passOutput = netsh wlan show profile name="$name" key=clear
             $password = $null
-            $passLine = $passOutput | Select-String "Key Content"
-            if ($passLine) {
-                $password = ($passLine.ToString().Split(':'))[1].Trim()
+            if ($IncludeSecrets) {
+                $passOutput = netsh wlan show profile name="$name" key=clear
+                $passLine = $passOutput | Select-String "Key Content"
+                if ($passLine) {
+                    $password = ($passLine.ToString().Split(':'))[1].Trim()
+                }
             }
             
             $profiles += @{

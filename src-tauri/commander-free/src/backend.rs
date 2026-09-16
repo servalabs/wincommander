@@ -3783,6 +3783,13 @@ mod fleet_forensic_projection_tests {
         assert!(projection.contains("Get-PrefetchFiles"));
         assert!(projection.contains("dataLength"));
         assert!(projection.contains("dataTruncated"));
+        assert!(projection.contains("recordTypeRaw"));
+        assert!(projection.contains("Not recorded locally"));
+        assert!(projection.contains("Get-WlanProfiles -IncludeSecrets:$false"));
+        assert!(
+            !projection.contains("$result = Get-WlanProfiles\n"),
+            "Fleet must explicitly opt out of WLAN credential collection"
+        );
         assert!(projection.contains("[bool]$FullDetail = $true"));
         assert!(envelope.contains("detail_mode  = 'full'"));
         assert!(envelope.contains("$column.sensitive = $true"));
