@@ -3807,9 +3807,45 @@ mod fleet_forensic_projection_tests {
             );
         }
         assert!(
-            FLEET_FORENSIC_PROJECTION_REGISTRY.len() >= 80,
-            "the Fleet registry must not regress to a DNS-only catalogue"
+            FLEET_FORENSIC_PROJECTION_REGISTRY.len() == 81,
+            "the Fleet registry must list every currently supported read-only Cleanup inspection"
         );
+    }
+
+    #[test]
+    fn fleet_forensic_registry_matches_the_powershell_allowlist_and_local_collectors() {
+        let projection = function_body("Get-FleetForensicProjection");
+        let validate_set = projection
+            .split("[ValidateSet(")
+            .nth(1)
+            .and_then(|after_start| after_start.split(")]").next())
+            .expect("Fleet projection must have a closed PowerShell ValidateSet");
+
+        for category in FLEET_FORENSIC_PROJECTION_REGISTRY {
+            assert!(
+                validate_set.contains(&format!("'{}'", category.id)),
+                "{} must be accepted by the PowerShell allowlist",
+                category.id
+            );
+            assert!(
+                projection.contains(&format!("'{}' {{", category.id)),
+                "{} must invoke a fixed local Cleanup switch arm",
+                category.id
+            );
+            assert!(
+                projection.contains(category.collector),
+                "{} must call its local {} collector",
+                category.id,
+                category.collector
+            );
+        }
+
+        // The projection must never become a back door to a destructive
+        // Cleanup operation.  Clear/Delete/Erase commands remain in their
+        // separate, explicitly authorised desktop action path.
+        assert!(!projection.contains("Clear-"));
+        assert!(!projection.contains("Remove-"));
+        assert!(!projection.contains("Erase-"));
     }
 }
 
