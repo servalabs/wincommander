@@ -317,11 +317,16 @@ pub async fn fleet_connect(
 
 /// Query the running fleet agent's status (connected, deviceId, lastEnrollAt,
 /// lastError). Purely a status read — no side effects, no settings writes.
+///
+/// This intentionally is not a service-operation gate. The enrolled device's
+/// agent session is shared machine state, whereas the UI's app.fleet setting
+/// belongs to the signed-in Windows user. An administrator needs truthful
+/// read-only link state even when that user's settings contain no Fleet block.
+/// It exposes no check-in secret, signing key, or configuration mutation.
 /// When Pro is unreachable, falls back to a synthetic status that surfaces the
 /// specific transport error so the frontend never shows stale/empty state silently.
 #[tauri::command]
 pub async fn fleet_status() -> Result<serde_json::Value, String> {
-    crate::license::require_service_feature("fleet")?;
     match crate::sidecar::dispatch_paid_command("fleet_agent_status", serde_json::Value::Null).await
     {
         Ok(mut v) => {
@@ -846,11 +851,10 @@ pub async fn fleet_report_privacy_shield_status(
     detail: Option<String>,
     command_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    crate::license::require_service_feature("fleet")?;
-    let settings = crate::settings::read_settings()?;
-    if !settings.app.fleet.enabled {
-        return Err("Fleet is not enabled on this device.".to_string());
-    }
+    // This is a device-status receipt, not a per-user Fleet operation. The
+    // authenticated Pro agent owns delivery and device identity; a stale
+    // Windows-user settings cache must not hide a running local detector or
+    // leave a Fleet command applying forever.
     crate::sidecar::dispatch_paid_command(
         "fleet_agent_privacy_shield_status",
         serde_json::json!({
@@ -876,11 +880,9 @@ pub async fn fleet_report_privacy_shield_status(
 /// re-read.
 #[tauri::command]
 pub async fn fleet_sync_shield_state() -> Result<serde_json::Value, String> {
-    crate::license::require_service_feature("fleet")?;
-    let settings = crate::settings::read_settings()?;
-    if !settings.app.fleet.enabled {
-        return Ok(serde_json::Value::Null);
-    }
+    // The signed state comes from the machine-scoped Pro agent. Do not use a
+    // profile-local `app.fleet.enabled` cache as an authority check: a second
+    // Windows user can be Not Linked while the device agent is connected.
     let resp =
         crate::sidecar::dispatch_paid_command("fleet_agent_shield_state", serde_json::Value::Null)
             .await?;
@@ -973,6 +975,28 @@ fn report_fleet_shield_once(
     });
 }
 
+/// Local sessions have no command id, so retain only the current read-back.
+/// This permits `stopped → running_local_session → stopped` to reach Fleet
+/// while still suppressing the five-second supervisor poll between changes.
+fn report_fleet_shield_local_observation(
+    reported_for_command: &mut std::collections::BTreeSet<String>,
+    status: &'static str,
+) {
+    reconcile_fleet_shield_local_observation_keys(reported_for_command, status);
+    report_fleet_shield_once(reported_for_command, None, status);
+}
+
+fn reconcile_fleet_shield_local_observation_keys(
+    reported_for_command: &mut std::collections::BTreeSet<String>,
+    status: &str,
+) {
+    for prior in ["running_local_session", "stopped"] {
+        if prior != status {
+            reported_for_command.remove(&fleet_shield_report_key(None, prior));
+        }
+    }
+}
+
 fn fleet_shield_camera_issue(status: &serde_json::Value) -> Option<&'static str> {
     if status
         .get("cameraAvailable")
@@ -1050,15 +1074,15 @@ fn fleet_shield_start_params(
     ]);
     params.insert(
         "BlurGaze".to_string(),
-        (blur_enabled && shield.gaze_detection_enabled == Some(true)).to_string(),
+        (blur_enabled && shield.gaze_detection_enabled.unwrap_or(true)).to_string(),
     );
     params.insert(
         "BlurFaces".to_string(),
-        (blur_enabled && shield.anti_peeping_enabled == Some(true)).to_string(),
+        (blur_enabled && shield.anti_peeping_enabled.unwrap_or(true)).to_string(),
     );
     params.insert(
         "BlurPhone".to_string(),
-        (blur_enabled && shield.camera_hunter_enabled == Some(true)).to_string(),
+        (blur_enabled && shield.camera_hunter_enabled.unwrap_or(true)).to_string(),
     );
     Ok(params)
 }
@@ -1096,6 +1120,17 @@ async fn apply_fleet_privacy_shield_policy(
     let Some(state) =
         serde_json::from_value::<crate::settings::FleetShieldDesiredState>(state).ok()
     else {
+        // No Fleet Shield desired state does not mean the detector is stopped:
+        // an employee can have started it locally. Publish one fresh, bounded
+        // read-back so Fleet distinguishes a local session from a disconnected
+        // agent or a Fleet-managed session.
+        let local = privacy_shield_status(app).await?;
+        let status = if local.get("running").and_then(serde_json::Value::as_bool) == Some(true) {
+            "running_local_session"
+        } else {
+            "stopped"
+        };
+        report_fleet_shield_local_observation(reported_for_command, status);
         return Ok(());
     };
     let command_id = state.command_id.as_deref();
@@ -1460,6 +1495,51 @@ mod tests {
     }
 
     #[test]
+    fn native_fleet_supervisor_honours_blur_notify_when_tuning_has_not_arrived() {
+        let state = crate::settings::FleetShieldDesiredState {
+            enabled: true,
+            mode: "blur_notify".to_string(),
+            revision: 9,
+            updated_at: "2026-09-16T10:00:00Z".to_string(),
+            command_id: Some("command-9".to_string()),
+        };
+        let params = super::fleet_shield_start_params(
+            &state,
+            &crate::settings::PrivacyShieldSettings::default(),
+        )
+        .unwrap();
+        assert_eq!(params["BlurGaze"], "true");
+        assert_eq!(params["BlurFaces"], "true");
+        assert_eq!(params["BlurPhone"], "true");
+    }
+
+    #[test]
+    fn local_shield_readback_reports_both_edges_without_poll_spam() {
+        let mut reported = std::collections::BTreeSet::new();
+        reported.insert(":stopped".to_string());
+        super::reconcile_fleet_shield_local_observation_keys(&mut reported, "stopped");
+        assert_eq!(
+            reported,
+            std::collections::BTreeSet::from([":stopped".to_string()])
+        );
+        super::reconcile_fleet_shield_local_observation_keys(
+            &mut reported,
+            "running_local_session",
+        );
+        reported.insert(":running_local_session".to_string());
+        assert_eq!(
+            reported,
+            std::collections::BTreeSet::from([":running_local_session".to_string()])
+        );
+        super::reconcile_fleet_shield_local_observation_keys(&mut reported, "stopped");
+        reported.insert(":stopped".to_string());
+        assert_eq!(
+            reported,
+            std::collections::BTreeSet::from([":stopped".to_string()])
+        );
+    }
+
+    #[test]
     fn native_fleet_supervisor_requires_command_identity_after_revision_replay() {
         let state = crate::settings::FleetShieldDesiredState {
             enabled: true,
@@ -1491,14 +1571,36 @@ mod tests {
     }
 
     #[test]
-    fn every_fleet_entry_path_uses_the_explicit_service_gate() {
+    fn fleet_operations_use_the_explicit_service_gate_but_status_is_read_only() {
         let source = include_str!("fleet_agent.rs");
         let service_gate = ["require_service_feature(\"", "fleet\")"].concat();
         let obsolete_gate = ["require", "_paid(\"fleet agent\")"].concat();
         assert_eq!(
             source.matches(&service_gate).count(),
-            11,
-            "connect, status, policy apply, posture, privacy-shield status, local-alert and clipboard-event reporting, unenroll request/status, and disconnect must all require Fleet"
+            8,
+            "Fleet mutations require the service gate; machine-scoped status, Shield desired-state reads, and Shield read-back receipts deliberately do not"
+        );
+        let status_start = source
+            .find("pub async fn fleet_status")
+            .expect("fleet_status command");
+        let status_end = source[status_start..]
+            .find("\n}\n")
+            .map(|offset| status_start + offset)
+            .expect("fleet_status end");
+        assert!(
+            !source[status_start..status_end].contains(&service_gate),
+            "the link-status bridge must remain readable without a per-user Fleet setting"
+        );
+        let shield_status_start = source
+            .find("pub async fn fleet_report_privacy_shield_status")
+            .expect("privacy-shield status bridge");
+        let shield_status_end = source[shield_status_start..]
+            .find("\n}\n")
+            .map(|offset| shield_status_start + offset)
+            .expect("privacy-shield status bridge end");
+        assert!(
+            !source[shield_status_start..shield_status_end].contains(&service_gate),
+            "Shield device read-back must not be blocked by a stale per-user Fleet cache"
         );
         assert!(!source.contains(&obsolete_gate));
     }

@@ -5438,23 +5438,42 @@ fn schedule_privacy_shield_reader_attach(app: AppHandle) {
     });
 }
 
-/// Map the Privacy Shield Python detector's free-text `reason` (e.g.
-/// "PHONE DETECTED", "MULTIPLE FACES & LOOK AWAY") to the flow-core
-/// `GazeKind` string `flow_bridge::parse_gaze_kind` expects. Priority
-/// mirrors the detector's own combine-and-report order (device > multi-face
-/// > gaze). A no-face reading is absence/unknown, not a security event, so it
-/// deliberately maps to no event.
-fn gaze_kind_from_reason(reason: &str) -> Option<&'static str> {
+/// Map a detector transition into the closed event classes that can leave the
+/// device. A combined detector transition retains every configured condition
+/// instead of silently dropping gaze when a phone is also present.
+fn privacy_shield_event_classes_from_reason(reason: &str) -> Vec<&'static str> {
     let upper = reason.to_ascii_uppercase();
+    let mut classes = Vec::with_capacity(3);
     if upper.contains("PHONE DETECTED") {
-        Some("secondary_device")
-    } else if upper.contains("MULTIPLE FACES") {
-        Some("multiple_faces")
-    } else if upper.contains("NO FACE") {
-        None
-    } else {
-        Some("look_away")
+        classes.push("phone_detected");
     }
+    if upper.contains("PRESENCE LOST") || upper.contains("NO FACE") {
+        classes.push("presence_lost");
+    }
+    if upper.contains("LOOK AWAY") {
+        classes.push("look_away");
+    }
+    classes
+}
+
+/// Flow automations predate Fleet's alert vocabulary. Keep their established
+/// local event names while the Fleet bridge uses its separately bounded names.
+fn privacy_shield_flow_kinds_from_reason(reason: &str) -> Vec<&'static str> {
+    let upper = reason.to_ascii_uppercase();
+    let mut kinds = Vec::with_capacity(4);
+    if upper.contains("PHONE DETECTED") {
+        kinds.push("secondary_device");
+    }
+    if upper.contains("MULTIPLE FACES") {
+        kinds.push("multiple_faces");
+    }
+    if upper.contains("PRESENCE LOST") || upper.contains("NO FACE") {
+        kinds.push("no_face");
+    }
+    if upper.contains("LOOK AWAY") {
+        kinds.push("look_away");
+    }
+    kinds
 }
 
 /// Monotonic generation for shield readers. Each Start-PrivacyShield spawns a
@@ -5493,6 +5512,7 @@ enum FleetPrivacyAlertGate {
     FleetDisconnected,
     NoFleetManagedSession,
     UnknownEventClass,
+    UnknownMode,
     RateLimited,
 }
 
@@ -5505,6 +5525,7 @@ impl FleetPrivacyAlertGate {
                 "the current Privacy Shield session was started locally, not by Fleet"
             }
             Self::UnknownEventClass => "the detector emitted an unsupported aggregate class",
+            Self::UnknownMode => "Fleet has not confirmed a valid Privacy Shield mode",
             Self::RateLimited => "the signed Fleet notification limit is reached",
         }
     }
@@ -5534,7 +5555,7 @@ fn fleet_privacy_event_gate(
     // limit govern the aggregate notification channel.
     if matches!(
         event_class,
-        "look_away" | "multiple_faces" | "secondary_device"
+        "look_away" | "presence_lost" | "phone_detected"
     ) {
         FleetPrivacyAlertGate::Allowed
     } else {
@@ -5542,12 +5563,14 @@ fn fleet_privacy_event_gate(
     }
 }
 
-async fn fleet_privacy_alert_gate(event_class: &str) -> FleetPrivacyAlertGate {
+async fn fleet_privacy_alert_mode(
+    event_class: &str,
+) -> Result<&'static str, FleetPrivacyAlertGate> {
     let Ok(settings) = crate::settings::read_settings() else {
         // A settings read failure must not affect the local detector. Fleet
         // reporting fails closed because an admin has not confirmed that this
         // particular detector class is enabled for Fleet notification.
-        return FleetPrivacyAlertGate::FleetDisconnected;
+        return Err(FleetPrivacyAlertGate::FleetDisconnected);
     };
     // First-sync catch-up: a device can be enrolled (`fleet.enabled == true`)
     // moments before its first `fleet_apply_pending_epoch` tick lands, so
@@ -5565,7 +5588,7 @@ async fn fleet_privacy_alert_gate(event_class: &str) -> FleetPrivacyAlertGate {
         let _ = crate::fleet_agent::fleet_apply_pending_epoch_typed().await;
         match crate::settings::read_settings() {
             Ok(s) => s,
-            Err(_) => return FleetPrivacyAlertGate::FleetDisconnected,
+            Err(_) => return Err(FleetPrivacyAlertGate::FleetDisconnected),
         }
     } else {
         settings
@@ -5578,18 +5601,20 @@ async fn fleet_privacy_alert_gate(event_class: &str) -> FleetPrivacyAlertGate {
         event_class,
     );
     if gate != FleetPrivacyAlertGate::Allowed {
-        return gate;
+        return Err(gate);
     }
+    let mode =
+        fleet_privacy_alert_mode_from_state(settings.app.fleet.shield_desired_state.as_ref())?;
     let limit = shield.fleet_notification_limit.unwrap_or(0).min(1000);
     if limit == 0 {
-        return FleetPrivacyAlertGate::Allowed;
+        return Ok(mode);
     }
     let window_secs = shield
         .fleet_notification_window_seconds
         .unwrap_or(60)
         .clamp(1, 86_400);
     let Ok(mut rate) = fleet_privacy_alert_rate().lock() else {
-        return FleetPrivacyAlertGate::Allowed;
+        return Ok(mode);
     };
     let config = (limit, window_secs);
     if rate.config != Some(config) {
@@ -5599,16 +5624,30 @@ async fn fleet_privacy_alert_gate(event_class: &str) -> FleetPrivacyAlertGate {
     let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(window_secs as u64);
     rate.sent.retain(|at| *at > cutoff);
     if rate.sent.len() >= limit as usize {
-        return FleetPrivacyAlertGate::RateLimited;
+        return Err(FleetPrivacyAlertGate::RateLimited);
     }
     rate.sent.push(std::time::Instant::now());
-    FleetPrivacyAlertGate::Allowed
+    Ok(mode)
+}
+
+fn fleet_privacy_alert_mode_from_state(
+    state: Option<&crate::settings::FleetShieldDesiredState>,
+) -> Result<&'static str, FleetPrivacyAlertGate> {
+    match state.map(|state| state.mode.as_str()) {
+        Some("notify_only") => Ok("notify_only"),
+        Some("blur_notify") => Ok("blur_notify"),
+        _ => Err(FleetPrivacyAlertGate::UnknownMode),
+    }
 }
 
 #[cfg(test)]
 mod fleet_privacy_alert_tests {
-    use super::{fleet_privacy_event_gate, FleetPrivacyAlertGate};
-    use crate::settings::PrivacyShieldSettings;
+    use super::{
+        fleet_privacy_alert_mode_from_state, fleet_privacy_event_gate,
+        privacy_shield_event_classes_from_reason, privacy_shield_flow_kinds_from_reason,
+        FleetPrivacyAlertGate,
+    };
+    use crate::settings::{FleetShieldDesiredState, PrivacyShieldSettings};
 
     fn enabled_policy() -> PrivacyShieldSettings {
         PrivacyShieldSettings {
@@ -5629,13 +5668,13 @@ mod fleet_privacy_alert_tests {
             FleetPrivacyAlertGate::Allowed
         );
         assert_eq!(
-            fleet_privacy_event_gate(true, false, &policy, "multiple_faces",),
+            fleet_privacy_event_gate(true, false, &policy, "presence_lost",),
             FleetPrivacyAlertGate::Allowed
         );
 
         policy.anti_peeping_enabled = Some(false);
         assert_eq!(
-            fleet_privacy_event_gate(true, false, &policy, "multiple_faces",),
+            fleet_privacy_event_gate(true, false, &policy, "presence_lost",),
             FleetPrivacyAlertGate::Allowed
         );
         assert_eq!(
@@ -5660,7 +5699,7 @@ mod fleet_privacy_alert_tests {
             FleetPrivacyAlertGate::UnknownEventClass
         );
         assert_eq!(
-            fleet_privacy_event_gate(true, true, &policy, "no_face"),
+            fleet_privacy_event_gate(true, true, &policy, "multiple_faces"),
             FleetPrivacyAlertGate::UnknownEventClass
         );
     }
@@ -5671,6 +5710,42 @@ mod fleet_privacy_alert_tests {
         assert_eq!(
             fleet_privacy_event_gate(true, true, &policy, "look_away"),
             FleetPrivacyAlertGate::Allowed
+        );
+    }
+
+    #[test]
+    fn detector_transitions_use_only_the_bounded_fleet_event_vocabulary() {
+        assert_eq!(
+            privacy_shield_event_classes_from_reason("PHONE DETECTED & LOOK AWAY"),
+            vec!["phone_detected", "look_away"]
+        );
+        assert_eq!(
+            privacy_shield_event_classes_from_reason("PRESENCE LOST"),
+            vec!["presence_lost"]
+        );
+        assert!(privacy_shield_event_classes_from_reason("camera warmup").is_empty());
+        assert_eq!(
+            privacy_shield_flow_kinds_from_reason("MULTIPLE FACES & PHONE DETECTED"),
+            vec!["secondary_device", "multiple_faces"]
+        );
+    }
+
+    #[test]
+    fn fleet_alert_metadata_uses_only_the_server_selected_mode() {
+        let state = FleetShieldDesiredState {
+            enabled: true,
+            mode: "notify_only".to_string(),
+            revision: 1,
+            updated_at: "2026-09-16T00:00:00Z".to_string(),
+            command_id: Some("00000000-0000-0000-0000-000000000001".to_string()),
+        };
+        assert_eq!(
+            fleet_privacy_alert_mode_from_state(Some(&state)),
+            Ok("notify_only")
+        );
+        assert_eq!(
+            fleet_privacy_alert_mode_from_state(None),
+            Err(FleetPrivacyAlertGate::UnknownMode)
         );
     }
 }
@@ -5700,6 +5775,8 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                 .unwrap_or(0);
         }
         let mut locally_looking_away = false;
+        let mut active_fleet_event_classes = std::collections::BTreeSet::new();
+        let mut fleet_episode_id: Option<String> = None;
         crate::flow_bridge::flow_trace(format!(
             "shield-reader: SPAWNED gen={} pid={} seed_offset={} sidecar={}",
             my_gen,
@@ -5756,22 +5833,29 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                 // reached the flow engine (GazeTrigger flows never
                                 // fired) AND the whole reader loop stalled (the "log
                                 // gets stuck when Privacy Shield is on" symptom).
-                                let Some(gaze_kind) = gaze_kind_from_reason(reason) else {
+                                let event_classes =
+                                    privacy_shield_event_classes_from_reason(reason);
+                                if event_classes.is_empty() {
                                     crate::flow_bridge::flow_trace(
-                                        "shield-reader: no-face reading ignored as presence unknown",
+                                        "shield-reader: no supported Privacy Shield event class",
                                     );
                                     continue;
-                                };
+                                }
                                 let first_look_away_in_episode = !locally_looking_away;
                                 locally_looking_away = true;
+                                let episode_id = fleet_episode_id
+                                    .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                                    .clone();
                                 crate::flow_bridge::flow_trace(format!(
-                                    "shield-reader: look_away read (reason='{}') → emit privacy-shield-event kind='{}'",
-                                    reason, gaze_kind
+                                    "shield-reader: look_away read (reason='{}') → emit {} bounded event class(es)",
+                                    reason, event_classes.len()
                                 ));
-                                let _ = app.emit(
-                                    "privacy-shield-event",
-                                    serde_json::json!({ "kind": gaze_kind }),
-                                );
+                                for flow_kind in privacy_shield_flow_kinds_from_reason(reason) {
+                                    let _ = app.emit(
+                                        "privacy-shield-event",
+                                        serde_json::json!({ "kind": flow_kind }),
+                                    );
+                                }
                                 let _ = app.emit(
                                     "privacy-shield-look-state",
                                     serde_json::json!({ "lookingAway": true }),
@@ -5823,30 +5907,45 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                 // Fleet receives only the detected class. Keep this
                                 // best-effort work off the reader loop: it must never
                                 // delay the protected user's local notification.
-                                tauri::async_runtime::spawn(async move {
-                                    let fleet_gate = fleet_privacy_alert_gate(gaze_kind).await;
-                                    if fleet_gate == FleetPrivacyAlertGate::Allowed {
-                                        if let Err(error) = crate::sidecar::dispatch_paid_command(
-                                            "record_privacy_shield_event",
-                                            serde_json::json!({ "class": gaze_kind }),
-                                        )
-                                        .await
-                                        {
-                                            crate::flow_bridge::flow_trace(format!(
+                                for event_class in event_classes {
+                                    if !active_fleet_event_classes.insert(event_class) {
+                                        continue;
+                                    }
+                                    let episode_id = episode_id.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        match fleet_privacy_alert_mode(event_class).await {
+                                            Ok(mode) => {
+                                                if let Err(error) =
+                                                    crate::sidecar::dispatch_paid_command(
+                                                        "record_privacy_shield_event",
+                                                        serde_json::json!({
+                                                            "class": event_class,
+                                                            "episodeId": episode_id,
+                                                            "mode": mode,
+                                                        }),
+                                                    )
+                                                    .await
+                                                {
+                                                    crate::flow_bridge::flow_trace(format!(
                                                 "shield-reader: Fleet attention event not queued: {}",
                                                 error
                                             ));
-                                        }
-                                    } else {
-                                        crate::flow_bridge::flow_trace(format!(
+                                                }
+                                            }
+                                            Err(fleet_gate) => {
+                                                crate::flow_bridge::flow_trace(format!(
                                             "shield-reader: Fleet attention event not queued: {}",
                                             fleet_gate.reason(),
                                         ));
-                                    }
-                                });
+                                            }
+                                        }
+                                    });
+                                }
                             }
                             Some("look_back") => {
                                 locally_looking_away = false;
+                                active_fleet_event_classes.clear();
+                                fleet_episode_id = None;
                                 crate::flow_bridge::flow_trace("shield-reader: look_back");
                                 let _ = app.emit(
                                     "privacy-shield-look-state",

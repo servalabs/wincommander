@@ -754,11 +754,11 @@ class ShieldWorker(QThread):
                 device_triggered = False
                 multi_face_triggered = False
                 gaze_triggered = False
-                # A camera frame without landmarks is absence/unknown, not a
-                # threat.  It never creates a Shield event, alert, or blur.
-                # The debounced state below only prevents a one-frame dropout
-                # from clearing an already-alert-worthy condition.
+                # A sustained missing face is a distinct presence-lost event.
+                # It is debounced and recovered independently, so a camera
+                # dropout cannot create an alert storm.
                 presence_unknown = False
+                presence_lost_triggered = False
 
                 # 1. Check Phone/Object - require buffer_frames consecutive detections
                 if self.check_phone and self.obj_detector:
@@ -784,12 +784,11 @@ class ShieldWorker(QThread):
                         self._face_recovery_streak = 0
                         if self.check_gaze:
                             # Use the configured detector buffer for absence
-                            # and recovery.  Absence is intentionally not an
-                            # alert-worthy state: it is only held so a lone
-                            # face frame cannot clear a real threat episode.
+                            # and recovery. A sustained absence is alert-worthy
+                            # but one missing frame is not.
                             if self._no_face_detected_streak >= self.buffer_frames:
                                 self._presence_loss_active = True
-                            presence_unknown = self._presence_loss_active
+                            presence_lost_triggered = self._presence_loss_active
                     else:
                         self._no_face_detected_streak = 0
                         if self._presence_loss_active:
@@ -815,10 +814,9 @@ class ShieldWorker(QThread):
                             if not self._check_gaze(landmarks[0]):
                                 gaze_triggered = True
 
-                # Combine only explicit, configured threats.  "No face" is
-                # absence/unknown and must not be converted into LOOK AWAY,
-                # a local notification, a Fleet event, or a blur.
-                if device_triggered or multi_face_triggered or gaze_triggered:
+                # Combine only explicit, configured threats. Presence loss is
+                # independent of gaze and uses the same explicit blur flag.
+                if device_triggered or multi_face_triggered or gaze_triggered or presence_lost_triggered:
                     is_clear = False
                     parts = []
                     if device_triggered:
@@ -827,6 +825,8 @@ class ShieldWorker(QThread):
                         parts.append("MULTIPLE FACES")
                     if gaze_triggered:
                         parts.append("LOOK AWAY")
+                    if presence_lost_triggered:
+                        parts.append("PRESENCE LOST")
                     reason = " & ".join(parts)
 
             except Exception as e:
@@ -849,7 +849,7 @@ class ShieldWorker(QThread):
                 self._attentive_ms = 0.0
             
             # Transition Logic
-            if presence_unknown and not (device_triggered or multi_face_triggered or gaze_triggered):
+            if presence_unknown and not (device_triggered or multi_face_triggered or gaze_triggered or presence_lost_triggered):
                 # Preserve a genuine alert state through a short unknown
                 # camera interval, but never emit/blur solely for absence.
                 pass
@@ -1081,7 +1081,7 @@ class ShieldApp(QObject):
         # not satisfy a blur condition; otherwise every successful camera
         # startup immediately blacks out the screen.
         should_blur = (not is_clear) and (
-            ((("LOOK AWAY" in reason) or ("NO FACE" in reason)) and self.args.blur_gaze)
+            ((("LOOK AWAY" in reason) or ("PRESENCE LOST" in reason)) and self.args.blur_gaze)
             or (("MULTIPLE FACES" in reason) and self.args.blur_faces)
             or (("PHONE DETECTED" in reason) and self.args.blur_phone)
         )
