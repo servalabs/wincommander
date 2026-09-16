@@ -10,13 +10,9 @@ import { Switch } from "@/components/ui/switch";
 import { Icon } from "@/components/ui/icon";
 import { getSettingsOnce } from "@/hooks/useSettings";
 import { useLicenseQuery } from "@/hooks/queries/useLicenseQuery";
+import { fleetLinkLabel, fleetLinkState, type FleetLinkStatus } from "./fleetLinkPresentation";
 
-interface FleetStatus {
-  connected: boolean;
-  deviceId: string;
-  serverUrl: string;
-  lastEnrollAt: string | null;
-  lastError: string | null;
+interface FleetStatus extends FleetLinkStatus {
   // True while Pro's check-in loop is alive and self-healing (connected or
   // mid a transient-failure retry); false once it has permanently stopped
   // (never started, disconnected, or a terminal rejection — e.g. this device
@@ -71,9 +67,9 @@ function isUnenrollApproved(result: UnenrollResult) {
 
 export default function FleetConnectView() {
   const { data: license, isLoading: licenseLoading } = useLicenseQuery();
-  // Status polling is not an access request. Limit it to active Fleet service
-  // licences so merely opening this panel does not repeatedly invoke a
-  // service-gated backend command for ordinary Pro/free users.
+  // Status polling is read-only. The device-owned agent status is stored in
+  // the shared service context, so it must not be hidden merely because this
+  // Windows user's settings do not contain app.fleet.
   const fleetEntitled = license?.valid === true &&
     (license.active_service_features ?? license.features ?? []).includes("fleet");
   const [serverUrl, setServerUrl] = useState("");
@@ -137,10 +133,6 @@ export default function FleetConnectView() {
   }
 
   function doPollStatus() {
-    if (!fleetEntitled) {
-      setStatusChecked(true);
-      return;
-    }
     invoke<FleetStatus>("fleet_status")
       .then((s) => {
         setStatus(s);
@@ -187,10 +179,7 @@ export default function FleetConnectView() {
 
   // Steady-state poll on mount — shows status if already enrolled.
   useEffect(() => {
-    if (licenseLoading || !fleetEntitled) {
-      setStatusChecked(!licenseLoading);
-      return;
-    }
+    if (licenseLoading) return;
     startSteadyPoll();
     return () => { stopPoll(); stopUnenrollPoll(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -331,7 +320,8 @@ export default function FleetConnectView() {
     );
   }
 
-  const isConnected = status?.connected ?? false;
+  const linkState = fleetLinkState(status);
+  const isConnected = linkState === "linked" || linkState === "pending";
   // Surface any Pro-agent error whether connected or not.
   const agentError = status?.lastError ?? null;
   const isRetrying = status?.retrying ?? false;
@@ -339,7 +329,7 @@ export default function FleetConnectView() {
   // yet — the server withholds all policy/commands until they do. Distinct
   // from `unenrollInfo` (a LEAVE request awaiting approval); this is a JOIN
   // request awaiting approval.
-  const isAwaitingApproval = isConnected && (status?.pendingApproval ?? false);
+  const isAwaitingApproval = linkState === "pending";
   // This device is persisted as enrolled but the live poll hasn't reported
   // connected=true — Pro (a short-lived sidecar) most likely restarted and is
   // re-enrolling itself in the background (env-seeded auto-resume), OR the
@@ -348,14 +338,16 @@ export default function FleetConnectView() {
   // Connect click. Requires `isRetrying` — Pro's loop must actually be alive
   // and self-healing, otherwise this would also (wrongly) read true for a
   // device permanently removed from the fleet, see `isRemoved` below.
-  const isReconnecting = wasEnrolled && !isConnected && !enrolling && isRetrying;
+  const isReconnecting = linkState === "reconnecting" || (wasEnrolled && !isConnected && !enrolling && isRetrying);
   // Terminal: this device WAS enrolled but Pro's check-in loop has
   // permanently stopped (retrying=false) with an error — removed/unenrolled
   // server-side (401/403) or a permanent enroll failure. Unlike
   // `isReconnecting`, nothing is happening in the background anymore; the
   // "stays enrolled while it retries" copy would be false here, so this
   // falls through to the connect form (prefilled) with the real reason shown.
-  const isRemoved = wasEnrolled && !isConnected && !enrolling && !isRetrying && !!agentError;
+  const isRemoved = linkState === "error" || (wasEnrolled && !isConnected && !enrolling && !isRetrying && !!agentError);
+  const isOffline = linkState === "offline";
+  const hasAuthoritativeDeviceLink = linkState !== "not_linked";
 
   return (
     <div className="fleet-connect-card">
@@ -374,7 +366,7 @@ export default function FleetConnectView() {
           </span>
         ) : isConnected ? (
           <span className="fleet-connect-badge fleet-connect-badge--ok">
-            <span className="fleet-dot is-online" /> Enrolled
+            <span className="fleet-dot is-online" /> {fleetLinkLabel(linkState)}
           </span>
         ) : enrolling ? (
           <span className="fleet-connect-badge fleet-connect-badge--pending">
@@ -386,7 +378,11 @@ export default function FleetConnectView() {
           </span>
         ) : isRemoved ? (
           <span className="fleet-connect-badge fleet-connect-badge--off">
-            <span className="fleet-dot is-offline" /> Removed
+            <span className="fleet-dot is-offline" /> {fleetLinkLabel(linkState)}
+          </span>
+        ) : isOffline ? (
+          <span className="fleet-connect-badge fleet-connect-badge--off">
+            <span className="fleet-dot is-offline" /> {fleetLinkLabel(linkState)}
           </span>
         ) : (
           <span className="fleet-connect-badge fleet-connect-badge--off">
@@ -437,11 +433,13 @@ export default function FleetConnectView() {
               <Icon icon="warning-sign" size={13} intent="danger" /> {error}
             </p>
           )}
-          <Button variant="outline" size="sm" disabled={busy} onClick={disconnect}>
-            {busy
-              ? (unenrollInfo ? "Checking…" : "Requesting…")
-              : unenrollInfo ? "Refresh status" : "Request to leave"}
-          </Button>
+          {fleetEntitled ? (
+            <Button variant="outline" size="sm" disabled={busy} onClick={disconnect}>
+              {busy
+                ? (unenrollInfo ? "Checking…" : "Requesting…")
+                : unenrollInfo ? "Refresh status" : "Request to leave"}
+            </Button>
+          ) : <p className="fleet-connect-enrolling">This is the device agent’s read-only link status.</p>}
         </div>
       ) : isReconnecting ? (
         <div className="fleet-connect-status">
@@ -463,9 +461,21 @@ export default function FleetConnectView() {
               <Icon icon="warning-sign" size={13} intent="danger" /> {agentError}
             </p>
           )}
-          <Button variant="outline" size="sm" disabled={busy} onClick={disconnect}>
+          {fleetEntitled && <Button variant="outline" size="sm" disabled={busy} onClick={disconnect}>
             {busy ? "Requesting…" : "Request to leave"}
-          </Button>
+          </Button>}
+        </div>
+      ) : hasAuthoritativeDeviceLink && status ? (
+        <div className="fleet-connect-status">
+          <dl className="fleet-connect-meta">
+            <div className="fleet-meta"><dt>Device ID</dt><dd className="mono">{status.deviceId || "—"}</dd></div>
+            <div className="fleet-meta"><dt>Server</dt><dd className="mono">{status.serverUrl || "—"}</dd></div>
+          </dl>
+          <p className="fleet-connect-enrolling">
+            <Icon icon="offline" size={13} /> This device is known to Fleet but is not currently checking in.
+          </p>
+          {agentError && <p className="fleet-connect-error" role="alert"><Icon icon="warning-sign" size={13} intent="danger" /> {agentError}</p>}
+          {!fleetEntitled && <p className="fleet-connect-enrolling">This is the device agent’s read-only link status.</p>}
         </div>
       ) : (
         <div className="fleet-connect-form">

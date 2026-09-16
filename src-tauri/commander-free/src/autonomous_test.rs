@@ -241,10 +241,22 @@ fn fail(code: &str, message: &str) -> i32 {
 }
 
 fn print_json(value: serde_json::Value) {
-    println!(
-        "{}",
-        serde_json::to_string(&value).unwrap_or_else(|_| "{\"ok\":false}".into())
-    );
+    let serialized = serde_json::to_string(&value).unwrap_or_else(|_| "{\"ok\":false}".into());
+    // A Windows-subsystem debug client can run from an interactive scheduled
+    // task with no inherited console. Keep the lab receipt inside the
+    // caller's disposable LocalAppData root so the orchestrator has a bounded
+    // result even then; never use a caller-supplied output path.
+    if let Some(path) = std::env::var_os("LOCALAPPDATA").map(|root| {
+        std::path::PathBuf::from(root)
+            .join("WinCommander")
+            .join("fleet-lab-result.json")
+    }) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, &serialized);
+    }
+    println!("{serialized}");
 }
 
 #[cfg(test)]

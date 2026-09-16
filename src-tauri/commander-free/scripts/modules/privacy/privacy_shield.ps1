@@ -103,17 +103,40 @@ function Get-PrivacyShieldCameraAvailability {
             }
         } catch {}
         $blockedByPolicy = $policyBlockers.Count -gt 0
+        # This is deliberately a closed, content-free vocabulary.  The Fleet
+        # path may use it for operator guidance, but must never receive camera
+        # names, registry values, frames, or application details.
+        $cameraStatus = if ($policyBlockers -match 'App Privacy') {
+            'app_camera_permission_denied'
+        } elseif ($blockedByPolicy) {
+            'windows_camera_policy_denied'
+        } elseif ($names.Count -eq 0) {
+            'hardware_unavailable'
+        } else {
+            'available'
+        }
+        $policyScope = if ($policyBlockers -match 'Your user') {
+            'user'
+        } elseif ($blockedByPolicy) {
+            'device'
+        } else {
+            $null
+        }
         @{
             available = ($names.Count -gt 0) -and -not $blockedByPolicy
             devices   = $names
             message   = if ($blockedByPolicy) { "Camera is blocked by Windows policy: " + ($policyBlockers -join ' ') } elseif ($names.Count -gt 0) { "Camera available." } else { "No usable camera detected." }
             blockedByPolicy = $blockedByPolicy
             policyBlockers = @($policyBlockers)
+            cameraStatus = $cameraStatus
+            cameraPolicyScope = $policyScope
             isWindowsServer = $isWindowsServer
         }
     }
     catch {
-        @{ available = $false; devices = @(); message = $_.Exception.Message; isWindowsServer = $false }
+        # Registry/WMI probe failures are not evidence that the hardware is
+        # absent.  Keep the diagnosis honest and do not echo exception text.
+        @{ available = $false; devices = @(); message = 'Camera status could not be read.'; cameraStatus = 'unknown'; cameraPolicyScope = $null; isWindowsServer = $false }
     }
 }
 
@@ -144,6 +167,7 @@ function Get-PrivacyShieldStatus {
         $shieldProcessMarker = "--wc-privacy-shield"
         $running = $false
         $processId = $null
+        $activeMode = $null
         $camera = Get-PrivacyShieldCameraAvailability
 
         # Get-CimInstance works reliably on both PowerShell 5.1 (Windows
@@ -161,6 +185,14 @@ function Get-PrivacyShieldStatus {
             if ($proc.CommandLine -like "*$shieldProcessMarker*") {
                 $running = $true
                 $processId = $proc.ProcessId
+                # The process arguments are the detector's applied state.
+                # Do not infer mode from a delayed settings sync: that made a
+                # no-blur Notify only process appear as Blur + Notify locally.
+                $activeMode = if ($proc.CommandLine -match '(?:^|\s)--blur-(?:gaze|faces|phone)(?:\s|$)') {
+                    'blur_notify'
+                } else {
+                    'notify_only'
+                }
                 break
             }
         }
@@ -173,6 +205,8 @@ function Get-PrivacyShieldStatus {
             if ($markerPid) {
                 $running = $true
                 $processId = $markerPid
+                # A protected/elevated process can hide CommandLine. Its mode
+                # is intentionally unknown rather than guessed from cache.
             }
         }
 
@@ -186,16 +220,50 @@ function Get-PrivacyShieldStatus {
         @{
             running         = $running
             processId       = $processId
+            activeMode      = $activeMode
             cameraAvailable = [bool]$camera.available
             cameraDevices   = @($camera.devices)
             cameraMessage   = $camera.message
             cameraPolicyBlockers = @($camera.policyBlockers)
+            cameraStatus = $camera.cameraStatus
+            cameraPolicyScope = $camera.cameraPolicyScope
+            shieldLifecycle = if ($running) { 'running' } else { 'stopped' }
             isWindowsServer = [bool]$camera.isWindowsServer
         }
     }
     catch {
-        @{ error = $true; message = $_.Exception.Message }
+        # A status-read failure is different from a stopped shield.  The
+        # console must not show an invented lifecycle or hardware diagnosis.
+        @{ error = $true; message = 'Privacy Shield status could not be read.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown' }
     }
+}
+
+function Get-PrivacyShieldStartFailure {
+    param([string]$LogTail)
+
+    # Do not return the log tail: it can contain implementation-specific
+    # details.  These short messages and codes are safe for the local UI and
+    # Fleet receipt, while keeping a camera busy distinct from missing
+    # hardware or a policy denial.
+    if ($LogTail -imatch 'device or resource busy|camera.*(?:already|currently).*in use|camera.*busy') {
+        return @{ code = 'camera_busy'; message = 'Camera is currently being used by another application.' }
+    }
+    if ($LogTail -imatch 'black frames|camera feed unavailable') {
+        return @{ code = 'camera_feed_unavailable'; message = 'Camera feed is black - open its privacy shutter or close another camera app.' }
+    }
+    if ($LogTail -imatch 'no camera|webcam|videocapture|camera not found|camera timed out') {
+        return @{ code = 'hardware_unavailable'; message = 'No usable camera detected for Privacy Shield.' }
+    }
+    if ($LogTail -imatch 'missing python dependency|importerror|module not found') {
+        return @{ code = 'runtime_dependency_missing'; message = 'Privacy Shield AI runtime is unavailable.' }
+    }
+    if ($LogTail -imatch 'model preparation|failed to download|model download') {
+        return @{ code = 'model_download_failed'; message = 'Privacy Shield model preparation failed.' }
+    }
+    if ($LogTail -imatch 'detector init|flatbuffer|not a valid') {
+        return @{ code = 'model_invalid'; message = 'Privacy Shield model could not be loaded.' }
+    }
+    return @{ code = 'shield_start_failed'; message = 'Privacy Shield could not start.' }
 }
 
 function Start-PrivacyShield {
@@ -224,7 +292,7 @@ function Start-PrivacyShield {
     try {
         $status = Get-PrivacyShieldStatus
         if ($status.running) {
-            return @{ error = $true; message = "Shield is already running." }
+            return @{ error = $true; message = "Shield is already running."; cameraStatus = $status.cameraStatus; shieldLifecycle = 'running'; diagnosticCode = 'already_running' }
         }
         if ($status.cameraAvailable -ne $true) {
             return @{
@@ -232,12 +300,16 @@ function Start-PrivacyShield {
                 message = if ($status.cameraMessage) { $status.cameraMessage } else { "No camera detected - Privacy Shield requires a webcam." }
                 cameraAvailable = $false
                 cameraDevices = @()
+                cameraStatus = if ($status.cameraStatus) { $status.cameraStatus } else { 'unknown' }
+                cameraPolicyScope = $status.cameraPolicyScope
+                shieldLifecycle = 'stopped'
+                diagnosticCode = if ($status.cameraStatus) { $status.cameraStatus } else { 'unknown' }
             }
         }
 
         $pythonExe = Resolve-PythonPath
         if (-not $pythonExe) {
-            return @{ error = $true; message = "Python is required." }
+            return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = 'available'; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_unavailable' }
         }
 
         # Check dependencies (Quietly)
@@ -258,7 +330,7 @@ function Start-PrivacyShield {
                 }
                 & $pythonExe -c "import $importName" *>$null
                 if ($LASTEXITCODE -ne 0) {
-                    return @{ error = $true; message = "Missing Python dependency: $pkg" }
+                    return @{ error = $true; message = "Privacy Shield AI runtime is unavailable."; cameraStatus = 'available'; shieldLifecycle = 'stopped'; diagnosticCode = 'runtime_dependency_missing' }
                 }
             }
             catch {}
@@ -337,6 +409,25 @@ def clear_pid_marker():
         pass
     except Exception as e:
         log(f"Could not remove detector PID marker: {e}")
+
+def owner_process_is_alive(pid):
+    """Check the trusted WinCommander Free owner, never the PS launcher."""
+    if not pid or pid <= 0 or sys.platform != "win32":
+        return False
+    SYNCHRONIZE = 0x00100000
+    WAIT_TIMEOUT = 0x00000102
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if not handle:
+            return False
+        try:
+            return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        # We cannot verify ownership, so do not keep using the camera.
+        return False
 
 
 # --- Dependency Imports ---
@@ -438,6 +529,13 @@ class ShieldWorker(QThread):
         self._captured_for_multi_face = False
         self._device_detected_streak = 0
         self._multi_face_detected_streak = 0
+        # Presence is noisier than the other detectors: a single missed
+        # landmark frame must never create a look-away episode.  Keep the
+        # loss latched until a sustained face recovery too, so a flickering
+        # feed cannot alternate look_away/look_back and flood notifications.
+        self._no_face_detected_streak = 0
+        self._face_recovery_streak = 0
+        self._presence_loss_active = False
         self._frame_buffer = deque(maxlen=30)
         self._active_recordings = []
 
@@ -668,7 +766,11 @@ class ShieldWorker(QThread):
                 device_triggered = False
                 multi_face_triggered = False
                 gaze_triggered = False
-                no_face_triggered = False
+                # A sustained missing face is a distinct presence-lost event.
+                # It is debounced and recovered independently, so a camera
+                # dropout cannot create an alert storm.
+                presence_unknown = False
+                presence_lost_triggered = False
 
                 # 1. Check Phone/Object - require buffer_frames consecutive detections
                 if self.check_phone and self.obj_detector:
@@ -690,9 +792,29 @@ class ShieldWorker(QThread):
                     landmarks = face_results.face_landmarks
 
                     if not landmarks:
+                        self._no_face_detected_streak += 1
+                        self._face_recovery_streak = 0
                         if self.check_gaze:
-                            no_face_triggered = True
+                            # Use the configured detector buffer for absence
+                            # and recovery. A sustained absence is alert-worthy
+                            # but one missing frame is not.
+                            if self._no_face_detected_streak >= self.buffer_frames:
+                                self._presence_loss_active = True
+                            presence_lost_triggered = self._presence_loss_active
                     else:
+                        self._no_face_detected_streak = 0
+                        if self._presence_loss_active:
+                            self._face_recovery_streak += 1
+                            if self._face_recovery_streak >= self.buffer_frames:
+                                self._presence_loss_active = False
+                                self._face_recovery_streak = 0
+                            else:
+                                # Hold unknown presence until a real recovery;
+                                # a lone detected frame must not clear a real
+                                # alert episode.
+                                presence_unknown = True
+                        else:
+                            self._face_recovery_streak = 0
                         raw_multi = self.check_faces and len(landmarks) > 1
                         if raw_multi:
                             self._multi_face_detected_streak += 1
@@ -704,8 +826,9 @@ class ShieldWorker(QThread):
                             if not self._check_gaze(landmarks[0]):
                                 gaze_triggered = True
 
-                # Combine into is_clear and display reason (priority: device > multi-face > gaze > no-face)
-                if device_triggered or multi_face_triggered or gaze_triggered or no_face_triggered:
+                # Combine only explicit, configured threats. Presence loss is
+                # independent of gaze and uses the same explicit blur flag.
+                if device_triggered or multi_face_triggered or gaze_triggered or presence_lost_triggered:
                     is_clear = False
                     parts = []
                     if device_triggered:
@@ -714,8 +837,8 @@ class ShieldWorker(QThread):
                         parts.append("MULTIPLE FACES")
                     if gaze_triggered:
                         parts.append("LOOK AWAY")
-                    if no_face_triggered:
-                        parts.append("NO FACE")
+                    if presence_lost_triggered:
+                        parts.append("PRESENCE LOST")
                     reason = " & ".join(parts)
 
             except Exception as e:
@@ -738,7 +861,11 @@ class ShieldWorker(QThread):
                 self._attentive_ms = 0.0
             
             # Transition Logic
-            if self._is_locked:
+            if presence_unknown and not (device_triggered or multi_face_triggered or gaze_triggered or presence_lost_triggered):
+                # Preserve a genuine alert state through a short unknown
+                # camera interval, but never emit/blur solely for absence.
+                pass
+            elif self._is_locked:
                 device_in_reason = "PHONE DETECTED" in self._lock_reason
                 multi_in_reason = "MULTIPLE FACES" in self._lock_reason
                 device_clear = self.wake_delay_ms * self.device_wake_multiplier if device_in_reason else 0
@@ -878,9 +1005,17 @@ class ShieldApp(QObject):
         parser.add_argument('--multi-face-wake-multiplier', type=int, default=2)
         parser.add_argument('--buffer-frames', type=int, default=6)
         parser.add_argument('--capture-speed', type=int, default=1, help='Video playback speed: 1=real-time, 2=2x, 3=3x, 4=4x')
+        # Supplied only by WinCommander Free, never the transient PS wrapper.
+        parser.add_argument('--owner-pid', type=int, default=0)
         # Ignored for now but kept for API compat if needed
         parser.add_argument('--mode', type=str, default='')
         self.args, _ = parser.parse_known_args()
+
+        self._owner_watchdog = None
+        if self.args.owner_pid and not owner_process_is_alive(self.args.owner_pid):
+            log("Shield owner is unavailable; refusing unmanaged start")
+            clear_pid_marker()
+            raise RuntimeError("WinCommander owner process is unavailable")
 
         write_pid_marker()
 
@@ -933,7 +1068,21 @@ class ShieldApp(QObject):
         self.worker.status_msg.connect(lambda msg: log(f"Status: {msg}"))
         self.worker.init_failed.connect(self.handle_init_fail)
         self.worker.start()
+        if self.args.owner_pid:
+            self._owner_watchdog = QTimer(self)
+            self._owner_watchdog.setInterval(1000)
+            self._owner_watchdog.timeout.connect(self._stop_when_owner_exits)
+            self._owner_watchdog.start()
         log("Shield worker started")
+
+    def _stop_when_owner_exits(self):
+        if owner_process_is_alive(self.args.owner_pid):
+            return
+        log("Shield owner exited; stopping managed detector")
+        clear_pid_marker()
+        self.worker._running = False
+        self.overlay.update_state(True, "")
+        self.app.quit()
 
     def _handle_state(self, is_clear, reason):
         # Fleet/flow receives every transition. The local blur toggles only
@@ -944,7 +1093,7 @@ class ShieldApp(QObject):
         # not satisfy a blur condition; otherwise every successful camera
         # startup immediately blacks out the screen.
         should_blur = (not is_clear) and (
-            ((("LOOK AWAY" in reason) or ("NO FACE" in reason)) and self.args.blur_gaze)
+            ((("LOOK AWAY" in reason) or ("PRESENCE LOST" in reason)) and self.args.blur_gaze)
             or (("MULTIPLE FACES" in reason) and self.args.blur_faces)
             or (("PHONE DETECTED" in reason) and self.args.blur_phone)
         )
@@ -979,6 +1128,14 @@ if __name__ == "__main__":
             Remove-ItemSecure -Path (Join-Path $env:APPDATA "WinCommander\privacy_shield.py") -Force -ErrorAction SilentlyContinue
         }
 
+        # The Python process is intentionally detached from this short-lived
+        # PowerShell wrapper. Carry Free's identity into it instead so it can
+        # stop if Free is ended, even when Windows cannot assign its Job.
+        $ownerPid = 0
+        if ($env:WINCMD_SHIELD_OWNER_PID -match '^[1-9][0-9]*$') {
+            $ownerPid = [int]$env:WINCMD_SHIELD_OWNER_PID
+        }
+
         $pythonArgs = @(
             "-",
             "$shieldProcessMarker",
@@ -1000,6 +1157,7 @@ if __name__ == "__main__":
         if ($BlurPhone) { $pythonArgs += "--blur-phone" }
         if ($CaptureOnDevice) { $pythonArgs += "--capture-on-device" }
         if ($CaptureOnMultiFace) { $pythonArgs += "--capture-on-multi-face" }
+        if ($ownerPid -gt 0) { $pythonArgs += "--owner-pid"; $pythonArgs += "$ownerPid" }
 
         # Use resolved python executable (must be python.exe, NOT pythonw.exe)
         # pythonw.exe often blocks OpenCV/Media Foundation from connecting to the camera.
@@ -1011,9 +1169,21 @@ if __name__ == "__main__":
         $startInfo.UseShellExecute = $false
         $startInfo.CreateNoWindow = $true
         $startInfo.RedirectStandardInput = $true
+        # The detector is deliberately long-lived.  Do not let it inherit this
+        # one-shot command runner's stdout/stderr handles: Rust waits for the
+        # runner's output EOF, and inherited handles kept a Fleet Start
+        # lifecycle stuck at "applying" until the detector was stopped.
+        # Drain both streams asynchronously rather than letting an occasional
+        # native-library warning fill a redirected pipe and stall detection.
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
         
         $process = [System.Diagnostics.Process]::Start($startInfo)
         if ($process -and -not $process.HasExited) {
+            $process.add_OutputDataReceived({ param($sender, $eventArgs) })
+            $process.add_ErrorDataReceived({ param($sender, $eventArgs) })
+            $process.BeginOutputReadLine()
+            $process.BeginErrorReadLine()
             $process.StandardInput.Write($embeddedScript)
             $process.StandardInput.Close()
         }
@@ -1031,28 +1201,25 @@ if __name__ == "__main__":
             $logRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
             $logPath = if ($logRoot) { Join-Path $logRoot "WinCommander\logs\privacy_shield.log" } else { $null }
             $logTail = ""
-            $exitMessage = "Failed to start Privacy Shield - process exited unexpectedly."
+            $failure = Get-PrivacyShieldStartFailure -LogTail $logTail
             if ($logPath -and (Test-Path $logPath)) {
                 $logTail = (Get-Content $logPath -Tail 30 | Out-String).Trim()
-                if ($logTail -imatch "black frames|camera feed unavailable") {
-                    $exitMessage = "Camera feed is black - open its privacy shutter or close another camera app."
-                } elseif ($logTail -imatch "no camera|camera open|webcam|videocapture|camera not|camera timed out") {
-                    $exitMessage = "No camera detected - Privacy Shield requires a webcam."
-                } elseif ($logTail -imatch "missing python dependency|importerror|module not found") {
-                    $exitMessage = "Missing Python dependency - please reinstall the AI runtime."
-                } elseif ($logTail -imatch "model preparation|failed to download|model download") {
-                    $exitMessage = "Model download failed - check your internet connection."
-                } elseif ($logTail -imatch "detector init|flatbuffer|not a valid") {
-                    $exitMessage = "Model file is corrupt - restart to trigger a re-download."
-                }
+                $failure = Get-PrivacyShieldStartFailure -LogTail $logTail
             }
-            return @{ error = $true; message = $exitMessage; debugInfo = $logTail }
+            $cameraStatus = if ($failure.code -in @('camera_busy', 'camera_feed_unavailable', 'hardware_unavailable')) {
+                $failure.code
+            } else {
+                # The preflight succeeded, so a dependency/model failure is
+                # not evidence that camera hardware disappeared.
+                'available'
+            }
+            return @{ error = $true; message = $failure.message; cameraStatus = $cameraStatus; shieldLifecycle = 'stopped'; diagnosticCode = $failure.code }
         }
 
-        @{ success = $true; processId = $process.Id }
+        @{ success = $true; processId = $process.Id; cameraStatus = 'available'; shieldLifecycle = 'running' }
     }
     catch {
-        @{ error = $true; message = $_.Exception.Message }
+        @{ error = $true; message = 'Privacy Shield could not start.'; cameraStatus = 'unknown'; shieldLifecycle = 'unknown'; diagnosticCode = 'shield_start_failed' }
     }
 }
 

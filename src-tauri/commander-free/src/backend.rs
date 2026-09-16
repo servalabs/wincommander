@@ -1440,6 +1440,7 @@ fn get_required_frontend_module(command: &str) -> Option<&'static str> {
         "Get-ShellBags"
         | "Get-USBDeviceHistory"
         | "Get-DnsCacheEntries" | "Clear-DnsCache"
+        | "Get-FleetForensicProjection"
         | "Get-ExecutionCache"
         | "Get-ProcessIntelligence"
         | "Get-EventLogSummary"
@@ -1953,6 +1954,10 @@ fn get_module_for_command(command: &str) -> Option<&'static str> {
         "Clear-Clipboard" => Some("privacy/cleanup"),
         "Get-USBDeviceHistory" => Some("privacy/cleanup"),
         "Get-DnsCacheEntries" => Some("privacy/cleanup"),
+        // Fixed, bounded Fleet table projection. Its PowerShell implementation
+        // only accepts the closed category set in cleanup.ps1; it is not a
+        // general remote file or trace reader.
+        "Get-FleetForensicProjection" => Some("privacy/cleanup"),
         "Get-ExecutionCache" => Some("privacy/cleanup"),
         "Disable-ClipboardHistory" => Some("privacy/cleanup"),
         "Enable-ClipboardHistory" => Some("privacy/cleanup"),
@@ -3711,6 +3716,140 @@ mod module_dependency_tests {
 }
 
 #[cfg(test)]
+mod fleet_forensic_projection_tests {
+    use super::*;
+
+    fn function_body(name: &str) -> &'static str {
+        let script = std::str::from_utf8(PRIVACY_CLEANUP).expect("cleanup module is UTF-8");
+        let start = script
+            .find(&format!("function {name} {{"))
+            .unwrap_or_else(|| panic!("{name} must remain in privacy/cleanup.ps1"));
+        let after_start = &script[start..];
+        let end = after_start.find("\nfunction ").unwrap_or(after_start.len());
+        &after_start[..end]
+    }
+
+    #[test]
+    fn fleet_forensic_projection_is_a_fixed_cleanup_command() {
+        assert_eq!(
+            get_module_for_command("Get-FleetForensicProjection"),
+            Some("privacy/cleanup")
+        );
+        assert_eq!(
+            get_required_frontend_module("Get-FleetForensicProjection"),
+            Some("cleanup")
+        );
+    }
+
+    #[test]
+    fn fleet_forensic_projection_keeps_a_bounded_safe_record_contract() {
+        let projection = function_body("Get-FleetForensicProjection");
+        for category in FLEET_FORENSIC_PROJECTION_REGISTRY {
+            assert!(
+                projection.contains(category.id),
+                "missing fixed category {}",
+                category.id,
+            );
+            assert!(
+                projection.contains(category.label),
+                "missing local label for {}",
+                category.id,
+            );
+            assert!(
+                projection.contains(category.collector),
+                "{} must use its local {} collector",
+                category.id,
+                category.collector,
+            );
+            assert!(
+                category.fleet_command_id.starts_with("fleet.cleanup.inspect."),
+                "{} must have a static Fleet command ID",
+                category.id,
+            );
+            assert!(matches!(category.group, "standard" | "deep-dfir"));
+        }
+        let envelope = function_body("New-FleetForensicProjection");
+        assert!(projection.contains("$rowLimit = 200"));
+        assert!(envelope.contains("$byteLimit = 512KB"));
+        assert!(envelope.contains("category_id"));
+        assert!(envelope.contains("datasets"));
+        assert!(projection.contains("Get-DnsCacheEntries"));
+        assert!(projection.contains("Get-BrowserFootprints"));
+        assert!(projection.contains("Get-EventLogSummary"));
+        assert!(projection.contains("Get-PrefetchFiles"));
+        assert!(projection.contains("dataLength"));
+        assert!(projection.contains("dataTruncated"));
+        assert!(projection.contains("[redacted]"));
+        assert!(!projection.contains("profilePath"));
+        assert!(!projection.contains("title ="));
+        // SRUM retains its local `path` column shape only as an explicit
+        // redaction marker; the local raw path must never cross this bridge.
+        assert!(projection.contains("path = '[redacted]'"));
+    }
+
+    #[test]
+    fn fleet_forensic_registry_is_unique_and_covers_every_read_only_projection() {
+        let mut ids = std::collections::HashSet::new();
+        let mut command_ids = std::collections::HashSet::new();
+        for category in FLEET_FORENSIC_PROJECTION_REGISTRY {
+            assert!(ids.insert(category.id), "duplicate category {}", category.id);
+            assert!(
+                command_ids.insert(category.fleet_command_id),
+                "duplicate Fleet command ID {}",
+                category.fleet_command_id,
+            );
+            assert!(
+                !category.collector.starts_with("Clear-")
+                    && !category.collector.starts_with("Remove-")
+                    && !category.collector.starts_with("Erase-"),
+                "{} must remain an inspection-only collector",
+                category.id,
+            );
+        }
+        assert!(
+            FLEET_FORENSIC_PROJECTION_REGISTRY.len() == 81,
+            "the Fleet registry must list every currently supported read-only Cleanup inspection"
+        );
+    }
+
+    #[test]
+    fn fleet_forensic_registry_matches_the_powershell_allowlist_and_local_collectors() {
+        let projection = function_body("Get-FleetForensicProjection");
+        let validate_set = projection
+            .split("[ValidateSet(")
+            .nth(1)
+            .and_then(|after_start| after_start.split(")]").next())
+            .expect("Fleet projection must have a closed PowerShell ValidateSet");
+
+        for category in FLEET_FORENSIC_PROJECTION_REGISTRY {
+            assert!(
+                validate_set.contains(&format!("'{}'", category.id)),
+                "{} must be accepted by the PowerShell allowlist",
+                category.id
+            );
+            assert!(
+                projection.contains(&format!("'{}' {{", category.id)),
+                "{} must invoke a fixed local Cleanup switch arm",
+                category.id
+            );
+            assert!(
+                projection.contains(category.collector),
+                "{} must call its local {} collector",
+                category.id,
+                category.collector
+            );
+        }
+
+        // The projection must never become a back door to a destructive
+        // Cleanup operation.  Clear/Delete/Erase commands remain in their
+        // separate, explicitly authorised desktop action path.
+        assert!(!projection.contains("Clear-"));
+        assert!(!projection.contains("Remove-"));
+        assert!(!projection.contains("Erase-"));
+    }
+}
+
+#[cfg(test)]
 mod system_encryption_status_contract_tests {
     const VAULT_VOLUMES_SCRIPT: &str = include_str!("../scripts/modules/vault/volumes.ps1");
 
@@ -3842,6 +3981,242 @@ pub async fn run_backend_script(
         }
     }
     run_backend_script_with_timeout(app, command, params, None).await
+}
+
+/// The sole set of Cleanup views that Fleet may request from the local Free
+/// process. Keep this list in lockstep with the PowerShell ValidateSet and the
+/// signed sidecar parser; it is intentionally not derived from caller input.
+/// Static source of truth for Fleet's read-only System Cleanup requests.
+///
+/// The command ID is intentionally derived from a literal category ID: it is
+/// a selector for this one collector, never a Windows command.  `collector`
+/// names the same PowerShell reader used by the local Cleanup screen; tests
+/// below prevent this registry, the PowerShell `ValidateSet`, and the switch
+/// that invokes each local reader from drifting apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FleetForensicProjectionCategory {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub group: &'static str,
+    pub fleet_command_id: &'static str,
+    pub collector: &'static str,
+}
+
+macro_rules! cleanup_category {
+    ($id:literal, $label:literal, $group:literal, $collector:literal) => {
+        FleetForensicProjectionCategory {
+            id: $id,
+            label: $label,
+            group: $group,
+            fleet_command_id: concat!("fleet.cleanup.inspect.", $id),
+            collector: $collector,
+        }
+    };
+}
+
+pub(crate) const FLEET_FORENSIC_PROJECTION_REGISTRY: &[FleetForensicProjectionCategory] = &[
+    cleanup_category!("shell_bags", "ShellBags", "standard", "Get-ShellBags"),
+    cleanup_category!("usb_history", "USB history", "standard", "Get-USBDeviceHistory"),
+    cleanup_category!("recycle_bin", "Recycle Bin", "standard", "Get-RecycleBinInfo"),
+    cleanup_category!("dns_cache", "DNS Cache", "standard", "Get-DnsCacheEntries"),
+    cleanup_category!("clipboard_history", "Clipboard history", "standard", "Get-ClipboardHistoryStatus"),
+    cleanup_category!("execution_audit", "Execution audit", "standard", "Get-ExecutionCache"),
+    cleanup_category!("wlan_profiles", "WLAN profiles", "standard", "Get-WlanProfiles"),
+    cleanup_category!("net_drives", "Network drives", "standard", "Get-NetworkDrives"),
+    cleanup_category!("event_log_summary", "Event log summary", "standard", "Get-EventLogSummary"),
+    cleanup_category!("command_history", "Command history", "standard", "Get-PSHistory"),
+    cleanup_category!("recent_files", "Recent files", "standard", "Get-RecentFiles"),
+    cleanup_category!("rdp_history", "RDP history", "standard", "Get-RDPHistory"),
+    cleanup_category!("jump_lists", "Jump Lists", "standard", "Get-JumpLists"),
+    cleanup_category!("connectivity_history", "Connectivity history", "standard", "Get-ConnectivityHistory"),
+    cleanup_category!("browser_footprints", "Browser footprints", "standard", "Get-BrowserFootprints"),
+    cleanup_category!("prefetch", "Prefetch", "standard", "Get-PrefetchFiles"),
+    cleanup_category!("shadow_copies", "Shadow copies", "standard", "Get-ShadowCopies"),
+    cleanup_category!("ntfs_journals", "NTFS journals", "standard", "Get-NTFSJournals"),
+    cleanup_category!("amcache", "Amcache", "deep-dfir", "Get-AmcacheEntries"),
+    cleanup_category!("nt_user_traces", "NTUSER traces", "deep-dfir", "Get-NTUserTraces"),
+    cleanup_category!("notepad_state", "Notepad state", "deep-dfir", "Get-NotepadStateFiles"),
+    cleanup_category!("compatibility_cache", "Compatibility cache", "deep-dfir", "Get-PCAInfo"),
+    cleanup_category!("crash_dumps", "Crash dumps", "deep-dfir", "Get-CrashDumpList"),
+    cleanup_category!("search_index", "Search index", "deep-dfir", "Get-SearchIndexInfo"),
+    cleanup_category!("print_spooler", "Print spooler", "deep-dfir", "Get-PrintSpoolerInfo"),
+    cleanup_category!("resource_usage_history", "Resource usage history", "deep-dfir", "Get-SRUMData"),
+    cleanup_category!("temp_database_files", "Temporary database files", "deep-dfir", "Get-SQLiteWALList"),
+    cleanup_category!("activity_timeline", "Activity timeline", "deep-dfir", "Get-RecallDatabaseInfo"),
+    cleanup_category!("web_cache_database", "Web cache database", "deep-dfir", "Get-WebCacheInfo"),
+    cleanup_category!("thumbnail_icon_cache", "Thumbnail and icon cache", "deep-dfir", "Get-ThumbnailCacheInfo"),
+    cleanup_category!("notification_history", "Notification history", "deep-dfir", "Get-NotificationDatabaseInfo"),
+    cleanup_category!("peer_distribution_cache", "Peer distribution cache", "deep-dfir", "Get-BranchCacheInfo"),
+    cleanup_category!("diagnostics_timeline", "Diagnostics timeline", "deep-dfir", "Get-EventTranscriptInfo"),
+    cleanup_category!("timeline_cache", "Timeline cache", "deep-dfir", "Get-ActivitiesTimelineInfo"),
+    cleanup_category!("rdp_bitmap_cache", "RDP bitmap cache", "deep-dfir", "Get-RdpBitmapCacheInfo"),
+    cleanup_category!("servicing_logs", "Servicing logs", "deep-dfir", "Get-ServicingLogsInfo"),
+    cleanup_category!("device_install_logs", "Device installation logs", "deep-dfir", "Get-DeviceInstallLogsInfo"),
+    cleanup_category!("usage_trace_logs", "Usage trace logs", "deep-dfir", "Get-UsageTraceLogsInfo"),
+    cleanup_category!("protection_history", "Protection history", "deep-dfir", "Get-DefenderHistoryInfo"),
+    cleanup_category!("wsl_data", "WSL data", "deep-dfir", "Get-WSLDataInfo"),
+    cleanup_category!("docker_desktop_data", "Docker Desktop data", "deep-dfir", "Get-DockerDesktopDataInfo"),
+    cleanup_category!("virtual_machine_artifacts", "Virtual machine artifacts", "deep-dfir", "Get-VirtualMachineArtifactsInfo"),
+    cleanup_category!("developer_caches", "Developer caches", "deep-dfir", "Get-DeveloperCachesInfo"),
+    cleanup_category!("credential_manager", "Credential Manager", "deep-dfir", "Get-CredentialManagerInfo"),
+    cleanup_category!("network_wizard_history", "Network wizard history", "deep-dfir", "Get-NetworkWizardHistoryInfo"),
+    cleanup_category!("wer_history", "Windows Error Reporting history", "deep-dfir", "Get-WERHistoryInfo"),
+    cleanup_category!("inactive_user_protection_metadata", "Inactive-user protection metadata", "deep-dfir", "Get-InactiveUserProtectionMetadataInfo"),
+    cleanup_category!("sticky_notes", "Sticky Notes", "deep-dfir", "Get-StickyNotesInfo"),
+    cleanup_category!("onedrive_metadata", "OneDrive metadata", "deep-dfir", "Get-OneDriveMetadataInfo"),
+    cleanup_category!("spotlight_cache", "Spotlight cache", "deep-dfir", "Get-SpotlightCacheInfo"),
+    cleanup_category!("font_cache", "Font cache", "deep-dfir", "Get-FontCacheInfo"),
+    cleanup_category!("legacy_icon_cache", "Legacy icon cache", "deep-dfir", "Get-LegacyIconCacheInfo"),
+    cleanup_category!("game_captures", "Game captures", "deep-dfir", "Get-GameCapturesInfo"),
+    cleanup_category!("photos_cache", "Photos cache", "deep-dfir", "Get-PhotosCacheInfo"),
+    cleanup_category!("xbox_cache", "Xbox cache", "deep-dfir", "Get-XboxCacheInfo"),
+    cleanup_category!("communication_caches", "Communication caches", "deep-dfir", "Get-CommunicationCachesInfo"),
+    cleanup_category!("editor_history", "Editor history", "deep-dfir", "Get-EditorHistoryInfo"),
+    cleanup_category!("git_activity", "Git activity", "deep-dfir", "Get-GitActivityInfo"),
+    cleanup_category!("ssh_state", "SSH state", "deep-dfir", "Get-SSHStateInfo"),
+    cleanup_category!("remote_access_logs", "Remote access logs", "deep-dfir", "Get-RemoteAccessLogsInfo"),
+    cleanup_category!("password_manager_caches", "Password-manager caches", "deep-dfir", "Get-PasswordManagerCachesInfo"),
+    cleanup_category!("game_launcher_logs", "Game launcher logs", "deep-dfir", "Get-GameLauncherLogsInfo"),
+    cleanup_category!("adobe_recent", "Adobe recent items", "deep-dfir", "Get-AdobeRecentInfo"),
+    cleanup_category!("office_temp_files", "Office temporary files", "deep-dfir", "Get-OfficeTempFilesInfo"),
+    cleanup_category!("firewall_log", "Firewall log", "deep-dfir", "Get-FirewallLogInfo"),
+    cleanup_category!("neighbor_cache", "Neighbor cache", "deep-dfir", "Get-NeighborCacheInfo"),
+    cleanup_category!("netbios_cache", "NetBIOS cache", "deep-dfir", "Get-NetBIOSCacheInfo"),
+    cleanup_category!("geolocation_cache", "Geolocation cache", "deep-dfir", "Get-GeolocationCacheInfo"),
+    cleanup_category!("vpn_phonebooks", "VPN phonebooks", "deep-dfir", "Get-VPNPhonebooksInfo"),
+    cleanup_category!("proxy_cache", "Proxy cache", "deep-dfir", "Get-ProxyCacheInfo"),
+    cleanup_category!("cloud_placeholders", "Cloud placeholders", "deep-dfir", "Get-CloudPlaceholdersInfo"),
+    cleanup_category!("bits_queue", "BITS queue", "deep-dfir", "Get-BITSQueueInfo"),
+    cleanup_category!("cellular_history", "Cellular history", "deep-dfir", "Get-CellularHistoryInfo"),
+    cleanup_category!("app_launch_history", "App launch history", "deep-dfir", "Get-AppLaunchHistoryInfo"),
+    cleanup_category!("office_mru", "Office MRU", "deep-dfir", "Get-OfficeMruInfo"),
+    cleanup_category!("embedded_web_cache", "Embedded web cache", "deep-dfir", "Get-EmbeddedWebCacheInfo"),
+    cleanup_category!("p2p_update_cache", "Peer update cache", "deep-dfir", "Get-P2PUpdateCacheInfo"),
+    cleanup_category!("reliability_history", "Reliability history", "deep-dfir", "Get-ReliabilityHistoryInfo"),
+    cleanup_category!("explorer_search_history", "Explorer search metadata", "deep-dfir", "Get-ExplorerSearchHistoryInfo"),
+    cleanup_category!("search_personalization", "Search personalisation", "deep-dfir", "Get-SearchPersonalizationInfo"),
+    cleanup_category!("process_review", "Process review", "deep-dfir", "Get-ProcessIntelligence"),
+];
+
+pub(crate) fn fleet_forensic_projection_category(
+    category: &str,
+) -> Option<&'static FleetForensicProjectionCategory> {
+    FLEET_FORENSIC_PROJECTION_REGISTRY
+        .iter()
+        .find(|entry| entry.id == category)
+}
+
+/// Execute the one Fleet-authorised System Cleanup projection locally in Free.
+///
+/// This is intentionally separate from `run_backend_script`: the latter can
+/// dispatch paid features back to Pro, while this function is called by the
+/// authenticated Pro -> Free pipe. Keeping this runner closed prevents a
+/// recursive IPC future and, more importantly, prevents that pipe from
+/// becoming a general local command executor.
+pub(crate) async fn run_fleet_forensic_projection(
+    category: &str,
+) -> Result<serde_json::Value, String> {
+    let registry_entry = fleet_forensic_projection_category(category)
+        .ok_or_else(|| "Fleet collector category is not allowed".to_string())?;
+
+    let modules = settings::read_settings()
+        .map(|settings| settings.app.modules)
+        .unwrap_or_default();
+    if !modules.get("cleanup").copied().unwrap_or(false) {
+        return Err("System Cleanup is disabled on this device".to_string());
+    }
+
+    let core_utils = load_module("core/utils")?;
+    let core_router = load_module("core/router")?;
+    let cleanup = load_module("privacy/cleanup")?;
+    // Browser footprints reuses the installed-browser discovery helper.  It is
+    // harmless to load for the other fixed projections and keeps the script
+    // shape independent of a caller-controlled category.
+    let security = load_module("tweaks/security")?;
+    let full_script = format!(
+        "{}\n\n{}\n\n{}\n\n{}\n\nInvoke-BackendCommand",
+        core_utils, security, cleanup, core_router
+    );
+
+    let (mut command, _ps_exe) = build_powershell_command();
+    command.env("WINCMD_COMMAND", "Get-FleetForensicProjection");
+    command.env(
+        "WINCMD_PARAMS_JSON",
+        serde_json::json!({ "Category": category }).to_string(),
+    );
+    let mut child = command
+        .spawn()
+        .map_err(|_| "WinCommander could not start the local cleanup collector".to_string())?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(full_script.as_bytes()).map_err(|_| {
+            "WinCommander could not prepare the local cleanup collector".to_string()
+        })?;
+    }
+
+    let child_pid = child.id();
+    let wait = tokio::task::spawn_blocking(move || child.wait_with_output());
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(60), wait).await {
+        Ok(Ok(Ok(output))) => output,
+        Ok(_) => return Err("WinCommander could not read the local cleanup records".to_string()),
+        Err(_) => {
+            let _ = tokio::task::spawn_blocking(move || {
+                let mut kill = Command::new("taskkill");
+                kill.args(["/F", "/T", "/PID", &child_pid.to_string()]);
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    kill.creation_flags(0x08000000);
+                }
+                kill.output()
+            })
+            .await;
+            return Err("The local cleanup collector timed out".to_string());
+        }
+    };
+    if !output.status.success() {
+        return Err("WinCommander could not prepare the requested cleanup records".to_string());
+    }
+    let mut result = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .map_err(|_| "WinCommander returned an invalid cleanup record set".to_string())?;
+    if result.get("error").and_then(serde_json::Value::as_bool) == Some(true) {
+        return Err(result
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .filter(|message| {
+                message.starts_with("System Cleanup could not ") && message.len() <= 240
+            })
+            .unwrap_or("WinCommander could not prepare the requested cleanup records")
+            .to_string());
+    }
+    let source_matches = result.get("source").and_then(serde_json::Value::as_str)
+        == Some("wincommander.system_cleanup");
+    let category_matches = result.get("category_id").and_then(serde_json::Value::as_str)
+        == Some(registry_entry.id);
+    let label_matches = result.get("label").and_then(serde_json::Value::as_str)
+        == Some(registry_entry.label);
+    let is_structured = result.get("columns").and_then(serde_json::Value::as_array).is_some()
+        && result.get("records").and_then(serde_json::Value::as_array).is_some()
+        && result.get("datasets").and_then(serde_json::Value::as_array).is_some();
+    if !source_matches || !category_matches || !label_matches || !is_structured {
+        return Err("WinCommander returned an incomplete cleanup table".to_string());
+    }
+    let Some(record) = result.as_object_mut() else {
+        return Err("WinCommander returned an invalid cleanup record set".to_string());
+    };
+    // These values come only from the static registry above, never from a
+    // Fleet request or a PowerShell response.  They let the Console identify
+    // the local collector behind a persisted table without opening a generic
+    // remote-command path.
+    record.insert("group".to_string(), serde_json::json!(registry_entry.group));
+    record.insert(
+        "fleet_command_id".to_string(),
+        serde_json::json!(registry_entry.fleet_command_id),
+    );
+    record.insert(
+        "local_collector".to_string(),
+        serde_json::json!(registry_entry.collector),
+    );
+    Ok(result)
 }
 
 /// Internal callers that render a live status surface may use a shorter
@@ -4170,6 +4545,13 @@ pub(crate) async fn run_backend_script_with_timeout(
 
     cmd.env("WINCMD_COMMAND", &command);
     cmd.env("WINCMD_PARAMS_JSON", &params_json);
+    // The Python detector intentionally outlives this short-lived PowerShell
+    // wrapper, so give it the real Free owner rather than the wrapper PID.
+    // It fails closed if that owner disappears, even if a late Job assignment
+    // is unavailable (for example because of a nested-job policy).
+    if command == "Start-PrivacyShield" {
+        cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string());
+    }
     if let Ok(exe_path) = std::env::current_exe() {
         cmd.env("WINCMD_EXE_PATH", exe_path);
     }
@@ -5092,22 +5474,42 @@ fn schedule_privacy_shield_reader_attach(app: AppHandle) {
     });
 }
 
-/// Map the Privacy Shield Python detector's free-text `reason` (e.g.
-/// "PHONE DETECTED", "MULTIPLE FACES & LOOK AWAY") to the flow-core
-/// `GazeKind` string `flow_bridge::parse_gaze_kind` expects. Priority
-/// mirrors the detector's own combine-and-report order (device > multi-face
-/// > gaze > no-face) since a frame can trip more than one check at once.
-fn gaze_kind_from_reason(reason: &str) -> &'static str {
+/// Map a detector transition into the closed event classes that can leave the
+/// device. A combined detector transition retains every configured condition
+/// instead of silently dropping gaze when a phone is also present.
+fn privacy_shield_event_classes_from_reason(reason: &str) -> Vec<&'static str> {
     let upper = reason.to_ascii_uppercase();
+    let mut classes = Vec::with_capacity(3);
     if upper.contains("PHONE DETECTED") {
-        "secondary_device"
-    } else if upper.contains("MULTIPLE FACES") {
-        "multiple_faces"
-    } else if upper.contains("NO FACE") {
-        "no_face"
-    } else {
-        "look_away"
+        classes.push("phone_detected");
     }
+    if upper.contains("PRESENCE LOST") || upper.contains("NO FACE") {
+        classes.push("presence_lost");
+    }
+    if upper.contains("LOOK AWAY") {
+        classes.push("look_away");
+    }
+    classes
+}
+
+/// Flow automations predate Fleet's alert vocabulary. Keep their established
+/// local event names while the Fleet bridge uses its separately bounded names.
+fn privacy_shield_flow_kinds_from_reason(reason: &str) -> Vec<&'static str> {
+    let upper = reason.to_ascii_uppercase();
+    let mut kinds = Vec::with_capacity(4);
+    if upper.contains("PHONE DETECTED") {
+        kinds.push("secondary_device");
+    }
+    if upper.contains("MULTIPLE FACES") {
+        kinds.push("multiple_faces");
+    }
+    if upper.contains("PRESENCE LOST") || upper.contains("NO FACE") {
+        kinds.push("no_face");
+    }
+    if upper.contains("LOOK AWAY") {
+        kinds.push("look_away");
+    }
+    kinds
 }
 
 /// Monotonic generation for shield readers. Each Start-PrivacyShield spawns a
@@ -5140,33 +5542,71 @@ fn fleet_privacy_alert_rate() -> &'static Mutex<FleetPrivacyAlertRate> {
     RATE.get_or_init(|| Mutex::new(FleetPrivacyAlertRate::default()))
 }
 
-fn fleet_privacy_event_is_enabled(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FleetPrivacyAlertGate {
+    Allowed,
+    FleetDisconnected,
+    NoFleetManagedSession,
+    UnknownEventClass,
+    UnknownMode,
+    RateLimited,
+}
+
+impl FleetPrivacyAlertGate {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::FleetDisconnected => "Fleet is not configured on this device",
+            Self::NoFleetManagedSession => {
+                "the current Privacy Shield session was started locally, not by Fleet"
+            }
+            Self::UnknownEventClass => "the detector emitted an unsupported aggregate class",
+            Self::UnknownMode => "Fleet has not confirmed a valid Privacy Shield mode",
+            Self::RateLimited => "the signed Fleet notification limit is reached",
+        }
+    }
+}
+
+fn fleet_privacy_event_gate(
     fleet_enabled: bool,
+    fleet_session_owned: bool,
     shield: &crate::settings::PrivacyShieldSettings,
     event_class: &str,
-) -> bool {
-    if !fleet_enabled
-        || shield.fleet_managed != Some(true)
-        || shield.fleet_monitoring_enabled != Some(true)
-    {
-        return false;
+) -> FleetPrivacyAlertGate {
+    if !fleet_enabled {
+        return FleetPrivacyAlertGate::FleetDisconnected;
+    }
+    // An explicitly Fleet-started device session is allowed to report even
+    // when the organisation-wide default is off. It is distinct from a local
+    // session: `privacy_shield_session_owned` is set only after the signed
+    // device command has reached the local app and started the Shield.
+    let org_policy_active =
+        shield.fleet_managed == Some(true) && shield.fleet_monitoring_enabled == Some(true);
+    if !fleet_session_owned && !org_policy_active {
+        return FleetPrivacyAlertGate::NoFleetManagedSession;
     }
     // Blur switches are local enforcement preferences, not alert opt-outs.
     // Fleet policy explicitly keeps monitoring and Fleet alerts active when a
     // blur switch is off; only its global monitoring switch and alert rate
     // limit govern the aggregate notification channel.
-    matches!(
+    if matches!(
         event_class,
-        "look_away" | "no_face" | "multiple_faces" | "secondary_device"
-    )
+        "look_away" | "presence_lost" | "phone_detected"
+    ) {
+        FleetPrivacyAlertGate::Allowed
+    } else {
+        FleetPrivacyAlertGate::UnknownEventClass
+    }
 }
 
-async fn allow_fleet_privacy_alert(event_class: &str) -> bool {
+async fn fleet_privacy_alert_mode(
+    event_class: &str,
+) -> Result<&'static str, FleetPrivacyAlertGate> {
     let Ok(settings) = crate::settings::read_settings() else {
         // A settings read failure must not affect the local detector. Fleet
         // reporting fails closed because an admin has not confirmed that this
         // particular detector class is enabled for Fleet notification.
-        return false;
+        return Err(FleetPrivacyAlertGate::FleetDisconnected);
     };
     // First-sync catch-up: a device can be enrolled (`fleet.enabled == true`)
     // moments before its first `fleet_apply_pending_epoch` tick lands, so
@@ -5177,30 +5617,40 @@ async fn allow_fleet_privacy_alert(event_class: &str) -> bool {
     // background apply loop had caught up, would report correctly. Give this
     // first event one chance to force that sync itself before deciding.
     let shield = &settings.ideal.privacy.privacy_shield;
-    let unsynced = settings.app.fleet.enabled && shield.fleet_managed.is_none();
+    let unsynced = settings.app.fleet.enabled
+        && !settings.app.fleet.privacy_shield_session_owned
+        && shield.fleet_managed.is_none();
     let settings = if unsynced {
         let _ = crate::fleet_agent::fleet_apply_pending_epoch_typed().await;
         match crate::settings::read_settings() {
             Ok(s) => s,
-            Err(_) => return false,
+            Err(_) => return Err(FleetPrivacyAlertGate::FleetDisconnected),
         }
     } else {
         settings
     };
     let shield = &settings.ideal.privacy.privacy_shield;
-    if !fleet_privacy_event_is_enabled(settings.app.fleet.enabled, shield, event_class) {
-        return false;
+    let gate = fleet_privacy_event_gate(
+        settings.app.fleet.enabled,
+        settings.app.fleet.privacy_shield_session_owned,
+        shield,
+        event_class,
+    );
+    if gate != FleetPrivacyAlertGate::Allowed {
+        return Err(gate);
     }
+    let mode =
+        fleet_privacy_alert_mode_from_state(settings.app.fleet.shield_desired_state.as_ref())?;
     let limit = shield.fleet_notification_limit.unwrap_or(0).min(1000);
     if limit == 0 {
-        return true;
+        return Ok(mode);
     }
     let window_secs = shield
         .fleet_notification_window_seconds
         .unwrap_or(60)
         .clamp(1, 86_400);
     let Ok(mut rate) = fleet_privacy_alert_rate().lock() else {
-        return true;
+        return Ok(mode);
     };
     let config = (limit, window_secs);
     if rate.config != Some(config) {
@@ -5210,16 +5660,30 @@ async fn allow_fleet_privacy_alert(event_class: &str) -> bool {
     let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(window_secs as u64);
     rate.sent.retain(|at| *at > cutoff);
     if rate.sent.len() >= limit as usize {
-        return false;
+        return Err(FleetPrivacyAlertGate::RateLimited);
     }
     rate.sent.push(std::time::Instant::now());
-    true
+    Ok(mode)
+}
+
+fn fleet_privacy_alert_mode_from_state(
+    state: Option<&crate::settings::FleetShieldDesiredState>,
+) -> Result<&'static str, FleetPrivacyAlertGate> {
+    match state.map(|state| state.mode.as_str()) {
+        Some("notify_only") => Ok("notify_only"),
+        Some("blur_notify") => Ok("blur_notify"),
+        _ => Err(FleetPrivacyAlertGate::UnknownMode),
+    }
 }
 
 #[cfg(test)]
 mod fleet_privacy_alert_tests {
-    use super::fleet_privacy_event_is_enabled;
-    use crate::settings::PrivacyShieldSettings;
+    use super::{
+        fleet_privacy_alert_mode_from_state, fleet_privacy_event_gate,
+        privacy_shield_event_classes_from_reason, privacy_shield_flow_kinds_from_reason,
+        FleetPrivacyAlertGate,
+    };
+    use crate::settings::{FleetShieldDesiredState, PrivacyShieldSettings};
 
     fn enabled_policy() -> PrivacyShieldSettings {
         PrivacyShieldSettings {
@@ -5235,27 +5699,90 @@ mod fleet_privacy_alert_tests {
     #[test]
     fn fleet_alerts_remain_enabled_when_a_local_blur_switch_is_off() {
         let mut policy = enabled_policy();
-        assert!(fleet_privacy_event_is_enabled(true, &policy, "look_away"));
-        assert!(fleet_privacy_event_is_enabled(
-            true,
-            &policy,
-            "multiple_faces"
-        ));
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &policy, "look_away"),
+            FleetPrivacyAlertGate::Allowed
+        );
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &policy, "presence_lost",),
+            FleetPrivacyAlertGate::Allowed
+        );
 
         policy.anti_peeping_enabled = Some(false);
-        assert!(fleet_privacy_event_is_enabled(
-            true,
-            &policy,
-            "multiple_faces"
-        ));
-        assert!(fleet_privacy_event_is_enabled(true, &policy, "look_away"));
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &policy, "presence_lost",),
+            FleetPrivacyAlertGate::Allowed
+        );
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &policy, "look_away"),
+            FleetPrivacyAlertGate::Allowed
+        );
     }
 
     #[test]
-    fn fleet_alerts_require_an_active_fleet_policy_and_known_event_class() {
+    fn local_shield_sessions_do_not_upload_attention_events() {
         let policy = enabled_policy();
-        assert!(!fleet_privacy_event_is_enabled(false, &policy, "look_away"));
-        assert!(!fleet_privacy_event_is_enabled(true, &policy, "untrusted"));
+        assert_eq!(
+            fleet_privacy_event_gate(false, false, &policy, "look_away"),
+            FleetPrivacyAlertGate::FleetDisconnected
+        );
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &PrivacyShieldSettings::default(), "look_away"),
+            FleetPrivacyAlertGate::NoFleetManagedSession
+        );
+        assert_eq!(
+            fleet_privacy_event_gate(true, false, &policy, "untrusted"),
+            FleetPrivacyAlertGate::UnknownEventClass
+        );
+        assert_eq!(
+            fleet_privacy_event_gate(true, true, &policy, "multiple_faces"),
+            FleetPrivacyAlertGate::UnknownEventClass
+        );
+    }
+
+    #[test]
+    fn fleet_started_device_session_reports_when_org_default_is_off() {
+        let policy = PrivacyShieldSettings::default();
+        assert_eq!(
+            fleet_privacy_event_gate(true, true, &policy, "look_away"),
+            FleetPrivacyAlertGate::Allowed
+        );
+    }
+
+    #[test]
+    fn detector_transitions_use_only_the_bounded_fleet_event_vocabulary() {
+        assert_eq!(
+            privacy_shield_event_classes_from_reason("PHONE DETECTED & LOOK AWAY"),
+            vec!["phone_detected", "look_away"]
+        );
+        assert_eq!(
+            privacy_shield_event_classes_from_reason("PRESENCE LOST"),
+            vec!["presence_lost"]
+        );
+        assert!(privacy_shield_event_classes_from_reason("camera warmup").is_empty());
+        assert_eq!(
+            privacy_shield_flow_kinds_from_reason("MULTIPLE FACES & PHONE DETECTED"),
+            vec!["secondary_device", "multiple_faces"]
+        );
+    }
+
+    #[test]
+    fn fleet_alert_metadata_uses_only_the_server_selected_mode() {
+        let state = FleetShieldDesiredState {
+            enabled: true,
+            mode: "notify_only".to_string(),
+            revision: 1,
+            updated_at: "2026-09-16T00:00:00Z".to_string(),
+            command_id: Some("00000000-0000-0000-0000-000000000001".to_string()),
+        };
+        assert_eq!(
+            fleet_privacy_alert_mode_from_state(Some(&state)),
+            Ok("notify_only")
+        );
+        assert_eq!(
+            fleet_privacy_alert_mode_from_state(None),
+            Err(FleetPrivacyAlertGate::UnknownMode)
+        );
     }
 }
 
@@ -5284,6 +5811,8 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                 .unwrap_or(0);
         }
         let mut locally_looking_away = false;
+        let mut active_fleet_event_classes = std::collections::BTreeSet::new();
+        let mut fleet_episode_id: Option<String> = None;
         crate::flow_bridge::flow_trace(format!(
             "shield-reader: SPAWNED gen={} pid={} seed_offset={} sidecar={}",
             my_gen,
@@ -5340,17 +5869,29 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                 // reached the flow engine (GazeTrigger flows never
                                 // fired) AND the whole reader loop stalled (the "log
                                 // gets stuck when Privacy Shield is on" symptom).
-                                let gaze_kind = gaze_kind_from_reason(reason);
+                                let event_classes =
+                                    privacy_shield_event_classes_from_reason(reason);
+                                if event_classes.is_empty() {
+                                    crate::flow_bridge::flow_trace(
+                                        "shield-reader: no supported Privacy Shield event class",
+                                    );
+                                    continue;
+                                }
                                 let first_look_away_in_episode = !locally_looking_away;
                                 locally_looking_away = true;
+                                let episode_id = fleet_episode_id
+                                    .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                                    .clone();
                                 crate::flow_bridge::flow_trace(format!(
-                                    "shield-reader: look_away read (reason='{}') → emit privacy-shield-event kind='{}'",
-                                    reason, gaze_kind
+                                    "shield-reader: look_away read (reason='{}') → emit {} bounded event class(es)",
+                                    reason, event_classes.len()
                                 ));
-                                let _ = app.emit(
-                                    "privacy-shield-event",
-                                    serde_json::json!({ "kind": gaze_kind }),
-                                );
+                                for flow_kind in privacy_shield_flow_kinds_from_reason(reason) {
+                                    let _ = app.emit(
+                                        "privacy-shield-event",
+                                        serde_json::json!({ "kind": flow_kind }),
+                                    );
+                                }
                                 let _ = app.emit(
                                     "privacy-shield-look-state",
                                     serde_json::json!({ "lookingAway": true }),
@@ -5402,28 +5943,45 @@ fn spawn_shield_event_reader(app: AppHandle, pid: u32, start_at_end: bool) {
                                 // Fleet receives only the detected class. Keep this
                                 // best-effort work off the reader loop: it must never
                                 // delay the protected user's local notification.
-                                tauri::async_runtime::spawn(async move {
-                                    if allow_fleet_privacy_alert(gaze_kind).await {
-                                        if let Err(error) = crate::sidecar::dispatch_paid_command(
-                                            "record_privacy_shield_event",
-                                            serde_json::json!({ "class": gaze_kind }),
-                                        )
-                                        .await
-                                        {
-                                            crate::flow_bridge::flow_trace(format!(
+                                for event_class in event_classes {
+                                    if !active_fleet_event_classes.insert(event_class) {
+                                        continue;
+                                    }
+                                    let episode_id = episode_id.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        match fleet_privacy_alert_mode(event_class).await {
+                                            Ok(mode) => {
+                                                if let Err(error) =
+                                                    crate::sidecar::dispatch_paid_command(
+                                                        "record_privacy_shield_event",
+                                                        serde_json::json!({
+                                                            "class": event_class,
+                                                            "episodeId": episode_id,
+                                                            "mode": mode,
+                                                        }),
+                                                    )
+                                                    .await
+                                                {
+                                                    crate::flow_bridge::flow_trace(format!(
                                                 "shield-reader: Fleet attention event not queued: {}",
                                                 error
                                             ));
+                                                }
+                                            }
+                                            Err(fleet_gate) => {
+                                                crate::flow_bridge::flow_trace(format!(
+                                            "shield-reader: Fleet attention event not queued: {}",
+                                            fleet_gate.reason(),
+                                        ));
+                                            }
                                         }
-                                    } else {
-                                        crate::flow_bridge::flow_trace(
-                                            "shield-reader: Fleet attention event rate-limited by signed policy",
-                                        );
-                                    }
-                                });
+                                    });
+                                }
                             }
                             Some("look_back") => {
                                 locally_looking_away = false;
+                                active_fleet_event_classes.clear();
+                                fleet_episode_id = None;
                                 crate::flow_bridge::flow_trace("shield-reader: look_back");
                                 let _ = app.emit(
                                     "privacy-shield-look-state",

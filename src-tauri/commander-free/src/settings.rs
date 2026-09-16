@@ -616,6 +616,22 @@ impl Default for FileSearchSettings {
 /// fleet server URLs or anything that looks like C2 traffic — the actual HTTP
 /// is done entirely in Pro (fleet_push.rs). Free only stores the URL in
 /// settings and passes it to Pro via IPC args.
+/// The last signed device-scoped Privacy Shield instruction that Pro verified
+/// during check-in. This is intentionally state, not a connection setting:
+/// Free needs it to drive the local camera supervisor and send the correlated
+/// lifecycle receipt back through Pro. Keeping it typed prevents the generic
+/// settings round-trip from silently dropping `shieldDesiredState`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FleetShieldDesiredState {
+    pub enabled: bool,
+    pub mode: String,
+    pub revision: i64,
+    pub updated_at: String,
+    #[serde(default)]
+    pub command_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
@@ -637,6 +653,20 @@ pub struct FleetSettings {
     /// retroactively locking an employee's already-manual shield session.
     #[serde(default)]
     pub privacy_shield_session_owned: bool,
+    /// Most recent verified device-scoped Fleet Shield instruction. Absent on
+    /// existing installs and before the first successful Fleet check-in.
+    #[serde(default)]
+    pub shield_desired_state: Option<FleetShieldDesiredState>,
+    /// Last Fleet Shield desired-state revision confirmed by a local
+    /// Start/Stop read-back. This lets a mode update safely reconfigure a
+    /// running detector once, rather than claiming an old blur mode matches.
+    #[serde(default)]
+    pub privacy_shield_applied_revision: Option<i64>,
+    /// Command identity paired with `privacy_shield_applied_revision`. A
+    /// recovery can replay a revision, so revision alone cannot acknowledge a
+    /// different device command. Absent legacy data safely causes one read-back.
+    #[serde(default)]
+    pub privacy_shield_applied_command_id: Option<String>,
 }
 
 /// Paid: decoy-mode preference. Defaults OFF with an empty `display_name`,
@@ -4136,6 +4166,33 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(shield).unwrap()["notifyMode"],
+            serde_json::json!("notify_only")
+        );
+    }
+
+    #[test]
+    fn fleet_shield_desired_state_survives_settings_round_trip() {
+        let fleet: FleetSettings = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "shieldDesiredState": {
+                "enabled": true,
+                "mode": "notify_only",
+                "revision": 1,
+                "updatedAt": "2026-09-15T09:32:29Z",
+                "commandId": "f11ff2e0-5aff-4700-b1f3-eae160df083d"
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            fleet
+                .shield_desired_state
+                .as_ref()
+                .and_then(|state| state.command_id.as_deref()),
+            Some("f11ff2e0-5aff-4700-b1f3-eae160df083d")
+        );
+        assert_eq!(
+            serde_json::to_value(fleet).unwrap()["shieldDesiredState"]["mode"],
             serde_json::json!("notify_only")
         );
     }

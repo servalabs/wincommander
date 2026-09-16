@@ -36,3 +36,31 @@ export function resolveFleetPrivacyShieldControl({
     enabled: legacyManaged && legacyMonitoringEnabled,
   };
 }
+
+/**
+ * Derive local-card permissions from the current process read-back, not a
+ * stale policy cache. A Fleet-owned running session cannot be stopped
+ * locally. Once a Fleet stop is verified as not running, the card is usable
+ * again even if its ownership write is still in flight.
+ */
+export function resolveLocalFleetPrivacyShieldControl({
+  running,
+  sessionOwned,
+  fleetControl,
+}: {
+  running: boolean;
+  sessionOwned: boolean;
+  fleetControl: { managed: boolean; enabled: boolean };
+}): {
+  stopLocked: boolean;
+  startLocked: boolean;
+  settingsLocked: boolean;
+} {
+  const stopLocked = running && sessionOwned;
+  const startLocked = !running && fleetControl.managed && fleetControl.enabled;
+  return {
+    stopLocked,
+    startLocked,
+    settingsLocked: stopLocked || startLocked,
+  };
+}

@@ -244,6 +244,84 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
     CommandMeta { catalog_id: "forensics.browser_traces.view", action_class: ActionClass::Safe, summary: "Read bounded browser-trace cleanup evidence", payload_schema: None },
     CommandMeta { catalog_id: "forensics.event_log_remnants.view", action_class: ActionClass::Safe, summary: "Read bounded event-log cleanup evidence", payload_schema: None },
     CommandMeta { catalog_id: "forensics.prefetch_remnants.view", action_class: ActionClass::Safe, summary: "Read bounded prefetch cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.shell_bags.view", action_class: ActionClass::Safe, summary: "Read bounded redacted ShellBag cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.usb_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted USB-history cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.recycle_bin.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Recycle Bin cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.dns_cache.view", action_class: ActionClass::Safe, summary: "Read bounded DNS-cache records from System Cleanup", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.clipboard_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted clipboard-history cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.execution_audit.view", action_class: ActionClass::Safe, summary: "Read bounded redacted execution-audit cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.wlan_profiles.view", action_class: ActionClass::Safe, summary: "Read bounded WLAN-profile names without credentials", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.net_drives.view", action_class: ActionClass::Safe, summary: "Read bounded redacted network-drive cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.command_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted command-history cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.recent_files.view", action_class: ActionClass::Safe, summary: "Read bounded redacted recent-file cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.rdp_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted RDP-history cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.jump_lists.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Jump List cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.connectivity_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted connectivity-history cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.shadow_copies.view", action_class: ActionClass::Safe, summary: "Read bounded redacted shadow-copy cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.ntfs_journals.view", action_class: ActionClass::Safe, summary: "Read bounded redacted NTFS-journal cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.amcache.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Amcache cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.nt_user_traces.view", action_class: ActionClass::Safe, summary: "Read bounded redacted NTUSER trace cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.notepad_state.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Notepad-state cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.compatibility_cache.view", action_class: ActionClass::Safe, summary: "Read bounded redacted compatibility-cache cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.crash_dumps.view", action_class: ActionClass::Safe, summary: "Read bounded crash-dump metadata without contents", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.search_index.view", action_class: ActionClass::Safe, summary: "Read bounded redacted search-index cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.print_spooler.view", action_class: ActionClass::Safe, summary: "Read bounded print-spooler metadata without document data", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.resource_usage_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted resource-usage cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.temp_database_files.view", action_class: ActionClass::Safe, summary: "Read bounded temporary-database metadata without contents", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.activity_timeline.view", action_class: ActionClass::Safe, summary: "Read bounded activity-timeline metadata without activity content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.web_cache_database.view", action_class: ActionClass::Safe, summary: "Read bounded web-cache metadata without browsing content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.thumbnail_icon_cache.view", action_class: ActionClass::Safe, summary: "Read bounded thumbnail-cache metadata without images", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.notification_history.view", action_class: ActionClass::Safe, summary: "Read bounded notification-history metadata without notification content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.peer_distribution_cache.view", action_class: ActionClass::Safe, summary: "Read bounded peer-distribution metadata without payload content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.diagnostics_timeline.view", action_class: ActionClass::Safe, summary: "Read bounded diagnostics-timeline metadata without log content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.timeline_cache.view", action_class: ActionClass::Safe, summary: "Read bounded timeline-cache metadata without activity content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.rdp_bitmap_cache.view", action_class: ActionClass::Safe, summary: "Read bounded RDP bitmap-cache metadata without image tiles", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.servicing_logs.view", action_class: ActionClass::Safe, summary: "Read bounded servicing-log metadata without log content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.device_install_logs.view", action_class: ActionClass::Safe, summary: "Read bounded device-install-log metadata without log content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.usage_trace_logs.view", action_class: ActionClass::Safe, summary: "Read bounded usage-trace-log metadata without log content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.protection_history.view", action_class: ActionClass::Safe, summary: "Read bounded protection-history metadata without event details", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.wsl_data.view", action_class: ActionClass::Safe, summary: "Read bounded redacted WSL cleanup metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.docker_desktop_data.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Docker cleanup metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.virtual_machine_artifacts.view", action_class: ActionClass::Safe, summary: "Read bounded redacted virtual-machine metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.developer_caches.view", action_class: ActionClass::Safe, summary: "Read bounded redacted developer-cache metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.credential_manager.view", action_class: ActionClass::Safe, summary: "Read bounded credential metadata without values", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.network_wizard_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted network-wizard metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.wer_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted WER metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.inactive_user_protection_metadata.view", action_class: ActionClass::Safe, summary: "Read bounded inactive-user protection metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.sticky_notes.view", action_class: ActionClass::Safe, summary: "Read bounded Sticky Notes metadata without note content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.onedrive_metadata.view", action_class: ActionClass::Safe, summary: "Read bounded redacted OneDrive metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.spotlight_cache.view", action_class: ActionClass::Safe, summary: "Read bounded Spotlight-cache metadata without images", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.font_cache.view", action_class: ActionClass::Safe, summary: "Read bounded font-cache metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.legacy_icon_cache.view", action_class: ActionClass::Safe, summary: "Read bounded icon-cache metadata without images", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.game_captures.view", action_class: ActionClass::Safe, summary: "Read bounded game-capture metadata without media", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.photos_cache.view", action_class: ActionClass::Safe, summary: "Read bounded photo-cache metadata without images", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.xbox_cache.view", action_class: ActionClass::Safe, summary: "Read bounded Xbox-cache metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.communication_caches.view", action_class: ActionClass::Safe, summary: "Read bounded communication-cache metadata without messages", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.editor_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted editor-history metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.git_activity.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Git-activity metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.ssh_state.view", action_class: ActionClass::Safe, summary: "Read bounded redacted SSH metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.remote_access_logs.view", action_class: ActionClass::Safe, summary: "Read bounded redacted remote-access metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.password_manager_caches.view", action_class: ActionClass::Safe, summary: "Read bounded password-manager metadata without secrets", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.game_launcher_logs.view", action_class: ActionClass::Safe, summary: "Read bounded game-launcher metadata without log content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.adobe_recent.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Adobe-recent metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.office_temp_files.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Office-temporary metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.firewall_log.view", action_class: ActionClass::Safe, summary: "Read bounded firewall-log metadata without packet lines", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.neighbor_cache.view", action_class: ActionClass::Safe, summary: "Read bounded redacted neighbor-cache metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.netbios_cache.view", action_class: ActionClass::Safe, summary: "Read bounded redacted NetBIOS-cache metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.geolocation_cache.view", action_class: ActionClass::Safe, summary: "Read bounded geolocation metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.vpn_phonebooks.view", action_class: ActionClass::Safe, summary: "Read bounded redacted VPN metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.proxy_cache.view", action_class: ActionClass::Safe, summary: "Read bounded redacted proxy metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.cloud_placeholders.view", action_class: ActionClass::Safe, summary: "Read bounded cloud-placeholder metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.bits_queue.view", action_class: ActionClass::Safe, summary: "Read bounded BITS-queue metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.cellular_history.view", action_class: ActionClass::Safe, summary: "Read bounded cellular-history metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.app_launch_history.view", action_class: ActionClass::Safe, summary: "Read bounded app-launch metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.office_mru.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Office-MRU metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.embedded_web_cache.view", action_class: ActionClass::Safe, summary: "Read bounded web-cache metadata without browsing content", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.p2p_update_cache.view", action_class: ActionClass::Safe, summary: "Read bounded peer-update-cache metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.reliability_history.view", action_class: ActionClass::Safe, summary: "Read bounded reliability-history metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.explorer_search_history.view", action_class: ActionClass::Safe, summary: "Read bounded Explorer-search metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.search_personalization.view", action_class: ActionClass::Safe, summary: "Read bounded search-personalisation metadata", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.process_review.view", action_class: ActionClass::Safe, summary: "Read bounded redacted process-review metadata", payload_schema: None },
     CommandMeta {
         catalog_id: "velociraptor.collect.client_info",
         action_class: ActionClass::Safe,
@@ -1042,6 +1120,14 @@ pub struct RemoteSearchResult {
     pub command_id: String,
     pub rows: Vec<RemoteSearchResultRow>,
     pub index_status: Option<Value>,
+    /// The server-signed cap accepted by the device after applying local
+    /// bounds. `None` denotes an agent that predates cap receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_result_limit: Option<usize>,
+    /// `true` only when further eligible rows existed beyond the accepted cap.
+    /// This must not be inferred from `rows.len()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap_reached: Option<bool>,
     /// Whether this device actually evaluated `RemoteSearchRequest::predicates`.
     ///
     /// Serde ignores unknown fields, so an agent older than the predicate
@@ -2742,6 +2828,80 @@ mod tests {
             deduped.len(),
             "COMMAND_METADATA has a duplicate catalog_id"
         );
+    }
+
+    #[cfg(feature = "command-metadata")]
+    #[test]
+    fn dns_cache_forensics_view_is_safe_and_parameterless() {
+        let entry = COMMAND_METADATA
+            .iter()
+            .find(|entry| entry.catalog_id == "forensics.dns_cache.view")
+            .expect("DNS Cache forensic view must be catalogued");
+        assert_eq!(entry.action_class, ActionClass::Safe);
+        assert_eq!(entry.payload_schema, None);
+    }
+
+    #[cfg(feature = "command-metadata")]
+    #[test]
+    fn standard_cleanup_forensics_views_are_safe_and_parameterless() {
+        for catalog_id in [
+            "forensics.shell_bags.view",
+            "forensics.usb_history.view",
+            "forensics.recycle_bin.view",
+            "forensics.clipboard_history.view",
+            "forensics.execution_audit.view",
+            "forensics.wlan_profiles.view",
+            "forensics.net_drives.view",
+            "forensics.command_history.view",
+            "forensics.recent_files.view",
+            "forensics.rdp_history.view",
+            "forensics.jump_lists.view",
+            "forensics.connectivity_history.view",
+            "forensics.shadow_copies.view",
+            "forensics.ntfs_journals.view",
+        ] {
+            let entry = COMMAND_METADATA
+                .iter()
+                .find(|entry| entry.catalog_id == catalog_id)
+                .unwrap_or_else(|| panic!("{catalog_id} must be catalogued"));
+            assert_eq!(entry.action_class, ActionClass::Safe, "{catalog_id}");
+            assert_eq!(entry.payload_schema, None, "{catalog_id}");
+        }
+    }
+
+    #[cfg(feature = "command-metadata")]
+    #[test]
+    fn deep_cleanup_forensics_views_are_safe_and_parameterless() {
+        for catalog_id in [
+            "forensics.amcache.view",
+            "forensics.nt_user_traces.view",
+            "forensics.notepad_state.view",
+            "forensics.compatibility_cache.view",
+            "forensics.crash_dumps.view",
+            "forensics.search_index.view",
+            "forensics.print_spooler.view",
+            "forensics.resource_usage_history.view",
+            "forensics.temp_database_files.view",
+            "forensics.activity_timeline.view",
+            "forensics.web_cache_database.view",
+            "forensics.thumbnail_icon_cache.view",
+            "forensics.notification_history.view",
+            "forensics.peer_distribution_cache.view",
+            "forensics.diagnostics_timeline.view",
+            "forensics.timeline_cache.view",
+            "forensics.rdp_bitmap_cache.view",
+            "forensics.servicing_logs.view",
+            "forensics.device_install_logs.view",
+            "forensics.usage_trace_logs.view",
+            "forensics.protection_history.view",
+        ] {
+            let entry = COMMAND_METADATA
+                .iter()
+                .find(|entry| entry.catalog_id == catalog_id)
+                .unwrap_or_else(|| panic!("{catalog_id} must be catalogued"));
+            assert_eq!(entry.action_class, ActionClass::Safe, "{catalog_id}");
+            assert_eq!(entry.payload_schema, None, "{catalog_id}");
+        }
     }
 
     #[cfg(feature = "command-metadata")]

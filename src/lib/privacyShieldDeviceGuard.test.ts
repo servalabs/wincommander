@@ -54,12 +54,26 @@ describe("privacy shield device guardrails", () => {
     expect(shield).not.toContain("should_blur = is_clear or (");
   });
 
-  test("detector lifetime is not tied to the transient PowerShell launcher", async () => {
+  test("a managed detector exits with its WinCommander owner, not its transient PowerShell launcher", async () => {
     const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
+    const backend = await read("src-tauri/commander-free/src/backend.rs");
+    const sidecar = await read("src-tauri/commander-free/src/sidecar.rs");
 
     expect(shield).not.toContain("--parent-pid");
-    expect(shield).not.toContain("_parent_watchdog");
-    expect(shield).not.toContain("watchdog: parent PID");
+    expect(shield).toContain("--owner-pid");
+    expect(shield).toContain("owner_process_is_alive");
+    expect(shield).toContain("Shield owner exited; stopping managed detector");
+    expect(backend).toContain('cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string())');
+    expect(sidecar).toContain('cmd.env("WINCMD_SHIELD_OWNER_PID", std::process::id().to_string())');
+  });
+
+  test("long-lived detector does not hold the backend command output pipe open", async () => {
+    const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
+
+    expect(shield).toContain("$startInfo.RedirectStandardOutput = $true");
+    expect(shield).toContain("$startInfo.RedirectStandardError = $true");
+    expect(shield).toContain("$process.BeginOutputReadLine()");
+    expect(shield).toContain("$process.BeginErrorReadLine()");
   });
 
   test("black camera frames fail startup before a false look-away blackout", async () => {
@@ -69,6 +83,24 @@ describe("privacy shield device guardrails", () => {
     expect(shield).toContain("Camera is delivering black frames");
     expect(shield).toContain("open its privacy shutter or close another camera app");
     expect(shield).toContain("Camera feed is black - open its privacy shutter or close another camera app.");
+  });
+
+  test("presence loss is debounced as unknown and never becomes a Shield alert", async () => {
+    const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
+    const backend = await read("src-tauri/commander-free/src/backend.rs");
+
+    expect(shield).toContain("self._no_face_detected_streak = 0");
+    expect(shield).toContain("self._face_recovery_streak = 0");
+    expect(shield).toContain("self._presence_loss_active = False");
+    expect(shield).toContain("self._no_face_detected_streak >= self.buffer_frames");
+    expect(shield).toContain("self._face_recovery_streak >= self.buffer_frames");
+    expect(shield).toContain("presence_unknown = self._presence_loss_active");
+    expect(shield).toContain("absence/unknown and must not be converted into LOOK AWAY");
+    expect(shield).toContain("if presence_unknown and not (device_triggered or multi_face_triggered or gaze_triggered):");
+    expect(shield).not.toContain('parts.append("NO FACE")');
+    expect(backend).toContain('"shield-reader: no-face reading ignored as presence unknown"');
+    expect(backend).toContain('"look_away" | "multiple_faces" | "secondary_device"');
+    expect(backend).not.toContain('"look_away" | "no_face" | "multiple_faces" | "secondary_device"');
   });
 
   test("stop paths use the detector PID marker when command-line inspection is unavailable", async () => {
@@ -114,8 +146,10 @@ describe("privacy shield device guardrails", () => {
 
     expect(unavailable).toBeGreaterThan(-1);
     expect(unmanaged).toBeGreaterThan(unavailable);
-    expect(pollers.slice(unavailable, unmanaged)).toContain('"camera_unavailable"');
-    expect(pollers.slice(unavailable, unmanaged)).toContain('"windows_server_camera_unavailable"');
+    const capabilityBranch = pollers.slice(unavailable, unmanaged);
+    expect(capabilityBranch).toContain('"windows_camera_policy_denied"');
+    expect(capabilityBranch).toContain('"hardware_unavailable"');
+    expect(capabilityBranch).toContain('"camera_status_unknown"');
   });
 
   test("fleet policy stop retains ownership until the local process really stops", async () => {
@@ -140,11 +174,11 @@ describe("privacy shield device guardrails", () => {
   test("Fleet attention alerts require the enabled signed Fleet policy", async () => {
     const backend = await read("src-tauri/commander-free/src/backend.rs");
 
-    expect(backend).toContain("fn fleet_privacy_event_is_enabled(");
-    expect(backend).toContain("shield.fleet_managed != Some(true)");
-    expect(backend).toContain("shield.fleet_monitoring_enabled != Some(true)");
-    expect(backend).toContain('"look_away" | "no_face" | "multiple_faces" | "secondary_device"');
-    expect(backend).toContain("if allow_fleet_privacy_alert(gaze_kind).await {");
+    expect(backend).toContain("fn fleet_privacy_event_gate(");
+    expect(backend).toContain("shield.fleet_managed == Some(true) && shield.fleet_monitoring_enabled == Some(true)");
+    expect(backend).toContain("!fleet_session_owned && !org_policy_active");
+    expect(backend).toContain('"look_away" | "multiple_faces" | "secondary_device"');
+    expect(backend).toContain("let fleet_gate = fleet_privacy_alert_gate(gaze_kind).await;");
   });
 
   test("the event reader retains an initial look-away emitted during startup", async () => {
