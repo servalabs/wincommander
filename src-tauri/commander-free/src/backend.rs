@@ -3744,24 +3744,24 @@ mod fleet_forensic_projection_tests {
     #[test]
     fn fleet_forensic_projection_keeps_a_bounded_safe_record_contract() {
         let projection = function_body("Get-FleetForensicProjection");
-        for category in [
-            "dns_cache",
-            "browser_footprints",
-            "event_log_summary",
-            "prefetch",
-        ] {
+        for category in FLEET_FORENSIC_PROJECTION_CATEGORIES {
             assert!(
                 projection.contains(category),
                 "missing fixed category {category}"
             );
         }
+        let envelope = function_body("New-FleetForensicProjection");
         assert!(projection.contains("$rowLimit = 200"));
+        assert!(envelope.contains("$byteLimit = 512KB"));
+        assert!(envelope.contains("category_id"));
+        assert!(envelope.contains("datasets"));
         assert!(projection.contains("Get-DnsCacheEntries"));
         assert!(projection.contains("Get-BrowserFootprints"));
         assert!(projection.contains("Get-EventLogSummary"));
         assert!(projection.contains("Get-PrefetchFiles"));
         assert!(projection.contains("dataLength"));
         assert!(projection.contains("dataTruncated"));
+        assert!(projection.contains("[redacted]"));
         assert!(!projection.contains("profilePath"));
         assert!(!projection.contains("title ="));
         assert!(!projection.contains("path ="));
@@ -3902,6 +3902,30 @@ pub async fn run_backend_script(
     run_backend_script_with_timeout(app, command, params, None).await
 }
 
+/// The sole set of Cleanup views that Fleet may request from the local Free
+/// process. Keep this list in lockstep with the PowerShell ValidateSet and the
+/// signed sidecar parser; it is intentionally not derived from caller input.
+pub(crate) const FLEET_FORENSIC_PROJECTION_CATEGORIES: &[&str] = &[
+    "shell_bags",
+    "usb_history",
+    "recycle_bin",
+    "dns_cache",
+    "clipboard_history",
+    "execution_audit",
+    "wlan_profiles",
+    "net_drives",
+    "event_log_summary",
+    "command_history",
+    "recent_files",
+    "rdp_history",
+    "jump_lists",
+    "connectivity_history",
+    "browser_footprints",
+    "prefetch",
+    "shadow_copies",
+    "ntfs_journals",
+];
+
 /// Execute the one Fleet-authorised System Cleanup projection locally in Free.
 ///
 /// This is intentionally separate from `run_backend_script`: the latter can
@@ -3912,9 +3936,8 @@ pub async fn run_backend_script(
 pub(crate) async fn run_fleet_forensic_projection(
     category: &str,
 ) -> Result<serde_json::Value, String> {
-    match category {
-        "dns_cache" | "browser_footprints" | "event_log_summary" | "prefetch" => {}
-        _ => return Err("Fleet collector category is not allowed".to_string()),
+    if !FLEET_FORENSIC_PROJECTION_CATEGORIES.contains(&category) {
+        return Err("Fleet collector category is not allowed".to_string());
     }
 
     let modules = settings::read_settings()

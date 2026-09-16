@@ -424,18 +424,11 @@ fn fleet_forensic_projection_category(args: &serde_json::Value) -> Result<&'stat
         .get("category")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "collector category is required".to_string())?;
-    match category {
-        "dns_cache" | "browser_footprints" | "event_log_summary" | "prefetch" => {
-            Ok(match category {
-                "dns_cache" => "dns_cache",
-                "browser_footprints" => "browser_footprints",
-                "event_log_summary" => "event_log_summary",
-                "prefetch" => "prefetch",
-                _ => unreachable!("validated fixed forensic category"),
-            })
-        }
-        _ => Err("collector category is not allowed".to_string()),
-    }
+    crate::backend::FLEET_FORENSIC_PROJECTION_CATEGORIES
+        .iter()
+        .copied()
+        .find(|allowed| *allowed == category)
+        .ok_or_else(|| "collector category is not allowed".to_string())
 }
 
 async fn respond_to_free_forensic_projection(
@@ -1899,12 +1892,7 @@ mod tests {
 
     #[test]
     fn reverse_forensic_request_accepts_only_fixed_categories_and_shape() {
-        for category in [
-            "dns_cache",
-            "browser_footprints",
-            "event_log_summary",
-            "prefetch",
-        ] {
+        for &category in crate::backend::FLEET_FORENSIC_PROJECTION_CATEGORIES {
             assert_eq!(
                 fleet_forensic_projection_category(&serde_json::json!({ "category": category }))
                     .unwrap(),

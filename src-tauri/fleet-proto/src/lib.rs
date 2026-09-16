@@ -244,7 +244,21 @@ pub const COMMAND_METADATA: &[CommandMeta] = &[
     CommandMeta { catalog_id: "forensics.browser_traces.view", action_class: ActionClass::Safe, summary: "Read bounded browser-trace cleanup evidence", payload_schema: None },
     CommandMeta { catalog_id: "forensics.event_log_remnants.view", action_class: ActionClass::Safe, summary: "Read bounded event-log cleanup evidence", payload_schema: None },
     CommandMeta { catalog_id: "forensics.prefetch_remnants.view", action_class: ActionClass::Safe, summary: "Read bounded prefetch cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.shell_bags.view", action_class: ActionClass::Safe, summary: "Read bounded redacted ShellBag cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.usb_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted USB-history cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.recycle_bin.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Recycle Bin cleanup evidence", payload_schema: None },
     CommandMeta { catalog_id: "forensics.dns_cache.view", action_class: ActionClass::Safe, summary: "Read bounded DNS-cache records from System Cleanup", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.clipboard_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted clipboard-history cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.execution_audit.view", action_class: ActionClass::Safe, summary: "Read bounded redacted execution-audit cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.wlan_profiles.view", action_class: ActionClass::Safe, summary: "Read bounded WLAN-profile names without credentials", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.net_drives.view", action_class: ActionClass::Safe, summary: "Read bounded redacted network-drive cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.command_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted command-history cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.recent_files.view", action_class: ActionClass::Safe, summary: "Read bounded redacted recent-file cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.rdp_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted RDP-history cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.jump_lists.view", action_class: ActionClass::Safe, summary: "Read bounded redacted Jump List cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.connectivity_history.view", action_class: ActionClass::Safe, summary: "Read bounded redacted connectivity-history cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.shadow_copies.view", action_class: ActionClass::Safe, summary: "Read bounded redacted shadow-copy cleanup evidence", payload_schema: None },
+    CommandMeta { catalog_id: "forensics.ntfs_journals.view", action_class: ActionClass::Safe, summary: "Read bounded redacted NTFS-journal cleanup evidence", payload_schema: None },
     CommandMeta {
         catalog_id: "velociraptor.collect.client_info",
         action_class: ActionClass::Safe,
@@ -2762,6 +2776,34 @@ mod tests {
             .expect("DNS Cache forensic view must be catalogued");
         assert_eq!(entry.action_class, ActionClass::Safe);
         assert_eq!(entry.payload_schema, None);
+    }
+
+    #[cfg(feature = "command-metadata")]
+    #[test]
+    fn standard_cleanup_forensics_views_are_safe_and_parameterless() {
+        for catalog_id in [
+            "forensics.shell_bags.view",
+            "forensics.usb_history.view",
+            "forensics.recycle_bin.view",
+            "forensics.clipboard_history.view",
+            "forensics.execution_audit.view",
+            "forensics.wlan_profiles.view",
+            "forensics.net_drives.view",
+            "forensics.command_history.view",
+            "forensics.recent_files.view",
+            "forensics.rdp_history.view",
+            "forensics.jump_lists.view",
+            "forensics.connectivity_history.view",
+            "forensics.shadow_copies.view",
+            "forensics.ntfs_journals.view",
+        ] {
+            let entry = COMMAND_METADATA
+                .iter()
+                .find(|entry| entry.catalog_id == catalog_id)
+                .unwrap_or_else(|| panic!("{catalog_id} must be catalogued"));
+            assert_eq!(entry.action_class, ActionClass::Safe, "{catalog_id}");
+            assert_eq!(entry.payload_schema, None, "{catalog_id}");
+        }
     }
 
     #[cfg(feature = "command-metadata")]
