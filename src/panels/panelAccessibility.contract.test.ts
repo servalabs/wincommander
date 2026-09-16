@@ -40,6 +40,7 @@ describe("assigned panel accessibility contracts", () => {
     expect(mesh).toContain('role="alert" className="p-3 bg-amber-500/10');
     expect(mesh).toContain('aria-pressed={staging.allowLanAccess}');
     expect(fleet.match(/className="fleet-connect-error" role="alert"/g)?.length).toBeGreaterThanOrEqual(5);
+    expect(fleet).toContain('const hasAuthoritativeDeviceLink = linkState !== "not_linked" && !isRemoved;');
     expect(advisor).toContain('className="advisor-error" role="alert"');
     expect(advisor).toContain('aria-label={`Downloading ${model}`}');
     expect(flows).toContain('aria-label={`Run ${rule.name} now`}');

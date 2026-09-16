@@ -347,7 +347,11 @@ export default function FleetConnectView() {
   // falls through to the connect form (prefilled) with the real reason shown.
   const isRemoved = linkState === "error" || (wasEnrolled && !isConnected && !enrolling && !isRetrying && !!agentError);
   const isOffline = linkState === "offline";
-  const hasAuthoritativeDeviceLink = linkState !== "not_linked";
+  // A terminal agent error (for example, a server-side credential revocation)
+  // still has a useful historical device identity, but it is no longer a live
+  // Fleet link. Treat it as re-enrollable so the prefilled, confirmed Connect
+  // flow remains available instead of trapping the user on a read-only error.
+  const hasAuthoritativeDeviceLink = linkState !== "not_linked" && !isRemoved;
 
   return (
     <div className="fleet-connect-card">
