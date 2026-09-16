@@ -417,13 +417,20 @@ fn fleet_forensic_projection_category(args: &serde_json::Value) -> Result<&'stat
     let object = args
         .as_object()
         .ok_or_else(|| "collector arguments must be an object".to_string())?;
-    if object.len() != 1 {
-        return Err("collector accepts only the category field".to_string());
+    if object.len() != 2 {
+        return Err("collector accepts only category and fixed full_detail fields".to_string());
     }
     let category = object
         .get("category")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "collector category is required".to_string())?;
+    if object
+        .get("full_detail")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return Err("collector requires the fixed full_detail marker".to_string());
+    }
     crate::backend::fleet_forensic_projection_category(category)
         .map(|allowed| allowed.id)
         .ok_or_else(|| "collector category is not allowed".to_string())
@@ -441,7 +448,7 @@ async fn respond_to_free_forensic_projection(
         }
         crate::license::require_service_feature("fleet")?;
         let category = fleet_forensic_projection_category(&request.args)?;
-        crate::backend::run_fleet_forensic_projection(category).await
+        crate::backend::run_fleet_forensic_projection(category, true).await
     }
     .await;
 
@@ -1890,15 +1897,21 @@ mod tests {
     fn reverse_forensic_request_accepts_only_fixed_categories_and_shape() {
         for category in crate::backend::FLEET_FORENSIC_PROJECTION_REGISTRY {
             assert_eq!(
-                fleet_forensic_projection_category(&serde_json::json!({ "category": category.id }))
+                fleet_forensic_projection_category(&serde_json::json!({
+                    "category": category.id,
+                    "full_detail": true
+                }))
                     .unwrap(),
                 category.id
             );
         }
         for args in [
             serde_json::json!({}),
+            serde_json::json!({ "category": "dns_cache" }),
+            serde_json::json!({ "category": "dns_cache", "full_detail": false }),
             serde_json::json!({ "category": "dns_cache", "path": "C:\\sensitive" }),
-            serde_json::json!({ "category": "arbitrary_command" }),
+            serde_json::json!({ "category": "dns_cache", "full_detail": true, "path": "C:\\sensitive" }),
+            serde_json::json!({ "category": "arbitrary_command", "full_detail": true }),
             serde_json::json!(["dns_cache"]),
         ] {
             assert!(fleet_forensic_projection_category(&args).is_err());

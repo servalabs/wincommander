@@ -3742,7 +3742,7 @@ mod fleet_forensic_projection_tests {
     }
 
     #[test]
-    fn fleet_forensic_projection_keeps_a_bounded_safe_record_contract() {
+    fn fleet_forensic_projection_keeps_a_bounded_full_detail_contract() {
         let projection = function_body("Get-FleetForensicProjection");
         for category in FLEET_FORENSIC_PROJECTION_REGISTRY {
             assert!(
@@ -3779,12 +3779,13 @@ mod fleet_forensic_projection_tests {
         assert!(projection.contains("Get-PrefetchFiles"));
         assert!(projection.contains("dataLength"));
         assert!(projection.contains("dataTruncated"));
-        assert!(projection.contains("[redacted]"));
-        assert!(!projection.contains("profilePath"));
-        assert!(!projection.contains("title ="));
-        // SRUM retains its local `path` column shape only as an explicit
-        // redaction marker; the local raw path must never cross this bridge.
-        assert!(projection.contains("path = '[redacted]'"));
+        assert!(projection.contains("[bool]$FullDetail = $true"));
+        assert!(envelope.contains("detail_mode  = 'full'"));
+        assert!(envelope.contains("$column.sensitive = $true"));
+        assert!(projection.contains("preview = (& $sanitizeText $_.preview 256)"));
+        assert!(projection.contains("command = (& $sanitizeText $_.command 256)"));
+        assert!(projection.contains("path = (& $sanitizeText $_.path 256)"));
+        assert!(!projection.contains("'[redacted]'"));
     }
 
     #[test]
@@ -4115,6 +4116,7 @@ pub(crate) fn fleet_forensic_projection_category(
 /// becoming a general local command executor.
 pub(crate) async fn run_fleet_forensic_projection(
     category: &str,
+    full_detail: bool,
 ) -> Result<serde_json::Value, String> {
     let registry_entry = fleet_forensic_projection_category(category)
         .ok_or_else(|| "Fleet collector category is not allowed".to_string())?;
@@ -4124,6 +4126,9 @@ pub(crate) async fn run_fleet_forensic_projection(
         .unwrap_or_default();
     if !modules.get("cleanup").copied().unwrap_or(false) {
         return Err("System Cleanup is disabled on this device".to_string());
+    }
+    if !full_detail {
+        return Err("Fleet cleanup evidence requires the fixed full-detail request".to_string());
     }
 
     let core_utils = load_module("core/utils")?;
@@ -4142,7 +4147,10 @@ pub(crate) async fn run_fleet_forensic_projection(
     command.env("WINCMD_COMMAND", "Get-FleetForensicProjection");
     command.env(
         "WINCMD_PARAMS_JSON",
-        serde_json::json!({ "Category": category }).to_string(),
+        // The sidecar parser accepts this literal boolean only. It is a
+        // protocol marker for Fleet's display-policy data, not a caller
+        // selected PowerShell function, field list, or disclosure request.
+        serde_json::json!({ "Category": category, "FullDetail": true }).to_string(),
     );
     let mut child = command
         .spawn()

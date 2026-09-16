@@ -609,8 +609,10 @@ function Get-DnsCacheEntries {
 # the desktop Cleanup viewer can keep its richer local-only output.
 function New-FleetForensicProjection {
     # The Fleet projection is a deliberately small, schema-first view of a
-    # local Cleanup card.  It is not an export API: callers supply already
-    # redacted rows, and this helper applies the final row and byte bounds.
+    # local Cleanup card. It is a fixed, bounded admin evidence export: the
+    # existing authenticated Pro bridge is the only caller and applies the
+    # display privacy policy. Values must therefore remain in the result so a
+    # privacy setting can be changed without re-collecting the device.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Category,
@@ -655,13 +657,27 @@ function New-FleetForensicProjection {
         total        = $Total
         shown        = $shown.Count
         truncated    = $Truncated
-        redacted     = $Redacted
+        # `redacted` is retained for backwards-compatible consumers, but new
+        # evidence is always complete. Individual columns declare whether a
+        # value is sensitive so Fleet can conceal or reveal it at display time.
+        redacted     = $false
+        detail_mode  = 'full'
         datasets     = @([ordered]@{
             id      = $Category
             title   = $Label
             columns = @($Columns)
             rows    = @($shown)
         })
+    }
+    foreach ($column in @($projection.columns)) {
+        # Older category arms used `type = redacted` as a transport-time
+        # placeholder. Convert that to declarative presentation metadata.
+        if ($column.type -eq 'redacted') {
+            $column.type = 'text'
+            $column.sensitive = $true
+        } elseif ($null -eq $column.sensitive) {
+            $column.sensitive = $false
+        }
     }
     foreach ($key in $Extra.Keys) { $projection[$key] = $Extra[$key] }
     return $projection
@@ -694,7 +710,11 @@ function Get-FleetForensicProjection {
             'p2p_update_cache', 'reliability_history', 'explorer_search_history', 'search_personalization',
             'process_review'
         )]
-        [string]$Category = 'dns_cache'
+        [string]$Category = 'dns_cache',
+        # This is supplied as true only by the signed Pro-to-Free bridge. It
+        # is not a caller-selected disclosure level; the complete bounded
+        # projection is always collected and Fleet chooses how to display it.
+        [bool]$FullDetail = $true
     )
 
     $rowLimit = 200
@@ -727,9 +747,9 @@ function Get-FleetForensicProjection {
     }
 
     # A number of deep-cleanup cards are local file inventories. Fleet gets
-    # their bounded metadata (size/time/source) but never the filename, path,
-    # contents, thumbnail, database row, or log line that makes the artifact
-    # personally identifying.
+    # their bounded local viewer metadata (including the locally visible
+    # artifact label), with a per-column sensitive marker for its display
+    # policy. This helper remains fixed-field; it never reads arbitrary paths.
     $metadataRows = {
         param([object[]]$Items, [string]$Source)
         @($Items | ForEach-Object {
@@ -744,19 +764,28 @@ function Get-FleetForensicProjection {
                     break
                 }
             }
-            @{ source = $Source; artifact = '[redacted]'; sizeKB = $sizeKB; modified = $modified }
+            $artifact = ''
+            foreach ($property in @('name', 'fileName', 'displayName', 'originalPath', 'path', 'fullName')) {
+                $value = $null
+                try { $value = $_.$property } catch {}
+                if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+                    $artifact = (& $sanitizeText $value 256)
+                    break
+                }
+            }
+            @{ source = $Source; artifact = $artifact; sizeKB = $sizeKB; modified = $modified }
         })
     }
 
     $metadataProjection = {
         param([string]$ProjectionCategory, [string]$ProjectionLabel, [hashtable]$Result, [string]$Source)
         # Each switch arm below calls its collector literally. This helper only
-        # normalises the already-returned, redacted metadata shape.
+        # normalises the fixed local metadata shape.
         $items = @($Result.files)
         if ($items.Count -eq 0) { $items = @($Result.entries) }
         $records = & $metadataRows $items $Source
-        $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'redacted' }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
-        return (New-FleetForensicProjection -Category $ProjectionCategory -Label $ProjectionLabel -Columns $columns -Records $records -Total $items.Count -Redacted $true)
+        $columns = @(@{ key = 'source'; label = 'Source'; type = 'text' }, @{ key = 'artifact'; label = 'Artifact'; type = 'text'; sensitive = $true }, @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' }, @{ key = 'modified'; label = 'Modified'; type = 'timestamp' })
+        return (New-FleetForensicProjection -Category $ProjectionCategory -Label $ProjectionLabel -Columns $columns -Records $records -Total $items.Count)
     }
 
     $empty = {
@@ -799,8 +828,8 @@ function Get-FleetForensicProjection {
                 $columns = @(
                         @{ key = 'name'; label = 'Name'; type = 'text' },
                         @{ key = 'dataLength'; label = 'Data length'; type = 'number' },
-                        @{ key = 'data'; label = 'Data'; type = 'text' },
-                        @{ key = 'recordType'; label = 'Type'; type = 'text' },
+                        @{ key = 'data'; label = 'Data'; type = 'text'; sensitive = $true },
+                        @{ key = 'recordType'; label = 'Type'; type = 'text'; sensitive = $true },
                         @{ key = 'section'; label = 'Section'; type = 'text' },
                         @{ key = 'status'; label = 'Status'; type = 'text' },
                         @{ key = 'ttl'; label = 'TTL'; type = 'number' }
@@ -894,13 +923,14 @@ function Get-FleetForensicProjection {
                 if ($result.error) { return (& $empty 'System Cleanup could not read ShellBag summaries.') }
                 $sourceRows = @($result.entries)
                 $records = @($sourceRows | ForEach-Object {
-                    @{ record = 'ShellBag record (path redacted)'; lastModified = (& $sanitizeText $_.lastModified 64) }
+                    @{ record = (& $sanitizeText $_.path 256); lastModified = (& $sanitizeText $_.lastModified 64) }
                 })
                 $columns = @(
                     @{ key = 'record'; label = 'Record'; type = 'text' },
                     @{ key = 'lastModified'; label = 'Last modified'; type = 'timestamp' }
                 )
-                return (New-FleetForensicProjection -Category 'shell_bags' -Label 'ShellBags' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                $columns[0].sensitive = $true
+                return (New-FleetForensicProjection -Category 'shell_bags' -Label 'ShellBags' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
             'usb_history' {
@@ -909,19 +939,19 @@ function Get-FleetForensicProjection {
                 $sourceRows = @($result.devices)
                 $records = @($sourceRows | ForEach-Object {
                     @{
-                        deviceIdHash = (& $opaqueId $_.deviceId)
+                        deviceId = (& $sanitizeText $_.deviceId 256)
                         friendlyName = (& $sanitizeText $_.friendlyName 128)
                         manufacturer = (& $sanitizeText $_.manufacturer 128)
                         className = (& $sanitizeText $_.className 64)
                     }
                 })
                 $columns = @(
-                    @{ key = 'deviceIdHash'; label = 'Device ID'; type = 'opaque-id' },
+                    @{ key = 'deviceId'; label = 'Device ID'; type = 'text'; sensitive = $true },
                     @{ key = 'friendlyName'; label = 'Device'; type = 'text' },
                     @{ key = 'manufacturer'; label = 'Manufacturer'; type = 'text' },
                     @{ key = 'className'; label = 'Class'; type = 'text' }
                 )
-                return (New-FleetForensicProjection -Category 'usb_history' -Label 'USB history' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                return (New-FleetForensicProjection -Category 'usb_history' -Label 'USB history' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
             'recycle_bin' {
@@ -934,7 +964,8 @@ function Get-FleetForensicProjection {
                     try { $sizeBytes = [int64]$_.sizeBytes } catch {}
                     try { $sizeKB = [double]$_.sizeKB } catch {}
                     @{
-                        item = 'Deleted item (path and account redacted)'
+                        item = (& $sanitizeText $_.originalPath 256)
+                        account = (& $sanitizeText $_.account 128)
                         deletedTime = (& $sanitizeText $_.deletedTime 64)
                         sizeBytes = $sizeBytes
                         sizeKB = $sizeKB
@@ -943,12 +974,14 @@ function Get-FleetForensicProjection {
                 })
                 $columns = @(
                     @{ key = 'item'; label = 'Item'; type = 'text' },
+                    @{ key = 'account'; label = 'Account'; type = 'text'; sensitive = $true },
                     @{ key = 'deletedTime'; label = 'Deleted'; type = 'timestamp' },
                     @{ key = 'sizeBytes'; label = 'Size (bytes)'; type = 'number' },
                     @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' },
                     @{ key = 'drive'; label = 'Drive'; type = 'text' }
                 )
-                return (New-FleetForensicProjection -Category 'recycle_bin' -Label 'Recycle Bin' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true -Extra @{ totalSizeKB = [double]$result.totalSizeKB })
+                $columns[0].sensitive = $true
+                return (New-FleetForensicProjection -Category 'recycle_bin' -Label 'Recycle Bin' -Columns $columns -Records $records -Total $sourceRows.Count -Extra @{ totalSizeKB = [double]$result.totalSizeKB })
             }
 
             'clipboard_history' {
@@ -958,14 +991,14 @@ function Get-FleetForensicProjection {
                 $records = @($sourceRows | ForEach-Object {
                     $count = 0
                     try { $count = [int]$_.charCount } catch {}
-                    @{ itemType = (& $sanitizeText $_.type 32); preview = '[redacted]'; charCount = $count }
+                    @{ itemType = (& $sanitizeText $_.type 32); preview = (& $sanitizeText $_.preview 256); charCount = $count }
                 })
                 $columns = @(
                     @{ key = 'itemType'; label = 'Type'; type = 'text' },
-                    @{ key = 'preview'; label = 'Preview'; type = 'redacted' },
+                    @{ key = 'preview'; label = 'Preview'; type = 'text'; sensitive = $true },
                     @{ key = 'charCount'; label = 'Characters'; type = 'number' }
                 )
-                return (New-FleetForensicProjection -Category 'clipboard_history' -Label 'Clipboard history' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true -Extra @{
+                return (New-FleetForensicProjection -Category 'clipboard_history' -Label 'Clipboard history' -Columns $columns -Records $records -Total $sourceRows.Count -Extra @{
                     clipboardHistoryDisabled = [bool]$result.clipboardHistoryDisabled
                     cloudClipboardDisabled = [bool]$result.cloudClipboardDisabled
                 })
@@ -976,24 +1009,22 @@ function Get-FleetForensicProjection {
                 if ($result.error) { return (& $empty 'System Cleanup could not read execution-audit summaries.') }
                 $sourceRows = @($result.entries)
                 $records = @($sourceRows | ForEach-Object {
-                    @{ source = (& $sanitizeText $_.source 64); record = 'Execution record (path redacted)' }
+                    @{ source = (& $sanitizeText $_.source 64); record = (& $sanitizeText $_.path 256) }
                 })
                 $columns = @(
                     @{ key = 'source'; label = 'Source'; type = 'text' },
-                    @{ key = 'record'; label = 'Record'; type = 'redacted' }
+                    @{ key = 'record'; label = 'Record'; type = 'text'; sensitive = $true }
                 )
-                return (New-FleetForensicProjection -Category 'execution_audit' -Label 'Execution audit' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                return (New-FleetForensicProjection -Category 'execution_audit' -Label 'Execution audit' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
             'wlan_profiles' {
                 $result = Get-WlanProfiles
                 if ($result.error) { return (& $empty 'System Cleanup could not read WLAN-profile summaries.') }
                 $sourceRows = @($result.profiles)
-                $records = @($sourceRows | ForEach-Object { @{ name = (& $sanitizeText $_.name 128) } })
-                $columns = @(@{ key = 'name'; label = 'Profile'; type = 'text' })
-                # Passwords are intentionally not projected, even when the
-                # local viewer can read them for an authorised administrator.
-                return (New-FleetForensicProjection -Category 'wlan_profiles' -Label 'WLAN profiles' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                $records = @($sourceRows | ForEach-Object { @{ name = (& $sanitizeText $_.name 128); password = (& $sanitizeText $_.password 256) } })
+                $columns = @(@{ key = 'name'; label = 'Profile'; type = 'text'; sensitive = $true }, @{ key = 'password'; label = 'Password'; type = 'text'; sensitive = $true })
+                return (New-FleetForensicProjection -Category 'wlan_profiles' -Label 'WLAN profiles' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
             'net_drives' {
@@ -1001,25 +1032,25 @@ function Get-FleetForensicProjection {
                 if ($result.error) { return (& $empty 'System Cleanup could not read network-drive summaries.') }
                 $sourceRows = @($result.drives)
                 $records = @($sourceRows | ForEach-Object {
-                    @{ drive = (& $sanitizeText $_.Name 16); remote = '[redacted]' }
+                    @{ drive = (& $sanitizeText $_.Name 16); remote = (& $sanitizeText $_.DisplayRoot 256) }
                 })
                 $columns = @(
                     @{ key = 'drive'; label = 'Drive'; type = 'text' },
-                    @{ key = 'remote'; label = 'Remote location'; type = 'redacted' }
+                    @{ key = 'remote'; label = 'Remote location'; type = 'text'; sensitive = $true }
                 )
-                return (New-FleetForensicProjection -Category 'net_drives' -Label 'Network drives' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                return (New-FleetForensicProjection -Category 'net_drives' -Label 'Network drives' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
             'command_history' {
                 $result = Get-PSHistory
                 if ($result.error) { return (& $empty 'System Cleanup could not read command-history summaries.') }
                 $sourceRows = @($result.entries)
-                $records = @($sourceRows | ForEach-Object { @{ id = [int]$_.id; command = '[redacted]' } })
+                $records = @($sourceRows | ForEach-Object { @{ id = [int]$_.id; command = (& $sanitizeText $_.command 256) } })
                 $columns = @(
                     @{ key = 'id'; label = 'Record'; type = 'number' },
-                    @{ key = 'command'; label = 'Command'; type = 'redacted' }
+                    @{ key = 'command'; label = 'Command'; type = 'text'; sensitive = $true }
                 )
-                return (New-FleetForensicProjection -Category 'command_history' -Label 'Command history' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                return (New-FleetForensicProjection -Category 'command_history' -Label 'Command history' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
             'recent_files' {
@@ -1030,19 +1061,21 @@ function Get-FleetForensicProjection {
                     $sizeBytes = 0
                     try { $sizeBytes = [int64]$_.sizeBytes } catch {}
                     @{
-                        item = '[redacted]'
+                        item = (& $sanitizeText $_.name 256)
+                        target = (& $sanitizeText $_.target 256)
                         extension = (& $sanitizeText $_.extension 32)
                         lastModified = (& $sanitizeText $_.lastModified 64)
                         sizeBytes = $sizeBytes
                     }
                 })
                 $columns = @(
-                    @{ key = 'item'; label = 'Item'; type = 'redacted' },
+                    @{ key = 'item'; label = 'Item'; type = 'text'; sensitive = $true },
+                    @{ key = 'target'; label = 'Target'; type = 'text'; sensitive = $true },
                     @{ key = 'extension'; label = 'Extension'; type = 'text' },
                     @{ key = 'lastModified'; label = 'Last modified'; type = 'timestamp' },
                     @{ key = 'sizeBytes'; label = 'Size (bytes)'; type = 'number' }
                 )
-                return (New-FleetForensicProjection -Category 'recent_files' -Label 'Recent files' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                return (New-FleetForensicProjection -Category 'recent_files' -Label 'Recent files' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
             'rdp_history' {
@@ -1050,15 +1083,15 @@ function Get-FleetForensicProjection {
                 if ($result.error) { return (& $empty 'System Cleanup could not read RDP-history summaries.') }
                 $sourceRows = @($result.entries)
                 $records = @($sourceRows | ForEach-Object {
-                    @{ type = (& $sanitizeText $_.type 32); endpoint = '[redacted]'; identity = '[redacted]'; lastModified = (& $sanitizeText $_.lastModified 64) }
+                    @{ type = (& $sanitizeText $_.type 32); endpoint = (& $sanitizeText $_.host 256); identity = (& $sanitizeText $_.username 128); lastModified = (& $sanitizeText $_.lastModified 64) }
                 })
                 $columns = @(
                     @{ key = 'type'; label = 'Type'; type = 'text' },
-                    @{ key = 'endpoint'; label = 'Endpoint'; type = 'redacted' },
-                    @{ key = 'identity'; label = 'Identity'; type = 'redacted' },
+                    @{ key = 'endpoint'; label = 'Endpoint'; type = 'text'; sensitive = $true },
+                    @{ key = 'identity'; label = 'Identity'; type = 'text'; sensitive = $true },
                     @{ key = 'lastModified'; label = 'Last modified'; type = 'timestamp' }
                 )
-                return (New-FleetForensicProjection -Category 'rdp_history' -Label 'RDP history' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                return (New-FleetForensicProjection -Category 'rdp_history' -Label 'RDP history' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
             'jump_lists' {
@@ -1068,15 +1101,15 @@ function Get-FleetForensicProjection {
                 $records = @($sourceRows | ForEach-Object {
                     $sizeKB = 0
                     try { $sizeKB = [double]$_.sizeKB } catch {}
-                    @{ name = '[redacted]'; type = (& $sanitizeText $_.type 32); sizeKB = $sizeKB; lastModified = (& $sanitizeText $_.lastModified 64) }
+                    @{ name = (& $sanitizeText $_.name 256); type = (& $sanitizeText $_.type 32); sizeKB = $sizeKB; lastModified = (& $sanitizeText $_.lastModified 64) }
                 })
                 $columns = @(
-                    @{ key = 'name'; label = 'List'; type = 'redacted' },
+                    @{ key = 'name'; label = 'List'; type = 'text'; sensitive = $true },
                     @{ key = 'type'; label = 'Type'; type = 'text' },
                     @{ key = 'sizeKB'; label = 'Size (KB)'; type = 'number' },
                     @{ key = 'lastModified'; label = 'Last modified'; type = 'timestamp' }
                 )
-                return (New-FleetForensicProjection -Category 'jump_lists' -Label 'Jump Lists' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                return (New-FleetForensicProjection -Category 'jump_lists' -Label 'Jump Lists' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
             'connectivity_history' {
@@ -1084,15 +1117,18 @@ function Get-FleetForensicProjection {
                 if ($result.error) { return (& $empty 'System Cleanup could not read connectivity-history summaries.') }
                 $sourceRows = @($result.entries)
                 $records = @($sourceRows | ForEach-Object {
-                    @{ source = (& $sanitizeText $_.source 64); type = (& $sanitizeText $_.type 32); category = (& $sanitizeText $_.category 32); network = '[redacted]' }
+                    @{ source = (& $sanitizeText $_.source 64); type = (& $sanitizeText $_.type 32); category = (& $sanitizeText $_.category 32); network = (& $sanitizeText $_.name 256); key = (& $sanitizeText $_.key 256); description = (& $sanitizeText $_.description 256); dnsSuffix = (& $sanitizeText $_.dnsSuffix 256) }
                 })
                 $columns = @(
                     @{ key = 'source'; label = 'Source'; type = 'text' },
                     @{ key = 'type'; label = 'Type'; type = 'text' },
                     @{ key = 'category'; label = 'Category'; type = 'text' },
-                    @{ key = 'network'; label = 'Network'; type = 'redacted' }
+                    @{ key = 'network'; label = 'Network'; type = 'text'; sensitive = $true },
+                    @{ key = 'key'; label = 'Registry key'; type = 'text'; sensitive = $true },
+                    @{ key = 'description'; label = 'Description'; type = 'text'; sensitive = $true },
+                    @{ key = 'dnsSuffix'; label = 'DNS suffix'; type = 'text'; sensitive = $true }
                 )
-                return (New-FleetForensicProjection -Category 'connectivity_history' -Label 'Connectivity history' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                return (New-FleetForensicProjection -Category 'connectivity_history' -Label 'Connectivity history' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
             'shadow_copies' {
@@ -1101,7 +1137,7 @@ function Get-FleetForensicProjection {
                 $sourceRows = @($result.copies)
                 $records = @($sourceRows | ForEach-Object {
                     @{
-                        idHash = (& $opaqueId $_.id)
+                        id = (& $sanitizeText $_.id 256)
                         drive = (& $sanitizeText $_.drive 16)
                         created = (& $sanitizeText $_.created 64)
                         clientAccessible = [bool]$_.clientAccessible
@@ -1110,14 +1146,14 @@ function Get-FleetForensicProjection {
                     }
                 })
                 $columns = @(
-                    @{ key = 'idHash'; label = 'Copy ID'; type = 'opaque-id' },
+                    @{ key = 'id'; label = 'Copy ID'; type = 'text'; sensitive = $true },
                     @{ key = 'drive'; label = 'Drive'; type = 'text' },
                     @{ key = 'created'; label = 'Created'; type = 'timestamp' },
                     @{ key = 'clientAccessible'; label = 'Client accessible'; type = 'boolean' },
                     @{ key = 'persistent'; label = 'Persistent'; type = 'boolean' },
                     @{ key = 'state'; label = 'State'; type = 'text' }
                 )
-                return (New-FleetForensicProjection -Category 'shadow_copies' -Label 'Shadow copies' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true -Extra @{ vssRunning = [bool]$result.vssRunning })
+                return (New-FleetForensicProjection -Category 'shadow_copies' -Label 'Shadow copies' -Columns $columns -Records $records -Total $sourceRows.Count -Extra @{ vssRunning = [bool]$result.vssRunning })
             }
 
             'ntfs_journals' {
@@ -1125,33 +1161,49 @@ function Get-FleetForensicProjection {
                 if ($result.error) { return (& $empty 'System Cleanup could not read NTFS-journal summaries.') }
                 $sourceRows = @($result.journals)
                 $records = @($sourceRows | ForEach-Object {
-                    @{ drive = (& $sanitizeText $_.drive 16); present = [bool]$_.present; journalIdHash = (& $opaqueId $_.journalId); maxSize = (& $sanitizeText $_.maxSize 64) }
+                    @{ drive = (& $sanitizeText $_.drive 16); present = [bool]$_.present; journalId = (& $sanitizeText $_.journalId 128); maxSize = (& $sanitizeText $_.maxSize 64) }
                 })
                 $columns = @(
                     @{ key = 'drive'; label = 'Drive'; type = 'text' },
                     @{ key = 'present'; label = 'Present'; type = 'boolean' },
-                    @{ key = 'journalIdHash'; label = 'Journal ID'; type = 'opaque-id' },
+                    @{ key = 'journalId'; label = 'Journal ID'; type = 'text'; sensitive = $true },
                     @{ key = 'maxSize'; label = 'Maximum size'; type = 'text' }
                 )
-                return (New-FleetForensicProjection -Category 'ntfs_journals' -Label 'NTFS journals' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                return (New-FleetForensicProjection -Category 'ntfs_journals' -Label 'NTFS journals' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
 
             'amcache' {
                 $result = Get-AmcacheEntries
                 if ($result.error) { return (& $empty 'System Cleanup could not read Amcache summaries.') }
                 $sourceRows = @($result.entries)
-                $records = @($sourceRows | ForEach-Object { @{ category = (& $sanitizeText $_.category 96); count = [int]$_.count; sample = '[redacted]' } })
-                $columns = @(@{ key = 'category'; label = 'Category'; type = 'text' }, @{ key = 'count'; label = 'Records'; type = 'number' }, @{ key = 'sample'; label = 'Sample'; type = 'redacted' })
-                return (New-FleetForensicProjection -Category 'amcache' -Label 'Amcache' -Columns $columns -Records $records -Total ([int]$result.total) -Redacted $true -Extra @{ hveFileExists = [bool]$result.hveFileExists; hveFileSizeMb = [double]$result.hveFileSizeMb })
+                $records = @($sourceRows | ForEach-Object { @{ category = (& $sanitizeText $_.category 96); count = [int]$_.count; sample = (& $sanitizeText (($_.sample | ConvertTo-Json -Compress -Depth 3)) 256) } })
+                $columns = @(@{ key = 'category'; label = 'Category'; type = 'text' }, @{ key = 'count'; label = 'Records'; type = 'number' }, @{ key = 'sample'; label = 'Sample'; type = 'text'; sensitive = $true })
+                return (New-FleetForensicProjection -Category 'amcache' -Label 'Amcache' -Columns $columns -Records $records -Total ([int]$result.total) -Extra @{ hveFileExists = [bool]$result.hveFileExists; hveFileSizeMb = [double]$result.hveFileSizeMb })
             }
 
             'nt_user_traces' {
                 $result = Get-NTUserTraces
                 if ($result.error) { return (& $empty 'System Cleanup could not read NTUSER trace summaries.') }
-                $sourceRows = @($result.sections)
-                $records = @($sourceRows | ForEach-Object { @{ section = (& $sanitizeText $_.name 64); count = [int]$_.count } })
-                $columns = @(@{ key = 'section'; label = 'Section'; type = 'text' }, @{ key = 'count'; label = 'Records'; type = 'number' })
-                return (New-FleetForensicProjection -Category 'nt_user_traces' -Label 'NTUSER traces' -Columns $columns -Records $records -Total (($sourceRows | Measure-Object -Property count -Sum).Sum) -Redacted $true)
+                # The local collector already provides a small fixed set of
+                # trace key/value pairs. Flatten it into rows rather than
+                # discarding the values into a category-level count.
+                $sourceRows = @(
+                    foreach ($section in @($result.sections)) {
+                        foreach ($entry in @($section.entries)) {
+                            @{
+                                section = (& $sanitizeText $section.name 64)
+                                key = (& $sanitizeText $entry.key 64)
+                                value = (& $sanitizeText $entry.value 256)
+                            }
+                        }
+                    }
+                )
+                $columns = @(
+                    @{ key = 'section'; label = 'Section'; type = 'text' },
+                    @{ key = 'key'; label = 'Key'; type = 'text'; sensitive = $true },
+                    @{ key = 'value'; label = 'Value'; type = 'text'; sensitive = $true }
+                )
+                return (New-FleetForensicProjection -Category 'nt_user_traces' -Label 'NTUSER traces' -Columns $columns -Records $sourceRows -Total ([int]$result.total))
             }
 
             'notepad_state' {
@@ -1204,10 +1256,10 @@ function Get-FleetForensicProjection {
                 if ($result.error) { return (& $empty 'System Cleanup could not read resource-usage summaries.') }
                 $sourceRows = @($result.entries)
                 $records = @($sourceRows | ForEach-Object {
-                    @{ name = (& $sanitizeText $_.name 128); pid = [int]$_.pid; cpuTime = (& $sanitizeText $_.cpuTime 32); memoryKB = [double]$_.memoryKB; threadCount = [int]$_.threadCount; path = '[redacted]'; owner = '[redacted]' }
+                    @{ name = (& $sanitizeText $_.name 128); pid = [int]$_.pid; cpuTime = (& $sanitizeText $_.cpuTime 32); memoryKB = [double]$_.memoryKB; threadCount = [int]$_.threadCount; path = (& $sanitizeText $_.path 256); owner = (& $sanitizeText $_.owner 128) }
                 })
                 $columns = @(@{ key = 'name'; label = 'Process'; type = 'text' }, @{ key = 'pid'; label = 'PID'; type = 'number' }, @{ key = 'cpuTime'; label = 'CPU time'; type = 'text' }, @{ key = 'memoryKB'; label = 'Memory (KB)'; type = 'number' }, @{ key = 'threadCount'; label = 'Threads'; type = 'number' }, @{ key = 'path'; label = 'Path'; type = 'redacted' }, @{ key = 'owner'; label = 'Owner'; type = 'redacted' })
-                return (New-FleetForensicProjection -Category 'resource_usage_history' -Label 'Resource usage history' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true -Extra @{ srumSizeMb = [double]$result.srumSizeMb })
+                return (New-FleetForensicProjection -Category 'resource_usage_history' -Label 'Resource usage history' -Columns $columns -Records $records -Total $sourceRows.Count -Extra @{ srumSizeMb = [double]$result.srumSizeMb })
             }
 
             'temp_database_files' {
@@ -1373,9 +1425,9 @@ function Get-FleetForensicProjection {
                 $result = Get-ProcessIntelligence
                 if ($result.error) { return (& $empty 'System Cleanup could not read process summaries.') }
                 $sourceRows = @($result.processes)
-                $records = @($sourceRows | ForEach-Object { @{ name = (& $sanitizeText $_.name 128); pid = [int]$_.pid; signed = (& $sanitizeText $_.signed 32); signer = (& $sanitizeText $_.signer 128); elevated = (& $sanitizeText $_.elevated 16); path = '[redacted]' } })
+                $records = @($sourceRows | ForEach-Object { @{ name = (& $sanitizeText $_.name 128); pid = [int]$_.pid; signed = (& $sanitizeText $_.signed 32); signer = (& $sanitizeText $_.signer 128); elevated = (& $sanitizeText $_.elevated 16); path = (& $sanitizeText $_.path 256) } })
                 $columns = @(@{ key = 'name'; label = 'Process'; type = 'text' }, @{ key = 'pid'; label = 'PID'; type = 'number' }, @{ key = 'signed'; label = 'Signature'; type = 'text' }, @{ key = 'signer'; label = 'Signer'; type = 'text' }, @{ key = 'elevated'; label = 'Elevated'; type = 'text' }, @{ key = 'path'; label = 'Path'; type = 'redacted' })
-                return (New-FleetForensicProjection -Category 'process_review' -Label 'Process review' -Columns $columns -Records $records -Total $sourceRows.Count -Redacted $true)
+                return (New-FleetForensicProjection -Category 'process_review' -Label 'Process review' -Columns $columns -Records $records -Total $sourceRows.Count)
             }
         }
     }
