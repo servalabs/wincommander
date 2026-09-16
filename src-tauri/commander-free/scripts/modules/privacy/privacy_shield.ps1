@@ -517,6 +517,13 @@ class ShieldWorker(QThread):
         self._captured_for_multi_face = False
         self._device_detected_streak = 0
         self._multi_face_detected_streak = 0
+        # Presence is noisier than the other detectors: a single missed
+        # landmark frame must never create a look-away episode.  Keep the
+        # loss latched until a sustained face recovery too, so a flickering
+        # feed cannot alternate look_away/look_back and flood notifications.
+        self._no_face_detected_streak = 0
+        self._face_recovery_streak = 0
+        self._presence_loss_active = False
         self._frame_buffer = deque(maxlen=30)
         self._active_recordings = []
 
@@ -769,9 +776,31 @@ class ShieldWorker(QThread):
                     landmarks = face_results.face_landmarks
 
                     if not landmarks:
+                        self._no_face_detected_streak += 1
+                        self._face_recovery_streak = 0
                         if self.check_gaze:
-                            no_face_triggered = True
+                            # Use the configured detector buffer for both
+                            # absence and recovery. This turns an absence
+                            # into one stable episode rather than a per-frame
+                            # event, and keeps Notify-only useful without a
+                            # Fleet/local notification storm.
+                            if self._no_face_detected_streak >= self.buffer_frames:
+                                self._presence_loss_active = True
+                            no_face_triggered = self._presence_loss_active
                     else:
+                        self._no_face_detected_streak = 0
+                        if self._presence_loss_active:
+                            self._face_recovery_streak += 1
+                            if self._face_recovery_streak >= self.buffer_frames:
+                                self._presence_loss_active = False
+                                self._face_recovery_streak = 0
+                            else:
+                                # Hold the loss state until a real recovery;
+                                # a lone detected frame must not reset the
+                                # notification episode.
+                                no_face_triggered = True
+                        else:
+                            self._face_recovery_streak = 0
                         raw_multi = self.check_faces and len(landmarks) > 1
                         if raw_multi:
                             self._multi_face_detected_streak += 1

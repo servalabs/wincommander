@@ -85,6 +85,17 @@ describe("privacy shield device guardrails", () => {
     expect(shield).toContain("Camera feed is black - open its privacy shutter or close another camera app.");
   });
 
+  test("presence loss and recovery are debounced into one Shield alert episode", async () => {
+    const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
+
+    expect(shield).toContain("self._no_face_detected_streak = 0");
+    expect(shield).toContain("self._face_recovery_streak = 0");
+    expect(shield).toContain("self._presence_loss_active = False");
+    expect(shield).toContain("self._no_face_detected_streak >= self.buffer_frames");
+    expect(shield).toContain("self._face_recovery_streak >= self.buffer_frames");
+    expect(shield).toContain("Hold the loss state until a real recovery");
+  });
+
   test("stop paths use the detector PID marker when command-line inspection is unavailable", async () => {
     const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
     const backend = await read("src-tauri/commander-free/src/backend.rs");
@@ -156,11 +167,11 @@ describe("privacy shield device guardrails", () => {
   test("Fleet attention alerts require the enabled signed Fleet policy", async () => {
     const backend = await read("src-tauri/commander-free/src/backend.rs");
 
-    expect(backend).toContain("fn fleet_privacy_event_is_enabled(");
-    expect(backend).toContain("shield.fleet_managed != Some(true)");
-    expect(backend).toContain("shield.fleet_monitoring_enabled != Some(true)");
+    expect(backend).toContain("fn fleet_privacy_event_gate(");
+    expect(backend).toContain("shield.fleet_managed == Some(true) && shield.fleet_monitoring_enabled == Some(true)");
+    expect(backend).toContain("!fleet_session_owned && !org_policy_active");
     expect(backend).toContain('"look_away" | "no_face" | "multiple_faces" | "secondary_device"');
-    expect(backend).toContain("if allow_fleet_privacy_alert(gaze_kind).await {");
+    expect(backend).toContain("let fleet_gate = fleet_privacy_alert_gate(gaze_kind).await;");
   });
 
   test("the event reader retains an initial look-away emitted during startup", async () => {
