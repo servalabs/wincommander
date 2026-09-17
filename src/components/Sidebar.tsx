@@ -16,6 +16,7 @@ import { runOperation } from "../context/OperationContext";
 import useVisibility from "../hooks/useVisibility";
 import useBorrowedActive from "../hooks/useBorrowedActive";
 import { DEFAULT_ALWAYS_PANELS, DEFAULT_BORROWED_PANELS } from "../lib/visibilityDefaults";
+import { canOpenFleetNavigation } from "../lib/fleetNavigationAccess";
 import { Icon, type IconName } from "./ui/icon";
 import { Spinner } from "./ui/spinner";
 import { invoke } from "@tauri-apps/api/core";
@@ -78,7 +79,7 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
   const score = useSovereigntyScore();
   const isDevBuild = useIsDevBuild();
   const { mode: authMode } = useAuthMode();
-  const { appSettings, dependencyStatus, patchAppSettings, refreshDependencies } = useAppState();
+  const { appSettings, dependencyStatus, patchAppSettings, refreshDependencies, systemInfo } = useAppState();
   const [installingDeps, setInstallingDeps] = useState<Record<string, boolean>>({});
   const [secretSettingsRevealed, setSecretSettingsRevealed] = useState(false);
 
@@ -173,6 +174,12 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
       : []) as string[];
 
     return navItems.filter(item => {
+      // Fleet is a device-administration surface.  Do not show it to a
+      // standard account (or during the short startup interval before Windows
+      // reports this process's token). Personal Secure Storage remains in the
+      // Secure group and is intentionally not affected by this filter.
+      if (item.id === "fleet" && !canOpenFleetNavigation(systemInfo?.isAdmin)) return false;
+
       // Secret Settings is governed ONLY by the title-bar 5× brand-click
       // reveal for this session — not Borrowed Mode, not permanently-hidden.
       // KT: secret used to sit in DEFAULT_BORROWED_PANELS, so once Borrowed
@@ -199,6 +206,7 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
     appSettings?.app?.lockedPanelIds,
     appSettings?.app?.permanentlyHiddenPanels,
     navItems,
+    systemInfo?.isAdmin,
     settingsReady,
     secretSettingsRevealed,
     showUnlockedPanels,

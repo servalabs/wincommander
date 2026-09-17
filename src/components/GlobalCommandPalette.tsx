@@ -22,6 +22,7 @@ import { useAppState } from "../context/AppContext";
 import { useAuthMode } from "../context/AuthModeContext";
 import { cn } from "../lib/utils";
 import { DEFAULT_BORROWED_PANELS } from "../lib/visibilityDefaults";
+import { canOpenFleetNavigation } from "../lib/fleetNavigationAccess";
 
 const PANEL_LABEL: Partial<Record<string, string>> = Object.fromEntries(
   PANEL_MANIFESTS.map((p) => [p.id, p.label])
@@ -64,7 +65,7 @@ export default function GlobalCommandPalette() {
   const borrowedActive = useBorrowedActive();
   const { setSearchQuery } = useSearchQuery();
   const { theme, setTheme } = useTheme();
-  const { appSettings } = useAppState();
+  const { appSettings, systemInfo } = useAppState();
   const { setMode } = useAuthMode();
 
   // Secret unlock/lock keyword — moved here from the (now-removed) per-panel
@@ -174,10 +175,11 @@ export default function GlobalCommandPalette() {
   // Mode never strands the user without a way back into the panel.
   const panels = useMemo(
     () =>
-      getSidebarManifests(visibility).filter((p) =>
-        p.id === "secret" ? secretSettingsRevealed : !lockedIds.has(p.id),
-      ),
-    [visibility, lockedIds, secretSettingsRevealed],
+      getSidebarManifests(visibility).filter((p) => {
+        if (p.id === "fleet" && !canOpenFleetNavigation(systemInfo?.isAdmin)) return false;
+        return p.id === "secret" ? secretSettingsRevealed : !lockedIds.has(p.id);
+      }),
+    [visibility, lockedIds, secretSettingsRevealed, systemInfo?.isAdmin],
   );
   const canShowPanel = useCallback(
     (id: PanelId) => (id === "secret" ? secretSettingsRevealed : !lockedIds.has(id)),

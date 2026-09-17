@@ -105,6 +105,7 @@ import {
   type StartupProtectionReadiness,
 } from "./lib/startupProtectionReadiness";
 import DashboardPanel from "./panels/dashboard";
+import { canOpenFleetNavigation } from "./lib/fleetNavigationAccess";
 
 // INACTIVITY TIMER: After this amount of no mouse or keyboard activity, 
 // we pause all active panel polling to save resources on Rust sysinfo calls,
@@ -236,7 +237,7 @@ function AppContent({ splashDone, onSplashComplete }: {
   // that are used directly in this component. Declared here (before
   // lockHiddenPanels) so the borrowed-panel redirect can read lockedPanelIds.
   const appState = useAppState();
-  const { productivityStatus, appSettings, patchAppSettings, startupComplete, startupError, retryStartup, startupDataState, runStartupJob } = appState;
+  const { productivityStatus, appSettings, patchAppSettings, startupComplete, startupError, retryStartup, startupDataState, runStartupJob, systemInfo } = appState;
   const panelPrefetchRef = useRef<PanelPrefetchQueue | null>(null);
   const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
   useAutomaticUpdate(automaticUpdatesEnabled, canUpdatePro);
@@ -1196,6 +1197,13 @@ function AppContent({ splashDone, onSplashComplete }: {
   }, []);
 
   const handlePanelChange = useCallback((panel: PanelId) => {
+    // The rail and command palette both omit Fleet for a standard user. Keep
+    // the route guard as the enforcement backstop for a stale dev URL or a
+    // custom `navigate-panel` event. This must not gate Secure Storage.
+    if (panel === "fleet" && !canOpenFleetNavigation(systemInfo?.isAdmin)) {
+      if (activePanel !== "dashboard") setActivePanel("dashboard");
+      return;
+    }
     if (panel === "flows" && !canUseDevTools) {
       window.dispatchEvent(new CustomEvent("license-gate-open", { detail: { tab: "buy", featureLabel: "Automation" } }));
       return;
@@ -1226,11 +1234,20 @@ function AppContent({ splashDone, onSplashComplete }: {
     setActivePanel(panel);
     // KT: Persist to settings.json so next session resumes on the same panel
     patchAppSettings({ app: { lastPanel: panel } }).catch(reportSettingsWriteFailure);
-  }, [activePanel, patchAppSettings, appSettings?.app?.modules, canUseDevTools, preloadDiskCleanup, prioritizePanel]);
+  }, [activePanel, patchAppSettings, appSettings?.app?.modules, canUseDevTools, preloadDiskCleanup, prioritizePanel, systemInfo?.isAdmin]);
 
   useEffect(() => {
     if (activePanel === "flows" && !canUseDevTools) setActivePanel("dashboard");
   }, [activePanel, canUseDevTools]);
+
+  // A development URL can name any registered panel before the Sidebar is
+  // mounted. Once Windows has resolved the process token, do not leave a
+  // standard account on Fleet through that bypass route.
+  useEffect(() => {
+    if (activePanel === "fleet" && systemInfo !== null && !canOpenFleetNavigation(systemInfo.isAdmin)) {
+      setActivePanel("dashboard");
+    }
+  }, [activePanel, systemInfo]);
 
   // Global custom event listener for navigating via search dropdowns
   useEffect(() => {

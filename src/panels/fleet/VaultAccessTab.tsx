@@ -35,7 +35,7 @@ function vaultListFailure(cause: unknown): { category: "service_connect" | "serv
   // request can fail while the service is restarting, and the original error
   // may contain OS transport detail.  Keep the user-facing result actionable
   // but bounded instead.
-  const detail = cause instanceof Error ? cause.message.toLowerCase() : "";
+  const detail = (cause instanceof Error ? cause.message : String(cause ?? "")).toLowerCase();
   if (detail.includes("rejected request") || detail.includes("forbidden")) {
     return {
       category: "service_denied",
@@ -64,7 +64,10 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ADMI
   // Keep the service's transport/Windows detail out of the UI.  The service
   // already makes the authorization decision; this only turns its fixed error
   // categories into an action the person can take.
-  const detail = cause instanceof Error ? cause.message.toLowerCase() : "";
+  // Tauri rejects an invoke with a string, not necessarily an Error object.
+  // Treat both forms identically so an administrator sees the service's safe
+  // category instead of every failure becoming the opaque generic fallback.
+  const detail = (cause instanceof Error ? cause.message : String(cause ?? "")).toLowerCase();
   if (detail.includes("forbidden") || detail.includes("privileged") || detail.includes("vault policy administrator")) {
     return {
       code: "VLT.POLICY.ADMIN_ACCESS_REQUIRED",

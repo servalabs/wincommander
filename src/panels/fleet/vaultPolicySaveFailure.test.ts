@@ -39,4 +39,11 @@ describe("Vault policy save failures", () => {
     expect(failure.message).toContain("WinCommander Vault Policy Administrators");
     expect(failure.message).not.toContain("Run as administrator");
   });
+
+  test("classifies Tauri's string rejection the same way as an Error", () => {
+    const failure = vaultPolicySaveFailure("forbidden: vault policy operation requires Vault Policy Administrator");
+
+    expect(failure.code).toBe("VLT.POLICY.ADMIN_ACCESS_REQUIRED");
+    expect(failure.message).toContain("not allowed to change Vault settings");
+  });
 });
