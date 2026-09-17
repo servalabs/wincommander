@@ -61,6 +61,14 @@ const FS_TYPES: { value: FSType; label: string; desc: string }[] = [
 ];
 
 const MAX_PIM = 2_147_468;
+const MIN_CREATION_PASSWORD_LENGTH = 10;
+
+function meetsCreationPasswordRequirements(password: string): boolean {
+    return password.length >= MIN_CREATION_PASSWORD_LENGTH
+        && /[A-Za-z]/.test(password)
+        && /\d/.test(password)
+        && /[^A-Za-z0-9]/.test(password);
+}
 
 function creationPimPasswordValid(password: string, pim: string, hash: HashAlgo): boolean {
     if (!pim) return true;
@@ -74,14 +82,14 @@ function creationPimPasswordValid(password: string, pim: string, hash: HashAlgo)
 function getPasswordStrength(pw: string): { score: number; label: string; color: string } {
     if (!pw) return { score: 0, label: "", color: "var(--color-border)" };
 
+    // Weak until it meets the creation minimum.
+    if (!meetsCreationPasswordRequirements(pw)) return { score: 1, label: "Weak", color: "var(--color-danger)" };
+
     // Automatic Likely Unbreakable
     if (pw.length >= 24) return { score: 6, label: "Likely Unbreakable", color: "var(--color-success)" };
 
-    // Weak until 8 chars
-    if (pw.length < 8) return { score: 1, label: "Weak", color: "var(--color-danger)" };
-
     let score = 0;
-    if (pw.length >= 8) score++;
+    if (pw.length >= MIN_CREATION_PASSWORD_LENGTH) score++;
     if (pw.length >= 16) score++;
     if (/[A-Z]/.test(pw)) score++;
     if (/[0-9]/.test(pw)) score++;
@@ -185,10 +193,10 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
             case "encryption": return true;
             case "filesystem": return true;
             case "password": {
-                const primaryCredentialValid = (password.length >= 8 && password === passwordConfirm) || (!password && Boolean(keyfile));
+                const primaryCredentialValid = (meetsCreationPasswordRequirements(password) && password === passwordConfirm) || (!password && Boolean(keyfile));
                 const primaryPimValid = creationPimPasswordValid(password, pim, hashAlgo);
                 if (isDual) {
-                    const hiddenCredentialValid = (secondPassword.length >= 8 && secondPassword === secondPasswordConfirm) || (!secondPassword && Boolean(secondKeyfile));
+                    const hiddenCredentialValid = (meetsCreationPasswordRequirements(secondPassword) && secondPassword === secondPasswordConfirm) || (!secondPassword && Boolean(secondKeyfile));
                     const hiddenPimValid = creationPimPasswordValid(secondPassword, secondPim, hashAlgo);
                     return primaryCredentialValid && primaryPimValid && hiddenCredentialValid && hiddenPimValid
                         && (password !== secondPassword || keyfile !== secondKeyfile);
@@ -538,7 +546,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                         <p className="step-description">Set a strong password to protect your volume.</p>
                         <div className="info-callout" style={{ marginBottom: 16 }}>
                             <Icon icon="shield" intent="success" />
-                            <span><strong>Passphrase guidance:</strong> Use a long, unique passphrase. 24+ characters is ideal, but any strong password above the minimum works.</span>
+                            <span><strong>Password requirements:</strong> At least 10 characters, including a letter, a number, and a special character. Use a long, unique passphrase; 24+ characters is ideal.</span>
                         </div>
                         <FormGroup label={isDual ? "First password" : "Password"} labelFor="pw">
                             <InputGroup
@@ -580,8 +588,8 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                 <div className="pw-mismatch" role="alert">Passwords do not match</div>
                             )}
                         </FormGroup>
-                        {password.length > 0 && password.length < 8 && (
-                            <div className="pw-mismatch" role="alert">Minimum 8 characters required</div>
+                        {password.length > 0 && !meetsCreationPasswordRequirements(password) && (
+                            <div className="pw-mismatch" role="alert">Use at least 10 characters with a letter, number, and special character</div>
                         )}
                         {isDual && (
                             <>
@@ -609,6 +617,9 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                     )}
                                     {secondPassword.length > 0 && secondPassword === password && (
                                         <div className="pw-mismatch" role="alert">The second password must differ from the first</div>
+                                    )}
+                                    {secondPassword.length > 0 && !meetsCreationPasswordRequirements(secondPassword) && (
+                                        <div className="pw-mismatch" role="alert">Use at least 10 characters with a letter, number, and special character</div>
                                     )}
                                 </FormGroup>
                                 <FormGroup label="Hidden-volume keyfile (optional)" labelFor="second-keyfile">
