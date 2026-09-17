@@ -1,4 +1,7 @@
 use serde::Serialize;
+use serde_json::{json, Value};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 
 #[derive(Debug, Serialize)]
@@ -26,13 +29,22 @@ fn powershell(script: &str) -> Result<String, String> {
     #[cfg(not(windows))]
     {
         let _ = script;
-        return Err("RDP resource redirection is only available on Windows".into());
+        Err("RDP resource redirection is only available on Windows".into())
     }
 
     #[cfg(windows)]
     {
         let output = Command::new("powershell.exe")
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ])
+            .creation_flags(0x08000000)
             .output()
             .map_err(|e| format!("failed to start PowerShell: {e}"))?;
         if !output.status.success() {
@@ -53,11 +65,12 @@ $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 if (-not ($cv.ProductName -like 'Windows Server*' -or $cv.InstallationType -like 'Server*')) {
   throw 'This control is only available on Windows Server.'
 }
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $admin) { throw 'Administrator rights are required to change machine-wide RDP redirection policy.' }
 "#
 }
 
-#[tauri::command]
-pub fn get_rdp_redirection_status() -> Result<RdpRedirectionStatus, String> {
+pub fn get_status() -> Result<RdpRedirectionStatus, String> {
     let script = r#"
 $ErrorActionPreference='Stop'
 $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
@@ -70,8 +83,10 @@ function D([string]$p,[string]$n,[int]$fallback) {
 $isServer = ($cv.ProductName -like 'Windows Server*' -or $cv.InstallationType -like 'Server*')
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 $qwave = $false; $mf = $false
-try { $qwave = (Get-WindowsFeature -Name qWave -ErrorAction Stop).InstallState -eq 'Installed' } catch {}
-try { $mf = (Get-WindowsFeature -Name Server-Media-Foundation -ErrorAction Stop).InstallState -eq 'Installed' } catch {}
+if ($isServer) {
+  try { $qwave = (Get-WindowsFeature -Name qWave -ErrorAction Stop).InstallState -eq 'Installed' } catch {}
+  try { $mf = (Get-WindowsFeature -Name Server-Media-Foundation -ErrorAction Stop).InstallState -eq 'Installed' } catch {}
+}
 [pscustomobject]@{
  isWindowsServer=$isServer
  productName=[string]$cv.ProductName
@@ -95,9 +110,8 @@ try { $mf = (Get-WindowsFeature -Name Server-Media-Foundation -ErrorAction Stop)
     serde_json::from_str(&raw).map_err(|e| format!("invalid Windows Server redirection status: {e}"))
 }
 
-#[tauri::command]
-pub fn set_rdp_redirection_capability(capability: String, enabled: bool) -> Result<(), String> {
-    let (name, value, listener_name): (&str, u32, Option<&str>) = match capability.as_str() {
+fn set_capability(capability: &str, enabled: bool) -> Result<(), String> {
+    let (name, value, listener_name): (&str, u32, Option<&str>) = match capability {
         "smart_cards" => ("fEnableSmartCard", if enabled { 1 } else { 0 }, None),
         "drives" => ("fDisableCdm", if enabled { 0 } else { 1 }, Some("fDisableCdm")),
         "clipboard" => ("fDisableClip", if enabled { 0 } else { 1 }, Some("fDisableClip")),
@@ -110,7 +124,7 @@ pub fn set_rdp_redirection_capability(capability: String, enabled: bool) -> Resu
         _ => return Err("unknown RDP redirection capability".into()),
     };
     let listener = listener_name
-        .map(|n| format!("Set-ItemProperty -Path $ws -Name '{n}' -Type DWord -Value {value}"))
+        .map(|n| format!("Set-ItemProperty -Path $ws -Name '{n}' -Value {value}"))
         .unwrap_or_default();
     let script = format!(
         r#"
@@ -119,7 +133,7 @@ $ErrorActionPreference='Stop'
 $pol = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
 $ws  = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
 New-Item -Path $pol -Force | Out-Null
-Set-ItemProperty -Path $pol -Name '{}' -Type DWord -Value {}
+New-ItemProperty -Path $pol -Name '{}' -PropertyType DWord -Value {} -Force | Out-Null
 {}
 gpupdate /target:computer /force | Out-Null
 "#,
@@ -128,8 +142,7 @@ gpupdate /target:computer /force | Out-Null
     powershell(&script).map(|_| ())
 }
 
-#[tauri::command]
-pub fn apply_recommended_rdp_redirection() -> Result<(), String> {
+fn apply_recommended() -> Result<(), String> {
     let script = format!(
         r#"
 $ErrorActionPreference='Stop'
@@ -143,9 +156,9 @@ $values = @{{
  fDisableCam=0; fDisableAudioCapture=0; fDisablePNPRedir=0;
  fDisableCameraRedir=0; fDisableWebAuthn=0
 }}
-foreach($kv in $values.GetEnumerator()) {{ Set-ItemProperty -Path $pol -Name $kv.Key -Type DWord -Value $kv.Value }}
-foreach($n in @('fDisableCam','fDisableCdm','fDisableClip','fDisableCpm','fDisableAudioCapture')) {{ Set-ItemProperty -Path $ws -Name $n -Type DWord -Value 0 }}
-Set-ItemProperty -Path $ws -Name fAutoClientDrives -Type DWord -Value 1
+foreach($kv in $values.GetEnumerator()) {{ New-ItemProperty -Path $pol -Name $kv.Key -PropertyType DWord -Value $kv.Value -Force | Out-Null }}
+foreach($n in @('fDisableCam','fDisableCdm','fDisableClip','fDisableCpm','fDisableAudioCapture')) {{ Set-ItemProperty -Path $ws -Name $n -Value 0 }}
+Set-ItemProperty -Path $ws -Name fAutoClientDrives -Value 1
 if (Test-Path $usb) {{ Remove-ItemProperty -Path $usb -Name fUsbRedirectionEnableMode -ErrorAction SilentlyContinue }}
 try {{ if ((Get-WindowsFeature qWave).InstallState -ne 'Installed') {{ Install-WindowsFeature qWave | Out-Null }} }} catch {{}}
 try {{ if ((Get-WindowsFeature Server-Media-Foundation).InstallState -ne 'Installed') {{ Install-WindowsFeature Server-Media-Foundation | Out-Null }} }} catch {{}}
@@ -156,17 +169,54 @@ gpupdate /target:computer /force | Out-Null
     powershell(&script).map(|_| ())
 }
 
-#[tauri::command]
-pub fn get_rdp_client_profile() -> String {
-    [
-        "redirectsmartcards:i:1",
-        "redirectclipboard:i:1",
-        "redirectprinters:i:1",
-        "drivestoredirect:s:*",
-        "audiomode:i:0",
-        "audiocapturemode:i:1",
-        "camerastoredirect:s:*",
-        "redirectwebauthn:i:1",
-    ]
-    .join("\r\n")
+fn client_profile() -> &'static str {
+    "redirectsmartcards:i:1\r\nredirectclipboard:i:1\r\nredirectprinters:i:1\r\ndrivestoredirect:s:*\r\naudiomode:i:0\r\naudiocapturemode:i:1\r\ncamerastoredirect:s:*\r\nredirectwebauthn:i:1"
+}
+
+/// Extension carried through the already-registered privileged
+/// `apply_machine_setting` Tauri command. Keeping this behind the existing
+/// machine-setting seam avoids introducing a second generic privileged IPC
+/// surface. Every mutation independently re-checks Windows Server + admin.
+pub fn handle(value: &Value) -> Result<Value, String> {
+    let action = value
+        .get("action")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "RDP redirection action is required".to_string())?;
+
+    match action {
+        "status" => serde_json::to_value(get_status()?).map_err(|e| e.to_string()),
+        "set_capability" => {
+            let capability = value
+                .get("capability")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "RDP redirection capability is required".to_string())?;
+            let enabled = value
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "RDP redirection enabled flag is required".to_string())?;
+            set_capability(capability, enabled)?;
+            serde_json::to_value(get_status()?).map_err(|e| e.to_string())
+        }
+        "apply_recommended" => {
+            apply_recommended()?;
+            serde_json::to_value(get_status()?).map_err(|e| e.to_string())
+        }
+        "client_profile" => Ok(json!({ "profile": client_profile() })),
+        _ => Err("unknown RDP redirection action".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client_profile;
+
+    #[test]
+    fn client_profile_uses_native_channels_only() {
+        let p = client_profile();
+        assert!(p.contains("redirectsmartcards:i:1"));
+        assert!(p.contains("drivestoredirect:s:*"));
+        assert!(p.contains("camerastoredirect:s:*"));
+        assert!(p.contains("redirectwebauthn:i:1"));
+        assert!(!p.to_ascii_lowercase().contains("usbdevicestoredirect"));
+    }
 }
