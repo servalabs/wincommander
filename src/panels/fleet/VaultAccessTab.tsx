@@ -60,15 +60,15 @@ function vaultListFailure(cause: unknown): { category: "service_connect" | "serv
   };
 }
 
-function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ELEVATION_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.APPLY_FAILED"; message: string } {
+export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ADMIN_ACCESS_REQUIRED" | "VLT.POLICY.VERSION_CONFLICT" | "VLT.POLICY.CONTAINER_UNAVAILABLE" | "VLT.POLICY.PRINCIPAL_UNAVAILABLE" | "VLT.POLICY.ACL_UNVERIFIED" | "VLT.POLICY.ACTIVE_MOUNT" | "VLT.POLICY.SERVICE_UNAVAILABLE" | "VLT.POLICY.INVALID" | "VLT.POLICY.APPLY_FAILED"; message: string } {
   // Keep the service's transport/Windows detail out of the UI.  The service
   // already makes the authorization decision; this only turns its fixed error
   // categories into an action the person can take.
   const detail = cause instanceof Error ? cause.message.toLowerCase() : "";
-  if (detail.includes("forbidden") || detail.includes("privileged")) {
+  if (detail.includes("forbidden") || detail.includes("privileged") || detail.includes("vault policy administrator")) {
     return {
-      code: "VLT.POLICY.ELEVATION_REQUIRED",
-      message: "Vault settings require an elevated WinCommander window. Close this window, then start WinCommander with Run as administrator. Your assigned Vaults can still be mounted normally.",
+      code: "VLT.POLICY.ADMIN_ACCESS_REQUIRED",
+      message: "This Windows account is not allowed to change Vault settings. Ask a device administrator to add it to WinCommander Vault Policy Administrators. Your assigned Vaults can still be mounted normally.",
     };
   }
   if (detail.includes("version conflict") || detail.includes("changed elsewhere")) {
@@ -83,9 +83,39 @@ function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ELEVATION_R
       message: "The saved Vault container file is missing, moved, or not readable. Choose the encrypted file itself in Edit, then save again.",
     };
   }
+  if (detail.includes("principal resolution") || detail.includes("could not find one or more named")) {
+    return {
+      code: "VLT.POLICY.PRINCIPAL_UNAVAILABLE",
+      message: "Windows could not find one of the named users or groups in this Vault permission. In Access control, refresh the Windows users and groups, then choose the account or group again before saving.",
+    };
+  }
+  if (detail.includes("acl") || detail.includes("access plan") || detail.includes("read-back")) {
+    return {
+      code: "VLT.POLICY.ACL_UNVERIFIED",
+      message: "Windows could not set or verify the Vault's file permissions. Keep the container in its own folder, check that the folder still exists, then save again. The previous Vault permission was left unchanged.",
+    };
+  }
+  if (detail.includes("dismount") || detail.includes("active vault")) {
+    return {
+      code: "VLT.POLICY.ACTIVE_MOUNT",
+      message: "WinCommander could not safely dismount an active Vault before changing its permission. Close files using that Vault, dismount it, then save again. The existing permission was left unchanged.",
+    };
+  }
+  if (detail.includes("timed out") || detail.includes("pipe") || detail.includes("connect") || detail.includes("service unavailable") || detail.includes("reply")) {
+    return {
+      code: "VLT.POLICY.SERVICE_UNAVAILABLE",
+      message: "The local WinCommander service is still starting or unavailable, so no Vault settings were changed. Wait a moment, refresh the Vault page, then save again.",
+    };
+  }
+  if (detail.includes("validation") || detail.includes("invalid") || detail.includes("duplicate") || detail.includes("persist")) {
+    return {
+      code: "VLT.POLICY.INVALID",
+      message: "Windows rejected these Vault settings before saving them. Check the container file, its dedicated parent folder, the selected users or groups, and any preferred drive letter, then save again.",
+    };
+  }
   return {
     code: "VLT.POLICY.APPLY_FAILED",
-    message: "Vault settings could not be saved. Refresh the Vault page and retry; use the reference below if it repeats.",
+    message: "The local service did not save these Vault settings. No existing permission was changed. Refresh the Vault page and retry; use the reference below if it repeats.",
   };
 }
 
@@ -384,7 +414,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     };
   });
 
-  const apply = async (policyToApply = policy, policyEntryRemoved = false) => {
+  const apply = async (
+    policyToApply = policy,
+    policyEntryRemoved = false,
+    draftToKeepAfterSave: VaultAccessPolicy | null = null,
+  ) => {
     if (saveInProgress.current) return;
     if (!policyToApply) return;
     const policyError = validateVaultAccessIntent(policyToApply);
@@ -403,7 +437,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       const submittedPolicy = nextVaultAccessPolicy(policyToApply);
       const appliedStatus = await applyPolicy(submittedPolicy);
       const removed = submittedPolicy.entries.length === 0;
-      replacePolicy(removed ? null : submittedPolicy, false);
+      const keepDraft = draftToKeepAfterSave !== null;
+      // Removing one saved Vault is intentionally a surgical operation.  A
+      // separate edit the administrator has not saved yet remains a local
+      // draft rather than being silently sent with the removal request.
+      replacePolicy(keepDraft ? draftToKeepAfterSave : removed ? null : submittedPolicy, keepDraft, submittedPolicy);
       setStatus(appliedStatus);
       if (removed) {
         setAuthorizedEntries([]);
@@ -411,7 +449,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       }
       // Applying a policy can change this caller's authorized rows, but the
       // returned status is already current; avoid an immediate duplicate read.
-      const refreshed = await refresh(true, false);
+      const refreshed = await refresh(!keepDraft, false);
       if (!refreshed) {
         recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "windows_readback", lifecycle: "verified", outcome: "failed", errorCode: "VLT.POLICY.READBACK_FAILED", severity: "warn", retryability: "manual", suggestedNextAction: "refresh_status", privacyClass: "local_sensitive" });
         showError("Vault settings were saved, but current access could not be verified. Refresh before mounting.", undefined, { operationId });
@@ -432,7 +470,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       }
     } catch (cause) {
       const failure = vaultPolicySaveFailure(cause);
-      recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: failure.code, severity: "error", retryability: "manual", suggestedNextAction: failure.code === "VLT.POLICY.ELEVATION_REQUIRED" ? "restart_elevated" : "retry", privacyClass: "local_sensitive" });
+      recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: failure.code, severity: "error", retryability: "manual", suggestedNextAction: failure.code === "VLT.POLICY.ADMIN_ACCESS_REQUIRED" ? "request_admin_access" : "retry", privacyClass: "local_sensitive" });
       showError(failure.message, undefined, { operationId });
     } finally {
       saveInProgress.current = false;
@@ -444,10 +482,25 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     const entryId = entryRemovalConfirmation;
     setEntryRemovalConfirmation(null);
     const current = policyRef.current;
-    if (!entryId || !current) return;
-    const next = removeVaultEntryDraft(current, entryId, true);
+    const saved = draftBaseRef.current;
+    if (!entryId || !current || !saved) return;
+    // Apply the deletion against the last service-owned policy, not the
+    // mutable editor state. This makes the selected row the only server-side
+    // change made by this confirmation.
+    const next = removeVaultEntryDraft(saved, entryId, true);
     if (!next) return;
-    void apply(next, true);
+    const remainingDraft = removeVaultEntryDraft(current, entryId, true);
+    const draftToKeepAfterSave = dirtyRef.current && remainingDraft
+      ? {
+        ...remainingDraft,
+        // Clearing the last saved entry leaves no active policy. A later
+        // draft save must start again at version zero; otherwise its next
+        // write would be rejected as a stale policy version.
+        version: next.entries.length === 0 ? 0 : next.version,
+        expected_previous_version: next.entries.length === 0 ? 0 : next.version,
+      }
+      : null;
+    void apply(next, true, draftToKeepAfterSave);
   };
 
   const importLegacyDraft = () => {
@@ -673,7 +726,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
 
       {isAdmin && !canManagePolicy && <div className="fleet-vault-verification-warning" role="alert">
         <Icon icon="warning-sign" size={16} />
-        <div><strong>Run WinCommander as administrator to change Vault settings</strong><p>This account is an Administrator, but this app instance is not elevated. You can still view and mount Vaults assigned to this account.</p></div>
+        <div><strong>This account needs Vault policy-manager access</strong><p>Ask a device administrator to add this Windows account to WinCommander Vault Policy Administrators. You can still view and mount Vaults assigned to this account.</p></div>
       </div>}
 
       {canManagePolicy && policyLoadUnavailable && <div className="fleet-vault-verification-warning" role="alert">
@@ -920,7 +973,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <DialogHeader>
             <DialogTitle>Remove this Vault from the saved policy?</DialogTitle>
             <DialogDescription>
-              WinCommander will dismount this Vault if needed, revoke its shared Windows access, and save the removal. Any other changes in this draft will be saved too. The encrypted container file is not deleted; it can then be mounted through Secure Storage with normal Windows access and its password.
+              WinCommander will dismount only this Vault if needed, revoke only its shared Windows access, and save that removal. Other unsaved edits stay as a local draft and are not included. The encrypted container file is not deleted; it can then be mounted through Secure Storage with normal Windows access and its password.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

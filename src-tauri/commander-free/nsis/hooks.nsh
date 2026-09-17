@@ -37,6 +37,27 @@
   ${AndIf} $0 != 1056
     Abort "WinCommander could not start its machine service."
   ${EndIf}
+
+  ; Vault-policy changes are authorized by a dedicated local group, not by
+  ; whether the desktop process happened to be elevated. Give the installing
+  ; account a direct membership: a nested Administrators group is marked
+  ; deny-only in a non-elevated UAC token and would send the app back to an
+  ; unnecessary credential prompt. Other users remain unable to alter policy
+  ; until a device administrator explicitly grants them this group.
+  nsExec::ExecToStack 'net.exe localgroup "WinCommander Vault Policy Administrators" /add'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+  ${AndIf} $0 != 1379
+    Abort "WinCommander could not create the Vault Policy Administrators group."
+  ${EndIf}
+  nsExec::ExecToStack 'net.exe localgroup "WinCommander Vault Policy Administrators" "$USERNAME" /add'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+  ${AndIf} $0 != 1378
+    Abort "WinCommander could not grant Vault policy administration to the installing account."
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

@@ -194,7 +194,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("Future mounts only need the password");
     expect(vault).toContain("Save vault settings");
     expect(vault).toContain("Remove Vault policy");
-    expect(vault).toContain('replacePolicy(removed ? null : submittedPolicy, false)');
+    expect(vault).toContain('replacePolicy(keepDraft ? draftToKeepAfterSave : removed ? null : submittedPolicy, keepDraft, submittedPolicy)');
     expect(vault).toContain("Vault policy removed and shared access revoked.");
     expect(vault).toContain("Remove the saved Vault policy?");
     expect(vault).toContain("The encrypted container files are not deleted.");

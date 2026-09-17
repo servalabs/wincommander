@@ -44,6 +44,8 @@ describe("Free machine-wide release packaging", () => {
 
     const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
     expect(hooks).toContain("sc.exe create ${WC_SERVICE_NAME}");
+    expect(hooks).toContain('net.exe localgroup "WinCommander Vault Policy Administrators" /add');
+    expect(hooks).toContain('net.exe localgroup "WinCommander Vault Policy Administrators" "$USERNAME" /add');
     expect(hooks).not.toContain("sc.exe delete WinCommanderEncVol");
     expect(hooks).not.toContain("sc.exe delete VeraCrypt");
   });

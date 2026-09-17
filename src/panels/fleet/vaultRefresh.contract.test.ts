@@ -11,7 +11,7 @@ describe("Vault refresh boundaries", () => {
 
     expect(apply.indexOf("++refreshRevision.current") < apply.indexOf("await applyPolicy")).toBe(true);
     expect(apply.indexOf("setAuthorizedEntries([])") < apply.indexOf("await applyPolicy")).toBe(true);
-    expect(apply).toContain("const refreshed = await refresh(true, false)");
+    expect(apply).toContain("const refreshed = await refresh(!keepDraft, false)");
     expect(apply).toContain("if (!refreshed)");
     expect(apply).toContain("if (saveInProgress.current) return");
     expect(source).toContain('<fieldset disabled={saving} className="contents">');
@@ -24,9 +24,12 @@ describe("Vault refresh boundaries", () => {
 
     expect(requestRemoval).toContain("setEntryRemovalConfirmation(id)");
     expect(confirmedRemoval).toContain("removeVaultEntryDraft(current, entryId, true)");
-    expect(confirmedRemoval).toContain("void apply(next, true)");
+    expect(confirmedRemoval).toContain("removeVaultEntryDraft(saved, entryId, true)");
+    expect(confirmedRemoval).toContain("void apply(next, true, draftToKeepAfterSave)");
     expect(source).toContain("Remove this Vault from the saved policy?");
     expect(source).toContain("Remove and save");
+    expect(source).toContain("dismount only this Vault");
+    expect(source).toContain("Other unsaved edits stay as a local draft");
     expect(source).toContain("Vault removed from saved policy. It can now use normal Secure Storage mounting with its password.");
   });
 
