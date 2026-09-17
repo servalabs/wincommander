@@ -142,6 +142,54 @@ pub fn user_data_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// A current-user NSIS install lives directly below the caller's LocalAppData
+/// directory.  That location is a per-user security boundary: it must never
+/// make the desktop shell depend on a writable ProgramData directory merely to
+/// read or save its own settings.
+///
+/// Keep this deliberately narrow.  A portable/debug copy (or an arbitrary
+/// executable nested below LocalAppData) does not become a current-user install
+/// just because of its parent directory.  Only the installed primary binary is
+/// eligible for the per-user datastore route.
+fn is_current_user_install_executable(
+    executable: &std::path::Path,
+    local_app_data: &std::path::Path,
+) -> bool {
+    let expected = local_app_data
+        .join(APP_DIR_NAME)
+        .join("wincommander-free.exe");
+    executable
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&expected.to_string_lossy())
+}
+
+/// Whether the running desktop binary is the NSIS current-user installation.
+///
+/// Machine/service state always stays in ProgramData.  The general application
+/// datastore, however, is per-user for this install mode so a standard account
+/// can open WinCommander without being asked to modify a machine-owned folder.
+pub fn current_user_install_uses_local_datastore() -> bool {
+    let Ok(executable) = std::env::current_exe() else {
+        return false;
+    };
+    let Ok(local_app_data) = env_path("LOCALAPPDATA") else {
+        return false;
+    };
+    is_current_user_install_executable(&executable, &local_app_data)
+}
+
+/// Root for general application data (settings, local licence cache, and
+/// similarly user-facing state).  A machine install retains ProgramData so its
+/// service and shared policy keep one source of truth.  A current-user install
+/// uses the interactive user's LocalAppData instead.
+pub fn datastore_data_dir() -> Result<PathBuf, String> {
+    if current_user_install_uses_local_datastore() {
+        user_data_dir()
+    } else {
+        machine_data_dir()
+    }
+}
+
 /// Best-effort: lock a sensitive app-data dir to SYSTEM + Administrators + owner.
 /// Windows-only; no-op elsewhere. Errors are swallowed (defense-in-depth, not
 /// load-bearing). Uses well-known SIDs (*S-1-5-18 = SYSTEM, *S-1-5-32-544 =
@@ -551,8 +599,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        is_valid_machine_state_resource, is_valid_state_filename, should_harden_machine_data_dir,
-        state_file_from_dir, MACHINE_DATA_ACL_GRANTS,
+        is_current_user_install_executable, is_valid_machine_state_resource,
+        is_valid_state_filename, should_harden_machine_data_dir, state_file_from_dir,
+        MACHINE_DATA_ACL_GRANTS,
     };
 
     #[test]
@@ -625,6 +674,39 @@ mod tests {
     fn existing_machine_data_directory_is_not_acl_rewritten_by_standard_user_launch() {
         assert!(!should_harden_machine_data_dir(false));
         assert!(should_harden_machine_data_dir(true));
+    }
+
+    #[test]
+    fn only_the_expected_current_user_binary_uses_local_datastore() {
+        let local = PathBuf::from(r"C:\Users\Test\AppData\Local");
+        assert!(is_current_user_install_executable(
+            &local.join("WinCommander").join("wincommander-free.exe"),
+            &local,
+        ));
+        assert!(is_current_user_install_executable(
+            &PathBuf::from(r"c:\users\test\appdata\local\wincommander\WINCOMMANDER-FREE.EXE"),
+            &local,
+        ));
+    }
+
+    #[test]
+    fn portable_or_machine_binaries_cannot_redirect_the_datastore() {
+        let local = PathBuf::from(r"C:\Users\Test\AppData\Local");
+        assert!(!is_current_user_install_executable(
+            &PathBuf::from(r"C:\Program Files\WinCommander\wincommander-free.exe"),
+            &local,
+        ));
+        assert!(!is_current_user_install_executable(
+            &local
+                .join("WinCommander")
+                .join("versions")
+                .join("wincommander-free.exe"),
+            &local,
+        ));
+        assert!(!is_current_user_install_executable(
+            &local.join("WinCommander").join("other.exe"),
+            &local,
+        ));
     }
 
     #[cfg(windows)]

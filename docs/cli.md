@@ -6,7 +6,7 @@ The production CLI is read-only. Mutating and destructive commands remain
 desktop-only until they share the desktop's native confirmation and
 cross-process locking controls.
 
-Run it from an elevated terminal because the shipped executable retains WinCommander's administrator manifest. Every CLI request writes one structured JSON document to stdout; the process exit code carries the outcome.
+Run it normally as the signed-in user. Commands that change machine-wide state are unavailable in the production CLI and must be approved explicitly in the desktop app. Every CLI request writes one structured JSON document to stdout; the process exit code carries the outcome.
 
 ```powershell
 wincommander-free.exe commands list

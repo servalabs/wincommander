@@ -564,10 +564,11 @@ fn find_webview2_hwnd(
     }
 }
 
-/// Update the Windows-visible name of the installed app — both the
-/// `DisplayName` in the Uninstall registry key (shown in Settings →
-/// Apps + Control Panel) and the Start Menu shortcut filename
-/// (shown in Start menu, Windows search, taskbar tooltips).
+/// Update the current user's Start Menu shortcut filename.
+///
+/// An ordinary desktop launch must never change machine-owned registry or
+/// shortcut state. Those writes are cosmetic and previously caused the normal
+/// startup path to request UAC merely to rename a label.
 ///
 /// `label` should be one of:
 ///   - "WinCommander Pro"   when entitled + Pro EXE installed
@@ -581,7 +582,6 @@ fn find_webview2_hwnd(
 fn set_app_display_label(label: String) -> Result<(), String> {
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
         // Trim + sanity-check input — only accept the two labels we
         // own; refuse anything else so a compromised frontend can't
         // graffiti arbitrary text into our uninstall entry.
@@ -597,62 +597,10 @@ fn set_app_display_label(label: String) -> Result<(), String> {
         }
         let mut errors: Vec<String> = Vec::new();
 
-        // ── 1. Update the Uninstall registry DisplayName ──
-        // We don't know our product GUID at compile time (Tauri/WiX
-        // picks one per build), so enumerate Uninstall entries and
-        // match by current DisplayName starting with "WinCommander".
-        let uninstall_roots = [
-            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-        ];
-        for root in &uninstall_roots {
-            let ps = format!(
-                "Get-ChildItem -LiteralPath 'HKLM:\\{root}' -ErrorAction SilentlyContinue | ForEach-Object {{ \
-                    $p = $_.PSPath; \
-                    $name = (Get-ItemProperty -LiteralPath $p -Name DisplayName -ErrorAction SilentlyContinue).DisplayName; \
-                    if ($name -and $name -like '{base}*') {{ \
-                        Set-ItemProperty -LiteralPath $p -Name DisplayName -Value '{target}' -ErrorAction SilentlyContinue \
-                    }} \
-                }}",
-                base = base_label
-            );
-            let mut cmd = std::process::Command::new("powershell");
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            cmd.args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &ps,
-            ]);
-            match cmd.output() {
-                Ok(out) if out.status.success() => {}
-                Ok(out) => errors.push(format!(
-                    "{}: ps exit {}: {}",
-                    root,
-                    out.status.code().unwrap_or(-1),
-                    String::from_utf8_lossy(&out.stderr).trim()
-                )),
-                Err(e) => errors.push(format!("{}: spawn: {}", root, e)),
-            }
-        }
-
-        // ── 2. Rename the Start Menu shortcut(s) ──
-        // The MSI places one .lnk at ProgramData (machine-wide) and
-        // potentially one at APPDATA (per-user). Both filenames track
-        // the productName at install time. Rename them in place so
-        // Start menu + Windows Search reflect the new edition.
+        // The current-user installer places shortcuts beneath APPDATA. Do not
+        // touch ProgramData: it belongs to the machine installer and would
+        // require elevation for a label-only change.
         let mut shortcut_dirs: Vec<std::path::PathBuf> = Vec::new();
-        if let Ok(pd) = std::env::var("ProgramData") {
-            shortcut_dirs.push(
-                std::path::PathBuf::from(pd)
-                    .join("Microsoft")
-                    .join("Windows")
-                    .join("Start Menu")
-                    .join("Programs"),
-            );
-        }
         if let Ok(ad) = std::env::var("APPDATA") {
             shortcut_dirs.push(
                 std::path::PathBuf::from(ad)
@@ -701,50 +649,18 @@ fn set_app_display_label(label: String) -> Result<(), String> {
         }
 
         if errors.is_empty() {
-            return Ok(());
+            Ok(())
+        } else {
+            let summary = errors.join(" | ");
+            log_message(
+                "warn",
+                &format!(
+                    "[DisplayLabel] current-user shortcut update skipped: {}",
+                    summary
+                ),
+            );
+            Err(summary)
         }
-
-        // ── UAC auto-elevation path ──────────────────────────────────
-        // If any failure mentions access/permission, the .lnk lives in
-        // %ProgramData% (admin-owned) or HKLM (registry, admin-only).
-        // Spawn an elevated PowerShell child via `Start-Process -Verb
-        // RunAs` that performs JUST the rename + registry write. The
-        // outer (unelevated) PS triggers the UAC prompt; user clicks
-        // Yes → elevated child runs → shortcut + DisplayName updated
-        // in one shot. User clicks No → leave Start Menu as-is; the
-        // running app's title bar / tray still reflect the new label.
-        let needs_elevation = errors.iter().any(|e| {
-            e.to_lowercase().contains("denied")
-                || e.to_lowercase().contains("permission")
-                || e.to_lowercase().contains("access")
-        });
-        if needs_elevation {
-            if let Err(e) = elevate_display_label(target) {
-                log_message(
-                    "warn",
-                    &format!("[DisplayLabel] elevation kickoff failed: {}", e),
-                );
-            } else {
-                log_message(
-                    "info",
-                    "[DisplayLabel] UAC elevation requested for shortcut + registry rename",
-                );
-                // Treat as success from the caller's perspective — the
-                // elevated child runs async; we don't block on its
-                // completion. Worst case (user cancels UAC) the
-                // shortcut stays mislabelled but the app works.
-                return Ok(());
-            }
-        }
-
-        // Soft failure — log + return the first error string. The
-        // frontend treats this as best-effort; UI doesn't break.
-        let summary = errors.join(" | ");
-        log_message(
-            "warn",
-            &format!("[DisplayLabel] partial failures: {}", summary),
-        );
-        Err(summary)
     }
     #[cfg(not(windows))]
     {
@@ -838,45 +754,6 @@ async fn get_pro_diagnostic_summaries(limit: Option<usize>) -> Result<serde_json
         serde_json::json!({ "limit": limit.unwrap_or(100).min(500) }),
     )
     .await
-}
-
-/// Spawn an elevated PowerShell child (via UAC prompt) that renames
-/// the Start Menu .lnk and rewrites the HKLM uninstall DisplayName.
-/// Returns Ok the moment the outer (unelevated) launcher process is
-/// spawned — we don't wait for the elevated child since the UAC
-/// dialog is owned by the user and may sit modal for a while.
-#[cfg(windows)]
-fn elevate_display_label(target: &str) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    // Defense-in-depth — only the three labels we own.
-    let pro_l = paths::app_display_name_with_edition(true);
-    let free_l = paths::app_display_name_with_edition(false);
-    let base_l = paths::app_display_name();
-    if target != pro_l && target != free_l && target != base_l {
-        return Err(format!("refusing unrecognised label '{}'", target));
-    }
-    // Single PS line; multi-line stdin scripts are silently swallowed
-    // by `powershell -Command -` on Windows PS 5.1 with CRLF source.
-    let inner = format!(
-        "$t='{}'; $base='{}'; foreach ($d in @(\"$env:ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\",\"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\")) {{ if (Test-Path $d) {{ Get-ChildItem -Path $d -Filter \"$($base)*.lnk\" -ErrorAction SilentlyContinue | ForEach-Object {{ $n=\"$t.lnk\"; if ($_.Name -ne $n) {{ try {{ Rename-Item -LiteralPath $_.FullName -NewName $n -ErrorAction Stop }} catch {{}} }} }} }} }}; foreach ($r in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall')) {{ Get-ChildItem -LiteralPath $r -ErrorAction SilentlyContinue | ForEach-Object {{ $p=$_.PSPath; $n=(Get-ItemProperty -LiteralPath $p -Name DisplayName -ErrorAction SilentlyContinue).DisplayName; if ($n -and $n -like \"$($base)*\") {{ Set-ItemProperty -LiteralPath $p -Name DisplayName -Value $t -ErrorAction SilentlyContinue }} }} }}",
-        target, base_l
-    );
-    // Base64-encode the inner script and hand it to a child via
-    // `-EncodedCommand`. This sidesteps all the quoting nightmares of
-    // nested `Start-Process -ArgumentList` quoting.
-    use base64::{engine::general_purpose, Engine as _};
-    let utf16: Vec<u8> = inner.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
-    let encoded = general_purpose::STANDARD.encode(&utf16);
-    let outer = format!(
-        "Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand','{}'",
-        encoded
-    );
-
-    let mut cmd = std::process::Command::new("powershell");
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW for the outer launcher
-    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &outer]);
-    cmd.spawn().map_err(|e| format!("elevation spawn: {}", e))?;
-    Ok(())
 }
 
 fn handle_search_hotkey(app: &tauri::AppHandle) {

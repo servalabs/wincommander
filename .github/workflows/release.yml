@@ -315,21 +315,19 @@ jobs:
 
           "TAURI_SIGNING_PRIVATE_KEY=$key" | Add-Content -Path $env:GITHUB_ENV
 
-      # Do not replace this with `bun tauri build`: the public release wrapper builds
-      # commander-svc, stages it as a Tauri resource, and forces NSIS so its
-      # service install/update/uninstall hooks are compiled into the setup. It
-      # deliberately does not require the separate private Pro source checkout.
+      # Do not replace this with `bun tauri build`: the public release wrapper
+      # builds the signed current-user Free setup and its asInvoker Explorer
+      # helper. Machine services and drivers are never installed by this path.
       - name: Build signed Free NSIS setup
         env:
           RUST_MIN_STACK: "16777216"
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bun run build:free:release-installer
 
-      # This is an artifact-level gate, not a source-contract check.  It
-      # proves the installer contains the staged service by actually running
-      # its NSIS lifecycle: install, create/configure/start WinCommanderSvc,
-      # then uninstall and remove it again on the clean hosted runner.
-      - name: Verify Free setup installs and removes WinCommanderSvc
+      # This is an artifact-level gate, not a source-contract check. It proves
+      # a standard-user setup and uninstall work without elevation and leave
+      # no machine service behind.
+      - name: Verify Free setup installs and removes only the current-user installation
         shell: pwsh
         env:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
@@ -342,65 +340,33 @@ jobs:
           }
 
           $setup = $setups[0].FullName
-          $diagnosticLog = Join-Path $env:ProgramFiles "WinCommander\installer-lifecycle.log"
-          Remove-Item -LiteralPath $diagnosticLog -Force -ErrorAction SilentlyContinue
-          # The Free setup is per-machine and installs an SCM service. Hosted
-          # runners have a split administrator token, so launch it elevated.
-          $setupProcess = Start-Process -FilePath $setup -ArgumentList "/S" -Verb RunAs -Wait -PassThru
+          $installRoot = Join-Path $env:LOCALAPPDATA "WinCommander"
+          Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
+          $setupProcess = Start-Process -FilePath $setup -ArgumentList "/S" -Wait -PassThru
           if ($setupProcess.ExitCode -ne 0) {
-            if (Test-Path -LiteralPath $diagnosticLog -PathType Leaf) {
-              Write-Host "NSIS lifecycle diagnostic:"
-              Get-Content -LiteralPath $diagnosticLog -Raw | Write-Host
-              Remove-Item -LiteralPath $diagnosticLog -Force
-            }
             throw "The NSIS setup failed with exit code $($setupProcess.ExitCode)."
           }
 
-          $servicePath = Join-Path $env:ProgramFiles "WinCommander\wincommander-svc.exe"
-          if (-not (Test-Path -LiteralPath $servicePath -PathType Leaf)) {
-            throw "The NSIS setup did not install wincommander-svc.exe at $servicePath."
+          $mainBinary = Join-Path $env:LOCALAPPDATA "WinCommander\wincommander-free.exe"
+          if (-not (Test-Path -LiteralPath $mainBinary -PathType Leaf)) {
+            throw "The NSIS setup did not install wincommander-free.exe at $mainBinary."
           }
           $service = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
-          if ($null -eq $service) {
-            throw "The NSIS setup did not create WinCommanderSvc."
-          }
-          $serviceRegistry = Get-ItemProperty -LiteralPath "Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\WinCommanderSvc" -ErrorAction Stop
-          if ($serviceRegistry.Start -ne 2 -or $service.PathName -notmatch [Regex]::Escape($servicePath)) {
-            throw "WinCommanderSvc configuration mismatch (Start=$($serviceRegistry.Start), CIM StartMode=$($service.StartMode), PathName=$($service.PathName))."
-          }
-          $running = Get-Service -Name WinCommanderSvc -ErrorAction Stop
-          $running.WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
-          $running.Refresh()
-          if ($running.Status -ne "Running") {
-            throw "WinCommanderSvc was installed but is not running (state: $($running.Status))."
+          if ($null -ne $service) {
+            throw "The Free setup unexpectedly created WinCommanderSvc."
           }
 
-          $uninstaller = Join-Path $env:ProgramFiles "WinCommander\uninstall.exe"
+          $uninstaller = Join-Path $env:LOCALAPPDATA "WinCommander\uninstall.exe"
           if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
             throw "The NSIS setup did not create its uninstaller at $uninstaller."
           }
-          $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Verb RunAs -Wait -PassThru
+          $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru
           if ($uninstallProcess.ExitCode -ne 0) {
-            if (Test-Path -LiteralPath $diagnosticLog -PathType Leaf) {
-              Write-Host "NSIS lifecycle diagnostic:"
-              Get-Content -LiteralPath $diagnosticLog -Raw | Write-Host
-              Remove-Item -LiteralPath $diagnosticLog -Force
-            }
             throw "The NSIS uninstaller failed with exit code $($uninstallProcess.ExitCode)."
           }
-          $deadline = (Get-Date).AddSeconds(30)
-          do {
-            $remainingService = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
-            if ($null -eq $remainingService) { break }
-            Start-Sleep -Seconds 1
-          } while ((Get-Date) -lt $deadline)
-          if ($null -ne $remainingService) {
-            throw "The NSIS uninstaller did not remove WinCommanderSvc."
+          if (Test-Path -LiteralPath $mainBinary) {
+            throw "The NSIS uninstaller did not remove wincommander-free.exe."
           }
-          if (Test-Path -LiteralPath $servicePath) {
-            throw "The NSIS uninstaller did not remove wincommander-svc.exe."
-          }
-          Remove-Item -LiteralPath $diagnosticLog -Force -ErrorAction SilentlyContinue
 
       - name: Verify bundled shared media
         shell: pwsh

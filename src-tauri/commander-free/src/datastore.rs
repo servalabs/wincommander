@@ -12,9 +12,12 @@
 //   load_profile(passphrase)         → Value  (returns {} if absent)
 //   save_profile(passphrase, &Value) → Ok(())
 //
-// Sections are stored as individual files under (machine-wide so every
-// Windows account shares one config — writes are guarded by the machine-data ACL):
-//   %ProgramData%\<APP>\store\<section>.dat
+// Sections are stored as individual files under the installation's trusted data
+// root. A machine install uses %ProgramData% (shared policy/service state); an
+// NSIS current-user install uses the caller's %LOCALAPPDATA% so opening the app
+// never requires permission to modify ProgramData:
+//   %ProgramData%\<APP>\store\<section>.dat       (machine install)
+//   %LOCALAPPDATA%\<APP>\store\<section>.dat     (current-user install)
 //
 // Each file contains: "enc:v1:" + base64(nonce[12] || ciphertext_with_gcm_tag)
 //
@@ -45,9 +48,21 @@ use rand::RngCore;
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 const MATERIAL_FILENAME: &str = ".install.material";
 const USER_MATERIAL_FILENAME: &str = ".user-store.material";
+// These are the only encrypted blobs that share USER_MATERIAL_FILENAME.  If
+// Windows can no longer unlock that material (for example, after a profile or
+// DPAPI migration), archive the key and its matching ciphertext together so a
+// fresh profile can start with defaults without ever overwriting recoverable
+// bytes. Keep this allow-list narrow: unrelated LocalAppData files are not a
+// datastore recovery responsibility.
+const USER_STORE_RECOVERY_FILES: [&str; 3] = [
+    USER_MATERIAL_FILENAME,
+    "user-settings.dat",
+    "clipboard-guard-rules.dat",
+];
 const STORE_SUBDIR: &str = "store";
 const FORMAT_PREFIX_V1: &str = "enc:v1:";
 const FORMAT_PREFIX_V2: &str = "enc:v2:";
@@ -60,11 +75,7 @@ const ARGON2_PARALLEL: u32 = 1;
 const DERIVED_KEY_LEN: usize = 32;
 
 fn store_dir() -> Result<PathBuf, String> {
-    // Machine-wide (%ProgramData%) so the settings blob — which holds the
-    // startup_pin real/decoy/destroy hashes — is shared across every Windows
-    // account. Per-user (%LOCALAPPDATA%) meant a 2nd account had no PINs and
-    // bypassed the calculator front door entirely. The machine-data ACL guards writes.
-    let dir = crate::paths::machine_data_dir()?.join(STORE_SUBDIR);
+    let dir = crate::paths::datastore_data_dir()?.join(STORE_SUBDIR);
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create store dir: {e}"))?;
     Ok(dir)
 }
@@ -108,7 +119,7 @@ fn user_file_path(filename: &str) -> Result<PathBuf, String> {
 fn dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
-        CryptProtectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPT_INTEGER_BLOB,
+        CryptProtectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
     unsafe {
         let in_blob = CRYPT_INTEGER_BLOB {
@@ -125,7 +136,7 @@ fn dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
-            CRYPTPROTECT_LOCAL_MACHINE,
+            CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN,
             &mut out_blob,
         );
         if ok == 0 {
@@ -141,7 +152,7 @@ fn dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
 fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
-        CryptUnprotectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPT_INTEGER_BLOB,
+        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
     unsafe {
         let in_blob = CRYPT_INTEGER_BLOB {
@@ -158,7 +169,7 @@ fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
-            CRYPTPROTECT_LOCAL_MACHINE,
+            CRYPTPROTECT_UI_FORBIDDEN,
             &mut out_blob,
         );
         if ok == 0 {
@@ -176,7 +187,9 @@ fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(windows)]
 fn user_dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
+    use windows_sys::Win32::Security::Cryptography::{
+        CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
     unsafe {
         let in_blob = CRYPT_INTEGER_BLOB {
             cbData: plain.len() as u32,
@@ -186,14 +199,15 @@ fn user_dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
             cbData: 0,
             pbData: std::ptr::null_mut(),
         };
-        // `0` is current-user DPAPI scope. Do not add CRYPTPROTECT_LOCAL_MACHINE.
+        // Keep current-user scope, but never allow an unattended launch to show
+        // credential/UI prompts (for example from an SSH session).
         if CryptProtectData(
             &in_blob,
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
-            0,
+            CRYPTPROTECT_UI_FORBIDDEN,
             &mut out_blob,
         ) == 0
         {
@@ -208,7 +222,9 @@ fn user_dpapi_protect(plain: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(windows)]
 fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+    use windows_sys::Win32::Security::Cryptography::{
+        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
     unsafe {
         let in_blob = CRYPT_INTEGER_BLOB {
             cbData: blob.len() as u32,
@@ -225,7 +241,7 @@ fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
-            0,
+            CRYPTPROTECT_UI_FORBIDDEN,
             &mut out_blob,
         ) == 0
         {
@@ -256,14 +272,20 @@ fn user_dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
     Ok(blob.to_vec())
 }
 
-// Read the per-install 32-byte material, creating it on first use. The salt is
-// stored DPAPI-machine-protected at rest (see above); legacy raw 32-byte
-// material is migrated in place on first read (the salt bytes are unchanged, so
-// the encrypted store decrypts exactly as before).
+// Read the datastore's 32-byte material, creating it on first use. Machine
+// installs use DPAPI-machine protection so their shared store remains readable
+// across accounts. A current-user install also uses machine DPAPI for its
+// LocalAppData key material: Windows can otherwise reject current-user DPAPI in
+// a noninteractive logon (such as SSH). The LocalAppData directory ACL remains
+// the per-user access boundary; the DPAPI scope supplies logon compatibility.
 fn install_material() -> Result<[u8; 32], String> {
+    if crate::paths::current_user_install_uses_local_datastore() {
+        return user_material();
+    }
+
     // Machine-wide alongside the store (see store_dir): the AES/Argon2 salt
     // must live where the sections it decrypts live, so all accounts share one key.
-    let path = crate::paths::machine_data_dir()?.join(MATERIAL_FILENAME);
+    let path = crate::paths::datastore_data_dir()?.join(MATERIAL_FILENAME);
     if path.exists() {
         let raw = fs::read(&path).map_err(|e| format!("Failed to read install material: {e}"))?;
         if raw.len() == 32 {
@@ -304,27 +326,102 @@ fn install_material() -> Result<[u8; 32], String> {
     Ok(buf)
 }
 
-fn user_material() -> Result<[u8; 32], String> {
-    let path = crate::paths::user_data_dir()?.join(USER_MATERIAL_FILENAME);
-    if path.exists() {
-        let raw =
-            fs::read(&path).map_err(|_| "could not read per-user store material".to_string())?;
-        let plain = user_dpapi_unprotect(&raw)
-            .map_err(|_| "could not unlock per-user store material".to_string())?;
-        if plain.len() != 32 {
-            return Err("per-user store material is invalid".to_string());
+fn protect_user_store_material(
+    material: &[u8; 32],
+    current_user_install: bool,
+) -> Result<Vec<u8>, String> {
+    if current_user_install {
+        dpapi_protect(material).map_err(|_| "could not protect per-user store material".to_string())
+    } else {
+        user_dpapi_protect(material)
+            .map_err(|_| "could not protect per-user store material".to_string())
+    }
+}
+
+fn unprotect_user_store_material(
+    protected: &[u8],
+    current_user_install: bool,
+) -> Result<Vec<u8>, String> {
+    if current_user_install {
+        // Preserve an existing user-DPAPI material if this logon can still
+        // unlock it. Older current-user builds wrote that format. If it cannot
+        // be opened (notably under SSH), accept the current machine-DPAPI
+        // format instead.
+        user_dpapi_unprotect(protected).or_else(|_| dpapi_unprotect(protected))
+    } else {
+        user_dpapi_unprotect(protected)
+    }
+}
+
+fn write_new_user_material(
+    path: &std::path::Path,
+    current_user_install: bool,
+) -> Result<[u8; 32], String> {
+    let mut material = [0u8; 32];
+    OsRng.fill_bytes(&mut material);
+    let protected = protect_user_store_material(&material, current_user_install)?;
+    atomic_write_bytes(&path, &protected)
+        .map_err(|_| "could not write per-user store material".to_string())?;
+    Ok(material)
+}
+
+/// Move an unrecoverable current-user key and only the ciphertext blobs tied to
+/// it out of their loadable names.  The backup name cannot be reached through
+/// `load_user_blob`, and a UUID keeps repeated recovery attempts from
+/// overwriting a prior forensic/recovery copy.
+fn archive_unreadable_user_store(directory: &std::path::Path) -> Result<(), String> {
+    let recovery_id = Uuid::new_v4().simple().to_string();
+    for filename in USER_STORE_RECOVERY_FILES {
+        let source = directory.join(filename);
+        let archive = directory.join(format!(
+            ".unreadable-user-store-{recovery_id}-{filename}.bak"
+        ));
+        match fs::symlink_metadata(&source) {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => return Err("could not archive unreadable per-user data".to_string()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err("could not archive unreadable per-user data".to_string()),
         }
+        match fs::rename(&source, &archive) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("could not archive unreadable per-user data".to_string()),
+        }
+    }
+    Ok(())
+}
+
+fn recover_unreadable_user_material(
+    directory: &std::path::Path,
+    current_user_install: bool,
+) -> Result<[u8; 32], String> {
+    archive_unreadable_user_store(directory)?;
+    write_new_user_material(
+        &directory.join(USER_MATERIAL_FILENAME),
+        current_user_install,
+    )
+}
+
+fn user_material() -> Result<[u8; 32], String> {
+    let directory = crate::paths::user_data_dir()?;
+    let path = directory.join(USER_MATERIAL_FILENAME);
+    let current_user_install = crate::paths::current_user_install_uses_local_datastore();
+    if path.exists() {
+        let raw = match fs::read(&path) {
+            Ok(raw) => raw,
+            Err(_) => return recover_unreadable_user_material(&directory, current_user_install),
+        };
+        let plain = match unprotect_user_store_material(&raw, current_user_install) {
+            Ok(plain) if plain.len() == 32 => plain,
+            Ok(_) | Err(_) => {
+                return recover_unreadable_user_material(&directory, current_user_install)
+            }
+        };
         let mut material = [0u8; 32];
         material.copy_from_slice(&plain);
         return Ok(material);
     }
-    let mut material = [0u8; 32];
-    OsRng.fill_bytes(&mut material);
-    let protected = user_dpapi_protect(&material)
-        .map_err(|_| "could not protect per-user store material".to_string())?;
-    atomic_write_bytes(&path, &protected)
-        .map_err(|_| "could not write per-user store material".to_string())?;
-    Ok(material)
+    write_new_user_material(&path, current_user_install)
 }
 
 fn derive_section_key(
@@ -481,6 +578,12 @@ pub(crate) fn load_user_blob(
     max_plaintext_bytes: usize,
 ) -> Result<Option<Vec<u8>>, String> {
     let path = user_file_path(filename)?;
+    // Resolve the material before looking for the blob. If the current user's
+    // DPAPI material is unrecoverable, this archives the material and its known
+    // companion blobs (including this one); the subsequent existence check then
+    // correctly returns `None` and startup uses defaults instead of attempting
+    // to decode bytes that were encrypted with the retired key.
+    let key = derive_section_key(&user_material()?, None)?;
     if !path.exists() {
         return Ok(None);
     }
@@ -496,7 +599,6 @@ pub(crate) fn load_user_blob(
     }
     let encoded =
         fs::read_to_string(&path).map_err(|_| "could not read per-user data".to_string())?;
-    let key = derive_section_key(&user_material()?, None)?;
     let plaintext = decode_section(&key, encoded.trim(), &format!("user:{filename}"))
         .map_err(|_| "per-user data could not be decoded".to_string())?;
     if plaintext.len() > max_plaintext_bytes {
@@ -788,15 +890,92 @@ mod tests {
         assert!(user_file_path("clipboard-guard-rules.dat").is_ok());
     }
 
+    #[test]
+    fn unreadable_user_material_archives_only_its_known_blobs_then_recovers() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path();
+        let expected = [
+            (
+                USER_MATERIAL_FILENAME,
+                b"unreadable-dpapi-material".as_slice(),
+            ),
+            ("user-settings.dat", b"old-settings-ciphertext".as_slice()),
+            (
+                "clipboard-guard-rules.dat",
+                b"old-clipboard-policy-ciphertext".as_slice(),
+            ),
+        ];
+        for (filename, bytes) in expected {
+            fs::write(directory.join(filename), bytes).unwrap();
+        }
+        fs::write(directory.join("unrelated-user-file.dat"), b"leave me alone").unwrap();
+
+        let fresh_material = recover_unreadable_user_material(directory, true).unwrap();
+        let new_material = fs::read(directory.join(USER_MATERIAL_FILENAME)).unwrap();
+        assert_eq!(
+            dpapi_unprotect(&new_material).unwrap(),
+            fresh_material.to_vec(),
+            "a fresh current-user-install material must use machine DPAPI"
+        );
+        assert_eq!(
+            fs::read(directory.join("unrelated-user-file.dat")).unwrap(),
+            b"leave me alone",
+            "recovery must not move unrelated LocalAppData files"
+        );
+
+        let archived: Vec<_> = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(".unreadable-user-store-"))
+            })
+            .collect();
+        assert_eq!(archived.len(), USER_STORE_RECOVERY_FILES.len());
+        for (filename, bytes) in expected {
+            let archive = archived
+                .iter()
+                .find(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.ends_with(&format!("-{filename}.bak")))
+                })
+                .expect("every known encrypted blob must be archived");
+            assert_eq!(fs::read(archive).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn user_store_recovery_refuses_to_move_a_directory_named_like_a_blob() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path();
+        fs::create_dir(directory.join(USER_MATERIAL_FILENAME)).unwrap();
+
+        assert!(archive_unreadable_user_store(directory).is_err());
+        assert!(directory.join(USER_MATERIAL_FILENAME).is_dir());
+    }
+
     #[cfg(windows)]
     #[test]
-    fn current_user_dpapi_material_roundtrip_is_separate_from_machine_store() {
+    fn current_user_install_material_uses_machine_dpapi_and_reads_legacy_user_dpapi() {
         let material = [9u8; 32];
-        let protected = user_dpapi_protect(&material).expect("current-user protect");
-        assert!(protected.len() > material.len());
+        let protected = protect_user_store_material(&material, true).expect("machine protect");
+        assert!(
+            protected.len() > material.len(),
+            "DPAPI must protect the material"
+        );
         assert_eq!(
-            user_dpapi_unprotect(&protected).expect("current-user unprotect"),
-            material
+            dpapi_unprotect(&protected).expect("machine unprotect"),
+            material,
+            "current-user installations need machine DPAPI to survive SSH/noninteractive logons"
+        );
+
+        let legacy = user_dpapi_protect(&material).expect("legacy current-user protect");
+        assert_eq!(
+            unprotect_user_store_material(&legacy, true).expect("legacy fallback"),
+            material,
+            "a readable legacy current-user material must not be reset"
         );
     }
 

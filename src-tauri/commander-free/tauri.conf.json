@@ -55,8 +55,7 @@
       "digestAlgorithm": "sha256",
       "timestampUrl": "",
       "nsis": {
-        "installMode": "perMachine",
-        "installerHooks": "nsis/hooks.nsh"
+        "installMode": "currentUser"
       }
     }
   },

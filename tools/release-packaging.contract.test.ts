@@ -3,229 +3,58 @@ import { readFileSync } from "node:fs";
 
 const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> };
 const baseConfig = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.json", "utf8")) as {
-  bundle: { resources: string[]; targets: string | string[] };
+  bundle: {
+    resources: string[];
+    targets: string | string[];
+    windows: { nsis: { installMode: string; installerHooks?: string } };
+  };
 };
 const releaseTool = readFileSync("tools/build-tauri-release.ts", "utf8");
-const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8").replace(/\r\n/g, "\n");
 const manifest = readFileSync("src-tauri/commander-free/app.manifest", "utf8");
 const buildScript = readFileSync("src-tauri/commander-free/build.rs", "utf8");
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
-const publishTagWorkflow = readFileSync(".github/workflows/publish-release-tag.yml", "utf8");
-const prepareReleaseWorkflow = readFileSync(".github/workflows/prepare-release.yml", "utf8");
 
-describe("public service release packaging", () => {
-  test("pins the normal Tauri configuration to NSIS", () => {
+describe("Free per-user release packaging", () => {
+  test("uses the standard-user NSIS installation mode without machine hooks", () => {
     expect(baseConfig.bundle.targets).toBe("nsis");
+    expect(baseConfig.bundle.windows.nsis.installMode).toBe("currentUser");
+    expect(baseConfig.bundle.windows.nsis.installerHooks).toBeUndefined();
   });
 
-  test("closes its app processes and retires only a verified legacy MSI display record", () => {
-    const preinstall = hooks.indexOf("!macro NSIS_HOOK_PREINSTALL");
-    const uninstall = hooks.indexOf("!macro NSIS_HOOK_PREUNINSTALL");
-    const preinstallHooks = hooks.slice(preinstall, uninstall);
-    const uninstallHooks = hooks.slice(uninstall);
-
-    expect(hooks).toContain("!macro WC_CLOSE_RUNNING_APPS");
-    expect(hooks).toContain('taskkill.exe /F /T /IM ${MAINBINARYNAME}.exe');
-    expect(hooks).toContain("taskkill.exe /F /T /IM wincommander-pro.exe");
-    expect(hooks).toContain('${AndIf} $R8 != 128');
-    expect(preinstallHooks.indexOf("sc stop WinCommanderSvc")).toBeLessThan(preinstallHooks.indexOf("!insertmacro WC_CLOSE_RUNNING_APPS"));
-    expect(preinstallHooks.indexOf("!insertmacro WC_CLOSE_RUNNING_APPS")).toBeLessThan(preinstallHooks.indexOf("!insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS"));
-    expect(preinstallHooks).toContain('Delete "${WC_INSTALL_DIR}\\wincommander-pro.exe"');
-    expect(preinstallHooks).toContain('Delete "${WC_INSTALL_DIR}\\wincommander-pro.json"');
-    expect(uninstallHooks).toContain("!insertmacro WC_CLOSE_RUNNING_APPS");
-    expect(uninstallHooks).not.toContain("!insertmacro WC_RETIRE_LEGACY_MSI_REGISTRATIONS");
-
-    expect(hooks).toContain("Function WcRetireLegacyMsiRegistrations");
-    expect(hooks).toContain("SetRegView 64");
-    expect(hooks).toContain("SetRegView 32");
-    expect(hooks).toContain('"WindowsInstaller"');
-    expect(hooks).toContain('StrCmp $3 "WinCommander Pro"');
-    expect(hooks).toContain('StrCmp $4 "Secure Health"');
-    expect(hooks).toContain('StrCmp $5 "${WC_INSTALL_DIR}" wc_legacy_msi_remove');
-    expect(hooks).toContain('StrCmp $5 "${WC_INSTALL_DIR}\\" wc_legacy_msi_remove');
-    expect(hooks).toContain('StrCmp $5 "$\\"${WC_INSTALL_DIR}\\$\\"" wc_legacy_msi_remove wc_legacy_msi_next');
-    expect(hooks).toContain('DeleteRegKey HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\$1"');
-    expect(hooks).not.toContain("msiexec");
-    expect(hooks).toContain('DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\WinCommander"');
-  });
-
-  test("keeps raw Cargo checks independent of a release-only service artifact", () => {
-    expect(baseConfig.bundle.resources).not.toContain("../target/release/wincommander-svc.exe");
-    expect(releaseTool).toContain('["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"]');
-    expect(releaseTool).toContain('const serviceResource = "resources/wincommander-svc.exe"');
+  test("does not bundle or register a service or kernel driver during normal setup", () => {
+    expect(baseConfig.bundle.resources).not.toContain("resources/wincommander-svc.exe");
+    expect(releaseTool).not.toContain("commander-svc");
+    expect(releaseTool).not.toContain("wincommander-svc.exe");
     expect(releaseTool).toContain('const contextShredResource = "resources/wincommander-context-shred.exe"');
-    expect(releaseTool).toContain('const contextDeleteIconResource = "resources/context-delete.ico"');
-    expect(releaseTool).toContain('const stagedServicePath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-svc.exe")');
-    expect(releaseTool).toContain('const stagedContextShredPath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-context-shred.exe")');
-    expect(releaseTool).toContain("const stagedContextDeleteIconPath = resolve(");
-    expect(releaseTool).toContain('"context-delete.ico",');
-    expect(releaseTool).toContain('const staticCrtFlags = "-C target-feature=+crt-static"');
-    expect(releaseTool).toContain("RUSTFLAGS: rustflags");
-    expect(releaseTool).toContain("copyFileSync(serviceBuildPath, stagedServicePath)");
     expect(releaseTool).toContain("copyFileSync(contextShredBuildPath, stagedContextShredPath)");
-    expect(releaseTool).toContain("copyFileSync(contextDeleteIconPath, stagedContextDeleteIconPath)");
     expect(releaseTool).toContain('config.bundle.targets = ["nsis"]');
-    expect(releaseTool).toContain('config.bundle.resources = [');
-    expect(releaseTool).toContain('rmSync(generatedConfigPath, { force: true })');
-    expect(releaseTool).toContain('rmSync(stagedServicePath, { force: true })');
-    expect(releaseTool).toContain('rmSync(stagedContextShredPath, { force: true })');
-    expect(releaseTool).toContain('rmSync(stagedContextDeleteIconPath, { force: true })');
     expect(packageJson.scripts["build:free:release-installer"]).toContain("bun run tools/build-tauri-release.ts");
-    expect(packageJson.scripts["build:free:release-installer"]).not.toContain("build:pro");
-    expect(packageJson.scripts.build).toContain("bun run build:service:release");
   });
 
-  test("builds and publishes the NSIS artifact that exercises the service lifecycle", () => {
-    expect(releaseWorkflow).toContain("run: bun run build:free:release-installer");
-    expect(releaseWorkflow).not.toContain("run: bun tauri build --config src-tauri/commander-free/tauri.conf.json");
-    expect(releaseWorkflow).toContain('bundle/nsis" -Filter "WinCommander*${version}*_x64-setup.exe"');
-    expect(releaseWorkflow).toContain("Verify Free setup installs and removes WinCommanderSvc");
-    expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\wincommander-svc.exe"');
-    expect(releaseWorkflow).toContain('Get-CimInstance Win32_Service -Filter "Name=\'WinCommanderSvc\'"');
-    expect(releaseWorkflow).toContain('Get-ItemProperty -LiteralPath "Registry::HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\WinCommanderSvc"');
-    expect(releaseWorkflow).toContain('$serviceRegistry.Start -ne 2');
-    expect(releaseWorkflow).toContain('CIM StartMode=$($service.StartMode)');
-    expect(releaseWorkflow).toContain('$running.WaitForStatus("Running", [TimeSpan]::FromSeconds(30))');
-    expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\uninstall.exe"');
-    expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\installer-lifecycle.log"');
-    expect(releaseWorkflow).toContain('Get-Content -LiteralPath $diagnosticLog -Raw | Write-Host');
-    expect(releaseWorkflow).toContain('Remove-Item -LiteralPath $diagnosticLog -Force');
-    expect(releaseWorkflow).toContain('"SETUP_PATH=$($setup.FullName)"');
-    expect(releaseWorkflow).toContain('"$remote/free/latest.exe"');
-    expect(releaseWorkflow).not.toContain("MSI_PATH=");
-    expect(releaseWorkflow).not.toContain("latest.msi");
-    expect(publishTagWorkflow).toContain("signed NSIS setup release");
-    expect(publishTagWorkflow).not.toContain("signed MSI release");
-    expect(prepareReleaseWorkflow).toContain("signed Free NSIS setup workflow");
-    expect(prepareReleaseWorkflow).not.toContain("signed Free MSI workflow");
-  });
-
-  test("uses a fixed quoted Program Files service path with checked lifecycle commands", () => {
-    // The probe-verified NSIS form compiles to `\"\\\"path\\\"\"`, the
-    // one argument sc.exe needs for a quoted Program Files ImagePath.
-    const scmImagePathArgument = String.raw`"\$\"` + '${WC_SERVICE_EXE}' + String.raw`\$\""`;
-    const uninstaller = hooks.slice(hooks.indexOf("!macro NSIS_HOOK_PREUNINSTALL"));
-
-    expect(hooks).toContain('!define WC_SERVICE_EXE "${WC_INSTALL_DIR}\\wincommander-svc.exe"');
-    expect(hooks).toContain('!define WC_BUNDLED_SERVICE "$INSTDIR\\resources\\wincommander-svc.exe"');
-    expect(hooks).not.toContain('!define WC_BUNDLED_SERVICE "$INSTDIR\\wincommander-svc.exe"');
-    expect(hooks).toContain('StrCpy $INSTDIR "${WC_INSTALL_DIR}"');
-    expect(hooks).toContain("${If} $R6 == 1");
-    expect(hooks).toContain("sc stop WinCommanderSvc");
-    expect(hooks).toContain('findstr /C:": 1  STOPPED"');
-    expect(hooks).not.toContain("WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped");
-    expect(hooks).not.toContain("Get-Service -Name WinCommanderSvc");
-    expect(hooks).not.toContain("$$svc");
-    expect(hooks).not.toContain("''WinCommanderSvc''");
-    expect(hooks).toContain('reg.exe export "HKLM\\SYSTEM\\CurrentControlSet\\Services\\WinCommanderSvc" "${WC_SERVICE_CONFIG_BACKUP}" /y');
-    expect(hooks).toContain('reg.exe import "${WC_SERVICE_CONFIG_BACKUP}"');
-    expect(hooks).toContain('!define WC_SERVICE_BACKUP "${WC_INSTALL_DIR}\\wincommander-svc.exe.wc-backup"');
-    expect(hooks).toContain('!define WC_LIFECYCLE_DIAGNOSTIC_LOG "${WC_INSTALL_DIR}\\installer-lifecycle.log"');
-    expect(hooks).toContain('!macro WC_WRITE_LIFECYCLE_DIAGNOSTIC');
-    expect(hooks).toContain('FileWrite $R0 "stage=$R3 exit=$R8 reason=$R4$\\r$\\n"');
-    expect(hooks).toContain('StrCpy $R3 "service-start"');
-    expect(hooks).toContain('wc_service_rollback:\n    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC');
-    expect(hooks).toContain('StrCpy $R4 "WinCommander service payload is missing; the installation was not completed."');
-    expect(hooks).toContain('StrCpy $R4 "WinCommander service executable could not be backed up."');
-    expect(hooks).toContain('kernel32::CopyFileW(w "${WC_SERVICE_EXE}", w "${WC_SERVICE_BACKUP}", i 0)');
-    expect(hooks).toContain('kernel32::CopyFileW(w "${WC_BUNDLED_SERVICE}", w "${WC_SERVICE_EXE}", i 0)');
-    expect(hooks).toContain('kernel32::CopyFileW(w "${WC_SERVICE_BACKUP}", w "${WC_SERVICE_EXE}", i 0)');
-    expect(hooks).not.toContain('CopyFiles /SILENT "${WC_BUNDLED_SERVICE}"');
-    expect(hooks).toContain(`sc.exe create WinCommanderSvc binPath= ${scmImagePathArgument} start= auto obj= LocalSystem`);
-    expect(hooks).not.toContain('sc create WinCommanderSvc binPath= """"${WC_SERVICE_EXE}""""');
-    expect(hooks).toContain('IfFileExists "${WC_BUNDLED_SERVICE}" wc_service_payload_ready 0');
-    expect(hooks).toContain("wc_service_payload_ready:");
-    expect(hooks).not.toContain('IfFileExists "${WC_BUNDLED_SERVICE}" +2 0');
-    expect(hooks).toContain(`sc.exe config WinCommanderSvc binPath= ${scmImagePathArgument} start= auto obj= LocalSystem`);
-    expect(hooks).toContain('${If} $R8 == 1073');
-    expect(hooks).toContain('${AndIf} $R6 == 0');
-    expect(hooks).toContain('sc.exe create WinCommanderEncVol type= kernel binPath= \\??\\${WC_ENCVOL_DRIVER} start= system');
-    expect(hooks).toContain('sc.exe config WinCommanderEncVol type= kernel binPath= \\??\\${WC_ENCVOL_DRIVER} start= system');
-    expect(hooks).toContain("sc failure WinCommanderSvc reset= 86400 actions= restart/5000/restart/5000/none/0");
-    expect(hooks).toContain("sc start WinCommanderSvc");
-    expect(hooks).toContain("sc delete WinCommanderSvc");
-    expect(hooks).toContain("${AndIf} $R8 != 1072");
-    expect(hooks).toContain("wc_un_wait_svc_delete:");
-    expect(hooks).toContain("sc query WinCommanderSvc");
-    expect(hooks).toContain("wc_un_svc_removed:");
-    expect(uninstaller.indexOf("wc_un_wait_svc_delete:")).toBeGreaterThan(uninstaller.indexOf("sc delete WinCommanderSvc"));
-    expect(uninstaller.indexOf('Delete "${WC_SERVICE_EXE}"')).toBeGreaterThan(uninstaller.indexOf("wc_un_svc_removed:"));
-    expect(hooks).toContain('Delete "${WC_SERVICE_EXE}"');
-  });
-
-  test("preserves third-party encryption drivers and waits before removing its own", () => {
-    const uninstall = hooks.indexOf("!macro NSIS_HOOK_PREUNINSTALL");
-    const uninstallHooks = hooks.slice(uninstall);
-    const stop = uninstallHooks.indexOf("sc stop WinCommanderEncVol");
-    const stopped = uninstallHooks.indexOf('sc query WinCommanderEncVol | findstr /C:": 1  STOPPED"');
-    const remove = uninstallHooks.indexOf("sc delete WinCommanderEncVol");
-
-    expect(hooks).toContain("sc query WinCommanderEncVol");
-    expect(hooks).not.toContain("sc stop veracrypt");
-    expect(hooks).not.toContain("sc delete veracrypt");
-    expect(uninstall).toBeGreaterThanOrEqual(0);
-    expect(stop).toBeGreaterThanOrEqual(0);
-    expect(stopped).toBeGreaterThan(stop);
-    expect(remove).toBeGreaterThan(stopped);
-    expect(uninstallHooks).toContain("${AndIf} $R8 != 1061");
-    expect(uninstallHooks).toContain("${AndIf} $R8 != 1072");
-    expect(uninstallHooks).toContain("wc_un_wait_encvol_delete:");
-    expect(uninstallHooks).toContain("wc_un_encvol_removed:");
-    expect(uninstallHooks.indexOf("wc_un_wait_encvol_delete:")).toBeGreaterThan(remove);
-    expect(uninstallHooks.indexOf("wc_un_encvol_removed:")).toBeGreaterThan(uninstallHooks.indexOf("wc_un_wait_encvol_delete:"));
-    expect(hooks).toContain("Restart Windows, then run the uninstaller again.");
-  });
-
-  test("repairs only the fixed owned encryption driver on install or update", () => {
-    // A kernel service's ImagePath is an NT object name, so it must be the
-    // unquoted `\??\` form. Quoting it made every StartService fail with
-    // ERROR_INVALID_NAME (123).
-    const ntDriverArgument = '\\??\\' + '${WC_ENCVOL_DRIVER}';
-
-    expect(hooks).toContain('!define WC_ENCVOL_DRIVER "$PROGRAMDATA\\WinCommander\\bin\\engine\\EncVolKm.sys"');
-    expect(hooks).toContain('IfFileExists "${WC_ENCVOL_DRIVER}" wc_encvol_driver_present wc_encvol_driver_ready');
-    expect(hooks).toContain("sc query WinCommanderEncVol");
-    expect(hooks).toContain('sc qc WinCommanderEncVol | findstr /I /C:"${WC_ENCVOL_DRIVER}"');
-    expect(hooks).toContain(`sc.exe create WinCommanderEncVol type= kernel binPath= ${ntDriverArgument} start= system`);
-    expect(hooks).toContain(`sc.exe config WinCommanderEncVol type= kernel binPath= ${ntDriverArgument} start= system`);
-    expect(hooks).not.toContain('binPath= "\\$\\"' + '${WC_ENCVOL_DRIVER}');
-    expect(hooks).toContain("sc start WinCommanderEncVol");
-    expect(hooks).toContain("wc_encvol_driver_rollback:");
-    expect(hooks).not.toContain("sc create veracrypt");
-    expect(hooks).not.toContain("sc config veracrypt");
-  });
-
-  test("never prompts for elevation just to open the desktop app", () => {
+  test("keeps the desktop process and bundled Explorer helper at the caller's privilege", () => {
     expect(manifest).toContain('requestedExecutionLevel level="asInvoker"');
     expect(manifest).not.toContain("highestAvailable");
     expect(manifest).not.toContain("requireAdministrator");
     expect(buildScript).toContain('const AS_INVOKER_LEVEL: &str = r#"level="asInvoker""#;');
-    expect(hooks).toContain("-RunLevel Limited");
-  });
 
-  test("passes valid quoted PowerShell task and path arguments to NSIS", () => {
-    expect(hooks).toContain("-LiteralPath '$INSTDIR'");
-    expect(hooks).toContain("$$a = New-ScheduledTaskAction -Execute '$INSTDIR\\${MAINBINARYNAME}.exe'");
-    expect(hooks).toContain("-TaskName 'WinCommanderLaunchOnce'");
-    expect(hooks).toContain("-Confirm:$$false");
-    expect(hooks).toContain("$$_.TaskName -like 'WinCommander_AutoErase_*");
-    expect(hooks).not.toContain("''$INSTDIR");
-    expect(hooks).not.toContain("''WinCommanderLaunchOnce''");
-  });
-
-  test("bundles the non-elevating Explorer helper separately from the primary app", () => {
     const helperManifest = readFileSync("src-tauri/commander-context-shred/app.manifest", "utf8");
-    const helperEntry = readFileSync("src-tauri/commander-context-shred/src/main.rs", "utf8");
-    const contextMenu = readFileSync("src-tauri/commander-free/src/backend.rs", "utf8");
-
     expect(helperManifest).toContain('requestedExecutionLevel level="asInvoker"');
     expect(helperManifest).not.toContain("highestAvailable");
-    expect(helperEntry).toContain('windows_subsystem = "windows"');
-    expect(contextMenu).toContain('const CONTEXT_SHRED_HELPER: &str = "wincommander-context-shred.exe"');
-    expect(contextMenu).toContain('const CONTEXT_SHRED_ICON: &str = "context-delete.ico"');
-    expect(contextMenu).toContain('join("resources")');
-    expect(contextMenu).toContain('join(CONTEXT_SHRED_HELPER)');
-    expect(contextMenu).toContain('join(CONTEXT_SHRED_ICON)');
-    expect(contextMenu).not.toContain('context_shred_command(exe_str)');
+    expect(helperManifest).not.toContain("requireAdministrator");
+  });
+
+  test("runs the release setup and uninstaller without RunAs and rejects machine-service side effects", () => {
+    expect(releaseWorkflow).not.toContain("Verify Free setup installs and removes WinCommanderSvc");
+    expect(releaseWorkflow).toContain("Verify Free setup installs and removes only the current-user installation");
+    expect(releaseWorkflow).toContain('Join-Path $env:LOCALAPPDATA "WinCommander\\wincommander-free.exe"');
+    expect(releaseWorkflow).toContain('Join-Path $env:LOCALAPPDATA "WinCommander\\uninstall.exe"');
+    expect(releaseWorkflow).toContain("The Free setup unexpectedly created WinCommanderSvc.");
+
+    const verification = releaseWorkflow.slice(
+      releaseWorkflow.indexOf("Verify Free setup installs and removes only the current-user installation"),
+      releaseWorkflow.indexOf("Verify bundled shared media"),
+    );
+    expect(verification).not.toContain("-Verb RunAs");
+    expect(verification).not.toContain("$env:ProgramFiles");
   });
 });
