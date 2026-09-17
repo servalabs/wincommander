@@ -195,11 +195,11 @@ describe("public service release packaging", () => {
     expect(hooks).not.toContain("sc config veracrypt");
   });
 
-  test("lets ordinary users run with their own token while debug stays asInvoker", () => {
-    expect(manifest).toContain('requestedExecutionLevel level="highestAvailable"');
+  test("never prompts for elevation just to open the desktop app", () => {
+    expect(manifest).toContain('requestedExecutionLevel level="asInvoker"');
+    expect(manifest).not.toContain("highestAvailable");
     expect(manifest).not.toContain("requireAdministrator");
-    expect(buildScript).toContain('const HIGHEST_AVAILABLE_LEVEL: &str = r#"level="highestAvailable""#;');
-    expect(buildScript).toContain('replacen(HIGHEST_AVAILABLE_LEVEL, r#"level="asInvoker""#, 1)');
+    expect(buildScript).toContain('const AS_INVOKER_LEVEL: &str = r#"level="asInvoker""#;');
     expect(hooks).toContain("-RunLevel Limited");
   });
 

@@ -189,7 +189,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).not.toContain("invoke(");
     expect(vaultHook).toContain('invoke<Policy | null>("get_vault_access_policy")');
     expect(vaultHook).toContain('invoke<Status>("apply_vault_access_policy"');
-    expect(vault).toContain("nextVaultAccessPolicy(policy)");
+    expect(vault).toContain("nextVaultAccessPolicy(policyToApply)");
     expect(vault).toContain("Saved vaults");
     expect(vault).toContain("Future mounts only need the password");
     expect(vault).toContain("Save vault settings");
@@ -234,5 +234,12 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("vaultPresentationLabel(entry.presentation)");
     expect(vault).toContain('aria-label="Vault volume role"');
     expect(vaultEditor).toContain("Outer + hidden container");
+  });
+
+  test("keeps an unassigned non-admin Vault surface visibly expanded", () => {
+    expect(vault).toContain('data-vault-empty-state="expanded"');
+    expect(vault).toContain("No Vaults are assigned to this account");
+    expect(vault).toContain("An administrator must grant this Windows account access before a Vault can appear here.");
+    expect(vault).toContain('<Icon icon="refresh" size={14} />Refresh</Button>');
   });
 });

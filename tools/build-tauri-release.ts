@@ -19,9 +19,8 @@ const contextDeleteIconPath = resolve(
 // copy to replace the root service only after it has backed up a running
 // installation's previous executable.
 const stagedServicePath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-svc.exe");
-// Explorer must invoke a separate asInvoker binary for secure erase. The main
-// Tauri executable intentionally keeps its highestAvailable manifest for
-// privileged features, which would otherwise show UAC for every selected item.
+// Explorer invokes a separate asInvoker binary for secure erase so selected
+// files are handled by a narrow helper rather than the long-lived desktop app.
 const stagedContextShredPath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-context-shred.exe");
 const stagedContextDeleteIconPath = resolve(
   root,

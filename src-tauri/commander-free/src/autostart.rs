@@ -37,10 +37,9 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(windows)]
 const AUTOSTART_POWERSHELL: &str = "powershell.exe";
 
-/// The app manifest uses `highestAvailable`. A Scheduled Task cannot display
-/// the corresponding consent prompt, so an administrator's logon task exits
-/// with 0x800702E4 before the app starts. Preserve the limited group task and
-/// force this launch to use the interactive user's normal token instead.
+/// The desktop app runs as the invoking user. Preserve the limited group task
+/// so a logon launch can never become elevated or affect another user's
+/// desktop session.
 ///
 /// Task Scheduler discards a child process's stderr. Keep that evidence in the
 /// relevant profile rather than ProgramData, which a standard user cannot

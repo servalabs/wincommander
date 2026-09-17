@@ -17,6 +17,19 @@ describe("Vault refresh boundaries", () => {
     expect(source).toContain('<fieldset disabled={saving} className="contents">');
   });
 
+  test("removing a saved row confirms then persists the policy change", async () => {
+    const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
+    const requestRemoval = source.slice(source.indexOf("const requestEntryRemoval"), source.indexOf("const setAccessPreset"));
+    const confirmedRemoval = source.slice(source.indexOf("const confirmEntryRemoval"), source.indexOf("const importLegacyDraft"));
+
+    expect(requestRemoval).toContain("setEntryRemovalConfirmation(id)");
+    expect(confirmedRemoval).toContain("removeVaultEntryDraft(current, entryId, true)");
+    expect(confirmedRemoval).toContain("void apply(next, true)");
+    expect(source).toContain("Remove this Vault from the saved policy?");
+    expect(source).toContain("Remove and save");
+    expect(source).toContain("Vault removed from saved policy. It can now use normal Secure Storage mounting with its password.");
+  });
+
   test("refresh rejects stale responses and clears obsolete mount results", async () => {
     const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
     const refresh = source.slice(source.indexOf("const refresh ="), source.indexOf("useEffect(() => { void refresh()"));

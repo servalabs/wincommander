@@ -108,6 +108,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const [mountTarget, setMountTarget] = useState<MountTarget | null>(null);
   const [volumeRole, setVolumeRole] = useState<VaultVolumeRole>("outer");
   const [draftConfirmation, setDraftConfirmation] = useState<"replace" | "discard" | null>(null);
+  const [entryRemovalConfirmation, setEntryRemovalConfirmation] = useState<string | null>(null);
   const [policyRemovalConfirmation, setPolicyRemovalConfirmation] = useState(false);
   const [existingVaultDialogOpen, setExistingVaultDialogOpen] = useState(false);
   const [existingVaultPath, setExistingVaultPath] = useState("");
@@ -335,7 +336,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     openEntryEditor(entry.id, "details");
   };
 
-  const removeEntry = (id: string) => {
+  const removeEntryDraft = (id: string) => {
     const current = policyRef.current;
     if (!current) return;
     const next = removeVaultEntryDraft(current, id, draftBaseRef.current !== null);
@@ -348,6 +349,17 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       return;
     }
     replacePolicy(next, true);
+  };
+
+  const requestEntryRemoval = (id: string) => {
+    // A row created only in this unsaved draft has no service policy to
+    // revoke. Removing it locally is safe; a saved row must go through the
+    // confirmation and service-backed apply below.
+    if (!draftBaseRef.current?.entries.some(entry => entry.id === id)) {
+      removeEntryDraft(id);
+      return;
+    }
+    setEntryRemovalConfirmation(id);
   };
 
   const setAccessPreset = (id: string, preset: Exclude<VaultAccessPreset, "custom">) => editPolicy(current => {
@@ -372,10 +384,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     };
   });
 
-  const apply = async () => {
+  const apply = async (policyToApply = policy, policyEntryRemoved = false) => {
     if (saveInProgress.current) return;
-    if (!policy) return;
-    if (error) return void showError(error);
+    if (!policyToApply) return;
+    const policyError = validateVaultAccessIntent(policyToApply);
+    if (policyError) return void showError(policyError);
     saveInProgress.current = true;
     const operationId = newDiagnosticOperationId("vault");
     recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "requested", lifecycle: "requested", outcome: "started", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
@@ -387,7 +400,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     try {
       // The service's optimistic lock accepts only the next revision. The
       // displayed version remains the last observed policy until refresh.
-      const submittedPolicy = nextVaultAccessPolicy(policy);
+      const submittedPolicy = nextVaultAccessPolicy(policyToApply);
       const appliedStatus = await applyPolicy(submittedPolicy);
       const removed = submittedPolicy.entries.length === 0;
       replacePolicy(removed ? null : submittedPolicy, false);
@@ -407,6 +420,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       if (removed) {
         recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
         showSuccess("Vault policy removed and shared access revoked.", undefined, { operationId });
+      } else if (policyEntryRemoved) {
+        recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "info", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
+        showSuccess("Vault removed from saved policy. It can now use normal Secure Storage mounting with its password.", undefined, { operationId });
       } else if (appliedStatus.validation_state === "degraded") {
         recordDiagnostic({ operationId, feature: "vault", action: "apply_policy", stage: "applied", lifecycle: "applied", outcome: "degraded", errorCode: "VLT.POLICY.DEGRADED", severity: "warn", retryability: "manual", suggestedNextAction: "review_status", privacyClass: "local_sensitive" });
         showError("Vault settings were saved with warnings. Fix the listed access problems before mounting.", undefined, { operationId });
@@ -422,6 +438,16 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       saveInProgress.current = false;
       setSaving(false);
     }
+  };
+
+  const confirmEntryRemoval = () => {
+    const entryId = entryRemovalConfirmation;
+    setEntryRemovalConfirmation(null);
+    const current = policyRef.current;
+    if (!entryId || !current) return;
+    const next = removeVaultEntryDraft(current, entryId, true);
+    if (!next) return;
+    void apply(next, true);
   };
 
   const importLegacyDraft = () => {
@@ -600,7 +626,15 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         </CardHeader>
         <CardContent className="fleet-admin-stack">
           {authorizedEntries.length === 0 && (
-            <p className="fleet-field-hint">{canManagePolicy ? "No vault has been saved and assigned to this account yet." : "No Vault access is currently assigned to this Windows account."}</p>
+            <div className="fleet-vault-empty-inline" data-vault-empty-state="expanded">
+              <Icon icon="database" size={20} />
+              <div>
+                <strong>{canManagePolicy ? "No saved Vaults" : "No Vaults are assigned to this account"}</strong>
+                <small>{canManagePolicy
+                  ? "No Vault has been saved and assigned to this account yet."
+                  : "An administrator must grant this Windows account access before a Vault can appear here. Refresh after they make the change."}</small>
+              </div>
+            </div>
           )}
           {authorizedEntries.map(entry => {
             const mountGate = vaultMountGate({ authorized: entry, entryResult: status?.entries.find(item => item.id === entry.entry_id)?.result, draftDirty: false });
@@ -686,7 +720,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                     <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
                     {mounted ? <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id} onClick={() => void unmountSelectedEntry(entry.id)}>{unmountingEntryId === entry.id ? "Unmounting…" : "Dismount"}</Button>
                       : <Button variant="primary" size="sm" disabled={saving || mountingEntryId === entry.id || !authorized} onClick={() => { if (authorized) openMountPrompt(authorized); }}>{mountingEntryId === entry.id ? "Mounting…" : "Mount"}</Button>}
-                    <Button variant="outline" size="sm" onClick={() => removeEntry(entry.id)}>Remove policy</Button>
+                    <Button variant="outline" size="sm" onClick={() => requestEntryRemoval(entry.id)}>Remove policy</Button>
                   </div></td>
                 </tr>;
               })}</tbody>
@@ -742,7 +776,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             return <div className="fleet-vault-workspace" key={entry.id} ref={editorRef} data-vault-editor-mode={editorMode}>
               <div className="fleet-vault-workspace-header">
                 <div><span className="fleet-vault-step">{editorMode === "access" ? "Manage access" : "Vault details"}</span><strong>{entry.label || `Vault ${entryIndex + 1}`}</strong></div>
-                <Button variant="outline" size="sm" onClick={() => removeEntry(entry.id)}>Remove</Button>
+                <Button variant="outline" size="sm" onClick={() => requestEntryRemoval(entry.id)}>Remove</Button>
               </div>
               <VaultAccessEditor
                 entry={entry}
@@ -877,6 +911,21 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <DialogFooter>
             <Button variant="outline" onClick={() => setDraftConfirmation(null)}>Keep editing</Button>
             <Button variant="primary" onClick={confirmDraftChange}>{draftConfirmation === "replace" ? "Replace draft" : "Discard & reload"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={entryRemovalConfirmation !== null} onOpenChange={open => { if (!open) setEntryRemovalConfirmation(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Remove this Vault from the saved policy?</DialogTitle>
+            <DialogDescription>
+              WinCommander will dismount this Vault if needed, revoke its shared Windows access, and save the removal. Any other changes in this draft will be saved too. The encrypted container file is not deleted; it can then be mounted through Secure Storage with normal Windows access and its password.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEntryRemovalConfirmation(null)}>Cancel</Button>
+            <Button variant="primary" onClick={confirmEntryRemoval}>Remove and save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

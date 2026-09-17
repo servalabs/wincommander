@@ -151,16 +151,14 @@ fn main() {
         }
     }
 
-    // Production builds use highestAvailable: standard users keep their own
-    // medium-integrity token while administrators can elevate when needed.
-    // Development builds remain asInvoker so `tauri dev` and the CLI never
-    // prompt solely because they were launched from a developer terminal.
-    // Privileged commands still enforce their existing administrator checks.
+    // The desktop shell must never request elevation merely to open. Both
+    // packaged and development builds inherit the caller's token; individual
+    // machine-wide operations keep their explicit elevation checks.
     let release_manifest = include_str!("app.manifest");
-    const HIGHEST_AVAILABLE_LEVEL: &str = r#"level="highestAvailable""#;
+    const AS_INVOKER_LEVEL: &str = r#"level="asInvoker""#;
     assert!(
-        release_manifest.contains(HIGHEST_AVAILABLE_LEVEL),
-        "the release manifest must retain requestedExecutionLevel=highestAvailable"
+        release_manifest.contains(AS_INVOKER_LEVEL),
+        "the desktop manifest must retain requestedExecutionLevel=asInvoker"
     );
     let is_development_profile = std::env::var("PROFILE").as_deref() == Ok("debug");
     if std::env::var_os("CARGO_FEATURE_AUTONOMOUS_TEST").is_some() && !is_development_profile {
@@ -170,14 +168,7 @@ fn main() {
     if is_development_profile {
         println!("cargo:rustc-cfg=wincommander_dev_profile");
     }
-    let development_manifest;
-    let app_manifest = if is_development_profile {
-        development_manifest =
-            release_manifest.replacen(HIGHEST_AVAILABLE_LEVEL, r#"level="asInvoker""#, 1);
-        development_manifest.as_str()
-    } else {
-        release_manifest
-    };
+    let app_manifest = release_manifest;
     println!("cargo:rerun-if-changed=app.manifest");
 
     let mut windows = tauri_build::WindowsAttributes::new();

@@ -4883,11 +4883,10 @@ fn context_shred_icon_value(app_exe: &std::path::Path) -> Result<String, String>
     Ok(format!("\"{}\",0", icon_path.display()))
 }
 
-/// The primary desktop executable deliberately has a highestAvailable
-/// manifest for its administrative features. Explorer must not launch it for
-/// a normal user-owned delete: that would produce a UAC consent request even
-/// though the native erase needs no extra privilege. The bundled helper has an
-/// explicit asInvoker manifest and lives in Tauri's stable resources directory.
+/// Explorer uses a narrow bundled helper for normal user-owned deletion rather
+/// than attaching file selection directly to the long-lived desktop process.
+/// The helper has an explicit asInvoker manifest and lives in Tauri's stable
+/// resources directory.
 /// During `tauri dev`, the helper is built beside the debug desktop executable
 /// instead. Keeping this resolution local avoids pointing a developer's
 /// Explorer verb at an old installed build (or at the elevated release EXE).

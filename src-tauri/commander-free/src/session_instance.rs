@@ -88,11 +88,10 @@ fn encode_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-// A development build must be able to coexist with the installed elevated
-// release while `tauri dev` is being exercised. The build script emits this
-// cfg only for Cargo's debug profile, which is also the sole profile whose
-// manifest is transformed to asInvoker. Release object names remain byte-for-
-// byte compatible with existing installations.
+// A development build must be able to coexist with the installed release while
+// `tauri dev` is being exercised. The build script emits this cfg only for
+// Cargo's debug profile. Release object names remain byte-for-byte compatible
+// with existing installations.
 #[cfg(wincommander_dev_profile)]
 const INSTANCE_CHANNEL: &str = "Dev_";
 #[cfg(not(wincommander_dev_profile))]

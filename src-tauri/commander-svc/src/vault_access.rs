@@ -5318,6 +5318,16 @@ mod tests {
             "removing a policy entry must delete its service-owned Windows group"
         );
         assert_eq!(s.policy().unwrap().entries.len(), 1);
+        assert!(matches!(
+            s.selected_container_mount_route("D:\\Vaults\\retired\\sales", "S-1-test-Alex", 7)
+                .unwrap(),
+            SelectedContainerMountRoute::Unmanaged { .. }
+        ));
+        assert!(
+            !s.authorize_mount("retired", &["S-1-test-Alex".into()])
+                .allowed,
+            "a removed entry must not keep routing its container through policy-managed mounting"
+        );
     }
 
     #[test]

@@ -212,19 +212,22 @@ pub fn machine_data_dir() -> Result<PathBuf, String> {
         .or_else(|_| std::env::var("ALLUSERSPROFILE").map(PathBuf::from))
         .map_err(|_| "ProgramData not available".to_string())?;
     let dir = base.join(APP_DIR_NAME);
+    let was_missing = !dir.exists();
     fs::create_dir_all(&dir)
         .map_err(|e| format!("Failed to create machine data directory: {}", e))?;
-    // This directory stores device security policy (including Startup PIN
-    // material). Interactive users may read it, but must never inherit write
-    // access from ProgramData. The one-shot call also repairs installations
-    // created before this policy existed. Failure is load-bearing: accepting a
-    // newly-created writable ProgramData directory would let a standard user
-    // alter machine policy and Startup PIN material.
-    if MACHINE_DATA_ACL_INITIALIZED.get().is_none() {
+    // ACL repair is an installation/administrator operation. Reapplying it on
+    // every launch asks a standard account to modify ProgramData, which blocks
+    // otherwise read-only settings loads. A newly-created directory is still
+    // hardened before use; an existing installer-owned directory is only read.
+    if should_harden_machine_data_dir(was_missing) && MACHINE_DATA_ACL_INITIALIZED.get().is_none() {
         harden_machine_data_dir_acl(&dir)?;
         let _ = MACHINE_DATA_ACL_INITIALIZED.set(());
     }
     Ok(dir)
+}
+
+fn should_harden_machine_data_dir(was_missing: bool) -> bool {
+    was_missing
 }
 
 const MACHINE_DATA_ACL_GRANTS: [&str; 3] = [
@@ -548,8 +551,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        is_valid_machine_state_resource, is_valid_state_filename, state_file_from_dir,
-        MACHINE_DATA_ACL_GRANTS,
+        is_valid_machine_state_resource, is_valid_state_filename, should_harden_machine_data_dir,
+        state_file_from_dir, MACHINE_DATA_ACL_GRANTS,
     };
 
     #[test]
@@ -616,6 +619,12 @@ mod tests {
         assert_eq!(MACHINE_DATA_ACL_GRANTS[0], "*S-1-5-18:(OI)(CI)F");
         assert_eq!(MACHINE_DATA_ACL_GRANTS[1], "*S-1-5-32-544:(OI)(CI)F");
         assert_eq!(MACHINE_DATA_ACL_GRANTS[2], "*S-1-5-32-545:(OI)(CI)RX");
+    }
+
+    #[test]
+    fn existing_machine_data_directory_is_not_acl_rewritten_by_standard_user_launch() {
+        assert!(!should_harden_machine_data_dir(false));
+        assert!(should_harden_machine_data_dir(true));
     }
 
     #[cfg(windows)]
