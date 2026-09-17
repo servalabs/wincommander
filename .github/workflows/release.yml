@@ -236,6 +236,22 @@ jobs:
           # a release with missing runtime logos despite a passing dev build.
           submodules: recursive
 
+      # The Free installer places the paid Vault helper in ProgramData for the
+      # machine service. Its source remains private, so a normal public
+      # checkout cannot build the installer by itself. Keep this as a sibling:
+      # the Pro workspace intentionally references ../wincommander's shared
+      # crates through relative Cargo paths.
+      - name: Checkout required private Pro sidecar source
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+        run: |
+          $proWorkspace = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) "wincommander-pro"
+          gh repo clone servalabs/wincommander-pro $proWorkspace -- --depth 1 --branch main
+          if (-not (Test-Path -LiteralPath (Join-Path $proWorkspace "Cargo.toml") -PathType Leaf)) {
+            throw "The private Pro workspace checkout did not contain Cargo.toml."
+          }
+
       - name: Validate pinned shared build assets
         shell: pwsh
         run: |

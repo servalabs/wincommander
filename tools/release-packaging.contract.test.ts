@@ -57,6 +57,15 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).not.toContain("sc.exe delete VeraCrypt");
   });
 
+  test("checks out the private Pro workspace beside the Free release checkout", () => {
+    expect(releaseWorkflow).toContain("Checkout required private Pro sidecar source");
+    expect(releaseWorkflow).toContain("GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}");
+    expect(releaseWorkflow).toContain(
+      "gh repo clone servalabs/wincommander-pro $proWorkspace -- --depth 1 --branch main",
+    );
+    expect(releaseWorkflow).toContain('Split-Path -Parent $env:GITHUB_WORKSPACE) "wincommander-pro"');
+  });
+
   test("keeps the desktop process and bundled Explorer helper at the caller's privilege", () => {
     expect(manifest).toContain('requestedExecutionLevel level="asInvoker"');
     expect(manifest).not.toContain("highestAvailable");
