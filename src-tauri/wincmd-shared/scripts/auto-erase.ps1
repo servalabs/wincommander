@@ -432,6 +432,17 @@ if (Test-Path `$historyDir) {
 `$mpLog = "`$env:ProgramData\Microsoft\Windows Defender\Support\MpCmdRun.log"
 if (Test-Path `$mpLog) { Erase-OneFile `$mpLog }
 "@
+    # Firewall packet logs are operational records, not firewall policy.  The
+    # firewall service opens a fresh log after removal, so this is safe to run
+    # periodically under SYSTEM without changing rules or connectivity.
+    'firewallLog'        = @"
+foreach (`$profile in @(Get-NetFirewallProfile -ErrorAction SilentlyContinue)) {
+    `$path = [string]`$profile.LogFileName
+    if (`$path -and (Test-Path -LiteralPath `$path -PathType Leaf -ErrorAction SilentlyContinue)) {
+        Erase-OneFile `$path | Out-Null
+    }
+}
+"@
 
     # Extended app-usage / office / web-cache / P2P update categories --------
     'appLaunchHistory'   = @"
@@ -710,7 +721,11 @@ function Set-AutoEraseSchedule {
         # is auto-generated: WinCommander_AutoErase_<categoryId> for the
         # current user, WinCommander_AutoErase_<categoryId>_<user>
         # for other accounts.
-        [string]$TaskNameOverride = ''
+        [string]$TaskNameOverride = '',
+        # Bulk scheduling uses this switch so a pre-existing task is reported
+        # instead of silently replacing a schedule the user set by hand.  The
+        # per-card editor intentionally leaves it off after its own confirmation.
+        [switch]$PreserveExisting
     )
     Assert-AutoEraseAdmin
 
@@ -730,6 +745,17 @@ function Set-AutoEraseSchedule {
             "WinCommander_AutoErase_$CategoryId"
         } else {
             "WinCommander_AutoErase_${CategoryId}_${TargetUser}"
+        }
+
+        if ($PreserveExisting -and (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+            return @{
+                status          = 'alreadyConfigured'
+                categoryId      = $CategoryId
+                taskName        = $taskName
+                intervalMinutes = $IntervalMinutes
+                runAsSystem     = [bool]$RunAsSystem
+                targetUser      = $TargetUser
+            }
         }
 
         $eraseScript = $script:AutoEraseScripts[$CategoryId]

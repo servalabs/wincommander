@@ -1579,10 +1579,11 @@ const legacyViewOnlyCategories: LegacyCleanupCategory[] = [
 export const VIEW_ONLY_CATEGORIES = exposeCleanupCategories(legacyViewOnlyCategories);
 
 // ── Schedulable-clearer overlay ──────────────────────────────────────
-// Every standard + DFIR card with a clearDataKey gets a per-card auto-erase
-// timer in the UI. Action-only (free-space erase, SSD TRIM, virtual memory) and
-// view-only (Process Review, SRUM) are explicitly excluded — destructive
-// long-running ops shouldn't run on a timer, and view-only has no clearer.
+// A card receives a per-card auto-erase timer only when its stable scheduler id
+// is backed by a real payload in auto-erase.ps1. Action-only (free-space erase,
+// virtual memory, recovery removal) and view-only cards are explicitly excluded:
+// repeating those operations would either change system state unsafely or have
+// no cleanup payload at all.
 //
 // SUPPORTED_AUTOERASE_IDS is the canonical list — MUST match the keys of
 // `$script:AutoEraseScripts` in privacy/cleanup.ps1 (and the inline switch
@@ -1602,7 +1603,7 @@ export const SUPPORTED_AUTOERASE_IDS = new Set<string>([
   'eventTranscript', 'activitiesTimeline', 'rdpBitmapCache', 'servicingLogs',
   'deviceInstallLogs', 'usageTraceLogs', 'defenderHistory',
   'appLaunchHistory', 'officeMru', 'embeddedWebCache', 'p2pUpdateCache',
-  'reliabilityHistory', 'explorerSearchHistory', 'searchPersonalization',
+  'reliabilityHistory', 'explorerSearchHistory', 'searchPersonalization', 'firewallLog',
   // Disk cleanup (scheduled via cleanmgr — runs as current user). No
   // CleanupCategory carries this id, so applyScheduling() never surfaces it
   // here; its only UI is Maintenance's "Reclaim disk space" card, which gates
