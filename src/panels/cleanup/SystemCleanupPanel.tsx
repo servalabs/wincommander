@@ -45,7 +45,7 @@ export default function SystemCleanupPanel() {
     const [combinedDetail, setCombinedDetail] = useState<{ catId: string } | null>(null);
 
     const scan = useCleanupScan({
-        schedulesEnabled: hasPaid && !isInvestigator,
+        schedulesEnabled: hasPaid && proInstalled && !isInvestigator,
         entitlementsReady: !entitlementsLoading,
         migrationEnabled: hasPaid && proInstalled && !isInvestigator,
     });
@@ -211,7 +211,7 @@ export default function SystemCleanupPanel() {
                                 <CleanupTabNavigation
                                     scan={scan}
                                     isInvestigator={isInvestigator}
-                                    schedulesEnabled={hasPaid && !isInvestigator}
+                                    schedulesEnabled={hasPaid && proInstalled && !isInvestigator}
                                     onRequestScheduleAccess={onRequestScheduleAccess}
                                 />
                                 <CleanupSummaryStats scan={scan} />
@@ -220,7 +220,7 @@ export default function SystemCleanupPanel() {
                                         scan={scan}
                                         tier="low-impact"
                                         isInvestigator={isInvestigator}
-                                        schedulesEnabled={hasPaid && !isInvestigator}
+                                        schedulesEnabled={hasPaid && proInstalled && !isInvestigator}
                                         onRequestScheduleAccess={onRequestScheduleAccess}
                                         detailOpenerMap={detailOpenerMap}
                                         onDriveWipe={() => setDriveWipeOpen(true)}
@@ -233,7 +233,7 @@ export default function SystemCleanupPanel() {
                                         scan={scan}
                                         tier="history-cache"
                                         isInvestigator={isInvestigator}
-                                        schedulesEnabled={hasPaid && !isInvestigator}
+                                        schedulesEnabled={hasPaid && proInstalled && !isInvestigator}
                                         onRequestScheduleAccess={onRequestScheduleAccess}
                                         detailOpenerMap={detailOpenerMap}
                                         onDriveWipe={() => setDriveWipeOpen(true)}
@@ -246,7 +246,7 @@ export default function SystemCleanupPanel() {
                                         scan={scan}
                                         tier="rebuilds-apps-connectivity"
                                         isInvestigator={isInvestigator}
-                                        schedulesEnabled={hasPaid && !isInvestigator}
+                                        schedulesEnabled={hasPaid && proInstalled && !isInvestigator}
                                         onRequestScheduleAccess={onRequestScheduleAccess}
                                         detailOpenerMap={detailOpenerMap}
                                         onDriveWipe={() => setDriveWipeOpen(true)}
@@ -259,7 +259,7 @@ export default function SystemCleanupPanel() {
                                         scan={scan}
                                         tier="data-accounts-recovery"
                                         isInvestigator={isInvestigator}
-                                        schedulesEnabled={hasPaid && !isInvestigator}
+                                        schedulesEnabled={hasPaid && proInstalled && !isInvestigator}
                                         onRequestScheduleAccess={onRequestScheduleAccess}
                                         detailOpenerMap={detailOpenerMap}
                                         onDriveWipe={() => setDriveWipeOpen(true)}
@@ -403,6 +403,7 @@ function CleanupTabNavigation({
         handleClearAllCategories,
         handleAutoSetSchedules,
         autoSetSchedulesBusy,
+        hasAutoSetSchedules,
     } = scan;
     const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];
     const isScanningAll = isCategoryBatchScanning(allScanCategories);
@@ -446,12 +447,14 @@ function CleanupTabNavigation({
                     small
                     intent="primary"
                     icon={autoSetSchedulesBusy ? undefined : "time"}
-                    text={autoSetSchedulesBusy ? "Setting scheduled wipes…" : "Auto-set scheduled wipes"}
-                    aria-label="Auto-set scheduled wipes"
+                    text={autoSetSchedulesBusy ? "Updating scheduled wipes…" : hasAutoSetSchedules ? "Turn off auto-set wipes" : "Auto-set scheduled wipes"}
+                    aria-label={hasAutoSetSchedules ? "Turn off auto-set scheduled wipes" : "Auto-set scheduled wipes"}
                     title={isInvestigator
                         ? "Scheduled wipes are unavailable in review mode"
                         : schedulesEnabled
-                            ? "Set safe default intervals without changing existing schedules"
+                            ? hasAutoSetSchedules
+                                ? "Turn off only the schedules created by this button"
+                                : "Set safe default intervals without changing existing schedules"
                             : "Unlock scheduled wipes"}
                     loading={autoSetSchedulesBusy}
                     disabled={isInvestigator || autoSetSchedulesBusy}

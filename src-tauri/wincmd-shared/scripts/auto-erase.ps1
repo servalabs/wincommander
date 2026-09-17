@@ -725,7 +725,10 @@ function Set-AutoEraseSchedule {
         # Bulk scheduling uses this switch so a pre-existing task is reported
         # instead of silently replacing a schedule the user set by hand.  The
         # per-card editor intentionally leaves it off after its own confirmation.
-        [switch]$PreserveExisting
+        [switch]$PreserveExisting,
+        # Marks schedules created by the bulk toolbar so its second click can
+        # remove only those tasks, never a schedule chosen per-card.
+        [switch]$ManagedByAutoSet
     )
     Assert-AutoEraseAdmin
 
@@ -801,8 +804,13 @@ function Set-AutoEraseSchedule {
         }
 
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        $description = if ($ManagedByAutoSet) {
+            'WinCommander Auto-set scheduled wipe'
+        } else {
+            'WinCommander scheduled wipe'
+        }
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers `
-                               -Principal $principal -Settings $settings -Force | Out-Null
+                               -Principal $principal -Settings $settings -Description $description -Force | Out-Null
 
         @{
             status          = 'enabled'
@@ -955,10 +963,14 @@ function Get-AutoEraseSchedules {
             # name. The suffix is only the selected-account label and can be
             # ambiguous for domain-qualified or underscore-containing users.
             $ownerAccount = $t.Principal.UserId
-            $targetUser = $ownerAccount
+            # A base task is the current-user (or SYSTEM) schedule. Only a
+            # suffix identifies an explicitly selected *other* user. Treating
+            # the owner of every base task as TargetUser made the frontend hide
+            # all normal schedules after creating them.
+            $targetUser = $null
             foreach ($knownCat in $script:AutoEraseScripts.Keys) {
                 if ($tail -eq $knownCat) {
-                    $categoryId = $knownCat; $targetUser = $t.Principal.UserId; break
+                    $categoryId = $knownCat; break
                 } elseif ($tail -like "${knownCat}_*") {
                     $categoryId = $knownCat
                     $targetUser = $tail.Substring($knownCat.Length + 1)
@@ -972,6 +984,7 @@ function Get-AutoEraseSchedules {
                 intervalMinutes = $minutes
                 targetUser      = $targetUser
                 ownerAccount    = $ownerAccount
+                managedByAutoSet = ($t.Description -eq 'WinCommander Auto-set scheduled wipe')
                 lastRun         = if ($info) { [string]$info.LastRunTime } else { $null }
                 nextRun         = if ($info) { [string]$info.NextRunTime } else { $null }
                 lastResult      = if ($info) { $info.LastTaskResult } else { $null }

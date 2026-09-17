@@ -70,12 +70,15 @@ export interface CleanupClearReconciliation {
 export interface AutoSetScheduleSummary {
     created: number;
     alreadyConfigured: number;
+    disabled: number;
     skipped: number;
     failed: number;
 }
 
 export const formatAutoSetScheduleSummary = (summary: AutoSetScheduleSummary) =>
-    `Scheduled wipes: ${summary.created} created, ${summary.alreadyConfigured} already configured, ${summary.skipped} skipped, ${summary.failed} failed.`;
+    summary.disabled > 0
+        ? `Scheduled wipes: ${summary.disabled} disabled, ${summary.skipped} skipped, ${summary.failed} failed.`
+        : `Scheduled wipes: ${summary.created} created, ${summary.alreadyConfigured} already configured, ${summary.skipped} skipped, ${summary.failed} failed.`;
 
 /**
  * The post-clear scan is the authoritative result. Several Windows cleaners
@@ -452,6 +455,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // cleanupCategories.ts (SUPPORTED_AUTOERASE_IDS) so the clock icon
     // appears instantly — no async roundtrip just to decide visibility.
     const [schedulesById, setSchedulesById] = useState<Record<string, number>>({});
+    const [autoSetScheduleIds, setAutoSetScheduleIds] = useState<Set<string>>(new Set());
     const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
     const [autoSetSchedulesBusy, setAutoSetSchedulesBusy] = useState(false);
     const migrationStarted = useRef(false);
@@ -460,6 +464,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         const res = await getAutoEraseSchedules();
         if (res.success && res.data?.schedules) {
             const map: Record<string, number> = {};
+            const autoSetIds = new Set<string>();
             for (const s of res.data.schedules) {
                 // Multi-user tasks use suffixed task names and a targetUser.
                 // They must not make the current-profile card look scheduled.
@@ -467,9 +472,11 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 if (s.enabled && s.intervalMinutes > 0) {
                     const uiId = s.categoryId === 'clipboard' ? 'clipboardHistory' : s.categoryId;
                     map[uiId] = s.intervalMinutes;
+                    if (s.managedByAutoSet) autoSetIds.add(uiId);
                 }
             }
             setSchedulesById(map);
+            setAutoSetScheduleIds(autoSetIds);
         }
     };
 
@@ -827,9 +834,11 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
      * as intentional user choices and are never overwritten by this shortcut.
      */
     const handleAutoSetSchedules = async (): Promise<AutoSetScheduleSummary> => {
+        let firstFailure: string | undefined;
         const summary: AutoSetScheduleSummary = {
             created: 0,
             alreadyConfigured: 0,
+            disabled: 0,
             skipped: 0,
             failed: 0,
         };
@@ -840,6 +849,22 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
         setAutoSetSchedulesBusy(true);
         try {
+            if (autoSetScheduleIds.size > 0) {
+                for (const categoryId of autoSetScheduleIds) {
+                    try {
+                        const res = await removeAutoEraseSchedule(getSchedulerCategoryId(categoryId));
+                        if (res.success) summary.disabled++;
+                        else {
+                            summary.failed++;
+                            firstFailure ??= res.error || `Failed to turn off ${categoryId}.`;
+                        }
+                    } catch {
+                        summary.failed++;
+                        firstFailure ??= `Failed to turn off ${categoryId}.`;
+                    }
+                }
+                return summary;
+            }
             for (const category of SCHEDULABLE_CATEGORIES) {
                 if (!category.schedulable || !category.clearDataKey) {
                     summary.skipped++;
@@ -860,13 +885,18 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                         interval,
                         !!category.schedulerRunAsSystem,
                         true,
+                        true,
                     );
                     if (res.success && res.data?.status === "alreadyConfigured") {
                         summary.alreadyConfigured++;
                     } else if (res.success) summary.created++;
-                    else summary.failed++;
+                    else {
+                        summary.failed++;
+                        firstFailure ??= res.error || `Failed to schedule ${category.label}.`;
+                    }
                 } catch {
                     summary.failed++;
+                    firstFailure ??= `Failed to schedule ${category.label}.`;
                 }
             }
         } finally {
@@ -876,7 +906,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             setAutoSetSchedulesBusy(false);
         }
 
-        const message = formatAutoSetScheduleSummary(summary);
+        const message = `${formatAutoSetScheduleSummary(summary)}${firstFailure ? ` First error: ${firstFailure}` : ''}`;
         if (summary.failed > 0) showError(message);
         else showSuccess(message);
         return summary;
@@ -1086,6 +1116,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         handleOtherUserClear,
         handleCardClearAllUsers,
         schedulesById,
+        hasAutoSetSchedules: autoSetScheduleIds.size > 0,
         scheduleBusyId,
         autoSetSchedulesBusy,
         handleSetSchedule,

@@ -1511,6 +1511,7 @@ export function useBackend() {
       intervalMinutes: number,
       runAsSystem: boolean = false,
       preserveExisting: boolean = false,
+      managedByAutoSet: boolean = false,
     ) =>
       execute<{ status: string; categoryId: string; taskName: string; intervalMinutes: number; runAsSystem: boolean }>(
         "Set-AutoEraseSchedule",
@@ -1519,6 +1520,7 @@ export function useBackend() {
           IntervalMinutes: intervalMinutes,
           RunAsSystem: runAsSystem,
           PreserveExisting: preserveExisting,
+          ManagedByAutoSet: managedByAutoSet,
         },
       ),
     removeAutoEraseSchedule: (categoryId: string) =>
@@ -1535,6 +1537,7 @@ export function useBackend() {
           intervalMinutes: number;
           targetUser: string | null;
           ownerAccount?: string | null;
+          managedByAutoSet?: boolean;
           lastRun: string | null;
           nextRun: string | null;
           lastResult: number | null;
