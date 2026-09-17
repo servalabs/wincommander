@@ -14,6 +14,9 @@
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "© OpenStreetMap",
     maxZoom: 18,
+    // The preview is a map, not a tile downloader. The standard OSM service
+    // needs a valid referrer; restrict it to the app origin for privacy.
+    referrerPolicy: "origin",
   }).addTo(map);
 
   function isPoint(point) {

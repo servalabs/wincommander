@@ -2,7 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="referrer" content="no-referrer">
+    <!-- OSM's standard tile service requires a valid referrer for web maps.
+         `origin` identifies only this app's host, never a file name or GPS value. -->
+    <meta name="referrer" content="origin">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="leaflet.css">
     <style>

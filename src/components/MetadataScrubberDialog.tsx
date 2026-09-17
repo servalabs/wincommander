@@ -1830,8 +1830,11 @@ function GpsCoordList({ results, isDryRun }: { results: GpsMapResult[]; isDryRun
           onLoad={() => setMapFrameReady(true)}
           style={{ width: '100%', height: 200, border: 'none', display: 'block' }}
           title="GPS locations map"
-          sandbox="allow-scripts"
-          referrerPolicy="no-referrer"
+          /* This is a bundled same-origin page. Retaining that origin lets its
+             map-tile requests identify the app host without revealing a file
+             path or the selected GPS coordinates. */
+          sandbox="allow-scripts allow-same-origin"
+          referrerPolicy="origin"
         />
       </div>
     </div>
