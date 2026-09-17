@@ -171,3 +171,4 @@ src-tauri/target-scoop/
 /target-privacy-shield-remote-test/
 /tmp-test-la/
 .target-fleet-full-detail/
+src-tauri/target-rdp-redirection-check
