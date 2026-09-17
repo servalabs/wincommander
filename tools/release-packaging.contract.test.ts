@@ -59,7 +59,9 @@ describe("Free machine-wide release packaging", () => {
 
   test("checks out the private Pro workspace beside the Free release checkout", () => {
     expect(releaseWorkflow).toContain("Checkout required private Pro sidecar source");
-    expect(releaseWorkflow).toContain("GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}");
+    expect(releaseWorkflow).toContain("GH_TOKEN: ${{ secrets.WINCOMMANDER_PRO_READ_TOKEN }}");
+    expect(releaseWorkflow).toContain("WINCOMMANDER_PRO_READ_TOKEN with Contents: Read access");
+    expect(releaseWorkflow).toContain("WINCOMMANDER_PRO_READ_TOKEN cannot read servalabs/wincommander-pro");
     expect(releaseWorkflow).toContain(
       "gh repo clone servalabs/wincommander-pro $proWorkspace -- --depth 1 --branch main",
     );

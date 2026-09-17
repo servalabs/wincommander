@@ -244,8 +244,15 @@ jobs:
       - name: Checkout required private Pro sidecar source
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          GH_TOKEN: ${{ secrets.WINCOMMANDER_PRO_READ_TOKEN }}
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "The release environment requires WINCOMMANDER_PRO_READ_TOKEN with Contents: Read access to servalabs/wincommander-pro."
+          }
+          gh api repos/servalabs/wincommander-pro --jq .default_branch | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "WINCOMMANDER_PRO_READ_TOKEN cannot read servalabs/wincommander-pro. Grant that token Contents: Read access, then rerun the release."
+          }
           $proWorkspace = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) "wincommander-pro"
           gh repo clone servalabs/wincommander-pro $proWorkspace -- --depth 1 --branch main
           if (-not (Test-Path -LiteralPath (Join-Path $proWorkspace "Cargo.toml") -PathType Leaf)) {
