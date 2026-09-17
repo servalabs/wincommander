@@ -1,11 +1,14 @@
 import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { getProManifestPath } from "./pro-workspace";
 
 const root = resolve(import.meta.dirname, "..");
+const proManifest = getProManifestPath(root);
 const configPath = resolve(root, "src-tauri", "commander-free", "tauri.conf.json");
 const generatedConfigPath = resolve(root, "src-tauri", "commander-free", "tauri.release.generated.json");
 const contextShredBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-context-shred.exe");
 const serviceBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-svc.exe");
+const proBuildPath = resolve(root, "src-tauri", "target", "release", "wincommander-pro.exe");
 const contextDeleteIconPath = resolve(
   root,
   "src-tauri",
@@ -17,6 +20,7 @@ const contextDeleteIconPath = resolve(
 // files are handled by a narrow helper rather than the long-lived desktop app.
 const stagedContextShredPath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-context-shred.exe");
 const stagedServicePath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-svc.exe");
+const stagedProPath = resolve(root, "src-tauri", "commander-free", "resources", "wincommander-pro.exe");
 const stagedContextDeleteIconPath = resolve(
   root,
   "src-tauri",
@@ -48,6 +52,15 @@ run(
   ["cargo", "build", "--manifest-path", "src-tauri/Cargo.toml", "-p", "commander-svc", "--release"],
   "WinCommander machine-service release build",
 );
+// The service authenticates this helper by the hash baked into the Free
+// executable. Build and hash the exact release sidecar before Tauri compiles
+// that executable, then bundle the same file for the installer to place in
+// its protected ProgramData location.
+run(
+  ["cargo", "build", "-p", "commander-pro", "--release", "--manifest-path", proManifest, "--target-dir", "src-tauri/target"],
+  "WinCommander Pro service-helper release build",
+);
+run(["bun", "run", "hash-pro"], "WinCommander Pro service-helper hash");
 
 const config = JSON.parse(readFileSync(configPath, "utf8")) as {
   bundle: { resources: string[]; targets: string | string[] };
@@ -55,13 +68,18 @@ const config = JSON.parse(readFileSync(configPath, "utf8")) as {
 const contextShredResource = "resources/wincommander-context-shred.exe";
 const contextDeleteIconResource = "resources/context-delete.ico";
 const serviceResource = "resources/wincommander-svc.exe";
+const proResource = "resources/wincommander-pro.exe";
 config.bundle.resources = [
   ...config.bundle.resources.filter(
-    resource => resource !== contextShredResource && resource !== contextDeleteIconResource && resource !== serviceResource,
+    resource => resource !== contextShredResource
+      && resource !== contextDeleteIconResource
+      && resource !== serviceResource
+      && resource !== proResource,
   ),
   contextShredResource,
   contextDeleteIconResource,
   serviceResource,
+  proResource,
 ];
 // Keep one signed NSIS artifact for the updater. The machine-wide installer
 // places the immutable application binary in Program Files, while each person
@@ -71,6 +89,7 @@ config.bundle.targets = ["nsis"];
 copyFileSync(contextShredBuildPath, stagedContextShredPath);
 copyFileSync(contextDeleteIconPath, stagedContextDeleteIconPath);
 copyFileSync(serviceBuildPath, stagedServicePath);
+copyFileSync(proBuildPath, stagedProPath);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 try {
   run(["bun", "x", "tauri", "build", "--config", generatedConfigPath], "Tauri release bundle");
@@ -79,4 +98,5 @@ try {
   rmSync(stagedContextShredPath, { force: true });
   rmSync(stagedContextDeleteIconPath, { force: true });
   rmSync(stagedServicePath, { force: true });
+  rmSync(stagedProPath, { force: true });
 }

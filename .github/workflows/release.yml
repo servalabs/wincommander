@@ -342,7 +342,9 @@ jobs:
 
           $setup = $setups[0].FullName
           $installRoot = Join-Path $env:ProgramFiles "WinCommander"
+          $proSidecar = Join-Path $env:ProgramData "WinCommander\bin\wincommander-pro.exe"
           Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $proSidecar -Force -ErrorAction SilentlyContinue
           $setupProcess = Start-Process -FilePath $setup -ArgumentList "/S" -Verb RunAs -Wait -PassThru
           if ($setupProcess.ExitCode -ne 0) {
             throw "The NSIS setup failed with exit code $($setupProcess.ExitCode)."
@@ -355,6 +357,9 @@ jobs:
           $service = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
           if ($null -eq $service -or $service.State -ne "Running") {
             throw "The Free setup did not create and start WinCommanderSvc."
+          }
+          if (-not (Test-Path -LiteralPath $proSidecar -PathType Leaf)) {
+            throw "The Free setup did not install the service-owned Pro Vault helper at $proSidecar."
           }
 
           $uninstaller = Join-Path $env:ProgramFiles "WinCommander\uninstall.exe"
@@ -371,6 +376,9 @@ jobs:
           $serviceAfterUninstall = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
           if ($null -ne $serviceAfterUninstall) {
             throw "The NSIS uninstaller did not remove WinCommanderSvc."
+          }
+          if (Test-Path -LiteralPath $proSidecar) {
+            throw "The NSIS uninstaller did not remove the service-owned Pro Vault helper."
           }
 
       - name: Verify bundled shared media

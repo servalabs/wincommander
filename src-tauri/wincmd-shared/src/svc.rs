@@ -21,7 +21,7 @@
 //!
 //! Every `Request::feature_id` in this namespace is prefixed `svc.`.  The
 //! service enforces a capability-class split on the peer identity.  There are
-//! **three** classes, in increasing order of trust required from the peer:
+//! **four** classes, in increasing order of trust required from the peer:
 //!
 //! - **[`CapabilityClass::ReadOnly`]** — queries and status checks that carry
 //!   no privilege risk.  The service allows these from any authenticated peer
@@ -44,6 +44,13 @@
 //!   Anything the service persists on behalf of a `SessionHelper` caller
 //!   should carry a trust-origin marker so a forged-submission investigation
 //!   is possible later.
+//! - **[`CapabilityClass::InteractiveSession`]** — a user-initiated action
+//!   whose work remains in that authenticated user's Windows logon session.
+//!   The service may perform a fixed, machine-owned prerequisite, but it must
+//!   never use the caller's path or credentials while privileged. This class
+//!   is appropriate for creating a personal Vault: the service starts only its
+//!   fixed driver, then the signed Pro engine creates the caller-selected file
+//!   using the caller's own token.
 //! - **[`CapabilityClass::Privileged`]** — mutations, dispatches, and anything
 //!   unknown.  The service requires the peer SID to be in the admin or
 //!   LocalSystem group before honouring these.  Fail-closed: an unrecognised
@@ -209,6 +216,11 @@ pub enum CapabilityClass {
     /// limiting submissions, is the service's job, not this module's — see
     /// the module-level docs for the full obligation list.
     SessionHelper,
+    /// A user-initiated action that is safe for an authenticated active
+    /// desktop session because all caller-controlled file work remains in
+    /// that caller's token.  It is neither a general read-only exemption nor
+    /// an administrator capability.
+    InteractiveSession,
     /// Read-only queries (status, settings reads, ping, health).  No state is
     /// mutated and no privileged Windows API is invoked.
     ReadOnly,
@@ -216,8 +228,8 @@ pub enum CapabilityClass {
 
 impl CapabilityClass {
     /// Ordinal strength of this class, strictly increasing with the trust the
-    /// service demands of the peer: `ReadOnly` (0) < `SessionHelper` (1) <
-    /// `Privileged` (2).
+    /// service demands of the peer: `ReadOnly` (0) < `InteractiveSession` (1)
+    /// < `SessionHelper` (2) < `Privileged` (3).
     ///
     /// A pure ordering helper for the service side — e.g. to assert that a
     /// peer's confirmed identity class dominates a verb's required class
@@ -229,8 +241,9 @@ impl CapabilityClass {
     pub fn rank(self) -> u8 {
         match self {
             CapabilityClass::ReadOnly => 0,
-            CapabilityClass::SessionHelper => 1,
-            CapabilityClass::Privileged => 2,
+            CapabilityClass::InteractiveSession => 1,
+            CapabilityClass::SessionHelper => 2,
+            CapabilityClass::Privileged => 3,
         }
     }
 }
@@ -308,11 +321,10 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         | "svc.vault.list_authorized"
         | "svc.vault.capabilities" => CapabilityClass::ReadOnly,
 
-        // Personal creation now has service-owned request correlation, but the
-        // service still cannot retain one file handle across the separate Pro
-        // engine creation. Keep it administrator-only until that remaining
-        // substitution boundary is proven safe for an ordinary user.
-        "svc.vault.create_personal" => CapabilityClass::Privileged,
+        // Creation is safe for a normal signed-in user only because the
+        // service prepares a fixed driver and the Pro engine performs all
+        // caller-controlled file I/O in the authenticated caller's token.
+        "svc.vault.create_personal" => CapabilityClass::InteractiveSession,
 
         // Creates/updates a Windows local group and sets its EXACT
         // membership from admin-supplied SIDs (the Access control UI's
@@ -373,6 +385,14 @@ mod tests {
         }
     }
 
+    #[test]
+    fn personal_vault_creation_requires_an_interactive_session_not_admin() {
+        assert_eq!(
+            classify_verb("svc.vault.create_personal"),
+            CapabilityClass::InteractiveSession
+        );
+    }
+
     // ── classify_verb: privileged verbs ─────────────────────────────────────
 
     #[test]
@@ -381,7 +401,6 @@ mod tests {
             "svc.patch_settings",
             "svc.dispatch",
             "svc.set_fleet_enabled",
-            "svc.vault.create_personal",
             "svc.vault.reconcile_access_groups",
             "svc.vault.get_access_directory",
             "svc.vault.save_access_directory",
@@ -566,13 +585,22 @@ mod tests {
     fn session_helper_is_distinct_from_read_only_and_privileged() {
         assert_ne!(CapabilityClass::SessionHelper, CapabilityClass::ReadOnly);
         assert_ne!(CapabilityClass::SessionHelper, CapabilityClass::Privileged);
+        assert_ne!(
+            CapabilityClass::InteractiveSession,
+            CapabilityClass::ReadOnly
+        );
+        assert_ne!(
+            CapabilityClass::InteractiveSession,
+            CapabilityClass::SessionHelper
+        );
     }
 
     // ── CapabilityClass::rank: strictly increasing with required trust ─────
 
     #[test]
     fn rank_is_strictly_ordered_read_only_lt_session_helper_lt_privileged() {
-        assert!(CapabilityClass::ReadOnly.rank() < CapabilityClass::SessionHelper.rank());
+        assert!(CapabilityClass::ReadOnly.rank() < CapabilityClass::InteractiveSession.rank());
+        assert!(CapabilityClass::InteractiveSession.rank() < CapabilityClass::SessionHelper.rank());
         assert!(CapabilityClass::SessionHelper.rank() < CapabilityClass::Privileged.rank());
     }
 }

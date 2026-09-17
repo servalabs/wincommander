@@ -292,6 +292,12 @@ pub(crate) async fn handle_connection(
         .as_deref()
         .map(AuthenticatedPipePeer::client_pid)
         .unwrap_or(0);
+    // Derived from the captured named-pipe token, never from renderer input.
+    // It is used only by personal-Vault creation, whose file work stays in
+    // this caller's token.
+    let caller_has_interactive_session = peer
+        .as_deref()
+        .is_some_and(peer_has_active_interactive_session);
     let ack = Envelope::Hello(wincmd_shared::svc::hello_from_ui("svc-ack"));
     write_envelope(&mut conn, &ack)
         .await
@@ -347,10 +353,11 @@ pub(crate) async fn handle_connection(
             write_envelope(&mut conn, &reply).await?;
             continue;
         }
-        match authorize(
+        match authorize_with_interactive_session(
             &req.feature_id,
             caller_privileged
                 || (vault_policy_manager && is_vault_management_verb(&req.feature_id)),
+            caller_has_interactive_session,
             client_pid,
             &session_helper_gate,
         )
@@ -434,8 +441,34 @@ pub async fn authorize(
     pid: u32,
     session_helper_gate: &Arc<SessionHelperGate>,
 ) -> Result<Option<TrustOrigin>, String> {
+    authorize_with_interactive_session(verb, caller_privileged, false, pid, session_helper_gate)
+        .await
+}
+
+/// As [`authorize`], with the captured peer's active-session status. This is
+/// kept separate so direct callers cannot accidentally claim interactive
+/// status; the pipe loop derives it from `AuthenticatedPipePeer`.
+async fn authorize_with_interactive_session(
+    verb: &str,
+    caller_privileged: bool,
+    caller_has_interactive_session: bool,
+    pid: u32,
+    session_helper_gate: &Arc<SessionHelperGate>,
+) -> Result<Option<TrustOrigin>, String> {
     match classify_verb(verb) {
         CapabilityClass::ReadOnly => Ok(None),
+
+        // This is intentionally separate from read-only. The only current
+        // user is personal Vault creation: caller-selected file I/O runs with
+        // the authenticated user token, while the service is limited to its
+        // fixed driver payload.
+        CapabilityClass::InteractiveSession => {
+            if caller_has_interactive_session {
+                Ok(None)
+            } else {
+                Err("personal Vault creation requires an active Windows session".to_string())
+            }
+        }
 
         CapabilityClass::Privileged => {
             if caller_privileged {
@@ -563,7 +596,7 @@ async fn dispatch_verb(
             .await
         }
         "svc.vault.create_personal" => {
-            handle_personal_vault_create(request_id, vault_access, args, peer)
+            handle_personal_vault_create(request_id, vault_access, args, peer).await
         }
         "svc.vault.unmount" => handle_vault_unmount(
             request_id,
@@ -955,7 +988,7 @@ fn handle_vault_authorize(
 /// engine is launched in the caller's session.  That gives the user normal
 /// file-placement semantics while the SYSTEM service remains the source of
 /// truth for the owner record and the protected container DACL.
-fn handle_personal_vault_create(
+async fn handle_personal_vault_create(
     operation_id: u64,
     vault_access: &VaultAccessStore,
     mut args: serde_json::Value,
@@ -996,6 +1029,16 @@ fn handle_personal_vault_create(
             "no interactive Windows session",
         ));
     }
+    // Prepare only the fixed, service-owned driver. The native engine remains
+    // in the authenticated caller's session so it never needs a UAC prompt to
+    // create a file in that user's chosen location.
+    if let Err(error) = ensure_vault_driver_for_personal_operation(operation_id).await {
+        zeroize_json(&mut args);
+        return Err(VerbError::new(
+            PERSONAL_VAULT_DRIVER_STOPPED,
+            error.public_message(),
+        ));
+    }
     let requested_path = path.to_string();
     let now = crate::vault_access::unix_time_seconds();
     let registration = vault_access
@@ -1033,9 +1076,9 @@ fn handle_personal_vault_create(
             },
         ))
     })
-    .map_err(|_| {
+    .map_err(|reason| {
         vault_access.cancel_personal_registration(&registration);
-        VerbError::new("vault_create_failed", "personal vault creation failed")
+        personal_vault_creation_failure(reason)
     })?;
     let broker_path = result
         .get("path")
@@ -1051,7 +1094,7 @@ fn handle_personal_vault_create(
     {
         vault_access.cancel_personal_registration(&registration);
         return Err(VerbError::new(
-            "vault_create_failed",
+            "vault_creation_verification_failed",
             "personal vault creation could not be verified",
         ));
     }
@@ -1064,6 +1107,58 @@ fn handle_personal_vault_create(
             )
         })?;
     Ok(result)
+}
+
+/// A fixed-payload repair may require the signed Pro helper to copy the
+/// service-owned driver into its protected location. It receives neither a
+/// caller path nor credentials; the actual volume engine is launched later as
+/// the authenticated desktop user.
+async fn ensure_vault_driver_for_personal_operation(
+    request_id: u64,
+) -> Result<(), crate::encvol_driver::EnsureDriverError> {
+    let mut driver_check =
+        tokio::task::spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)
+            .await
+            .unwrap_or(Err(
+                crate::encvol_driver::EnsureDriverError::ServiceInspection,
+            ));
+    if matches!(
+        &driver_check,
+        Err(crate::encvol_driver::EnsureDriverError::PayloadValidation)
+    ) {
+        let prepared = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
+                crate::pro_broker::VaultCall {
+                    request_id,
+                    target_session_id: 0,
+                    caller_sid: "S-1-5-18",
+                    caller_token: None,
+                    caller_authentication_id: None,
+                    presentation: wincmd_shared::vault_access::VaultPresentation::Machine,
+                    feature_id: "vault.broker.prepare_driver",
+                    args: serde_json::json!({}),
+                },
+            ))
+        });
+        if prepared.is_ok() {
+            driver_check =
+                tokio::task::spawn_blocking(crate::encvol_driver::ensure_for_vault_mount)
+                    .await
+                    .unwrap_or(Err(
+                        crate::encvol_driver::EnsureDriverError::ServiceInspection,
+                    ));
+        }
+    }
+    driver_check
+}
+
+fn personal_vault_creation_failure(
+    reason: wincmd_shared::vault_access::VaultMountReason,
+) -> VerbError {
+    VerbError::new(
+        VaultMountBroker::personal_mount_failure_code(reason),
+        "personal vault engine could not create the container",
+    )
 }
 
 /// Pre-flight failures are intentionally separate from native-engine failures:
@@ -2751,6 +2846,53 @@ mod tests {
         for caller_privileged in [false, true] {
             let result = authorize("svc.ping", caller_privileged, 1234, &gate).await;
             assert_eq!(result, Ok(None));
+        }
+    }
+
+    #[tokio::test]
+    async fn personal_vault_creation_allows_standard_user_only_in_active_session() {
+        let gate = passing_gate();
+        assert_eq!(
+            authorize_with_interactive_session(
+                "svc.vault.create_personal",
+                false,
+                true,
+                1234,
+                &gate,
+            )
+            .await,
+            Ok(None),
+        );
+        assert_eq!(
+            authorize_with_interactive_session(
+                "svc.vault.create_personal",
+                false,
+                false,
+                1234,
+                &gate,
+            )
+            .await,
+            Err("personal Vault creation requires an active Windows session".to_string()),
+        );
+    }
+
+    #[test]
+    fn personal_vault_creation_broker_failures_keep_the_stable_reason_code() {
+        for (reason, expected) in [
+            (
+                wincmd_shared::vault_access::VaultMountReason::BrokerUnavailable,
+                "vault_broker_unavailable",
+            ),
+            (
+                wincmd_shared::vault_access::VaultMountReason::EntitlementDenied,
+                "vault_entitlement_denied",
+            ),
+            (
+                wincmd_shared::vault_access::VaultMountReason::BrokerRejected,
+                "vault_broker_rejected",
+            ),
+        ] {
+            assert_eq!(personal_vault_creation_failure(reason).kind, expected);
         }
     }
 

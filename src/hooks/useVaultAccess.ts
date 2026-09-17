@@ -18,7 +18,11 @@ export default function useVaultAccess<Policy, Status>() {
     [],
   );
   const applyPolicy = useCallback(
-    (policy: Policy) => invoke<Status>("apply_vault_access_policy", { policy }),
+    (policy: Policy, operationId?: string) =>
+      invoke<Status>("apply_vault_access_policy", {
+        policy,
+        diagnosticOperationId: operationId,
+      }),
     [],
   );
   const mountEntry = useCallback(

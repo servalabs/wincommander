@@ -136,8 +136,13 @@ pub async fn get_vault_access_policy() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn apply_vault_access_policy(policy: Value) -> Result<Value, String> {
-    let operation_id = next_operation_id("apply_policy");
+pub async fn apply_vault_access_policy(
+    policy: Value,
+    diagnostic_operation_id: Option<String>,
+) -> Result<Value, String> {
+    // The renderer shows this opaque reference to the administrator. Carry it
+    // unchanged to the service so its durable diagnostic is actually findable.
+    let operation_id = requested_operation_id(diagnostic_operation_id, "apply_policy");
     let started = Instant::now();
     record_vault_event(
         &operation_id,

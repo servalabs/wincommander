@@ -5,6 +5,7 @@ import useBackend from "../../hooks/useBackend";
 import type { EncryptionPartition } from "../../hooks/useBackend";
 import useVisibility from "../../hooks/useVisibility";
 import { useTheme } from "../../context/ThemeContext";
+import { vaultCreationFailureDetail } from "./vaultCreationFailure";
 import './CreateVolumeWizard.css';
 
 type FSType = "None" | "NTFS" | "FAT" | "ExFAT";
@@ -296,7 +297,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                     Device: device,
                 });
             if (res?.success === false) {
-                logStep(label, "error", res.error || "Unknown error");
+                logStep(label, "error", vaultCreationFailureDetail(res.error));
                 setPassword("");
                 setPasswordConfirm("");
                 if (isDual) {
@@ -309,7 +310,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                 setDone(true);
             }
         } catch (e: any) {
-            logStep(label, "error", e?.message);
+            logStep(label, "error", vaultCreationFailureDetail(e));
             setPassword("");
             setPasswordConfirm("");
             if (isDual) {

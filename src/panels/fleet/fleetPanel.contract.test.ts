@@ -189,6 +189,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).not.toContain("invoke(");
     expect(vaultHook).toContain('invoke<Policy | null>("get_vault_access_policy")');
     expect(vaultHook).toContain('invoke<Status>("apply_vault_access_policy"');
+    expect(vaultHook).toContain("diagnosticOperationId: operationId");
     expect(vault).toContain("nextVaultAccessPolicy(policyToApply)");
     expect(vault).toContain("Saved vaults");
     expect(vault).toContain("Future mounts only need the password");

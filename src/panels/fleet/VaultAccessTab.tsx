@@ -435,7 +435,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       // The service's optimistic lock accepts only the next revision. The
       // displayed version remains the last observed policy until refresh.
       const submittedPolicy = nextVaultAccessPolicy(policyToApply);
-      const appliedStatus = await applyPolicy(submittedPolicy);
+      // Keep the UI reference, desktop diagnostic and service event correlated.
+      // Without this, a support reference could not identify the failed save.
+      const appliedStatus = await applyPolicy(submittedPolicy, operationId);
       const removed = submittedPolicy.entries.length === 0;
       const keepDraft = draftToKeepAfterSave !== null;
       // Removing one saved Vault is intentionally a surgical operation.  A
