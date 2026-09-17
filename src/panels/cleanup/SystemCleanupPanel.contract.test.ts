@@ -188,7 +188,7 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(traceCard).toContain("showScheduler && !isActionOnly");
   });
 
-  test("the cleanup toolbar exposes only global Scan All and Clean All actions", async () => {
+  test("the cleanup toolbar exposes global scan, auto-schedule, and clean actions", async () => {
     const scan = await read("src/panels/cleanup/useCleanupScan.ts");
     const panel = await read("src/panels/cleanup/SystemCleanupPanel.tsx");
 
@@ -197,6 +197,10 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(scan).toContain("isCategoryBatchScanning");
     expect(panel).toContain("const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];");
     expect(panel).toContain("handleClearAllCategories");
+    expect(panel).toContain("handleAutoSetSchedules");
+    expect(panel).toContain('text={autoSetSchedulesBusy ? "Setting scheduled wipes…" : "Auto-set scheduled wipes"}');
+    expect(panel).toContain('data-cleanup-auto-set-schedules="true"');
+    expect(panel).toContain("onRequestScheduleAccess?.()");
     expect(panel).not.toContain('text={isScanningAll ? "Scanning All..." : "Scan All"}');
     expect(panel).not.toContain('text="Clean All"');
     expect(panel).not.toContain('text={isScanningThisTab ? "Scanning section..." : "Scan section"}');

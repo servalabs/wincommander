@@ -6,7 +6,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { showSuccess, showError } from "../../utils/toast";
 import useBackend from "../../hooks/useBackend";
 import { usePatchSettings, useSettingsQuery } from "../../hooks/queries/useSettingsQuery";
-import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
+import { STANDARD_CATEGORIES, DEEP_DFIR_CATEGORIES, VIEW_ONLY_CATEGORIES, ACTION_CATEGORIES, SCHEDULABLE_CATEGORIES, type CleanupCategory } from "./cleanupCategories";
+import { getAutoScheduleInterval } from "./autoSchedulePolicy";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
 
 const getSchedulerCategoryId = (categoryId: string): string =>
@@ -65,6 +66,16 @@ export interface CleanupClearReconciliation {
     result: CleanupClearResult;
     removed: number;
 }
+
+export interface AutoSetScheduleSummary {
+    created: number;
+    alreadyConfigured: number;
+    skipped: number;
+    failed: number;
+}
+
+export const formatAutoSetScheduleSummary = (summary: AutoSetScheduleSummary) =>
+    `Scheduled wipes: ${summary.created} created, ${summary.alreadyConfigured} already configured, ${summary.skipped} skipped, ${summary.failed} failed.`;
 
 /**
  * The post-clear scan is the authoritative result. Several Windows cleaners
@@ -442,6 +453,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // appears instantly — no async roundtrip just to decide visibility.
     const [schedulesById, setSchedulesById] = useState<Record<string, number>>({});
     const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
+    const [autoSetSchedulesBusy, setAutoSetSchedulesBusy] = useState(false);
     const migrationStarted = useRef(false);
 
     const refreshSchedules = async () => {
@@ -810,6 +822,66 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         }
     };
 
+    /**
+     * Applies only defaults where no task exists. Existing entries are treated
+     * as intentional user choices and are never overwritten by this shortcut.
+     */
+    const handleAutoSetSchedules = async (): Promise<AutoSetScheduleSummary> => {
+        const summary: AutoSetScheduleSummary = {
+            created: 0,
+            alreadyConfigured: 0,
+            skipped: 0,
+            failed: 0,
+        };
+        if (!schedulesEnabled) {
+            summary.skipped = SCHEDULABLE_CATEGORIES.length;
+            return summary;
+        }
+
+        setAutoSetSchedulesBusy(true);
+        try {
+            for (const category of SCHEDULABLE_CATEGORIES) {
+                if (!category.schedulable || !category.clearDataKey) {
+                    summary.skipped++;
+                    continue;
+                }
+                if (schedulesById[category.id] !== undefined) {
+                    summary.alreadyConfigured++;
+                    continue;
+                }
+
+                const interval = getAutoScheduleInterval(
+                    category,
+                    cardDataMap[category.id]?.count,
+                );
+                try {
+                    const res = await setAutoEraseSchedule(
+                        getSchedulerCategoryId(category.id),
+                        interval,
+                        !!category.schedulerRunAsSystem,
+                        true,
+                    );
+                    if (res.success && res.data?.status === "alreadyConfigured") {
+                        summary.alreadyConfigured++;
+                    } else if (res.success) summary.created++;
+                    else summary.failed++;
+                } catch {
+                    summary.failed++;
+                }
+            }
+        } finally {
+            // Always re-read the source of truth so every clock icon reflects
+            // both successful tasks and any pre-existing/manual configuration.
+            try { await refreshSchedules(); } catch {}
+            setAutoSetSchedulesBusy(false);
+        }
+
+        const message = formatAutoSetScheduleSummary(summary);
+        if (summary.failed > 0) showError(message);
+        else showSuccess(message);
+        return summary;
+    };
+
     const handleCardClear = async (cat: CleanupCategory, onDriveWipe?: () => void) => {
         if (cat.id === 'unallocatedErase') {
             onDriveWipe?.();
@@ -1015,8 +1087,10 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         handleCardClearAllUsers,
         schedulesById,
         scheduleBusyId,
+        autoSetSchedulesBusy,
         handleSetSchedule,
         handleClearSchedule,
+        handleAutoSetSchedules,
     };
 }
 

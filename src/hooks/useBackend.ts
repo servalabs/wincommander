@@ -1506,10 +1506,20 @@ export function useBackend() {
     // intervalMinutes is clamped server-side to >= 1; runAsSystem switches
     // the scheduled task principal to NT AUTHORITY\SYSTEM (required for
     // Security event log, BT pairings, etc).
-    setAutoEraseSchedule: (categoryId: string, intervalMinutes: number, runAsSystem: boolean = false) =>
+    setAutoEraseSchedule: (
+      categoryId: string,
+      intervalMinutes: number,
+      runAsSystem: boolean = false,
+      preserveExisting: boolean = false,
+    ) =>
       execute<{ status: string; categoryId: string; taskName: string; intervalMinutes: number; runAsSystem: boolean }>(
         "Set-AutoEraseSchedule",
-        { CategoryId: categoryId, IntervalMinutes: intervalMinutes, RunAsSystem: runAsSystem },
+        {
+          CategoryId: categoryId,
+          IntervalMinutes: intervalMinutes,
+          RunAsSystem: runAsSystem,
+          PreserveExisting: preserveExisting,
+        },
       ),
     removeAutoEraseSchedule: (categoryId: string) =>
       execute<{ status: string; categoryId: string }>(

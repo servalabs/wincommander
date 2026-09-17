@@ -208,7 +208,12 @@ export default function SystemCleanupPanel() {
 
                         {hasSafeguards && (
                             <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as CleanupUsabilityTier | "actions-monitoring")}>
-                                <CleanupTabNavigation scan={scan} isInvestigator={isInvestigator} />
+                                <CleanupTabNavigation
+                                    scan={scan}
+                                    isInvestigator={isInvestigator}
+                                    schedulesEnabled={hasPaid && !isInvestigator}
+                                    onRequestScheduleAccess={onRequestScheduleAccess}
+                                />
                                 <CleanupSummaryStats scan={scan} />
                                 <TabsContent value="low-impact">
                                     <CleanupCategoryGrid
@@ -382,9 +387,13 @@ export default function SystemCleanupPanel() {
 function CleanupTabNavigation({
     scan,
     isInvestigator,
+    schedulesEnabled,
+    onRequestScheduleAccess,
 }: {
     scan: ReturnType<typeof useCleanupScan>;
     isInvestigator: boolean;
+    schedulesEnabled: boolean;
+    onRequestScheduleAccess?: () => void;
 }) {
     const {
         orderedScanCategories,
@@ -392,6 +401,8 @@ function CleanupTabNavigation({
         cardDataMap,
         isCategoryBatchScanning,
         handleClearAllCategories,
+        handleAutoSetSchedules,
+        autoSetSchedulesBusy,
     } = scan;
     const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];
     const isScanningAll = isCategoryBatchScanning(allScanCategories);
@@ -430,6 +441,29 @@ function CleanupTabNavigation({
                         letterSpacing: "0.6px",
                         padding: "6px 8px",
                     }}
+                />
+                <Button
+                    small
+                    intent="primary"
+                    icon={autoSetSchedulesBusy ? undefined : "time"}
+                    text={autoSetSchedulesBusy ? "Setting scheduled wipes…" : "Auto-set scheduled wipes"}
+                    aria-label="Auto-set scheduled wipes"
+                    title={isInvestigator
+                        ? "Scheduled wipes are unavailable in review mode"
+                        : schedulesEnabled
+                            ? "Set safe default intervals without changing existing schedules"
+                            : "Unlock scheduled wipes"}
+                    loading={autoSetSchedulesBusy}
+                    disabled={isInvestigator || autoSetSchedulesBusy}
+                    onClick={() => {
+                        if (!schedulesEnabled) {
+                            onRequestScheduleAccess?.();
+                            return;
+                        }
+                        void handleAutoSetSchedules();
+                    }}
+                    data-cleanup-auto-set-schedules="true"
+                    style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.25px" }}
                 />
                 <Button
                     small
