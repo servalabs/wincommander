@@ -27,6 +27,7 @@ import CanaryTokensSection from "./CanaryTokensSection";
 import UsbDevicesSection from "./UsbDevicesSection";
 import PrintActivitySection from "./PrintActivitySection";
 import RdpIdleCard from "./RdpIdleCard";
+import RdpRedirectionCard from "./RdpRedirectionCard";
 import PanelHeader from "../../components/shared/PanelHeader";
 import { useSettingsQuery } from "../../hooks/queries/useSettingsQuery";
 import {
@@ -414,6 +415,7 @@ export default function PrivacyPanel() {
                                         </div>
                                         <div className="privacy-monitor-col">
                                             <div className="privacy-monitor-cell" data-tour="privacy-rdp-idle"><RdpIdleCard /></div>
+                                            <div className="privacy-monitor-cell"><RdpRedirectionCard /></div>
                                             <div className="privacy-monitor-cell">
                                                 <DecoyMonitorSection
                                                     isAdvanced={isAdvanced}
