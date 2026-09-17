@@ -236,29 +236,6 @@ jobs:
           # a release with missing runtime logos despite a passing dev build.
           submodules: recursive
 
-      # The Free installer places the paid Vault helper in ProgramData for the
-      # machine service. Its source remains private, so a normal public
-      # checkout cannot build the installer by itself. Keep this as a sibling:
-      # the Pro workspace intentionally references ../wincommander's shared
-      # crates through relative Cargo paths.
-      - name: Checkout required private Pro sidecar source
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.WINCOMMANDER_PRO_READ_TOKEN }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-            throw "The release environment requires WINCOMMANDER_PRO_READ_TOKEN with Contents: Read access to servalabs/wincommander-pro."
-          }
-          gh api repos/servalabs/wincommander-pro --jq .default_branch | Out-Null
-          if ($LASTEXITCODE -ne 0) {
-            throw "WINCOMMANDER_PRO_READ_TOKEN cannot read servalabs/wincommander-pro. Grant that token Contents: Read access, then rerun the release."
-          }
-          $proWorkspace = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) "wincommander-pro"
-          gh repo clone servalabs/wincommander-pro $proWorkspace -- --depth 1 --branch main
-          if (-not (Test-Path -LiteralPath (Join-Path $proWorkspace "Cargo.toml") -PathType Leaf)) {
-            throw "The private Pro workspace checkout did not contain Cargo.toml."
-          }
-
       - name: Validate pinned shared build assets
         shell: pwsh
         run: |
@@ -365,9 +342,7 @@ jobs:
 
           $setup = $setups[0].FullName
           $installRoot = Join-Path $env:ProgramFiles "WinCommander"
-          $proSidecar = Join-Path $env:ProgramData "WinCommander\bin\wincommander-pro.exe"
           Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item -LiteralPath $proSidecar -Force -ErrorAction SilentlyContinue
           $setupProcess = Start-Process -FilePath $setup -ArgumentList "/S" -Verb RunAs -Wait -PassThru
           if ($setupProcess.ExitCode -ne 0) {
             throw "The NSIS setup failed with exit code $($setupProcess.ExitCode)."
@@ -380,9 +355,6 @@ jobs:
           $service = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
           if ($null -eq $service -or $service.State -ne "Running") {
             throw "The Free setup did not create and start WinCommanderSvc."
-          }
-          if (-not (Test-Path -LiteralPath $proSidecar -PathType Leaf)) {
-            throw "The Free setup did not install the service-owned Pro Vault helper at $proSidecar."
           }
 
           $uninstaller = Join-Path $env:ProgramFiles "WinCommander\uninstall.exe"
@@ -400,10 +372,6 @@ jobs:
           if ($null -ne $serviceAfterUninstall) {
             throw "The NSIS uninstaller did not remove WinCommanderSvc."
           }
-          if (Test-Path -LiteralPath $proSidecar) {
-            throw "The NSIS uninstaller did not remove the service-owned Pro Vault helper."
-          }
-
       - name: Verify bundled shared media
         shell: pwsh
         run: |

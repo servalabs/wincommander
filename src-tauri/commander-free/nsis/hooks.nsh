@@ -7,24 +7,14 @@
 !define WC_SERVICE_NAME "WinCommanderSvc"
 !define WC_SERVICE_PAYLOAD "$INSTDIR\resources\wincommander-svc.exe"
 !define WC_SERVICE_EXE "$INSTDIR\wincommander-svc.exe"
-; The service launches this exact immutable ProgramData sidecar and verifies
-; its hash against the one compiled into WinCommander. Do not put it under an
-; individual user's profile: every signed-in Windows user must use the same
-; protected helper.
-!define WC_PRO_PAYLOAD "$INSTDIR\resources\wincommander-pro.exe"
-!define WC_PRO_DIR "$COMMONAPPDATA\WinCommander\bin"
-!define WC_PRO_EXE "$COMMONAPPDATA\WinCommander\bin\wincommander-pro.exe"
 
 !macro NSIS_HOOK_POSTINSTALL
   IfFileExists "${WC_SERVICE_PAYLOAD}" wc_service_payload_ok 0
     Abort "The WinCommander service payload is missing; the installation was not completed."
   wc_service_payload_ok:
-  IfFileExists "${WC_PRO_PAYLOAD}" wc_pro_payload_ok 0
-    Abort "The WinCommander Vault helper payload is missing; the installation was not completed."
-
-  wc_pro_payload_ok:
-  ; An update must not replace either helper while the existing SYSTEM
-  ; service is using it. The first-install/not-running results are harmless.
+  ; Stop the existing service before replacing its owned executable. The
+  ; separately entitled Pro helper is installed on demand and is never bundled
+  ; into, replaced by, or required for a Free installer update.
   nsExec::ExecToStack 'sc.exe stop ${WC_SERVICE_NAME}'
   Pop $0
   Pop $1
@@ -32,8 +22,6 @@
   ; authorization derives this exact install root, so do not run it from a
   ; mutable user profile or ProgramData download directory.
   CopyFiles /SILENT "${WC_SERVICE_PAYLOAD}" "${WC_SERVICE_EXE}"
-  CreateDirectory "${WC_PRO_DIR}"
-  CopyFiles /SILENT "${WC_PRO_PAYLOAD}" "${WC_PRO_EXE}"
   nsExec::ExecToStack 'sc.exe create ${WC_SERVICE_NAME} binPath= $\"${WC_SERVICE_EXE}$\" start= auto obj= LocalSystem'
   Pop $0
   Pop $1
@@ -87,9 +75,6 @@
   nsExec::ExecToStack 'sc.exe delete ${WC_SERVICE_NAME}'
   Pop $0
   Pop $1
-  ; This is a user-mode helper owned by this setup. Leave any engine/driver
-  ; payload alone; Windows owns the lifetime of a loaded kernel driver.
-  Delete "${WC_PRO_EXE}"
-  RMDir "${WC_PRO_DIR}"
-  RMDir "$COMMONAPPDATA\WinCommander"
+  ; The paid sidecar and its metadata are separately entitlement-installed
+  ; runtime assets in ProgramData. Do not remove them during a Free uninstall.
 !macroend

@@ -31,15 +31,15 @@ describe("Free machine-wide release packaging", () => {
     expect(baseConfig.bundle.windows.nsis.startMenuFolder).toBe("ServaLabs\\WinCommander");
   });
 
-  test("bundles its machine service and service-owned Pro helper but never ships or manages a kernel driver", () => {
+  test("bundles its machine service but leaves the entitled Pro helper to its verified runtime installer", () => {
     expect(baseConfig.bundle.resources).not.toContain("resources/wincommander-svc.exe");
     expect(baseConfig.bundle.resources).not.toContain("resources/wincommander-pro.exe");
     expect(baseConfig.bundle.resources).not.toContain("resources/EncVolKm.sys");
     expect(releaseTool).toContain("commander-svc");
     expect(releaseTool).toContain("wincommander-svc.exe");
-    expect(releaseTool).toContain("commander-pro");
-    expect(releaseTool).toContain("wincommander-pro.exe");
-    expect(releaseTool).toContain('run(["bun", "run", "hash-pro"], "WinCommander Pro service-helper hash")');
+    expect(releaseTool).not.toContain("commander-pro");
+    expect(releaseTool).not.toContain("wincommander-pro.exe");
+    expect(releaseTool).not.toContain('run(["bun", "run", "hash-pro"], "WinCommander Pro service-helper hash")');
     expect(releaseTool).not.toContain("EncVolKm.sys");
     expect(releaseTool).toContain('const contextShredResource = "resources/wincommander-context-shred.exe"');
     expect(releaseTool).toContain("copyFileSync(contextShredBuildPath, stagedContextShredPath)");
@@ -48,24 +48,18 @@ describe("Free machine-wide release packaging", () => {
 
     const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
     expect(hooks).toContain("sc.exe create ${WC_SERVICE_NAME}");
-    expect(hooks).toContain("$COMMONAPPDATA\\WinCommander\\bin\\wincommander-pro.exe");
-    expect(hooks).toContain('CopyFiles /SILENT "${WC_PRO_PAYLOAD}" "${WC_PRO_EXE}"');
-    expect(hooks).toContain('Delete "${WC_PRO_EXE}"');
+    expect(hooks).not.toContain("WC_PRO_PAYLOAD");
+    expect(hooks).not.toContain("WC_PRO_EXE");
     expect(hooks).toContain('net.exe localgroup "WinCommander Vault Policy Administrators" /add');
     expect(hooks).toContain('net.exe localgroup "WinCommander Vault Policy Administrators" "$USERNAME" /add');
     expect(hooks).not.toContain("sc.exe delete WinCommanderEncVol");
     expect(hooks).not.toContain("sc.exe delete VeraCrypt");
   });
 
-  test("checks out the private Pro workspace beside the Free release checkout", () => {
-    expect(releaseWorkflow).toContain("Checkout required private Pro sidecar source");
-    expect(releaseWorkflow).toContain("GH_TOKEN: ${{ secrets.WINCOMMANDER_PRO_READ_TOKEN }}");
-    expect(releaseWorkflow).toContain("WINCOMMANDER_PRO_READ_TOKEN with Contents: Read access");
-    expect(releaseWorkflow).toContain("WINCOMMANDER_PRO_READ_TOKEN cannot read servalabs/wincommander-pro");
-    expect(releaseWorkflow).toContain(
-      "gh repo clone servalabs/wincommander-pro $proWorkspace -- --depth 1 --branch main",
-    );
-    expect(releaseWorkflow).toContain('Split-Path -Parent $env:GITHUB_WORKSPACE) "wincommander-pro"');
+  test("builds the Free installer without a private Pro workspace or token", () => {
+    expect(releaseWorkflow).not.toContain("Checkout required private Pro sidecar source");
+    expect(releaseWorkflow).not.toContain("WINCOMMANDER_PRO_READ_TOKEN");
+    expect(releaseWorkflow).not.toContain("servalabs/wincommander-pro");
   });
 
   test("keeps the desktop process and bundled Explorer helper at the caller's privilege", () => {
@@ -85,9 +79,7 @@ describe("Free machine-wide release packaging", () => {
     expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\wincommander-free.exe"');
     expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\uninstall.exe"');
     expect(releaseWorkflow).toContain("The Free setup did not create and start WinCommanderSvc.");
-    expect(releaseWorkflow).toContain("The Free setup did not install the service-owned Pro Vault helper");
     expect(releaseWorkflow).toContain("The NSIS uninstaller did not remove WinCommanderSvc.");
-    expect(releaseWorkflow).toContain("The NSIS uninstaller did not remove the service-owned Pro Vault helper.");
 
     const verification = releaseWorkflow.slice(
       releaseWorkflow.indexOf("Verify Free setup installs and removes the machine-wide installation"),
