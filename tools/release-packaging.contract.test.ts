@@ -48,6 +48,8 @@ describe("Free machine-wide release packaging", () => {
 
     const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
     expect(hooks).toContain("sc.exe create ${WC_SERVICE_NAME}");
+    expect(hooks).toContain("WC_STOP_OWNED_SERVICE_OR_ABORT");
+    expect(hooks).toContain("installer-lifecycle.log");
     expect(hooks).not.toContain("WC_PRO_PAYLOAD");
     expect(hooks).not.toContain("WC_PRO_EXE");
     expect(hooks).toContain('net.exe localgroup "WinCommander Vault Policy Administrators" /add');
@@ -86,6 +88,7 @@ describe("Free machine-wide release packaging", () => {
       releaseWorkflow.indexOf("Verify bundled shared media"),
     );
     expect(verification).toContain("-Verb RunAs");
+    expect(verification).toContain("NSIS lifecycle diagnostic:");
     expect(verification).not.toContain("$env:LOCALAPPDATA");
   });
 });

@@ -342,9 +342,15 @@ jobs:
 
           $setup = $setups[0].FullName
           $installRoot = Join-Path $env:ProgramFiles "WinCommander"
+          $diagnosticLog = Join-Path $installRoot "installer-lifecycle.log"
+          Remove-Item -LiteralPath $diagnosticLog -Force -ErrorAction SilentlyContinue
           Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
           $setupProcess = Start-Process -FilePath $setup -ArgumentList "/S" -Verb RunAs -Wait -PassThru
           if ($setupProcess.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $diagnosticLog -PathType Leaf) {
+              Write-Host "NSIS lifecycle diagnostic:"
+              Get-Content -LiteralPath $diagnosticLog -Raw | Write-Host
+            }
             throw "The NSIS setup failed with exit code $($setupProcess.ExitCode)."
           }
 
