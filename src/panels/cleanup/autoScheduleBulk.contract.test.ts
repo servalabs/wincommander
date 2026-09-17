@@ -10,10 +10,10 @@ describe("Auto-set scheduled wipes frontend contract", () => {
 
     expect(scan).toContain("SCHEDULABLE_CATEGORIES");
     expect(scan).toContain("if (!category.schedulable || !category.clearDataKey)");
-    expect(scan).toContain("if (schedulesById[category.id] !== undefined)");
+    expect(scan).toContain("const scheduledIds = Object.keys(schedulesById)");
     expect(scan).toContain("summary.alreadyConfigured++");
     expect(scan).toContain('res.data?.status === "alreadyConfigured"');
-    expect(scan).toContain("true,\n                        true,");
+    expect(scan).toContain("!!category.schedulerRunAsSystem,\n                            true,\n                            true,");
   });
 
   test("uses category policy, the existing backend scheduler, and refreshes card clocks", async () => {
@@ -38,11 +38,13 @@ describe("Auto-set scheduled wipes frontend contract", () => {
     expect(scan).toContain("if (summary.failed > 0) showError(message)");
   });
 
-  test("turns off only schedules the bulk button created", async () => {
+  test("turns off all scheduled wipes, confirming before removing individual schedules", async () => {
     const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text();
     const scheduler = await Bun.file("src-tauri/wincmd-shared/scripts/auto-erase.ps1").text();
 
-    expect(scan).toContain("autoSetScheduleIds.size > 0");
+    expect(scan).toContain("const scheduledIds = Object.keys(schedulesById)");
+    expect(scan).toContain("Turn off all scheduled wipes?");
+    expect(scan).toContain("Turn off all wipes");
     expect(scan).toContain("removeAutoEraseSchedule(getSchedulerCategoryId(categoryId))");
     expect(scheduler).toContain("[switch]$ManagedByAutoSet");
     expect(scheduler).toContain("managedByAutoSet =");

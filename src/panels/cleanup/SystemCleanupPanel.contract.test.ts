@@ -198,7 +198,7 @@ describe("System Cleanup panel reconstruction contracts", () => {
     expect(panel).toContain("const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];");
     expect(panel).toContain("handleClearAllCategories");
     expect(panel).toContain("handleAutoSetSchedules");
-    expect(panel).toContain('hasAutoSetSchedules ? "Turn off auto-set wipes" : "Auto-set scheduled wipes"');
+    expect(panel).toContain('hasScheduledWipes ? "Turn off scheduled wipes" : "Auto-set scheduled wipes"');
     expect(panel).toContain('data-cleanup-auto-set-schedules="true"');
     expect(panel).toContain("onRequestScheduleAccess?.()");
     expect(panel).not.toContain('text={isScanningAll ? "Scanning All..." : "Scan All"}');

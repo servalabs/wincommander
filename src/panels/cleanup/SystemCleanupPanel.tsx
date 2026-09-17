@@ -403,7 +403,7 @@ function CleanupTabNavigation({
         handleClearAllCategories,
         handleAutoSetSchedules,
         autoSetSchedulesBusy,
-        hasAutoSetSchedules,
+        hasScheduledWipes,
     } = scan;
     const allScanCategories = [...orderedScanCategories, ...VIEW_ONLY_CATEGORIES];
     const isScanningAll = isCategoryBatchScanning(allScanCategories);
@@ -447,13 +447,13 @@ function CleanupTabNavigation({
                     small
                     intent="primary"
                     icon={autoSetSchedulesBusy ? undefined : "time"}
-                    text={autoSetSchedulesBusy ? "Updating scheduled wipes…" : hasAutoSetSchedules ? "Turn off auto-set wipes" : "Auto-set scheduled wipes"}
-                    aria-label={hasAutoSetSchedules ? "Turn off auto-set scheduled wipes" : "Auto-set scheduled wipes"}
+                    text={autoSetSchedulesBusy ? "Updating scheduled wipes…" : hasScheduledWipes ? "Turn off scheduled wipes" : "Auto-set scheduled wipes"}
+                    aria-label={hasScheduledWipes ? "Turn off scheduled wipes" : "Auto-set scheduled wipes"}
                     title={isInvestigator
                         ? "Scheduled wipes are unavailable in review mode"
                         : schedulesEnabled
-                            ? hasAutoSetSchedules
-                                ? "Turn off only the schedules created by this button"
+                            ? hasScheduledWipes
+                                ? "Turn off all scheduled wipes after confirmation"
                                 : "Set safe default intervals without changing existing schedules"
                             : "Unlock scheduled wipes"}
                     loading={autoSetSchedulesBusy}

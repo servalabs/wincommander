@@ -849,8 +849,21 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
 
         setAutoSetSchedulesBusy(true);
         try {
-            if (autoSetScheduleIds.size > 0) {
-                for (const categoryId of autoSetScheduleIds) {
+            const scheduledIds = Object.keys(schedulesById);
+            if (scheduledIds.length > 0) {
+                const individuallyConfigured = scheduledIds.filter(id => !autoSetScheduleIds.has(id));
+                if (individuallyConfigured.length > 0) {
+                    const accepted = await requestConfirm({
+                        title: 'Turn off all scheduled wipes?',
+                        description: `This will remove ${scheduledIds.length} scheduled wipe${scheduledIds.length === 1 ? '' : 's'}, including ${individuallyConfigured.length} configured individually. You can set any of them again from its card.`,
+                        confirmLabel: 'Turn off all wipes',
+                    });
+                    if (!accepted) {
+                        summary.skipped = scheduledIds.length;
+                        return summary;
+                    }
+                }
+                for (const categoryId of scheduledIds) {
                     try {
                         const res = await removeAutoEraseSchedule(getSchedulerCategoryId(categoryId));
                         if (res.success) summary.disabled++;
@@ -863,40 +876,35 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                         firstFailure ??= `Failed to turn off ${categoryId}.`;
                     }
                 }
-                return summary;
-            }
-            for (const category of SCHEDULABLE_CATEGORIES) {
-                if (!category.schedulable || !category.clearDataKey) {
-                    summary.skipped++;
-                    continue;
-                }
-                if (schedulesById[category.id] !== undefined) {
-                    summary.alreadyConfigured++;
-                    continue;
-                }
-
-                const interval = getAutoScheduleInterval(
-                    category,
-                    cardDataMap[category.id]?.count,
-                );
-                try {
-                    const res = await setAutoEraseSchedule(
-                        getSchedulerCategoryId(category.id),
-                        interval,
-                        !!category.schedulerRunAsSystem,
-                        true,
-                        true,
-                    );
-                    if (res.success && res.data?.status === "alreadyConfigured") {
-                        summary.alreadyConfigured++;
-                    } else if (res.success) summary.created++;
-                    else {
-                        summary.failed++;
-                        firstFailure ??= res.error || `Failed to schedule ${category.label}.`;
+            } else {
+                for (const category of SCHEDULABLE_CATEGORIES) {
+                    if (!category.schedulable || !category.clearDataKey) {
+                        summary.skipped++;
+                        continue;
                     }
-                } catch {
-                    summary.failed++;
-                    firstFailure ??= `Failed to schedule ${category.label}.`;
+                    const interval = getAutoScheduleInterval(
+                        category,
+                        cardDataMap[category.id]?.count,
+                    );
+                    try {
+                        const res = await setAutoEraseSchedule(
+                            getSchedulerCategoryId(category.id),
+                            interval,
+                            !!category.schedulerRunAsSystem,
+                            true,
+                            true,
+                        );
+                        if (res.success && res.data?.status === "alreadyConfigured") {
+                            summary.alreadyConfigured++;
+                        } else if (res.success) summary.created++;
+                        else {
+                            summary.failed++;
+                            firstFailure ??= res.error || `Failed to schedule ${category.label}.`;
+                        }
+                    } catch {
+                        summary.failed++;
+                        firstFailure ??= `Failed to schedule ${category.label}.`;
+                    }
                 }
             }
         } finally {
@@ -1116,7 +1124,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
         handleOtherUserClear,
         handleCardClearAllUsers,
         schedulesById,
-        hasAutoSetSchedules: autoSetScheduleIds.size > 0,
+        hasScheduledWipes: Object.keys(schedulesById).length > 0,
         scheduleBusyId,
         autoSetSchedulesBusy,
         handleSetSchedule,
