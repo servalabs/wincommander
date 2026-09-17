@@ -75,11 +75,11 @@ describe("Vault access editor presentation", () => {
     expect(editorSource).not.toContain("useVaultAccess");
   });
 
-  test("keeps the dual-container protection requirement visible only when relevant", () => {
-    const warning = "A writable outer mount requires the hidden protection password for that one request.";
-    expect(renderEditor()).not.toContain(warning);
-    const visible = renderEditor({ ...entry, container_kind: "dual" }).split('<details class="vault-access-details">')[0];
-    expect(visible).toContain(warning);
+  test("keeps container type out of the Fleet policy editor", () => {
+    const html = renderEditor({ ...entry, container_kind: "dual" });
+    expect(html).not.toContain("Container type");
+    expect(html).not.toContain("Outer + hidden container");
+    expect(editorSource).not.toContain("container_kind:");
   });
 
   test("names each permission group, principal, access level, and removal action", () => {

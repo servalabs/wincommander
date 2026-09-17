@@ -3,7 +3,7 @@ import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { FleetAccessDirectory } from "./accessControlTypes";
-import type { VaultAccessEntry, VaultContainerKind } from "./vaultAccessTypes";
+import type { VaultAccessEntry } from "./vaultAccessTypes";
 import { vaultAccessPreset, type VaultAccessPreset } from "./vaultAccessPresets";
 import VaultAccessInfo from "./VaultAccessInfo";
 import VaultAccessPatternPicker from "./VaultAccessPatternPicker";
@@ -57,12 +57,6 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, onEntr
           <Button variant="outline" size="sm" type="button" aria-label={`Browse for Vault ${vaultNumber} container file`} onClick={() => void browseContainerFile()}>Browse</Button>
         </div>
         <small>Keep each managed Vault in its own dedicated parent folder.</small>
-      </Field>
-      <Field label="Container type" help="Standard containers can be private or shared. For an outer + hidden container, choose which volume to open when mounting.">
-        <select aria-label={`Vault ${vaultNumber} container type`} value={entry.container_kind} onChange={event => onEntryChange({ container_kind: event.target.value as VaultContainerKind })}>
-          <option value="standard">Standard container</option><option value="dual">Outer + hidden container</option>
-        </select>
-        {entry.container_kind === "dual" && <small className="vault-access-security-note">A writable outer mount requires the hidden protection password for that one request.</small>}
       </Field>
       <Field label="Primary owner" help="The Windows account responsible for this Vault.">
         <Input aria-label={`Vault ${vaultNumber} owner`} value={entry.owner_account} placeholder="PC\username" onChange={event => onOwnerChange(event.target.value)} />
