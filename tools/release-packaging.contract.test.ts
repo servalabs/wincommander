@@ -44,6 +44,7 @@ describe("Free machine-wide release packaging", () => {
     expect(releaseTool).toContain('const contextShredResource = "resources/wincommander-context-shred.exe"');
     expect(releaseTool).toContain("copyFileSync(contextShredBuildPath, stagedContextShredPath)");
     expect(releaseTool).toContain('config.bundle.targets = ["nsis"]');
+    expect(releaseTool).toContain('CARGO_PROFILE_RELEASE_LTO: "false"');
     expect(packageJson.scripts["build:free:release-installer"]).toContain("bun run tools/build-tauri-release.ts");
 
     const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");

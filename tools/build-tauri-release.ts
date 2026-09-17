@@ -29,11 +29,21 @@ const stagedContextDeleteIconPath = resolve(
 // require a separately installed VCRUNTIME140.dll.
 const staticCrtFlags = "-C target-feature=+crt-static";
 const rustflags = [process.env.RUSTFLAGS, staticCrtFlags].filter(Boolean).join(" ");
+// Rust 1.98's Thin-LTO link of the large Tauri binary can crash in the
+// Windows MSVC linker on GitHub-hosted runners (0xc0000005). This is a build
+// toolchain failure, not an application diagnostic. Keep the portable static
+// C runtime, but use normal release linking for the installer so it is
+// reproducible on both local machines and CI.
+const releaseBuildEnv = {
+  ...process.env,
+  RUSTFLAGS: rustflags,
+  CARGO_PROFILE_RELEASE_LTO: "false",
+};
 
 function run(command: string[], label: string) {
   const result = Bun.spawnSync(command, {
     cwd: root,
-    env: { ...process.env, RUSTFLAGS: rustflags },
+    env: releaseBuildEnv,
     stdout: "inherit",
     stderr: "inherit",
   });
