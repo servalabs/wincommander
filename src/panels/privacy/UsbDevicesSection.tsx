@@ -1,82 +1,40 @@
-// src/panels/privacy/UsbDevicesSection.tsx
-//
-// "USB Device Timeline" — U-A foundation: attach/detach timeline for all USB
-// devices. Free feature; mutations (start/stop/clear/notify) gated via
-// require_paid on the Rust side. No Pro sidecar — runs in-process.
-// Later phases (U-B metering, U-C HID-guard, U-D policy) build on the public
-// contract: subscribe(), current_devices(), identity_for_key(), is_running().
-//
-// U-C USB HID timing-anomaly guard is appended below the timeline table.
-// The low-level hook cannot identify which keyboard produced an event, so the
-// UI must describe correlation to a recently attached HID as low-confidence.
-// The payload carries timing counts only — never keystroke content.
-//
-// U-F Auto-isolate subsection is appended after U-C. SAFETY: default mode is
-// OBSERVE (alert-only). ENFORCE requires explicit opt-in and acts ONLY on
-// removable mass-storage (+ optionally HID). The danger note is mandatory UI.
-//
-// UI additions:
-//   • Per-device risk badge — derived from hidAlerts + autoActions (heuristic,
-//     NOT a definitive trust score). High/Medium/Low using existing Tag primitive.
-//   • Per-device backend trust score — read-only numeric score from usb_policy.
-//   • Summary stat strip — total devices, total plug-time, total data, high-risk
-//     count, using existing privacy-stats-strip CSS classes.
-
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Button, Spinner, Switch, Tag } from '@/components/ui/bp';
-import { reportSettingsWriteFailure } from '../../lib/settingsWriteRecovery';
 import type { Intent } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
-import { formatTrustScore, trustScoreTone } from '../../lib/usbTrust';
-import { showSuccess, showError } from '../../utils/toast';
-import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
-import { useAppState } from '../../context/AppContext';
 import PrivacyEventTable from './PrivacyEventTable';
 import TierGate from '../../components/shared/TierGate';
 import useEntitlements from '../../hooks/useEntitlements';
+import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
+import { useAppState } from '../../context/AppContext';
+import { reportSettingsWriteFailure } from '../../lib/settingsWriteRecovery';
+import { formatTrustScore, trustScoreTone } from '../../lib/usbTrust';
+import { showError, showSuccess } from '../../utils/toast';
 import { useUsbHidApproval } from '../../context/UsbHidApprovalContext';
 import { DEFAULT_USB_HID_APPROVAL_TTL_SECS } from '../../lib/usbHidApproval';
 import UsbHidApprovalGateSettings from './UsbHidApprovalGateSettings';
 import { newDiagnosticOperationId, recordDiagnostic } from '../../lib/diagnostics';
 
-// U-C: shape returned by get_usb_hid_alerts (timing + device identity — no keystroke content).
-interface HidInjectionAlert {
-  deviceKey: string;
-  friendlyName: string;
-  detectedAt: string;         // RFC-3339 UTC
-  gapsSampled: number;        // distinct keys counted (timing/count only)
-  medianGapMs: number;        // median inter-key interval in ms
-  recentHidDevice: string | null;
-  redFlag: 'hidOnly' | 'composite' | 'unknown';
-  severity: 'danger' | 'warning';
+interface UsbMonitorFailure {
+  code: string;
+  message: string;
+  recoveryAction: string;
 }
 
-// Shape returned by get_usb_timeline (Rust must serialize matching camelCase).
-interface UsbTimelineEntry {
-  key: string;           // stable identity key (vid:pid:serial or fallback)
-  instanceId: string;    // raw Windows PnP InstanceId (U-D block/allow target)
-  friendlyName: string;  // OS-supplied display name
-  vid: string;           // 4-hex vendor ID, e.g. "05ac"
-  pid: string;           // 4-hex product ID, e.g. "024f"
-  deviceClass: 'HID' | 'Storage' | 'Other'; // USB class label
-  lastSeen: string;      // ISO-8601 timestamp of last attach/detach event
-  lastSeenRelative: string; // human-relative, e.g. "3 min ago" — pre-formatted by Rust
-  totalPluggedSecs: number; // cumulative seconds of FINISHED (detached) sessions
-  sessionCount: number;  // number of distinct plug sessions recorded
-  attached: boolean;     // true if currently plugged in
-  driveLetter: string | null; // mounted volume letter, from the current open session (Storage only)
-  openSinceEpoch: number | null; // epoch secs the current open session began, else null
-}
-
-// Shape returned by usb_monitor_status.
 interface UsbMonitorStatus {
   running: boolean;
   notify: boolean;
+  connected?: number;
+  monitorStartedAt?: number | null;
+  lastPollAt?: number | null;
+  lastError?: UsbMonitorFailure | null;
+  historyCoverage?: 'monitorOnly' | string;
+  windowsHistoryAvailable?: boolean;
 }
 
-// Raw shapes returned by get_usb_timeline (camelCase from the Rust structs).
 interface UsbDeviceIdentity {
   key: string;
   vid: string;
@@ -86,21 +44,62 @@ interface UsbDeviceIdentity {
   isMassStorage: boolean;
   instanceId?: string;
 }
+
 interface UsbDeviceRecord {
   identity: UsbDeviceIdentity;
-  lastSeen: number; // epoch seconds
+  firstSeen?: number;
+  lastSeen: number;
   totalPluggedSecs: number;
   sessionCount: number;
 }
+
 interface UsbSessionRow {
   deviceKey: string;
   attachedAt: number;
   detachedAt: number | null;
+  durationSecs?: number | null;
   volumeLetter?: string | null;
+  attachedAtEstimated?: boolean;
+  endedUnobservedAt?: number | null;
 }
+
 interface UsbTimeline {
   records: Record<string, UsbDeviceRecord>;
   sessions: UsbSessionRow[];
+  currentKeys?: string[];
+  monitorStartedAt?: number | null;
+  lastPollAt?: number | null;
+  historyCoverage?: 'monitorOnly' | string;
+  windowsHistoryAvailable?: boolean;
+}
+
+type DeviceCategory = 'Keyboard / HID' | 'Storage' | 'USB device';
+
+interface UsbTimelineEntry {
+  key: string;
+  instanceId: string;
+  friendlyName: string;
+  category: DeviceCategory;
+  lastSeen: number;
+  totalPluggedSecs: number;
+  sessionCount: number;
+  attached: boolean;
+  driveLetter: string | null;
+  openSinceEpoch: number | null;
+}
+
+type TimelineState = 'Connected now' | 'Attached' | 'Detached' | 'Present when armed' | 'State unknown';
+type TimelineSource = 'Current monitor run' | 'Persisted monitor record';
+
+interface TimelineEvent {
+  id: string;
+  deviceKey: string;
+  name: string;
+  category: DeviceCategory;
+  state: TimelineState;
+  at: number;
+  durationSecs: number | null;
+  source: TimelineSource;
 }
 
 interface UsbTrustScore {
@@ -117,71 +116,6 @@ interface UsbTrustScore {
   };
 }
 
-function formatRelative(epochSecs: number): string {
-  const diff = Math.max(0, Math.floor(Date.now() / 1000) - epochSecs);
-  if (diff < 60) return `${diff}s ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
-
-function classIntent(cls: UsbTimelineEntry['deviceClass']): Intent | undefined {
-  if (cls === 'HID') return 'warning';
-  if (cls === 'Storage') return 'danger';
-  return undefined;
-}
-
-function formatTotalTime(secs: number): string {
-  if (secs < 60) return `${secs}s`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
-  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
-}
-
-// Total time the device has been plugged in: finished sessions PLUS, for a device
-// that is still attached, the live elapsed time of its current open session.
-// `totalPluggedSecs` alone only counts detached sessions, so a still-connected
-// device otherwise reads 0 until it's unplugged.
-function livePluggedSecs(entry: UsbTimelineEntry, nowSec: number): number {
-  const live =
-    entry.attached && entry.openSinceEpoch != null
-      ? Math.max(0, nowSec - entry.openSinceEpoch)
-      : 0;
-  return entry.totalPluggedSecs + live;
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
-  return `${(n / 1024 ** 3).toFixed(2)} GB`;
-}
-
-// Heuristic risk level derived purely from already-fetched HID alerts and
-// auto-sandbox actions — NOT a definitive trust score.
-type RiskLevel = 'High' | 'Medium' | 'Low';
-
-function riskLevel(
-  entry: UsbTimelineEntry,
-  hidAlerts: HidInjectionAlert[],
-  autoActions: AutoActionRecord[],
-): RiskLevel {
-  const hasHidAlert = hidAlerts.some((a) => a.deviceKey === entry.key);
-  const hasQuarantine = autoActions.some(
-    (a) => a.deviceKey === entry.key && a.action === 'quarantine',
-  );
-  if (entry.deviceClass === 'Storage' && (hasHidAlert || hasQuarantine)) return 'High';
-  if (entry.deviceClass === 'HID' && hasHidAlert) return 'High';
-  if (entry.deviceClass === 'Storage') return 'Medium';
-  return 'Low';
-}
-
-function riskIntent(level: RiskLevel): Intent {
-  if (level === 'High') return 'danger';
-  if (level === 'Medium') return 'warning';
-  return 'success';
-}
-
-// U-B data-transfer metering — one row per actively-metered device.
 interface UsbTransferStat {
   deviceKey: string;
   friendlyName: string;
@@ -190,58 +124,24 @@ interface UsbTransferStat {
   lastSampleEpoch: number;
 }
 
-// USB-attached storage volume, as File Explorer presents it. Returned by
-// get_usb_storage_volumes (camelCase from the Rust UsbVolume struct).
 interface UsbVolume {
-  driveLetter: string; // "E:"
-  label: string;       // volume label (Explorer's name); may be empty
-  model: string;       // disk model, e.g. "SanDisk Ultra USB Device"
-  serial: string;      // USB disk serial (uppercased) for device-key correlation
+  driveLetter: string;
+  label: string;
+  model: string;
+  serial: string;
 }
 
-// Correlate a Storage timeline entry to one of the mounted USB volumes, mirroring
-// the backend's usb_monitor::correlate_volume_letter: match by the serial embedded
-// in the device key, else fall back to the sole volume when only one is mounted.
-function volumeForEntry(
-  entry: UsbTimelineEntry,
-  volumes: UsbVolume[],
-): UsbVolume | undefined {
-  if (entry.deviceClass !== 'Storage' || volumes.length === 0) return undefined;
-  const serial = (entry.key.split(':')[3] ?? '').toUpperCase();
-  if (serial && serial !== 'NOSERIAL') {
-    const bySerial = volumes.find((v) => {
-      const vs = (v.serial || '').toUpperCase();
-      return vs !== '' && (vs === serial || vs.includes(serial) || serial.includes(vs));
-    });
-    if (bySerial) return bySerial;
-  }
-  if (volumes.length === 1) return volumes[0];
-  return undefined;
+interface HidInjectionAlert {
+  deviceKey: string;
+  friendlyName: string;
+  detectedAt: string;
+  gapsSampled: number;
+  medianGapMs: number;
+  recentHidDevice: string | null;
+  redFlag: 'hidOnly' | 'composite' | 'unknown';
+  severity: 'danger' | 'warning';
 }
 
-// File-Explorer-style display name for a storage device: "Label (E:)", falling
-// back to the disk model, then to the raw PnP friendly name when no volume is
-// resolved (unformatted / no-media / ambiguous multi-volume host).
-function displayNameForEntry(entry: UsbTimelineEntry, vol: UsbVolume | undefined): string {
-  if (vol) {
-    const base = vol.label || vol.model || 'USB Drive';
-    return `${base} (${vol.driveLetter})`;
-  }
-  return entry.friendlyName;
-}
-
-// Block/Allow route through the Pro sidecar, which must be installed (a paid
-// entitlement alone isn't enough). Translate that backend signal into a clear
-// instruction instead of leaking the raw "PRO_NOT_INSTALLED:" marker string.
-function humanizeUsbError(e: unknown): string {
-  const s = String(e);
-  if (s.includes('PRO_NOT_INSTALLED')) {
-    return 'This action needs WinCommander Pro installed. Open Settings → Pro to install it.';
-  }
-  return s.replace(/^Error:\s*/i, '');
-}
-
-// U-F: auto-sandbox / quarantine orchestration types.
 type AutoSandboxMode = 'off' | 'observe' | 'enforce';
 
 interface AutoSandboxStatus {
@@ -254,7 +154,7 @@ interface AutoSandboxStatus {
 }
 
 interface AutoActionRecord {
-  time: string;            // ISO-8601 or epoch string
+  time: string;
   deviceKey: string;
   friendlyName: string;
   action: 'ignore' | 'alert' | 'quarantine';
@@ -262,1144 +162,1032 @@ interface AutoActionRecord {
   detail: string;
 }
 
+function InfoButton({ label, children }: { label: string; children: ReactNode }) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setPinned(false);
+  }, []);
+
+  return (
+    <span className="relative inline-flex items-center">
+      <button
+        type="button"
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/15 text-[11px] opacity-70 hover:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+        aria-label={label}
+        aria-expanded={open}
+        aria-describedby={open ? id : undefined}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => { if (!pinned) setOpen(false); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => { if (!pinned) setOpen(false); }}
+        onClick={() => {
+          const next = !open;
+          setPinned(next);
+          setOpen(next);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            close();
+            event.currentTarget.blur();
+          }
+        }}
+      >
+        i
+      </button>
+      {open && (
+        <span
+          id={id}
+          role="tooltip"
+          className="absolute left-6 top-0 z-30 w-72 rounded-md border border-white/15 bg-[var(--surface)] p-2 text-xs leading-relaxed shadow-xl"
+        >
+          {children}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  return `${(value / 1024 ** 3).toFixed(2)} GB`;
+}
+
+function formatDuration(secs: number | null): string {
+  if (secs == null) return 'Unavailable';
+  if (secs < 60) return `${Math.max(0, secs)}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+}
+
+function safeDate(epochSeconds: number): string {
+  if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return 'Unknown time';
+  return new Date(epochSeconds * 1000).toLocaleString();
+}
+
+function safeFriendlyName(identity: UsbDeviceIdentity): string {
+  const supplied = identity.friendlyName?.trim();
+  if (supplied) return supplied;
+  if (identity.isMassStorage) return 'USB storage device';
+  if (identity.isHid) return 'USB input device';
+  return 'USB device';
+}
+
+function categoryFor(identity: UsbDeviceIdentity): DeviceCategory {
+  if (identity.isMassStorage) return 'Storage';
+  if (identity.isHid) return 'Keyboard / HID';
+  return 'USB device';
+}
+
+function isInternalUsbPlumbing(identity: UsbDeviceIdentity): boolean {
+  if (identity.isMassStorage || identity.isHid) return false;
+  const label = `${identity.friendlyName ?? ''} ${identity.instanceId ?? ''}`.toLowerCase();
+  return /root hub|host controller|generic usb hub|usb composite device|usb hub|xhci|ehci|ohci|uhci/.test(label);
+}
+
+function humanizeUsbError(error: unknown): string {
+  const value = String(error).replace(/^Error:\s*/i, '');
+  if (value.includes('PRO_NOT_INSTALLED')) {
+    return 'This action needs WinCommander Pro installed. Open Settings → Pro to install it.';
+  }
+  if (/access denied|permission/i.test(value)) {
+    return 'Windows denied USB device access. Run WinCommander with the required administrator permissions, then retry.';
+  }
+  if (/timed out/i.test(value)) {
+    return 'The Windows USB device query timed out. Refresh once; if it repeats, restart WinCommander and check the Plug and Play service.';
+  }
+  if (/usb timeline|machine-state|programdata/i.test(value)) {
+    return 'Stored USB monitor data could not be read or saved. Check ProgramData permissions and free disk space, then refresh.';
+  }
+  return value;
+}
+
+function volumeForEntry(entry: UsbTimelineEntry, volumes: UsbVolume[]): UsbVolume | undefined {
+  if (entry.category !== 'Storage' || volumes.length === 0) return undefined;
+  if (entry.driveLetter) {
+    const direct = volumes.find((volume) => volume.driveLetter === entry.driveLetter);
+    if (direct) return direct;
+  }
+  if (volumes.length === 1) return volumes[0];
+  return undefined;
+}
+
+function displayNameForEntry(entry: UsbTimelineEntry, volume: UsbVolume | undefined): string {
+  if (!volume) return entry.friendlyName;
+  return `${volume.label || volume.model || 'USB Drive'} (${volume.driveLetter})`;
+}
+
+function stateIntent(state: TimelineState): Intent | undefined {
+  if (state === 'Connected now') return 'success';
+  if (state === 'Detached') return undefined;
+  if (state === 'State unknown') return 'warning';
+  return 'primary';
+}
+
+function isToday(value: string): boolean {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return false;
+  const now = new Date();
+  return parsed.getFullYear() === now.getFullYear()
+    && parsed.getMonth() === now.getMonth()
+    && parsed.getDate() === now.getDate();
+}
+
 export default function UsbDevicesSection() {
   const { hasPaid, isLoading: entitlementLoading } = useEntitlements();
   const advancedAvailable = hasPaid && !entitlementLoading;
   const { appSettings, patchAppSettings } = useAppState();
-  const { status: hidApprovalStatus, start: startHidApprovalGate, stop: stopHidApprovalGate } = useUsbHidApproval();
   const requestConfirm = useAppConfirm();
-  const [running, setRunning] = useState(false);
-  const [notifyEnabled, setNotifyEnabled] = useState(false);
+  const { status: hidApprovalStatus, start: startHidApprovalGate, stop: stopHidApprovalGate } = useUsbHidApproval();
+
+  const [status, setStatus] = useState<UsbMonitorStatus>({ running: false, notify: true });
   const [entries, setEntries] = useState<UsbTimelineEntry[]>([]);
-  const [trustScores, setTrustScores] = useState<Record<string, UsbTrustScore>>({});
+  const [sessions, setSessions] = useState<UsbSessionRow[]>([]);
+  const [currentKeys, setCurrentKeys] = useState<Set<string>>(new Set());
+  const [monitorStartedAt, setMonitorStartedAt] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [volumes, setVolumes] = useState<UsbVolume[]>([]);
+  const [trustScores, setTrustScores] = useState<Record<string, UsbTrustScore>>({});
+  const [blockedKeys, setBlockedKeys] = useState<Set<string>>(new Set());
+  const [proInstalled, setProInstalled] = useState(true);
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+
   const [metering, setMetering] = useState(false);
   const [stats, setStats] = useState<UsbTransferStat[]>([]);
-  // Mounted USB storage volumes — used to show Explorer-style names + drive letters.
-  const [volumes, setVolumes] = useState<UsbVolume[]>([]);
-  // U-D: device keys we blocked this session, so Allow has a visible target and
-  // we can show a BLOCKED badge. Windows-side block state isn't queryable cheaply,
-  // so this tracks intent within the session.
-  const [blockedKeys, setBlockedKeys] = useState<Set<string>>(new Set());
-  // Block/Allow enforce via the Pro sidecar binary — which must be INSTALLED
-  // (a paid entitlement alone isn't enough). Track it so we can disable the
-  // buttons and say why, instead of letting them fail silently.
-  const [proInstalled, setProInstalled] = useState<boolean>(true);
-  // Ticking wall-clock (epoch secs) so "Total plug time" for a still-attached
-  // device counts up live instead of sitting at its last-refresh value.
-  const [nowSec, setNowSec] = useState<number>(() => Math.floor(Date.now() / 1000));
-  // U-C: HID-injection guard state
   const [hidGuardRunning, setHidGuardRunning] = useState(false);
   const [hidSensitivity, setHidSensitivity] = useState<'lenient' | 'balanced' | 'strict'>('balanced');
   const [hidThresholds, setHidThresholds] = useState({ humanFloorMs: 30, minBurstKeys: 12 });
   const [hidAlerts, setHidAlerts] = useState<HidInjectionAlert[]>([]);
-  // U-F: auto-sandbox state
   const [autoSandboxRunning, setAutoSandboxRunning] = useState(false);
   const [autoSandboxMode, setAutoSandboxMode] = useState<AutoSandboxMode>('observe');
   const [autoSandboxConfig, setAutoSandboxConfig] = useState({ allowKeys: [] as string[], allowVids: [] as string[], actOnHid: false });
   const [autoActions, setAutoActions] = useState<AutoActionRecord[]>([]);
   const [autoSandboxBusy, setAutoSandboxBusy] = useState(false);
   const [hidApprovalBusy, setHidApprovalBusy] = useState(false);
+
   const hidApprovalGateEnabled = appSettings?.ideal?.privacy?.usbSecurity?.hidApprovalGateEnabled === true;
   const hidApprovalTtlSecs = appSettings?.ideal?.privacy?.usbSecurity?.hidApprovalTtlSecs
     ?? DEFAULT_USB_HID_APPROVAL_TTL_SECS;
+
   const recordUsbFailure = useCallback((action: string, errorCode: string) => {
-    recordDiagnostic({ operationId: newDiagnosticOperationId("usb"), feature: "usb", action, stage: "windows_apply",
-      lifecycle: "applied", outcome: "failed", errorCode, severity: "warn", retryability: "manual",
-      suggestedNextAction: "retry", privacyClass: "local_sensitive" });
+    recordDiagnostic({
+      operationId: newDiagnosticOperationId('usb'), feature: 'usb', action, stage: 'windows_apply',
+      lifecycle: 'applied', outcome: 'failed', errorCode, severity: 'warn', retryability: 'manual',
+      suggestedNextAction: 'retry', privacyClass: 'local_sensitive',
+    });
   }, []);
 
-  // Fetch mounted USB volumes (Explorer-style names + drive letters). Isolated
-  // from refresh() because it shells out to a potentially-slow PowerShell query;
-  // it must never block the timeline render or a toggle's busy state. The backend
-  // caps the query with a hard timeout, so worst case this resolves to [].
   const refreshVolumes = useCallback(async () => {
     try {
-      const vols = await invoke<UsbVolume[]>('get_usb_storage_volumes');
-      setVolumes(Array.isArray(vols) ? vols : []);
+      const result = await invoke<UsbVolume[]>('get_usb_storage_volumes');
+      setVolumes(Array.isArray(result) ? result : []);
     } catch {
       setVolumes([]);
     }
   }, []);
 
+  const refreshAdvanced = useCallback(async (visibleEntries: UsbTimelineEntry[]) => {
+    if (!advancedAvailable) {
+      setTrustScores({});
+      setMetering(false);
+      setStats([]);
+      setHidGuardRunning(false);
+      setHidAlerts([]);
+      setAutoSandboxRunning(false);
+      setAutoActions([]);
+      return;
+    }
+
+    const [meterStatus, transferStats, hidStatus, alerts, sandboxStatus, sandboxRecent] = await Promise.allSettled([
+      invoke<boolean>('usb_metering_status'),
+      invoke<UsbTransferStat[]>('get_usb_transfer_stats'),
+      invoke<{ running: boolean; sensitivity?: 'lenient' | 'balanced' | 'strict'; humanFloorMs?: number; minBurstKeys?: number }>('usb_hid_guard_status'),
+      invoke<HidInjectionAlert[]>('get_usb_hid_alerts'),
+      invoke<AutoSandboxStatus>('usb_autosandbox_status'),
+      invoke<AutoActionRecord[]>('get_usb_autosandbox_recent'),
+    ]);
+
+    if (meterStatus.status === 'fulfilled') setMetering(!!meterStatus.value);
+    if (transferStats.status === 'fulfilled') setStats(Array.isArray(transferStats.value) ? transferStats.value : []);
+    if (hidStatus.status === 'fulfilled') {
+      setHidGuardRunning(!!hidStatus.value?.running);
+      setHidSensitivity(hidStatus.value?.sensitivity ?? 'balanced');
+      setHidThresholds({
+        humanFloorMs: hidStatus.value?.humanFloorMs ?? 30,
+        minBurstKeys: hidStatus.value?.minBurstKeys ?? 12,
+      });
+    }
+    if (alerts.status === 'fulfilled') setHidAlerts(Array.isArray(alerts.value) ? alerts.value : []);
+    if (sandboxStatus.status === 'fulfilled') {
+      setAutoSandboxRunning(!!sandboxStatus.value?.running);
+      setAutoSandboxMode(sandboxStatus.value?.mode ?? 'observe');
+      setAutoSandboxConfig({
+        allowKeys: sandboxStatus.value?.allowKeys ?? [],
+        allowVids: sandboxStatus.value?.allowVids ?? [],
+        actOnHid: !!sandboxStatus.value?.actOnHid,
+      });
+    }
+    if (sandboxRecent.status === 'fulfilled') setAutoActions(Array.isArray(sandboxRecent.value) ? sandboxRecent.value : []);
+
+    const scorePairs = await Promise.all(visibleEntries.map(async (entry) => {
+      try {
+        const score = await invoke<UsbTrustScore>("usb_device_trust_score", { deviceKey: entry.key });
+        return [entry.key, score] as const;
+      } catch {
+        return null;
+      }
+    }));
+    const nextScores: Record<string, UsbTrustScore> = {};
+    scorePairs.forEach((pair) => { if (pair) nextScores[pair[0]] = pair[1]; });
+    setTrustScores(nextScores);
+  }, [advancedAvailable]);
+
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      const status = await invoke<UsbMonitorStatus>('usb_monitor_status');
-      setRunning(!!status?.running);
-      setNotifyEnabled(!!status?.notify);
-      const timeline = await invoke<UsbTimeline>('get_usb_timeline');
-      const attached = new Set(
-        (timeline?.sessions ?? [])
-          .filter((s) => s.detachedAt == null)
-          .map((s) => s.deviceKey),
-      );
-      // Drive letter comes from the device's current OPEN session only — a
-      // detached session's volume letter no longer identifies a mounted
-      // volume, so it must not be offered to set_usb_volume_readonly.
-      const openDriveLetters = new Map<string, string | null>();
-      const openSince = new Map<string, number>();
-      (timeline?.sessions ?? [])
-        .filter((s) => s.detachedAt == null)
-        .forEach((s) => {
-          openDriveLetters.set(s.deviceKey, s.volumeLetter ?? null);
-          if (typeof s.attachedAt === 'number') openSince.set(s.deviceKey, s.attachedAt);
-        });
-      const rows: UsbTimelineEntry[] = Object.values(timeline?.records ?? {})
-        .map((r): UsbTimelineEntry => ({
-          key: r.identity.key,
-          instanceId: r.identity.instanceId ?? '',
-          friendlyName: r.identity.friendlyName || `USB ${r.identity.vid}:${r.identity.pid}`,
-          vid: r.identity.vid,
-          pid: r.identity.pid,
-          deviceClass: r.identity.isHid ? 'HID' : r.identity.isMassStorage ? 'Storage' : 'Other',
-          lastSeen: new Date(r.lastSeen * 1000).toISOString(),
-          lastSeenRelative: formatRelative(r.lastSeen),
-          totalPluggedSecs: r.totalPluggedSecs,
-          sessionCount: r.sessionCount,
-          attached: attached.has(r.identity.key),
-          driveLetter: openDriveLetters.get(r.identity.key) ?? null,
-          openSinceEpoch: openSince.get(r.identity.key) ?? null,
-        }))
-        // Show only devices the user actually plugs in: storage and input (HID).
-        // Everything classified "Other" — root hubs, host controllers, USB hubs,
-        // built-in Bluetooth/WiFi radios, composite parents — is internal plumbing
-        // and is hidden from the timeline.
-        .filter((r) => r.deviceClass === 'Storage' || r.deviceClass === 'HID')
-        .sort((a, b) => a.lastSeen.localeCompare(b.lastSeen));
-      setEntries(rows);
-      // Explorer-style names + drive letters for storage rows. This shells out to
-      // PowerShell (WMI/CIM) which can be slow, so it is fired-and-forget — NEVER
-      // awaited here. Awaiting it used to wedge the whole refresh (and any toggle
-      // that does `await refresh()`) with the busy spinner stuck on.
-      void refreshVolumes();
-      if (!advancedAvailable) {
-        setTrustScores({});
-        setMetering(false);
-        setStats([]);
-        setHidGuardRunning(false);
-        setHidAlerts([]);
-        setAutoSandboxRunning(false);
-        setAutoActions([]);
-        return;
+      const [nextStatus, timeline] = await Promise.all([
+        invoke<UsbMonitorStatus>('usb_monitor_status'),
+        invoke<UsbTimeline>('get_usb_timeline'),
+      ]);
+      setStatus(nextStatus);
+      const startedAt = nextStatus.monitorStartedAt ?? timeline.monitorStartedAt ?? null;
+      setMonitorStartedAt(startedAt && startedAt > 0 ? startedAt : null);
+
+      const explicitCurrentKeys = Array.isArray(timeline.currentKeys)
+        ? new Set(timeline.currentKeys)
+        : new Set(
+          nextStatus.running
+            ? (timeline.sessions ?? []).filter((row) => row.detachedAt == null && row.endedUnobservedAt == null).map((row) => row.deviceKey)
+            : [],
+        );
+      setCurrentKeys(explicitCurrentKeys);
+      setSessions(Array.isArray(timeline.sessions) ? timeline.sessions : []);
+
+      const openRows = new Map<string, UsbSessionRow>();
+      for (const row of timeline.sessions ?? []) {
+        if (explicitCurrentKeys.has(row.deviceKey) && row.detachedAt == null && row.endedUnobservedAt == null) {
+          openRows.set(row.deviceKey, row);
+        }
       }
-      const scorePairs = await Promise.all(
-        rows.map(async (entry) => {
-          try {
-            const score = await invoke<UsbTrustScore>("usb_device_trust_score", {
-              deviceKey: entry.key,
-            });
-            return [entry.key, score] as const;
-          } catch {
-            return null;
-          }
-        }),
-      );
-      const nextScores: Record<string, UsbTrustScore> = {};
-      scorePairs.forEach((pair) => {
-        if (pair) nextScores[pair[0]] = pair[1];
-      });
-      setTrustScores(nextScores);
-      const meteringRunning = await invoke<boolean>('usb_metering_status');
-      setMetering(!!meteringRunning);
-      const ts = await invoke<UsbTransferStat[]>('get_usb_transfer_stats');
-      setStats(Array.isArray(ts) ? ts : []);
-      // U-C: fetch HID guard status + recent alerts
-      const hidStatus = await invoke<{ running: boolean; alertCount: number; sensitivity?: 'lenient' | 'balanced' | 'strict'; humanFloorMs?: number; minBurstKeys?: number }>('usb_hid_guard_status');
-      setHidGuardRunning(!!hidStatus?.running);
-      setHidSensitivity(hidStatus?.sensitivity ?? 'balanced');
-      setHidThresholds({ humanFloorMs: hidStatus?.humanFloorMs ?? 30, minBurstKeys: hidStatus?.minBurstKeys ?? 12 });
-      const alerts = await invoke<HidInjectionAlert[]>('get_usb_hid_alerts');
-      setHidAlerts(Array.isArray(alerts) ? alerts : []);
-      // U-F: fetch auto-sandbox status + recent actions
-      const asSt = await invoke<AutoSandboxStatus>('usb_autosandbox_status');
-      setAutoSandboxRunning(!!asSt?.running);
-      setAutoSandboxMode(asSt?.mode ?? 'observe');
-      setAutoSandboxConfig({
-        allowKeys: asSt?.allowKeys ?? [],
-        allowVids: asSt?.allowVids ?? [],
-        actOnHid: !!asSt?.actOnHid,
-      });
-      const recent = await invoke<AutoActionRecord[]>('get_usb_autosandbox_recent');
-      setAutoActions(Array.isArray(recent) ? recent : []);
-    } catch (e) {
-      setError(String(e));
+
+      const visibleEntries = Object.values(timeline.records ?? {})
+        .filter((record) => !isInternalUsbPlumbing(record.identity))
+        .map((record): UsbTimelineEntry => {
+          const open = openRows.get(record.identity.key);
+          return {
+            key: record.identity.key,
+            instanceId: record.identity.instanceId ?? '',
+            friendlyName: safeFriendlyName(record.identity),
+            category: categoryFor(record.identity),
+            lastSeen: record.lastSeen,
+            totalPluggedSecs: record.totalPluggedSecs,
+            sessionCount: record.sessionCount,
+            attached: explicitCurrentKeys.has(record.identity.key),
+            driveLetter: open?.volumeLetter ?? null,
+            openSinceEpoch: open?.attachedAt ?? null,
+          };
+        })
+        .sort((a, b) => b.lastSeen - a.lastSeen);
+      setEntries(visibleEntries);
+      void refreshVolumes();
+      void refreshAdvanced(visibleEntries);
+    } catch (reason) {
+      const message = humanizeUsbError(reason);
+      setError(message);
+      recordUsbFailure('refresh', 'USB.MONITOR.REFRESH_FAILED');
     }
-  }, [advancedAvailable, refreshVolumes]);
+  }, [recordUsbFailure, refreshAdvanced, refreshVolumes]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  useEffect(() => { void refresh(); }, [refresh]);
 
-  // Whether the Pro sidecar binary is installed — decides if Block/Allow can work.
   useEffect(() => {
     invoke<{ installed?: boolean }>('get_pro_install_status')
-      .then((s) => setProInstalled(!!s?.installed))
+      .then((result) => setProInstalled(!!result?.installed))
       .catch(() => setProInstalled(false));
   }, []);
 
-  // Tick the wall-clock every second while monitoring so live plug time advances.
   useEffect(() => {
-    if (!running) return;
+    if (!status.running) return;
     const id = window.setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 1000);
     return () => window.clearInterval(id);
-  }, [running]);
+  }, [status.running]);
 
-  // Live meter: while metering is active, poll transfer totals so the numbers
-  // tick up as data copies. Without this the stats only moved on a manual
-  // Refresh or an attach/detach event, so an in-progress copy looked like "0".
-  useEffect(() => {
-    if (!advancedAvailable || !running || !metering) return;
-    const id = window.setInterval(() => {
-      invoke<UsbTransferStat[]>('get_usb_transfer_stats')
-        .then((ts) => setStats(Array.isArray(ts) ? ts : []))
-        .catch(() => { /* best-effort live poll */ });
-    }, 3000);
-    return () => window.clearInterval(id);
-  }, [advancedAvailable, running, metering]);
-
-  // Keep volume names/letters fresh while a storage device is present: a drive
-  // mounts a moment AFTER its device attaches, so the attach-time fetch can miss
-  // it. Polled on a slow cadence (the query is heavier than the in-proc reads),
-  // only when there's actually a storage device to resolve, with an in-flight
-  // guard so a slow query can't stack up.
-  const hasStorage = entries.some((e) => e.deviceClass === 'Storage');
-  useEffect(() => {
-    if (!advancedAvailable || !running || !hasStorage) return;
-    let inFlight = false;
-    const tick = async () => {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        await refreshVolumes();
-      } finally {
-        inFlight = false;
-      }
-    };
-    const id = window.setInterval(() => void tick(), 8000);
-    return () => window.clearInterval(id);
-  }, [advancedAvailable, running, hasStorage, refreshVolumes]);
-
-  // Live-update: re-fetch timeline on attach/detach events. On attach, also
-  // schedule two quick volume re-fetches — Windows mounts the volume a few
-  // seconds AFTER the device attaches, so the fetch fired with the attach event
-  // is usually too early to see the drive letter / Explorer name.
   useEffect(() => {
     let unmounted = false;
-    const timers: number[] = [];
-    const attachPromise = listen('usb-device-attached', () => {
-      if (unmounted) return;
-      void refresh();
-      for (const delayMs of [2500, 6000]) {
-        timers.push(
-          window.setTimeout(() => {
-            if (!unmounted) void refreshVolumes();
-          }, delayMs),
-        );
-      }
-    });
-    const detachPromise = listen('usb-device-detached', () => {
-      if (!unmounted) void refresh();
-    });
+    const attachPromise = listen('usb-device-attached', () => { if (!unmounted) void refresh(); });
+    const detachPromise = listen('usb-device-detached', () => { if (!unmounted) void refresh(); });
     return () => {
       unmounted = true;
-      timers.forEach((t) => window.clearTimeout(t));
       void attachPromise.then((unlisten) => unlisten());
       void detachPromise.then((unlisten) => unlisten());
     };
-  }, [refresh, refreshVolumes]);
+  }, [refresh]);
 
-  // U-C: live-update on HID-injection detection event (timing/device only — no keystroke content).
   useEffect(() => {
     if (!advancedAvailable) return;
     let unmounted = false;
-    const injectionPromise = listen<HidInjectionAlert>('usb-hid-injection', (ev) => {
-      if (!unmounted) {
-        setHidAlerts((prev) => {
-          const next = [ev.payload, ...prev].slice(0, 50);
-          return next;
-        });
-      }
+    const alertPromise = listen<HidInjectionAlert>('usb-hid-injection', (event) => {
+      if (!unmounted) setHidAlerts((current) => [event.payload, ...current].slice(0, 50));
+    });
+    const actionPromise = listen<AutoActionRecord>('usb-autosandbox-action', (event) => {
+      if (!unmounted) setAutoActions((current) => [event.payload, ...current].slice(0, 50));
     });
     return () => {
       unmounted = true;
-      void injectionPromise.then((unlisten) => unlisten());
-    };
-  }, [advancedAvailable]);
-
-  // U-F: live-update on auto-sandbox action events.
-  useEffect(() => {
-    if (!advancedAvailable) return;
-    let unmounted = false;
-    const actionPromise = listen<AutoActionRecord>('usb-autosandbox-action', (ev) => {
-      if (!unmounted) {
-        setAutoActions((prev) => {
-          const next = [ev.payload, ...prev].slice(0, 50);
-          return next;
-        });
-      }
-    });
-    return () => {
-      unmounted = true;
+      void alertPromise.then((unlisten) => unlisten());
       void actionPromise.then((unlisten) => unlisten());
     };
   }, [advancedAvailable]);
 
-  const toggle = useCallback(
-    async (on: boolean) => {
-      setBusy(true);
-      setError(null);
-      try {
-        await invoke(on ? 'start_usb_monitor' : 'stop_usb_monitor');
-        await patchAppSettings({ ideal: { privacy: { usbSecurity: { monitorEnabled: on } } } }).catch(reportSettingsWriteFailure);
-        await refresh();
-      } catch (e) {
-        setError(String(e));
-        recordUsbFailure("monitor", "USB.MONITOR.CONFIG_FAILED");
-      } finally {
-        setBusy(false);
+  const timelineEvents = useMemo<TimelineEvent[]>(() => {
+    const byKey = new Map(entries.map((entry) => [entry.key, entry]));
+    const events: TimelineEvent[] = [];
+    for (const session of sessions) {
+      const entry = byKey.get(session.deviceKey);
+      if (!entry) continue;
+      const sourceFor = (time: number): TimelineSource => monitorStartedAt != null && time >= monitorStartedAt
+        ? 'Current monitor run'
+        : 'Persisted monitor record';
+      const connected = currentKeys.has(session.deviceKey)
+        && session.detachedAt == null
+        && session.endedUnobservedAt == null;
+      const attachState: TimelineState = session.detachedAt == null && !connected
+        ? 'State unknown'
+        : connected
+          ? 'Connected now'
+          : session.attachedAtEstimated
+            ? 'Present when armed'
+            : 'Attached';
+      events.push({
+        id: `${session.deviceKey}:attach:${session.attachedAt}`,
+        deviceKey: session.deviceKey,
+        name: entry.friendlyName,
+        category: entry.category,
+        state: attachState,
+        at: session.attachedAt,
+        durationSecs: connected ? Math.max(0, nowSec - session.attachedAt) : null,
+        source: sourceFor(session.attachedAt),
+      });
+      if (session.detachedAt != null) {
+        events.push({
+          id: `${session.deviceKey}:detach:${session.detachedAt}`,
+          deviceKey: session.deviceKey,
+          name: entry.friendlyName,
+          category: entry.category,
+          state: 'Detached',
+          at: session.detachedAt,
+          durationSecs: session.durationSecs ?? Math.max(0, session.detachedAt - session.attachedAt),
+          source: sourceFor(session.detachedAt),
+        });
+      } else if (session.endedUnobservedAt != null) {
+        events.push({
+          id: `${session.deviceKey}:unknown:${session.endedUnobservedAt}`,
+          deviceKey: session.deviceKey,
+          name: entry.friendlyName,
+          category: entry.category,
+          state: 'State unknown',
+          at: session.endedUnobservedAt,
+          durationSecs: null,
+          source: 'Persisted monitor record',
+        });
       }
-    },
-    [patchAppSettings, recordUsbFailure, refresh],
-  );
+    }
+    return events.sort((a, b) => b.at - a.at);
+  }, [currentKeys, entries, monitorStartedAt, nowSec, sessions]);
 
-  // U-C: toggle the low-confidence USB HID timing-anomaly guard.
-  const toggleHidGuard = useCallback(
-    async (on: boolean) => {
-      setBusy(true);
-      setError(null);
-      try {
-        if (on) await invoke('start_usb_monitor');
-        await invoke(on ? 'start_usb_hid_guard' : 'stop_usb_hid_guard');
-        await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidGuardEnabled: on } } } }).catch(reportSettingsWriteFailure);
-        setHidGuardRunning(on);
-        await refresh();
-      } catch (e) {
-        setError(String(e));
-        recordUsbFailure("hid_guard", "USB.HID_GUARD.CONFIG_FAILED");
-      } finally {
-        setBusy(false);
-      }
-    },
-    [patchAppSettings, recordUsbFailure, refresh],
-  );
-
-  const clearHidAlerts = useCallback(async () => {
-    const accepted = await requestConfirm({
-      title: 'Clear recent USB HID alerts?',
-      description: 'This removes recent USB HID timing-anomaly metadata recorded on this machine.',
-      confirmLabel: 'Clear alerts',
-    });
-    if (!accepted) return;
+  const toggleMonitor = useCallback(async (on: boolean) => {
     setBusy(true);
     setError(null);
     try {
-      await invoke('clear_usb_hid_alerts');
-      setHidAlerts([]);
-    } catch (e) {
-      setError(String(e));
-      recordUsbFailure("clear_hid_alerts", "USB.HID_ALERTS.CLEAR_FAILED");
+      await invoke(on ? 'start_usb_monitor' : 'stop_usb_monitor');
+      await patchAppSettings({ ideal: { privacy: { usbSecurity: { monitorEnabled: on } } } }).catch(reportSettingsWriteFailure);
+      await refresh();
+    } catch (reason) {
+      const message = humanizeUsbError(reason);
+      setError(message);
+      recordUsbFailure('monitor', 'USB.MONITOR.CONFIG_FAILED');
     } finally {
       setBusy(false);
     }
-  }, [recordUsbFailure, requestConfirm]);
+  }, [patchAppSettings, recordUsbFailure, refresh]);
 
-  const setHidSensitivityCmd = useCallback(async (sensitivity: 'lenient' | 'balanced' | 'strict') => {
+  const toggleNotify = useCallback(async (on: boolean) => {
     setBusy(true);
-    setError(null);
     try {
-      const next = await invoke<{ humanFloorMs: number; minBurstKeys: number }>('set_usb_hid_guard_sensitivity', { sensitivity });
-      setHidSensitivity(sensitivity);
-      setHidThresholds({ humanFloorMs: next.humanFloorMs, minBurstKeys: next.minBurstKeys });
-    } catch (e) {
-      setError(String(e));
-      recordUsbFailure("set_hid_sensitivity", "USB.HID_GUARD.SENSITIVITY_FAILED");
+      await invoke('set_usb_monitor_notify', { enabled: on });
+      setStatus((current) => ({ ...current, notify: on }));
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
+      recordUsbFailure('set_notification', 'USB.NOTIFICATION.CONFIG_FAILED');
     } finally {
       setBusy(false);
     }
   }, [recordUsbFailure]);
 
-  const toggleNotify = useCallback(
-    async (on: boolean) => {
-      setBusy(true);
-      setError(null);
-      try {
-        await invoke('set_usb_monitor_notify', { enabled: on });
-        setNotifyEnabled(on);
-      } catch (e) {
-        setError(String(e));
-        recordUsbFailure("set_notification", "USB.NOTIFICATION.CONFIG_FAILED");
-      } finally {
-        setBusy(false);
-      }
-    },
-    [recordUsbFailure],
-  );
-
-  const toggleMetering = useCallback(
-    async (on: boolean) => {
-      setBusy(true);
-      setError(null);
-      try {
-        if (on) await invoke('start_usb_monitor');
-        await invoke(on ? 'start_usb_metering' : 'stop_usb_metering');
-        await patchAppSettings({ ideal: { privacy: { usbSecurity: { meteringEnabled: on } } } }).catch(reportSettingsWriteFailure);
-        setMetering(on);
-        await refresh();
-      } catch (e) {
-        setError(String(e));
-        recordUsbFailure("metering", "USB.METERING.CONFIG_FAILED");
-      } finally {
-        setBusy(false);
-      }
-    },
-    [patchAppSettings, recordUsbFailure, refresh],
-  );
-
-  const setHidApprovalGateEnabled = useCallback(async (enabled: boolean) => {
-    setHidApprovalBusy(true);
-    setError(null);
-    try {
-      if (enabled) {
-        await startHidApprovalGate(hidApprovalTtlSecs);
-      } else {
-        await stopHidApprovalGate();
-      }
-      await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidApprovalGateEnabled: enabled } } } });
-    } catch (reason) {
-      const message = humanizeUsbError(reason);
-      setError(message);
-      recordUsbFailure("hid_approval_gate", "USB.HID_APPROVAL.CONFIG_FAILED");
-      void showError(`Keyboard approval setting failed: ${message}`);
-    } finally {
-      setHidApprovalBusy(false);
-    }
-  }, [hidApprovalTtlSecs, patchAppSettings, recordUsbFailure, startHidApprovalGate, stopHidApprovalGate]);
-
-  const setHidApprovalTtlSecs = useCallback(async (approvalTtlSecs: number) => {
-    setHidApprovalBusy(true);
-    setError(null);
-    try {
-      await startHidApprovalGate(approvalTtlSecs);
-      await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidApprovalTtlSecs: approvalTtlSecs } } } });
-    } catch (reason) {
-      const message = humanizeUsbError(reason);
-      setError(message);
-      recordUsbFailure("hid_approval_window", "USB.HID_APPROVAL.TTL_FAILED");
-      void showError(`Keyboard approval window failed to update: ${message}`);
-    } finally {
-      setHidApprovalBusy(false);
-    }
-  }, [patchAppSettings, recordUsbFailure, startHidApprovalGate]);
-
-  // U-D: block / allow a device by its raw Windows InstanceId. U-A now exposes
-  // `instanceId` on each timeline entry; we fall back to the device key only for
-  // records that predate that field.
-  const blockDevice = useCallback(
-    async (entry: UsbTimelineEntry) => {
-      const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
-      const accepted = await requestConfirm({
-        title: `Disable “${name}”?`,
-        description: "The device will stop working in Windows until you allow it again. This requires WinCommander Pro and administrator rights.",
-        confirmLabel: "Disable device",
-      });
-      if (!accepted) return;
-      setBusy(true);
-      setError(null);
-      try {
-        await invoke('block_usb_device', { args: { instanceId: entry.instanceId || entry.key } });
-        setBlockedKeys((prev) => new Set(prev).add(entry.key));
-        void showSuccess(`Blocked "${name}" — now disabled in Windows.`);
-        await refresh();
-      } catch (e) {
-        const msg = humanizeUsbError(e);
-        setError(msg);
-        recordUsbFailure("block_device", "USB.DEVICE.BLOCK_FAILED");
-        void showError(`Block failed: ${msg}`);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [recordUsbFailure, refresh, requestConfirm, volumes],
-  );
-
-  const allowDevice = useCallback(
-    async (entry: UsbTimelineEntry) => {
-      const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
-      if (hidApprovalGateEnabled && entry.deviceClass === 'HID') {
-        void showError(`Use the New keyboard approval dialog for "${name}". Generic Allow is disabled while the approval gate is active.`);
-        return;
-      }
-      setBusy(true);
-      setError(null);
-      try {
-        await invoke('allow_usb_device', { args: { instanceId: entry.instanceId || entry.key } });
-        setBlockedKeys((prev) => {
-          const next = new Set(prev);
-          next.delete(entry.key);
-          return next;
-        });
-        void showSuccess(`Allowed "${name}" — re-enabled in Windows.`);
-        await refresh();
-      } catch (e) {
-        const msg = humanizeUsbError(e);
-        setError(msg);
-        recordUsbFailure("allow_device", "USB.DEVICE.ALLOW_FAILED");
-        void showError(`Allow failed: ${msg}`);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [hidApprovalGateEnabled, recordUsbFailure, refresh, volumes],
-  );
-
-  // U-E: set a mounted storage volume read-only via diskpart.
-  // The drive letter comes from UsbSession.volume_letter; the Rust side validates
-  // it to a single A-Z char before interpolation.
-  const setVolumeReadonly = useCallback(
-    async (letter: string, readOnly: boolean) => {
-      const displayLetter = letter.replace(/:$/, '');
-      if (readOnly) {
-        const accepted = await requestConfirm({
-          title: `Make ${displayLetter}: read-only?`,
-          description: "Writes will be blocked until read-only mode is cleared. Administrator rights are required, and an already-mounted volume may need to be re-plugged.",
-          confirmLabel: "Make read-only",
-        });
-        if (!accepted) return;
-      }
-      setBusy(true);
-      setError(null);
-      try {
-        await invoke('set_usb_volume_readonly', { args: { driveLetter: letter, readOnly } });
-        await refresh();
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [refresh, requestConfirm],
-  );
-
-  const clear = useCallback(async () => {
+  const clearTimeline = useCallback(async () => {
     const accepted = await requestConfirm({
       title: 'Clear the USB device timeline?',
-      description: 'This permanently removes stored USB sessions and resets each device’s accumulated session count and connected time.',
+      description: 'This permanently removes stored USB monitor records. It does not erase Windows system traces or prove that a device was never used.',
       confirmLabel: 'Clear USB history',
     });
     if (!accepted) return;
     setBusy(true);
-    setError(null);
     try {
       await invoke('clear_usb_timeline');
-      setEntries([]);
-    } catch (e) {
-      setError(String(e));
+      await refresh();
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh, requestConfirm]);
+
+  const toggleMetering = useCallback(async (on: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (on) await invoke('start_usb_monitor');
+      await invoke(on ? 'start_usb_metering' : 'stop_usb_metering');
+      await patchAppSettings({ ideal: { privacy: { usbSecurity: { meteringEnabled: on } } } }).catch(reportSettingsWriteFailure);
+      setMetering(on);
+      await refresh();
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
+      recordUsbFailure('metering', 'USB.METERING.CONFIG_FAILED');
+    } finally {
+      setBusy(false);
+    }
+  }, [patchAppSettings, recordUsbFailure, refresh]);
+
+  const toggleHidGuard = useCallback(async (on: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (on) await invoke('start_usb_monitor');
+      await invoke(on ? 'start_usb_hid_guard' : 'stop_usb_hid_guard');
+      await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidGuardEnabled: on } } } }).catch(reportSettingsWriteFailure);
+      setHidGuardRunning(on);
+      await refresh();
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
+      recordUsbFailure('hid_guard', 'USB.HID_GUARD.CONFIG_FAILED');
+    } finally {
+      setBusy(false);
+    }
+  }, [patchAppSettings, recordUsbFailure, refresh]);
+
+  const clearHidAlerts = useCallback(async () => {
+    const accepted = await requestConfirm({
+      title: 'Clear recent USB HID alerts?',
+      description: 'This removes only timing-anomaly metadata. WinCommander never stores the keys that were typed.',
+      confirmLabel: 'Clear alerts',
+    });
+    if (!accepted) return;
+    setBusy(true);
+    try {
+      await invoke('clear_usb_hid_alerts');
+      setHidAlerts([]);
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
     } finally {
       setBusy(false);
     }
   }, [requestConfirm]);
 
-  // U-F: start / stop auto-sandbox monitor.
-  const toggleAutoSandbox = useCallback(
-    async (on: boolean) => {
-      setAutoSandboxBusy(true);
-      setError(null);
-      try {
-        if (on) await invoke('start_usb_monitor');
-        await invoke(on ? 'start_usb_autosandbox' : 'stop_usb_autosandbox');
-        await patchAppSettings({ ideal: { privacy: { usbSecurity: { autoSandboxEnabled: on } } } }).catch(reportSettingsWriteFailure);
-        setAutoSandboxRunning(on);
-        await refresh();
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setAutoSandboxBusy(false);
-      }
-    },
-    [patchAppSettings, refresh],
-  );
+  const setHidSensitivityCmd = useCallback(async (sensitivity: 'lenient' | 'balanced' | 'strict') => {
+    setBusy(true);
+    try {
+      const next = await invoke<{ humanFloorMs: number; minBurstKeys: number }>('set_usb_hid_guard_sensitivity', { sensitivity });
+      setHidSensitivity(sensitivity);
+      setHidThresholds(next);
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
-  // U-F: change operating mode (off / observe / enforce).
-  const setAutoSandboxModeCmd = useCallback(
-    async (mode: AutoSandboxMode) => {
-      setAutoSandboxBusy(true);
-      setError(null);
-      try {
-        // Fetch current config, patch mode, send back.
-        const current = await invoke<{
-          mode: AutoSandboxMode;
-          allowKeys: string[];
-          allowVids: string[];
-          actOnHid: boolean;
-        }>('usb_autosandbox_status').catch(() => null);
-        if (mode === 'enforce' && current?.actOnHid) {
-          const accepted = await requestConfirm({
-            title: 'Enforce automatic keyboard quarantine?',
-            description: 'HID scope is already saved. Switching to Enforce can immediately disable a newly attached untrusted keyboard. Continue only if you have tested a recovery path.',
-            confirmLabel: 'Enforce with HID scope',
-          });
-          if (!accepted) return;
-        }
-        // Patch ONLY the mode; preserve the rest of the current config. The
-        // previous code wrote `current ? [] : []` (both branches empty), so
-        // every mode switch silently wiped the approved-device allow-list and
-        // reset actOnHid, causing a trusted device to be treated as untrusted
-        // the next time it was attached under 'enforce'.
-        await invoke('set_usb_autosandbox_config', {
-          config: {
-            mode,
-            allowKeys: current?.allowKeys ?? [],
-            allowVids: current?.allowVids ?? [],
-            actOnHid: current?.actOnHid ?? false,
-          },
-        });
-        setAutoSandboxMode(mode);
-        setAutoSandboxConfig({
-          allowKeys: current?.allowKeys ?? [],
-          allowVids: current?.allowVids ?? [],
-          actOnHid: current?.actOnHid ?? false,
-        });
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setAutoSandboxBusy(false);
-      }
-    },
-    [requestConfirm],
-  );
+  const blockDevice = useCallback(async (entry: UsbTimelineEntry) => {
+    const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
+    const accepted = await requestConfirm({
+      title: `Disable “${name}”?`,
+      description: 'The device will stop working in Windows until you allow it again. This requires WinCommander Pro and administrator rights.',
+      confirmLabel: 'Disable device',
+    });
+    if (!accepted) return;
+    setBusy(true);
+    try {
+      await invoke('block_usb_device', { args: { instanceId: entry.instanceId || entry.key } });
+      setBlockedKeys((current) => new Set(current).add(entry.key));
+      void showSuccess(`Blocked "${name}" — now disabled in Windows.`);
+    } catch (reason) {
+      const message = humanizeUsbError(reason);
+      setError(message);
+      void showError(`Block failed: ${message}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [requestConfirm, volumes]);
 
-  const setAutoSandboxHidScope = useCallback(async (actOnHid: boolean) => {
-    if (actOnHid && autoSandboxMode === 'enforce') {
+  const allowDevice = useCallback(async (entry: UsbTimelineEntry) => {
+    const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
+    if (hidApprovalGateEnabled && entry.category === 'Keyboard / HID') {
+      void showError(`Use the New keyboard approval dialog for "${name}". Generic Allow is disabled while the approval gate is active.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      await invoke('allow_usb_device', { args: { instanceId: entry.instanceId || entry.key } });
+      setBlockedKeys((current) => {
+        const next = new Set(current);
+        next.delete(entry.key);
+        return next;
+      });
+      void showSuccess(`Allowed "${name}" — re-enabled in Windows.`);
+    } catch (reason) {
+      const message = humanizeUsbError(reason);
+      setError(message);
+      void showError(`Allow failed: ${message}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [hidApprovalGateEnabled, volumes]);
+
+  const setVolumeReadonly = useCallback(async (letter: string, readOnly: boolean) => {
+    const displayLetter = letter.replace(/:$/, '');
+    if (readOnly) {
       const accepted = await requestConfirm({
-        title: 'Also auto-quarantine newly attached keyboards?',
-        description: 'In Enforce mode, an untrusted USB keyboard can be disabled immediately after it attaches. Keep this off unless you have tested a recovery path.',
-        confirmLabel: 'Include HID devices',
+        title: `Make ${displayLetter}: read-only?`,
+        description: 'Writes will be blocked until read-only mode is cleared. Administrator rights are required.',
+        confirmLabel: 'Make read-only',
       });
       if (!accepted) return;
     }
-    setAutoSandboxBusy(true);
-    setError(null);
+    setBusy(true);
     try {
-      await invoke('set_usb_autosandbox_config', {
-        config: { mode: autoSandboxMode, ...autoSandboxConfig, actOnHid },
-      });
-      setAutoSandboxConfig((current) => ({ ...current, actOnHid }));
-    } catch (e) {
-      setError(String(e));
+      await invoke('set_usb_volume_readonly', { args: { driveLetter: letter, readOnly } });
+      await refresh();
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh, requestConfirm]);
+
+  const setHidApprovalGateEnabled = useCallback(async (enabled: boolean) => {
+    setHidApprovalBusy(true);
+    try {
+      if (enabled) await startHidApprovalGate(hidApprovalTtlSecs);
+      else await stopHidApprovalGate();
+      await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidApprovalGateEnabled: enabled } } } });
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
+    } finally {
+      setHidApprovalBusy(false);
+    }
+  }, [hidApprovalTtlSecs, patchAppSettings, startHidApprovalGate, stopHidApprovalGate]);
+
+  const setHidApprovalTtlSecs = useCallback(async (approvalTtlSecs: number) => {
+    setHidApprovalBusy(true);
+    try {
+      await startHidApprovalGate(approvalTtlSecs);
+      await patchAppSettings({ ideal: { privacy: { usbSecurity: { hidApprovalTtlSecs: approvalTtlSecs } } } });
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
+    } finally {
+      setHidApprovalBusy(false);
+    }
+  }, [patchAppSettings, startHidApprovalGate]);
+
+  const toggleAutoSandbox = useCallback(async (on: boolean) => {
+    setAutoSandboxBusy(true);
+    try {
+      if (on) await invoke('start_usb_monitor');
+      await invoke(on ? 'start_usb_autosandbox' : 'stop_usb_autosandbox');
+      await patchAppSettings({ ideal: { privacy: { usbSecurity: { autoSandboxEnabled: on } } } }).catch(reportSettingsWriteFailure);
+      setAutoSandboxRunning(on);
+      await refresh();
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
     } finally {
       setAutoSandboxBusy(false);
     }
-  }, [autoSandboxConfig, autoSandboxMode, requestConfirm]);
+  }, [patchAppSettings, refresh]);
 
-  // U-F: clear recent actions ring.
-  const clearAutoActions = useCallback(async () => {
-    const accepted = await requestConfirm({
-      title: 'Clear recent USB auto-sandbox actions?',
-      description: 'This removes the recent automatic USB response records saved for this app session.',
-      confirmLabel: 'Clear actions',
-    });
-    if (!accepted) return;
+  const setAutoSandboxModeCmd = useCallback(async (mode: AutoSandboxMode) => {
     setAutoSandboxBusy(true);
-    setError(null);
     try {
-      await invoke('clear_usb_autosandbox_recent');
-      setAutoActions([]);
-    } catch (e) {
-      setError(String(e));
+      const current = await invoke<AutoSandboxStatus>('usb_autosandbox_status').catch(() => null);
+      if (mode === 'enforce' && current?.actOnHid) {
+        const accepted = await requestConfirm({
+          title: 'Enforce automatic keyboard quarantine?',
+          description: 'A newly attached untrusted keyboard can be disabled after detection. Continue only if you have tested a recovery path.',
+          confirmLabel: 'Enforce with HID scope',
+        });
+        if (!accepted) return;
+      }
+      await invoke('set_usb_autosandbox_config', {
+        config: {
+          mode,
+          allowKeys: current?.allowKeys ?? [],
+          allowVids: current?.allowVids ?? [],
+          actOnHid: current?.actOnHid ?? false,
+        },
+      });
+      setAutoSandboxMode(mode);
+      setAutoSandboxConfig({
+        allowKeys: current?.allowKeys ?? [],
+        allowVids: current?.allowVids ?? [],
+        actOnHid: current?.actOnHid ?? false,
+      });
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
     } finally {
       setAutoSandboxBusy(false);
     }
   }, [requestConfirm]);
 
-  const attachedCount = entries.filter((e) => e.attached).length;
+  const setAutoSandboxHidScope = useCallback(async (actOnHid: boolean) => {
+    if (actOnHid && autoSandboxMode === 'enforce') {
+      const accepted = await requestConfirm({
+        title: 'Also auto-quarantine newly attached keyboards?',
+        description: 'In Enforce mode an untrusted keyboard can be disabled after it attaches. Keep this off unless you have tested recovery.',
+        confirmLabel: 'Include HID devices',
+      });
+      if (!accepted) return;
+    }
+    setAutoSandboxBusy(true);
+    try {
+      await invoke('set_usb_autosandbox_config', { config: { mode: autoSandboxMode, ...autoSandboxConfig, actOnHid } });
+      setAutoSandboxConfig((current) => ({ ...current, actOnHid }));
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
+    } finally {
+      setAutoSandboxBusy(false);
+    }
+  }, [autoSandboxConfig, autoSandboxMode, requestConfirm]);
+
+  const clearAutoActions = useCallback(async () => {
+    const accepted = await requestConfirm({
+      title: 'Clear recent USB auto-isolate actions?',
+      description: 'This removes the recent automatic USB response records. It does not change the current protection policy.',
+      confirmLabel: 'Clear actions',
+    });
+    if (!accepted) return;
+    setAutoSandboxBusy(true);
+    try {
+      await invoke('clear_usb_autosandbox_recent');
+      setAutoActions([]);
+    } catch (reason) {
+      setError(humanizeUsbError(reason));
+    } finally {
+      setAutoSandboxBusy(false);
+    }
+  }, [requestConfirm]);
+
+  const connectedCount = entries.filter((entry) => entry.attached).length;
+  const alertsToday = advancedAvailable
+    ? hidAlerts.filter((alert) => isToday(alert.detectedAt)).length
+      + autoActions.filter((action) => action.action !== 'ignore' && isToday(action.time)).length
+    : null;
+  const lastEvent = timelineEvents[0] ?? null;
+  const monitorFailure = status.lastError ?? null;
+
   const headerRight = (
-    <Tag minimal intent={attachedCount > 0 ? 'primary' : running ? 'success' : 'none'} className="font-mono">
-      {attachedCount > 0
-        ? `${attachedCount} ATTACHED`
-        : running
-          ? 'WATCHING'
-          : 'OFF'}
+    <Tag minimal intent={status.running ? (monitorFailure ? 'warning' : 'success') : 'none'} className="font-mono">
+      {status.running ? 'ARMED' : 'OFF'}
     </Tag>
   );
 
   return (
-    <SectionCard title="USB Device Timeline" icon="usb" headerRight={headerRight}>
-      <div className="flex flex-col gap-3">
-        <div className="text-sm opacity-80">
-          Tracks USB device attach and detach events — friendly name, VID/PID, device
-          class, session count, and cumulative plug time. HID and Storage devices are
-          highlighted.
+    <SectionCard title="USB Protection" icon="usb" headerRight={headerRight}>
+      <div className="flex flex-col gap-4">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          <div className="rounded-md border border-white/10 p-3">
+            <div className="text-xs opacity-60">State</div>
+            <div className="mt-1 font-mono text-sm font-semibold">{status.running ? 'Armed' : 'Off'}</div>
+          </div>
+          <div className="rounded-md border border-white/10 p-3">
+            <div className="text-xs opacity-60">Devices currently connected</div>
+            <div className="mt-1 font-mono text-sm font-semibold">{status.running ? (monitorFailure ? 'Unknown' : connectedCount) : '—'}</div>
+          </div>
+          <div className="rounded-md border border-white/10 p-3">
+            <div className="text-xs opacity-60">Alerts today</div>
+            <div className="mt-1 font-mono text-sm font-semibold">{alertsToday ?? 'N/A'}</div>
+          </div>
+          <div className="rounded-md border border-white/10 p-3">
+            <div className="text-xs opacity-60">Last USB event</div>
+            <div className="mt-1 text-sm font-medium">{lastEvent ? safeDate(lastEvent.at) : 'None observed'}</div>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <Switch
-            checked={running}
-            disabled={busy}
-            onChange={(e) => toggle((e.target as HTMLInputElement).checked)}
-            label="Monitor USB activity"
-          />
-          <Switch
-            checked={notifyEnabled}
-            disabled={busy || !running}
-            onChange={(e) => toggleNotify((e.target as HTMLInputElement).checked)}
-            label="Notify on plug/unplug"
-          />
-          <TierGate
-            tier="paid"
-            featureLabel="USB transfer metering"
-            fallback={<span className="text-xs text-[var(--shield-text-muted)]">Pro: USB transfer metering</span>}
-          >
-            <Switch
-              checked={metering}
-              disabled={busy || !running}
-              onChange={(e) => toggleMetering((e.target as HTMLInputElement).checked)}
-              label="Meter data transfer"
-            />
-          </TierGate>
-          <Button icon="refresh" minimal small onClick={() => void refresh()} disabled={busy} aria-label="Refresh USB device timeline">
-            Refresh
-          </Button>
-          <Button
-            icon="trash"
-            minimal
-            small
-            onClick={clear}
-            disabled={busy || entries.length === 0}
-            aria-label="Clear USB device timeline"
-          >
-            Clear
-          </Button>
-          {busy && <Spinner size={14} />}
+        <div className="flex items-center gap-2 text-sm opacity-75">
+          <span>Monitors USB attach/detach state and optional protection signals; it does not inspect files or typed content.</span>
+          <InfoButton label="What USB Protection records">
+            The basic monitor stores device presence, a safe Windows-supplied label, category, event time, and observed session duration. It does not log filenames, copied content, keystrokes, or claim activity from periods when monitoring was off.
+          </InfoButton>
         </div>
 
-        {advancedAvailable && running && metering && stats.length > 0 && (
-          <div className="flex flex-col gap-1 border-t border-white/10 pt-2">
-            <div className="text-xs font-semibold opacity-70">Recorded USB data transfer (since cleared)</div>
-            {stats.map((s) => {
-              const statEntry = entries.find((e) => e.key === s.deviceKey);
-              const label = statEntry
-                ? displayNameForEntry(statEntry, volumeForEntry(statEntry, volumes))
-                : s.friendlyName || s.deviceKey;
-              return (
-                <div key={s.deviceKey} className="font-mono text-xs opacity-70">
-                  {label}: &darr; {formatBytes(s.readBytes)} read &middot; &uarr;{' '}
-                  {formatBytes(s.writeBytes)} written
-                </div>
-              );
-            })}
+        {monitorFailure && (
+          <div role="alert" className="rounded-md border border-[var(--color-warning)]/35 p-3 text-sm">
+            <div className="font-semibold">USB watcher needs attention</div>
+            <div className="mt-1">{monitorFailure.message}</div>
+            <div className="mt-1 text-xs opacity-70">Recovery: {monitorFailure.recoveryAction}</div>
           </div>
         )}
-        {advancedAvailable && running && metering && stats.length === 0 && (
-          <div className="border-t border-white/10 pt-2 text-xs opacity-60">
-            Metering active — plug in or copy to a USB drive and totals will appear here.
-            Figures are approximate (all volume I/O, sampled every few seconds).
-          </div>
-        )}
-
         {error && <div role="alert" className="font-mono text-sm text-[var(--color-danger)]">{error}</div>}
 
-        {running && entries.length > 0 && (() => {
-          const totalPlugSecs = entries.reduce((s, e) => s + livePluggedSecs(e, nowSec), 0);
-          const totalBytes = stats.reduce((s, t) => s + t.readBytes + t.writeBytes, 0);
-          const highCount = entries.filter(
-            (e) => riskLevel(e, hidAlerts, autoActions) === 'High',
-          ).length;
-          return (
-            <div className="privacy-stats-strip">
-              <div className="privacy-stat">
-                <span className="privacy-stat-n">{entries.length}</span>
-                <span className="privacy-stat-l">Devices</span>
-              </div>
-              <div className="privacy-stat-divider" />
-              <div className="privacy-stat">
-                <span className="privacy-stat-n">{formatTotalTime(totalPlugSecs)}</span>
-                <span className="privacy-stat-l">Total plug time</span>
-              </div>
-              {advancedAvailable && stats.length > 0 && (
-                <>
-                  <div className="privacy-stat-divider" />
-                  <div className="privacy-stat">
-                    <span className="privacy-stat-n">{formatBytes(totalBytes)}</span>
-                    <span className="privacy-stat-l">Data transferred</span>
-                  </div>
-                </>
-              )}
-              {advancedAvailable && <>
-                <div className="privacy-stat-divider" />
-                <div className="privacy-stat">
-                  <span className={`privacy-stat-n${highCount > 0 ? ' usb-stat-high' : ''}`}>
-                    {highCount}
-                  </span>
-                  <span className="privacy-stat-l">High risk</span>
-                </div>
-              </>}
+        <section aria-labelledby="usb-timeline-heading" className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <h3 id="usb-timeline-heading" className="text-sm font-semibold">Timeline</h3>
+              <InfoButton label="About USB timeline coverage">
+                {status.windowsHistoryAvailable
+                  ? 'Windows historical USB traces are available from the current event source and are labelled separately.'
+                  : 'This monitor does not import complete Windows USB history. Stored rows are WinCommander monitor records only, so periods before it was armed remain unknown.'}
+              </InfoButton>
             </div>
-          );
-        })()}
-
-        {running && entries.length === 0 && (
-          <div className="text-sm opacity-70">No USB device events recorded.</div>
-        )}
-
-        {!running && (
-          <div className="text-sm opacity-50">Monitoring off — enable to see device history.</div>
-        )}
-
-        {running && entries.length > 0 && (
-          <div className="flex flex-col gap-2">
-            <div className="text-xs opacity-60">
-              <strong>Block</strong> disables a device in Windows so it stops working (like Device
-              Manager → Disable); <strong>Allow</strong> re-enables a blocked one.
-              {!advancedAvailable ? (
-                <>
-                  {' '}Device blocking, read-only mode, trust scores, and attack prevention are <strong>WinCommander Pro</strong> controls.
-                </>
-              ) : !proInstalled && (
-                <>
-                  {' '}These need <strong>WinCommander Pro</strong> installed — open Settings → Pro to
-                  enable them.
-                </>
-              )}
+            <div className="flex flex-wrap gap-2 text-[11px]">
+              <Tag minimal intent="success">Connected now</Tag>
+              <Tag minimal>Persisted monitor records</Tag>
+              <Tag minimal intent="warning">Unknown gaps stay unknown</Tag>
             </div>
-            {entries
-              .slice()
-              .reverse()
-              .map((entry, i) => {
-                const vol = volumeForEntry(entry, volumes);
-                const name = displayNameForEntry(entry, vol);
-                const resolvedLetter = vol?.driveLetter ?? entry.driveLetter;
-                const isBlocked = blockedKeys.has(entry.key);
-                const approvalControlledHid = hidApprovalGateEnabled && entry.deviceClass === 'HID';
+          </div>
+
+          {!status.running && (
+            <div className="rounded-md border border-white/10 p-3 text-sm opacity-75">
+              Monitoring is off. Stored records can be reviewed, but WinCommander cannot say what USB activity occurred while protection was off.
+            </div>
+          )}
+
+          {status.running && !monitorFailure && timelineEvents.length === 0 && (
+            <div className="rounded-md border border-white/10 p-3 text-sm opacity-75">
+              No USB events have been observed since monitoring started. This does not prove that no USB devices were used before it was armed.
+            </div>
+          )}
+
+          {timelineEvents.length > 0 && (
+            <PrivacyEventTable
+              title="USB attach and detach timeline"
+              columns={['Time', 'Device', 'Category', 'State', 'Duration', 'Record source']}
+              rows={timelineEvents.map((event) => ({
+                id: event.id,
+                search: `${event.name} ${event.category} ${event.state} ${event.source}`,
+                sort: [String(event.at), event.name, event.category, event.state, String(event.durationSecs ?? -1), event.source],
+                cells: [
+                  safeDate(event.at),
+                  event.name,
+                  event.category,
+                  <Tag key={`${event.id}-state`} minimal intent={stateIntent(event.state)}>{event.state}</Tag>,
+                  formatDuration(event.durationSecs),
+                  event.source,
+                ],
+              }))}
+            />
+          )}
+        </section>
+
+        <section aria-labelledby="usb-trusted-heading" className="flex flex-col gap-2 border-t border-white/10 pt-3">
+          <div className="flex items-center gap-2">
+            <h3 id="usb-trusted-heading" className="text-sm font-semibold">Trusted devices</h3>
+            <InfoButton label="How trusted device status is determined">
+              Basic monitoring does not assign trust. With Pro, a numeric trust signal and saved policy exceptions can be shown; these are decision aids, not proof that a device is safe.
+            </InfoButton>
+          </div>
+          {entries.length === 0 ? (
+            <div className="text-sm opacity-60">No monitored USB devices are available to review.</div>
+          ) : (
+            <div className="grid gap-2 md:grid-cols-2">
+              {entries.map((entry) => {
+                const score = trustScores[entry.key];
+                const policyTrusted = autoSandboxConfig.allowKeys.includes(entry.key);
                 return (
-                <div
-                  key={`${entry.key}-${i}`}
-                  className="flex items-start gap-2 border-t border-white/10 pt-2"
-                >
-                  <div className="flex flex-col gap-1 pt-0.5">
-                    <Tag minimal={entry.deviceClass === 'Other'} intent={classIntent(entry.deviceClass)} className="font-mono">
-                      {entry.deviceClass}
-                    </Tag>
-                    {advancedAvailable && (() => {
-                      const level = riskLevel(entry, hidAlerts, autoActions);
-                      return (
-                        <Tag
-                          minimal
-                          intent={riskIntent(level)}
-                          className="font-mono"
-                          title="Heuristic risk score derived from low-confidence HID timing alerts and auto-isolation history — not a definitive trust score."
-                        >
-                          {level}
-                        </Tag>
-                      );
-                    })()}
-                    {advancedAvailable && (() => {
-                      const score = trustScores[entry.key];
-                      if (!score) return null;
-                      return (
-                        <Tag
-                          minimal
-                          intent={trustScoreTone(score.score)}
-                          className="font-mono"
-                          title="Trust score combines USB identity stability, vendor signal, HID alerts, quarantine history, and transfer volume."
-                        >
-                          Trust score {formatTrustScore(score.score)}
-                        </Tag>
-                      );
-                    })()}
-                    {entry.attached && (
-                      <Tag minimal intent="success" className="font-mono">
-                        LIVE
-                      </Tag>
-                    )}
-                    {isBlocked && (
-                      <Tag
-                        minimal
-                        intent="danger"
-                        className="font-mono"
-                        title="You blocked this device this session — it is disabled in Windows until you Allow it."
-                      >
-                        BLOCKED
-                      </Tag>
-                    )}
+                  <div key={entry.key} className="rounded-md border border-white/10 p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-medium">{displayNameForEntry(entry, volumeForEntry(entry, volumes))}</div>
+                        <div className="mt-1 text-xs opacity-60">{entry.category} · {entry.sessionCount} monitored session{entry.sessionCount === 1 ? '' : 's'}</div>
+                      </div>
+                      <div className="flex flex-wrap justify-end gap-1">
+                        {entry.attached && <Tag minimal intent="success">CONNECTED</Tag>}
+                        {policyTrusted && <Tag minimal intent="success">TRUSTED BY POLICY</Tag>}
+                        {score && (
+                          <Tag minimal intent={trustScoreTone(score.score)} className="font-mono">
+                            Trust score {formatTrustScore(score.score)}
+                          </Tag>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium">{name}</div>
-                    <div className="font-mono text-xs opacity-60">
-                      {entry.vid}:{entry.pid} &middot; last seen {entry.lastSeenRelative}
-                    </div>
-                    <div className="font-mono text-xs opacity-50">
-                      {entry.sessionCount} session{entry.sessionCount === 1 ? '' : 's'} &middot;{' '}
-                      {formatTotalTime(livePluggedSecs(entry, nowSec))}
-                      {entry.attached ? ' plugged in' : ' total'}
-                    </div>
-                    {/* U-D: Block / Allow — Block disables the device in Windows so it
-                        stops working (like Device Manager → Disable); Allow re-enables a
-                        blocked one. Enforced by the Pro sidecar; targets the raw InstanceId. */}
-                    <div className="flex items-center gap-1 mt-1">
-                      <Button
-                        intent="danger"
-                        minimal
-                        small
-                        aria-label={`Block ${name}`}
-                        disabled={busy || isBlocked || !proInstalled || !advancedAvailable}
-                        onClick={() => void blockDevice(entry)}
-                        title={
-                          !advancedAvailable
-                            ? 'WinCommander Pro is required to disable or re-enable USB devices.'
-                            : proInstalled
-                            ? 'Disable this device in Windows so it stops working (Device Manager → Disable). Reversible with Allow. Needs admin.'
-                            : 'Install WinCommander Pro (Settings → Pro) to disable/enable USB devices.'
-                        }
-                      >
-                        Block
-                      </Button>
-                      <Button
-                        intent="success"
-                        minimal
-                        small
-                        aria-label={`Allow ${name}`}
-                        disabled={busy || !proInstalled || !advancedAvailable || approvalControlledHid}
-                        onClick={() => void allowDevice(entry)}
-                        title={
-                          approvalControlledHid
-                            ? 'Use the New keyboard approval dialog. Generic Allow cannot bypass its human-presence challenge.'
-                            : !advancedAvailable
-                            ? 'WinCommander Pro is required to disable or re-enable USB devices.'
-                            : proInstalled
-                            ? 'Re-enable this device in Windows if it was blocked/disabled. Needs admin.'
-                            : 'Install WinCommander Pro (Settings → Pro) to disable/enable USB devices.'
-                        }
-                      >
-                        Allow
-                      </Button>
-                      {/* U-E: Read-only toggle — storage only, and only once we've resolved
-                          a mounted drive letter. Without one, disable rather than send an
-                          empty driveLetter that would silently no-op on the backend. */}
-                      {entry.deviceClass === 'Storage' && (
-                        <>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <section aria-labelledby="usb-actions-heading" className="flex flex-col gap-3 border-t border-white/10 pt-3">
+          <div className="flex items-center gap-2">
+            <h3 id="usb-actions-heading" className="text-sm font-semibold">Protection actions</h3>
+            <InfoButton label="About USB protection actions">
+              Arming starts observation from that point forward. Notifications report attach/detach changes. Clearing the timeline deletes WinCommander records only; it does not change Windows history.
+            </InfoButton>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <Switch
+              checked={status.running}
+              disabled={busy}
+              onChange={(event) => void toggleMonitor((event.target as HTMLInputElement).checked)}
+              label="Arm USB Protection"
+            />
+            <Switch
+              checked={status.notify}
+              disabled={busy || !status.running}
+              onChange={(event) => void toggleNotify((event.target as HTMLInputElement).checked)}
+              label="Notify on USB changes"
+            />
+            <Button icon="refresh" minimal small onClick={() => void refresh()} disabled={busy} aria-label="Refresh USB device timeline">
+              Refresh
+            </Button>
+            <Button icon="trash" minimal small onClick={() => void clearTimeline()} disabled={busy || timelineEvents.length === 0} aria-label="Clear USB device timeline">
+              Clear stored records
+            </Button>
+            {busy && <Spinner size={14} />}
+          </div>
+          <div className="text-xs opacity-65">
+            Clearing records is permanent for WinCommander’s local USB timeline. It does not erase Windows artefacts and must not be used as evidence that a device was never connected.
+          </div>
+        </section>
+
+        <details className="rounded-md border border-white/10 p-3">
+          <summary className="cursor-pointer text-sm font-semibold">Transfer monitoring</summary>
+          <div className="mt-3 flex flex-col gap-2">
+            <TierGate tier="paid" featureLabel="USB transfer metering" fallback={<div className="text-xs opacity-60">WinCommander Pro is required for aggregate transfer metering.</div>}>
+              <Switch
+                checked={metering}
+                disabled={busy || !status.running}
+                onChange={(event) => void toggleMetering((event.target as HTMLInputElement).checked)}
+                label="Meter aggregate USB transfer volume"
+              />
+              <div className="text-xs opacity-60">
+                Aggregate byte counts only. Filenames and copied content are not collected.
+              </div>
+              {stats.length > 0 && (
+                <div className="grid gap-1 text-xs">
+                  {stats.map((stat) => (
+                    <div key={stat.deviceKey}>{stat.friendlyName || 'USB device'}: ↓ {formatBytes(stat.readBytes)} · ↑ {formatBytes(stat.writeBytes)}</div>
+                  ))}
+                </div>
+              )}
+            </TierGate>
+          </div>
+        </details>
+
+        <TierGate
+          tier="paid"
+          featureLabel="USB HID anomaly alerts and auto-isolate"
+          fallback={<div className="text-xs opacity-60">Pro adds USB HID safety, automatic isolation, and enforcement policy.</div>}
+        >
+          <div className="flex flex-col gap-3">
+            <details className="rounded-md border border-white/10 p-3">
+              <summary className="cursor-pointer text-sm font-semibold">Keyboard/HID safety</summary>
+              <div className="mt-3 flex flex-col gap-3">
+                <Switch
+                  checked={hidGuardRunning}
+                  disabled={busy}
+                  onChange={(event) => void toggleHidGuard((event.target as HTMLInputElement).checked)}
+                  label="Alert on abnormal USB keyboard timing"
+                />
+                <div className="text-xs opacity-60">
+                  This is a low-confidence timing correlation. The Windows hook cannot prove which keyboard generated input. Keystroke content is never read or logged.
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs" role="group" aria-label="USB HID timing sensitivity">
+                  {(['lenient', 'balanced', 'strict'] as const).map((preset) => (
+                    <Button key={preset} small minimal={hidSensitivity !== preset} aria-pressed={hidSensitivity === preset} disabled={busy} onClick={() => void setHidSensitivityCmd(preset)}>
+                      {preset.charAt(0).toUpperCase() + preset.slice(1)}
+                    </Button>
+                  ))}
+                  <span className="opacity-50">{hidThresholds.minBurstKeys}+ timing gaps under {hidThresholds.humanFloorMs}ms</span>
+                </div>
+                {hidAlerts.length > 0 && (
+                  <Button icon="trash" minimal small onClick={() => void clearHidAlerts()} disabled={busy} aria-label="Clear USB HID timing alerts">
+                    Clear HID alerts
+                  </Button>
+                )}
+                <UsbHidApprovalGateSettings
+                  enabled={hidApprovalGateEnabled}
+                  ttlSecs={hidApprovalTtlSecs}
+                  status={hidApprovalStatus}
+                  busy={hidApprovalBusy || !advancedAvailable || !proInstalled}
+                  onEnabledChange={(enabled) => void setHidApprovalGateEnabled(enabled)}
+                  onTtlChange={(ttlSecs) => void setHidApprovalTtlSecs(ttlSecs)}
+                />
+              </div>
+            </details>
+
+            <details className="rounded-md border border-white/10 p-3">
+              <summary className="cursor-pointer text-sm font-semibold">Auto-isolate</summary>
+              <div className="mt-3 flex flex-col gap-3">
+                <Switch
+                  checked={autoSandboxRunning}
+                  disabled={autoSandboxBusy}
+                  onChange={(event) => void toggleAutoSandbox((event.target as HTMLInputElement).checked)}
+                  label="Enable auto-isolate"
+                />
+                <div className="text-xs opacity-60">
+                  Observe alerts only. Enforce can quarantine removable storage after detection. HID enforcement is off by default because disabling a keyboard can lock out input.
+                </div>
+                <div className="flex flex-wrap gap-2" role="group" aria-label="USB auto-isolate mode">
+                  {(['off', 'observe', 'enforce'] as AutoSandboxMode[]).map((m) => (
+                    <Button
+                      key={m}
+                      small
+                      minimal={autoSandboxMode !== m}
+                      intent={m === 'enforce' && autoSandboxMode === m ? 'danger' : undefined}
+                      aria-pressed={autoSandboxMode === m}
+                      disabled={autoSandboxBusy}
+                      onClick={() => void setAutoSandboxModeCmd(m)}
+                    >
+                      {m.charAt(0).toUpperCase() + m.slice(1)}
+                    </Button>
+                  ))}
+                </div>
+                <Switch
+                  checked={autoSandboxConfig.actOnHid}
+                  disabled={autoSandboxBusy}
+                  onChange={(event) => void setAutoSandboxHidScope((event.target as HTMLInputElement).checked)}
+                  label="Include newly attached HID keyboards"
+                />
+                {autoActions.length > 0 && (
+                  <Button icon="trash" minimal small onClick={() => void clearAutoActions()} disabled={autoSandboxBusy} aria-label="Clear USB auto-isolate actions">
+                    Clear auto-isolate actions
+                  </Button>
+                )}
+              </div>
+            </details>
+
+            <details className="rounded-md border border-white/10 p-3">
+              <summary className="cursor-pointer text-sm font-semibold">Advanced policy</summary>
+              <div className="mt-3 flex flex-col gap-3">
+                <div className="text-xs opacity-60">
+                  Device disable/allow and storage read-only enforcement require Pro and administrator rights. Dangerous actions keep their warning visible before confirmation.
+                </div>
+                {entries.map((entry) => {
+                  const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
+                  const volume = volumeForEntry(entry, volumes);
+                  const resolvedLetter = volume?.driveLetter ?? entry.driveLetter;
+                  const isBlocked = blockedKeys.has(entry.key);
+                  const approvalControlledHid = hidApprovalGateEnabled && entry.category === 'Keyboard / HID';
+                  return (
+                    <div key={`policy-${entry.key}`} className="rounded-md border border-white/10 p-3">
+                      <div className="text-sm font-medium">{name}</div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        <Button
+                          intent="danger"
+                          minimal
+                          small
+                          aria-label={`Block ${name}`}
+                          disabled={busy || isBlocked || !proInstalled || !advancedAvailable}
+                          onClick={() => void blockDevice(entry)}
+                        >
+                          Block
+                        </Button>
+                        <Button
+                          intent="success"
+                          minimal
+                          small
+                          aria-label={`Allow ${name}`}
+                          disabled={busy || !proInstalled || !advancedAvailable || approvalControlledHid}
+                          onClick={() => void allowDevice(entry)}
+                          title={approvalControlledHid ? 'Use the New keyboard approval dialog. Generic Allow cannot bypass its human-presence challenge.' : undefined}
+                        >
+                          Allow
+                        </Button>
+                        {entry.category === 'Storage' && (
                           <Button
                             intent="warning"
                             minimal
                             small
                             aria-label={`Make ${name} read-only`}
                             disabled={busy || !resolvedLetter || !advancedAvailable}
-                            onClick={() =>
-                              resolvedLetter && void setVolumeReadonly(resolvedLetter, true)
-                            }
-                            title={
-                              !advancedAvailable
-                                ? 'WinCommander Pro is required for USB read-only enforcement.'
-                                : resolvedLetter
-                                ? `Force volume ${resolvedLetter} read-only via diskpart (best-effort)`
-                                : 'No mounted drive letter resolved for this device yet — re-plug or refresh'
-                            }
+                            onClick={() => resolvedLetter && void setVolumeReadonly(resolvedLetter, true)}
                           >
                             Read-only
                           </Button>
-                        </>
-                      )}
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </div>
-                );
-              })}
+                  );
+                })}
+              </div>
+            </details>
           </div>
-        )}
-
-        <TierGate
-          tier="paid"
-          featureLabel="USB HID anomaly alerts and auto-isolate"
-          fallback={<p className="border-t border-white/10 pt-3 text-xs text-[var(--shield-text-subtle)]">Pro adds low-confidence USB HID timing-anomaly alerts, trust scoring, and automatic isolation. Free keeps the simple attach/detach timeline.</p>}
-        >
-        {/* U-C: low-confidence USB HID timing correlation */}
-        <div className="border-t border-white/10 pt-3 flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="text-sm font-semibold">USB HID timing anomalies</div>
-            <Switch
-              checked={hidGuardRunning}
-              disabled={busy}
-              onChange={(e) => toggleHidGuard((e.target as HTMLInputElement).checked)}
-              label="Alert on superhuman USB-keyboard timing"
-            />
-            {hidAlerts.length > 0 && (
-              <Button
-                icon="trash"
-                minimal
-                small
-                onClick={clearHidAlerts}
-                disabled={busy}
-                aria-label="Clear USB HID timing alerts"
-              >
-                Clear alerts
-              </Button>
-            )}
-            <Tag minimal intent={hidGuardRunning ? 'success' : 'none'} className="font-mono">
-              {hidGuardRunning ? 'ACTIVE' : 'OFF'}
-            </Tag>
-          </div>
-          <div className="text-xs opacity-60">
-            Correlates superhuman input timing with a recently attached USB keyboard. The Windows
-            low-level hook cannot prove which keyboard produced the input, so this is a low-confidence
-            anomaly alert—not proof of a BadUSB, Flipper, Rubber Ducky, or O.MG device. Keystroke
-            content is never read or logged.
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs" role="group" aria-label="USB HID timing sensitivity">
-            <span className="opacity-70">Sensitivity:</span>
-            {(['lenient', 'balanced', 'strict'] as const).map((preset) => (
-              <Button
-                key={preset}
-                small
-                minimal={hidSensitivity !== preset}
-                intent={hidSensitivity === preset && preset === 'strict' ? 'warning' : undefined}
-                disabled={busy}
-                aria-pressed={hidSensitivity === preset}
-                onClick={() => void setHidSensitivityCmd(preset)}
-                title={preset === 'strict' ? 'Alerts on shorter, slower bursts; may increase false positives.' : preset === 'lenient' ? 'Requires a longer, faster burst; fewer false positives.' : 'Balanced default for normal keyboards.'}
-              >
-                {preset.charAt(0).toUpperCase() + preset.slice(1)}
-              </Button>
-            ))}
-            <span className="opacity-50">
-              {hidThresholds.minBurstKeys}+ gaps under {hidThresholds.humanFloorMs}ms; saved on this PC.
-            </span>
-          </div>
-
-          {hidAlerts.length > 0 && (
-            <div className="flex flex-col gap-1 mt-1">
-              <div className="text-xs font-semibold opacity-70">Recent timing anomalies — an evidence report is recorded automatically; block remains an explicit, reversible response.</div>
-              <PrivacyEventTable title="USB HID timing anomalies" columns={["Time", "Correlated device", "Flag", "Events", "Median gap", "Response"]} rows={hidAlerts.map((a, i) => {
-                const attached = entries.find((entry) => entry.key === a.deviceKey && entry.attached);
-                return {
-                  id: `${a.deviceKey}-${a.detectedAt}-${i}`,
-                  search: `${a.friendlyName} ${a.redFlag} ${a.severity}`,
-                  sort: [a.detectedAt, a.friendlyName, a.redFlag, String(a.gapsSampled), String(a.medianGapMs), attached ? 'block' : 'detached'],
-                  cells: [
-                    new Date(a.detectedAt).toLocaleString(), a.friendlyName, a.redFlag,
-                    String(a.gapsSampled), `${a.medianGapMs}ms`,
-                    attached ? <Button intent="danger" minimal small disabled={busy || !proInstalled} onClick={() => void blockDevice(attached)} title="Disable the still-attached device in Windows. Reversible with Allow; requires Pro and admin.">Block now</Button> : 'Detached',
-                  ],
-                };
-              })} />
-            </div>
-          )}
-
-          {hidAlerts.length === 0 && hidGuardRunning && (
-            <div className="text-xs opacity-50">No USB HID timing anomalies detected.</div>
-          )}
-        </div>
-
-        <UsbHidApprovalGateSettings
-          enabled={hidApprovalGateEnabled}
-          ttlSecs={hidApprovalTtlSecs}
-          status={hidApprovalStatus}
-          busy={hidApprovalBusy || !advancedAvailable || !proInstalled}
-          onEnabledChange={(enabled) => void setHidApprovalGateEnabled(enabled)}
-          onTtlChange={(ttlSecs) => void setHidApprovalTtlSecs(ttlSecs)}
-        />
-
-        {/* U-F: Auto-isolate subsection */}
-        <div className="border-t border-white/10 pt-3 flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="text-sm font-semibold">Auto-isolate</div>
-            <Switch
-              checked={autoSandboxRunning}
-              disabled={autoSandboxBusy}
-              onChange={(e) => toggleAutoSandbox((e.target as HTMLInputElement).checked)}
-              label="Enable auto-isolate monitor"
-            />
-            <Tag
-              minimal
-              intent={autoSandboxRunning ? (autoSandboxMode === 'enforce' ? 'danger' : 'success') : 'none'}
-              className="font-mono"
-            >
-              {autoSandboxRunning ? autoSandboxMode.toUpperCase() : 'OFF'}
-            </Tag>
-            {autoActions.length > 0 && (
-              <Button
-                icon="trash"
-                minimal
-                small
-                onClick={clearAutoActions}
-                disabled={autoSandboxBusy}
-                aria-label="Clear USB auto-isolate actions"
-              >
-                Clear
-              </Button>
-            )}
-            {autoSandboxBusy && <Spinner size={14} />}
-          </div>
-
-          <div className="text-xs opacity-60">
-            Watches for untrusted USB devices on attach. <strong>Observe</strong> (default) alerts
-            only — no enforcement. <strong>Enforce</strong> auto-quarantines removable mass-storage
-            via the Pro sidecar so its files are inaccessible until you approve it. Requires USB
-            monitoring to be enabled first.
-          </div>
-
-          <Switch
-            checked={autoSandboxConfig.actOnHid}
-            disabled={autoSandboxBusy}
-            onChange={(e) => void setAutoSandboxHidScope((e.target as HTMLInputElement).checked)}
-            label="Include newly attached HID keyboards (off by default)"
-          />
-          <div className="text-xs opacity-50">
-            This setting and approved-device exceptions are retained on this PC. It does not cover USB network, serial, DMA/Thunderbolt, or non-USB devices.
-          </div>
-
-          {/* Mode selector */}
-          {autoSandboxRunning && (
-            <div className="flex items-center gap-2 mt-1" role="group" aria-label="USB auto-isolate mode">
-              <div className="text-xs opacity-70">Mode:</div>
-              {(['off', 'observe', 'enforce'] as AutoSandboxMode[]).map((m) => (
-                <Button
-                  key={m}
-                  small
-                  minimal={autoSandboxMode !== m}
-                  intent={
-                    autoSandboxMode === m
-                      ? m === 'enforce'
-                        ? 'danger'
-                        : m === 'observe'
-                          ? 'warning'
-                          : undefined
-                      : undefined
-                  }
-                  disabled={autoSandboxBusy}
-                  aria-pressed={autoSandboxMode === m}
-                  onClick={() => void setAutoSandboxModeCmd(m)}
-                >
-                  {m.charAt(0).toUpperCase() + m.slice(1)}
-                </Button>
-              ))}
-            </div>
-          )}
-
-          {/* ENFORCE danger note — always shown when mode is enforce */}
-          {autoSandboxMode === 'enforce' && autoSandboxRunning && (
-            <div
-              className="text-xs font-semibold px-2 py-1 border"
-              style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)' }}
-            >
-              ENFORCE is active: every untrusted removable drive will be quarantined on attach —
-              its files will be inaccessible until you approve it from the USB Intelligence panel.
-              This can block input devices if HID mode is also enabled. Use with care.
-            </div>
-          )}
-
-          {/* Recent auto-action log */}
-          {autoActions.length > 0 && (
-            <div className="flex flex-col gap-1 mt-1">
-              <div className="text-xs font-semibold opacity-70">Recent auto-actions</div>
-              <PrivacyEventTable title="USB auto-isolate actions" columns={["Time", "Action", "Device", "Detail", "Enforced"]} rows={autoActions.map((a, i) => ({ id: `${a.deviceKey}-${a.time}-${i}`, search: `${a.action} ${a.friendlyName} ${a.detail}`, sort: [a.time, a.action, a.friendlyName, a.detail, String(a.enforced)], cells: [a.time, a.action, a.friendlyName, a.detail, a.enforced ? 'Yes' : 'No'] }))} />
-            </div>
-          )}
-
-          {autoActions.length === 0 && autoSandboxRunning && (
-            <div className="text-xs opacity-50">No auto-isolate events this session.</div>
-          )}
-        </div>
         </TierGate>
       </div>
     </SectionCard>
