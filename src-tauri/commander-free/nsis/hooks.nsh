@@ -109,7 +109,10 @@
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "vault-policy-group-create" "$0" "$1"
     Abort "WinCommander could not create the Vault Policy Administrators group."
   ${EndIf}
-  nsExec::ExecToStack 'net.exe localgroup "WinCommander Vault Policy Administrators" "$USERNAME" /add'
+  ; `$USERNAME` is not an NSIS variable. Let cmd.exe expand its own environment
+  ; variable, otherwise `net localgroup` receives the literal text "$USERNAME"
+  ; and silently-installed releases abort on a non-existent account.
+  nsExec::ExecToStack 'cmd.exe /c net.exe localgroup "WinCommander Vault Policy Administrators" "%USERNAME%" /add'
   Pop $0
   Pop $1
   ${If} $0 != 0

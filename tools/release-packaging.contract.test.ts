@@ -54,7 +54,7 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).not.toContain("WC_PRO_PAYLOAD");
     expect(hooks).not.toContain("WC_PRO_EXE");
     expect(hooks).toContain('net.exe localgroup "WinCommander Vault Policy Administrators" /add');
-    expect(hooks).toContain('net.exe localgroup "WinCommander Vault Policy Administrators" "$USERNAME" /add');
+    expect(hooks).toContain('cmd.exe /c net.exe localgroup "WinCommander Vault Policy Administrators" "%USERNAME%" /add');
     expect(hooks).not.toContain("sc.exe delete WinCommanderEncVol");
     expect(hooks).not.toContain("sc.exe delete VeraCrypt");
   });
