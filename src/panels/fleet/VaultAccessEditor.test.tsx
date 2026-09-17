@@ -65,6 +65,16 @@ describe("Vault access editor presentation", () => {
     expect(visible).toContain("Other user or group grants may still allow access.");
   });
 
+  test("lets an administrator browse for an existing container without changing policy state", () => {
+    const html = renderEditor();
+    expect(html).toContain('aria-label="Browse for Vault 1 container file"');
+    expect(editorSource).toContain('open as openFileDialog');
+    expect(editorSource).toContain('title: "Select an existing encrypted Vault container"');
+    expect(editorSource).toContain('onEntryChange({ container_path: selected })');
+    expect(editorSource).not.toContain("applyPolicy");
+    expect(editorSource).not.toContain("useVaultAccess");
+  });
+
   test("keeps the dual-container protection requirement visible only when relevant", () => {
     const warning = "A writable outer mount requires the hidden protection password for that one request.";
     expect(renderEditor()).not.toContain(warning);

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { FleetAccessDirectory } from "./accessControlTypes";
@@ -29,13 +30,32 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, onEntr
   const accessPreset = vaultAccessPreset(entry);
   const vaultNumber = entryIndex + 1;
 
+  const browseContainerFile = async () => {
+    try {
+      // Do not filter by extension: an existing encrypted container is valid
+      // without one. The service still validates the selected path only when
+      // the administrator explicitly saves the policy.
+      const selected = await openFileDialog({
+        multiple: false,
+        directory: false,
+        title: "Select an existing encrypted Vault container",
+      });
+      if (typeof selected === "string") onEntryChange({ container_path: selected });
+    } catch {
+      // The path input remains available if Windows cannot open its picker.
+    }
+  };
+
   return <div className="vault-access-editor">
     <div className="fleet-owner-inputs">
       <Field label="Vault name" help="The label people recognize.">
         <Input aria-label={`Vault ${vaultNumber} label`} value={entry.label} placeholder="Shared vault" onChange={event => onEntryChange({ label: event.target.value })} />
       </Field>
       <Field label="Container file" help="The encrypted container file on this PC. A filename extension is not required.">
-        <Input aria-label={`Vault ${vaultNumber} container path`} value={entry.container_path} placeholder="Encrypted container file" onChange={event => onEntryChange({ container_path: event.target.value })} />
+        <div className="vault-access-container-path">
+          <Input aria-label={`Vault ${vaultNumber} container path`} value={entry.container_path} placeholder="Encrypted container file" onChange={event => onEntryChange({ container_path: event.target.value })} />
+          <Button variant="outline" size="sm" type="button" aria-label={`Browse for Vault ${vaultNumber} container file`} onClick={() => void browseContainerFile()}>Browse</Button>
+        </div>
         <small>Keep each managed Vault in its own dedicated parent folder.</small>
       </Field>
       <Field label="Container type" help="Standard containers can be private or shared. For an outer + hidden container, choose which volume to open when mounting.">

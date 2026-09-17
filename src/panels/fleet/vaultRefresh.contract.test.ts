@@ -33,6 +33,30 @@ describe("Vault refresh boundaries", () => {
     expect(source).toContain("Vault removed from saved policy. It can now use normal Secure Storage mounting with its password.");
   });
 
+  test("a fully removed saved policy immediately clears its editor state", async () => {
+    const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
+    const apply = source.slice(source.indexOf("const apply ="), source.indexOf("const importLegacyDraft"));
+
+    expect(apply).toContain("const savedPolicyRemoved = removed && !keepDraft");
+    expect(apply).toContain("replacePolicy(keepDraft ? draftToKeepAfterSave : removed ? null : submittedPolicy, keepDraft, submittedPolicy)");
+    const cleared = apply.slice(apply.indexOf("if (savedPolicyRemoved)"), apply.indexOf("} else {\n        setStatus(appliedStatus);"));
+    expect(cleared).toContain("setStatus(null)");
+    expect(cleared).toContain("setAuthorizedEntries([])");
+    expect(cleared).toContain("setSelectedEntryId(null)");
+    expect(cleared).toContain("setEditorOpen(false)");
+  });
+
+  test("a targeted removal replaces the displayed policy before its service readback", async () => {
+    const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
+    const apply = source.slice(source.indexOf("const apply ="), source.indexOf("const importLegacyDraft"));
+
+    expect(apply.indexOf("replacePolicy(keepDraft ? draftToKeepAfterSave : removed ? null : submittedPolicy, keepDraft, submittedPolicy)"))
+      .toBeLessThan(apply.indexOf("const refreshed = await refresh(!keepDraft, false)"));
+    const selectedRowRepair = source.slice(source.indexOf("const entries = policy?.entries"), source.indexOf("const updateEntry"));
+    expect(selectedRowRepair).toContain("!entries.some(entry => entry.id === selectedEntryId)");
+    expect(selectedRowRepair).toContain("setSelectedEntryId(entries[0]!.id)");
+  });
+
   test("refresh rejects stale responses and clears obsolete mount results", async () => {
     const source = await Bun.file("src/panels/fleet/VaultAccessTab.tsx").text();
     const refresh = source.slice(source.indexOf("const refresh ="), source.indexOf("useEffect(() => { void refresh()"));

@@ -20,6 +20,15 @@
 
 .vault-access-editor .fleet-field > select { width: 100%; }
 
+.vault-access-container-path {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.vault-access-container-path > input { min-width: 0; }
+.vault-access-container-path > button { flex: 0 0 auto; }
+
 .vault-access-field-heading {
   display: flex;
   align-items: center;

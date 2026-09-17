@@ -22,6 +22,7 @@ import useEntitlements from "../../hooks/useEntitlements";
 import { newDiagnosticOperationId, recordDiagnostic } from "../../lib/diagnostics";
 import './index.css';
 import DriveLetterPicker from "./DriveLetterPicker";
+import { mountPasswordSelectedVolume } from "./mountAutoMode";
 
 const validPim = (value: string) => !value || (Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 2_147_468);
 const MOUNT_ERROR_MAX_LENGTH = 300;
@@ -295,11 +296,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       if (letters.success && letters.data && !letters.data.letters.includes(mountLetter)) {
         throw new Error(`Drive ${mountLetter}: is already in use. Dismount it first or choose a free drive letter.`);
       }
-      const mountRequest = mountVolume({
+      const result = await mountPasswordSelectedVolume(mountVolume, {
         volumePath: mountPath,
         driveLetter: mountLetter,
-        volumeKind: "standard",
-        volumeRole: "standard",
         password: mountPassword,
         keyfiles: mountKeyfile ? [mountKeyfile] : [],
         pim: mountPim || undefined,
@@ -311,7 +310,6 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         hardenAcl: true,
       });
       setMountPassword("");
-      const result = await mountRequest;
       if (!result.success || !result.data) throw new Error(result.error || "Failed to mount volume");
       if (result.data.scope !== "per-user") {
         throw new Error("The encrypted volume was not mounted privately for this Windows account.");

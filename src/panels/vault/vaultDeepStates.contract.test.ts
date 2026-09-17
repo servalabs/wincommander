@@ -37,7 +37,7 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).toContain("installed WinCommander service still requires an NTFS permission check");
     expect(vaultSource).toContain("Repair or update the WinCommander service");
     expect(mountHandlerSource).toContain("setMountFailure(message);");
-    expect(mountHandlerSource).toContain("const mountRequest = mountVolume({");
+    expect(mountHandlerSource).toContain("mountPasswordSelectedVolume(mountVolume");
     expect(mountHandlerSource).toContain("setMountPassword(\"\");");
     expect(mountHandlerSource).toContain("getAvailableDriveLetters()");
     expect(mountHandlerSource).toContain("is already in use. Dismount it first or choose a free drive letter.");
@@ -67,8 +67,7 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).not.toContain("Hidden + decoy");
     expect(vaultSource).not.toContain("Open hidden volume");
     expect(vaultSource).not.toContain("Open visible decoy");
-    expect(vaultSource).toContain('volumeKind: "standard"');
-    expect(vaultSource).toContain('volumeRole: "standard"');
+    expect(vaultSource).toContain("mountPasswordSelectedVolume");
     expect(vaultSource).toContain("The password selects the matching standard, outer, or hidden volume automatically.");
     expect(mountHandlerSource).toContain("readOnly: true");
     expect(vaultSource).toContain("Read-only automatic mount");

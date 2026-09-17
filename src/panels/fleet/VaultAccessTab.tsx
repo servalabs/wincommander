@@ -443,14 +443,27 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       const appliedStatus = await applyPolicy(submittedPolicy, operationId);
       const removed = submittedPolicy.entries.length === 0;
       const keepDraft = draftToKeepAfterSave !== null;
+      // A successful full removal leaves no saved policy to edit. Clear every
+      // policy-derived selection and editor state before the readback, so a
+      // delayed refresh can never leave a deleted row visible or editable.
+      // Deliberately retain an unrelated local draft: it has not been sent to
+      // the service and is explained to the administrator as a draft below.
+      const savedPolicyRemoved = removed && !keepDraft;
       // Removing one saved Vault is intentionally a surgical operation.  A
       // separate edit the administrator has not saved yet remains a local
       // draft rather than being silently sent with the removal request.
       replacePolicy(keepDraft ? draftToKeepAfterSave : removed ? null : submittedPolicy, keepDraft, submittedPolicy);
-      setStatus(appliedStatus);
-      if (removed) {
+      if (savedPolicyRemoved) {
+        setStatus(null);
         setAuthorizedEntries([]);
         setMountResults({});
+        setSelectedEntryId(null);
+        setEditorMode("details");
+        setEditorOpen(false);
+        setEntryRemovalConfirmation(null);
+        setPolicyRemovalConfirmation(false);
+      } else {
+        setStatus(appliedStatus);
       }
       // Applying a policy can change this caller's authorized rows, but the
       // returned status is already current; avoid an immediate duplicate read.
