@@ -1,0 +1,86 @@
+import { describe, expect, test } from "bun:test";
+
+declare const Bun: {
+  file(path: string): { text(): Promise<string> };
+};
+
+const componentPath = "src/panels/privacy/PrintMonitoringSection.tsx";
+
+describe("Print Monitoring contract", () => {
+  test("keeps the replacement component isolated from Privacy Monitor integration", async () => {
+    const [component, privacyIndex] = await Promise.all([
+      Bun.file(componentPath).text(),
+      Bun.file("src/panels/privacy/index.tsx").text(),
+    ]);
+
+    expect(component).toContain('title="Print Monitoring"');
+    expect(component).toContain("Local Print Record");
+    expect(component).toContain("Fleet-safe Print Signals");
+    expect(privacyIndex).not.toContain("PrintMonitoringSection");
+  });
+
+  test("local records use only the existing Windows Print Service audit commands", async () => {
+    const component = await Bun.file(componentPath).text();
+
+    expect(component).toContain('invoke<PrintAuditStatus>("get_print_audit_status")');
+    expect(component).toContain('invoke<PrintAuditEntry[]>("get_print_audit_log"');
+    expect(component).toContain('invoke("set_print_audit_enabled"');
+    expect(component).toContain("Microsoft-Windows-PrintService/Operational");
+    expect(component).toContain("Event 307");
+    expect(component).toContain("administrator approval once");
+    expect(component).toContain('document?: string | null');
+    expect(component).toContain('printer?: string | null');
+    expect(component).toContain('user?: string | null');
+    expect(component).toContain('jobStatus?: string | null');
+  });
+
+  test("Fleet-safe projection whitelists aggregate fields and excludes local metadata", async () => {
+    const component = await Bun.file(componentPath).text();
+    const projection = component.split("export function toFleetSafePrintSignals")[1]?.split("function InfoButton")[0] ?? "";
+
+    expect(projection).toContain('entry.kind === "print"');
+    expect(projection).toContain('entry.class === "print_job"');
+    expect(projection).toContain("windowStart");
+    expect(projection).toContain("windowEnd");
+    expect(projection).toContain("magnitude");
+    expect(projection).toContain("severity");
+    expect(projection).not.toContain("document");
+    expect(projection).not.toContain("printer");
+    expect(projection).not.toContain("user");
+    expect(projection).not.toContain("path");
+    expect(projection).not.toContain("content");
+
+    expect(component).toContain("Document names, printer names, usernames, paths, and document contents are never sent to Fleet.");
+  });
+
+  test("watermarking is truthful, unavailable, and non-interactive without a controlled pipeline", async () => {
+    const component = await Bun.file(componentPath).text();
+    const watermarking = component.split('data-testid="print-watermarking"')[1] ?? "";
+
+    expect(watermarking).toContain("Planned — no controlled print/export pipeline is wired to this monitor.");
+    expect(watermarking).toContain("Visible watermarking: off by default and unavailable here.");
+    expect(watermarking).toContain("Invisible/forensic markers: off by default and unavailable here.");
+    expect(watermarking).toContain("cannot watermark arbitrary jobs after they have been submitted");
+    expect(watermarking).not.toContain("<Switch");
+  });
+
+  test("info buttons support hover, keyboard, click, Escape, and touch", async () => {
+    const component = await Bun.file(componentPath).text();
+
+    expect(component).toContain("onMouseEnter={() => setOpen(true)}");
+    expect(component).toContain("onFocus={() => setOpen(true)}");
+    expect(component).toContain("onClick={(event) =>");
+    expect(component).toContain('event.key === "Escape"');
+    expect(component).toContain('event.pointerType !== "touch"');
+    expect(component).toContain("aria-expanded={open}");
+    expect(component).toContain('role="tooltip"');
+    expect(component).toContain('role="alert"');
+  });
+
+  test("paid boundary remains explicit", async () => {
+    const component = await Bun.file(componentPath).text();
+
+    expect(component).toContain('const paid = canUse("paid")');
+    expect(component).toContain("require WinCommander Pro");
+  });
+});
