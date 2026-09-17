@@ -313,6 +313,11 @@ export interface AppPreferences {
    *  and suppresses every updater event — no banner, no background download,
    *  no restart prompt. Mirrors `app.disable_updates` in settings.rs. */
   disableUpdates?: boolean;
+  /** Per-Windows-user choice for the Dashboard's next Fix All action. When
+   *  enabled, that action requests elevation and applies eligible protections
+   *  machine-wide; it does not replace other users' saved preferences.
+   *  Missing resolves to false. */
+  applyFixAllMachineWide?: boolean;
   /** Low Performance Mode — disables UI animations AND the periodic active-panel
    *  polling, which is the expensive half: each refresh spawns a cold
    *  powershell.exe (no runspace reuse), and on a multi-user server every

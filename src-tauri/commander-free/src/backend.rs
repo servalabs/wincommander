@@ -3969,6 +3969,102 @@ fn params_to_json_env(params: &HashMap<String, String>) -> String {
     serde_json::to_string(&serde_json::Value::Object(map)).unwrap_or_else(|_| "{}".to_string())
 }
 
+// `MachineWide` is an IPC control flag, never a PowerShell argument.  Fix All
+// uses it only when an administrator deliberately chooses the all-users
+// scope; omitting it preserves every existing single-user call.
+const MACHINE_WIDE_PARAM: &str = "MachineWide";
+
+// These commands enforce a Windows-wide policy/service/hosts-file effect.
+// Do not add a command just because it happens to require elevation: commands
+// which only edit the caller's HKCU profile must remain user-scoped.  In
+// particular, recent-file, PowerShell-history, typing-insight and advertising
+// ID preferences do not have a safe machine policy equivalent.
+const MACHINE_WIDE_FIX_COMMANDS: &[&str] = &[
+    "Disable-Telemetry",
+    "Enable-Telemetry",
+    "Disable-ClipboardHistory",
+    "Enable-ClipboardHistory",
+    "Disable-CloudClipboardSync",
+    "Enable-CloudClipboardSync",
+    "Disable-ActivityHistory",
+    "Enable-ActivityHistory",
+    "Disable-LocationTracking",
+    "Enable-LocationTracking",
+    "Disable-RecallSnapshots",
+    "Enable-RecallSnapshots",
+    "Disable-InternetCommunication",
+    "Enable-InternetCommunication",
+    "Disable-OfficeLogging",
+    "Enable-OfficeLogging",
+    "Disable-DiagnosticEventTracing",
+    "Enable-DiagnosticEventTracing",
+    "Disable-TailoredExperiences",
+    "Enable-TailoredExperiences",
+    "Set-AppCapabilityAccess",
+    "Add-BlocklistToHosts",
+    "Remove-BlocklistFromHosts",
+];
+
+fn take_machine_wide_param(params: &mut HashMap<String, String>) -> Result<bool, String> {
+    let Some(raw) = params.remove(MACHINE_WIDE_PARAM) else {
+        return Ok(false);
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" => Ok(true),
+        "false" | "" => Ok(false),
+        _ => Err("MachineWide must be true or false".to_string()),
+    }
+}
+
+fn is_machine_wide_fix_command(command: &str) -> bool {
+    MACHINE_WIDE_FIX_COMMANDS.contains(&command)
+}
+
+fn machine_wide_status(command: &str, status: &str, reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "command": command,
+        "scope": "machine",
+        "status": status,
+        "reason": reason,
+    })
+}
+
+fn with_machine_wide_status(command: &str, result: serde_json::Value) -> serde_json::Value {
+    let status = if result.get("error").and_then(serde_json::Value::as_bool) == Some(true)
+        || result.get("ok").and_then(serde_json::Value::as_bool) == Some(false)
+    {
+        "failed"
+    } else {
+        "applied"
+    };
+
+    match result {
+        serde_json::Value::Object(mut object) => {
+            object.insert("scope".to_string(), serde_json::json!("machine"));
+            object.insert("status".to_string(), serde_json::json!(status));
+            serde_json::Value::Object(object)
+        }
+        data => serde_json::json!({
+            "command": command,
+            "scope": "machine",
+            "status": status,
+            "data": data,
+        }),
+    }
+}
+
+#[cfg(windows)]
+fn is_elevated_process() -> bool {
+    // This checks the effective process token. Membership in Administrators is
+    // insufficient for a split-token account that has not accepted UAC.
+    unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() != 0 }
+}
+
+#[cfg(not(windows))]
+fn is_elevated_process() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod param_env_tests {
     use super::*;
@@ -3994,6 +4090,52 @@ mod param_env_tests {
         assert_eq!(parsed["flag"], serde_json::json!(true));
         assert_eq!(parsed["count"], serde_json::json!(42));
         assert_eq!(parsed["name"], serde_json::json!("hello"));
+    }
+
+    #[test]
+    fn machine_wide_scope_defaults_off_and_is_not_forwarded_to_powershell() {
+        let mut params = HashMap::new();
+        assert!(!take_machine_wide_param(&mut params).unwrap());
+        assert!(params.is_empty());
+
+        params.insert(MACHINE_WIDE_PARAM.to_string(), "true".to_string());
+        params.insert("Capability".to_string(), "webcam".to_string());
+        assert!(take_machine_wide_param(&mut params).unwrap());
+        assert_eq!(params.get("Capability"), Some(&"webcam".to_string()));
+        assert!(!params.contains_key(MACHINE_WIDE_PARAM));
+    }
+
+    #[test]
+    fn machine_wide_scope_rejects_invalid_flag_values() {
+        let mut params = HashMap::new();
+        params.insert(MACHINE_WIDE_PARAM.to_string(), "all-users".to_string());
+        assert_eq!(
+            take_machine_wide_param(&mut params).unwrap_err(),
+            "MachineWide must be true or false"
+        );
+    }
+
+    #[test]
+    fn machine_wide_scope_allowlist_excludes_user_profile_commands() {
+        assert!(is_machine_wide_fix_command("Disable-ActivityHistory"));
+        assert!(is_machine_wide_fix_command("Set-AppCapabilityAccess"));
+        assert!(!is_machine_wide_fix_command("Disable-RecentFilesTracking"));
+        assert!(!is_machine_wide_fix_command("Disable-TerminalHistory"));
+    }
+
+    #[test]
+    fn machine_wide_results_are_truthful_about_block_and_failure() {
+        let blocked = machine_wide_status("Disable-TerminalHistory", "blocked", "user-only");
+        assert_eq!(blocked["scope"], "machine");
+        assert_eq!(blocked["status"], "blocked");
+
+        let failed = with_machine_wide_status(
+            "Disable-Telemetry",
+            serde_json::json!({ "error": true, "message": "access denied" }),
+        );
+        assert_eq!(failed["scope"], "machine");
+        assert_eq!(failed["status"], "failed");
+        assert_eq!(failed["message"], "access denied");
     }
 }
 
@@ -4267,9 +4409,25 @@ pub(crate) async fn run_fleet_forensic_projection(
 pub(crate) async fn run_backend_script_with_timeout(
     app: AppHandle,
     command: String,
-    params: HashMap<String, String>,
+    mut params: HashMap<String, String>,
     timeout_override: Option<std::time::Duration>,
 ) -> Result<serde_json::Value, String> {
+    let machine_wide = take_machine_wide_param(&mut params)?;
+    if machine_wide && !is_machine_wide_fix_command(&command) {
+        return Ok(machine_wide_status(
+            &command,
+            "blocked",
+            "This fix is user-specific and has no supported machine-wide policy.",
+        ));
+    }
+    if machine_wide && !is_elevated_process() {
+        return Ok(machine_wide_status(
+            &command,
+            "blocked",
+            "Administrator elevation is required to apply this fix machine-wide.",
+        ));
+    }
+
     // Redact secrets before they hit the app log -- `params` can carry a
     // plaintext vault password/keyfile, one `WINCMD_LOG=debug` away from
     // being written to disk otherwise.
@@ -4576,9 +4734,16 @@ pub(crate) async fn run_backend_script_with_timeout(
     let params_json = params_to_json_env(&params);
 
     // Build complete script: Core Utils + Additional Modules + Command Module + Router + Invocation
+    let machine_wide_assertion = if machine_wide {
+        // Keep the PowerShell process independently guarded too: the token may
+        // change between the native preflight and a delayed process spawn.
+        "if (-not (Test-IsAdmin)) { throw 'Administrator elevation is required to apply this fix machine-wide.' }\n\n"
+    } else {
+        ""
+    };
     let full_script = format!(
-        "{}\n\n{}{}\n\n{}\n\nInvoke-BackendCommand",
-        core_utils, additional_modules, command_module, core_router
+        "{}\n\n{}{}\n\n{}\n\n{}Invoke-BackendCommand",
+        core_utils, additional_modules, command_module, core_router, machine_wide_assertion
     );
 
     // Execute PowerShell via stdin (memory-only, never writes to disk)
@@ -4730,6 +4895,12 @@ pub(crate) async fn run_backend_script_with_timeout(
             );
             Ok(serde_json::json!({ "success": true, "data": trimmed }))
         }
+    };
+
+    let result = if machine_wide {
+        result.map(|value| with_machine_wide_status(&command, value))
+    } else {
+        result
     };
 
     // Privacy-shield-specific: when the PS wrapper successfully spawns

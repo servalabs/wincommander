@@ -146,6 +146,11 @@ export default function DashboardPanel() {
   // registers the operation, preventing duplicate Fix All submissions.
   const [isFixAllRunning, setIsFixAllRunning] = useState(false);
   const fixAllInProgress = isFixEverythingRunning || isFixAllRunning;
+  // This is deliberately a per-Windows-user preference and defaults to off.
+  // It changes only the next Dashboard Fix All request; individual fixes and
+  // drift healing remain user-scoped so people sharing a PC keep control of
+  // their own choices.
+  const applyFixAllMachineWide = appSettings?.app?.applyFixAllMachineWide === true;
   // App-update ids claimed by any in-flight upgrade (marked synchronously at
   // every queuing site). Lets us drop app-update findings the instant they're
   // queued — before the update task even registers as "running".
@@ -463,11 +468,17 @@ export default function DashboardPanel() {
   //   contextMenuShred/Scrub → Rust invoke path, needs patchAppSettings after
   //   suggestions          → companion Disable-SetupCompletionNags
   //   paste-monitor        → settings-only (no toggle/command), flips ideal.privacy.clipboard.pasteMonitorEnabled
-  const buildFindingOp = useCallback((f: ScanFinding): { label: string; fn: () => Promise<any> } | null => {
+  const buildFindingOp = useCallback((f: ScanFinding, machineWide = false): { label: string; fn: () => Promise<any> } | null => {
     const wrap = (fn: () => Promise<any>) => async () => {
       const res = await fn();
       if (res && (res as any).error) throw new Error((res as any).error);
       if (res && res.success === false) throw new Error("Operation failed");
+      // Machine-scope dispatch deliberately refuses user-only or unsupported
+      // commands. Surface that as a failed operation step instead of a green
+      // Fix All result that implies another user's setting was changed.
+      if (res?.data?.status === "blocked") {
+        throw new Error(res.data.reason || "This fix cannot be applied machine-wide.");
+      }
       return res;
     };
     const runToggleCommand = async (toggleId: string, targetChecked = true) => {
@@ -477,24 +488,25 @@ export default function DashboardPanel() {
         return executeBackendCommand('Set-AppCapabilityAccess', {
           Capability: toggle.capabilityKey,
           Access: targetChecked ? 'Deny' : 'Allow',
+          MachineWide: machineWide,
         });
       }
-      const res = await executeBackendCommand(targetChecked ? toggle.enableCmd : toggle.disableCmd);
+      const res = await executeBackendCommand(targetChecked ? toggle.enableCmd : toggle.disableCmd, { MachineWide: machineWide });
       if (targetChecked && toggle.id === 'suggestions') {
-        await executeBackendCommand('Disable-SetupCompletionNags');
+        await executeBackendCommand('Disable-SetupCompletionNags', { MachineWide: machineWide });
       }
       return res;
     };
     let fn: (() => Promise<any>) | null = null;
     if (f.id === 'telemetry-blocklist') {
-      fn = () => executeBackendCommand('Add-BlocklistToHosts', { BlocklistName: 'telemetry-blocklist' });
+      fn = () => executeBackendCommand('Add-BlocklistToHosts', { BlocklistName: 'telemetry-blocklist', MachineWide: machineWide });
     } else if (f.id.startsWith('drift:')) {
       const toggleId = f.id.slice('drift:'.length);
       fn = () => runToggleCommand(toggleId, f.targetChecked ?? false);
     } else if (f.id.startsWith('dependency:')) {
       const depId = f.id.slice('dependency:'.length);
       fn = async () => {
-        const res = await executeBackendCommand('Install-Dependency', { Id: depId });
+        const res = await executeBackendCommand('Install-Dependency', { Id: depId, MachineWide: machineWide });
         await refreshDependencies(true);
         return res;
       };
@@ -532,10 +544,10 @@ export default function DashboardPanel() {
       };
     } else if (f.id.startsWith('browser-hardening:')) {
       const browserName = f.id.slice('browser-hardening:'.length);
-      fn = () => executeBackendCommand('Enable-HardenBrowserByName', { Name: browserName });
+      fn = () => executeBackendCommand('Enable-HardenBrowserByName', { Name: browserName, MachineWide: machineWide });
     } else if (f.id === 'services-profile') {
       fn = async () => {
-        const res = await executeBackendCommand('Set-ServicesManual');
+        const res = await executeBackendCommand('Set-ServicesManual', { MachineWide: machineWide });
         if (res && ((res as any).error || res.success === false)) return res;
         const previous = appSettings?.ideal?.tweaks?.maintenanceRuns?.services;
         await patchAppSettings({
@@ -587,13 +599,13 @@ export default function DashboardPanel() {
   // Returns the settle promise so callers (handleFixAll) can track completion
   // directly, instead of only through the TaskStatusContext-derived
   // isFixEverythingRunning (see fixAllInProgress, above).
-  const fixFindings = useCallback((targets: ScanFinding[], title: string) => {
-    if (needsElevation) {
-      showError(MACHINE_SCOPE_ELEVATION_MESSAGE);
+  const fixFindings = useCallback((targets: ScanFinding[], title: string, machineWide = false) => {
+    if (machineWide && needsElevation) {
+      showError(`Apply Fix All to all users is blocked. ${MACHINE_SCOPE_ELEVATION_MESSAGE}`);
       return Promise.resolve();
     }
     const opSteps = targets
-      .map(buildFindingOp)
+      .map((finding) => buildFindingOp(finding, machineWide))
       .filter((s): s is { label: string; fn: () => Promise<any> } => s !== null);
     if (opSteps.length === 0) return Promise.resolve();
     const ids = targets.map((t) => t.id);
@@ -644,10 +656,13 @@ export default function DashboardPanel() {
     // when Fix Everything is already running (e.g. rapid double-click).
     if (fixAllInProgress) return;
     setIsFixAllRunning(true);
-    void fixFindings(activeFindings, "Fix Everything").finally(() => {
+    void fixFindings(activeFindings, "Fix Everything", applyFixAllMachineWide).finally(() => {
       setIsFixAllRunning(false);
     });
-  }, [fixFindings, activeFindings, fixAllInProgress]);
+  }, [fixFindings, activeFindings, fixAllInProgress, applyFixAllMachineWide]);
+  const handleApplyFixAllMachineWideChange = useCallback((enabled: boolean) => {
+    void patchAppSettings({ app: { applyFixAllMachineWide: enabled } }).catch(reportSettingsWriteFailure);
+  }, [patchAppSettings]);
   const handleHealDrift = useCallback(() => fixFindings(driftFindings, "Heal Drift"), [fixFindings, driftFindings]);
   const handleFixOne = useCallback((f: ScanFinding) => {
     if (busyIds.size > 0) return;
@@ -893,6 +908,14 @@ export default function DashboardPanel() {
                   )}
                   {radar.phase === 'complete' && (
                     <div className="dashboard-fix-actions">
+                      <label className="dashboard-fix-all-scope" title="Off by default. This asks for administrator permission and applies eligible fixes to every Windows user on this PC.">
+                        <input
+                          type="checkbox"
+                          checked={applyFixAllMachineWide}
+                          onChange={(event) => handleApplyFixAllMachineWideChange(event.target.checked)}
+                        />
+                        <span>Apply Fix All to all users</span>
+                      </label>
                       <NeedsAttention
                         findings={activeFindings}
                         busyIds={busyIds}

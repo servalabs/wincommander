@@ -211,6 +211,19 @@ export default function IdentityPanel() {
                     </div>
                 </SectionCard>
 
+                <SectionCard title="Fix All scope" icon="shield">
+                    <UniversalToggle
+                        label="Apply next Fix All to all users"
+                        description="Off by default. When enabled, your next Dashboard Fix All requests administrator permission and applies eligible protections machine-wide. It does not replace other users’ saved preferences; each Windows user can choose this separately."
+                        checked={appSettings?.app?.applyFixAllMachineWide === true}
+                        onChange={(enabled) => {
+                            patchAppSettings({ app: { applyFixAllMachineWide: enabled } }).catch(reportSettingsWriteFailure);
+                        }}
+                        severity="none"
+                        icon="shield"
+                    />
+                </SectionCard>
+
                 <SectionCard title="System Activation" icon="key">
                     <TierGate tier="paid" featureLabel="System Activation">
                         <ActivationPanel />

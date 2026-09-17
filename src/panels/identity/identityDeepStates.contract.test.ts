@@ -15,4 +15,10 @@ describe("settings deep-state contracts", () => {
     expect(license).toContain('labelFor="identity-license-key"');
     expect(license).toContain('id="identity-license-key"');
   });
+
+  test("Fix All's all-users preference remains a per-user opt-in", () => {
+    expect(identity).toContain("Apply next Fix All to all users");
+    expect(identity).toContain("appSettings?.app?.applyFixAllMachineWide === true");
+    expect(identity).toContain("patchAppSettings({ app: { applyFixAllMachineWide: enabled } })");
+  });
 });

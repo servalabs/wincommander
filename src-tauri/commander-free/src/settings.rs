@@ -449,6 +449,11 @@ pub struct AppPreferences {
     /// banner, no background download, no restart prompt. Default false.
     #[serde(default)]
     pub disable_updates: bool,
+    /// Per-Windows-user opt-in for the next Dashboard Fix All.  This merely
+    /// requests the machine-wide execution path; it never becomes a shared
+    /// policy itself, so another profile retains its own default-off choice.
+    #[serde(default)]
+    pub apply_fix_all_machine_wide: bool,
     /// Low Performance Mode: "auto" (default), "on" or "off". Disables UI
     /// animations AND the periodic active-panel polling — the latter being the
     /// expensive half, since every refresh spawns a cold powershell.exe
@@ -854,6 +859,7 @@ impl Default for AppPreferences {
             advisor: AdvisorSettings::default(),
             internet_kill_switch: false,
             disable_updates: false,
+            apply_fix_all_machine_wide: false,
             // None means "auto" — the frontend decides from this machine's cores
             // and RAM. Storing None rather than Some("auto") keeps the key out of
             // settings.json until a user makes an explicit choice.
@@ -4257,6 +4263,27 @@ mod tests {
             Some(&serde_json::json!(true)),
             "machine policy is shared with every account"
         );
+    }
+
+    #[test]
+    fn machine_wide_fix_all_opt_in_is_per_user_and_defaults_off() {
+        let defaults = create_default_settings();
+        assert!(!defaults.app.apply_fix_all_machine_wide);
+
+        let mut opted_in = serde_json::to_value(defaults).unwrap();
+        opted_in["app"]["applyFixAllMachineWide"] = serde_json::json!(true);
+        let (machine, user_overlay) = split_settings_value(opted_in).unwrap();
+
+        assert!(machine.pointer("/app/applyFixAllMachineWide").is_none());
+        assert_eq!(
+            user_overlay.pointer("/app/applyFixAllMachineWide"),
+            Some(&serde_json::json!(true))
+        );
+
+        let (_, fresh_user_overlay) =
+            split_settings_value(serde_json::to_value(create_default_settings()).unwrap()).unwrap();
+        let fresh = merge_user_overlay(parse_and_migrate_json_val(machine).unwrap(), fresh_user_overlay).unwrap();
+        assert!(!fresh.app.apply_fix_all_machine_wide);
     }
 
     #[test]
