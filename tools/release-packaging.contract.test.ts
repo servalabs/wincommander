@@ -6,7 +6,13 @@ const baseConfig = JSON.parse(readFileSync("src-tauri/commander-free/tauri.conf.
   bundle: {
     resources: string[];
     targets: string | string[];
-    windows: { nsis: { installMode: string; installerHooks?: string } };
+    windows: {
+      nsis: {
+        installMode: string;
+        installerHooks?: string;
+        startMenuFolder?: string;
+      };
+    };
   };
 };
 const releaseTool = readFileSync("tools/build-tauri-release.ts", "utf8");
@@ -14,21 +20,32 @@ const manifest = readFileSync("src-tauri/commander-free/app.manifest", "utf8");
 const buildScript = readFileSync("src-tauri/commander-free/build.rs", "utf8");
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
 
-describe("Free per-user release packaging", () => {
-  test("uses the standard-user NSIS installation mode without machine hooks", () => {
+describe("Free machine-wide release packaging", () => {
+  test("uses a shared Program Files install and a product-specific Start Menu location", () => {
     expect(baseConfig.bundle.targets).toBe("nsis");
-    expect(baseConfig.bundle.windows.nsis.installMode).toBe("currentUser");
-    expect(baseConfig.bundle.windows.nsis.installerHooks).toBeUndefined();
+    expect(baseConfig.bundle.windows.nsis.installMode).toBe("perMachine");
+    expect(baseConfig.bundle.windows.nsis.installerHooks).toBe("nsis/hooks.nsh");
+    // The app lives in Program Files, so every Windows account gets one safe,
+    // shared executable. A product folder avoids a collision with root-level
+    // shortcuts left by earlier releases.
+    expect(baseConfig.bundle.windows.nsis.startMenuFolder).toBe("ServaLabs\\WinCommander");
   });
 
-  test("does not bundle or register a service or kernel driver during normal setup", () => {
+  test("bundles its machine service but never ships or manages a kernel driver", () => {
     expect(baseConfig.bundle.resources).not.toContain("resources/wincommander-svc.exe");
-    expect(releaseTool).not.toContain("commander-svc");
-    expect(releaseTool).not.toContain("wincommander-svc.exe");
+    expect(baseConfig.bundle.resources).not.toContain("resources/EncVolKm.sys");
+    expect(releaseTool).toContain("commander-svc");
+    expect(releaseTool).toContain("wincommander-svc.exe");
+    expect(releaseTool).not.toContain("EncVolKm.sys");
     expect(releaseTool).toContain('const contextShredResource = "resources/wincommander-context-shred.exe"');
     expect(releaseTool).toContain("copyFileSync(contextShredBuildPath, stagedContextShredPath)");
     expect(releaseTool).toContain('config.bundle.targets = ["nsis"]');
     expect(packageJson.scripts["build:free:release-installer"]).toContain("bun run tools/build-tauri-release.ts");
+
+    const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
+    expect(hooks).toContain("sc.exe create ${WC_SERVICE_NAME}");
+    expect(hooks).not.toContain("sc.exe delete WinCommanderEncVol");
+    expect(hooks).not.toContain("sc.exe delete VeraCrypt");
   });
 
   test("keeps the desktop process and bundled Explorer helper at the caller's privilege", () => {
@@ -43,18 +60,18 @@ describe("Free per-user release packaging", () => {
     expect(helperManifest).not.toContain("requireAdministrator");
   });
 
-  test("runs the release setup and uninstaller without RunAs and rejects machine-service side effects", () => {
-    expect(releaseWorkflow).not.toContain("Verify Free setup installs and removes WinCommanderSvc");
-    expect(releaseWorkflow).toContain("Verify Free setup installs and removes only the current-user installation");
-    expect(releaseWorkflow).toContain('Join-Path $env:LOCALAPPDATA "WinCommander\\wincommander-free.exe"');
-    expect(releaseWorkflow).toContain('Join-Path $env:LOCALAPPDATA "WinCommander\\uninstall.exe"');
-    expect(releaseWorkflow).toContain("The Free setup unexpectedly created WinCommanderSvc.");
+  test("runs a machine-wide release setup and uninstaller with only the owned service lifecycle", () => {
+    expect(releaseWorkflow).toContain("Verify Free setup installs and removes the machine-wide installation");
+    expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\wincommander-free.exe"');
+    expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\uninstall.exe"');
+    expect(releaseWorkflow).toContain("The Free setup did not create and start WinCommanderSvc.");
+    expect(releaseWorkflow).toContain("The NSIS uninstaller did not remove WinCommanderSvc.");
 
     const verification = releaseWorkflow.slice(
-      releaseWorkflow.indexOf("Verify Free setup installs and removes only the current-user installation"),
+      releaseWorkflow.indexOf("Verify Free setup installs and removes the machine-wide installation"),
       releaseWorkflow.indexOf("Verify bundled shared media"),
     );
-    expect(verification).not.toContain("-Verb RunAs");
-    expect(verification).not.toContain("$env:ProgramFiles");
+    expect(verification).toContain("-Verb RunAs");
+    expect(verification).not.toContain("$env:LOCALAPPDATA");
   });
 });

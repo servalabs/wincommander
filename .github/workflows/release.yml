@@ -316,8 +316,9 @@ jobs:
           "TAURI_SIGNING_PRIVATE_KEY=$key" | Add-Content -Path $env:GITHUB_ENV
 
       # Do not replace this with `bun tauri build`: the public release wrapper
-      # builds the signed current-user Free setup and its asInvoker Explorer
-      # helper. Machine services and drivers are never installed by this path.
+      # builds the signed machine-wide Free setup and its asInvoker Explorer
+      # helper. It installs WinCommanderSvc, but never installs or removes a
+      # kernel driver.
       - name: Build signed Free NSIS setup
         env:
           RUST_MIN_STACK: "16777216"
@@ -325,9 +326,9 @@ jobs:
         run: bun run build:free:release-installer
 
       # This is an artifact-level gate, not a source-contract check. It proves
-      # a standard-user setup and uninstall work without elevation and leave
+      # one consented machine-wide setup serves all Windows accounts and leaves
       # no machine service behind.
-      - name: Verify Free setup installs and removes only the current-user installation
+      - name: Verify Free setup installs and removes the machine-wide installation
         shell: pwsh
         env:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
@@ -340,32 +341,36 @@ jobs:
           }
 
           $setup = $setups[0].FullName
-          $installRoot = Join-Path $env:LOCALAPPDATA "WinCommander"
+          $installRoot = Join-Path $env:ProgramFiles "WinCommander"
           Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
-          $setupProcess = Start-Process -FilePath $setup -ArgumentList "/S" -Wait -PassThru
+          $setupProcess = Start-Process -FilePath $setup -ArgumentList "/S" -Verb RunAs -Wait -PassThru
           if ($setupProcess.ExitCode -ne 0) {
             throw "The NSIS setup failed with exit code $($setupProcess.ExitCode)."
           }
 
-          $mainBinary = Join-Path $env:LOCALAPPDATA "WinCommander\wincommander-free.exe"
+          $mainBinary = Join-Path $env:ProgramFiles "WinCommander\wincommander-free.exe"
           if (-not (Test-Path -LiteralPath $mainBinary -PathType Leaf)) {
             throw "The NSIS setup did not install wincommander-free.exe at $mainBinary."
           }
           $service = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
-          if ($null -ne $service) {
-            throw "The Free setup unexpectedly created WinCommanderSvc."
+          if ($null -eq $service -or $service.State -ne "Running") {
+            throw "The Free setup did not create and start WinCommanderSvc."
           }
 
-          $uninstaller = Join-Path $env:LOCALAPPDATA "WinCommander\uninstall.exe"
+          $uninstaller = Join-Path $env:ProgramFiles "WinCommander\uninstall.exe"
           if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
             throw "The NSIS setup did not create its uninstaller at $uninstaller."
           }
-          $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru
+          $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Verb RunAs -Wait -PassThru
           if ($uninstallProcess.ExitCode -ne 0) {
             throw "The NSIS uninstaller failed with exit code $($uninstallProcess.ExitCode)."
           }
           if (Test-Path -LiteralPath $mainBinary) {
             throw "The NSIS uninstaller did not remove wincommander-free.exe."
+          }
+          $serviceAfterUninstall = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
+          if ($null -ne $serviceAfterUninstall) {
+            throw "The NSIS uninstaller did not remove WinCommanderSvc."
           }
 
       - name: Verify bundled shared media

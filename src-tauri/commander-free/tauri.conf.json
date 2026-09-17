@@ -55,7 +55,9 @@
       "digestAlgorithm": "sha256",
       "timestampUrl": "",
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "perMachine",
+        "startMenuFolder": "ServaLabs\\WinCommander",
+        "installerHooks": "nsis/hooks.nsh"
       }
     }
   },
