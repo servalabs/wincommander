@@ -1,10 +1,10 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::Command;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RdpRedirectionStatus {
     pub is_windows_server: bool,
@@ -208,7 +208,7 @@ pub fn handle(value: &Value) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::client_profile;
+    use super::{client_profile, RdpRedirectionStatus};
 
     #[test]
     fn client_profile_uses_native_channels_only() {
@@ -218,5 +218,31 @@ mod tests {
         assert!(p.contains("camerastoredirect:s:*"));
         assert!(p.contains("redirectwebauthn:i:1"));
         assert!(!p.to_ascii_lowercase().contains("usbdevicestoredirect"));
+    }
+
+    #[test]
+    fn status_deserializes_the_powershell_payload() {
+        let status: RdpRedirectionStatus = serde_json::from_str(r#"{
+            "isWindowsServer": true,
+            "productName": "Windows Server 2025",
+            "installationType": "Server",
+            "isAdmin": true,
+            "smartCards": true,
+            "drives": true,
+            "clipboard": true,
+            "printers": true,
+            "audioPlayback": true,
+            "microphone": true,
+            "pnpDevices": true,
+            "camera": true,
+            "webauthn": true,
+            "genericUsbDisabled": false,
+            "qwaveInstalled": true,
+            "mediaFoundationInstalled": true
+        }"#).expect("PowerShell status payload should deserialize");
+
+        assert!(status.is_windows_server);
+        assert_eq!(status.product_name, "Windows Server 2025");
+        assert!(!status.generic_usb_disabled);
     }
 }
