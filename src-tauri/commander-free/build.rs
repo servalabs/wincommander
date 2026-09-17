@@ -23,6 +23,28 @@ fn script_files(root: &Path, output: &mut Vec<std::path::PathBuf>) {
     }
 }
 
+/// Register every protected source and ciphertext as a Cargo input in every
+/// profile.  Debug binaries intentionally embed the readable `.ps1` sources;
+/// release binaries embed their matching authenticated `.enc` files.  Keeping
+/// both sides in Cargo's dependency graph means the next debug build cannot
+/// accidentally keep an older Cleanup collector after its source changes.
+fn watch_protected_modules() {
+    let mut sources = Vec::new();
+    script_files(Path::new("scripts/core"), &mut sources);
+    script_files(Path::new("scripts/modules"), &mut sources);
+    assert!(
+        !sources.is_empty(),
+        "no protected backend modules were found"
+    );
+    for source_path in sources {
+        println!("cargo:rerun-if-changed={}", source_path.display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            source_path.with_extension("enc").display()
+        );
+    }
+}
+
 fn validate_release_modules(salt_bytes: &[u8]) {
     let key: [u8; 32] = Sha256::digest(salt_bytes).into();
     let cipher = Aes256Gcm::new(&key.into());
@@ -36,8 +58,6 @@ fn validate_release_modules(salt_bytes: &[u8]) {
 
     for source_path in sources {
         let encrypted_path = source_path.with_extension("enc");
-        println!("cargo:rerun-if-changed={}", source_path.display());
-        println!("cargo:rerun-if-changed={}", encrypted_path.display());
         let source = fs::read(&source_path).unwrap_or_else(|error| {
             panic!(
                 "failed to read protected module {}: {error}",
@@ -81,6 +101,11 @@ fn validate_release_modules(salt_bytes: &[u8]) {
 // writes a random salt and matching ciphertext; debug builds do not consume it.
 // The salt is XOR-obfuscated into generated_key.rs so it is not stored verbatim.
 fn main() {
+    // Do this before the profile branch: a Debug build must be invalidated
+    // whenever cleanup.ps1 changes, even though it deliberately does not read
+    // or regenerate the release ciphertext.
+    watch_protected_modules();
+
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_CURRENT");
     println!("cargo:rerun-if-env-changed=WINCMD_PRO_SHA256_PREVIOUS");
 

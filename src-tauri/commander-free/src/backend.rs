@@ -3742,6 +3742,24 @@ mod fleet_forensic_projection_tests {
     }
 
     #[test]
+    fn debug_cleanup_collector_embeds_the_current_source_and_tracks_artifacts() {
+        // Debug is the Fleet development path. It must use the same current
+        // source file that developers edit, never an older release ciphertext.
+        assert_eq!(
+            PRIVACY_CLEANUP,
+            include_bytes!("../scripts/modules/privacy/cleanup.ps1")
+        );
+
+        // build.rs registers both source and ciphertext files regardless of
+        // profile, so Cargo invalidates a subsequent build when either side of
+        // the protected-module pair changes.
+        let build_script = include_str!("../build.rs");
+        assert!(build_script.contains("fn watch_protected_modules()"));
+        assert!(build_script.contains("watch_protected_modules();"));
+        assert!(build_script.contains("source_path.with_extension(\"enc\")"));
+    }
+
+    #[test]
     fn fleet_forensic_projection_keeps_a_bounded_full_detail_contract() {
         let projection = function_body("Get-FleetForensicProjection");
         for category in FLEET_FORENSIC_PROJECTION_REGISTRY {
@@ -3776,6 +3794,10 @@ mod fleet_forensic_projection_tests {
             "a zero-row System Cleanup collector must produce an empty table, not fail binding"
         );
         assert!(envelope.contains("category_id"));
+        assert!(
+            envelope.contains("projection_contract_version = 2"),
+            "Fleet must identify the current full-detail Cleanup projection contract"
+        );
         assert!(envelope.contains("datasets"));
         assert!(projection.contains("Get-DnsCacheEntries"));
         assert!(projection.contains("Get-BrowserFootprints"));

@@ -650,6 +650,11 @@ function New-FleetForensicProjection {
     if ($shown.Count -lt @($Records).Count) { $Truncated = $true }
 
     $projection = [ordered]@{
+        # Fleet rejects earlier projection contracts rather than accepting a
+        # stale packaged collector that could only return permanent redaction
+        # placeholders.  This is a protocol version, not a caller-selected
+        # detail level.
+        projection_contract_version = 2
         source       = 'wincommander.system_cleanup'
         category     = $Category
         category_id  = $Category
