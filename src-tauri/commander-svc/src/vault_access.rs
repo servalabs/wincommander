@@ -1994,6 +1994,77 @@ impl VaultAccessStore {
         Ok(state.status.clone())
     }
 
+    /// Forget one entry from a degraded policy without changing its Windows
+    /// ACL or deterministic local groups. This is an explicit recovery
+    /// operation, not an alternate implementation of [`Self::clear`].
+    ///
+    /// The exact policy identity and version make stale UI state fail closed;
+    /// a healthy policy must use [`Self::clear`], which revokes access it can
+    /// prove it owns. Restricting this escape hatch to `Degraded` keeps an
+    /// administrator from silently bypassing that guarantee.
+    pub fn forget_entry_policy_only(
+        &self,
+        entry_id: &str,
+        expected_policy_id: &str,
+        expected_version: u64,
+    ) -> Result<VaultPolicyStatus, VaultError> {
+        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        let active = state.active.as_ref().ok_or(VaultError::VersionConflict)?;
+        if state.status.validation_state != VaultValidationState::Degraded
+            || expected_policy_id != active.policy.policy_id
+            || expected_version != active.policy.version
+            || entry_id.is_empty()
+        {
+            return Err(VaultError::Validation);
+        }
+        let entry_exists = active
+            .policy
+            .entries
+            .iter()
+            .any(|entry| entry.id == entry_id);
+        let resolved_exists = active.resolved.iter().any(|entry| entry.id == entry_id);
+        if !entry_exists || !resolved_exists {
+            return Err(VaultError::Validation);
+        }
+
+        // Do not snapshot, inspect, modify, or delete any ACL/local group.
+        // The entire point of this recovery is that ACL ownership cannot be
+        // proven. If durable-record deletion fails, preserve the in-memory
+        // policy too so the service never reports a false success.
+        let mut replacement = active.clone();
+        replacement
+            .policy
+            .entries
+            .retain(|entry| entry.id != entry_id);
+        replacement.resolved.retain(|entry| entry.id != entry_id);
+        replacement.policy.expected_previous_version = active.policy.version;
+        replacement.policy.version = active.policy.version.saturating_add(1);
+
+        if replacement.policy.entries.is_empty() {
+            if let Err(error) = self.fs.remove(&self.path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    return Err(VaultError::Persistence);
+                }
+            }
+            state.active = None;
+            state.status = empty_status();
+            return Ok(state.status.clone());
+        }
+
+        let bytes = serde_json::to_vec(&replacement).map_err(|_| VaultError::Persistence)?;
+        self.fs
+            .atomic_write(&self.path, &bytes)
+            .map_err(|_| VaultError::Persistence)?;
+        let status = status_for(
+            &replacement,
+            VaultValidationState::Degraded,
+            VaultEntryResult::AclReadbackFailed,
+        );
+        state.active = Some(replacement);
+        state.status = status.clone();
+        Ok(status)
+    }
+
     /// Authorization is caller-token based.  Eligibility intentionally never
     /// becomes a launch authorization until a closed mount broker exists.
     pub fn authorize_mount(
@@ -3937,6 +4008,33 @@ mod tests {
             Err(VaultError::AclReadback)
         }
     }
+
+    /// Startup cannot prove the current ACL, while a normal decommission
+    /// would be a mutation. The counter proves the recovery path never
+    /// reaches that mutation seam.
+    struct ReadbackFailAcl(Arc<AtomicUsize>);
+    impl AclApplier for ReadbackFailAcl {
+        fn apply_and_verify(&self, _: &VaultAclPlan) -> Result<(), VaultError> {
+            Err(VaultError::AclApply)
+        }
+        fn snapshot(&self, _: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError> {
+            Err(VaultError::AclReadback)
+        }
+        fn restore(&self, _: &[AclSnapshot]) -> Result<(), VaultError> {
+            Ok(())
+        }
+        fn verify_exact(&self, _: &VaultAclPlan) -> Result<(), VaultError> {
+            Err(VaultError::AclReadback)
+        }
+        fn decommission_and_snapshot(
+            &self,
+            _: &VaultAclPlan,
+            _: &str,
+        ) -> Result<Vec<AclSnapshot>, VaultError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(VaultError::AclReadback)
+        }
+    }
     fn policy(version: u64, expected: u64) -> VaultAccessPolicy {
         VaultAccessPolicy {
             schema_version: 1,
@@ -4438,6 +4536,169 @@ mod tests {
             restarted.status().validation_state,
             VaultValidationState::Degraded
         );
+    }
+
+    #[test]
+    fn forget_degraded_entry_removes_only_durable_record_and_leaves_acl_and_groups() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let groups = Groups::default();
+        let memberships = Arc::clone(&groups.0);
+        let installed = VaultAccessStore::open_with_groups(
+            Box::new(Fs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(RecordingAcl::default()),
+            Box::new(groups),
+            PathBuf::from("/policy"),
+        );
+        installed.apply(policy(1, 0), 7).unwrap();
+        assert!(
+            !memberships.lock().unwrap().is_empty(),
+            "the installed policy must own deterministic local groups before recovery"
+        );
+
+        let decommission_calls = Arc::new(AtomicUsize::new(0));
+        let restarted = VaultAccessStore::open_with_groups(
+            Box::new(Fs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(ReadbackFailAcl(Arc::clone(&decommission_calls))),
+            Box::new(Groups(Arc::clone(&memberships))),
+            PathBuf::from("/policy"),
+        );
+        restarted.load_at_startup();
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Degraded
+        );
+
+        let status = restarted
+            .forget_entry_policy_only("shared", "p", 1)
+            .unwrap();
+
+        assert_eq!(status.validation_state, VaultValidationState::NeverApplied);
+        assert!(restarted.policy().is_none());
+        assert_eq!(decommission_calls.load(Ordering::SeqCst), 0);
+        assert!(
+            !memberships.lock().unwrap().is_empty(),
+            "forget-only recovery must leave Windows local groups untouched"
+        );
+        assert!(
+            !files
+                .lock()
+                .unwrap()
+                .contains_key(&PathBuf::from("/policy").join(POLICY_FILE)),
+            "the final forgotten entry removes only the durable policy document"
+        );
+    }
+
+    #[test]
+    fn forget_degraded_entry_preserves_other_durable_entries() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let mut installed_policy = policy(1, 0);
+        let mut retained = installed_policy.entries[0].clone();
+        retained.id = "retained".into();
+        retained.label = "Retained".into();
+        retained.container_path = "C:\\retained-vaults\\retained.hc".into();
+        retained.mount.preferred_letter = Some("K".into());
+        installed_policy.entries.push(retained);
+
+        let installed = VaultAccessStore::open(
+            Box::new(Fs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        installed.apply(installed_policy, 7).unwrap();
+
+        let decommission_calls = Arc::new(AtomicUsize::new(0));
+        let restarted = VaultAccessStore::open(
+            Box::new(Fs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(ReadbackFailAcl(Arc::clone(&decommission_calls))),
+            PathBuf::from("/policy"),
+        );
+        restarted.load_at_startup();
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Degraded
+        );
+
+        let status = restarted
+            .forget_entry_policy_only("shared", "p", 1)
+            .unwrap();
+
+        assert_eq!(status.validation_state, VaultValidationState::Degraded);
+        assert_eq!(status.version, 2);
+        let remaining = restarted.policy().unwrap();
+        assert_eq!(remaining.version, 2);
+        assert_eq!(remaining.expected_previous_version, 1);
+        assert_eq!(remaining.entries.len(), 1);
+        assert_eq!(remaining.entries[0].id, "retained");
+        assert_eq!(decommission_calls.load(Ordering::SeqCst), 0);
+        assert!(files
+            .lock()
+            .unwrap()
+            .contains_key(&PathBuf::from("/policy").join(POLICY_FILE)));
+    }
+
+    #[test]
+    fn forget_entry_rejects_healthy_stale_and_unknown_requests() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = VaultAccessStore::open(
+            Box::new(Fs(files)),
+            Box::new(Resolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        store.apply(policy(1, 0), 7).unwrap();
+
+        assert_eq!(
+            store.forget_entry_policy_only("shared", "p", 1),
+            Err(VaultError::Validation),
+            "a current policy must use normal ACL-revoking removal"
+        );
+        assert_eq!(
+            store.forget_entry_policy_only("missing", "p", 0),
+            Err(VaultError::Validation)
+        );
+        assert_eq!(store.policy().unwrap().version, 1);
+    }
+
+    #[test]
+    fn forget_degraded_entry_keeps_policy_when_record_deletion_fails() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let installed = VaultAccessStore::open(
+            Box::new(Fs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        installed.apply(policy(1, 0), 7).unwrap();
+
+        let restarted = VaultAccessStore::open(
+            Box::new(RemoveFailFs(Arc::clone(&files))),
+            Box::new(Resolver),
+            Box::new(ReadbackFailAcl(Arc::new(AtomicUsize::new(0)))),
+            PathBuf::from("/policy"),
+        );
+        restarted.load_at_startup();
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Degraded
+        );
+
+        assert_eq!(
+            restarted.forget_entry_policy_only("shared", "p", 1),
+            Err(VaultError::Persistence)
+        );
+        assert_eq!(restarted.policy().unwrap().version, 1);
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Degraded
+        );
+        assert!(files
+            .lock()
+            .unwrap()
+            .contains_key(&PathBuf::from("/policy").join(POLICY_FILE)));
     }
 
     #[test]

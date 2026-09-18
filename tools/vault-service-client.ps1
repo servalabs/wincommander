@@ -1,10 +1,14 @@
 # Authenticated acceptance client for the local WinCommander SYSTEM service.
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('get-policy', 'get-status', 'get-access-directory', 'personal-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe', 'apply', 'mount', 'unmount', 'unknown-verb')]
+    [ValidateSet('get-policy', 'get-status', 'get-access-directory', 'personal-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe', 'apply', 'forget-entry-policy-only', 'mount', 'unmount', 'unknown-verb')]
     [string]$Action,
 
     [string]$EntryId,
+
+    [string]$PolicyId,
+
+    [UInt64]$ExpectedVersion,
 
     [string]$ContainerPath,
     [string]$PolicyPath,
@@ -163,6 +167,7 @@ $feature = switch ($Action) {
     'diagnostics' { 'svc.diagnostics.query' }
     'container-probe' { 'svc.vault.get_policy' }
     'apply' { 'svc.vault.apply_policy' }
+    'forget-entry-policy-only' { 'svc.vault.forget_entry_policy_only' }
     'mount' { 'svc.vault.mount' }
     'unmount' { 'svc.vault.unmount' }
     # Fixed acceptance probe only; this does not expose arbitrary service verbs.
@@ -176,6 +181,11 @@ try {
     if ($Action -eq 'apply') {
         if (-not $PolicyPath) { throw '-PolicyPath is required for apply.' }
         $argsValue = Get-Content -LiteralPath $PolicyPath -Raw | ConvertFrom-Json
+    } elseif ($Action -eq 'forget-entry-policy-only') {
+        if ([string]::IsNullOrWhiteSpace($EntryId)) { throw '-EntryId is required for forget-entry-policy-only.' }
+        if ([string]::IsNullOrWhiteSpace($PolicyId)) { throw '-PolicyId is required for forget-entry-policy-only.' }
+        if (-not $PSBoundParameters.ContainsKey('ExpectedVersion')) { throw '-ExpectedVersion is required for forget-entry-policy-only.' }
+        $argsValue = [ordered]@{ entry_id = $EntryId; policy_id = $PolicyId; expected_version = $ExpectedVersion }
     } elseif ($Action -eq 'personal-status') {
         if (-not $ContainerPath) { throw '-ContainerPath is required for personal-status.' }
         $argsValue = [ordered]@{ container_path = $ContainerPath }

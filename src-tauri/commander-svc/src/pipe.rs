@@ -143,7 +143,10 @@ impl AuthenticatedPipePeer {
 fn is_vault_management_verb(verb: &str) -> bool {
     matches!(
         verb,
-        "svc.vault.get_policy" | "svc.vault.get_status" | "svc.vault.apply_policy"
+        "svc.vault.get_policy"
+            | "svc.vault.get_status"
+            | "svc.vault.apply_policy"
+            | "svc.vault.forget_entry_policy_only"
     )
 }
 
@@ -580,6 +583,9 @@ async fn dispatch_verb(
             Ok(serde_json::to_value(vault_access.status()).unwrap_or(serde_json::Value::Null))
         }
         "svc.vault.apply_policy" => handle_vault_apply_and_cleanup(vault_access, vault_mount, args),
+        "svc.vault.forget_entry_policy_only" => {
+            handle_vault_forget_entry_policy_only(vault_access, vault_mount, args)
+        }
         "svc.vault.authorize_mount" => handle_vault_authorize(vault_access, args, peer),
         "svc.vault.mount" if args.get("personal") == Some(&serde_json::Value::Bool(true)) => {
             handle_personal_vault_mount(request_id, vault_access, vault_mount, args, peer).await
@@ -822,6 +828,47 @@ fn handle_vault_apply_and_cleanup(
             )
         })?;
         handle_vault_apply(vault_access, args)
+    })
+}
+
+/// Removes only the selected service-owned policy record after a degraded ACL
+/// application. Active entries are dismounted first so no live mount becomes
+/// orphaned from its durable policy record; this path never invokes the
+/// ACL/group layers, so Windows permissions remain exactly as they were.
+/// Exact policy identity/version input prevents a stale renderer from
+/// forgetting a policy which was subsequently changed by another admin.
+fn handle_vault_forget_entry_policy_only(
+    vault_access: &VaultAccessStore,
+    vault_mount: &VaultMountBroker,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, VerbError> {
+    let request: wincmd_shared::vault_access::VaultForgetEntryPolicyOnlyRequest =
+        serde_json::from_value(args).map_err(|_| {
+            VerbError::new(
+                "vault_validation_failed",
+                "forget policy recovery request is invalid",
+            )
+        })?;
+    vault_mount.with_exclusive_operation(|| {
+        vault_mount.dismount_all_locked(vault_access).map_err(|_| {
+            VerbError::new(
+                "vault_dismount_failed",
+                "active vaults could not be dismounted",
+            )
+        })?;
+        vault_access
+            .forget_entry_policy_only(
+                &request.entry_id,
+                &request.policy_id,
+                request.expected_version,
+            )
+            .and_then(|status| {
+                serde_json::to_value(status)
+                    .map_err(|_| crate::vault_access::VaultError::Persistence)
+            })
+            .map_err(|error| {
+                VerbError::new("vault_forget_policy_failed", vault_error_message(error))
+            })
     })
 }
 
@@ -2902,6 +2949,9 @@ mod tests {
         assert!(is_vault_management_verb("svc.vault.get_policy"));
         assert!(is_vault_management_verb("svc.vault.get_status"));
         assert!(is_vault_management_verb("svc.vault.apply_policy"));
+        assert!(is_vault_management_verb(
+            "svc.vault.forget_entry_policy_only"
+        ));
         // Task B: reconcile_access_groups is gated exactly like
         // apply_policy (Privileged / SYSTEM-Admin only) but is deliberately
         // NOT a "Vault Policy Administrator" capability-token verb — only

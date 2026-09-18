@@ -25,6 +25,19 @@ export default function useVaultAccess<Policy, Status>() {
       }),
     [],
   );
+  // This is deliberately different from applying an empty policy. The
+  // service removes only the selected record and leaves every Windows ACL
+  // untouched.
+  const forgetPolicy = useCallback(
+    (entryId: string, policyId: string, expectedVersion: number, operationId?: string) =>
+      invoke<void>("forget_vault_access_entry_policy_only", {
+        entryId,
+        policyId,
+        expectedVersion,
+        diagnosticOperationId: operationId,
+      }),
+    [],
+  );
   const mountEntry = useCallback(
     (entryId: string, password: string, volumeRole: VaultVolumeRole, hiddenProtectionPassword?: string, operationId = newDiagnosticOperationId("vault")) =>
       invoke<VaultMountEntryResult>("vault_mount_entry", { entryId, password, volumeRole, hiddenProtectionPassword, diagnosticOperationId: operationId }),
@@ -58,7 +71,7 @@ export default function useVaultAccess<Policy, Status>() {
   );
 
   return {
-    getPolicy, getStatus, applyPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities,
+    getPolicy, getStatus, applyPolicy, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities,
     reconcileAccessGroups, getAccessDirectory, saveAccessDirectory,
   };
 }

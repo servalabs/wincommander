@@ -143,6 +143,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const [draftConfirmation, setDraftConfirmation] = useState<"replace" | "discard" | null>(null);
   const [entryRemovalConfirmation, setEntryRemovalConfirmation] = useState<string | null>(null);
   const [policyRemovalConfirmation, setPolicyRemovalConfirmation] = useState(false);
+  const [forgetPolicyConfirmation, setForgetPolicyConfirmation] = useState<string | null>(null);
   const [existingVaultDialogOpen, setExistingVaultDialogOpen] = useState(false);
   const [existingVaultPath, setExistingVaultPath] = useState("");
   const [existingVaultLabel, setExistingVaultLabel] = useState("");
@@ -168,7 +169,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const refreshRevision = useRef(0);
   const saveInProgress = useRef(false);
   const [draftDirty, setDraftDirty] = useState(initialDraft !== null);
-  const { getPolicy, getStatus, applyPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
+  const { getPolicy, getStatus, applyPolicy, forgetPolicy, mountEntry, unmountEntry, listAuthorizedEntries, getCapabilities } = useVaultAccess<VaultAccessPolicy, VaultPolicyStatus>();
   const error = useMemo(() => policy ? validateVaultAccessIntent(policy) : null, [policy]);
 
   const replacePolicy = useCallback((next: VaultAccessPolicy | null, dirty: boolean, basePolicy?: VaultAccessPolicy | null) => {
@@ -521,6 +522,64 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
     void apply(next, true, draftToKeepAfterSave);
   };
 
+  const repairSharedAccess = () => {
+    const saved = draftBaseRef.current;
+    if (!saved) return void showError("Saved Vault settings are not available yet. Refresh this page before repairing shared access.");
+    // Reapply the last service-owned policy, never a local draft. A draft
+    // stays local and is restored after the service has retried Windows ACLs.
+    const draft = policyRef.current;
+    const draftToKeep = dirtyRef.current && draft
+      ? {
+        ...draft,
+        // The repair write advances the saved revision even if Windows still
+        // reports it degraded. Keep a later draft save based on that revision
+        // rather than turning the recovery into a guaranteed conflict.
+        version: saved.version + 1,
+        expected_previous_version: saved.version + 1,
+      }
+      : null;
+    void apply(saved, false, draftToKeep);
+  };
+
+  const forgetSavedPolicy = async () => {
+    if (saveInProgress.current) return;
+    const entryId = forgetPolicyConfirmation;
+    if (!entryId) return;
+    const saved = draftBaseRef.current;
+    if (!saved || !saved.entries.some(entry => entry.id === entryId)) {
+      return void showError("Saved Vault settings changed before this recovery action. Refresh the page and try again.");
+    }
+    saveInProgress.current = true;
+    setSaving(true);
+    const operationId = newDiagnosticOperationId("vault");
+    recordDiagnostic({ operationId, feature: "vault", action: "forget_policy", stage: "requested", lifecycle: "requested", outcome: "started", severity: "warn", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
+    try {
+      // The service owns the safety boundary: this recovery command removes
+      // only this record and explicitly does not change its Windows ACLs.
+      await forgetPolicy(entryId, saved.policy_id, saved.version, operationId);
+      // A local draft still references the old service revision. Discard it
+      // before reading the updated policy so it cannot later recreate the
+      // deliberately forgotten entry.
+      replacePolicy(null, false);
+      setStatus(null);
+      setAuthorizedEntries([]);
+      setMountResults({});
+      setSelectedEntryId(null);
+      setEditorOpen(false);
+      setForgetPolicyConfirmation(null);
+      await refresh(true);
+      recordDiagnostic({ operationId, feature: "vault", action: "forget_policy", stage: "applied", lifecycle: "applied", outcome: "succeeded", severity: "warn", retryability: "never", suggestedNextAction: "none", privacyClass: "local_sensitive" });
+      showSuccess("Vault removed from WinCommander policy. Windows file permissions were left unchanged.", undefined, { operationId });
+    } catch (cause) {
+      const failure = vaultPolicySaveFailure(cause);
+      recordDiagnostic({ operationId, feature: "vault", action: "forget_policy", stage: "applied", lifecycle: "applied", outcome: "failed", errorCode: failure.code, severity: "error", retryability: "manual", suggestedNextAction: "retry", privacyClass: "local_sensitive" });
+      showError("WinCommander could not forget this Vault policy entry. Windows file permissions were not changed.", undefined, { operationId });
+    } finally {
+      saveInProgress.current = false;
+      setSaving(false);
+    }
+  };
+
   const importLegacyDraft = () => {
     const imported = readUntrustedLegacyVaultDraft(directory);
     if (!imported) return void setLegacyNotice("No retired local planner draft was found.");
@@ -779,6 +838,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 const authorized = authorizedById.get(entry.id);
                 const result = status?.entries.find(item => item.id === entry.id)?.result;
                 const mounted = authorized?.mount_state === "mounted";
+                const canRepairSharedAccess = result === "acl_apply_failed" || result === "acl_readback_failed";
                 return <tr className={selectedEntry?.id === entry.id ? "is-selected" : ""} key={entry.id}>
                   <td><strong>{entry.label}</strong></td>
                   <td className="fleet-vault-policy-path" title={entry.container_path}>{entry.container_path}</td>
@@ -791,6 +851,8 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                     <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
                     {mounted ? <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id} onClick={() => void unmountSelectedEntry(entry.id)}>{unmountingEntryId === entry.id ? "Unmounting…" : "Dismount"}</Button>
                       : <Button variant="primary" size="sm" disabled={saving || mountingEntryId === entry.id || !authorized} onClick={() => { if (authorized) openMountPrompt(authorized); }}>{mountingEntryId === entry.id ? "Mounting…" : "Mount"}</Button>}
+                    {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving} onClick={repairSharedAccess}>Repair shared access</Button>}
+                    {canRepairSharedAccess && <Button variant="outline" size="sm" disabled={saving} onClick={() => setForgetPolicyConfirmation(entry.id)}>Forget policy…</Button>}
                     <Button variant="outline" size="sm" onClick={() => requestEntryRemoval(entry.id)}>Remove policy</Button>
                   </div></td>
                 </tr>;
@@ -901,11 +963,12 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           </div>}
           <details className="fleet-vault-advanced">
             <summary>Advanced and recovery</summary>
-            <p>Use these only to import an older planner draft or discard local edits and return to the last settings saved by Windows.</p>
+            <p>Use these only to import an older planner draft, discard local edits, repair a degraded shared-access policy, or remove an unrecoverable policy record without changing Windows permissions.</p>
             <div className="fleet-action-row">
               <Button variant="outline" size="sm" onClick={importLegacyDraft}>Import retired planner as draft</Button>
               {draftDirty && <Button variant="outline" size="sm" onClick={() => void rebaseDraft()}>Rebase draft with saved settings</Button>}
               <Button variant="outline" size="sm" onClick={() => void discardDraftAndReload()}>Discard draft & reload saved</Button>
+              {status?.validation_state === "degraded" && <Button variant="outline" size="sm" onClick={repairSharedAccess}>Repair shared access</Button>}
             </div>
             {legacyNotice && <span className="fleet-field-hint">{legacyNotice}</span>}
           </details>
@@ -1012,6 +1075,21 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <DialogFooter>
             <Button variant="outline" onClick={() => setPolicyRemovalConfirmation(false)}>Cancel</Button>
             <Button variant="primary" onClick={() => { setPolicyRemovalConfirmation(false); void apply(); }}>Remove policy</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={forgetPolicyConfirmation !== null} onOpenChange={open => { if (!open) setForgetPolicyConfirmation(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Forget this degraded Vault policy?</DialogTitle>
+            <DialogDescription>
+              This removes only this Vault&apos;s WinCommander policy record. It does not revoke or repair any Windows file permissions, does not delete the encrypted container, and may leave the current users or groups with their existing Windows access. Other saved Vault policies are not changed. Any unsaved local Vault draft will be discarded. Use Repair shared access first whenever possible.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setForgetPolicyConfirmation(null)}>Cancel</Button>
+            <Button variant="primary" onClick={() => void forgetSavedPolicy()}>Forget policy; leave Windows permissions unchanged</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

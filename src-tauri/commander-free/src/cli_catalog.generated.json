@@ -4813,6 +4813,14 @@
       "frontendReferences": []
     },
     {
+      "id": "backend:Get\u002dFleetForensicProjection",
+      "name": "Get\u002dFleetForensicProjection",
+      "transport": "backend\u002dscript",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": []
+    },
+    {
       "id": "backend:Get\u002dFontCacheInfo",
       "name": "Get\u002dFontCacheInfo",
       "transport": "backend\u002dscript",
@@ -4894,7 +4902,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/useDashboardRadar.ts"
+        "src/hooks/useDashboardRadar.ts",
+        "src/panels/privacy/index.tsx"
       ]
     },
     {
@@ -5179,7 +5188,8 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/components/BackgroundPollers.tsx",
-        "src/panels/privacy/PrivacyShieldCard.tsx"
+        "src/panels/privacy/PrivacyShieldCard.tsx",
+        "src/panels/privacy/index.tsx"
       ]
     },
     {
@@ -5884,7 +5894,6 @@
         "src/components/Sidebar.tsx",
         "src/context/AppContext.tsx",
         "src/hooks/useDependencies.ts",
-        "src/panels/apps/PackageUpdateTools.tsx",
         "src/panels/apps/components/EnginesSection.tsx",
         "src/panels/dashboard/index.tsx",
         "src/panels/mesh/index.tsx"
@@ -7277,7 +7286,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/hooks/machineSettingsClient.ts"
+        "src/hooks/machineSettingsClient.ts",
+        "src/panels/privacy/RdpRedirectionCard.tsx"
       ]
     },
     {
@@ -8607,6 +8617,16 @@
       ]
     },
     {
+      "id": "tauri:forget_vault_access_entry_policy_only",
+      "name": "forget_vault_access_entry_policy_only",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
       "id": "tauri:full_lockdown",
       "name": "full_lockdown",
       "transport": "tauri",
@@ -8713,8 +8733,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/components/DiagnosticEventBridge.tsx",
-        "src/hooks/useDiagnosticCenter.ts"
+        "src/hooks/useDiagnosticCenter.ts",
+        "src/hooks/useDiagnosticsIpc.ts"
       ]
     },
     {
@@ -9061,8 +9081,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/components/DiagnosticEventBridge.tsx",
-        "src/hooks/useDiagnosticCenter.ts"
+        "src/hooks/useDiagnosticCenter.ts",
+        "src/hooks/useDiagnosticsIpc.ts"
       ]
     },
     {
@@ -9202,8 +9222,8 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/components/DiagnosticEventBridge.tsx",
-        "src/hooks/useDiagnosticCenter.ts"
+        "src/hooks/useDiagnosticCenter.ts",
+        "src/hooks/useDiagnosticsIpc.ts"
       ]
     },
     {
@@ -9352,6 +9372,16 @@
     {
       "id": "tauri:get_vault_access_capabilities",
       "name": "get_vault_access_capabilities",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
+      "id": "tauri:get_vault_access_directory",
+      "name": "get_vault_access_directory",
       "transport": "tauri",
       "registered": true,
       "debugOnly": false,
@@ -10057,7 +10087,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
-        "src/lib/diagnostics.ts"
+        "src/hooks/useDiagnosticsIpc.ts"
       ]
     },
     {
@@ -10432,6 +10462,16 @@
       ]
     },
     {
+      "id": "tauri:save_vault_access_directory",
+      "name": "save_vault_access_directory",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useVaultAccess.ts"
+      ]
+    },
+    {
       "id": "tauri:scan_runtimes",
       "name": "scan_runtimes",
       "transport": "tauri",
@@ -10574,6 +10614,16 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/useSearchResultContextMenu.ts"
+      ]
+    },
+    {
+      "id": "tauri:secure_shred",
+      "name": "secure_shred",
+      "transport": "tauri",
+      "registered": true,
+      "debugOnly": false,
+      "frontendReferences": [
+        "src/hooks/useBackend.ts"
       ]
     },
     {

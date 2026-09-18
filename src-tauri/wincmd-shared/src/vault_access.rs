@@ -124,6 +124,19 @@ pub struct VaultPolicyStatus {
     pub entries: Vec<VaultEntryStatus>,
 }
 
+/// Administrator-only recovery request for a policy entry whose prior ACL
+/// application is degraded. The service removes just its durable policy
+/// record; it never changes Windows ACLs, local groups, container files, or
+/// active mounts. The policy identity and version make a stale UI action fail
+/// safely rather than forgetting a newer policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultForgetEntryPolicyOnlyRequest {
+    pub entry_id: String,
+    pub policy_id: String,
+    pub expected_version: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VaultAuthorizeMountRequest {

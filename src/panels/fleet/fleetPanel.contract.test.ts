@@ -167,6 +167,8 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("Allowed users / groups");
     expect(vault).toContain("Manage access");
     expect(vault).toContain("Remove policy");
+    expect(vault).toContain("Repair shared access");
+    expect(vault).toContain("Forget policy; leave Windows permissions unchanged");
     expect(vault).toContain("Add existing Vault");
     expect(vault).toContain("open as openFileDialog");
     expect(vault).toContain("Existing Vault container path");
@@ -189,6 +191,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).not.toContain("invoke(");
     expect(vaultHook).toContain('invoke<Policy | null>("get_vault_access_policy")');
     expect(vaultHook).toContain('invoke<Status>("apply_vault_access_policy"');
+    expect(vaultHook).toContain('invoke<void>("forget_vault_access_entry_policy_only"');
     expect(vaultHook).toContain("diagnosticOperationId: operationId");
     expect(vault).toContain("nextVaultAccessPolicy(policyToApply)");
     expect(vault).toContain("Saved vaults");
@@ -199,6 +202,8 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("Vault policy removed and shared access revoked.");
     expect(vault).toContain("Remove the saved Vault policy?");
     expect(vault).toContain("The encrypted container files are not deleted.");
+    expect(vault).toContain("Forget this degraded Vault policy?");
+    expect(vault).toContain("Windows file permissions were left unchanged.");
     expect(vault).toContain("setAuthorizedEntries([])");
     expect(vault).toContain("const current = await getPolicy();");
     expect(vaultPresentation).toContain("needs to refresh this older Vault status");

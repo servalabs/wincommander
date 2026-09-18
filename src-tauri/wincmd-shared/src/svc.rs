@@ -103,6 +103,7 @@ pub fn is_known_verb(feature_id: &str) -> bool {
             | "svc.vault.get_policy"
             | "svc.vault.get_status"
             | "svc.vault.apply_policy"
+            | "svc.vault.forget_entry_policy_only"
             | "svc.vault.authorize_mount"
             | "svc.vault.mount"
             | "svc.vault.create_personal"
@@ -339,7 +340,11 @@ pub fn classify_verb(feature_id: &str) -> CapabilityClass {
         // table.
         "svc.vault.reconcile_access_groups"
         | "svc.vault.get_access_directory"
-        | "svc.vault.save_access_directory" => CapabilityClass::Privileged,
+        | "svc.vault.save_access_directory"
+        // This is an administrator recovery action. It removes only the
+        // service-owned Vault policy record; it deliberately does not alter
+        // any Windows ACL, group, container, or mount state.
+        | "svc.vault.forget_entry_policy_only" => CapabilityClass::Privileged,
 
         // All other verbs — including mutations, dispatches, fleet toggles,
         // and any future verb not yet added above — are Privileged.
@@ -459,6 +464,7 @@ mod tests {
             "svc.vault.get_policy",
             "svc.vault.get_status",
             "svc.vault.apply_policy",
+            "svc.vault.forget_entry_policy_only",
             "svc.vault.authorize_mount",
             "svc.vault.mount",
             "svc.vault.create_personal",

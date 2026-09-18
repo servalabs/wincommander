@@ -16,6 +16,7 @@ use zeroize::Zeroize;
 
 const GET_POLICY: &str = "svc.vault.get_policy";
 const APPLY_POLICY: &str = "svc.vault.apply_policy";
+const FORGET_ENTRY_POLICY_ONLY: &str = "svc.vault.forget_entry_policy_only";
 const GET_STATUS: &str = "svc.vault.get_status";
 const UNMOUNT: &str = "svc.vault.unmount";
 const LIST_AUTHORIZED: &str = "svc.vault.list_authorized";
@@ -130,6 +131,18 @@ fn vault_result_failed(result: &Value) -> bool {
         .is_some_and(|state| state == "failed" || state == "denied")
 }
 
+fn forget_entry_policy_only_payload(
+    entry_id: String,
+    policy_id: String,
+    expected_version: u64,
+) -> Value {
+    json!({
+        "entry_id": entry_id,
+        "policy_id": policy_id,
+        "expected_version": expected_version,
+    })
+}
+
 #[tauri::command]
 pub async fn get_vault_access_policy() -> Result<Value, String> {
     crate::svc_client::call(GET_POLICY, json!({})).await
@@ -180,6 +193,69 @@ pub async fn apply_vault_access_policy(
             record_vault_event(
                 &operation_id,
                 "apply_policy",
+                "applied",
+                DiagnosticLifecycle::Applied,
+                DiagnosticOutcome::Failed,
+                DiagnosticSeverity::Error,
+                Some(code),
+                retryability,
+                next,
+                Some(started),
+            );
+        }
+    }
+    result
+}
+
+/// Removes one service-owned Vault policy record without changing any Windows
+/// ACL, local-group membership, or container. The service first dismounts
+/// active Vaults to avoid leaving an orphaned live mount. This is deliberately
+/// a degraded-policy recovery action, not an alternative access revocation.
+#[tauri::command]
+pub async fn forget_vault_access_entry_policy_only(
+    entry_id: String,
+    policy_id: String,
+    expected_version: u64,
+    diagnostic_operation_id: Option<String>,
+) -> Result<Value, String> {
+    let operation_id = requested_operation_id(diagnostic_operation_id, "forget_entry_policy_only");
+    let started = Instant::now();
+    record_vault_event(
+        &operation_id,
+        "forget_entry_policy_only",
+        "requested",
+        DiagnosticLifecycle::Requested,
+        DiagnosticOutcome::Started,
+        DiagnosticSeverity::Info,
+        None,
+        DiagnosticRetryability::Never,
+        "none",
+        None,
+    );
+    let result = crate::svc_client::call_with_diagnostic_operation(
+        FORGET_ENTRY_POLICY_ONLY,
+        forget_entry_policy_only_payload(entry_id, policy_id, expected_version),
+        Some(operation_id.clone()),
+    )
+    .await;
+    match &result {
+        Ok(_) => record_vault_event(
+            &operation_id,
+            "forget_entry_policy_only",
+            "applied",
+            DiagnosticLifecycle::Applied,
+            DiagnosticOutcome::Succeeded,
+            DiagnosticSeverity::Info,
+            None,
+            DiagnosticRetryability::Never,
+            "windows_permissions_unchanged",
+            Some(started),
+        ),
+        Err(error) => {
+            let (code, retryability, next) = vault_failure_code("forget_entry_policy_only", error);
+            record_vault_event(
+                &operation_id,
+                "forget_entry_policy_only",
                 "applied",
                 DiagnosticLifecycle::Applied,
                 DiagnosticOutcome::Failed,
@@ -447,6 +523,10 @@ mod tests {
     fn vault_verbs_stay_on_the_frozen_service_wire() {
         assert_eq!(GET_POLICY, "svc.vault.get_policy");
         assert_eq!(APPLY_POLICY, "svc.vault.apply_policy");
+        assert_eq!(
+            FORGET_ENTRY_POLICY_ONLY,
+            "svc.vault.forget_entry_policy_only"
+        );
         assert_eq!(GET_STATUS, "svc.vault.get_status");
         assert_eq!(UNMOUNT, "svc.vault.unmount");
         assert_eq!(LIST_AUTHORIZED, "svc.vault.list_authorized");
@@ -455,6 +535,18 @@ mod tests {
         assert_eq!(GET_ACCESS_DIRECTORY, "svc.vault.get_access_directory");
         assert_eq!(SAVE_ACCESS_DIRECTORY, "svc.vault.save_access_directory");
         assert_eq!(QUERY_SERVICE_DIAGNOSTICS, "svc.diagnostics.query");
+    }
+
+    #[test]
+    fn forget_entry_recovery_payload_is_exact_and_has_no_acl_fields() {
+        assert_eq!(
+            forget_entry_policy_only_payload("entry-1".into(), "policy-1".into(), 7),
+            json!({
+                "entry_id": "entry-1",
+                "policy_id": "policy-1",
+                "expected_version": 7,
+            })
+        );
     }
 
     #[test]

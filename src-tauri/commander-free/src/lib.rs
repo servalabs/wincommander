@@ -2755,6 +2755,7 @@ pub fn run() {
             settings::read_settings_import_file,
             vault_access::get_vault_access_policy,
             vault_access::apply_vault_access_policy,
+            vault_access::forget_vault_access_entry_policy_only,
             vault_access::get_vault_access_status,
             vault_access::vault_mount_entry,
             vault_access::get_service_diagnostic_summaries,
