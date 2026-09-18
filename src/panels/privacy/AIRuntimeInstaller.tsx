@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, ProgressBar, Icon, Callout, Collapse } from "@/components/ui/bp";
 import useBackend from '../../hooks/useBackend';
 import { showError } from '../../utils/toast';
@@ -56,11 +56,20 @@ export default function AIRuntimeInstaller({ onInstalled }: AIRuntimeInstallerPr
     const [error, setError] = useState<string | null>(null);
     const [detailsOpen, setDetailsOpen] = useState(false);
 
+    // useBackend intentionally returns fresh function identities as its
+    // provider re-renders. Keeping those functions in refs makes this status
+    // check a single, explicit lifecycle operation instead of repeatedly
+    // restarting it (and briefly hiding/showing this panel) on every render.
+    const getAIDependenciesStatusRef = useRef(getAIDependenciesStatus);
+    const onInstalledRef = useRef(onInstalled);
+    getAIDependenciesStatusRef.current = getAIDependenciesStatus;
+    onInstalledRef.current = onInstalled;
+
     const fetchStatus = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
-            const res = await getAIDependenciesStatus();
+            const res = await getAIDependenciesStatusRef.current();
             if (res.success && res.data && res.data.details) {
                 const mappedDeps: Dependency[] = res.data.details.map((d: any) => ({
                     name: d.name,
@@ -71,7 +80,7 @@ export default function AIRuntimeInstaller({ onInstalled }: AIRuntimeInstallerPr
 
                 const missing = mappedDeps.filter(d => d.status === 'missing');
                 if (missing.length === 0) {
-                    onInstalled();
+                    onInstalledRef.current();
                     return true;
                 }
                 return false;
@@ -88,7 +97,7 @@ export default function AIRuntimeInstaller({ onInstalled }: AIRuntimeInstallerPr
             setLoading(false);
         }
         return false;
-    }, [getAIDependenciesStatus, onInstalled]);
+    }, []);
 
     useEffect(() => {
         fetchStatus();
@@ -145,7 +154,7 @@ export default function AIRuntimeInstaller({ onInstalled }: AIRuntimeInstallerPr
     const missingCount = dependencies.filter(d => d.status === 'missing').length;
     if (missingCount === 0 && !installing) {
         // Double check onInstalled call to ensure we hide if missed
-        setTimeout(onInstalled, 0);
+        setTimeout(() => onInstalledRef.current(), 0);
         return null;
     }
 

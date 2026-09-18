@@ -59,6 +59,8 @@ describe("Privacy deep-state and responsive contracts", () => {
     expect(source).toContain("repeat(auto-fit,minmax(min(100%,160px),1fr))");
     expect(source).toContain('aria-label="How Privacy Gaze Shield works"');
     expect(source).toContain('aria-label="Upgrade Privacy Shield for unlimited time"');
+    expect(source).toContain('aria-controls="privacy-shield-ai-runtime"');
+    expect(source).toContain('const [showAiRuntimeDetails, setShowAiRuntimeDetails] = useState(false);');
     expect(source).toContain('const stateUnknown = privacyShieldRunning === null || cameraAvailable === null');
     expect(source).toContain('text="Refresh status"');
     expect(source).toContain('notification sent');

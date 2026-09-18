@@ -118,6 +118,10 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
     // toggle covers Auto start, Camera Seen, Record Proof, Detection Mode,
     // and the processing-parameter sliders).
     const [showAdvanced, setShowAdvanced] = useState(false);
+    // Runtime setup is useful when needed, but it must not reflow the whole
+    // Privacy Shield card while its dependency probe settles. Keep it as an
+    // explicit disclosure so its status remains in one predictable place.
+    const [showAiRuntimeDetails, setShowAiRuntimeDetails] = useState(false);
 
     const openShieldPaywall = useCallback(() => {
         window.dispatchEvent(new CustomEvent("license-gate-open", {
@@ -734,8 +738,34 @@ export default function PrivacyShieldCard({ extraSlot }: PrivacyShieldCardProps 
                     </div>
                 </div>
 
-                {cameraAvailable === true && aiRuntimeInstalled === false && (
-                    <AIRuntimeInstaller onInstalled={() => { setAiRuntimeInstalled(true); refreshPrivacy(); }} />
+                {cameraAvailable === true && (
+                    <div className="rounded-md border border-[var(--shield-inner-border)] bg-[var(--shield-inner-bg)] px-3 py-2">
+                        <button
+                            type="button"
+                            className="flex w-full items-center justify-between gap-3 text-left hover:opacity-80 transition-opacity"
+                            onClick={() => setShowAiRuntimeDetails(open => !open)}
+                            aria-expanded={showAiRuntimeDetails}
+                            aria-controls="privacy-shield-ai-runtime"
+                        >
+                            <span className="flex items-center gap-2">
+                                <Icon icon="predictive-analysis" size={13} className="text-[var(--color-accent)]" />
+                                <span className="text-xs font-medium text-[var(--shield-text-primary)]">AI runtime</span>
+                                <span className={`text-[10px] ${aiRuntimeInstalled === true ? "text-[var(--color-success)]" : aiRuntimeInstalled === false ? "text-[var(--color-warning)]" : "text-[var(--shield-text-muted)]"}`}>
+                                    {aiRuntimeInstalled === true ? "Ready" : aiRuntimeInstalled === false ? "Setup needed" : "Checking"}
+                                </span>
+                            </span>
+                            <Icon icon={showAiRuntimeDetails ? "chevron-up" : "chevron-down"} size={12} color="var(--shield-text-muted)" />
+                        </button>
+                        {showAiRuntimeDetails && (
+                            <div id="privacy-shield-ai-runtime" className="pt-3">
+                                {aiRuntimeInstalled === true ? (
+                                    <p className="text-xs text-[var(--shield-text-subtle)]">The on-device AI runtime is ready for Privacy Shield.</p>
+                                ) : (
+                                    <AIRuntimeInstaller onInstalled={() => { setAiRuntimeInstalled(true); refreshPrivacy(); }} />
+                                )}
+                            </div>
+                        )}
+                    </div>
                 )}
 
                 {cameraAvailable !== false && (
