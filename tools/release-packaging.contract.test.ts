@@ -19,6 +19,10 @@ const releaseTool = readFileSync("tools/build-tauri-release.ts", "utf8");
 const manifest = readFileSync("src-tauri/commander-free/app.manifest", "utf8");
 const buildScript = readFileSync("src-tauri/commander-free/build.rs", "utf8");
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
+const legacyLaunchMigration = readFileSync(
+  "src-tauri/commander-free/nsis/migrate-legacy-user-launches.ps1",
+  "utf8",
+);
 
 describe("Free machine-wide release packaging", () => {
   test("uses a shared Program Files install and a product-specific Start Menu location", () => {
@@ -53,10 +57,13 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain("installer-lifecycle.log");
     expect(hooks).toContain('nsExec::ExecToStack \'sc.exe query ${WC_SERVICE_NAME}\'');
     expect(hooks).not.toContain("cmd.exe /c sc query ${WC_SERVICE_NAME} ^| findstr");
-    expect(hooks).toContain('ReadEnvStr $R6 "LOCALAPPDATA"');
-    expect(hooks).toContain('Delete "$R6\\WinCommander\\wincommander-free.exe"');
-    expect(hooks).toContain('Delete "$R6\\WinCommander\\uninstall.exe"');
-    expect(hooks).not.toContain('RMDir /r "$R6\\WinCommander"');
+    expect(hooks).toContain("WC_LEGACY_LAUNCH_MIGRATION");
+    expect(hooks).toContain("wincommander-migrate-legacy-user-launches.ps1");
+    expect(hooks).toContain("-SharedExecutable");
+    expect(legacyLaunchMigration).toContain("ProfileList");
+    expect(legacyLaunchMigration).toContain("wincommander-free.exe");
+    expect(legacyLaunchMigration).toContain("WinCommander legacy launch migration");
+    expect(legacyLaunchMigration).not.toContain("Remove-Item -LiteralPath $legacyRoot");
     expect(hooks).not.toContain("WC_PRO_PAYLOAD");
     expect(hooks).not.toContain("WC_PRO_EXE");
     expect(hooks).toContain('net.exe localgroup "WinCommander Vault Policy Administrators" /add');

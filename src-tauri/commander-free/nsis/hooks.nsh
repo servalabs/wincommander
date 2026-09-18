@@ -11,6 +11,7 @@ ${Using:StrFunc} StrStr
 !define WC_SERVICE_PAYLOAD "$INSTDIR\resources\wincommander-svc.exe"
 !define WC_SERVICE_EXE "$INSTDIR\wincommander-svc.exe"
 !define WC_LIFECYCLE_DIAGNOSTIC_LOG "$INSTDIR\installer-lifecycle.log"
+!define WC_LEGACY_LAUNCH_MIGRATION "${__FILEDIR__}\migrate-legacy-user-launches.ps1"
 
 !macro WC_WRITE_LIFECYCLE_DIAGNOSTIC stage exit detail
   FileOpen $R9 "${WC_LIFECYCLE_DIAGNOSTIC_LOG}" a
@@ -103,18 +104,18 @@ ${Using:StrFunc} StrStr
     Abort "WinCommander could not start its machine service."
   ${EndIf}
 
-  ; Releases before the per-machine installer could leave an older executable
-  ; under the installing account's LocalAppData. It can win when an old
-  ; personal shortcut is used. Remove only those obsolete launch files: this
-  ; directory also owns that user's settings and caches, which must survive a
-  ; machine-wide update. Other profiles are intentionally not removed here;
-  ; their data belongs to those users and an installer must not erase it.
-  ReadEnvStr $R6 "LOCALAPPDATA"
-  ${If} $R6 != ""
-    Delete "$R6\WinCommander\wincommander-free.exe"
-    Delete "$R6\WinCommander\uninstall.exe"
+  ; Move every existing local profile away from the obsolete per-user binary.
+  ; This is an elevated, machine-wide migration: it changes only shortcuts and
+  ; old executable payloads, and never removes profile-owned settings/caches.
+  InitPluginsDir
+  File /oname=$PLUGINSDIR\wincommander-migrate-legacy-user-launches.ps1 "${WC_LEGACY_LAUNCH_MIGRATION}"
+  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-migrate-legacy-user-launches.ps1" -SharedExecutable "$INSTDIR\wincommander-free.exe"'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "legacy-launch-migration" "$0" "$1"
+    DetailPrint "Warning: WinCommander could not migrate every legacy user shortcut."
   ${EndIf}
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
 
   ; Vault-policy changes are authorized by a dedicated local group, not by
   ; whether the desktop process happened to be elevated. Give the installing
