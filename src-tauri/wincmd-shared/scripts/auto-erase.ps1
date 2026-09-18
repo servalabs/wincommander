@@ -617,7 +617,8 @@ function ConvertTo-AutoEraseTaskArgument {
         [string]$CategoryId,
         [int]$IntervalMinutes,
         [string]$Script,
-        [string]$ExecutionScope = 'default'
+        [string]$ExecutionScope = 'default',
+        [string]$FirstDueUtc
     )
     # Every scheduled task invocation goes through a small queue/catch-up wrapper:
     #   - one global mutex makes categories run sequentially instead of all at once
@@ -631,24 +632,29 @@ function ConvertTo-AutoEraseTaskArgument {
 `$categoryId = '$categoryLiteral'
 `$scopeKey = '$scopeLiteral'
 `$intervalMinutes = $IntervalMinutes
+`$firstDueUtc = '$FirstDueUtc'
 `$stateRoot = if (`$scopeKey -eq 'system') {
     Join-Path `$env:ProgramData 'WinCommander\auto-erase\state'
 } else {
     Join-Path `$env:LOCALAPPDATA 'WinCommander\auto-erase'
 }
 New-Item -ItemType Directory -Path `$stateRoot -Force | Out-Null
-`$marker = Join-Path `$stateRoot ("`$categoryId.`$scopeKey.last")
+`$marker = Join-Path `$stateRoot ("`$categoryId.`$scopeKey.state.json")
+`$legacyMarker = Join-Path `$stateRoot ("`$categoryId.`$scopeKey.last")
 `$now = Get-Date
-`$due = `$true
+`$lastSuccess = `$null
+`$nextDue = [DateTime]::Parse(`$firstDueUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
 if (Test-Path -LiteralPath `$marker) {
     try {
-        `$lastRaw = [System.IO.File]::ReadAllText(`$marker).Trim()
-        `$last = [DateTime]::Parse(`$lastRaw, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
-        `$due = ((`$now.ToUniversalTime() - `$last.ToUniversalTime()).TotalMinutes -ge `$intervalMinutes)
-    } catch {
-        `$due = `$true
-    }
+        `$state = Get-Content -LiteralPath `$marker -Raw | ConvertFrom-Json
+        if (`$state.lastSuccessfulUtc) { `$lastSuccess = [DateTime]::Parse([string]`$state.lastSuccessfulUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) }
+        elseif (`$state.nextDueUtc) { `$nextDue = [DateTime]::Parse([string]`$state.nextDueUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) }
+    } catch {}
+} elseif (Test-Path -LiteralPath `$legacyMarker) {
+    try { `$lastSuccess = [DateTime]::Parse(([System.IO.File]::ReadAllText(`$legacyMarker).Trim()), [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) } catch {}
 }
+if (`$lastSuccess) { `$nextDue = `$lastSuccess.ToUniversalTime().AddMinutes(`$intervalMinutes) }
+`$due = (`$now.ToUniversalTime() -ge `$nextDue.ToUniversalTime())
 if (`$due) {
     `$mutex = New-Object System.Threading.Mutex(`$false, 'Global\WinCommanderAutoEraseQueue')
     `$hasLock = `$false
@@ -658,13 +664,13 @@ if (`$due) {
             `$now = Get-Date
             if (Test-Path -LiteralPath `$marker) {
                 try {
-                    `$lastRaw = [System.IO.File]::ReadAllText(`$marker).Trim()
-                    `$last = [DateTime]::Parse(`$lastRaw, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
-                    `$due = ((`$now.ToUniversalTime() - `$last.ToUniversalTime()).TotalMinutes -ge `$intervalMinutes)
-                } catch {
-                    `$due = `$true
-                }
+                    `$state = Get-Content -LiteralPath `$marker -Raw | ConvertFrom-Json
+                    if (`$state.lastSuccessfulUtc) { `$lastSuccess = [DateTime]::Parse([string]`$state.lastSuccessfulUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) }
+                    elseif (`$state.nextDueUtc) { `$nextDue = [DateTime]::Parse([string]`$state.nextDueUtc, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind) }
+                } catch {}
             }
+            if (`$lastSuccess) { `$nextDue = `$lastSuccess.ToUniversalTime().AddMinutes(`$intervalMinutes) }
+            `$due = (`$now.ToUniversalTime() -ge `$nextDue.ToUniversalTime())
             if (`$due) {
 __AUTO_ERASE_BODY__
                 # Record a truthful outcome (not just "it ran"): how many files
@@ -672,10 +678,14 @@ __AUTO_ERASE_BODY__
                 # many could not be cleared. Consumed by the UI/telemetry so a
                 # clear can never silently report success while leaving traces.
                 try {
-                    `$res = @{ ts = (Get-Date).ToUniversalTime().ToString('o'); removed = `$script:AutoEraseRemoved; deferred = `$script:AutoEraseDeferred; failed = `$script:AutoEraseFailed }
+                    `$success = (`$script:AutoEraseFailed -eq 0)
+                    `$completedUtc = (Get-Date).ToUniversalTime()
+                    if (`$success) { `$lastSuccess = `$completedUtc }
+                    `$nextDue = if (`$lastSuccess) { `$lastSuccess.AddMinutes(`$intervalMinutes) } else { `$completedUtc.AddMinutes(`$intervalMinutes) }
+                    `$res = @{ attemptedUtc = `$completedUtc.ToString('o'); lastSuccessfulUtc = if (`$lastSuccess) { `$lastSuccess.ToString('o') } else { `$null }; nextDueUtc = `$nextDue.ToString('o'); intervalMinutes = `$intervalMinutes; success = `$success; removed = `$script:AutoEraseRemoved; deferred = `$script:AutoEraseDeferred; failed = `$script:AutoEraseFailed }
                     [System.IO.File]::WriteAllText((Join-Path `$stateRoot ("`$categoryId.`$scopeKey.result.json")), (`$res | ConvertTo-Json -Compress))
+                    [System.IO.File]::WriteAllText(`$marker, (`$res | ConvertTo-Json -Compress))
                 } catch {}
-                [System.IO.File]::WriteAllText(`$marker, (Get-Date).ToUniversalTime().ToString('o'))
             }
         }
     } finally {
@@ -763,7 +773,8 @@ function Set-AutoEraseSchedule {
 
         $eraseScript = $script:AutoEraseScripts[$CategoryId]
         $scope = if ($RunAsSystem) { 'system' } else { "user-$TargetUser" }
-        $argument = ConvertTo-AutoEraseTaskArgument -CategoryId $CategoryId -IntervalMinutes $IntervalMinutes -Script $eraseScript -ExecutionScope $scope
+        $firstDueUtc = [DateTime]::UtcNow.AddMinutes($IntervalMinutes).ToString('o')
+        $argument = ConvertTo-AutoEraseTaskArgument -CategoryId $CategoryId -IntervalMinutes $IntervalMinutes -Script $eraseScript -ExecutionScope $scope -FirstDueUtc $firstDueUtc
 
         $action  = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument
 
@@ -781,7 +792,7 @@ function Set-AutoEraseSchedule {
         #      catch-up semantics. Uses -AtStartup for SYSTEM tasks (boot
         #      time, no user session needed) and -AtLogOn for S4U tasks
         #      (user-context, fires on each interactive logon of TargetUser).
-        $triggerInterval = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+        $triggerInterval = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes($IntervalMinutes) `
                             -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
                             -RepetitionDuration (New-TimeSpan -Days 9999)
         if ($RunAsSystem) {
@@ -805,9 +816,9 @@ function Set-AutoEraseSchedule {
 
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
         $description = if ($ManagedByAutoSet) {
-            'WinCommander Auto-set scheduled wipe'
+            'WinCommander Auto-set scheduled wipe v2'
         } else {
-            'WinCommander scheduled wipe'
+            'WinCommander scheduled wipe v2'
         }
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers `
                                -Principal $principal -Settings $settings -Description $description -Force | Out-Null
@@ -927,6 +938,19 @@ function Remove-AutoEraseSchedule {
         # Remove current-name task and legacy System_AutoErase_* task if still present
         Unregister-ScheduledTask -TaskName "WinCommander_AutoErase_$CategoryId" -Confirm:$false -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName "System_AutoErase_$CategoryId" -Confirm:$false -ErrorAction SilentlyContinue
+        # A disabled schedule must not leave a catch-up marker behind. Limit
+        # cleanup to this caller's base task plus the system scope; explicitly
+        # selected other-user schedules have their own remove command/state.
+        $scopeKeys = @("user-$env:USERNAME", 'system')
+        foreach ($root in @(
+            (Join-Path $env:LOCALAPPDATA 'WinCommander\auto-erase'),
+            (Join-Path $env:ProgramData 'WinCommander\auto-erase\state')
+        )) {
+            foreach ($scopeKey in $scopeKeys) {
+                Remove-Item -LiteralPath (Join-Path $root "$CategoryId.$scopeKey.state.json") -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath (Join-Path $root "$CategoryId.$scopeKey.last") -Force -ErrorAction SilentlyContinue
+            }
+        }
         @{ status = 'disabled'; categoryId = $CategoryId }
     }
     catch {
@@ -984,7 +1008,7 @@ function Get-AutoEraseSchedules {
                 intervalMinutes = $minutes
                 targetUser      = $targetUser
                 ownerAccount    = $ownerAccount
-                managedByAutoSet = ($t.Description -eq 'WinCommander Auto-set scheduled wipe')
+                managedByAutoSet = ($t.Description -like 'WinCommander Auto-set scheduled wipe*')
                 lastRun         = if ($info) { [string]$info.LastRunTime } else { $null }
                 nextRun         = if ($info) { [string]$info.NextRunTime } else { $null }
                 lastResult      = if ($info) { $info.LastTaskResult } else { $null }
@@ -1055,7 +1079,10 @@ function Invoke-AutoEraseMigration {
         Where-Object { $_.TaskName -like "$newPrefix*" })
     foreach ($t in $currentTasks) {
         $actionArgs = [string](@($t.Actions)[0].Arguments)
-        if ($actionArgs -like '*WinCommander\auto-erase\scripts*') { continue }
+        # v2 uses durable due-state markers. Re-register older script-backed
+        # tasks as well so existing schedules receive missed-interval catch-up
+        # without changing their task name, interval, or principal.
+        if ($actionArgs -like '*WinCommander\auto-erase\scripts*' -and $t.Description -like 'WinCommander*scheduled wipe v2') { continue }
 
         $tail = $t.TaskName.Substring($newPrefix.Length)
         $catId = $null

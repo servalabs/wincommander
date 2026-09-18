@@ -25,6 +25,15 @@ describe("Auto-set scheduled wipes frontend contract", () => {
     expect(scan).toContain("await refreshSchedules()");
   });
 
+  test("renders a cached schedule snapshot before silently verifying Task Scheduler", async () => {
+    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text();
+
+    expect(scan).toContain("SCHEDULE_CACHE_KEY");
+    expect(scan).toContain("useState<Record<string, number>>(readScheduleCache)");
+    expect(scan).toContain("void refreshSchedules()");
+    expect(scan).toContain("writeScheduleCache(map)");
+  });
+
   test("reports every outcome, including backend failures", async () => {
     const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text();
 

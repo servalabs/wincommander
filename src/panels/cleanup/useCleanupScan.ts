@@ -15,6 +15,28 @@ const getSchedulerCategoryId = (categoryId: string): string =>
         .find(c => c.id === categoryId)
         ?.schedulerCategoryId ?? categoryId;
 
+const SCHEDULE_CACHE_KEY = "wincommander.cleanup.schedule-cache.v1";
+
+function readScheduleCache(): Record<string, number> {
+    if (typeof window === "undefined") return {};
+    try {
+        const cached = JSON.parse(window.localStorage.getItem(SCHEDULE_CACHE_KEY) ?? "{}") as { schedules?: unknown };
+        if (!cached.schedules || typeof cached.schedules !== "object" || Array.isArray(cached.schedules)) return {};
+        const schedules: Record<string, number> = {};
+        for (const [id, minutes] of Object.entries(cached.schedules as Record<string, unknown>)) {
+            if (typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0) schedules[id] = minutes;
+        }
+        return schedules;
+    } catch {
+        return {};
+    }
+}
+
+function writeScheduleCache(schedules: Record<string, number>): void {
+    if (typeof window === "undefined") return;
+    try { window.localStorage.setItem(SCHEDULE_CACHE_KEY, JSON.stringify({ schedules, checkedAt: new Date().toISOString() })); } catch {}
+}
+
 // ── Module-level cache ───────────────────────────────────────────────
 // Persists loaded card data across panel unmount/remount so navigating
 // away and back shows results instantly without re-spawning PowerShell.
@@ -454,7 +476,9 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
     // The set of supported categoryIds is hardcoded in
     // cleanupCategories.ts (SUPPORTED_AUTOERASE_IDS) so the clock icon
     // appears instantly — no async roundtrip just to decide visibility.
-    const [schedulesById, setSchedulesById] = useState<Record<string, number>>({});
+    // Render the last verified snapshot immediately. Task Scheduler remains
+    // authoritative and replaces this cache silently after panel startup.
+    const [schedulesById, setSchedulesById] = useState<Record<string, number>>(readScheduleCache);
     const [autoSetScheduleIds, setAutoSetScheduleIds] = useState<Set<string>>(new Set());
     const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
     const [autoSetSchedulesBusy, setAutoSetSchedulesBusy] = useState(false);
@@ -476,6 +500,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 }
             }
             setSchedulesById(map);
+            writeScheduleCache(map);
             setAutoSetScheduleIds(autoSetIds);
         }
     };
@@ -528,7 +553,11 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
             const schedulerId = getSchedulerCategoryId(categoryId);
             const res = await setAutoEraseSchedule(schedulerId, minutes, runAsSystem);
             if (res.success) {
-                setSchedulesById(prev => ({ ...prev, [categoryId]: minutes }));
+                setSchedulesById(prev => {
+                    const next = { ...prev, [categoryId]: minutes };
+                    writeScheduleCache(next);
+                    return next;
+                });
                 showSuccess(`Auto-clean scheduled every ${minutes} min for ${categoryId}`);
                 return true;
             } else {
@@ -549,6 +578,7 @@ export function useCleanupScan({ schedulesEnabled, entitlementsReady, migrationE
                 setSchedulesById(prev => {
                     const next = { ...prev };
                     delete next[categoryId];
+                    writeScheduleCache(next);
                     return next;
                 });
                 showSuccess(`Auto-clean turned off for ${categoryId}`);
