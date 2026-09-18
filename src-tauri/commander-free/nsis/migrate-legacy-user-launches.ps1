@@ -64,6 +64,21 @@ foreach ($profile in $profiles) {
             $summary.failures++
         }
     }
+
+    # These folders belong to the old per-user application payload. The shared
+    # Program Files build has its own signed resources/scripts, while current
+    # per-user settings and telemetry live in different paths (store, logs,
+    # file-search, and the encrypted *.dat files) and are intentionally kept.
+    foreach ($legacyDirectory in @('resources', 'scripts')) {
+        $payloadPath = Join-Path $legacyRoot $legacyDirectory
+        if (-not (Test-Path -LiteralPath $payloadPath -PathType Container)) { continue }
+        try {
+            Remove-Item -LiteralPath $payloadPath -Recurse -Force -ErrorAction Stop
+            $summary.staleFilesRemoved++
+        } catch {
+            $summary.failures++
+        }
+    }
 }
 
 "WinCommander legacy launch migration: profiles=$($summary.profiles) shortcuts=$($summary.shortcutsUpdated) files=$($summary.staleFilesRemoved) failures=$($summary.failures)"
