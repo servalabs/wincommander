@@ -125,7 +125,9 @@ ${Using:StrFunc} StrStr
   ${If} $0 != 0
   ${AndIf} $0 != 1379
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "vault-policy-group-create" "$0" "$1"
-    Abort "WinCommander could not create the Vault Policy Administrators group."
+    ; Vault policy delegation is optional. A domain/local policy may forbid
+    ; local-group creation, but that must never cancel a normal app update.
+    DetailPrint "Warning: Vault policy administrator group was not created."
   ${EndIf}
   ; `$USERNAME` is not an NSIS variable. Let cmd.exe expand its own environment
   ; variable, otherwise `net localgroup` receives the literal text "$USERNAME"
@@ -136,7 +138,7 @@ ${Using:StrFunc} StrStr
   ${If} $0 != 0
   ${AndIf} $0 != 1378
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "vault-policy-group-grant" "$0" "$1"
-    Abort "WinCommander could not grant Vault policy administration to the installing account."
+    DetailPrint "Warning: Vault policy administration was not granted to this account."
   ${EndIf}
 !macroend
 
