@@ -2981,6 +2981,12 @@ pub fn run() {
         .run(context)
         .expect("error while running tauri application");
 
+    // A desktop session owns its Pro workers. Drain them before the process
+    // returns so a normal quit does not leave pooled/Fleet sidecars running.
+    if !cli_mode {
+        tauri::async_runtime::block_on(sidecar::close_pro_session());
+    }
+
     // Release the per-session mutex so a fast restart in the same session
     // can acquire it without waiting for the OS to clean up the exited process.
     #[cfg(windows)]

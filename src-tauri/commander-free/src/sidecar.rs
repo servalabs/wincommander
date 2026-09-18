@@ -303,26 +303,21 @@ fn next_request_id() -> u64 {
 // pool, the cascade actually runs in parallel up to POOL_CAPACITY
 // sessions wide, and the wall-clock matches what the UI shows.
 //
-// Pool sizing: 4 is the trade-off. Each Pro child costs a few MB of
-// RAM and a one-time ~100ms spawn cost. 4 lets the cascade saturate
-// most independent surfaces (DNS cache vs USB history vs RDP cache
-// don't contend with each other) without spinning up so many children
-// that the OS ContextSwitch cost outweighs the parallelism win.
+// Keep one normal worker per desktop session. This preserves the Windows user
+// boundary and avoids turning every signed-in user into four resident Pro
+// processes. Paid requests queue on that worker; a genuine machine-wide task
+// belongs in the supervised service, not in another user's desktop child.
 //
 // On EOF / error the broken session is dropped; the next dispatch
 // transparently respawns into the pool. Bye is sent best-effort to
 // every pooled session during process shutdown via `close_pro_session`.
 
-#[cfg(debug_assertions)]
 const POOL_CAPACITY: usize = 1;
-
-#[cfg(not(debug_assertions))]
-const POOL_CAPACITY: usize = 4;
 
 // Worker processes are deliberately kept briefly so bursty paid actions can
 // reuse their verified pipes. They must not become permanent background
 // processes after the work ends.
-const PRO_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+const PRO_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const PRO_POOL_REAP_INTERVAL: Duration = Duration::from_secs(15);
 static PRO_POOL_REAPER_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -1872,17 +1867,19 @@ fn test_dispatch_allows(feature_id: &str) -> bool {
     matches!(feature_id, "get_decoy_recent")
 }
 
-/// Best-effort graceful shutdown — drains the pool, sending Bye to
-/// every idle session. In-flight dispatches are not interrupted; their
-/// sessions are dropped (not returned to the pool) once they finish
-/// because the pool will already be torn down. Phase 11 wires this
-/// into the Tauri `on_window_event(CloseRequested)` flow.
-#[allow(dead_code)]
+/// Best-effort graceful shutdown for this desktop session. It drains both the
+/// ordinary pool and the dedicated Fleet worker so quitting WinCommander does
+/// not leave a user-owned Pro child behind.
 pub async fn close_pro_session() {
     let mut pool = pro_session_pool().lock().await;
     let sessions = std::mem::take(&mut *pool);
     drop(pool);
     stop_pro_sessions(sessions.into_iter().map(|entry| entry.session).collect()).await;
+
+    let agent = agent_session_slot().lock().await.take();
+    if let Some(agent) = agent {
+        stop_pro_session(agent).await;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1986,6 +1983,12 @@ mod tests {
         assert!(!pool_session_is_expired(now, now + PRO_POOL_IDLE_TIMEOUT));
         assert!(pool_session_is_expired(now, now));
         assert!(pool_session_is_expired(now, now - Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn each_desktop_session_keeps_only_one_normal_pro_worker() {
+        assert_eq!(POOL_CAPACITY, 1);
+        assert_eq!(PRO_POOL_IDLE_TIMEOUT, Duration::from_secs(30));
     }
 
     #[test]
