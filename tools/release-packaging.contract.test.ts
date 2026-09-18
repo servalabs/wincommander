@@ -65,6 +65,7 @@ describe("Free machine-wide release packaging", () => {
     expect(legacyLaunchMigration).toContain("WinCommander legacy launch migration");
     expect(legacyLaunchMigration).toContain("'resources', 'scripts'");
     expect(legacyLaunchMigration).toContain("file-search");
+    expect(legacyLaunchMigration).toContain("HKEY_USERS");
     expect(legacyLaunchMigration).not.toContain("Remove-Item -LiteralPath $legacyRoot");
     expect(hooks).not.toContain("WC_PRO_PAYLOAD");
     expect(hooks).not.toContain("WC_PRO_EXE");

@@ -17,17 +17,23 @@ if (-not (Test-Path -LiteralPath $shared -PathType Leaf)) {
 
 $profileList = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*'
 $profiles = Get-ItemProperty -Path $profileList -ErrorAction Stop |
-    ForEach-Object { [Environment]::ExpandEnvironmentVariables([string]$_.ProfileImagePath) } |
-    Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) } |
-    ForEach-Object { [IO.Path]::GetFullPath($_) } |
-    Sort-Object -Unique
+    ForEach-Object {
+        $path = [Environment]::ExpandEnvironmentVariables([string]$_.ProfileImagePath)
+        if ($path -and (Test-Path -LiteralPath $path -PathType Container)) {
+            [pscustomobject]@{
+                Sid = [string]$_.PSChildName
+                Path = [IO.Path]::GetFullPath($path)
+            }
+        }
+    } |
+    Sort-Object -Property Path -Unique
 
 $shell = New-Object -ComObject WScript.Shell
 $summary = [ordered]@{ profiles = 0; shortcutsUpdated = 0; staleFilesRemoved = 0; failures = 0 }
 
 foreach ($profile in $profiles) {
     $summary.profiles++
-    $legacyRoot = Join-Path $profile 'AppData\Local\WinCommander'
+    $legacyRoot = Join-Path $profile.Path 'AppData\Local\WinCommander'
     $legacyExe = Join-Path $legacyRoot 'wincommander-free.exe'
     $shortcutRoots = @(
         (Join-Path $profile 'Desktop'),
@@ -75,6 +81,18 @@ foreach ($profile in $profiles) {
         try {
             Remove-Item -LiteralPath $payloadPath -Recurse -Force -ErrorAction Stop
             $summary.staleFilesRemoved++
+        } catch {
+            $summary.failures++
+        }
+    }
+
+    # A loaded profile hive can retain the old per-user uninstall entry even
+    # after its payload is gone. Remove that exact registration only; never
+    # alter unrelated application registrations or user settings.
+    $uninstallKey = "Registry::HKEY_USERS\$($profile.Sid)\Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
+    if (Test-Path -LiteralPath $uninstallKey) {
+        try {
+            Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction Stop
         } catch {
             $summary.failures++
         }
