@@ -114,11 +114,12 @@ export function renderProInstallStep({
                 </p>
             );
         } else if (stage === "disk") {
-            title = "Couldn't write the Pro binary";
+            title = "Couldn't write the shared Pro component";
             hint = (
                 <p style={{ fontSize: 12, marginBottom: 12 }}>
-                    File-system error. If wincommander-pro.exe is currently running, close it
-                    first, then click Try again.
+                    WinCommander needs device-administrator permission to write the shared Pro
+                    component. Run WinCommander as an administrator and try again. If it is
+                    already elevated, close any running <code>wincommander-pro.exe</code> and retry.
                 </p>
             );
         }
@@ -172,7 +173,7 @@ export function renderProInstallStep({
                     Installing WinCommander Pro{manifest ? ` v${manifest.version}` : ""}…
                 </h3>
                 <p style={{ color: "var(--color-text-muted)", fontSize: 12 }}>
-                    Adding Defender exclusion · Downloading · Verifying SHA-256 · Writing to disk
+                    Downloading · Verifying SHA-256 · Writing to disk
                 </p>
             </div>
         );
@@ -226,9 +227,8 @@ export function renderProInstallStep({
                     </div>
                 )}
 
-                {/* Tamper Protection pre-flight: when on, Add-MpPreference
-                    will fail no matter what we do. Block Install and tell
-                    the user how to disable it. */}
+                {/* Tamper Protection prevents the optional exclusion only;
+                    it must never block installation of the signed package. */}
                 {tamperOn && (
                     <div
                         style={{
@@ -240,28 +240,9 @@ export function renderProInstallStep({
                             color: "var(--color-danger)",
                         }}
                     >
-                        <strong>Defender Tamper Protection is on.</strong> Windows blocks
-                        programmatic exclusion changes while it's enabled, so this install will
-                        fail until you turn it off:
-                        <ol style={{ margin: "8px 0 4px 18px", color: "var(--color-text-primary)" }}>
-                            <li>Open <strong>Windows Security</strong></li>
-                            <li>Go to <strong>Virus &amp; threat protection</strong> → <strong>Manage settings</strong></li>
-                            <li>Switch <strong>Tamper Protection</strong> to <em>Off</em></li>
-                            <li>
-                                Come back here and click{" "}
-                                <a
-                                    href="#"
-                                    onClick={(e) => { e.preventDefault(); void refresh(); }}
-                                    style={{ color: "var(--color-accent)" }}
-                                >
-                                    Re-check
-                                </a>
-                            </li>
-                        </ol>
-                        <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
-                            You can re-enable Tamper Protection after the install — the
-                            exclusion path persists across the toggle.
-                        </span>
+                        <strong>Defender Tamper Protection is on.</strong> The optional
+                        Defender exclusion cannot be added while it is enabled. Pro can
+                        still be installed normally with Defender protection left on.
                     </div>
                 )}
 
@@ -291,21 +272,20 @@ export function renderProInstallStep({
                         fontSize: 12,
                     }}
                 >
-                    <strong style={{ color: "var(--color-warning)" }}>
-                        Defender will flag this code.
-                    </strong>{" "}
+                    <strong style={{ color: "var(--color-warning)" }}>Optional Defender exclusion.</strong>{" "}
                     WinCommander Pro contains Privacy Clean features (shadow-copy clearer,
                     cipher /W overwrite, secure deletion) that look like malware to Windows
-                    Defender / SmartScreen / most AVs. To install successfully, the app
-                    needs to add{" "}
+                    Defender / SmartScreen / most AVs. You may add{" "}
                     <code style={{ margin: "0 2px" }}>%ProgramData%\WinCommander\bin\</code>{" "}
-                    to Defender's exclusion list before downloading the EXE.
+                    to Defender's exclusion list if your approved security policy permits it;
+                    it is not required to install Pro.
                 </div>
 
                 <Checkbox
                     checked={consent}
                     onChange={(e) => onConsentChange((e.target as HTMLInputElement).checked)}
-                    label="I understand and consent to the Defender exclusion."
+                    disabled={tamperOn}
+                    label="Optionally add a Defender exclusion for WinCommander Pro."
                 />
             </div>
         );
@@ -316,9 +296,8 @@ export function renderProInstallStep({
                 </Button>
                 <Button
                     className="wc-btn-primary"
-                    disabled={!consent || !manifest || tamperOn}
+                    disabled={!manifest}
                     onClick={() => install(consent)}
-                    title={tamperOn ? "Disable Defender Tamper Protection first" : undefined}
                 >
                     Install Pro
                 </Button>

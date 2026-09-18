@@ -22,4 +22,18 @@ describe("Pro startup probe policy", () => {
     expect(source).toContain("manifest: shouldProbeProPrompt");
     expect(source).toContain("defender: false");
   });
+
+  test("keeps Defender exclusion optional for a signed Pro install", async () => {
+    const rust = await Bun.file(
+      new URL("../../src-tauri/commander-free/src/pro_install.rs", import.meta.url),
+    ).text();
+    const dialog = await Bun.file(
+      new URL("../components/shared/ProInstallStepBody.tsx", import.meta.url),
+    ).text();
+
+    expect(rust).not.toContain("Pro install requires explicit consent to add a Defender exclusion");
+    expect(rust).toContain("optional Defender exclusion was not added");
+    expect(dialog).toContain("Optionally add a Defender exclusion for WinCommander Pro.");
+    expect(dialog).toContain("disabled={!manifest}");
+  });
 });

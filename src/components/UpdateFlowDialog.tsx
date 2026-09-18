@@ -38,8 +38,8 @@ interface UpdateFlowDialogProps {
     hasPaid: boolean;
     canUpdatePro: boolean;
     /** True when the caller already knows an update/install is pending. Paid
-     *  users then see an upfront confirm (covering the Free+Pro update AND the
-     *  one-time Defender exclusion) before anything runs. Everyone else — and
+     *  users then see an upfront confirm covering the Free+Pro update before
+     *  anything runs. Everyone else — and
      *  on-demand checks with nothing known pending — starts checking directly. */
     updateAvailable?: boolean;
     /** Consent-step "Not now" override — used only by the startup auto-trigger
@@ -67,9 +67,7 @@ function CenteredStatus({ title, sub }: { title: string; sub?: string }) {
 }
 
 export default function UpdateFlowDialog({ isOpen, onClose, hasPaid, canUpdatePro, updateAvailable = false, onNotNow }: UpdateFlowDialogProps) {
-    // True once the user OKs the upfront confirm — collects the Defender-exclusion
-    // consent for the whole Free+Pro update, so the Pro leg installs plainly
-    // (no second consent gate) via useUpdateFlow's auto path.
+    // True once the user OKs the upfront Free+Pro update confirmation.
     const [autoConsented, setAutoConsented] = useState(false);
     const flow = useUpdateFlow(canUpdatePro, autoConsented ? true : null);
     const { phase, freeOutcome, freeError, proMismatch, pro, start, retryFree, finishAndRestart, reset, needsRestart } = flow;
@@ -96,9 +94,8 @@ export default function UpdateFlowDialog({ isOpen, onClose, hasPaid, canUpdatePr
     let footer: React.ReactNode;
 
     if (phase === "idle" && showConfirm) {
-        // Upfront confirm for paid users: one consent covers the Free+Pro
-        // update AND the one-time Defender exclusion, so no separate Pro
-        // prompt appears later — the Pro leg installs plainly (autoConsented).
+        // Upfront confirmation covers the Free+Pro update. Defender exclusion
+        // remains an optional choice on the Pro install surface.
         body = (
             <div style={{ padding: "8px 0" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
@@ -113,9 +110,9 @@ export default function UpdateFlowDialog({ isOpen, onClose, hasPaid, canUpdatePr
                         fontSize: 12,
                     }}
                 >
-                    Updating WinCommander will also update WinCommander Pro and add a
-                    Windows Defender exclusion for{" "}
-                    <code style={{ margin: "0 2px" }}>%ProgramData%\WinCommander\bin</code>.
+                    Updating WinCommander will also update the compatible
+                    WinCommander Pro component. Defender protection remains enabled unless
+                    an administrator separately opts into an exclusion.
                 </div>
             </div>
         );

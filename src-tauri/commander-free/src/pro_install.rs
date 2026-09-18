@@ -877,17 +877,11 @@ pub async fn install_pro_binary(
 
     let install_path = pro_install_path().map_err(|e| format!("validation:{}", e))?;
     let replacing_existing_install = install_path.exists();
-    // An automatic update is allowed to replace an existing Pro sidecar
-    // without creating or changing any Defender exclusion. A first install
-    // still requires the explicit consent that the visible install dialog
-    // collects before it can alter Defender configuration.
-    if !consent_defender_exclusion && !exclusion_already_set && !replacing_existing_install {
-        return Err(
-            "consent:Pro install requires explicit consent to add a Defender exclusion. \
-             Confirm via the install modal first."
-                .to_string(),
-        );
-    }
+    // Defender exclusion is an optional compatibility choice.  A signed,
+    // hash-verified Pro package can be installed without reducing Defender
+    // coverage; a later AV quarantine remains visible to the user as an AV
+    // event, rather than silently turning into a mandatory security exception.
+    let _ = replacing_existing_install;
     if expected_sha256.len() != 64 || !expected_sha256.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("validation:expected_sha256 must be 64-char lowercase hex".to_string());
     }
@@ -941,14 +935,19 @@ pub async fn install_pro_binary(
         }));
     }
 
-    // 1. Defender exclusion (Windows only — no-op on dev OSes). If
-    //    Tamper Protection is on, this stage fails with a vague PS error;
-    //    the frontend should already have warned the user via the
-    //    get_defender_status pre-flight, but we tag the error so the
-    //    dialog can still highlight the right next step.
+    // 1. Defender exclusion is best-effort and only runs after explicit
+    //    opt-in.  Tamper Protection or a managed Defender policy must never
+    //    block the signed Pro install itself.
+    let mut defender_exclusion_warning = None;
     #[cfg(windows)]
     if !exclusion_already_set && consent_defender_exclusion {
-        add_defender_exclusion(true).map_err(|e| format!("defender_exclusion:{}", e))?;
+        if let Err(error) = add_defender_exclusion(true) {
+            crate::log_message(
+                "warn",
+                &format!("[ProInstall] optional Defender exclusion was not added: {error}"),
+            );
+            defender_exclusion_warning = Some(error);
+        }
     }
 
     // 2. Download to a sibling .tmp.
@@ -1046,5 +1045,6 @@ pub async fn install_pro_binary(
         "install_path": install_path.display().to_string(),
         "sha256": expected_sha256,
         "version": pro_version,
+        "defender_exclusion_warning": defender_exclusion_warning,
     }))
 }
