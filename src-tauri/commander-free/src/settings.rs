@@ -2053,6 +2053,10 @@ pub struct AppManagementSettings {
     /// Only auto-update manifest apps (not random installed software)?
     #[serde(default)]
     pub auto_update_manifest_only: Option<bool>,
+    /// Per-version retry state for automatic package updates. Kept in
+    /// `current.apps`: this is observed device state, not administrator intent.
+    #[serde(default)]
+    pub auto_update_attempts: std::collections::HashMap<String, AppAutoUpdateAttempt>,
     /// Lock specific apps to a version: { "Python.Python.3.12": "3.12.0" }
     #[serde(default)]
     pub pinned_versions: std::collections::HashMap<String, String>,
@@ -2096,6 +2100,15 @@ pub struct AppInventorySnapshot {
     /// Pre-computed counts so admin dashboard doesn't count arrays
     #[serde(default)]
     pub summary: AppInventorySummary,
+}
+
+/// Durable retry state for one automatically updated package/version pair.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AppAutoUpdateAttempt {
+    pub version: Option<String>,
+    #[serde(default)]
+    pub attempts: u8,
 }
 
 /// An app from the WinCommander manifest catalog
