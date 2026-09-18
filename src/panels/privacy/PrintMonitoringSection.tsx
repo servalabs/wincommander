@@ -1,28 +1,14 @@
 // src/panels/privacy/PrintMonitoringSection.tsx
-// Unified print-monitoring surface. Intentionally not wired into privacy/index.tsx yet.
+// Unified print-monitoring surface for the Privacy Monitor.
 // Local Print Record may contain Windows-supplied print metadata and must stay local.
 // Fleet-safe Print Signals projects the existing Argus payload onto aggregate-only fields.
 
 import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Button, Icon, Spinner, Switch, Tag } from "@/components/ui/bp";
 import useEntitlements from "@/hooks/useEntitlements";
 import { argus, type ArgusCollectorStatus, type ArgusSignalEntry } from "@/hooks/useArgus";
+import { printAudit, type PrintAuditEntry, type PrintAuditStatus } from "@/hooks/usePrintAudit";
 import SectionCard from "../../components/shared/SectionCard";
-
-interface PrintAuditEntry {
-  timeCreated: string;
-  document?: string | null;
-  pages: number;
-  printer?: string | null;
-  user?: string | null;
-  jobStatus?: string | null;
-}
-
-interface PrintAuditStatus {
-  channelEnabled: boolean;
-  channelPresent: boolean;
-}
 
 interface FleetSafePrintSignal {
   windowStart: string;
@@ -140,10 +126,10 @@ export default function PrintMonitoringSection() {
     setLocalLoading(true);
     setLocalError(null);
     try {
-      const status = await invoke<PrintAuditStatus>("get_print_audit_status");
+      const status = await printAudit.status();
       setLocalStatus(status);
       if (status.channelEnabled) {
-        const entries = await invoke<PrintAuditEntry[]>("get_print_audit_log", { limit: 50 });
+        const entries = await printAudit.recent(50);
         setLocalEntries(entries);
       } else {
         setLocalEntries([]);
@@ -186,7 +172,7 @@ export default function PrintMonitoringSection() {
     setLocalBusy(true);
     setLocalError(null);
     try {
-      await invoke("set_print_audit_enabled", { enabled });
+      await printAudit.setEnabled(enabled);
       await refreshLocal();
     } catch (error) {
       setLocalError(String(error));

@@ -5,7 +5,7 @@ declare const Bun: {
 };
 
 describe("Deception & Tripwires presentation boundaries", () => {
-  test("provides a reusable grouped presentation without wiring the Privacy Monitor index", async () => {
+  test("provides a reusable grouped presentation and the Privacy Monitor renders it once", async () => {
     const [grouped, index] = await Promise.all([
       Bun.file("src/panels/privacy/DeceptionTripwiresSection.tsx").text(),
       Bun.file("src/panels/privacy/index.tsx").text(),
@@ -14,7 +14,10 @@ describe("Deception & Tripwires presentation boundaries", () => {
     expect(grouped).toContain("Deception &amp; Tripwires");
     expect(grouped).toContain("<DecoyMonitorSection");
     expect(grouped).toContain("<CanaryTokensSection");
-    expect(index).not.toContain("DeceptionTripwiresSection");
+    expect(index).toContain('import DeceptionTripwiresSection from "./DeceptionTripwiresSection"');
+    expect(index).toContain("<DeceptionTripwiresSection");
+    expect(index).not.toContain('import DecoyMonitorSection from "./DecoyMonitorSection"');
+    expect(index).not.toContain('import CanaryTokensSection from "./CanaryTokensSection"');
   });
 
   test("keeps Canary explicitly local-only and uses the public listener contract", async () => {

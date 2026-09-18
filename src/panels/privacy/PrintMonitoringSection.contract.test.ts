@@ -7,7 +7,7 @@ declare const Bun: {
 const componentPath = "src/panels/privacy/PrintMonitoringSection.tsx";
 
 describe("Print Monitoring contract", () => {
-  test("keeps the replacement component isolated from Privacy Monitor integration", async () => {
+  test("replaces the separate print cards in the Privacy Monitor", async () => {
     const [component, privacyIndex] = await Promise.all([
       Bun.file(componentPath).text(),
       Bun.file("src/panels/privacy/index.tsx").text(),
@@ -16,22 +16,31 @@ describe("Print Monitoring contract", () => {
     expect(component).toContain('title="Print Monitoring"');
     expect(component).toContain("Local Print Record");
     expect(component).toContain("Fleet-safe Print Signals");
-    expect(privacyIndex).not.toContain("PrintMonitoringSection");
+    expect(privacyIndex).toContain('import PrintMonitoringSection from "./PrintMonitoringSection"');
+    expect(privacyIndex).toContain("<PrintMonitoringSection />");
+    expect(privacyIndex).not.toContain('import PrintActivitySection from "./PrintActivitySection"');
+    expect(privacyIndex).not.toContain('import ArgusPrintUsbSection from "./ArgusPrintUsbSection"');
   });
 
   test("local records use only the existing Windows Print Service audit commands", async () => {
-    const component = await Bun.file(componentPath).text();
+    const [component, client] = await Promise.all([
+      Bun.file(componentPath).text(),
+      Bun.file("src/hooks/usePrintAudit.ts").text(),
+    ]);
 
-    expect(component).toContain('invoke<PrintAuditStatus>("get_print_audit_status")');
-    expect(component).toContain('invoke<PrintAuditEntry[]>("get_print_audit_log"');
-    expect(component).toContain('invoke("set_print_audit_enabled"');
+    expect(component).toContain("printAudit.status()");
+    expect(component).toContain("printAudit.recent(50)");
+    expect(component).toContain("printAudit.setEnabled(enabled)");
+    expect(client).toContain('invoke<PrintAuditStatus>("get_print_audit_status")');
+    expect(client).toContain('invoke<PrintAuditEntry[]>("get_print_audit_log"');
+    expect(client).toContain('invoke("set_print_audit_enabled"');
     expect(component).toContain("Microsoft-Windows-PrintService/Operational");
     expect(component).toContain("Event 307");
     expect(component).toContain("administrator approval once");
-    expect(component).toContain('document?: string | null');
-    expect(component).toContain('printer?: string | null');
-    expect(component).toContain('user?: string | null');
-    expect(component).toContain('jobStatus?: string | null');
+    expect(client).toContain('document?: string | null');
+    expect(client).toContain('printer?: string | null');
+    expect(client).toContain('user?: string | null');
+    expect(client).toContain('jobStatus?: string | null');
   });
 
   test("Fleet-safe projection whitelists aggregate fields and excludes local metadata", async () => {
