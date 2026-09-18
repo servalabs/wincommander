@@ -5,6 +5,7 @@
 ; ordinary app update or uninstall from leaving a kernel driver unloading.
 
 !include "StrFunc.nsh"
+${Using:StrFunc} StrStr
 
 !define WC_SERVICE_NAME "WinCommanderSvc"
 !define WC_SERVICE_PAYLOAD "$INSTDIR\resources\wincommander-svc.exe"
