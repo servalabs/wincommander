@@ -93,6 +93,14 @@ export type DiskCleanupScanResult =
     | { success: true; categories: CleanupCategory[] }
     | { success: false; error?: string };
 
+/** Keep host/PowerShell diagnostics out of the normal product surface. */
+export function diskCleanupErrorMessage(error?: string): string {
+    if (/administrator (privileges|rights)|administrator elevation/i.test(error ?? "")) {
+        return "Cleaning Windows-managed storage requires administrator permission. Run WinCommander as administrator to continue.";
+    }
+    return error || "Disk cleanup could not be completed.";
+}
+
 // Concurrent callers share one in-flight PowerShell scan — Get-DiskCleanupScan
 // walks Temp/Windows Update cache/Prefetch/Windows.old and can take seconds, so
 // parallel scans are expensive. Writes the module cache and notifies whichever
@@ -166,7 +174,7 @@ export default function DiskCleanupGranular() {
         setLoading(true);
         const res = await fetchDiskCleanupScan();
         setLoading(false);
-        if (!res.success) showError(res.error || "Failed to scan");
+        if (!res.success) showError(diskCleanupErrorMessage(res.error));
     }, []);
 
     // Subscribe to module-level cache updates so this instance reflects any
@@ -281,7 +289,7 @@ export default function DiskCleanupGranular() {
             showSuccess(`Freed ${res.data.freedTotalMb?.toFixed(1) ?? "?"} MB`);
             refresh();
         } else {
-            showError(res.error || res.data?.message || "Cleanup failed");
+            showError(diskCleanupErrorMessage(res.error || res.data?.message));
         }
     }, [requestConfirm, selected, refresh]);
 

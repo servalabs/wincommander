@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isSignedInAccountCovered } from "./DiskCleanupGranular";
+import { diskCleanupErrorMessage, isSignedInAccountCovered } from "./DiskCleanupGranular";
 
 describe("disk cleanup schedule ownership", () => {
     const signedInAccount = {
@@ -27,5 +27,17 @@ describe("disk cleanup schedule ownership", () => {
             { taskName: "WinCommander_AutoErase_diskCleanup", ownerAccount: "DOMAIN\\alex" },
             { name: "alex", displayName: "Alex Smith" },
         )).toBe(false);
+    });
+});
+
+describe("disk cleanup permission copy", () => {
+    test("replaces raw administrator diagnostics with a concise next step", () => {
+        expect(diskCleanupErrorMessage("Administrator privileges required. Command: Get-DiskCleanupScan At line:10 char:9"))
+            .toBe("Cleaning Windows-managed storage requires administrator permission. Run WinCommander as administrator to continue.");
+    });
+
+    test("keeps an unrelated cleanup error useful", () => {
+        expect(diskCleanupErrorMessage("The selected drive is unavailable."))
+            .toBe("The selected drive is unavailable.");
     });
 });

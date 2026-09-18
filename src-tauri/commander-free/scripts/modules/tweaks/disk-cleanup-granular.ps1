@@ -32,7 +32,11 @@ function _Get-FileCount {
 # Returns size/count for every category; UI shows checkboxes per row.
 
 function Get-DiskCleanupScan {
-    Assert-IsAdmin
+    # This is a read-only preview. A standard Windows user can inspect their
+    # own temporary files; protected system folders simply report what is
+    # readable (the folder helpers already suppress access-denied entries).
+    # Requiring elevation here made a background dashboard prefetch surface a
+    # raw PowerShell error even though the app itself can run normally.
     $categories = @(
         @{ id = "tempUser";       label = "User Temp Files";         path = $env:TEMP                                          },
         @{ id = "tempSystem";     label = "System Temp Files";       path = "$env:SystemRoot\Temp"                            },
