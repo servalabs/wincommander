@@ -36,6 +36,12 @@ function Invoke-Git([string[]]$Arguments) {
 $root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 $tag = "v$Version"
 
+$gitAuthorName = (git -C $root config --get user.name | Out-String).Trim()
+$gitAuthorEmail = (git -C $root config --get user.email | Out-String).Trim()
+if ([string]::IsNullOrWhiteSpace($gitAuthorName) -or [string]::IsNullOrWhiteSpace($gitAuthorEmail)) {
+    Stop-Release 'Configure your Git author first: git config --global user.name "Your Name"; git config --global user.email "your-github-noreply-email".'
+}
+
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     Stop-Release 'GitHub CLI (gh) is required to verify release state.'
 }
@@ -157,7 +163,7 @@ if (![packageVersion, tauriVersion, cargoVersion, lockVersion].every((value) => 
 
     if (-not $versionAlreadyPrepared) {
         Invoke-Git @('-C', $worktree, 'add', 'package.json', 'src-tauri/commander-free/tauri.conf.json', 'src-tauri/commander-free/Cargo.toml', 'src-tauri/Cargo.lock')
-        Invoke-Git @('-C', $worktree, '-c', 'user.name=WinCommander release operator', '-c', 'user.email=release@users.noreply.github.com', 'commit', '-m', "release: v$Version")
+        Invoke-Git @('-C', $worktree, 'commit', '-m', "release: v$Version")
         Invoke-Git @('-C', $worktree, 'push', 'origin', 'HEAD:main')
     }
 
