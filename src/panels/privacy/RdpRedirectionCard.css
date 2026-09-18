@@ -1,0 +1,29 @@
+.rdp-redirection-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.rdp-redirection-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+}
+
+@media (max-width: 1050px) {
+  .rdp-redirection-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .rdp-redirection-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Spinner, Switch, Tag } from "@/components/ui/bp";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppState } from "../../context/AppContext";
+import "./RdpRedirectionCard.css";
 
 interface RdpRedirectionStatus {
   isWindowsServer: boolean;
@@ -161,11 +162,11 @@ export default function RdpRedirectionCard() {
             </Tag>
           </div>
 
-          <div className="flex flex-col divide-y divide-[var(--border-subtle)]">
+          <div className="rdp-redirection-grid">
             {rows.map((row) => {
               const checked = status[row.field] === true;
               return (
-                <div key={row.key} className="flex items-center justify-between gap-3 py-2">
+                <div key={row.key} className="rdp-redirection-row">
                   <div className="min-w-0">
                     <div className="text-xs font-medium">{row.label}</div>
                     <div className="mt-0.5 text-[11px] leading-4 text-[var(--text-mute)]">{row.detail}</div>

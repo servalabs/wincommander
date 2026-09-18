@@ -9,6 +9,7 @@ import { AcquisitionMonitorSwitch } from "../../components/tweaks/ExploitProtect
 import PowerPlanCard from "../../components/tweaks/PowerPlanCard";
 import PowerGraphicsCard from "../../components/tweaks/PowerGraphicsCard";
 import WindowsAiAdvancedActions from "../../components/tweaks/WindowsAiAdvancedActions";
+import RdpRedirectionCard from "../privacy/RdpRedirectionCard";
 import VmSandboxSection from "./VmSandboxSection";
 import ContextMenuIntegrationCard from "../../components/tweaks/ContextMenuIntegrationCard";
 import { TWEAKS_SECTIONS, TWEAKS_TOGGLES } from "../../registry/tweaks.toggles";
@@ -22,7 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/ta
 import { useTweaksSessionState } from "./tweaksSessionState";
 import './index.css';
 
-type TweaksTab = "appearance" | "performance" | "os-boot" | "security" | "exploit-protection";
+type TweaksTab = "appearance" | "performance" | "os-boot" | "security" | "exploit-protection" | "windows-server";
 
 function detectGpuVendor(gpu: string | null | undefined): "amd" | "nvidia" | "intel" | null {
     const g = (gpu ?? "").toLowerCase();
@@ -98,8 +99,9 @@ export default function TweaksPanel() {
         if (showExpertSpeed) order.push("os-boot");
         order.push("security");
         if (showExpertSpeed) order.push("exploit-protection");
+        if (isServerSku) order.push("windows-server");
         return order;
-    }, [showExpertSpeed]);
+    }, [isServerSku, showExpertSpeed]);
 
     // A tab whose TabsTrigger got hidden by a density downgrade (e.g. a
     // policy/entitlement change while the app is open) must not stay the
@@ -131,6 +133,8 @@ export default function TweaksPanel() {
                     return showExpertSpeed && sectionHasMatch("security", q);
                 case "exploit-protection":
                     return showExpertSpeed && sectionHasMatch("exploitProtection", q);
+                case "windows-server":
+                    return isServerSku && (sectionHasMatch("server", q) || "rdp device redirection smart cards drives clipboard printers audio microphone camera passkeys plug and play".includes(q));
             }
         };
         if (tabMatches(activeTab)) return;
@@ -154,6 +158,7 @@ export default function TweaksPanel() {
                     {showExpertSpeed && <TabsTrigger value="os-boot">OS &amp; boot</TabsTrigger>}
                     <TabsTrigger value="security">Security &amp; apps</TabsTrigger>
                     {showExpertSpeed && <TabsTrigger value="exploit-protection">Exploit protection</TabsTrigger>}
+                    {isServerSku && <TabsTrigger value="windows-server">Windows Server</TabsTrigger>}
                 </TabsList>
 
                 <TabsContent value="appearance">
@@ -180,7 +185,6 @@ export default function TweaksPanel() {
                     <OsBootTab
                         showExpertSpeed={showExpertSpeed}
                         isAdvanced={isAdvanced}
-                        isServerSku={isServerSku}
                         searchQuery={searchQuery}
                         handlePostToggle={handlePostToggle}
                     />
@@ -202,6 +206,15 @@ export default function TweaksPanel() {
                         handlePostToggle={handlePostToggle}
                     />
                 </TabsContent>
+
+                {isServerSku && (
+                    <TabsContent value="windows-server">
+                        <WindowsServerTab
+                            searchQuery={searchQuery}
+                            handlePostToggle={handlePostToggle}
+                        />
+                    </TabsContent>
+                )}
             </Tabs>
 
             {(!hasResults && !noSearch) && (
@@ -301,10 +314,9 @@ function PerformancePowerTab({ isAdvanced, noSearch, searchQuery, handlePostTogg
 }
 
 // ── Tab 3: OS & boot ──────────────────────────────────────────────────────
-function OsBootTab({ showExpertSpeed, isAdvanced, isServerSku, searchQuery, handlePostToggle }: {
+function OsBootTab({ showExpertSpeed, isAdvanced, searchQuery, handlePostToggle }: {
     showExpertSpeed: boolean;
     isAdvanced: boolean;
-    isServerSku: boolean;
     searchQuery: string;
     handlePostToggle: (t: ToggleDef) => Promise<void>;
 }) {
@@ -330,23 +342,30 @@ function OsBootTab({ showExpertSpeed, isAdvanced, isServerSku, searchQuery, hand
                 bare
                 searchQuery={searchQuery}
             />
-            {/* Server-only. These settings are either ignored outright on a
-                client SKU (Server Manager, IE ESC, shutdown tracker) or only
-                matter on a machine serving other machines, so the whole
-                section stays hidden unless we detect a Server SKU. */}
-            {isServerSku && (
-                <>
-                    <div className="tweaks-sublabel tweaks-sublabel-gap">Windows Server</div>
-                    <ToggleSection
-                        section={TWEAKS_SECTIONS[8]}
-                        toggles={TWEAKS_TOGGLES}
-                        onToggled={handlePostToggle}
-                        bare
-                        searchQuery={searchQuery}
-                    />
-                </>
-            )}
         </SectionCard>
+    );
+}
+
+// Windows Server management is kept separate from OS & boot so server
+// operators have one destination for server-only policy and RDP resources.
+// Incoming-session monitoring remains in Privacy Monitor.
+function WindowsServerTab({ searchQuery, handlePostToggle }: {
+    searchQuery: string;
+    handlePostToggle: (t: ToggleDef) => Promise<void>;
+}) {
+    return (
+        <div className="flex flex-col gap-4">
+            <SectionCard title="Windows Server">
+                <ToggleSection
+                    section={TWEAKS_SECTIONS[8]}
+                    toggles={TWEAKS_TOGGLES}
+                    onToggled={handlePostToggle}
+                    bare
+                    searchQuery={searchQuery}
+                />
+            </SectionCard>
+            {!searchQuery.trim() && <RdpRedirectionCard />}
+        </div>
     );
 }
 
