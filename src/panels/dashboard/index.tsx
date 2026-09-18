@@ -660,9 +660,6 @@ export default function DashboardPanel() {
       setIsFixAllRunning(false);
     });
   }, [fixFindings, activeFindings, fixAllInProgress, applyFixAllMachineWide]);
-  const handleApplyFixAllMachineWideChange = useCallback((enabled: boolean) => {
-    void patchAppSettings({ app: { applyFixAllMachineWide: enabled } }).catch(reportSettingsWriteFailure);
-  }, [patchAppSettings]);
   const handleHealDrift = useCallback(() => fixFindings(driftFindings, "Heal Drift"), [fixFindings, driftFindings]);
   const handleFixOne = useCallback((f: ScanFinding) => {
     if (busyIds.size > 0) return;
@@ -908,14 +905,6 @@ export default function DashboardPanel() {
                   )}
                   {radar.phase === 'complete' && (
                     <div className="dashboard-fix-actions">
-                      <label className="dashboard-fix-all-scope" title="Off by default. This asks for administrator permission and applies eligible fixes to every Windows user on this PC.">
-                        <input
-                          type="checkbox"
-                          checked={applyFixAllMachineWide}
-                          onChange={(event) => handleApplyFixAllMachineWideChange(event.target.checked)}
-                        />
-                        <span>Apply Fix All to all users</span>
-                      </label>
                       <NeedsAttention
                         findings={activeFindings}
                         busyIds={busyIds}
