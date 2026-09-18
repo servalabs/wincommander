@@ -35,7 +35,7 @@ function Write-HostsFileAtomic {
 
 # Helper: Get available blocklist names
 function Get-HostsBlocklistNames {
-    return @('telemetry-blocklist', 'ai-sites', 'piracy-torrent', 'glasswire', 'lightburn', 'corel', 'adobe', 'autodesk', 'cloud-upload')
+    return @('telemetry-blocklist', 'ai-sites', 'piracy-torrent', 'glasswire', 'lightburn', 'corel', 'adobe', 'autodesk', 'altium', 'solidworks', 'cloud-upload')
 }
 
 # Helper: Extract applied blocklist names from WINCOMMANDER section
