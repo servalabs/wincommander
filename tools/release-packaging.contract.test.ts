@@ -51,6 +51,10 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain("sc.exe create ${WC_SERVICE_NAME}");
     expect(hooks).toContain("WC_STOP_OWNED_SERVICE_OR_ABORT");
     expect(hooks).toContain("installer-lifecycle.log");
+    expect(hooks).toContain('nsExec::ExecToStack \'sc.exe query ${WC_SERVICE_NAME}\'');
+    expect(hooks).not.toContain("cmd.exe /c sc query ${WC_SERVICE_NAME} ^| findstr");
+    expect(hooks).toContain('ReadEnvStr $R6 "LOCALAPPDATA"');
+    expect(hooks).toContain('RMDir /r "$R6\\WinCommander"');
     expect(hooks).not.toContain("WC_PRO_PAYLOAD");
     expect(hooks).not.toContain("WC_PRO_EXE");
     expect(hooks).toContain('net.exe localgroup "WinCommander Vault Policy Administrators" /add');
@@ -77,7 +81,7 @@ describe("Free machine-wide release packaging", () => {
     expect(helperManifest).not.toContain("requireAdministrator");
   });
 
-  test("runs a machine-wide release setup and uninstaller with only the owned service lifecycle", () => {
+  test("runs a machine-wide release setup and uninstaller with service lifecycle and cleanup that preserves the license", () => {
     expect(releaseWorkflow).toContain("Verify Free setup installs and removes the machine-wide installation");
     expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\wincommander-free.exe"');
     expect(releaseWorkflow).toContain('Join-Path $env:ProgramFiles "WinCommander\\uninstall.exe"');
@@ -91,5 +95,11 @@ describe("Free machine-wide release packaging", () => {
     expect(verification).toContain("-Verb RunAs");
     expect(verification).toContain("NSIS lifecycle diagnostic:");
     expect(verification).not.toContain("$env:LOCALAPPDATA");
+
+    const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
+    expect(hooks).toContain('RMDir /r "$PROGRAMDATA\\WinCommander"');
+    expect(hooks).toContain('license_cache.json');
+    expect(hooks).toContain('icacls.exe "$PROGRAMDATA\\WinCommander" /inheritance:r');
+    expect(hooks).toContain('RMDir /r "$LOCALAPPDATA\\WinCommander"');
   });
 });

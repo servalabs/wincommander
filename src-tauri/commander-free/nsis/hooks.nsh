@@ -4,6 +4,8 @@
 ; WinCommanderSvc only when a Vault operation needs it.  This prevents an
 ; ordinary app update or uninstall from leaving a kernel driver unloading.
 
+!include "StrFunc.nsh"
+
 !define WC_SERVICE_NAME "WinCommanderSvc"
 !define WC_SERVICE_PAYLOAD "$INSTDIR\resources\wincommander-svc.exe"
 !define WC_SERVICE_EXE "$INSTDIR\wincommander-svc.exe"
@@ -33,10 +35,15 @@
     ${EndIf}
     StrCpy $R8 0
     wc_wait_for_service_stop:
-      nsExec::ExecToStack 'cmd.exe /c sc query ${WC_SERVICE_NAME} ^| findstr /C:": 1  STOPPED"'
+      ; Do not shell a pipe through cmd.exe here.  The prior escaped-pipe form
+      ; was passed to sc.exe as an option on affected NSIS builds (exit 1639),
+      ; making a stopped service look permanently busy and aborting every update.
+      nsExec::ExecToStack 'sc.exe query ${WC_SERVICE_NAME}'
       Pop $0
       Pop $1
+      ${StrStr} $R7 $1 "STOPPED"
       ${If} $0 == 0
+      ${AndIf} $R7 != ""
         Goto wc_service_stopped
       ${EndIf}
       IntOp $R8 $R8 + 1
@@ -95,6 +102,16 @@
     Abort "WinCommander could not start its machine service."
   ${EndIf}
 
+  ; Releases before the per-machine installer could leave a complete, older
+  ; executable under the installing account's LocalAppData.  It wins when an
+  ; old personal shortcut is used, so remove that legacy install only after
+  ; the shared Program Files binary and service are successfully in place.
+  ReadEnvStr $R6 "LOCALAPPDATA"
+  ${If} $R6 != ""
+    RMDir /r "$R6\WinCommander"
+  ${EndIf}
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
+
   ; Vault-policy changes are authorized by a dedicated local group, not by
   ; whether the desktop process happened to be elevated. Give the installing
   ; account a direct membership: a nested Administrators group is marked
@@ -132,6 +149,44 @@
   nsExec::ExecToStack 'sc.exe delete ${WC_SERVICE_NAME}'
   Pop $0
   Pop $1
-  ; The paid sidecar and its metadata are separately entitlement-installed
-  ; runtime assets in ProgramData. Do not remove them during a Free uninstall.
+
+  ; A product uninstall removes every machine-owned WinCommander component,
+  ; including the separately delivered Pro runtime and device policy/state.
+  ; The one exception is the device-bound licence token, which is moved out of
+  ; the product root and restored after cleanup.  Encrypted Vault containers
+  ; are user-chosen files outside this product root and are never touched.
+  ; If the token cannot be moved, leave the root intact rather than risk a
+  ; licence loss; the removed executable and service remain uninstalled.
+  InitPluginsDir
+  IfFileExists "$PROGRAMDATA\WinCommander\license_cache.json" 0 wc_remove_machine_data
+    ClearErrors
+    Rename "$PROGRAMDATA\WinCommander\license_cache.json" "$PLUGINSDIR\wincommander-license_cache.json"
+    IfErrors wc_preserve_license_failed
+  wc_remove_machine_data:
+    RMDir /r "$PROGRAMDATA\WinCommander"
+    CreateDirectory "$PROGRAMDATA\WinCommander"
+    ; Restore the device-data ACL before putting the retained entitlement back.
+    ; Standard users may read it but cannot replace the shared token or state.
+    nsExec::ExecToStack 'icacls.exe "$PROGRAMDATA\WinCommander" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-restore-machine-data-acl" "$0" "$1"
+    ${EndIf}
+    IfFileExists "$PLUGINSDIR\wincommander-license_cache.json" 0 wc_remove_legacy_current_user
+      ClearErrors
+      Rename "$PLUGINSDIR\wincommander-license_cache.json" "$PROGRAMDATA\WinCommander\license_cache.json"
+      IfErrors wc_restore_license_failed
+  wc_remove_legacy_current_user:
+    ; A legacy per-user installer used this path.  Remove it for the user
+    ; running uninstall so its old executable cannot shadow the shared build.
+    RMDir /r "$LOCALAPPDATA\WinCommander"
+    DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
+    Goto wc_uninstall_cleanup_done
+  wc_preserve_license_failed:
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-preserve-license" "failed" "$PROGRAMDATA\WinCommander\license_cache.json"
+    Goto wc_remove_legacy_current_user
+  wc_restore_license_failed:
+    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "uninstall-restore-license" "failed" "$PLUGINSDIR\wincommander-license_cache.json"
+  wc_uninstall_cleanup_done:
 !macroend
