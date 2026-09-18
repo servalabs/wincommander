@@ -1546,6 +1546,12 @@ export interface AppManagementSettings {
   autoUpdate?: boolean | null;
   /** Only auto-update manifest apps (not random installed software)? */
   autoUpdateManifestOnly?: boolean | null;
+  /**
+   * Durable per-version retry state for automatic package updates. This belongs
+   * to `current`: it records what the device has attempted, rather than the
+   * administrator's desired policy in `ideal`.
+   */
+  autoUpdateAttempts?: Record<string, AppAutoUpdateAttempt>;
   /** Lock specific apps to a version: { "Python.Python.3.12": "3.12.0" } */
   pinnedVersions?: Record<string, string>;
   /** How often to re-scan installed apps (minutes). Default 60. */
@@ -1579,6 +1585,14 @@ export interface AppInventorySnapshot {
 
   /** Pre-computed counts for admin dashboard */
   summary: AppInventorySummary;
+}
+
+/** One package/version pair that automatic updates have attempted. */
+export interface AppAutoUpdateAttempt {
+  /** The available package version the attempt applies to. */
+  version: string | null;
+  /** Number of starts for this exact available version. Capped at two. */
+  attempts: number;
 }
 
 export interface ManifestAppEntry {

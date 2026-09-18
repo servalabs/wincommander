@@ -208,6 +208,16 @@ export default function IdentityPanel() {
                             severity="none"
                             icon="refresh"
                         />
+                        <UniversalToggle
+                            label="Automatically update installed apps"
+                            description="When WinCommander is running as administrator, updates every eligible installed app after an inventory scan. An ignored app is never updated. A failed version is tried once more, then stopped until a newer version is found."
+                            checked={appSettings?.ideal?.apps?.autoUpdate === true}
+                            onChange={(enabled) => {
+                                patchAppSettings({ ideal: { apps: { autoUpdate: enabled } } }).catch(reportSettingsWriteFailure);
+                            }}
+                            severity="none"
+                            icon="automatic-updates"
+                        />
                     </div>
                 </SectionCard>
 

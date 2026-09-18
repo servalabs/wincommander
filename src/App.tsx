@@ -91,6 +91,7 @@ import GuideHost from "./components/guide/GuideHost";
 import UpdateFlowDialog from "./components/UpdateFlowDialog";
 import { startUpdaterListener, useUpdater } from "./hooks/updaterStore";
 import useAutomaticUpdate from "./hooks/useAutomaticUpdate";
+import useAutomaticAppUpdates from "./hooks/useAutomaticAppUpdates";
 import { PANEL_MANIFESTS, type PanelId } from "./types/panels";
 import type { WifiGuardBaselineEntry } from "./types/settings";
 import { getModuleForPanel, isModuleEnabled } from "./types/modules";
@@ -241,6 +242,7 @@ function AppContent({ splashDone, onSplashComplete }: {
   const panelPrefetchRef = useRef<PanelPrefetchQueue | null>(null);
   const automaticUpdatesEnabled = appSettings?.app?.autoUpdate ?? true;
   useAutomaticUpdate(automaticUpdatesEnabled, canUpdatePro);
+  useAutomaticAppUpdates();
 
   const lockHiddenPanels = useCallback(() => {
     setHiddenPanelsUnlocked(false);

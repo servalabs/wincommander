@@ -4,6 +4,10 @@ import { DEFAULT_ALWAYS_PANELS, DEFAULT_BORROWED_PANELS } from "../lib/visibilit
 import { getPrimaryManifests, getSidebarManifests, PANEL_MANIFESTS } from "./panels";
 
 describe("panel IA manifest", () => {
+  test("first-run visibility does not permanently hide any panel", () => {
+    expect(DEFAULT_ALWAYS_PANELS).toEqual([]);
+  });
+
   test("primary sidebar manifests match the current cover IA", () => {
     expect(getPrimaryManifests().map((panel) => panel.label)).toEqual([
       "Dashboard",

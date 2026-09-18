@@ -1413,6 +1413,10 @@ pub(super) const SYSTEM_STATE_SCOPE_TABLE: &[SystemStateScopeRule] = &[
         scope: SettingsScope::Machine,
     },
     SystemStateScopeRule {
+        path: "apps.autoUpdateAttempts",
+        scope: SettingsScope::Machine,
+    },
+    SystemStateScopeRule {
         path: "apps.pinnedVersions",
         scope: SettingsScope::Machine,
     },

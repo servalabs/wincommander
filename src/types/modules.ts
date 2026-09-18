@@ -14,8 +14,8 @@
 //   - No background processes spawn (e.g. Privacy Shield AI, productivity tracker)
 //   - Dashboard radar skips its scan checks
 //
-// By default, only basic modules are enabled (dashboard, network, tweaks, apps).
-// Help & Setup sets defaults based on the selected experience level.
+// A fresh installation enables every module. Help & Setup can subsequently
+// tailor modules based on the selected experience level.
 // Users can manually toggle any module regardless of experience level.
 //
 // STORED AT: settings.json → app.modules  (flat Record<ModuleId, boolean>)
@@ -198,6 +198,18 @@ export function getDefaultModules(level: ExperienceLevel): ModuleConfig {
   const config: ModuleConfig = {};
   for (const def of MODULE_DEFS) {
     config[def.id] = ids.includes(def.id);
+  }
+  return config;
+}
+
+/** Build the first-run module map. New installations must never present an
+ *  apparently disabled panel merely because its module key has not been
+ *  persisted yet. This is intentionally separate from experience-level
+ *  defaults so an existing user's explicit choices are never overwritten. */
+export function getFirstRunModules(): ModuleConfig {
+  const config: ModuleConfig = {};
+  for (const def of MODULE_DEFS) {
+    config[def.id] = true;
   }
   return config;
 }

@@ -20,7 +20,9 @@ use uuid::Uuid;
 
 pub const SETTINGS_VERSION: u32 = 2;
 
-const DEFAULT_PERMANENTLY_HIDDEN_PANELS: &[&str] = &["productivity", "server-apps", "flows"];
+// New installations expose all ordinary panels. An explicit per-user list is
+// still honoured, so this default never re-enables a panel a user hid.
+const DEFAULT_PERMANENTLY_HIDDEN_PANELS: &[&str] = &[];
 const USER_SETTINGS_FILENAME: &str = "user-settings.dat";
 const USER_SETTINGS_MAX_PLAINTEXT_BYTES: usize = 1_048_576;
 
@@ -4215,6 +4217,16 @@ mod tests {
             settings.app.permanently_hidden_panels,
             Some(vec!["productivity".to_string()])
         );
+    }
+
+    #[test]
+    fn runtime_defaults_keep_an_unconfigured_profile_visible() {
+        let mut settings = create_default_settings();
+        settings.app.permanently_hidden_panels = None;
+
+        apply_runtime_defaults(&mut settings);
+
+        assert_eq!(settings.app.permanently_hidden_panels, Some(Vec::new()));
     }
 
     #[test]

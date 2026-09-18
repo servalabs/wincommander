@@ -20,7 +20,7 @@ import useBackend, {
 import type { AppSettings, SettingsPatch, AppInventorySnapshot } from '../types/settings';
 import type { DependencyInfo } from '../hooks/useDependencies';
 import { _getOperationHandlers } from './TaskStatusContext';
-import { getDefaultModules } from '../types/modules';
+import { getDefaultModules, getFirstRunModules } from '../types/modules';
 import type { ModuleConfig } from '../types/modules';
 import { getStartupStaggerStep } from '../lib/performancePolicy';
 import { isAppInventoryRefreshDue } from '../lib/appInventoryStartup';
@@ -242,9 +242,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const normalizeModulesConfig = useCallback((
         modules: ModuleConfig | undefined,
-        level: 'simple' | 'standard' | 'advanced' | undefined
+        level: 'simple' | 'standard' | 'advanced' | undefined,
+        firstRunComplete: boolean | undefined,
     ): ModuleConfig => {
-        const base = getDefaultModules(level ?? 'standard');
+        // Before setup is complete there is no user preference to preserve:
+        // seed every panel/module ON. Once setup has completed, retain the
+        // existing experience-level fallback and overlay every persisted choice.
+        const base = firstRunComplete === true
+            ? getDefaultModules(level ?? 'standard')
+            : getFirstRunModules();
         return { ...base, ...(modules ?? {}) };
     }, []);
 
@@ -958,7 +964,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             // Heal sparse/legacy module maps so missing keys do NOT default to false on restart.
             const currentLevel = settings.app?.experienceLevel ?? 'standard';
-            const normalizedModules = normalizeModulesConfig(settings.app?.modules, currentLevel);
+            const normalizedModules = normalizeModulesConfig(
+                settings.app?.modules,
+                currentLevel,
+                settings.app?.firstRunComplete,
+            );
             const hadModuleShapeDrift = Object.keys(normalizedModules).length !== Object.keys(settings.app?.modules ?? {}).length;
             if (hadModuleShapeDrift) {
                 const normalizedSettings = {
@@ -1103,7 +1113,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             // so missing keys never behave like implicit OFF on next startup.
             if (normalizedPatch.app?.modules) {
                 const level = normalizedPatch.app?.experienceLevel ?? latest?.app?.experienceLevel ?? 'standard';
-                const currentModules = normalizeModulesConfig(latest?.app?.modules, level);
+                const currentModules = normalizeModulesConfig(
+                    latest?.app?.modules,
+                    level,
+                    latest?.app?.firstRunComplete,
+                );
                 normalizedPatch = {
                     ...normalizedPatch,
                     app: {
