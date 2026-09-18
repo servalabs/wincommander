@@ -633,6 +633,8 @@ Persisted under `ideal.network.hosts.enabledBlocklists`. All blocklists are
 | `piracy-torrent`      | Piracy, scene, torrents             | — |
 | `adobe`               | Adobe activation/telemetry          | 1 |
 | `autodesk`            | Autodesk licensing                  | 1 |
+| `altium`              | Altium activation/account services  | 1 |
+| `solidworks`          | SOLIDWORKS activation               | 1 |
 | `corel`               | Corel activation                    | 1 |
 | `glasswire`           | GlassWire activation                | 1 |
 | `lightburn`           | LightBurn licensing                 | 1 |

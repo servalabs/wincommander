@@ -4957,6 +4957,19 @@ function Get-HardcodedBlocklists {
 0.0.0.0 dev1.ipm.corel.public.corel.net
 '@
 
+                'altium'              = @'
+0.0.0.0 activation.altium.com
+0.0.0.0 ids.altium.com
+0.0.0.0 ids.live.altium.com
+0.0.0.0 ids.api.altium.com
+0.0.0.0 portal365.altium.com
+0.0.0.0 dashboard.altium.com
+'@
+
+                'solidworks'          = @'
+0.0.0.0 activate.solidworks.com
+'@
+
                 'adobe'               = @'
 0.0.0.0 adobe.io
 0.0.0.0 0ojupfm51u.adobe.io

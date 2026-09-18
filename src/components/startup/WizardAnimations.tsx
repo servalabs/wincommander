@@ -1570,6 +1570,8 @@ const FW_APPS: FwAppDef[] = [
   { id: 'ai-sites',           name: 'AI Services',  color: '#a29bfe', logo: companyLogos['google-logo.svg'] },
   { id: 'adobe',              name: 'Adobe',         color: '#ff3344', logo: companyLogos['adobe-logo.png'] },
   { id: 'autodesk',           name: 'Autodesk',      color: '#ff9f43', logo: software['autocad.png'] },
+  { id: 'altium',             name: 'Altium',        color: '#d5bd81', logo: software['altium-designer.svg'] },
+  { id: 'solidworks',         name: 'SOLIDWORKS',    color: '#e52521', logo: software['solidworks.svg'] },
   { id: 'corel',              name: 'Corel',         color: '#6c5ce7', logo: software['coreldraw.png'] },
   { id: 'piracy-torrent',     name: 'Torrents',      color: '#e17055', logo: software['piratebay.png'] },
   { id: 'glasswire',          name: 'GlassWire',     color: '#00b894', logo: software['glasswire.png'] },

@@ -7,7 +7,7 @@
 // Companion to the toggle registries in privacy/tweaks/capabilities.toggles.ts.
 // This file holds capabilities that aren't simple on/off toggles:
 //
-//   - **Blocklists** — 9 hostsfile blocklists (telemetry, AI sites, cloud
+//   - **Blocklists** — 11 hostsfile blocklists (telemetry, AI sites, cloud
 //     upload, Adobe, etc.). They have an active/inactive state but are
 //     rendered specially in the Network panel and First Run Wizard.
 //   - **Future:** vault operations, mesh actions, Privacy Shield orchestration,
@@ -67,7 +67,7 @@ export interface BlocklistFeature extends FeatureDef {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// THE 9 BLOCKLISTS — single source of truth
+// THE 11 BLOCKLISTS — single source of truth
 // ═══════════════════════════════════════════════════════════════════════
 //
 // All free per user comment ("hostsfile rewrite is trivial; competing with
@@ -139,6 +139,32 @@ export const BLOCKLISTS: BlocklistFeature[] = [
     defenderFlagged: false,
     emoji: "📐",
     logo: software["autocad.png"],
+  },
+  {
+    id: "blocklist.altium",
+    panel: "network",
+    label: "Altium Designer",
+    description: "Block Altium Designer activation and account endpoints",
+    tier: "free",
+    needsAdmin: true,
+    irreversible: false,
+    reducesSecurity: false,
+    defenderFlagged: false,
+    emoji: "🔧",
+    logo: software["altium-designer.svg"],
+  },
+  {
+    id: "blocklist.solidworks",
+    panel: "network",
+    label: "SOLIDWORKS",
+    description: "Block SOLIDWORKS activation endpoints",
+    tier: "free",
+    needsAdmin: true,
+    irreversible: false,
+    reducesSecurity: false,
+    defenderFlagged: false,
+    emoji: "⚙️",
+    logo: software["solidworks.svg"],
   },
   {
     id: "blocklist.corel",

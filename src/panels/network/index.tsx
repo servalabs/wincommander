@@ -136,6 +136,8 @@ const DNS_LOGO_THUMBNAIL_CLASSES: Record<string, string> = {
 const BRAND_LOGOS: Record<string, string[]> = {
     'adobe': [companyLogos['adobe-logo.png'], software['photoshop.png'], software['illustrator.png'], software['premiere-pro.png']],
     'autodesk': [software['autodesk.png'], software['autocad.png'], software['3ds-max.png']],
+    'altium': [software['altium-designer.svg']],
+    'solidworks': [software['solidworks.svg']],
     'corel': [software['coreldraw.png']],
     'glasswire': [software['glasswire.png']],
     'lightburn': [software['lightburn.png']],

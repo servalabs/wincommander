@@ -12,9 +12,11 @@ const entityMods = (CAN_LOAD_BROWSER_ASSET_MAPS
 const softwareMods = (CAN_LOAD_BROWSER_ASSET_MAPS
   ? import.meta.glob([
       "../../assets/softwares/autocad.png",
+      "../../assets/softwares/altium-designer.svg",
       "../../assets/softwares/coreldraw.png",
       "../../assets/softwares/glasswire.png",
       "../../assets/softwares/lightburn.png",
+      "../../assets/softwares/solidworks.svg",
       "../../assets/softwares/piratebay.png",
       "../../assets/softwares/gdrive.svg",
     ], { eager: true, query: "?url&wc-module", import: "default" })

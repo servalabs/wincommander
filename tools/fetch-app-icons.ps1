@@ -19,6 +19,12 @@ if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out
 # slug -> ordered list of candidate URLs.
 # Slug names match ID_TO_SLUG in src/panels/apps/components/appIcons.ts.
 $catalog = @(
+    @{ slug = 'altium-designer'; urls = @(
+            'https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/altiumdesigner.svg'
+        ) },
+    @{ slug = 'solidworks'; urls = @(
+            'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/solidworks.svg'
+        ) },
     @{ slug = 'peazip'; urls = @(
             'https://peazip.github.io/favicon.ico'
         ) },
