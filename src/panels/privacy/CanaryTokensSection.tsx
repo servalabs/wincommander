@@ -22,6 +22,8 @@ import { save } from '@tauri-apps/plugin-dialog';
 import { Button, HTMLSelect, InputGroup, Spinner, Tag } from '@/components/ui/bp';
 import type { Intent } from '@/components/ui/bp';
 import SectionCard from '../../components/shared/SectionCard';
+import TierGate from '../../components/shared/TierGate';
+import useEntitlements from '../../hooks/useEntitlements';
 import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
 import PrivacyEventTable from './PrivacyEventTable';
 import { showError, showSuccess } from '../../utils/toast';
@@ -33,16 +35,17 @@ interface CanaryToken {
   label: string;
   tokenType: 'docx' | 'url';
   outputPath: string;
-  beaconUrl: string;
-  createdAt: string;
+  beaconUrl?: string;
+  createdAt: string | number;
 }
 
 interface CanaryHit {
   tokenId: string;
   label: string;
-  remoteAddr: string;
-  userAgent: string | null;
-  firedAt: string;
+  peer?: string;
+  remoteAddr?: string;
+  userAgent?: string | null;
+  firedAt: string | number;
 }
 
 interface ListenerStatus {
@@ -57,9 +60,11 @@ const TOKEN_TYPES: { label: string; value: string }[] = [
 
 const RECENT_CAP = 50;
 
-function formatRelative(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
+function formatRelative(value: string | number): string {
+  const t = typeof value === 'number'
+    ? value * (value < 10_000_000_000 ? 1000 : 1)
+    : Date.parse(value);
+  if (Number.isNaN(t)) return String(value);
   const diffSec = Math.max(0, Math.round((Date.now() - t) / 1000));
   if (diffSec < 60) return `${diffSec}s ago`;
   const m = Math.floor(diffSec / 60);
@@ -72,6 +77,7 @@ function formatRelative(iso: string): string {
 // ── Section ──────────────────────────────────────────────────────────────────
 
 export default function CanaryTokensSection() {
+  const { hasPaid } = useEntitlements();
   const confirmAction = useAppConfirm();
   // Listener
   const [listenerStatus, setListenerStatus] = useState<ListenerStatus>({ running: false, port: null });
@@ -93,19 +99,22 @@ export default function CanaryTokensSection() {
 
   // General error
   const [error, setError] = useState<string | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   // ── Data fetch ─────────────────────────────────────────────────────────────
 
   const refreshStatus = useCallback(async () => {
+    if (!hasPaid) return;
     try {
       const s = await invoke<ListenerStatus>('canary_listener_status');
       setListenerStatus(s ?? { running: false, port: null });
     } catch (e) {
       setListenerStatus({ running: false, port: null });
     }
-  }, []);
+  }, [hasPaid]);
 
   const refreshTokens = useCallback(async () => {
+    if (!hasPaid) return;
     setTokensBusy(true);
     try {
       const list = await invoke<CanaryToken[]>('list_canaries');
@@ -115,20 +124,22 @@ export default function CanaryTokensSection() {
     } finally {
       setTokensBusy(false);
     }
-  }, []);
+  }, [hasPaid]);
 
   const refreshRecent = useCallback(async () => {
+    if (!hasPaid) return;
     try {
       const hits = await invoke<CanaryHit[]>('get_canary_recent');
       setRecent(Array.isArray(hits) ? hits : []);
     } catch {
       // Non-fatal — listener may not be running yet.
     }
-  }, []);
+  }, [hasPaid]);
 
   // ── Mount ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    if (!hasPaid) return;
     void refreshStatus();
     void refreshTokens();
     void refreshRecent();
@@ -144,7 +155,7 @@ export default function CanaryTokensSection() {
     return () => {
       if (unlisten) unlisten();
     };
-  }, [refreshStatus, refreshTokens, refreshRecent]);
+  }, [hasPaid, refreshStatus, refreshTokens, refreshRecent]);
 
   // ── Listener controls ──────────────────────────────────────────────────────
 
@@ -157,7 +168,7 @@ export default function CanaryTokensSection() {
         setError('Port must be 1024–65535.');
         return;
       }
-      await invoke('start_canary_listener', { args: { port } });
+      await invoke('start_canary_listener', { args: { httpPort: port } });
       await refreshStatus();
     } catch (e) {
       setError(String(e));
@@ -271,6 +282,24 @@ export default function CanaryTokensSection() {
 
   // ── Header pill ───────────────────────────────────────────────────────────
 
+  if (!hasPaid) {
+    return (
+      <SectionCard title="Canary links & documents" icon="feed">
+        <TierGate
+          tier="paid"
+          featureLabel="Canary links & documents"
+          fallback={
+            <p className="text-xs text-[var(--shield-text-subtle)]">
+              Pro adds local canary documents and shortcuts with beacon-hit tracking.
+            </p>
+          }
+        >
+          {null}
+        </TierGate>
+      </SectionCard>
+    );
+  }
+
   const hitCount = recent.length;
   const pillIntent: Intent = hitCount > 0 ? 'danger' : listenerStatus.running ? 'success' : 'none';
   const headerRight = (
@@ -278,7 +307,7 @@ export default function CanaryTokensSection() {
       {hitCount > 0
         ? `${hitCount} HIT${hitCount === 1 ? '' : 'S'}`
         : listenerStatus.running
-          ? `LISTENING :${listenerStatus.port}`
+          ? `LOCAL :${listenerStatus.port}`
           : 'OFF'}
     </Tag>
   );
@@ -286,18 +315,35 @@ export default function CanaryTokensSection() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <SectionCard title="Canary Tokens" icon="feed" headerRight={headerRight}>
+    <SectionCard title="Canary links & documents" icon="feed" headerRight={headerRight}>
       <div className="flex flex-col gap-4">
-        <div className="text-sm opacity-80">
-          Plant a traceable artifact — a Word doc or URL shortcut — that beacons
-          home when opened. The local HTTP listener records the hit and alerts you.
-          v1 supports self-hosted HTTP beacons; DNS canaries are v2.
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-sm opacity-80">
+            Records a local beacon request when a generated document or shortcut is opened or fetched.
+          </p>
+          <Button
+            icon="info-sign"
+            minimal
+            small
+            aria-label="About Canary link and document detection"
+            aria-expanded={showHelp}
+            aria-controls="canary-local-help"
+            onClick={() => setShowHelp((value) => !value)}
+          />
+        </div>
+        {showHelp && (
+          <div id="canary-local-help" role="note" className="rounded border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs opacity-80">
+            Canary artifacts contain a beacon URL. A hit is recorded only when that URL is fetched while this local listener is running. The current implementation does not provide an internet-facing callback service.
+          </div>
+        )}
+        <div role="status" className="rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-xs">
+          <strong>Local-only.</strong> Current canaries use 127.0.0.1. Opening a generated artifact on another PC will not notify this PC.
         </div>
 
         {/* ── Listener controls ── */}
         <div className="flex flex-col gap-2">
           <div className="text-xs font-semibold uppercase tracking-widest opacity-60">
-            HTTP Listener
+            Local beacon listener
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <InputGroup
@@ -344,7 +390,7 @@ export default function CanaryTokensSection() {
         {/* ── Token generation ── */}
         <div className="flex flex-col gap-2">
           <div className="text-xs font-semibold uppercase tracking-widest opacity-60">
-            Generate Token
+            Canary artifacts
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <HTMLSelect
@@ -425,7 +471,7 @@ export default function CanaryTokensSection() {
                     small
                     intent="danger"
                     onClick={() => void deleteToken(t.id)}
-                    aria-label={`Delete ${t.label}`}
+                    aria-label={`Stop tracking ${t.label}; generated artifact stays on disk`}
                   />
                 </div>
               ))}
@@ -454,7 +500,7 @@ export default function CanaryTokensSection() {
             <div className="text-sm opacity-60">No hits recorded.</div>
           )}
           {recent.length > 0 && (
-            <PrivacyEventTable title="Canary token hits" columns={["Time", "Token", "Remote address", "User agent"]} rows={recent.map((h, i) => ({ id: `${h.tokenId}-${h.firedAt}-${i}`, search: `${h.label} ${h.tokenId} ${h.remoteAddr} ${h.userAgent ?? ''}`, sort: [h.firedAt, h.label || h.tokenId, h.remoteAddr, h.userAgent ?? ''], cells: [<span className="font-mono">{formatRelative(h.firedAt)}</span>, <><Tag minimal intent="danger">HIT</Tag> {h.label || h.tokenId}</>, h.remoteAddr, h.userAgent || '—'] }))} />
+            <PrivacyEventTable title="Canary token hits" columns={["Time", "Token", "Request address", "User agent"]} rows={recent.map((h, i) => ({ id: `${h.tokenId}-${h.firedAt}-${i}`, search: `${h.label} ${h.tokenId} ${h.peer ?? h.remoteAddr ?? ''} ${h.userAgent ?? ''}`, sort: [String(h.firedAt), h.label || h.tokenId, h.peer ?? h.remoteAddr ?? '', h.userAgent ?? ''], cells: [<span className="font-mono">{formatRelative(h.firedAt)}</span>, <><Tag minimal intent="danger">HIT</Tag> {h.label || h.tokenId}</>, h.peer ?? h.remoteAddr ?? '—', h.userAgent || '—'] }))} />
           )}
         </div>
       </div>

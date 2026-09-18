@@ -58,7 +58,6 @@ interface Props {
 }
 
 export default function DecoyMonitorSection({
-  isAdvanced,
   searchQuery,
   enabled,
   enrolledPaths,
@@ -196,13 +195,19 @@ export default function DecoyMonitorSection({
   };
 
   const onRemove = async (path: string) => {
+    const accepted = await requestConfirm({
+      title: "Stop watching this decoy?",
+      description: `${path}\n\nThis removes only the monitoring record. The file remains on disk.`,
+      confirmLabel: "Stop watching",
+    });
+    if (!accepted) return;
     try {
       // Remove the runtime watch first. Persisting alone used to leave the
       // active watcher armed until an unrelated settings render happened.
       await invoke("remove_decoy", { path });
       onPatchDecoy({ enrolledPaths: enrolledPaths.filter((p) => p !== path) });
       await refreshDecoys();
-      showSuccess("Decoy unenrolled. The file remains on disk.");
+      showSuccess("Decoy monitoring record removed. The file remains on disk.");
     } catch (err) {
       showError(`Couldn't unenroll decoy: ${err}`);
     }
@@ -231,14 +236,16 @@ export default function DecoyMonitorSection({
   const onClearRecent = async () => {
     const accepted = await requestConfirm({
       title: "Clear recent decoy access events?",
-      description: "This removes the recent decoy-file access events recorded for this app session.",
+      description: "This removes only the recent decoy-file event history. Enrolled files and monitoring records are not changed.",
       confirmLabel: "Clear events",
     });
     if (!accepted) return;
     try {
       await invoke("clear_decoy_recent");
-    } catch { /* ignore */ }
-    refreshRecent();
+      await refreshRecent();
+    } catch (err) {
+      showError(`Couldn't clear decoy events: ${err}`);
+    }
   };
 
   // Status pill states: idle / watching / triggered (any recent events).
@@ -267,7 +274,7 @@ export default function DecoyMonitorSection({
   return (
     <>
       <SectionCard
-        title={isAdvanced ? "Decoy File Monitor" : "Honeypot files"}
+        title="Decoy files"
         icon="document"
         headerRight={(
           <div className="flex items-center gap-2">
@@ -279,21 +286,16 @@ export default function DecoyMonitorSection({
         <div className="flex flex-col gap-3 min-w-0">
           <div className="flex items-start justify-between gap-3">
             <p className="text-xs text-[var(--shield-text-subtle)] text-pretty max-w-[420px]">
-              {isAdvanced
-                ? readAuditEnabled
-                  ? "Reads, opens, edits, renames, and removals trigger an immediate warning. Background metadata activity is ignored."
-                  : "Edits, renames, and removals trigger immediately. Turn on read auditing below to also detect opens."
-                : readAuditEnabled
-                  ? "Fake sensitive-looking files alert you when opened, read, or changed."
-                  : "Fake sensitive-looking files alert you when changed; read/open detection is optional."}
+              Watches enrolled local files for changes, renames, deletion/removal, and optional reads or opens.
             </p>
             <button
               type="button"
               onClick={() => setShowIntro(true)}
               aria-label="How decoy file monitoring works"
-              className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-[var(--color-accent)]/30 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10 transition-colors"
+              aria-expanded={showIntro}
+              className="inline-grid size-6 shrink-0 place-items-center rounded-full border border-[var(--color-accent)]/30 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10 transition-colors"
             >
-              How it works?
+              <Icon icon="info-sign" size={11} />
             </button>
           </div>
           <label className="flex items-start gap-2 rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[11px] text-[var(--shield-text-subtle)] cursor-pointer">
@@ -342,7 +344,7 @@ export default function DecoyMonitorSection({
                 <span>
                   Notify Fleet admins
                   <span className="block text-[10px] text-[var(--shield-text-muted)]">
-                    Sends a path-free tripwire alert to the Fleet console.
+                    Sends a redacted tripwire signal to Fleet. Local path and user details stay on this PC.
                   </span>
                 </span>
               </label>
@@ -422,6 +424,7 @@ export default function DecoyMonitorSection({
                               icon="cross"
                               onClick={() => { void onRemove(d.path); }}
                               title="Stop watching (file stays on disk)"
+                              aria-label={`Stop watching ${shortPath(d.path)}; keep file on disk`}
                             />
                             <Button
                               small
@@ -430,6 +433,7 @@ export default function DecoyMonitorSection({
                               intent="danger"
                               onClick={() => onDeleteFile(d.path)}
                               title="Delete file from disk"
+                              aria-label={`Delete ${shortPath(d.path)} from disk`}
                             />
                           </span>
                         </div>

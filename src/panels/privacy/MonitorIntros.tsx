@@ -137,7 +137,7 @@ export function DecoyMonitorIntro({ isOpen, onClose }: IntroProps) {
         <IntroFrame
             title="What is file access monitoring?"
             subtitle="Tripwire files that alert when touched"
-            body="Drop decoy files — plausible account notes, wallet checklists, and client lists — in places an intruder is likely to inspect. Pro watches those exact paths. A real content change, rename, or removal raises an alert; optional Windows auditing can also report opens. Background metadata is ignored, and no lockdown action is implied."
+            body="Decoy files are local filesystem tripwires. Changes, renames, deletion/removal raise alerts; optional Windows auditing can also report reads and opens. Background metadata activity is ignored. If Fleet alerts are enabled, only a coarse event kind and time leave the PC — paths, usernames, domains, SIDs, and process details stay local."
             onClose={onClose}
         >
             <DecoyMonitorAnimation />
