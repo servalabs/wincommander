@@ -961,9 +961,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const normalizedModules = normalizeModulesConfig(settings.app?.modules, currentLevel);
             const hadModuleShapeDrift = Object.keys(normalizedModules).length !== Object.keys(settings.app?.modules ?? {}).length;
             if (hadModuleShapeDrift) {
-                settings = await invoke<AppSettings>('patch_settings_cmd', {
-                    patch: { app: { modules: normalizedModules } },
-                });
+                const normalizedSettings = {
+                    ...settings,
+                    app: { ...settings.app, modules: normalizedModules },
+                };
+                try {
+                    settings = await invoke<AppSettings>('patch_settings_cmd', {
+                        patch: { app: { modules: normalizedModules } },
+                    });
+                } catch {
+                    // A standard user may read the shared machine baseline but
+                    // cannot repair it. Keep the safe normalized shape in
+                    // memory so a denied persistence write never blocks startup.
+                    settings = normalizedSettings;
+                }
             }
 
             if (signal?.aborted) return null;
@@ -996,9 +1007,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
                         if (probeRes && typeof probeRes === 'object') {
                             // First run: probe populates BOTH ideal and current.
-                            const updated = await invoke<AppSettings>('patch_settings_cmd', {
-                                patch: { ideal: probeRes, current: probeRes },
-                            });
+                            let updated: AppSettings;
+                            try {
+                                updated = await invoke<AppSettings>('patch_settings_cmd', {
+                                    patch: { ideal: probeRes, current: probeRes },
+                                });
+                            } catch {
+                                // First-run probing is useful to every user,
+                                // but only an elevated administrator may save
+                                // the shared device baseline. Keep the result
+                                // in this session rather than failing splash.
+                                updated = { ...settings, ideal: probeRes, current: probeRes } as AppSettings;
+                            }
                             setAppSettings(updated);
                             appSettingsRef.current = updated;
                             seedFromCachedSettings(updated);

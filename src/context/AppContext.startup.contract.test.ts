@@ -16,6 +16,8 @@ describe("AppContext startup coordination", () => {
     expect(source).toMatch(/id:\s*['"]startup-status['"]/);
     expect(source).toContain("emitProgress(70, 'checking system readiness')");
     expect(source).toContain("setStartupComplete(true);");
+    expect(source).toContain("settings = normalizedSettings;");
+    expect(source).toContain("only an elevated administrator may save");
     expect(source).toContain("startupEligibilityRef.current");
     expect(source).not.toContain("runStartupJob,\n    startupEligibility,");
   });
