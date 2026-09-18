@@ -141,6 +141,8 @@ const BRAND_LOGOS: Record<string, string[]> = {
     'corel': [software['coreldraw.png']],
     'glasswire': [software['glasswire.png']],
     'lightburn': [software['lightburn.png']],
+    'easeus': [software['easeus.png']],
+    'wondershare': [software['wondershare.svg']],
     'piracy-torrent': [software['piratebay.png']],
     'ai-sites': [companyLogos['openai-logo.svg'], companyLogos['meta-logo.png'], companyLogos['google-logo.svg']],
     'telemetry-blocklist': [companyLogos['microsoft-logo.svg'], companyLogos['nvidia-logo.svg'], companyLogos['google-logo.svg']],

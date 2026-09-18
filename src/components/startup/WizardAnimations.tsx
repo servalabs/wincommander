@@ -1576,6 +1576,8 @@ const FW_APPS: FwAppDef[] = [
   { id: 'piracy-torrent',     name: 'Torrents',      color: '#e17055', logo: software['piratebay.png'] },
   { id: 'glasswire',          name: 'GlassWire',     color: '#00b894', logo: software['glasswire.png'] },
   { id: 'lightburn',          name: 'LightBurn',     color: '#fdcb6e', logo: software['lightburn.png'] },
+  { id: 'easeus',             name: 'EaseUS',        color: '#2563eb', logo: software['easeus.png'] },
+  { id: 'wondershare',        name: 'Wondershare',   color: '#2864e8', logo: software['wondershare.svg'] },
   { id: 'cloud-upload',       name: 'Cloud Upload',  color: '#74b9ff', logo: saas['gdrive.svg'] },
 ];
 

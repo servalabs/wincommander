@@ -7,7 +7,7 @@
 // Companion to the toggle registries in privacy/tweaks/capabilities.toggles.ts.
 // This file holds capabilities that aren't simple on/off toggles:
 //
-//   - **Blocklists** — 11 hostsfile blocklists (telemetry, AI sites, cloud
+//   - **Blocklists** — 13 hostsfile blocklists (telemetry, AI sites, cloud
 //     upload, Adobe, etc.). They have an active/inactive state but are
 //     rendered specially in the Network panel and First Run Wizard.
 //   - **Future:** vault operations, mesh actions, Privacy Shield orchestration,
@@ -67,7 +67,7 @@ export interface BlocklistFeature extends FeatureDef {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// THE 11 BLOCKLISTS — single source of truth
+// THE 13 BLOCKLISTS — single source of truth
 // ═══════════════════════════════════════════════════════════════════════
 //
 // All free per user comment ("hostsfile rewrite is trivial; competing with
@@ -204,6 +204,32 @@ export const BLOCKLISTS: BlocklistFeature[] = [
     defenderFlagged: false,
     emoji: "💡",
     logo: software["lightburn.png"],
+  },
+  {
+    id: "blocklist.easeus",
+    panel: "network",
+    label: "EaseUS",
+    description: "Block EaseUS product activation endpoints",
+    tier: "free",
+    needsAdmin: true,
+    irreversible: false,
+    reducesSecurity: false,
+    defenderFlagged: false,
+    emoji: "💾",
+    logo: software["easeus.png"],
+  },
+  {
+    id: "blocklist.wondershare",
+    panel: "network",
+    label: "Wondershare",
+    description: "Block Wondershare account activation endpoints",
+    tier: "free",
+    needsAdmin: true,
+    irreversible: false,
+    reducesSecurity: false,
+    defenderFlagged: false,
+    emoji: "🎬",
+    logo: software["wondershare.svg"],
   },
   {
     id: "blocklist.cloud-upload",

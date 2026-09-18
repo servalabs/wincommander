@@ -4944,6 +4944,14 @@ function Get-HardcodedBlocklists {
 0.0.0.0 api.cryptlex.com
 '@
 
+                'easeus'              = @'
+0.0.0.0 activation.easeus.com
+'@
+
+                'wondershare'         = @'
+0.0.0.0 accounts.wondershare.com
+'@
+
                 'corel'               = @'
 0.0.0.0 apps.corel.com
 0.0.0.0 ipm.corel.com

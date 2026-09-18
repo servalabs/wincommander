@@ -638,6 +638,8 @@ Persisted under `ideal.network.hosts.enabledBlocklists`. All blocklists are
 | `corel`               | Corel activation                    | 1 |
 | `glasswire`           | GlassWire activation                | 1 |
 | `lightburn`           | LightBurn licensing                 | 1 |
+| `easeus`              | EaseUS product activation           | 1 |
+| `wondershare`         | Wondershare account activation       | 1 |
 | `cloud-upload`        | Dropbox, GDrive, OneDrive           | 2 |
 
 ### Network — DNS
