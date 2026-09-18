@@ -54,7 +54,9 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain('nsExec::ExecToStack \'sc.exe query ${WC_SERVICE_NAME}\'');
     expect(hooks).not.toContain("cmd.exe /c sc query ${WC_SERVICE_NAME} ^| findstr");
     expect(hooks).toContain('ReadEnvStr $R6 "LOCALAPPDATA"');
-    expect(hooks).toContain('RMDir /r "$R6\\WinCommander"');
+    expect(hooks).toContain('Delete "$R6\\WinCommander\\wincommander-free.exe"');
+    expect(hooks).toContain('Delete "$R6\\WinCommander\\uninstall.exe"');
+    expect(hooks).not.toContain('RMDir /r "$R6\\WinCommander"');
     expect(hooks).not.toContain("WC_PRO_PAYLOAD");
     expect(hooks).not.toContain("WC_PRO_EXE");
     expect(hooks).toContain('net.exe localgroup "WinCommander Vault Policy Administrators" /add');

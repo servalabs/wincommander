@@ -103,13 +103,16 @@ ${Using:StrFunc} StrStr
     Abort "WinCommander could not start its machine service."
   ${EndIf}
 
-  ; Releases before the per-machine installer could leave a complete, older
-  ; executable under the installing account's LocalAppData.  It wins when an
-  ; old personal shortcut is used, so remove that legacy install only after
-  ; the shared Program Files binary and service are successfully in place.
+  ; Releases before the per-machine installer could leave an older executable
+  ; under the installing account's LocalAppData. It can win when an old
+  ; personal shortcut is used. Remove only those obsolete launch files: this
+  ; directory also owns that user's settings and caches, which must survive a
+  ; machine-wide update. Other profiles are intentionally not removed here;
+  ; their data belongs to those users and an installer must not erase it.
   ReadEnvStr $R6 "LOCALAPPDATA"
   ${If} $R6 != ""
-    RMDir /r "$R6\WinCommander"
+    Delete "$R6\WinCommander\wincommander-free.exe"
+    Delete "$R6\WinCommander\uninstall.exe"
   ${EndIf}
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\WinCommander"
 
