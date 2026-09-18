@@ -45,7 +45,7 @@ use std::sync::OnceLock;
 
 use tauri::{Emitter, Manager};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, STILL_ACTIVE},
+    Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, STILL_ACTIVE, WAIT_OBJECT_0},
     System::{
         RemoteDesktop::ProcessIdToSessionId,
         Threading::{
@@ -308,6 +308,34 @@ pub fn release() {
         unsafe {
             ReleaseMutex(h as _);
             CloseHandle(h as _);
+        }
+    }
+}
+
+/// Temporarily release the primary mutex while a foreground process asks UAC
+/// to start its elevated replacement. The handle remains open so a cancelled
+/// consent can reclaim it without rebuilding the single-instance state.
+pub fn relinquish_for_elevation_handoff() {
+    if let Some(&h) = MUTEX_HANDLE.get() {
+        unsafe {
+            let _ = ReleaseMutex(h as _);
+        }
+    }
+}
+
+/// Reclaim the mutex after UAC is cancelled or cannot create the child. If a
+/// second foreground launch won the tiny handoff window, that process is the
+/// primary and this process still remains fully usable; we never exit or show
+/// an error merely because elevation was declined.
+pub fn reclaim_after_elevation_cancel() {
+    if let Some(&h) = MUTEX_HANDLE.get() {
+        let result = unsafe { WaitForSingleObject(h as _, 0) };
+        if result != WAIT_OBJECT_0 {
+            crate::log_message_src(
+                "warn",
+                "core",
+                "[SessionInstance] could not reclaim mutex after cancelled elevation handoff",
+            );
         }
     }
 }

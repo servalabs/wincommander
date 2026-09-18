@@ -109,6 +109,7 @@ mod shortcut_cleaner;
 mod sidecar;
 mod sidecar_process_auth;
 mod startup_auth;
+mod startup_elevation;
 mod startup_maintenance;
 mod startup_trace;
 mod startup_window;
@@ -1513,6 +1514,18 @@ pub fn run() {
             // Primary instance already running in this session and has received
             // the forwarded args.  Nothing more to do.
             std::process::exit(0);
+        }
+        // Keep the desktop manifest asInvoker. A normal interactive launch
+        // asks Windows for an elevated replacement; cancelling that UAC prompt
+        // simply continues this already-initialised standard-user instance.
+        // Autostart, CLI, helper, duplicate, and elevated-relaunch launches
+        // are deliberately excluded so there is no prompt loop or logon UAC.
+        if !cli_mode && startup_elevation::should_offer_startup_elevation(cli_mode, &cli_args) {
+            if startup_elevation::offer_startup_elevation(&cli_args)
+                == startup_elevation::StartupElevationResult::ElevatedCopyStarted
+            {
+                std::process::exit(0);
+            }
         }
     }
     // Fail loud if the Edge WebView2 runtime is missing — otherwise the webview
