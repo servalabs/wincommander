@@ -16,16 +16,14 @@ import BrowserHardeningSection from "./BrowserHardeningSection";
 import PrivacyShieldCard from "./PrivacyShieldCard";
 import ScreenCaptureSection from "./ScreenCaptureSection";
 import PasteMonitorSection from "./PasteMonitorSection";
-import DecoyMonitorSection from "./DecoyMonitorSection";
+import DeceptionTripwiresSection from "./DeceptionTripwiresSection";
 import RansomwareMonitorSection from "./RansomwareMonitorSection";
 import RemoteAccessMonitorSection from "./RemoteAccessMonitorSection";
 import AuthAnomalySection from "./AuthAnomalySection";
 import ArgusDlpSection from "./ArgusDlpSection";
 import ArgusTamperSection from "./ArgusTamperSection";
-import ArgusPrintUsbSection from "./ArgusPrintUsbSection";
-import CanaryTokensSection from "./CanaryTokensSection";
 import UsbDevicesSection from "./UsbDevicesSection";
-import PrintActivitySection from "./PrintActivitySection";
+import PrintMonitoringSection from "./PrintMonitoringSection";
 import RdpIdleCard from "./RdpIdleCard";
 import PanelHeader from "../../components/shared/PanelHeader";
 import { useSettingsQuery } from "../../hooks/queries/useSettingsQuery";
@@ -393,7 +391,7 @@ export default function PrivacyPanel() {
                                                 />
                                             </div>
                                             <div className="privacy-monitor-cell"><ArgusDlpSection /></div>
-                                            <div className="privacy-monitor-cell"><ArgusPrintUsbSection /></div>
+                                            <div className="privacy-monitor-cell"><PrintMonitoringSection /></div>
                                             <div className="privacy-monitor-cell"><UsbDevicesSection /></div>
                                             <div className="privacy-monitor-cell">
                                                 <RansomwareMonitorSection
@@ -415,18 +413,19 @@ export default function PrivacyPanel() {
                                         <div className="privacy-monitor-col">
                                             <div className="privacy-monitor-cell" data-tour="privacy-rdp-idle"><RdpIdleCard /></div>
                                             <div className="privacy-monitor-cell">
-                                                <DecoyMonitorSection
-                                                    isAdvanced={isAdvanced}
-                                                    searchQuery=""
-                                                    enabled={decoyEnabled}
-                                                    enrolledPaths={decoyEnrolledPaths}
-                                                    readAuditEnabled={decoyReadAuditEnabled}
-                                                    fleetAlertEnabled={decoyFleetAlertEnabled}
-                                                    onPatchDecoy={patchDecoy}
+                                                <DeceptionTripwiresSection
+                                                    decoy={{
+                                                        isAdvanced,
+                                                        searchQuery: "",
+                                                        enabled: decoyEnabled,
+                                                        enrolledPaths: decoyEnrolledPaths,
+                                                        readAuditEnabled: decoyReadAuditEnabled,
+                                                        fleetAlertEnabled: decoyFleetAlertEnabled,
+                                                        onPatchDecoy: patchDecoy,
+                                                    }}
                                                 />
                                             </div>
                                             <div className="privacy-monitor-cell"><ArgusTamperSection /></div>
-                                            <div className="privacy-monitor-cell"><CanaryTokensSection /></div>
                                             <div className="privacy-monitor-cell">
                                                 <PasteMonitorSection
                                                     isAdvanced={isAdvanced}
@@ -444,7 +443,6 @@ export default function PrivacyPanel() {
                                                     onPatchClipboard={patchClipboard}
                                                 />
                                             </div>
-                                            <div className="privacy-monitor-cell"><PrintActivitySection /></div>
                                         </div>
                                     </div>
                                     </div>
