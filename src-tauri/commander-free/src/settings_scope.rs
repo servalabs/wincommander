@@ -217,6 +217,10 @@ pub(super) const SYSTEM_STATE_SCOPE_TABLE: &[SystemStateScopeRule] = &[
         scope: SettingsScope::User,
     },
     SystemStateScopeRule {
+        path: "privacy.clipboard.pasteMonitorAutoClearOnLock",
+        scope: SettingsScope::User,
+    },
+    SystemStateScopeRule {
         path: "privacy.clipboard.pasteMonitorReportToFleet",
         scope: SettingsScope::User,
     },

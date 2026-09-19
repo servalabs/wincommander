@@ -150,6 +150,36 @@
     background: var(--shield-inner-bg) !important;
 }
 
+/* Tooltips overlay their card.  The monitor's normal inner surfaces are
+ * intentionally translucent, but applying that treatment to a tooltip makes
+ * the card text show through it in light mode. */
+.privacy-monitor-cell .section-card .section-content [role="tooltip"] {
+    background: var(--color-bg-secondary) !important;
+    opacity: 1;
+    isolation: isolate;
+}
+
+/* The RDP session controls belong to Remote Desktop & Access Monitor, not a
+ * second card.  Preserve the familiar section heading while removing the
+ * nested card chrome. */
+.privacy-monitor-cell .remote-access-rdp-protection {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
+.privacy-monitor-cell .remote-access-rdp-protection .section-header-row {
+    padding: 0 0 10px;
+    border-bottom: 1px solid var(--shield-inner-border);
+}
+
+.privacy-monitor-cell .remote-access-rdp-protection .section-content {
+    padding: 12px 0 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+}
+
 .physical-shield-head {
     display: block;
 }
