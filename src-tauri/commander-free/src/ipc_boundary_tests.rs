@@ -9,6 +9,16 @@ use tauri::test::{
 };
 use tauri::{WebviewBuilder, WebviewUrl, WebviewWindowBuilder, WindowBuilder};
 
+// Tauri's test helper accepts WebviewWindow through AsRef, but a child
+// Webview needs an explicit adapter (AsRef is not blanket-reflexive).
+struct ChildView(tauri::Webview<MockRuntime>);
+
+impl AsRef<tauri::Webview<MockRuntime>> for ChildView {
+    fn as_ref(&self) -> &tauri::Webview<MockRuntime> {
+        &self.0
+    }
+}
+
 fn local_url() -> &'static str {
     if cfg!(windows) {
         "http://tauri.localhost/"
@@ -104,7 +114,7 @@ fn embedded_child_does_not_inherit_custom_commands_from_parent_main() {
         )
         .unwrap();
     assert!(get_ipc_response(
-        &child,
+        &ChildView(child),
         request("protected_mutation", json!({}), local_url())
     )
     .is_err());
