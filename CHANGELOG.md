@@ -5,6 +5,14 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Local settings changes and imports now enforce managed policy consistently.
+  Native policy ingestion preserves its verification key and rejects stale
+  epochs. The renderer and CLI no longer expose arbitrary policy ingestion.
+- ActivityWatch's local API transport rejects redirects, ambient proxies,
+  namespace escapes and oversized streamed responses.
+- Restore native module and watcher build integrity, update the CLI catalog,
+  and retain content-free diagnostics when USB actions fail.
+
 - Windows service machine-setting changes now report success only when the
   read-back state matches the request. RDP lock verification distinguishes an
   unavailable firewall query from an unlocked state and checks each matching

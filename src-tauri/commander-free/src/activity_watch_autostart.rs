@@ -54,13 +54,23 @@ impl ActivityWatchSupervisorCode {
 /// reason vocabulary. Keep this mapping string-only and side-effect free so
 /// it can be used by a check-in producer without re-running supervision.
 pub(crate) fn activity_watch_supervisor_code(error: &str) -> ActivityWatchSupervisorCode {
-    if error == "ActivityWatch is not installed" {
+    if matches!(
+        error,
+        "ActivityWatch is not installed" | "activitywatch_not_installed"
+    ) {
         ActivityWatchSupervisorCode::NotInstalled
-    } else if error.contains("API is unreachable") || error.contains("did not become ready") {
+    } else if error == "activitywatch_local_api_unreachable"
+        || error.contains("API is unreachable")
+        || error.contains("did not become ready")
+    {
         ActivityWatchSupervisorCode::LocalApiUnreachable
-    } else if error.contains("watchers did not become healthy") {
+    } else if error == "activitywatch_watchers_unhealthy"
+        || error.contains("watchers did not become healthy")
+    {
         ActivityWatchSupervisorCode::WatchersUnhealthy
-    } else if error.contains("disabled in Productivity settings") {
+    } else if error == "activitywatch_disabled"
+        || error.contains("disabled in Productivity settings")
+    {
         ActivityWatchSupervisorCode::StartupDisabled
     } else {
         ActivityWatchSupervisorCode::StartupFailed
@@ -84,7 +94,10 @@ pub fn init() {
                 Err(error) => {
                     crate::log_message(
                         "warn",
-                        &format!("[ActivityWatch] auto-start attempt {attempt}/3 skipped: {error}"),
+                        &format!(
+                            "[ActivityWatch] auto-start attempt {attempt}/3 skipped: {}",
+                            activity_watch_supervisor_code(&error).as_str()
+                        ),
                     );
                     // A missing installation cannot heal during this launch.
                     if error == "activitywatch_not_installed" || attempt == 3 {
@@ -300,58 +313,17 @@ fn wait_for_watcher_pair() -> Result<(), String> {
 /// constrained to its API namespace; this is never a general-purpose proxy.
 #[tauri::command]
 pub async fn activity_watch_request(path: String) -> Result<serde_json::Value, String> {
-    if !path.starts_with("/api/0/")
-        || path.len() > 4_096
-        || path.contains(['\\', '#', '@'])
-        || path.contains("//")
-    {
-        return Err("Invalid ActivityWatch API path".to_string());
-    }
-
-    let url = format!("http://127.0.0.1:5600{path}");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(4))
-        .build()
-        .map_err(|error| format!("ActivityWatch client setup failed: {error}"))?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|_| "ActivityWatch is not running.".to_string())?;
-    if !response.status().is_success() {
-        return Err(format!("ActivityWatch returned HTTP {}", response.status()));
-    }
-    if response
-        .content_length()
-        .is_some_and(|length| length > 64 * 1024 * 1024)
-    {
-        return Err("ActivityWatch returned an oversized response.".to_string());
-    }
-    response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|_| "ActivityWatch returned invalid JSON.".to_string())
+    http::request(&path).await
 }
+
+#[path = "activity_watch_http.rs"]
+mod http;
 
 #[cfg(windows)]
 fn server_ready() -> bool {
     let address: SocketAddr = "127.0.0.1:5600".parse().expect("constant socket address");
     for _ in 0..40 {
         if TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok() {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(250));
-    }
-    false
-}
-
-#[cfg(windows)]
-fn watchers_ready() -> bool {
-    for _ in 0..20 {
-        let running = running_processes();
-        let afk = running.iter().any(|name| name == "aw-watcher-afk");
-        let window = running.iter().any(|name| name == "aw-watcher-window");
-        if afk && window {
             return true;
         }
         thread::sleep(Duration::from_millis(250));

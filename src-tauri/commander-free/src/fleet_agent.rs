@@ -261,7 +261,7 @@ pub async fn fleet_connect(
     // 1. Persist config so it survives Pro restarts and app reboots.
     //    Free owns settings; Pro reads the config via IPC args at start time.
     //    The fleet signing key is ALSO pinned into policy.fleet_signing_key so the
-    //    policy-apply path (apply_admin_config_cmd) only accepts epochs signed
+    //    policy-apply path (apply_verified_admin_config) only accepts epochs signed
     //    by this fleet server — fail-closed if no key is supplied (P2 locks).
     //    NOTE (2026-07-09): the check-in transport carries NO device keypair — the
     //    server issues a per-device HMAC `checkin_secret` at enroll. The old
@@ -684,7 +684,7 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
         .and_then(|v| v.as_str())
         .map(String::from);
 
-    // apply_admin_config_cmd can fail on signature verification — also a PolicyError.
+    // apply_verified_admin_config can fail on signature verification — also a PolicyError.
     record_fleet_lifecycle(
         &operation_id,
         DiagnosticLifecycle::Applying,
@@ -692,11 +692,13 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
         "applying",
         None,
     );
-    let updated = crate::settings::apply_admin_config_cmd(
+    let updated = crate::settings::apply_verified_admin_config(
         config,
         locked_paths,
         "merge".to_string(),
-        version as u32,
+        u32::try_from(version).map_err(|_| {
+            ApplyError::PolicyError("Fleet policy version is outside the supported range".into())
+        })?,
         signature,
         signer_key,
         target_kind,
@@ -743,7 +745,7 @@ pub async fn fleet_apply_pending_epoch_typed() -> Result<serde_json::Value, Appl
 
 /// Fetch the latest signed policy epoch the Pro agent has pulled, verify it
 /// against the pinned fleet key, and apply it (values + locked paths) via the
-/// signature-checking `apply_admin_config_cmd`. This is the Free side of the
+/// signature-checking `apply_verified_admin_config`. This is the Free side of the
 /// one-way-IPC policy-apply loop (Pro caches the epoch; Free pulls + applies).
 ///
 /// Fail-closed: refuses to apply when no fleet key is pinned, and skips an epoch

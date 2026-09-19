@@ -52,20 +52,6 @@ export async function readSettingsImportFile(): Promise<SettingsImportFile | nul
   return invoke<SettingsImportFile | null>('read_settings_import_file');
 }
 
-export async function applyAdminConfig(
-  config: SettingsPatch,
-  lockedPaths: string[],
-  strategy: 'merge' | 'overwrite',
-  configVersion: number,
-): Promise<AppSettings> {
-  return invoke<AppSettings>('apply_admin_config_cmd', {
-    config,
-    lockedPaths,
-    strategy,
-    configVersion,
-  });
-}
-
 export async function patchSettingsOnce(patch: SettingsPatch): Promise<AppSettings> {
   return invoke<AppSettings>('patch_settings_cmd', { patch });
 }
