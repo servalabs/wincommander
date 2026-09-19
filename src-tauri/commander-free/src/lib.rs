@@ -60,6 +60,7 @@ mod flow_health;
 mod gpo_policy;
 mod inactivity_timer;
 mod investigator_install;
+mod ipc_boundary;
 mod license;
 mod local_clipboard_rules;
 mod log;

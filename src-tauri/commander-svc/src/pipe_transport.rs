@@ -8,10 +8,11 @@ use tokio::{
 use wincmd_shared::{Envelope, MAX_PAYLOAD_BYTES};
 
 const MAX_CONNECTIONS: usize = 32;
-const HELLO_MAX_BYTES: u32 = 16 * 1024;
+pub(crate) const MAX_FRAMES_PER_CONNECTION: usize = 128;
+const HELLO_MAX_BYTES: u32 = 4 * 1024;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const FRAME_TIMEOUT: Duration = Duration::from_secs(30);
-const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) fn connection_slots() -> Arc<Semaphore> {
     Arc::new(Semaphore::new(MAX_CONNECTIONS))

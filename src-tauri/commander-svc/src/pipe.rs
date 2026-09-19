@@ -313,8 +313,9 @@ pub(crate) async fn handle_connection(
         .await
         .context("write Hello ack")?;
 
-    // (b)/(c) Request loop.
-    loop {
+    // (b)/(c) Bound even continuously active clients; callers can reconnect.
+    // This never interrupts a handler or discards its completed reply.
+    for _ in 0..crate::pipe_transport::MAX_FRAMES_PER_CONNECTION {
         let env = match crate::pipe_transport::read_frame(&mut conn).await {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,

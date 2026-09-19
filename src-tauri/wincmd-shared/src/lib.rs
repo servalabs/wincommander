@@ -451,11 +451,11 @@ where
 {
     let limit = limit.min(MAX_PAYLOAD_BYTES);
     let len = reader.read_u32_le().await?;
-    if len > limit {
+    if len == 0 || len > limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "IPC frame payload {} bytes exceeds cap of {} bytes",
+                "IPC frame payload {} bytes is outside the allowed nonzero cap of {} bytes",
                 len, limit
             ),
         ));
