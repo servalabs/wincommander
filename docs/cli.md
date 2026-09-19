@@ -138,3 +138,11 @@ verified pending policy. Local settings patch, replacement and import preserve
 managed locks, the verification key and device identity. A conflicting import
 returns an error before the proposed settings are persisted. Direct JSON
 imports share the native file picker's 4 MiB size limit.
+
+Fleet Connect preserves existing managed preferences and local session state
+when reconnecting. Changing an existing server, verification key or managed
+dispatch setting requires native approval bound to the full request and the
+observed enrollment state. A previously pinned verification key cannot be
+cleared with an empty input. If policy changes while approval is open, retry
+Connect; the stale request is not committed. Supplied confirmation capabilities
+now bind the entire request, rather than only the server URL.

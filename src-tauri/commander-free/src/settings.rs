@@ -2795,6 +2795,9 @@ fn mutate_settings_with(
 #[path = "settings_local_write.rs"]
 mod local_write;
 
+#[path = "settings_fleet_enrollment.rs"]
+pub(crate) mod fleet_enrollment;
+
 /// Deep merge: patch values override base values. Objects are merged recursively.
 fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
     match (base, patch) {

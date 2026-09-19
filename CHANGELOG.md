@@ -5,6 +5,10 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Fleet reconnect preserves managed state. Connection changes validate keys,
+  bind native approval to the complete request, and recheck the observed
+  authority before saving. A failed settings read no longer implies a new device.
+
 - Local settings changes and imports now enforce managed policy consistently.
   Native policy ingestion preserves its verification key and rejects stale
   epochs. The renderer and CLI no longer expose arbitrary policy ingestion.

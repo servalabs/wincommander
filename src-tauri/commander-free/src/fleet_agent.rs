@@ -204,6 +204,8 @@ fn is_transport_err(e: &str) -> bool {
         || e.contains("timeout")
 }
 
+static FLEET_CONNECT_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Connect this device to a fleet server and persist the config to settings.
 ///
 /// Params: serverUrl, dispatch (bool), signingKeyPub (base64 Ed25519 key).
@@ -219,98 +221,48 @@ pub async fn fleet_connect(
     confirmation: Option<String>,
 ) -> Result<serde_json::Value, String> {
     crate::license::require_service_feature("fleet")?;
+    let _connection = FLEET_CONNECT_GATE
+        .try_lock()
+        .map_err(|_| "A Fleet connection change is already in progress".to_string())?;
     let server_url = normalize_fleet_server_url(&server_url)?;
-
-    // Re-pin guard (audit C4): if this device is already enrolled with a
-    // DIFFERENT signing key or server, re-pointing it is security-critical — a
-    // compromised WebView could otherwise silently re-enroll the agent to an
-    // attacker-controlled server and then receive attacker-signed commands.
-    // Require a confirmation the WebView cannot forge (a capability token, or an
-    // OS-native confirm — enrollment is always user-present). First-time
-    // enrollment (no prior key/server) is unaffected.
-    if let Ok(prev) = crate::settings::read_settings() {
-        let prev_key = prev.app.fleet.signing_key_pub;
-        let prev_url = prev.app.fleet.server_url;
-        let changing = (!prev_key.is_empty() && prev_key != signing_key_pub)
-            || (!prev_url.is_empty() && prev_url != server_url);
-        if changing {
-            let ok = match confirmation.as_deref() {
-                Some(tok) => crate::authz::consume(
-                    tok,
+    // A failed read cannot prove this device is unenrolled.
+    let current = crate::settings::read_settings()?;
+    let plan = crate::settings::fleet_enrollment::ConnectionPlan::new(
+        &current,
+        server_url,
+        dispatch,
+        signing_key_pub,
+    )?;
+    let confirmed = if plan.needs_confirmation() {
+        let confirmed = match confirmation.as_deref() {
+            Some(token) => crate::authz::consume(
+                token,
+                crate::authz::DestructiveAction::FleetReenroll,
+                &plan.confirmation_binding(),
+            )
+            .is_ok(),
+            None => {
+                crate::authz::native_confirm_action(
+                    &app,
                     crate::authz::DestructiveAction::FleetReenroll,
-                    &server_url,
                 )
-                .is_ok(),
-                None => {
-                    crate::authz::native_confirm_action(
-                        &app,
-                        crate::authz::DestructiveAction::FleetReenroll,
-                    )
-                    .await
-                }
-            };
-            if !ok {
-                return Err(
-                    "Re-enrolling this device to a different fleet server requires confirmation."
-                        .to_string(),
-                );
+                .await
             }
+        };
+        if !confirmed {
+            return Err("Re-enrolling this device or changing managed dispatch requires native confirmation.".into());
         }
-    }
-
-    // 1. Persist config so it survives Pro restarts and app reboots.
-    //    Free owns settings; Pro reads the config via IPC args at start time.
-    //    The fleet signing key is ALSO pinned into policy.fleet_signing_key so the
-    //    policy-apply path (apply_verified_admin_config) only accepts epochs signed
-    //    by this fleet server — fail-closed if no key is supplied (P2 locks).
-    //    NOTE (2026-07-09): the check-in transport carries NO device keypair — the
-    //    server issues a per-device HMAC `checkin_secret` at enroll. The old
-    //    `agentSigningKey{Priv,Pub}` generation is gone.
-    let pinned_key = if signing_key_pub.trim().is_empty() {
-        serde_json::Value::Null
+        true
     } else {
-        serde_json::Value::String(signing_key_pub.clone())
+        false
     };
-    let patch = serde_json::json!({
-        "app": {
-            "fleet": {
-                "enabled": true,
-                "serverUrl": server_url,
-                "dispatch": dispatch,
-                "signingKeyPub": signing_key_pub,
-                "privacyShieldSessionOwned": false,
-            },
-            // Fleet enrollment must not take ownership of the local camera or
-            // start Privacy Shield. An administrator can publish a signed
-            // policy from the Fleet console later; until then any Shield
-            // session is employee-started and remains locally controllable.
-            "modules": { "privacyShield": true }
-        },
-        "ideal": {
-            "privacy": {
-                "privacyShield": {
-                    "fleetManaged": false,
-                    "fleetMonitoringEnabled": false,
-                }
-            }
-        },
-        "policy": {
-            "fleetSigningKey": pinned_key,
-        }
-    });
-    crate::settings::patch_settings(patch)?;
-
-    // 2. Forward to the running Pro process so the agent starts immediately.
-    //    Pass the machine's STABLE device_id so the fleet sees the same device on
-    //    every re-enroll (no device keypair anymore — HMAC check-in secret only).
-    let device_id = crate::settings::read_settings()
-        .map(|s| s.device_id)
-        .unwrap_or_default();
+    // Recheck the observed authority under the settings lock before persisting.
+    let committed = plan.commit(confirmed)?;
     let args = serde_json::json!({
-        "serverUrl": server_url,
-        "dispatch": dispatch,
-        "signingKeyPub": signing_key_pub,
-        "deviceId": device_id,
+        "serverUrl": committed.app.fleet.server_url,
+        "dispatch": committed.app.fleet.dispatch,
+        "signingKeyPub": committed.app.fleet.signing_key_pub,
+        "deviceId": committed.device_id,
     });
     crate::sidecar::dispatch_paid_command("fleet_agent_configure", args).await
 }
