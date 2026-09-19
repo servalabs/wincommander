@@ -38,6 +38,9 @@ rand = { version = "0.8", default-features = false, features = ["std", "std_rng"
 zeroize = { version = "1", features = ["alloc"] }
 sha2 = "0.11"
 
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+
 [target.'cfg(windows)'.dependencies]
 # Windows service registration / dispatcher (SCM integration).
 windows-service = "0.8"

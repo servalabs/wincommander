@@ -99,6 +99,9 @@ pub fn notification_renderer_ready(app: AppHandle) -> Result<(), String> {
             .emit(NOTIFICATION_DELIVERY_EVENT, payload)
             .map_err(|error| format!("could not deliver queued notification: {error}"))?;
     }
+    // Fixed compatibility signal; the alert renderer has no generic emit right.
+    app.emit("wc-custom-notification-ready", ())
+        .map_err(|_| "could not announce notification readiness".to_string())?;
     Ok(())
 }
 

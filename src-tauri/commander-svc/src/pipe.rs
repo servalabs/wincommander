@@ -40,9 +40,7 @@ use wincmd_shared::svc::{
     classify_verb, is_known_verb, ApplyMachineSettingRequest, CapabilityClass,
     APPLY_MACHINE_SETTING_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
 };
-use wincmd_shared::{
-    read_envelope, write_envelope, Envelope, ErrorReply, Hello, Request, Response,
-};
+use wincmd_shared::{Envelope, ErrorReply, Hello, Request, Response};
 
 use crate::peer_auth::{SessionHelperGate, TrustOrigin};
 // `PeerAuthError` is named directly only by test code (production code
@@ -179,6 +177,7 @@ pub async fn serve(
     // Free the local SECURITY_DESCRIPTOR we allocated.  The kernel has
     // already copied the DACL into the pipe object by now.
     drop(sa);
+    let connection_slots = crate::pipe_transport::connection_slots();
 
     loop {
         // Wait for the next client to connect.
@@ -200,6 +199,10 @@ pub async fn serve(
         drop(next_sa);
 
         let conn = std::mem::replace(&mut server, next_server);
+        let Ok(permit) = Arc::clone(&connection_slots).try_acquire_owned() else {
+            drop(conn);
+            continue;
+        };
 
         let policy_store = Arc::clone(&policy_store);
         let session_helper_gate = Arc::clone(&session_helper_gate);
@@ -208,6 +211,7 @@ pub async fn serve(
         let vault_mount = Arc::clone(&vault_mount);
 
         tokio::spawn(async move {
+            let _permit = permit;
             if let Err(e) = handle_connection(
                 conn,
                 false,
@@ -249,7 +253,10 @@ pub(crate) async fn handle_connection(
     // (the documented post-handshake shape; see `wincmd_shared::svc`'s
     // module doc) is verified against THIS token, matching the exact
     // Phase-9b HMAC contract `Envelope::sign`/`verify_and_unwrap` define.
-    let session_token = match read_envelope(&mut conn).await.context("read Hello")? {
+    let session_token = match crate::pipe_transport::read_hello(&mut conn)
+        .await
+        .context("read Hello")?
+    {
         Envelope::Hello(Hello {
             protocol_version,
             session_token,
@@ -264,7 +271,7 @@ pub(crate) async fn handle_connection(
                     SVC_PROTOCOL_VERSION
                 ),
             });
-            let _ = write_envelope(&mut conn, &err).await;
+            let _ = crate::pipe_transport::write_frame(&mut conn, &err).await;
             return Ok(());
         }
     };
@@ -302,13 +309,13 @@ pub(crate) async fn handle_connection(
         .as_deref()
         .is_some_and(peer_has_active_interactive_session);
     let ack = Envelope::Hello(wincmd_shared::svc::hello_from_ui("svc-ack"));
-    write_envelope(&mut conn, &ack)
+    crate::pipe_transport::write_frame(&mut conn, &ack)
         .await
         .context("write Hello ack")?;
 
     // (b)/(c) Request loop.
     loop {
-        let env = match read_envelope(&mut conn).await {
+        let env = match crate::pipe_transport::read_frame(&mut conn).await {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e.into()),
@@ -336,7 +343,7 @@ pub(crate) async fn handle_connection(
                             kind: "signature_invalid".to_string(),
                             message: reason.to_string(),
                         });
-                        write_envelope(&mut conn, &reply).await?;
+                        crate::pipe_transport::write_frame(&mut conn, &reply).await?;
                         continue;
                     }
                 }
@@ -353,7 +360,7 @@ pub(crate) async fn handle_connection(
                 kind: "unknown_verb".to_string(),
                 message: "service verb is not recognized".to_string(),
             });
-            write_envelope(&mut conn, &reply).await?;
+            crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             continue;
         }
         match authorize_with_interactive_session(
@@ -372,7 +379,7 @@ pub(crate) async fn handle_connection(
                     kind: "forbidden".to_string(),
                     message: reason,
                 });
-                write_envelope(&mut conn, &reply).await?;
+                crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             }
             Ok(trust_origin) => {
                 if is_vault_management_verb(&req.feature_id)
@@ -385,7 +392,7 @@ pub(crate) async fn handle_connection(
                         message: "vault policy operation requires Vault Policy Administrator"
                             .to_string(),
                     });
-                    write_envelope(&mut conn, &reply).await?;
+                    crate::pipe_transport::write_frame(&mut conn, &reply).await?;
                     continue;
                 }
                 let reply = dispatch_verb(
@@ -399,7 +406,7 @@ pub(crate) async fn handle_connection(
                     caller_privileged || vault_policy_manager,
                 )
                 .await;
-                write_envelope(&mut conn, &reply).await?;
+                crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             }
         }
     }

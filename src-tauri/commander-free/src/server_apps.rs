@@ -181,8 +181,15 @@ pub async fn open_server_app(
     // their persistent cookies for usability.
     ephemeral: Option<bool>,
 ) -> Result<(), String> {
+    let label = crate::server_app_policy::label(&group, &id)?;
+    let parsed_url: tauri::Url = url.parse().map_err(|_| "invalid embedded-view URL")?;
+    let dev_origin = if cfg!(debug_assertions) {
+        app.config().build.dev_url.as_ref().map(tauri::Url::origin)
+    } else {
+        None
+    };
+    crate::server_app_policy::validate_url(&parsed_url, dev_origin.as_ref())?;
     let prefix = format!("{}-", group);
-    let label = format!("{}{}", prefix, id);
     let is_ephemeral = ephemeral.unwrap_or(false);
     let bounds = normalized_bounds(x, y, w, h);
 
@@ -222,12 +229,6 @@ pub async fn open_server_app(
         .get_window("main")
         .ok_or_else(|| "Main window not found".to_string())?;
 
-    // Validate URL format before passing to WebviewUrl::External
-    // tauri::WebviewUrl::External expects a url::Url; tauri re-exports it as tauri::Url
-    let parsed_url: tauri::Url = url
-        .parse()
-        .map_err(|e| format!("Invalid URL '{}': {}", url, e))?;
-
     let init_script = build_init_script(&custom_css, &custom_js);
 
     // Use per-user data directory for WebView2 instances to avoid cross-user lock conflicts.
@@ -259,6 +260,9 @@ pub async fn open_server_app(
             // default UA as a mobile/embedded browser and render phone-sized UI.
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .initialization_script(&init_script)
+            .on_navigation(move |url| {
+                crate::server_app_policy::validate_url(url, dev_origin.as_ref()).is_ok()
+            })
             .data_directory(webview_data_dir);
 
     window
@@ -277,6 +281,7 @@ pub async fn open_server_app(
 /// Called when the user navigates away from a panel.
 #[tauri::command]
 pub async fn hide_all_server_apps(app: tauri::AppHandle, group: String) -> Result<(), String> {
+    crate::server_app_policy::validate_group(&group)?;
     let prefix = format!("{}-", group);
     for (lbl, wv) in app.webviews() {
         if lbl.starts_with(&prefix) {
@@ -298,7 +303,7 @@ pub async fn resize_server_app(
     w: f64,
     h: f64,
 ) -> Result<(), String> {
-    let label = format!("{}-{}", group, id);
+    let label = crate::server_app_policy::label(&group, &id)?;
     if let Some(wv) = app.get_webview(&label) {
         let bounds = normalized_bounds(x, y, w, h);
         if !bounds_changed(&label, bounds) {
@@ -319,7 +324,7 @@ pub async fn close_server_app(
     group: String,
     id: String,
 ) -> Result<(), String> {
-    let label = format!("{}-{}", group, id);
+    let label = crate::server_app_policy::label(&group, &id)?;
     if let Some(wv) = app.get_webview(&label) {
         wv.close().map_err(|e| e.to_string())?;
     }
@@ -332,6 +337,7 @@ pub async fn close_server_app(
 /// Close all {group}-* webviews. Used on app exit or panel hard-reset.
 #[tauri::command]
 pub async fn close_all_server_apps(app: tauri::AppHandle, group: String) -> Result<(), String> {
+    crate::server_app_policy::validate_group(&group)?;
     let prefix = format!("{}-", group);
     for (lbl, wv) in app.webviews() {
         if lbl.starts_with(&prefix) {

@@ -74,6 +74,29 @@ physical attacks that operate before Windows enforcement begins.
 - Destructive operations require backend validation and explicit confirmation;
   completion must not be inferred only from a process returning success.
 
+## Renderer and local-service transport boundaries
+
+The desktop and Quick Search renderers use the registered native command
+surface and its existing authorization/confirmation gates. The alert renderer
+has a separate, small command allowance; its settings read is limited to the
+current theme. Embedded server, productivity, and login views do not inherit
+native command or plugin access from their parent desktop window. Alert
+readiness is announced through a fixed native command, not generic frontend
+event emission.
+
+Embedded-view groups and identifiers are validated before view or storage
+operations. External views use HTTP(S), without URL credentials, and cannot
+navigate into the bundled application's custom-protocol origins. The configured
+development application origin is also excluded from external views.
+
+The local service admits at most 32 concurrent connection tasks. Its initial
+frame is limited to 16 KiB and five seconds; subsequent frame reads have a
+30-second deadline, and writes have a ten-second deadline. The shared frame
+ceiling remains 16 MiB. A transport timeout closes the connection rather than
+resuming a partially consumed frame. These deadlines do not cancel an already
+executing machine operation or replace Windows peer authorization. They bound
+specific resources; they are not a claim of complete denial-of-service immunity.
+
 ## Privacy and managed monitoring
 
 Free is local-first. Operational state and local search indexes remain on the
