@@ -24,6 +24,7 @@ describe("RDP machine settings use the typed service route", () => {
 
     expect(client).toContain('setting: "rdp_lock"');
     expect(client).toContain('invoke<MachineSettingObserved>("apply_machine_setting", { request })');
-    expect(bridge).toContain("crate::svc_client::apply_machine_setting(request).await");
+    expect(bridge).toContain("let typed: ApplyMachineSettingRequest = serde_json::from_value(request)");
+    expect(bridge).toContain("crate::svc_client::apply_machine_setting(typed).await");
   });
 });

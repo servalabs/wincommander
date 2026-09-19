@@ -360,7 +360,7 @@ fn write_new_user_material(
     let mut material = [0u8; 32];
     OsRng.fill_bytes(&mut material);
     let protected = protect_user_store_material(&material, current_user_install)?;
-    atomic_write_bytes(&path, &protected)
+    atomic_write_bytes(path, &protected)
         .map_err(|_| "could not write per-user store material".to_string())?;
     Ok(material)
 }

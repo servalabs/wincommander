@@ -161,6 +161,8 @@ mod win32 {
             .map_err(|_| SvcError::Unavailable)?;
 
         let token = random_session_token();
+        let _verified_peer = wincmd_service_auth::verify_service_peer(&client)
+            .map_err(|_| SvcError::Forbidden("untrusted_service_peer".into()))?;
         let hello = Envelope::Hello(hello_from_ui(token.clone()));
         timeout_io(write_envelope(&mut client, &hello)).await?;
 
@@ -224,6 +226,26 @@ mod win32 {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[tokio::test]
+        async fn rejects_an_unregistered_pipe_server_before_sending_hello() {
+            use tokio::net::windows::named_pipe::ServerOptions;
+            let name = format!(r"\\.\pipe\wincmd-helper-peer-test-{}", std::process::id());
+            let server = ServerOptions::new()
+                .first_pipe_instance(true)
+                .create(&name)
+                .unwrap();
+            let client_task = tokio::spawn(async move {
+                call_once(&name, "svc.clipboard.get_policy", serde_json::json!({})).await
+            });
+            server.connect().await.unwrap();
+            assert!(matches!(
+                client_task.await.unwrap(),
+                Err(SvcError::Forbidden(_))
+            ));
+            let mut byte = [0u8; 1];
+            assert!(!matches!(server.try_read(&mut byte), Ok(n) if n > 0));
+        }
 
         #[test]
         fn unwrap_reply_returns_response_result() {

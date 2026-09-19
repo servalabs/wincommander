@@ -1,39 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
+import { rdpMachineSetting, type RdpRedirectionStatus, type CapabilityKey } from "../../hooks/rdpRedirectionClient";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Spinner, Switch, Tag } from "@/components/ui/bp";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppState } from "../../context/AppContext";
 import "./RdpRedirectionCard.css";
-
-interface RdpRedirectionStatus {
-  isWindowsServer: boolean;
-  productName: string;
-  installationType: string;
-  isAdmin: boolean;
-  smartCards: boolean;
-  drives: boolean;
-  clipboard: boolean;
-  printers: boolean;
-  audioPlayback: boolean;
-  microphone: boolean;
-  pnpDevices: boolean;
-  camera: boolean;
-  webauthn: boolean;
-  genericUsbDisabled: boolean;
-  qwaveInstalled: boolean;
-  mediaFoundationInstalled: boolean;
-}
-
-type CapabilityKey =
-  | "smart_cards"
-  | "drives"
-  | "clipboard"
-  | "printers"
-  | "audio_playback"
-  | "microphone"
-  | "pnp_devices"
-  | "camera"
-  | "webauthn";
 
 const rows: Array<{ key: CapabilityKey; field: keyof RdpRedirectionStatus; label: string; detail: string }> = [
   { key: "smart_cards", field: "smartCards", label: "Smart cards / DSC", detail: "Native RDP smart-card channel for signing tokens." },
@@ -46,15 +16,6 @@ const rows: Array<{ key: CapabilityKey; field: keyof RdpRedirectionStatus; label
   { key: "webauthn", field: "webauthn", label: "WebAuthn / passkeys", detail: "Allow supported WebAuthn credentials in the remote session." },
   { key: "pnp_devices", field: "pnpDevices", label: "Supported Plug and Play", detail: "Allow supported PnP redirection without enabling generic USB passthrough." },
 ];
-
-async function rdpMachineSetting<T>(value: Record<string, unknown>): Promise<T> {
-  return invoke<T>("apply_machine_setting", {
-    request: {
-      setting: "rdp_redirection",
-      value: { kind: "rdp_redirection", ...value },
-    },
-  });
-}
 
 export default function RdpRedirectionCard() {
   const { systemInfo } = useAppState();

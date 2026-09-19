@@ -1136,7 +1136,46 @@ impl VaultAccessStore {
         }
     }
 
-    /// Returns only a caller-owned, identity-stable personal container.  The
+    /// Resolve persisted DOS, verbatim and short-name paths through the same
+    /// filesystem normalization as requests. Ambiguous aliases fail closed.
+    fn personal_record_for_path(
+        &self,
+        container_path: &str,
+    ) -> Result<Option<PersonalVaultRecord>, VaultError> {
+        let normalized = self
+            .fs
+            .normalize_personal_creation_path(Path::new(container_path))?;
+        let normalized_key = personal_key(&normalized.to_string_lossy());
+        let requested_key = personal_key(container_path);
+        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        if !state.personal_registry_healthy {
+            return Err(VaultError::Persistence);
+        }
+        let mut found = None;
+        for (key, record) in &state.personal {
+            let direct = key == &normalized_key
+                || key == &requested_key
+                || key == &personal_key_alias(&normalized_key)
+                || key == &personal_key_alias(&requested_key);
+            // Expanding an 8.3 parent or a junction requires filesystem
+            // normalization, not just removal of the verbatim prefix.
+            let alias = || {
+                self.fs
+                    .normalize_personal_creation_path(Path::new(&record.container_path))
+                    .map(|path| personal_key(&path.to_string_lossy()) == normalized_key)
+                    .unwrap_or(false)
+            };
+            if direct || alias() {
+                if found.is_some() {
+                    return Err(VaultError::Persistence);
+                }
+                found = Some(record.clone());
+            }
+        }
+        Ok(found)
+    }
+
+    /// Returns only a caller-owned, identity-stable personal container. The
     /// service never accepts an owner SID or scope supplied by the renderer.
     #[cfg(test)]
     pub fn personal_for_owner(
@@ -1144,41 +1183,7 @@ impl VaultAccessStore {
         container_path: &str,
         caller_sid: &str,
     ) -> Result<Option<PersonalVaultRecord>, VaultError> {
-        // Registration canonicalizes the parent (including Windows' verbatim
-        // prefix); lookup must use the same spelling before attempting adoption.
-        let normalized = self
-            .fs
-            .normalize_personal_creation_path(Path::new(container_path))?;
-        let normalized_key = personal_key(&normalized.to_string_lossy());
-        // Older services persisted ordinary DOS/UNC paths without the prefix.
-        // Retain the caller spelling too: Windows canonicalization can change
-        // more than the verbatim prefix (for example, a junction's spelling).
-        let legacy_key = personal_key_alias(&normalized_key);
-        let requested_key = personal_key(container_path);
-        let requested_legacy_key = personal_key_alias(&requested_key);
-        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
-        if !state.personal_registry_healthy {
-            return Err(VaultError::Persistence);
-        }
-        let candidate_keys = [
-            normalized_key,
-            legacy_key,
-            requested_key,
-            requested_legacy_key,
-        ];
-        let mut record = None;
-        for (index, key) in candidate_keys.iter().enumerate() {
-            if candidate_keys[..index].contains(key) {
-                continue;
-            }
-            if let Some(candidate) = state.personal.get(key) {
-                if record.is_some() {
-                    return Err(VaultError::Persistence);
-                }
-                record = Some(candidate.clone());
-            }
-        }
-        drop(state);
+        let record = self.personal_record_for_path(container_path)?;
         let Some(record) = record else {
             return Ok(None);
         };
@@ -1199,25 +1204,7 @@ impl VaultAccessStore {
         container_path: &str,
         caller_sid: &str,
     ) -> Result<PersonalVaultRegistrationState, VaultError> {
-        let normalized = self
-            .fs
-            .normalize_personal_creation_path(Path::new(container_path))?;
-        let normalized_key = personal_key(&normalized.to_string_lossy());
-        let legacy_key = personal_key_alias(&normalized_key);
-        let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
-        if !state.personal_registry_healthy {
-            return Err(VaultError::Persistence);
-        }
-        if state.personal.contains_key(&normalized_key) && state.personal.contains_key(&legacy_key)
-        {
-            return Err(VaultError::Persistence);
-        }
-        let record = state
-            .personal
-            .get(&normalized_key)
-            .or_else(|| state.personal.get(&legacy_key))
-            .cloned();
-        drop(state);
+        let record = self.personal_record_for_path(container_path)?;
         let Some(record) = record else {
             return Ok(PersonalVaultRegistrationState::Unregistered);
         };
@@ -1314,6 +1301,9 @@ impl VaultAccessStore {
             || caller_session == 0
             || !valid_creation_path(Path::new(container_path))
         {
+            return Err(VaultError::Validation);
+        }
+        if self.personal_record_for_path(container_path)?.is_some() {
             return Err(VaultError::Validation);
         }
         let normalized = self
@@ -4809,10 +4799,13 @@ mod tests {
                 .personal_for_owner(request_path, "S-1-5-21-other")
                 .unwrap()
                 .is_none());
-            assert!(matches!(
-                store.prepare_legacy_personal_mount(request_path, "S-1-5-21-other", 1, 1 as _),
-                Err(VaultError::Validation)
-            ));
+            let denied =
+                store.prepare_legacy_personal_mount(request_path, "S-1-5-21-other", 1, 1 as _);
+            assert!(
+                matches!(denied, Err(VaultError::Validation)),
+                "unexpected denial: {:?}",
+                denied.err()
+            );
         }
         std::fs::rename(&container, directory.join("original.hc")).unwrap();
         std::fs::write(&container, b"replacement container").unwrap();

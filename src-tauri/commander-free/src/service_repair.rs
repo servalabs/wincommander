@@ -117,11 +117,7 @@ fn validate_release_paths(
     if cfg!(debug_assertions) {
         return Ok(());
     }
-    let program_files = std::env::var_os("ProgramW6432")
-        .or_else(|| std::env::var_os("ProgramFiles"))
-        .map(PathBuf::from)
-        .ok_or_else(|| "Windows Program Files location is unavailable".to_string())?;
-    let install_dir = std::fs::canonicalize(program_files.join("WinCommander"))
+    let install_dir = std::fs::canonicalize(crate::service_repair_paths::protected_install_dir()?)
         .map_err(|_| "protected WinCommander installation could not be resolved".to_string())?;
     let resolved_payload = std::fs::canonicalize(payload)
         .map_err(|_| "service payload could not be resolved".to_string())?;
@@ -167,7 +163,8 @@ struct ScResult {
 async fn run_sc(args: &[&str]) -> Result<ScResult, String> {
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    let mut cmd = tokio::process::Command::new("sc.exe");
+    let mut cmd =
+        tokio::process::Command::new(crate::service_repair_paths::service_control_executable()?);
     cmd.args(args).creation_flags(CREATE_NO_WINDOW);
     let out = cmd
         .output()

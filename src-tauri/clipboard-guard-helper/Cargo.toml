@@ -41,6 +41,7 @@ wincmd-clip-rules = { path = "../wincmd-clip-rules" }
 # Reusing this is the whole point of Phase 2 (plan §1.4): do NOT invent a
 # third IPC mechanism.
 wincmd-shared = { path = "../wincmd-shared" }
+wincmd-service-auth = { path = "../wincmd-service-auth" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

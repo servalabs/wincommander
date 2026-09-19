@@ -34,7 +34,7 @@ fn powershell(script: &str) -> Result<String, String> {
 
     #[cfg(windows)]
     {
-        let output = Command::new("powershell.exe")
+        let output = Command::new(crate::service_repair_paths::powershell_executable()?)
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -107,17 +107,38 @@ if ($isServer) {
 } | ConvertTo-Json -Compress
 "#;
     let raw = powershell(script)?;
-    serde_json::from_str(&raw).map_err(|e| format!("invalid Windows Server redirection status: {e}"))
+    serde_json::from_str(&raw)
+        .map_err(|e| format!("invalid Windows Server redirection status: {e}"))
 }
 
 fn set_capability(capability: &str, enabled: bool) -> Result<(), String> {
     let (name, value, listener_name): (&str, u32, Option<&str>) = match capability {
         "smart_cards" => ("fEnableSmartCard", if enabled { 1 } else { 0 }, None),
-        "drives" => ("fDisableCdm", if enabled { 0 } else { 1 }, Some("fDisableCdm")),
-        "clipboard" => ("fDisableClip", if enabled { 0 } else { 1 }, Some("fDisableClip")),
-        "printers" => ("fDisableCpm", if enabled { 0 } else { 1 }, Some("fDisableCpm")),
-        "audio_playback" => ("fDisableCam", if enabled { 0 } else { 1 }, Some("fDisableCam")),
-        "microphone" => ("fDisableAudioCapture", if enabled { 0 } else { 1 }, Some("fDisableAudioCapture")),
+        "drives" => (
+            "fDisableCdm",
+            if enabled { 0 } else { 1 },
+            Some("fDisableCdm"),
+        ),
+        "clipboard" => (
+            "fDisableClip",
+            if enabled { 0 } else { 1 },
+            Some("fDisableClip"),
+        ),
+        "printers" => (
+            "fDisableCpm",
+            if enabled { 0 } else { 1 },
+            Some("fDisableCpm"),
+        ),
+        "audio_playback" => (
+            "fDisableCam",
+            if enabled { 0 } else { 1 },
+            Some("fDisableCam"),
+        ),
+        "microphone" => (
+            "fDisableAudioCapture",
+            if enabled { 0 } else { 1 },
+            Some("fDisableAudioCapture"),
+        ),
         "pnp_devices" => ("fDisablePNPRedir", if enabled { 0 } else { 1 }, None),
         "camera" => ("fDisableCameraRedir", if enabled { 0 } else { 1 }, None),
         "webauthn" => ("fDisableWebAuthn", if enabled { 0 } else { 1 }, None),
@@ -137,7 +158,10 @@ New-ItemProperty -Path $pol -Name '{}' -PropertyType DWord -Value {} -Force | Ou
 {}
 gpupdate /target:computer /force | Out-Null
 "#,
-        server_guard_script(), name, value, listener
+        server_guard_script(),
+        name,
+        value,
+        listener
     );
     powershell(&script).map(|_| ())
 }
@@ -222,7 +246,8 @@ mod tests {
 
     #[test]
     fn status_deserializes_the_powershell_payload() {
-        let status: RdpRedirectionStatus = serde_json::from_str(r#"{
+        let status: RdpRedirectionStatus = serde_json::from_str(
+            r#"{
             "isWindowsServer": true,
             "productName": "Windows Server 2025",
             "installationType": "Server",
@@ -239,7 +264,9 @@ mod tests {
             "genericUsbDisabled": false,
             "qwaveInstalled": true,
             "mediaFoundationInstalled": true
-        }"#).expect("PowerShell status payload should deserialize");
+        }"#,
+        )
+        .expect("PowerShell status payload should deserialize");
 
         assert!(status.is_windows_server);
         assert_eq!(status.product_name, "Windows Server 2025");

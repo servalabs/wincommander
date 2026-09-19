@@ -32,21 +32,6 @@
     "shell:allow-open",
     "opener:allow-open-url",
     "autostart:default",
-    "updater:default",
-    "shell:allow-kill",
-    "shell:allow-stdin-write",
-    "fs:default",
-    "fs:allow-read-text-file",
-    "fs:allow-write-text-file",
-    "fs:allow-exists",
-    {
-      "identifier": "fs:scope",
-      "allow": [
-        "$APPDATA/WinCommander/**",
-        "$RESOURCE/**",
-        "$TEMP/WinCommander-*"
-      ]
-    },
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",

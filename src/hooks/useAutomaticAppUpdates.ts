@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import useBackend from "./useBackend";
 import { useAppState } from "../context/AppContext";
 import {
@@ -29,7 +29,7 @@ export default function useAutomaticAppUpdates(): void {
   const livePolicyRef = useRef({ enabled: false, ignored: new Set<string>() });
 
   const enabled = appSettings?.ideal.apps.autoUpdate === true;
-  const ignoredFindingIds = appSettings?.app.ignoredFindingIds ?? [];
+  const ignoredFindingIds = useMemo(() => appSettings?.app.ignoredFindingIds ?? [], [appSettings?.app.ignoredFindingIds]);
   useEffect(() => {
     livePolicyRef.current = { enabled, ignored: new Set(ignoredFindingIds) };
   }, [enabled, ignoredFindingIds]);

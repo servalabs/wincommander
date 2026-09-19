@@ -445,6 +445,7 @@ pub(crate) async fn handle_connection(
 /// // peer_auth confirmation (D-2) — only a pinned, in-session, correctly
 /// // signed peer passes, regardless of `caller_privileged`.
 /// ```
+#[cfg(test)]
 pub async fn authorize(
     verb: &str,
     caller_privileged: bool,

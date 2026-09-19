@@ -239,7 +239,9 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).not.toContain("setMountPassword");
     expect(vault).toContain("vaultPresentationLabel(entry.presentation)");
     expect(vault).toContain('aria-label="Vault volume role"');
-    expect(vaultEditor).toContain("Outer + hidden container");
+    expect(vault).toContain('mountTarget?.containerKind === "dual"');
+    expect(vault).toContain("requiresHiddenProtection");
+    expect(vault).toContain('hiddenProtectionPassword = ""');
   });
 
   test("keeps an unassigned non-admin Vault surface visibly expanded", () => {

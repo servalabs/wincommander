@@ -6,7 +6,7 @@ declare const Bun: {
 
 describe("Auto-set scheduled wipes frontend contract", () => {
   test("uses only real schedulable cards and preserves existing schedules", async () => {
-    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text();
+    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text().then(text => text.replace(/\r\n/g, "\n"));
 
     expect(scan).toContain("SCHEDULABLE_CATEGORIES");
     expect(scan).toContain("if (!category.schedulable || !category.clearDataKey)");
@@ -17,7 +17,7 @@ describe("Auto-set scheduled wipes frontend contract", () => {
   });
 
   test("uses category policy, the existing backend scheduler, and refreshes card clocks", async () => {
-    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text();
+    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text().then(text => text.replace(/\r\n/g, "\n"));
 
     expect(scan).toContain("getAutoScheduleInterval(");
     expect(scan).toContain("setAutoEraseSchedule(");
@@ -26,7 +26,7 @@ describe("Auto-set scheduled wipes frontend contract", () => {
   });
 
   test("renders a cached schedule snapshot before silently verifying Task Scheduler", async () => {
-    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text();
+    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text().then(text => text.replace(/\r\n/g, "\n"));
 
     expect(scan).toContain("SCHEDULE_CACHE_KEY");
     expect(scan).toContain("useState<Record<string, number>>(readScheduleCache)");
@@ -35,7 +35,7 @@ describe("Auto-set scheduled wipes frontend contract", () => {
   });
 
   test("reports every outcome, including backend failures", async () => {
-    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text();
+    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text().then(text => text.replace(/\r\n/g, "\n"));
 
     expect(scan).toContain("created: 0");
     expect(scan).toContain("alreadyConfigured: 0");
@@ -48,8 +48,8 @@ describe("Auto-set scheduled wipes frontend contract", () => {
   });
 
   test("turns off all scheduled wipes, confirming before removing individual schedules", async () => {
-    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text();
-    const scheduler = await Bun.file("src-tauri/wincmd-shared/scripts/auto-erase.ps1").text();
+    const scan = await Bun.file("src/panels/cleanup/useCleanupScan.ts").text().then(text => text.replace(/\r\n/g, "\n"));
+    const scheduler = await Bun.file("src-tauri/wincmd-shared/scripts/auto-erase.ps1").text().then(text => text.replace(/\r\n/g, "\n"));
 
     expect(scan).toContain("const scheduledIds = Object.keys(schedulesById)");
     expect(scan).toContain("Turn off all scheduled wipes?");

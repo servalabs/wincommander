@@ -27,12 +27,16 @@ describe("embedded view privilege boundary", () => {
     expect(source).toContain(".invoke_handler(ipc_boundary::guard(tauri::generate_handler![");
   });
 
-  test("embedded-view input checks precede storage deletion and webview changes", () => {
+  test("embedded-view input checks precede fresh storage allocation and webview changes", () => {
     const source = read("src/server_apps.rs");
     const checked = source.indexOf("crate::server_app_policy::validate_url(&parsed_url");
     expect(checked).toBeGreaterThan(-1);
-    expect(checked).toBeLessThan(source.indexOf("std::fs::remove_dir_all(&p)"));
+    const allocation = source.indexOf("Profile::prepare(&user_data, is_ephemeral)");
+    expect(allocation).toBeGreaterThan(-1);
+    expect(checked).toBeLessThan(allocation);
+    expect(source).not.toContain("std::fs::remove_dir_all");
+    expect(source).not.toContain("std::env::temp_dir()");
     expect(checked).toBeLessThan(source.indexOf("wv.hide()"));
-    expect(source).toContain(".on_navigation(move |url|");
+    expect(source).toContain(".on_navigation(profile.navigation_guard(dev_origin))");
   });
 });
