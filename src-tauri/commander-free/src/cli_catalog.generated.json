@@ -7270,16 +7270,6 @@
       ]
     },
     {
-      "id": "tauri:apply_admin_config_cmd",
-      "name": "apply_admin_config_cmd",
-      "transport": "tauri",
-      "registered": true,
-      "debugOnly": false,
-      "frontendReferences": [
-        "src/hooks/useSettings.ts"
-      ]
-    },
-    {
       "id": "tauri:apply_machine_setting",
       "name": "apply_machine_setting",
       "transport": "tauri",
@@ -9061,6 +9051,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/hooks/usePrintAudit.ts",
         "src/panels/privacy/PrintActivitySection.tsx"
       ]
     },
@@ -9071,6 +9062,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/hooks/usePrintAudit.ts",
         "src/panels/privacy/PrintActivitySection.tsx"
       ]
     },
@@ -10831,6 +10823,7 @@
       "registered": true,
       "debugOnly": false,
       "frontendReferences": [
+        "src/hooks/usePrintAudit.ts",
         "src/panels/privacy/PrintActivitySection.tsx"
       ]
     },

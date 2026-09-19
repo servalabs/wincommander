@@ -161,7 +161,10 @@ fn classify_snapshot_failure(message: &str) -> BasicMonitorFailure {
             "Run WinCommander with the required administrator permissions, then arm USB Protection again.",
         );
     }
-    if lower.contains("get-pnpdevice") || lower.contains("plug and play") || lower.contains("pnpdevice") {
+    if lower.contains("get-pnpdevice")
+        || lower.contains("plug and play")
+        || lower.contains("pnpdevice")
+    {
         return monitor_failure(
             "source_unavailable",
             "The Windows Plug and Play USB device source is unavailable.",
@@ -211,7 +214,11 @@ fn ensure_basic_loaded() -> Result<(), String> {
 
 fn merge_basic_timeline(disk: BasicTimeline, memory: &BasicTimeline) -> BasicTimeline {
     let mut sessions: BTreeMap<(String, i64), BasicSession> = BTreeMap::new();
-    for session in disk.sessions.into_iter().chain(memory.sessions.iter().cloned()) {
+    for session in disk
+        .sessions
+        .into_iter()
+        .chain(memory.sessions.iter().cloned())
+    {
         let key = (session.device_key.clone(), session.attached_at);
         match sessions.get_mut(&key) {
             Some(existing) if existing.detached_at.is_none() && session.detached_at.is_some() => {
@@ -307,7 +314,8 @@ fn persist_basic_timeline(snapshot: &BasicTimeline, merge: bool) -> Result<Basic
     } else {
         snapshot.clone()
     };
-    let payload = serde_json::to_vec(&state).map_err(|error| format!("encode USB timeline: {error}"))?;
+    let payload =
+        serde_json::to_vec(&state).map_err(|error| format!("encode USB timeline: {error}"))?;
     crate::paths::atomic_write_machine_state(&path, &payload)?;
     Ok(state)
 }
@@ -316,8 +324,10 @@ fn clear_basic_timeline_machine_wide() -> Result<(), String> {
     let _lock = crate::paths::acquire_machine_state_lock("usb-basic-timeline")?;
     let path = crate::paths::machine_state_file("usb_timeline.json")?;
     let disk: BasicTimeline = if path.exists() {
-        let raw = std::fs::read(&path).map_err(|error| format!("read USB timeline before clear: {error}"))?;
-        serde_json::from_slice(&raw).map_err(|error| format!("parse USB timeline before clear: {error}"))?
+        let raw = std::fs::read(&path)
+            .map_err(|error| format!("read USB timeline before clear: {error}"))?;
+        serde_json::from_slice(&raw)
+            .map_err(|error| format!("parse USB timeline before clear: {error}"))?
     } else {
         BasicTimeline::default()
     };
@@ -326,7 +336,8 @@ fn clear_basic_timeline_machine_wide() -> Result<(), String> {
         notify: disk.notify,
         ..BasicTimeline::default()
     };
-    let payload = serde_json::to_vec(&cleared).map_err(|error| format!("encode cleared USB timeline: {error}"))?;
+    let payload = serde_json::to_vec(&cleared)
+        .map_err(|error| format!("encode cleared USB timeline: {error}"))?;
     crate::paths::atomic_write_machine_state(&path, &payload)?;
     *basic_state().lock().unwrap() = cleared;
     BASIC_NOTIFY.store(basic_state().lock().unwrap().notify, Ordering::SeqCst);
@@ -338,13 +349,16 @@ fn set_basic_notify_machine_wide(enabled: bool) -> Result<(), String> {
     let _lock = crate::paths::acquire_machine_state_lock("usb-basic-timeline")?;
     let path = crate::paths::machine_state_file("usb_timeline.json")?;
     let mut state: BasicTimeline = if path.exists() {
-        let raw = std::fs::read(&path).map_err(|error| format!("read USB timeline before notify update: {error}"))?;
-        serde_json::from_slice(&raw).map_err(|error| format!("parse USB timeline before notify update: {error}"))?
+        let raw = std::fs::read(&path)
+            .map_err(|error| format!("read USB timeline before notify update: {error}"))?;
+        serde_json::from_slice(&raw)
+            .map_err(|error| format!("parse USB timeline before notify update: {error}"))?
     } else {
         BasicTimeline::default()
     };
     state.notify = enabled;
-    let payload = serde_json::to_vec(&state).map_err(|error| format!("encode USB timeline notify update: {error}"))?;
+    let payload = serde_json::to_vec(&state)
+        .map_err(|error| format!("encode USB timeline notify update: {error}"))?;
     crate::paths::atomic_write_machine_state(&path, &payload)?;
     BASIC_NOTIFY.store(enabled, Ordering::SeqCst);
     *basic_state().lock().unwrap() = state;
@@ -435,7 +449,8 @@ try {
     if trimmed.is_empty() || trimmed == "null" || trimmed == "[]" {
         return Ok(Vec::new());
     }
-    let value: Value = serde_json::from_str(trimmed).map_err(|error| format!("USB device JSON: {error}"))?;
+    let value: Value =
+        serde_json::from_str(trimmed).map_err(|error| format!("USB device JSON: {error}"))?;
     let rows: Vec<BasicPnpRow> = if value.is_array() {
         serde_json::from_value(value).map_err(|error| format!("USB device rows: {error}"))?
     } else {
@@ -468,7 +483,8 @@ fn apply_basic_snapshot(
     for key in open_current_run {
         if !current.contains_key(&key) {
             if let Some(session) = state.sessions.iter_mut().rev().find(|session| {
-                session.device_key == key && open_session_in_current_run(session, monitor_started_at)
+                session.device_key == key
+                    && open_session_in_current_run(session, monitor_started_at)
             }) {
                 session.detached_at = Some(now);
                 session.duration_secs = Some(now.saturating_sub(session.attached_at));
@@ -479,15 +495,19 @@ fn apply_basic_snapshot(
 
     for identity in current.values() {
         let has_open_current_run = state.sessions.iter().any(|session| {
-            session.device_key == identity.key && open_session_in_current_run(session, monitor_started_at)
+            session.device_key == identity.key
+                && open_session_in_current_run(session, monitor_started_at)
         });
-        let record = state.records.entry(identity.key.clone()).or_insert_with(|| BasicRecord {
-            identity: identity.clone(),
-            first_seen: now,
-            last_seen: now,
-            total_plugged_secs: 0,
-            session_count: 0,
-        });
+        let record = state
+            .records
+            .entry(identity.key.clone())
+            .or_insert_with(|| BasicRecord {
+                identity: identity.clone(),
+                first_seen: now,
+                last_seen: now,
+                total_plugged_secs: 0,
+                session_count: 0,
+            });
         record.identity = identity.clone();
         record.last_seen = now;
         if !has_open_current_run {
@@ -509,13 +529,20 @@ fn apply_basic_snapshot(
     let totals: BTreeMap<String, i64> = state
         .sessions
         .iter()
-        .filter_map(|session| session.duration_secs.map(|duration| (session.device_key.clone(), duration)))
+        .filter_map(|session| {
+            session
+                .duration_secs
+                .map(|duration| (session.device_key.clone(), duration))
+        })
         .fold(BTreeMap::new(), |mut totals, (key, duration)| {
             *totals.entry(key).or_default() += duration;
             totals
         });
     for record in state.records.values_mut() {
-        record.total_plugged_secs = totals.get(&record.identity.key).copied().unwrap_or_default();
+        record.total_plugged_secs = totals
+            .get(&record.identity.key)
+            .copied()
+            .unwrap_or_default();
         record.session_count = state
             .sessions
             .iter()
@@ -555,13 +582,12 @@ async fn basic_poll(app: &AppHandle, first_poll: bool) -> Result<(), String> {
 
     *basic_current_keys().lock().unwrap() = current.keys().cloned().collect();
     let snapshot = basic_state().lock().unwrap().clone();
-    let merged = persist_basic_timeline(&snapshot, true).map_err(|error| {
+    let merged = persist_basic_timeline(&snapshot, true).inspect_err(|_| {
         set_monitor_error(monitor_failure(
             "persistence_failed",
             "WinCommander observed USB state but could not save the monitor record.",
             "Check ProgramData permissions and free disk space, then refresh USB Protection.",
         ));
-        error
     })?;
     *basic_state().lock().unwrap() = merged;
     clear_monitor_error(now);
@@ -574,7 +600,8 @@ async fn basic_poll(app: &AppHandle, first_poll: bool) -> Result<(), String> {
             } else {
                 &identity.friendly_name
             };
-            let _ = crate::native_notify::show_native_notification(app, "USB device connected", label);
+            let _ =
+                crate::native_notify::show_native_notification(app, "USB device connected", label);
         }
     }
     for key in detached {
@@ -670,7 +697,12 @@ pub fn get_usb_timeline() -> Result<Value, String> {
     let state = basic_state().lock().unwrap().clone();
     let health = basic_health().lock().unwrap().clone();
     let current_keys: Vec<String> = if BASIC_RUNNING.load(Ordering::SeqCst) {
-        basic_current_keys().lock().unwrap().iter().cloned().collect()
+        basic_current_keys()
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect()
     } else {
         Vec::new()
     };
@@ -710,8 +742,13 @@ $rows | ConvertTo-Json -Compress
     if trimmed.is_empty() || trimmed == "null" {
         return Ok(Value::Array(Vec::new()));
     }
-    let value: Value = serde_json::from_str(trimmed).map_err(|error| format!("USB volume JSON: {error}"))?;
-    Ok(Value::Array(if let Value::Array(rows) = value { rows } else { vec![value] }))
+    let value: Value =
+        serde_json::from_str(trimmed).map_err(|error| format!("USB volume JSON: {error}"))?;
+    Ok(Value::Array(if let Value::Array(rows) = value {
+        rows
+    } else {
+        vec![value]
+    }))
 }
 
 #[tauri::command]
@@ -735,7 +772,12 @@ pub async fn start_usb_metering() -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn reconcile_usb_guard(legacy: Value) -> Result<Value, String> {
-    dispatch_paid("reconcile_usb_guard", "USB Guard", json!({ "legacy": legacy })).await
+    dispatch_paid(
+        "reconcile_usb_guard",
+        "USB Guard",
+        json!({ "legacy": legacy }),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -813,12 +855,22 @@ pub async fn clear_usb_hid_alerts() -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn usb_hid_guard_allow_device(device_key: String) -> Result<Value, String> {
-    dispatch_paid("usb_hid_guard_allow_device", "USB Guard", json!({ "deviceKey": device_key })).await
+    dispatch_paid(
+        "usb_hid_guard_allow_device",
+        "USB Guard",
+        json!({ "deviceKey": device_key }),
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn usb_hid_guard_disallow_device(device_key: String) -> Result<Value, String> {
-    dispatch_paid("usb_hid_guard_disallow_device", "USB Guard", json!({ "deviceKey": device_key })).await
+    dispatch_paid(
+        "usb_hid_guard_disallow_device",
+        "USB Guard",
+        json!({ "deviceKey": device_key }),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -852,7 +904,10 @@ pub async fn get_usb_hid_pending_approvals() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn begin_usb_hid_visual_challenge(device_key: String, action: String) -> Result<Value, String> {
+pub async fn begin_usb_hid_visual_challenge(
+    device_key: String,
+    action: String,
+) -> Result<Value, String> {
     dispatch_paid(
         "begin_usb_hid_visual_challenge",
         "USB Guard",
@@ -908,12 +963,22 @@ pub async fn trust_usb_hid_always(
 
 #[tauri::command]
 pub async fn block_usb_hid_pending(device_key: String) -> Result<Value, String> {
-    dispatch_paid("block_usb_hid_pending", "USB Guard", json!({ "deviceKey": device_key })).await
+    dispatch_paid(
+        "block_usb_hid_pending",
+        "USB Guard",
+        json!({ "deviceKey": device_key }),
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn usb_device_trust_score(device_key: String) -> Result<Value, String> {
-    dispatch_paid("usb_device_trust_score", "USB Guard", json!({ "deviceKey": device_key })).await
+    dispatch_paid(
+        "usb_device_trust_score",
+        "USB Guard",
+        json!({ "deviceKey": device_key }),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -933,7 +998,12 @@ pub async fn usb_autosandbox_status() -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn set_usb_autosandbox_config(config: Value) -> Result<Value, String> {
-    dispatch_paid("set_usb_autosandbox_config", "USB Guard", json!({ "config": config })).await
+    dispatch_paid(
+        "set_usb_autosandbox_config",
+        "USB Guard",
+        json!({ "config": config }),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -997,17 +1067,20 @@ mod tests {
         let mut state = BasicTimeline::default();
         let started = 100;
 
-        let (attached, detached) = apply_basic_snapshot(&mut state, &current(key), 100, started, true);
+        let (attached, detached) =
+            apply_basic_snapshot(&mut state, &current(key), 100, started, true);
         assert_eq!(attached.len(), 1);
         assert!(detached.is_empty());
         assert!(state.sessions.back().unwrap().attached_at_estimated);
 
-        let (attached, detached) = apply_basic_snapshot(&mut state, &current(key), 105, started, false);
+        let (attached, detached) =
+            apply_basic_snapshot(&mut state, &current(key), 105, started, false);
         assert!(attached.is_empty());
         assert!(detached.is_empty());
         assert_eq!(state.sessions.len(), 1);
 
-        let (attached, detached) = apply_basic_snapshot(&mut state, &BTreeMap::new(), 112, started, false);
+        let (attached, detached) =
+            apply_basic_snapshot(&mut state, &BTreeMap::new(), 112, started, false);
         assert!(attached.is_empty());
         assert_eq!(detached, vec![key.to_string()]);
         let session = state.sessions.back().unwrap();

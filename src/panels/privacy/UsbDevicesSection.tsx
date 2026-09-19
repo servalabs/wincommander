@@ -336,10 +336,10 @@ export default function UsbDevicesSection() {
   const hidApprovalTtlSecs = appSettings?.ideal?.privacy?.usbSecurity?.hidApprovalTtlSecs
     ?? DEFAULT_USB_HID_APPROVAL_TTL_SECS;
 
-  const recordUsbFailure = useCallback((action: string, errorCode: string) => {
+  const recordUsbFailure = useCallback((action: string, errorCode: string, attempted = true) => {
     recordDiagnostic({
-      operationId: newDiagnosticOperationId('usb'), feature: 'usb', action, stage: 'windows_apply',
-      lifecycle: 'applied', outcome: 'failed', errorCode, severity: 'warn', retryability: 'manual',
+      operationId: newDiagnosticOperationId('usb'), feature: 'usb', action, stage: attempted ? 'windows_apply' : 'validation',
+      lifecycle: attempted ? 'applied' : 'acknowledged', outcome: 'failed', errorCode, severity: 'warn', retryability: 'manual',
       suggestedNextAction: 'retry', privacyClass: 'local_sensitive',
     });
   }, []);
@@ -688,17 +688,19 @@ export default function UsbDevicesSection() {
       setBlockedKeys((current) => new Set(current).add(entry.key));
       void showSuccess(`Blocked "${name}" — now disabled in Windows.`);
     } catch (reason) {
+      recordUsbFailure('block', 'USB.BLOCK.FAILED');
       const message = humanizeUsbError(reason);
       setError(message);
       void showError(`Block failed: ${message}`);
     } finally {
       setBusy(false);
     }
-  }, [requestConfirm, volumes]);
+  }, [recordUsbFailure, requestConfirm, volumes]);
 
   const allowDevice = useCallback(async (entry: UsbTimelineEntry) => {
     const name = displayNameForEntry(entry, volumeForEntry(entry, volumes));
     if (hidApprovalGateEnabled && entry.category === 'Keyboard / HID') {
+      recordUsbFailure('allow', 'USB.HID_APPROVAL.REQUIRED', false);
       void showError(`Use the New keyboard approval dialog for "${name}". Generic Allow is disabled while the approval gate is active.`);
       return;
     }
@@ -712,13 +714,14 @@ export default function UsbDevicesSection() {
       });
       void showSuccess(`Allowed "${name}" — re-enabled in Windows.`);
     } catch (reason) {
+      recordUsbFailure('allow', 'USB.ALLOW.FAILED');
       const message = humanizeUsbError(reason);
       setError(message);
       void showError(`Allow failed: ${message}`);
     } finally {
       setBusy(false);
     }
-  }, [hidApprovalGateEnabled, volumes]);
+  }, [recordUsbFailure, hidApprovalGateEnabled, volumes]);
 
   const setVolumeReadonly = useCallback(async (letter: string, readOnly: boolean) => {
     const displayLetter = letter.replace(/:$/, '');

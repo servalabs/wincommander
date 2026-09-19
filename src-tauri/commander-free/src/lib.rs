@@ -60,7 +60,6 @@ mod flow_health;
 mod gpo_policy;
 mod inactivity_timer;
 mod investigator_install;
-mod ipc_boundary;
 mod license;
 mod local_clipboard_rules;
 mod log;
@@ -2766,7 +2765,6 @@ pub fn run() {
             settings::get_setting,
             settings::get_settings_hash_cmd,
             settings::get_device_identity,
-            settings::apply_admin_config_cmd,
             settings::is_setting_locked,
             settings::export_settings_cmd,
             settings::import_settings_cmd,
