@@ -115,13 +115,10 @@ impl WindowsState for LiveWindowsState {
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "$rule = Get-NetFirewallRule -Name 'WC-LockRDP' -ErrorAction SilentlyContinue; $port = $rule | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue; if ($rule -and $rule.Direction -eq 'Inbound' -and $rule.Action -eq 'Block' -and $rule.Enabled -eq 'True' -and $port.Protocol -eq 'TCP' -and $port.LocalPort -eq '3389') { '1' } else { '0' }",
+                crate::rdp_lock_query::SCRIPT,
             ],
         )?;
-        if !output.status.success() {
-            return Ok(false);
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).trim() == "1")
+        crate::rdp_lock_query::parse(&output)
     }
 }
 
@@ -163,17 +160,32 @@ fn apply_with<S: WindowsState>(
             state
                 .set_dword("fResetBroken", u32::from(enabled))
                 .map_err(|_| MACHINE_SETTING_APPLY_FAILED)?;
-            read_rdp_incoming(state)
+            let observed = read_rdp_incoming(state)?;
+            let expected = MachineSettingObserved::RdpIncoming {
+                enabled,
+                deny_connections: Some(!enabled),
+                idle_timeout_seconds: Some(timeout_ms / 1000),
+                max_idle_time_ms: Some(timeout_ms),
+                max_disconnection_time_ms: Some(timeout_ms),
+                max_connection_time_ms: Some(timeout_ms),
+                reset_broken: Some(enabled),
+            };
+            if observed != expected {
+                return Err(MACHINE_SETTING_APPLY_FAILED);
+            }
+            Ok(observed)
         }
         MachineSettingValue::RdpLock { locked } => {
             state
                 .set_rdp_lock(locked)
                 .map_err(|_| MACHINE_SETTING_APPLY_FAILED)?;
-            Ok(MachineSettingObserved::RdpLock {
-                locked: state
-                    .rdp_lock_exists()
-                    .map_err(|_| MACHINE_SETTING_APPLY_FAILED)?,
-            })
+            let observed = state
+                .rdp_lock_exists()
+                .map_err(|_| MACHINE_SETTING_APPLY_FAILED)?;
+            if observed != locked {
+                return Err(MACHINE_SETTING_APPLY_FAILED);
+            }
+            Ok(MachineSettingObserved::RdpLock { locked: observed })
         }
     }
 }
@@ -213,78 +225,5 @@ fn read_rdp_incoming<S: WindowsState>(state: &S) -> Result<MachineSettingObserve
 }
 
 #[cfg(test)]
-mod tests {
-    use std::cell::RefCell;
-    use std::collections::BTreeMap;
-
-    use super::*;
-    use wincmd_shared::svc::MachineSettingId;
-
-    #[derive(Default)]
-    struct FakeWindowsState {
-        values: RefCell<BTreeMap<&'static str, u32>>,
-        lock: RefCell<bool>,
-    }
-
-    impl WindowsState for FakeWindowsState {
-        fn set_dword(&self, name: &'static str, value: u32) -> Result<(), ()> {
-            self.values.borrow_mut().insert(name, value);
-            Ok(())
-        }
-
-        fn read_dword(&self, name: &'static str) -> Result<Option<u32>, ()> {
-            Ok(self.values.borrow().get(name).copied())
-        }
-
-        fn set_rdp_lock(&self, locked: bool) -> Result<(), ()> {
-            *self.lock.borrow_mut() = locked;
-            Ok(())
-        }
-
-        fn rdp_lock_exists(&self) -> Result<bool, ()> {
-            Ok(*self.lock.borrow())
-        }
-    }
-
-    #[test]
-    fn rdp_incoming_is_applied_then_returned_from_read_back() {
-        let state = FakeWindowsState::default();
-        let observed = apply_with(
-            &state,
-            ApplyMachineSettingRequest {
-                setting: MachineSettingId::RdpIncoming,
-                value: MachineSettingValue::RdpIncoming {
-                    enabled: true,
-                    idle_timeout_seconds: 900,
-                },
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            observed,
-            MachineSettingObserved::RdpIncoming {
-                enabled: true,
-                deny_connections: Some(false),
-                idle_timeout_seconds: Some(900),
-                max_idle_time_ms: Some(900_000),
-                max_disconnection_time_ms: Some(900_000),
-                max_connection_time_ms: Some(900_000),
-                reset_broken: Some(true),
-            }
-        );
-    }
-
-    #[test]
-    fn rdp_lock_is_verified_after_service_mutation() {
-        let state = FakeWindowsState::default();
-        let observed = apply_with(
-            &state,
-            ApplyMachineSettingRequest {
-                setting: MachineSettingId::RdpLock,
-                value: MachineSettingValue::RdpLock { locked: true },
-            },
-        )
-        .unwrap();
-        assert_eq!(observed, MachineSettingObserved::RdpLock { locked: true });
-    }
-}
+#[path = "machine_settings_tests.rs"]
+mod tests;
