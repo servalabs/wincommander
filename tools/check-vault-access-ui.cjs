@@ -142,7 +142,7 @@ async function main() {
     await reset('dual');
     await page.locator('.fleet-vault-workspace').getByRole('button', { name: 'Mount', exact: true }).click();
     await page.getByRole('dialog').waitFor();
-    assert.equal(await page.getByLabel('Hidden protection password', { exact: true }).isVisible(), true, 'Writable outer mount requests hidden protection');
+    assert.equal(await page.getByLabel('Hidden volume protection password', { exact: true }).isVisible(), true, 'Writable outer mount requests hidden protection');
     await page.keyboard.press('Escape');
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
     await reset('degraded');
