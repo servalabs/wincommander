@@ -290,9 +290,10 @@ describe("redesign surface copy guardrails", () => {
     expect(cleanupGrid).toContain('data-cleanup-summary="true"');
     expect(cleanupGrid).not.toContain('className="cleanup-scan-all-btn"');
     expect(cleanupPanel).toContain("function CleanupTabNavigation");
-    expect(cleanupPanel).toContain(
-      "<CleanupTabNavigation scan={scan} isInvestigator={isInvestigator} />",
-    );
+    const navigation = cleanupPanel.match(/<CleanupTabNavigation\b[\s\S]*?\/>/)?.[0] ?? "";
+    expect(navigation).toContain("scan={scan}");
+    expect(navigation).toContain("isInvestigator={isInvestigator}");
+    expect(navigation).toContain("schedulesEnabled={hasPaid && proInstalled && !isInvestigator}");
     expect(cleanupPanel).toContain("loadCategoryBatch(allScanCategories, \"standard\")");
     expect(cleanupPanel).toContain("<CleanupSummaryStats scan={scan} />");
     expect(cleanupGrid).not.toContain("{(summaryStats.needsCleaning > 0 || summaryStats.clean > 0) && (");
@@ -319,7 +320,7 @@ describe("redesign surface copy guardrails", () => {
 
     expect(cleanupPanel).toContain("entitlementsReady: !entitlementsLoading");
     expect(cleanupPanel).toContain("migrationEnabled: hasPaid && proInstalled && !isInvestigator");
-    expect(cleanupPanel).toContain("schedulesEnabled={hasPaid && !isInvestigator}");
+    expect(cleanupPanel).toContain("schedulesEnabled={hasPaid && proInstalled && !isInvestigator}");
     expect(cleanupPanel).not.toContain('schedulesEnabled={canUse("paid")}');
     expect(cleanupScan).toContain("if (!entitlementsReady || !schedulesEnabled || !migrationEnabled || migrationStarted.current) return;");
     expect(cleanupGrid).toContain("onRequestScheduleAccess");

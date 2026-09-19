@@ -1642,7 +1642,7 @@ mod tests {
 
     #[test]
     fn fleet_operations_use_the_explicit_service_gate_but_status_is_read_only() {
-        let source = include_str!("fleet_agent.rs");
+        let source = include_str!("fleet_agent.rs").replace("\r\n", "\n");
         let service_gate = ["require_service_feature(\"", "fleet\")"].concat();
         let obsolete_gate = ["require", "_paid(\"fleet agent\")"].concat();
         assert_eq!(
@@ -1911,7 +1911,7 @@ mod tests {
 
     #[test]
     fn approved_disconnect_clears_fleet_policy_only_after_sidecar_disconnect_succeeds() {
-        let source = include_str!("fleet_agent.rs");
+        let source = include_str!("fleet_agent.rs").replace("\r\n", "\n");
         let disconnect = source
             .find("dispatch_paid_command(\"fleet_agent_disconnect\"")
             .expect("disconnect dispatch must remain present");

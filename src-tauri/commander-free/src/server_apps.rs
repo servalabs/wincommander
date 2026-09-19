@@ -174,7 +174,7 @@ pub async fn open_server_app(
     w: f64,
     h: f64,
     // ephemeral: route this webview's storage to a separate per-group
-    // data directory and DESTROY whatever was there first. Used by the
+    // fresh data directory. Used by the
     // mesh-login flow so a stale Tailscale session cookie doesn't make
     // the next "Sign In" silently auto-complete without showing the
     // login form. Other groups (server-app, productivity, etc.) keep
@@ -204,12 +204,13 @@ pub async fn open_server_app(
     }
 
     // Ephemeral path: if a webview with this label already exists from
-    // a previous Sign In, CLOSE it so the new one starts with the erased
+    // a previous Sign In, CLOSE it so the new one starts with a fresh
     // data directory. Without this we'd reuse the existing webview and
-    // its in-memory session state would defeat the cookie erase below.
+    // its in-memory session state would defeat fresh sign-in isolation.
     if is_ephemeral {
         if let Some(wv) = app.get_webview(&label) {
-            let _ = wv.close();
+            wv.close()
+                .map_err(|_| "Previous sign-in view could not be closed")?;
         }
     } else if let Some(wv) = app.get_webview(&label) {
         // Persistent path: existing webview wins — just show + reposition.
@@ -231,38 +232,22 @@ pub async fn open_server_app(
 
     let init_script = build_init_script(&custom_css, &custom_js);
 
-    // Use per-user data directory for WebView2 instances to avoid cross-user lock conflicts.
-    // For ephemeral groups (mesh-login), use a SEPARATE per-group subdir
-    // and erase it first so cookies never persist across Sign In attempts.
-    // Otherwise share the long-lived ServerApps directory so persistent
-    // logins (Immich, Nextcloud, etc.) survive WinCommander restarts.
-    let webview_data_dir = {
-        let base = crate::paths::user_data_dir()
-            .unwrap_or_else(|_| std::env::temp_dir().join("WinCommander"))
-            .join("WebView2");
-        if is_ephemeral {
-            let p = base.join("Ephemeral").join(&group);
-            // Best-effort erase — ignore failures (e.g. file in use from
-            // a still-shutting-down webview). WebView2 will recreate
-            // whatever subset it needs on first navigation.
-            let _ = std::fs::remove_dir_all(&p);
-            p
-        } else {
-            base.join("ServerApps")
-        }
-    };
+    // A busy previous cookie store must never silently complete a new login.
+    let user_data =
+        crate::paths::user_data_dir().map_err(|_| "Per-user browser storage is unavailable")?;
+    let profile = crate::server_app_profile::Profile::prepare(&user_data, is_ephemeral)?;
+    let webview_data_dir = profile.path().to_owned();
 
     let builder =
         WebviewBuilder::new(&label, WebviewUrl::External(parsed_url))
             .transparent(false)
+            .incognito(is_ephemeral)
             // Force desktop user-agent so self-hosted apps (Immich, HA, Nextcloud)
             // don't serve mobile layouts. Without this, some apps detect the WebView2
             // default UA as a mobile/embedded browser and render phone-sized UI.
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .initialization_script(&init_script)
-            .on_navigation(move |url| {
-                crate::server_app_policy::validate_url(url, dev_origin.as_ref()).is_ok()
-            })
+            .on_navigation(profile.navigation_guard(dev_origin))
             .data_directory(webview_data_dir);
 
     window

@@ -85,7 +85,7 @@ describe("privacy shield device guardrails", () => {
     expect(shield).toContain("Camera feed is black - open its privacy shutter or close another camera app.");
   });
 
-  test("presence loss is debounced as unknown and never becomes a Shield alert", async () => {
+  test("sustained presence loss is independently debounced and never relabeled as look-away", async () => {
     const shield = await read("src-tauri/commander-free/scripts/modules/privacy/privacy_shield.ps1");
     const backend = await read("src-tauri/commander-free/src/backend.rs");
 
@@ -94,12 +94,12 @@ describe("privacy shield device guardrails", () => {
     expect(shield).toContain("self._presence_loss_active = False");
     expect(shield).toContain("self._no_face_detected_streak >= self.buffer_frames");
     expect(shield).toContain("self._face_recovery_streak >= self.buffer_frames");
-    expect(shield).toContain("presence_unknown = self._presence_loss_active");
-    expect(shield).toContain("absence/unknown and must not be converted into LOOK AWAY");
-    expect(shield).toContain("if presence_unknown and not (device_triggered or multi_face_triggered or gaze_triggered):");
+    expect(shield).toContain("presence_lost_triggered = self._presence_loss_active");
+    expect(shield).toContain('parts.append("PRESENCE LOST")');
+    expect(shield).toContain("if presence_unknown and not (device_triggered or multi_face_triggered or gaze_triggered or presence_lost_triggered):");
     expect(shield).not.toContain('parts.append("NO FACE")');
-    expect(backend).toContain('"shield-reader: no-face reading ignored as presence unknown"');
-    expect(backend).toContain('"look_away" | "multiple_faces" | "secondary_device"');
+    expect(backend).toContain('classes.push("presence_lost")');
+    expect(backend).toContain('"look_away" | "presence_lost" | "phone_detected"');
     expect(backend).not.toContain('"look_away" | "no_face" | "multiple_faces" | "secondary_device"');
   });
 
@@ -168,7 +168,9 @@ describe("privacy shield device guardrails", () => {
     expect(card).toContain("const fleetPolicyManaged");
     expect(card).toContain("const fleetShieldSessionLocked");
     expect(card).toContain("Privacy Shield was started by Fleet and can only be stopped by a Fleet administrator.");
-    expect(card).toContain("!privacyShieldRunning && fleetPolicyManaged");
+    expect(card).toContain("!privacyShieldRunning && localFleetControl.startLocked");
+    expect(card).toContain("resolveLocalFleetPrivacyShieldControl({");
+    expect(card).toContain("sessionOwned: fleetShieldSessionOwned");
   });
 
   test("Fleet attention alerts require the enabled signed Fleet policy", async () => {
@@ -177,8 +179,8 @@ describe("privacy shield device guardrails", () => {
     expect(backend).toContain("fn fleet_privacy_event_gate(");
     expect(backend).toContain("shield.fleet_managed == Some(true) && shield.fleet_monitoring_enabled == Some(true)");
     expect(backend).toContain("!fleet_session_owned && !org_policy_active");
-    expect(backend).toContain('"look_away" | "multiple_faces" | "secondary_device"');
-    expect(backend).toContain("let fleet_gate = fleet_privacy_alert_gate(gaze_kind).await;");
+    expect(backend).toContain('"look_away" | "presence_lost" | "phone_detected"');
+    expect(backend).toContain("match fleet_privacy_alert_mode(event_class).await {");
   });
 
   test("the event reader retains an initial look-away emitted during startup", async () => {

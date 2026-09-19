@@ -5,6 +5,7 @@ import path from "node:path";
 const root = process.cwd();
 const card = fs.readFileSync(path.join(root, "src/panels/privacy/RdpRedirectionCard.tsx"), "utf8");
 const backend = fs.readFileSync(path.join(root, "src-tauri/commander-free/src/rdp_redirection.rs"), "utf8");
+const client = fs.readFileSync(path.join(root, "src/hooks/rdpRedirectionClient.ts"), "utf8");
 const machineSettings = fs.readFileSync(path.join(root, "src-tauri/commander-free/src/machine_settings.rs"), "utf8");
 
 describe("Windows Server RDP resource redirection", () => {
@@ -15,8 +16,9 @@ describe("Windows Server RDP resource redirection", () => {
   });
 
   it("uses the existing privileged machine-setting seam", () => {
-    expect(card).toContain('invoke<T>("apply_machine_setting"');
-    expect(card).toContain('setting: "rdp_redirection"');
+    expect(client).toContain('invoke<T>("apply_machine_setting"');
+    expect(card).toContain("../../hooks/rdpRedirectionClient");
+    expect(client).toContain('setting: "rdp_redirection"');
     expect(machineSettings).toContain('Some("rdp_redirection")');
     expect(machineSettings).toContain("rdp_redirection::handle(value)");
   });
@@ -40,7 +42,9 @@ describe("Windows Server RDP resource redirection", () => {
   it("keeps generic RemoteFX USB passthrough disabled", () => {
     expect(backend).toContain("Remove-ItemProperty -Path $usb -Name fUsbRedirectionEnableMode");
     expect(card).toContain("Generic RemoteFX USB passthrough stays disabled");
-    expect(backend.toLowerCase()).not.toContain("usbdevicestoredirect");
+    const profile = backend.match(/fn client_profile\(\)[\s\S]*?\n}/)?.[0] ?? "";
+    expect(profile).toContain("redirectsmartcards");
+    expect(profile.toLowerCase()).not.toContain("usbdevicestoredirect");
   });
 
   it("generates the required native RDP client flags", () => {

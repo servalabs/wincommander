@@ -6,13 +6,12 @@
 // restoring a backup taken on another machine is safe by design.
 
 import { useState } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
 import { Button, Alert, Icon } from "@/components/ui/bp";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import SectionCard from "../shared/SectionCard";
 import {
-    exportSettings,
+    type SettingsImportFile,
     importSettings,
     writeSettingsExportFile,
     readSettingsImportFile,
@@ -21,32 +20,22 @@ import { useAppState } from "../../context/AppContext";
 import { showError, showSuccess } from "../../utils/toast";
 import "./ImportExportSettingsCard.css";
 
-const SETTINGS_FILE_FILTER = [{ name: "WinCommander settings", extensions: ["json"] }];
-
 // This exact sentence must stay verbatim (locked in an earlier compaction
 // pass) — it now lives in the hover tooltip; the always-visible line is a
 // short paraphrase so the card doesn't need a full-sentence callout.
 const IMPORT_WARNING_FULL_TEXT =
     "Importing REPLACES your current configuration — every toggle and preference is overwritten. This device's identity (device ID, activation) is preserved automatically, so a backup from another machine is safe to restore.";
 
-function defaultExportFileName(): string {
-    const date = new Date().toISOString().slice(0, 10);
-    return `wincommander-settings-${date}.json`;
-}
-
 export default function ImportExportSettingsCard() {
     const { refreshSettings } = useAppState();
     const [exporting, setExporting] = useState(false);
     const [importing, setImporting] = useState(false);
-    const [pendingImportPath, setPendingImportPath] = useState<string | null>(null);
+    const [pendingImportFile, setPendingImportFile] = useState<SettingsImportFile | null>(null);
 
     const runExport = async () => {
         setExporting(true);
         try {
-            const json = await exportSettings();
-            const path = await save({ defaultPath: defaultExportFileName(), filters: SETTINGS_FILE_FILTER });
-            if (!path) return;
-            await writeSettingsExportFile(path, json);
+            if (!await writeSettingsExportFile()) return;
             showSuccess("Settings exported.");
         } catch (err) {
             showError(err instanceof Error ? err.message : String(err));
@@ -56,18 +45,23 @@ export default function ImportExportSettingsCard() {
     };
 
     const pickImportFile = async () => {
-        const picked = await open({ multiple: false, filters: SETTINGS_FILE_FILTER });
-        if (typeof picked === "string") setPendingImportPath(picked);
+        setImporting(true);
+        try {
+            setPendingImportFile(await readSettingsImportFile());
+        } catch (err) {
+            showError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setImporting(false);
+        }
     };
 
     const confirmImport = async () => {
-        const path = pendingImportPath;
-        setPendingImportPath(null);
-        if (!path) return;
+        const file = pendingImportFile;
+        setPendingImportFile(null);
+        if (!file) return;
         setImporting(true);
         try {
-            const json = await readSettingsImportFile(path);
-            await importSettings(json);
+            await importSettings(file.json);
             await refreshSettings();
             showSuccess("Settings imported — this device's identity was kept as-is.");
         } catch (err) {
@@ -130,18 +124,18 @@ export default function ImportExportSettingsCard() {
             </Tooltip>
 
             <Alert
-                isOpen={!!pendingImportPath}
+                isOpen={!!pendingImportFile}
                 cancelButtonText="Cancel"
                 confirmButtonText="Replace settings"
                 intent="danger"
                 icon="import"
-                onCancel={() => setPendingImportPath(null)}
+                onCancel={() => setPendingImportFile(null)}
                 onConfirm={confirmImport}
                 loading={importing}
             >
                 <p>
                     Replace your current configuration with the contents of{" "}
-                    <strong>{pendingImportPath}</strong>? Every toggle and preference will be
+                    <strong>{pendingImportFile?.fileName}</strong>? Every toggle and preference will be
                     overwritten. This cannot be undone.
                 </p>
             </Alert>

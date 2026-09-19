@@ -125,6 +125,9 @@ async fn call_via_with_timeout(
         .pipe_mode(PipeMode::Byte)
         .open(pipe_name)
         .map_err(|e| format!("service connect failed: {e}"))?;
+    // Authenticate before writing even Hello: the server could otherwise
+    // impersonate the caller or receive a Vault credential.
+    let _verified_peer = verify_connected_service(&client, pipe_name)?;
     let session_token = Uuid::new_v4().to_string();
     let hello = wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(&session_token));
 
@@ -209,6 +212,25 @@ async fn call_via_with_timeout(
         }
         _ => Err("service returned an unexpected reply".to_string()),
     }
+}
+
+#[cfg(windows)]
+fn verify_connected_service(
+    client: &tokio::net::windows::named_pipe::NamedPipeClient,
+    _pipe_name: &str,
+) -> Result<Option<wincmd_service_auth::VerifiedServicePeer>, String> {
+    // Existing protocol tests use in-process, uniquely named fixtures. This
+    // branch does not exist in release/debug application binaries.
+    #[cfg(test)]
+    if _pipe_name != wincmd_shared::svc::SVC_PIPE_NAME {
+        if wincmd_service_auth::server_process_id(client).ok() == Some(std::process::id()) {
+            return Ok(None);
+        }
+        return Err("test service peer mismatch".into());
+    }
+    wincmd_service_auth::verify_service_peer(client)
+        .map(Some)
+        .map_err(|_| "Service identity could not be verified".to_string())
 }
 
 fn zeroize_envelope(envelope: &mut wincmd_shared::Envelope) {

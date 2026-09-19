@@ -7287,7 +7287,7 @@
       "debugOnly": false,
       "frontendReferences": [
         "src/hooks/machineSettingsClient.ts",
-        "src/panels/privacy/RdpRedirectionCard.tsx"
+        "src/hooks/rdpRedirectionClient.ts"
       ]
     },
     {

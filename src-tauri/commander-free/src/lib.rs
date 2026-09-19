@@ -15,11 +15,11 @@ mod appearance;
 mod argus;
 mod attend_watch;
 mod authz;
-mod ipc_boundary;
 mod autostart;
 mod backend;
 mod child_jobs;
 pub mod cli;
+mod ipc_boundary;
 pub use wincmd_shared::command_strings;
 mod auth_anomaly;
 #[cfg(all(feature = "autonomous-test", debug_assertions))]
@@ -97,14 +97,17 @@ mod screen_privacy;
 mod search_actions;
 mod security_data;
 mod selective_erase;
-mod server_apps;
 mod server_app_policy;
+mod server_app_profile;
+mod server_apps;
 mod service_repair;
+mod service_repair_paths;
 mod services;
 mod session_assurance;
 #[cfg(windows)]
 mod session_instance;
 mod settings;
+mod settings_transfer;
 mod shield_quota;
 mod shortcut_actions;
 mod shortcut_cleaner;
@@ -1522,12 +1525,12 @@ pub fn run() {
         // simply continues this already-initialised standard-user instance.
         // Autostart, CLI, helper, duplicate, and elevated-relaunch launches
         // are deliberately excluded so there is no prompt loop or logon UAC.
-        if !cli_mode && startup_elevation::should_offer_startup_elevation(cli_mode, &cli_args) {
-            if startup_elevation::offer_startup_elevation(&cli_args)
+        if !cli_mode
+            && startup_elevation::should_offer_startup_elevation(cli_mode, &cli_args)
+            && startup_elevation::offer_startup_elevation(&cli_args)
                 == startup_elevation::StartupElevationResult::ElevatedCopyStarted
-            {
-                std::process::exit(0);
-            }
+        {
+            std::process::exit(0);
         }
     }
     // Fail loud if the Edge WebView2 runtime is missing — otherwise the webview
@@ -2766,8 +2769,8 @@ pub fn run() {
             settings::is_setting_locked,
             settings::export_settings_cmd,
             settings::import_settings_cmd,
-            settings::write_settings_export_file,
-            settings::read_settings_import_file,
+            settings_transfer::write_settings_export_file,
+            settings_transfer::read_settings_import_file,
             vault_access::get_vault_access_policy,
             vault_access::apply_vault_access_policy,
             vault_access::forget_vault_access_entry_policy_only,

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { isTourActive, setTourActive } from "../lib/tourActive";
 
-const source = readFileSync("src/hooks/useTour.ts", "utf8");
-const appSource = readFileSync("src/App.tsx", "utf8");
+const source = readFileSync("src/hooks/useTour.ts", "utf8").replace(/\r\n/g, "\n");
+const appSource = readFileSync("src/App.tsx", "utf8").replace(/\r\n/g, "\n");
 
 describe("tour first-panel navigation", () => {
   test("publishes active tour state before dispatching a cross-panel navigation", () => {

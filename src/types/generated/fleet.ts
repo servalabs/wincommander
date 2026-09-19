@@ -962,6 +962,16 @@ result_limit: number, };
  */
 export type RemoteSearchResult = { command_id: string, rows: Array<RemoteSearchResultRow>, index_status: JsonValue | null,
 /**
+ * The server-signed cap accepted by the device after applying local
+ * bounds. `None` denotes an agent that predates cap receipts.
+ */
+accepted_result_limit: number | null,
+/**
+ * `true` only when further eligible rows existed beyond the accepted cap.
+ * This must not be inferred from `rows.len()`.
+ */
+cap_reached: boolean | null,
+/**
  * Whether this device actually evaluated `RemoteSearchRequest::predicates`.
  *
  * Serde ignores unknown fields, so an agent older than the predicate
