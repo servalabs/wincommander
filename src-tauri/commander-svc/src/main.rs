@@ -31,6 +31,8 @@ mod settings_host;
 
 #[cfg(windows)]
 mod machine_settings;
+#[cfg(windows)]
+mod rdp_lock_query;
 
 // G-1 ownership split: endpoint background loops live with their future
 // owners; this root remains process composition only.

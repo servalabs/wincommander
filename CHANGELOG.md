@@ -5,6 +5,11 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- Windows service machine-setting changes now report success only when the
+  read-back state matches the request. RDP lock verification distinguishes an
+  unavailable firewall query from an unlocked state and checks each matching
+  active rule independently.
+
 - Updated the document-search XML readers for quick-xml 0.42, so the merged
   dependency update builds correctly while preserving EPUB, Office, and ODF
   extraction behavior.
