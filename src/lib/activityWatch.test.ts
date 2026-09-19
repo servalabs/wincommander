@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import {
   AW_BUCKET_FETCH_CONCURRENCY,
   AwUnavailableError,
+  activityWatchFailureCode,
+  activityWatchFailureMessage,
   CLASSIFY_INPUT_LIMIT,
   MAX_AW_RESPONSE_BYTES,
   classifyEvent,
@@ -19,6 +21,12 @@ import {
 declare const process: { env: Record<string, string | undefined> };
 
 describe("ActivityWatch event retrieval", () => {
+  it("maps local supervision errors to safe diagnostics without exposing their text", () => {
+    expect(activityWatchFailureCode(new Error("ActivityWatch server process is running but its API is unreachable at C:\\Users\\person"))).toBe("local_api_unreachable");
+    expect(activityWatchFailureCode("ActivityWatch watchers did not become healthy")).toBe("watchers_unhealthy");
+    expect(activityWatchFailureMessage(new Error("ActivityWatch is not installed at C:\\Users\\person"))).toBe("ActivityWatch is not installed. Install it, then retry.");
+  });
+
   it("requests the complete selected-day event range by default", async () => {
     const originalFetch = globalThis.fetch;
     let requestedUrl = "";

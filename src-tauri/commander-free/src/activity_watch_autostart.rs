@@ -25,6 +25,48 @@ use sysinfo::{Pid, ProcessesToUpdate, System};
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Bounded, content-free local diagnosis that the Fleet reporter can carry
+/// without exposing an ActivityWatch bucket, window title, URL, file path, or
+/// the operating system's process error text. The reporting bridge owns the
+/// timestamped delivery receipt; this supervisor owns only process/API facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActivityWatchSupervisorCode {
+    NotInstalled,
+    LocalApiUnreachable,
+    WatchersUnhealthy,
+    StartupDisabled,
+    StartupFailed,
+}
+
+impl ActivityWatchSupervisorCode {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotInstalled => "not_installed",
+            Self::LocalApiUnreachable => "local_api_unreachable",
+            Self::WatchersUnhealthy => "watchers_unhealthy",
+            Self::StartupDisabled => "startup_disabled",
+            Self::StartupFailed => "startup_failed",
+        }
+    }
+}
+
+/// Translate internal or OS-originated failures to the small public-safe
+/// reason vocabulary. Keep this mapping string-only and side-effect free so
+/// it can be used by a check-in producer without re-running supervision.
+pub(crate) fn activity_watch_supervisor_code(error: &str) -> ActivityWatchSupervisorCode {
+    if error == "ActivityWatch is not installed" {
+        ActivityWatchSupervisorCode::NotInstalled
+    } else if error.contains("API is unreachable") || error.contains("did not become ready") {
+        ActivityWatchSupervisorCode::LocalApiUnreachable
+    } else if error.contains("watchers did not become healthy") {
+        ActivityWatchSupervisorCode::WatchersUnhealthy
+    } else if error.contains("disabled in Productivity settings") {
+        ActivityWatchSupervisorCode::StartupDisabled
+    } else {
+        ActivityWatchSupervisorCode::StartupFailed
+    }
+}
+
 /// Begin the one-shot ActivityWatch supervisor without delaying app startup.
 pub fn init() {
     #[cfg(windows)]
@@ -296,6 +338,20 @@ fn server_ready() -> bool {
     let address: SocketAddr = "127.0.0.1:5600".parse().expect("constant socket address");
     for _ in 0..40 {
         if TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    false
+}
+
+#[cfg(windows)]
+fn watchers_ready() -> bool {
+    for _ in 0..20 {
+        let running = running_processes();
+        let afk = running.iter().any(|name| name == "aw-watcher-afk");
+        let window = running.iter().any(|name| name == "aw-watcher-window");
+        if afk && window {
             return true;
         }
         thread::sleep(Duration::from_millis(250));
