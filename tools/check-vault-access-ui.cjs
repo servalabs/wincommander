@@ -29,10 +29,16 @@ async function main() {
   const reset = async state => {
     await page.evaluate(value => window.renderVaultFixture(value), state);
     if (state === 'unelevated') {
-      await page.getByRole('alert').filter({ hasText: 'Run WinCommander as administrator' }).waitFor();
+      await page.getByRole('alert').filter({ hasText: 'This account needs Vault policy-manager access' }).waitFor();
     } else if (state === 'unavailable') {
       await page.getByRole('alert').filter({ hasText: 'Vault settings could not be loaded yet' }).waitFor();
     } else {
+      // Saved policies intentionally start collapsed. The fixture must follow
+      // the real explicit-edit workflow, not force the product editor open.
+      const edit = page.getByRole('button', { name: 'Edit', exact: true });
+      await edit.waitFor();
+      assert.equal(await page.locator('.vault-access-editor').count(), 0, 'Saved policy editor starts closed');
+      await edit.click();
       await page.locator('.vault-access-editor').waitFor();
     }
     await page.getByText('Loading your Vault access…').waitFor({ state: 'hidden' });
@@ -44,9 +50,8 @@ async function main() {
     await page.evaluate(async () => {
       const fixtureModule = await import('/tools/fixtures/vault-access-ui.js');
       window.renderVaultFixture = fixtureModule.renderVaultFixture;
-      window.renderVaultFixture('saved');
     });
-    await page.locator('.vault-access-editor').waitFor();
+    await reset('saved');
     console.log('Vault UI fixture rendered.');
     const details = page.locator('.vault-access-details');
     const summary = details.locator('summary');
@@ -126,8 +131,7 @@ async function main() {
     for (const [state, text] of [
       ['saved', 'Showing the policy saved by the security service.'],
       ['draft', 'Draft auto-saved on this PC — not yet applied to Windows.'],
-      ['unauthorized', 'This Windows account is not authorized to mount this vault.'],
-      ['dual', 'A writable outer mount requires the hidden protection password for that one request.']
+      ['unauthorized', 'This Windows account is not authorized to mount this vault.']
     ]) {
       await reset(state);
       assert.equal(await closed(), true);
@@ -135,12 +139,18 @@ async function main() {
       assert.equal(await page.getByText(text, { exact: true }).isVisible(), true, `${state} message remains visible`);
       console.log(`Vault UI PASS: ${state} state.`);
     }
+    await reset('dual');
+    await page.locator('.fleet-vault-workspace').getByRole('button', { name: 'Mount', exact: true }).click();
+    await page.getByRole('dialog').waitFor();
+    assert.equal(await page.getByLabel('Hidden volume protection password', { exact: true }).isVisible(), true, 'Writable outer mount requests hidden protection');
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
     await reset('degraded');
     assert.equal(await closed(), true);
     assert.equal(await page.getByRole('alert').filter({ hasText: 'Mounting is unavailable until this is fixed' }).isVisible(), true, 'Degraded warning stays visible');
     assert.equal(await page.locator('.fleet-vault-workspace').getByRole('button', { name: 'Mount', exact: true }).isDisabled(), true);
     await reset('unelevated');
-    assert.equal(await page.getByRole('alert').filter({ hasText: 'Run WinCommander as administrator' }).isVisible(), true);
+    assert.equal(await page.getByRole('alert').filter({ hasText: 'This account needs Vault policy-manager access' }).isVisible(), true);
     await reset('unavailable');
     assert.equal(await page.getByRole('alert').filter({ hasText: 'Vault settings could not be loaded yet' }).isVisible(), true);
     await reset('mounted');
