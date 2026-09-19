@@ -61,7 +61,12 @@ const RDP_WARNING_PRESETS = [
     { label: 'Custom…',    value: -1 },
 ];
 
-export default function RdpIdleCard() {
+interface RdpIdleCardProps {
+    /** Render as the Remote Access card's RDP-session subsection. */
+    embedded?: boolean;
+}
+
+export default function RdpIdleCard({ embedded = false }: RdpIdleCardProps) {
     const { appSettings, patchAppSettings, refreshSettings, systemInfo } = useAppState();
     const { hasPaid } = useEntitlements();
     const { getUserProfiles } = useBackend();
@@ -281,7 +286,12 @@ export default function RdpIdleCard() {
     ) : undefined;
 
     return (
-        <SectionCard title="RDP Idle" icon="desktop" headerRight={headerRight}>
+        <SectionCard
+            title="RDP Session Protection"
+            icon="desktop"
+            headerRight={headerRight}
+            className={embedded ? "remote-access-rdp-protection" : undefined}
+        >
             {!canHostRdp && hasPaid ? (
                 <div className="rounded-lg border p-5 flex items-start gap-3"
                     style={{ background: 'var(--shield-bg-idle)', borderColor: 'var(--color-border)', opacity: 0.85 }}>

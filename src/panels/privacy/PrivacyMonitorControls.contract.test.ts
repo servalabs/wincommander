@@ -16,6 +16,24 @@ describe("Privacy Monitor control accessibility", () => {
     );
   });
 
+  test("keeps RDP session protection within remote access and the requested monitors on the right", async () => {
+    const [panel, remoteAccess, rdp] = await Promise.all([
+      Bun.file("src/panels/privacy/index.tsx").text(),
+      Bun.file("src/panels/privacy/RemoteAccessMonitorSection.tsx").text(),
+      Bun.file("src/panels/privacy/RdpIdleCard.tsx").text(),
+    ]);
+
+    expect(panel).toContain('rdpProtection={<RdpIdleCard embedded />}');
+    expect(remoteAccess).toContain('Remote Desktop & Access Monitor');
+    expect(remoteAccess).toContain('{rdpProtection}');
+    expect(rdp).toContain('embedded?: boolean');
+    expect(rdp).toContain('remote-access-rdp-protection');
+
+    const rightColumn = panel.slice(panel.indexOf('<div className="privacy-monitor-col">', panel.indexOf('privacy-monitor-col') + 1));
+    expect(rightColumn).toContain('<ArgusDlpSection />');
+    expect(rightColumn).toContain('<RansomwareMonitorSection');
+  });
+
   test("labels monitor switches, disclosure buttons, and clear actions", async () => {
     const [ransomware, decoy, rdp, usb, canary, shield, screenCapture, remoteAccess, paste, bp, slider, printAudit, dlp, printUsb, tamper, lockdown, rightSidebar] = await Promise.all([
       Bun.file("src/panels/privacy/RansomwareMonitorSection.tsx").text(),

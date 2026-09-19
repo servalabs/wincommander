@@ -74,7 +74,10 @@ describe("Print Monitoring contract", () => {
   });
 
   test("info buttons support hover, keyboard, click, Escape, and touch", async () => {
-    const component = await Bun.file(componentPath).text();
+    const [component, privacyCss] = await Promise.all([
+      Bun.file(componentPath).text(),
+      Bun.file("src/panels/privacy/index.css").text(),
+    ]);
 
     expect(component).toContain("onMouseEnter={() => setOpen(true)}");
     expect(component).toContain("onFocus={() => setOpen(true)}");
@@ -84,6 +87,9 @@ describe("Print Monitoring contract", () => {
     expect(component).toContain("aria-expanded={open}");
     expect(component).toContain('role="tooltip"');
     expect(component).toContain('role="alert"');
+    expect(privacyCss).toContain('[role="tooltip"]');
+    expect(privacyCss).toContain('background: var(--color-bg-secondary) !important');
+    expect(privacyCss).toContain('opacity: 1');
   });
 
   test("paid boundary remains explicit", async () => {

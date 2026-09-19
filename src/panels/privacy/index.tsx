@@ -380,6 +380,7 @@ export default function PrivacyPanel() {
                                                     enabled={remoteAccessEnabled}
                                                     toolOverrides={remoteAccessTools}
                                                     onPatch={patchRemoteAccess}
+                                                    rdpProtection={<RdpIdleCard embedded />}
                                                 />
                                             </div>
                                             <div className="privacy-monitor-cell">
@@ -390,9 +391,11 @@ export default function PrivacyPanel() {
                                                     onPatch={patchAuthAnomaly}
                                                 />
                                             </div>
-                                            <div className="privacy-monitor-cell"><ArgusDlpSection /></div>
                                             <div className="privacy-monitor-cell"><PrintMonitoringSection /></div>
                                             <div className="privacy-monitor-cell"><UsbDevicesSection /></div>
+                                        </div>
+                                        <div className="privacy-monitor-col">
+                                            <div className="privacy-monitor-cell"><ArgusDlpSection /></div>
                                             <div className="privacy-monitor-cell">
                                                 <RansomwareMonitorSection
                                                     isAdvanced={isAdvanced}
@@ -409,9 +412,6 @@ export default function PrivacyPanel() {
                                                     onPatchRansomware={patchRansomware}
                                                 />
                                             </div>
-                                        </div>
-                                        <div className="privacy-monitor-col">
-                                            <div className="privacy-monitor-cell" data-tour="privacy-rdp-idle"><RdpIdleCard /></div>
                                             <div className="privacy-monitor-cell">
                                                 <DeceptionTripwiresSection
                                                     decoy={{

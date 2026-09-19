@@ -1390,6 +1390,10 @@ pub struct ClipboardSettings {
     /// `monitor.paste.auto-expire`: seconds to wait before clearing.
     /// Backend clamps to [5, 600]. None = backend default (30).
     pub paste_monitor_auto_clear_seconds: Option<u32>,
+    /// `monitor.paste.clear-on-lock` (free): erase the clipboard when this
+    /// Windows account locks its workstation. None = backend default (off).
+    #[serde(default)]
+    pub paste_monitor_auto_clear_on_lock: Option<bool>,
     /// Forward only a closed, content-free Clipboard Monitor match summary to
     /// Fleet. Admin-lockable through `privacy.clipboard.pasteMonitorReportToFleet`.
     #[serde(default)]

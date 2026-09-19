@@ -22,7 +22,7 @@
 
 import { Switch, Icon, Button, Tag } from "@/components/ui/bp";
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { showError, showSuccess } from "../../utils/toast";
 import SectionCard from "../../components/shared/SectionCard";
 import { useAppConfirm } from "../../components/shared/AppConfirmDialog";
@@ -65,6 +65,8 @@ interface Props {
   /** Controlled expand for accordion behaviour in monitoring/safeguards grids. */
   expanded?: boolean;
   onExpandedChange?: (next: boolean) => void;
+  /** RDP session safeguards share this card, while RDP device redirection stays in Windows Settings. */
+  rdpProtection?: ReactNode;
 }
 
 export default function RemoteAccessMonitorSection({
@@ -75,6 +77,7 @@ export default function RemoteAccessMonitorSection({
   onPatch,
   expanded: expandedProp,
   onExpandedChange,
+  rdpProtection,
 }: Props) {
   const requestConfirm = useAppConfirm();
   const { systemInfo } = useAppState();
@@ -261,7 +264,7 @@ export default function RemoteAccessMonitorSection({
 
   return (
       <SectionCard
-        title={isAdvanced ? "Remote Access Monitor" : "Remote control alert"}
+        title={isAdvanced ? "Remote Desktop & Access Monitor" : "Remote control alert"}
         icon="desktop"
         headerRight={headerRight}
         armed={enabled}
@@ -319,6 +322,12 @@ export default function RemoteAccessMonitorSection({
             </Button>
           )}
         </div>
+
+        {rdpProtection && (
+          <div className="mt-4 border-t border-[var(--shield-inner-border)] pt-4">
+            {rdpProtection}
+          </div>
+        )}
 
         {enabled && (
           <div className="mt-4 pt-4 border-t border-[var(--shield-inner-border)]">
