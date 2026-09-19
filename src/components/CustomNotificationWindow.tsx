@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import {
   currentMonitor,
@@ -24,7 +24,6 @@ interface NotificationPayload {
 const MAX_VISIBLE_NOTIFICATIONS = 3;
 const DUPLICATE_SUPPRESS_MS = 8_000;
 const DISPLAY_DURATION_MS = 8_000;
-const READY_EVENT = "wc-custom-notification-ready";
 
 async function positionNotificationWindow() {
   const windowRef = getCurrentWindow();
@@ -146,7 +145,7 @@ export default function CustomNotificationWindow() {
           removeNotification(event.payload);
         }),
         listen("wc-custom-notification-ping", () => {
-          emit(READY_EVENT).catch(() => {});
+          invoke("notification_renderer_ready").catch(() => {});
         }),
       ]);
 
@@ -157,10 +156,9 @@ export default function CustomNotificationWindow() {
       disposers.push(...registered);
       // This direct acknowledgement is the delivery guarantee for alerts that
       // arrive while Privacy Shield is starting. Emit the legacy ready event
-      // as well because the main-window bridge uses it to coordinate ordinary
-      // local notifications.
+      // from Rust because the main-window bridge uses it to coordinate ordinary
+      // local notifications. This view cannot emit arbitrary application events.
       await invoke("notification_renderer_ready");
-      await emit(READY_EVENT);
     };
 
     setup().catch((error) => {

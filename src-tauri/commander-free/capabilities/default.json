@@ -2,16 +2,9 @@
   "$schema": "https://schemas.tauri.app/config/2/capability",
   "identifier": "default",
   "description": "Default capabilities for WinCommander",
-  "windows": [
-    "main",
-    "search-overlay"
-  ],
   "webviews": [
     "main",
-    "search-overlay",
-    "server-app-*",
-    "productivity-*",
-    "mesh-login-*"
+    "search-overlay"
   ],
   "permissions": [
     "core:default",

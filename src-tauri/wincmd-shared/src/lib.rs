@@ -439,13 +439,24 @@ pub async fn read_envelope<R>(reader: &mut R) -> io::Result<Envelope>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    read_envelope_limited(reader, MAX_PAYLOAD_BYTES).await
+}
+
+/// Read a frame with a stricter caller-specific cap, checked before allocation.
+/// The protocol-wide maximum remains an upper bound regardless of `limit`.
+/// Cancelling this read can consume a partial frame; close that connection.
+pub async fn read_envelope_limited<R>(reader: &mut R, limit: u32) -> io::Result<Envelope>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let limit = limit.min(MAX_PAYLOAD_BYTES);
     let len = reader.read_u32_le().await?;
-    if len > MAX_PAYLOAD_BYTES {
+    if len > limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
                 "IPC frame payload {} bytes exceeds cap of {} bytes",
-                len, MAX_PAYLOAD_BYTES
+                len, limit
             ),
         ));
     }
@@ -890,3 +901,6 @@ pub mod reboot_usb_predicate;
 
 /// F6 Phase-1 Piece 2 — wipe token + pubkey write helper (filesystem write only; no reboot/erase).
 pub mod wipe_token_write;
+
+#[cfg(test)]
+mod framing_tests;
