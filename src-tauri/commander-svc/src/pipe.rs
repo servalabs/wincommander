@@ -40,9 +40,7 @@ use wincmd_shared::svc::{
     classify_verb, is_known_verb, ApplyMachineSettingRequest, CapabilityClass,
     APPLY_MACHINE_SETTING_VERB, SVC_PIPE_NAME, SVC_PROTOCOL_VERSION,
 };
-use wincmd_shared::{
-    read_envelope, write_envelope, Envelope, ErrorReply, Hello, Request, Response,
-};
+use wincmd_shared::{Envelope, ErrorReply, Hello, Request, Response};
 
 use crate::peer_auth::{SessionHelperGate, TrustOrigin};
 // `PeerAuthError` is named directly only by test code (production code
@@ -170,6 +168,7 @@ pub async fn serve(
     let mut server = unsafe {
         ServerOptions::new()
             .pipe_mode(PipeMode::Byte)
+            .max_instances(crate::pipe_transport::MAX_CONNECTIONS + 1)
             .reject_remote_clients(true)
             .first_pipe_instance(true)
             .create_with_security_attributes_raw(SVC_PIPE_NAME, sa.as_ptr() as *mut _)
@@ -180,7 +179,12 @@ pub async fn serve(
     // already copied the DACL into the pipe object by now.
     drop(sa);
 
+    let connections = crate::pipe_transport::connection_slots();
     loop {
+        let permit = Arc::clone(&connections)
+            .acquire_owned()
+            .await
+            .context("service connection admission closed")?;
         // Wait for the next client to connect.
         server.connect().await.context("pipe accept")?;
 
@@ -193,6 +197,7 @@ pub async fn serve(
         let next_server = unsafe {
             ServerOptions::new()
                 .pipe_mode(PipeMode::Byte)
+                .max_instances(crate::pipe_transport::MAX_CONNECTIONS + 1)
                 .reject_remote_clients(true)
                 .create_with_security_attributes_raw(SVC_PIPE_NAME, next_sa.as_ptr() as *mut _)
                 .context("create next pipe instance")?
@@ -208,6 +213,7 @@ pub async fn serve(
         let vault_mount = Arc::clone(&vault_mount);
 
         tokio::spawn(async move {
+            let _permit = permit;
             if let Err(e) = handle_connection(
                 conn,
                 false,
@@ -249,7 +255,10 @@ pub(crate) async fn handle_connection(
     // (the documented post-handshake shape; see `wincmd_shared::svc`'s
     // module doc) is verified against THIS token, matching the exact
     // Phase-9b HMAC contract `Envelope::sign`/`verify_and_unwrap` define.
-    let session_token = match read_envelope(&mut conn).await.context("read Hello")? {
+    let session_token = match crate::pipe_transport::read_hello(&mut conn)
+        .await
+        .context("read Hello")?
+    {
         Envelope::Hello(Hello {
             protocol_version,
             session_token,
@@ -264,7 +273,7 @@ pub(crate) async fn handle_connection(
                     SVC_PROTOCOL_VERSION
                 ),
             });
-            let _ = write_envelope(&mut conn, &err).await;
+            let _ = crate::pipe_transport::write_frame(&mut conn, &err).await;
             return Ok(());
         }
     };
@@ -302,13 +311,14 @@ pub(crate) async fn handle_connection(
         .as_deref()
         .is_some_and(peer_has_active_interactive_session);
     let ack = Envelope::Hello(wincmd_shared::svc::hello_from_ui("svc-ack"));
-    write_envelope(&mut conn, &ack)
+    crate::pipe_transport::write_frame(&mut conn, &ack)
         .await
         .context("write Hello ack")?;
 
-    // (b)/(c) Request loop.
-    loop {
-        let env = match read_envelope(&mut conn).await {
+    // Bound even continuously active clients; callers can reconnect.
+    // This check never interrupts a handler or discards its completed reply.
+    for _ in 0..crate::pipe_transport::MAX_FRAMES_PER_CONNECTION {
+        let env = match crate::pipe_transport::read_frame(&mut conn).await {
             Ok(e) => e,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e.into()),
@@ -336,7 +346,7 @@ pub(crate) async fn handle_connection(
                             kind: "signature_invalid".to_string(),
                             message: reason.to_string(),
                         });
-                        write_envelope(&mut conn, &reply).await?;
+                        crate::pipe_transport::write_frame(&mut conn, &reply).await?;
                         continue;
                     }
                 }
@@ -353,7 +363,7 @@ pub(crate) async fn handle_connection(
                 kind: "unknown_verb".to_string(),
                 message: "service verb is not recognized".to_string(),
             });
-            write_envelope(&mut conn, &reply).await?;
+            crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             continue;
         }
         match authorize_with_interactive_session(
@@ -372,7 +382,7 @@ pub(crate) async fn handle_connection(
                     kind: "forbidden".to_string(),
                     message: reason,
                 });
-                write_envelope(&mut conn, &reply).await?;
+                crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             }
             Ok(trust_origin) => {
                 if is_vault_management_verb(&req.feature_id)
@@ -385,7 +395,7 @@ pub(crate) async fn handle_connection(
                         message: "vault policy operation requires Vault Policy Administrator"
                             .to_string(),
                     });
-                    write_envelope(&mut conn, &reply).await?;
+                    crate::pipe_transport::write_frame(&mut conn, &reply).await?;
                     continue;
                 }
                 let reply = dispatch_verb(
@@ -399,7 +409,7 @@ pub(crate) async fn handle_connection(
                     caller_privileged || vault_policy_manager,
                 )
                 .await;
-                write_envelope(&mut conn, &reply).await?;
+                crate::pipe_transport::write_frame(&mut conn, &reply).await?;
             }
         }
     }
@@ -3458,6 +3468,47 @@ mod integration {
 
         server_task.await.ok();
         reply
+    }
+
+    #[tokio::test]
+    async fn oversized_hello_is_rejected_before_reading_its_body() {
+        use std::time::Duration;
+        use tokio::io::AsyncWriteExt;
+        let pipe_name = format!(
+            r"\\.\pipe\wincmd-svc-test-hello-limit-{}",
+            std::process::id()
+        );
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .unwrap();
+        let mut client = ClientOptions::new().open(&pipe_name).unwrap();
+        server.connect().await.unwrap();
+        let mut task = tokio::spawn(handle_connection(
+            server,
+            false,
+            false,
+            None,
+            false,
+            test_support::test_policy_store(),
+            test_support::passing_gate(),
+            Arc::new(ClipboardGuardState::new()),
+            crate::vault_access::test_store(),
+            Arc::new(crate::vault_mount::VaultMountBroker::new()),
+        ));
+        // Send only the length, keeping the client alive without sending a body.
+        client.write_u32_le(4097).await.unwrap();
+        let result = tokio::time::timeout(Duration::from_millis(500), &mut task).await;
+        task.abort();
+        assert!(
+            result.is_ok(),
+            "oversized Hello waited for an attacker-controlled body"
+        );
+        let error = result.unwrap().unwrap().unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::InvalidData
+        );
     }
 
     #[tokio::test]

@@ -821,6 +821,7 @@ dependencies = [
  "tokio",
  "uuid",
  "wincmd-clip-rules",
+ "wincmd-service-auth",
  "wincmd-shared",
 ]
 
@@ -933,6 +934,7 @@ dependencies = [
  "webview2-com",
  "wincmd-clip-rules",
  "wincmd-search",
+ "wincmd-service-auth",
  "wincmd-shared",
  "windows 0.61.3",
  "windows-sys 0.61.2",
@@ -7340,6 +7342,16 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "zip 4.6.1",
+]
+
+[[package]]
+name = "wincmd-service-auth"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "wincmd-shared",
+ "windows-service",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

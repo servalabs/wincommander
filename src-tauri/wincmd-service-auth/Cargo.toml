@@ -1,0 +1,16 @@
+[package]
+name = "wincmd-service-auth"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Windows identity verification for the WinCommander service pipe"
+
+[dependencies]
+wincmd-shared = { path = "../wincmd-shared" }
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Pipes", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "net", "io-util"] }

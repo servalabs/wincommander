@@ -50,7 +50,7 @@ function normalizePath(path: string): string {
 // hardcoding the names in cli.rs — is what stops the two lists drifting apart
 // when a new dev-panel handler is added.
 function extractHandlerNames(source: string): Map<string, boolean> {
-  const marker = ".invoke_handler(tauri::generate_handler![";
+  const marker = ".invoke_handler(ipc_boundary::guard(tauri::generate_handler![";
   const start = source.indexOf(marker);
   if (start < 0) throw new Error("Tauri generate_handler list not found");
   const end = source.indexOf("        ])", start);

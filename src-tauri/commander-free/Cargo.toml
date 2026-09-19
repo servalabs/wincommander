@@ -114,6 +114,7 @@ hmac = "0.13"
 # Tauri uses tokio internally but doesn't re-export time/rt features.
 tokio = { version = "1", features = ["time", "rt", "process", "io-util", "sync", "net", "macros"] }
 wincmd-shared = { path = "../wincmd-shared" }
+wincmd-service-auth = { path = "../wincmd-service-auth" }
 fleet-proto = { path = "../fleet-proto", optional = true }
 wincmd-search = { path = "../wincmd-search" }
 commander-context-shred = { path = "../commander-context-shred" }

@@ -439,13 +439,23 @@ pub async fn read_envelope<R>(reader: &mut R) -> io::Result<Envelope>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    read_envelope_with_limit(reader, MAX_PAYLOAD_BYTES).await
+}
+
+/// Read a frame with a phase-specific cap, checked before allocating its body.
+/// A caller cannot raise the protocol-wide maximum with this helper.
+pub async fn read_envelope_with_limit<R>(reader: &mut R, limit: u32) -> io::Result<Envelope>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let limit = limit.min(MAX_PAYLOAD_BYTES);
     let len = reader.read_u32_le().await?;
-    if len > MAX_PAYLOAD_BYTES {
+    if len == 0 || len > limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "IPC frame payload {} bytes exceeds cap of {} bytes",
-                len, MAX_PAYLOAD_BYTES
+                "IPC frame payload {} bytes is outside the allowed nonzero cap of {} bytes",
+                len, limit
             ),
         ));
     }

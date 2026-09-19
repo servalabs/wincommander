@@ -56,6 +56,8 @@ mod vault_mount;
 
 #[cfg(windows)]
 mod pipe;
+#[cfg(windows)]
+mod pipe_transport;
 
 #[cfg(windows)]
 mod pro_broker;

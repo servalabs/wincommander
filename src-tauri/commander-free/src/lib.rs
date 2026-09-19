@@ -59,6 +59,7 @@ mod flow_health;
 mod gpo_policy;
 mod inactivity_timer;
 mod investigator_install;
+mod ipc_boundary;
 mod license;
 mod local_clipboard_rules;
 mod log;
@@ -98,11 +99,13 @@ mod security_data;
 mod selective_erase;
 mod server_apps;
 mod service_repair;
+mod service_repair_paths;
 mod services;
 mod session_assurance;
 #[cfg(windows)]
 mod session_instance;
 mod settings;
+mod settings_transfer;
 mod shield_quota;
 mod shortcut_actions;
 mod shortcut_cleaner;
@@ -2408,7 +2411,7 @@ pub fn run() {
             dev_startup_trace("setup complete");
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(ipc_boundary::guard(tauri::generate_handler![
             // Internal response sink for the invisible CLI runtime. It is
             // inert during a normal desktop launch.
             cli::mark_tauri_cli_ready,
@@ -2764,8 +2767,8 @@ pub fn run() {
             settings::is_setting_locked,
             settings::export_settings_cmd,
             settings::import_settings_cmd,
-            settings::write_settings_export_file,
-            settings::read_settings_import_file,
+            settings_transfer::write_settings_export_file,
+            settings_transfer::read_settings_import_file,
             vault_access::get_vault_access_policy,
             vault_access::apply_vault_access_policy,
             vault_access::forget_vault_access_entry_policy_only,
@@ -2977,7 +2980,7 @@ pub fn run() {
             f6_verify_boot::f6_verify_usb_boot_status,
             // ── Track A — selective in-Windows crypto-erase orchestrator (paid) ──
             selective_erase::erase_encrypted_container,
-        ])
+        ]))
         .run(context)
         .expect("error while running tauri application");
 
