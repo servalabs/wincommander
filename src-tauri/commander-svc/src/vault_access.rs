@@ -1222,9 +1222,11 @@ impl VaultAccessStore {
     }
 
     /// Classify an ordinary picker selection before any personal ownership
-    /// lookup. A current policy wins by normalized path *and* stable file
-    /// identity, so an old personal record cannot block an unmanaged file and
-    /// a replaced policy container cannot bypass its policy.
+    /// lookup. Native VeraCrypt partition paths are always unmanaged device
+    /// targets because Fleet Vault permissions apply only to filesystem
+    /// container files. For files, a current policy wins by normalized path
+    /// *and* stable file identity, so an old personal record cannot block an
+    /// unmanaged file and a replaced policy container cannot bypass its policy.
     pub fn selected_container_mount_route(
         &self,
         container_path: &str,
@@ -1234,6 +1236,32 @@ impl VaultAccessStore {
         if caller_sid.is_empty() || caller_session == 0 {
             return Err(VaultError::Validation);
         }
+
+        // A VeraCrypt partition/device selection is not a file container.
+        // Fleet Vault permissions are file-ACL policy and cannot govern an NT
+        // device namespace target. Trying to normalize/stable-file-identify
+        // \\Device\\HarddiskN\\PartitionN turns a normal external encrypted
+        // partition into a misleading "vault_policy_unavailable" failure.
+        //
+        // Keep this path service-owned and narrowly validated. The ephemeral
+        // identity is sufficient for same-session mount de-duplication; the
+        // actual encryption password/PIM/keyfiles remain the unlock boundary.
+        if wincmd_shared::vault_access::is_supported_vault_device_path(container_path) {
+            let normalized_path = container_path.trim().replace('/', "\\");
+            return Ok(SelectedContainerMountRoute::Unmanaged {
+                record: PersonalVaultRecord {
+                    container_identity: format!(
+                        "raw-device:{}",
+                        normalized_path.to_ascii_lowercase()
+                    ),
+                    container_path: normalized_path,
+                    owner_sid: caller_sid.to_owned(),
+                    scope: VaultPresentation::PerUser,
+                    created_by_session: caller_session,
+                },
+            });
+        }
+
         let normalized = self
             .fs
             .normalize_existing_container_path(Path::new(container_path))?;
@@ -5485,6 +5513,44 @@ mod tests {
                 entry_id: "shared".into()
             }
         );
+    }
+
+    #[test]
+    fn raw_veracrypt_partition_route_never_enters_file_policy_identity_checks() {
+        // test_store's filesystem deliberately fails every stable-file identity
+        // lookup. A native VeraCrypt partition must still classify successfully,
+        // proving this route cannot regress into Fleet's file-container policy
+        // or ACL verification path.
+        let store = test_store();
+        for (input, expected) in [
+            (
+                r"\Device\Harddisk1\Partition1",
+                r"\Device\Harddisk1\Partition1",
+            ),
+            (
+                r"\device/Harddisk12/partition3",
+                r"\device\Harddisk12\partition3",
+            ),
+        ] {
+            let route = store
+                .selected_container_mount_route(input, "S-1-5-21-owner", 7)
+                .expect("validated raw partition should be an unmanaged personal mount");
+            match route {
+                SelectedContainerMountRoute::Unmanaged { record } => {
+                    assert_eq!(record.container_path, expected);
+                    assert_eq!(record.owner_sid, "S-1-5-21-owner");
+                    assert_eq!(record.scope, VaultPresentation::PerUser);
+                    assert_eq!(record.created_by_session, 7);
+                    assert_eq!(
+                        record.container_identity,
+                        format!("raw-device:{}", expected.to_ascii_lowercase())
+                    );
+                }
+                SelectedContainerMountRoute::Managed { .. } => {
+                    panic!("raw VeraCrypt partitions must never be Fleet file-policy mounts");
+                }
+            }
+        }
     }
 
     #[test]

@@ -274,10 +274,12 @@ pub enum VaultBrokerVolumeRole {
 
 impl VaultMountPlan {
     pub fn validate(&self) -> Result<(), &'static str> {
+        let path_is_valid = is_windows_absolute_path(&self.container_path)
+            || (self.personal && is_supported_vault_device_path(&self.container_path));
         if self.operation_id == 0
             || self.container_path.is_empty()
             || self.container_path.len() > 32_767
-            || !is_windows_absolute_path(&self.container_path)
+            || !path_is_valid
             || self.password.is_empty()
             || self.password.len() > 32_767
             || self.mounted_root_acl_sddl.is_empty()
@@ -335,6 +337,25 @@ impl VaultMountPlan {
         self.hidden_keyfiles.iter_mut().for_each(Zeroize::zeroize);
         self.hidden_keyfiles.clear();
     }
+}
+
+/// VeraCrypt accepts native NT partition paths such as
+/// `\\Device\\Harddisk1\\Partition1`. These are not filesystem container
+/// paths and therefore must never be interpreted as Fleet ACL-managed files.
+/// Keep the accepted shape deliberately narrow: exactly one HarddiskN/PartitionN
+/// selector with decimal indices and no extra components.
+pub fn is_supported_vault_device_path(value: &str) -> bool {
+    let normalized = value.trim().replace('/', "\\").to_ascii_lowercase();
+    let Some(rest) = normalized.strip_prefix(r"\device\harddisk") else {
+        return false;
+    };
+    let Some((disk, partition)) = rest.split_once(r"\partition") else {
+        return false;
+    };
+    !disk.is_empty()
+        && !partition.is_empty()
+        && disk.bytes().all(|byte| byte.is_ascii_digit())
+        && partition.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn is_windows_absolute_path(value: &str) -> bool {
@@ -830,19 +851,46 @@ mod tests {
                 "expected Windows absolute path: {path}"
             );
         }
+
+        for path in [
+            r"\Device\Harddisk1\Partition1",
+            r"\device\harddisk12\partition3",
+            r"\Device/Harddisk12/Partition3",
+        ] {
+            plan.container_path = path.into();
+            assert_eq!(
+                plan.validate(),
+                Err("vault_mount_plan_invalid"),
+                "managed plans must not accept native device targets: {path}"
+            );
+            plan.personal = true;
+            assert_eq!(
+                plan.validate(),
+                Ok(()),
+                "personal plans should accept a validated VeraCrypt device target: {path}"
+            );
+            plan.personal = false;
+        }
+
         for path in [
             r"Vaults\private.hc",
             r"C:Vaults\private.hc",
             r"\Vaults\private.hc",
             r"\\server",
             r"\\",
+            r"\Device\Harddisk\Partition1",
+            r"\Device\Harddisk1\Partition",
+            r"\Device\Harddisk1\Partition1\extra",
+            r"\Device\CdRom0",
         ] {
             plan.container_path = path.into();
+            plan.personal = true;
             assert_eq!(
                 plan.validate(),
                 Err("vault_mount_plan_invalid"),
-                "expected non-absolute Windows path: {path}"
+                "expected rejected Windows path: {path}"
             );
+            plan.personal = false;
         }
     }
 
