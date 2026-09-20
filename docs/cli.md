@@ -30,7 +30,7 @@ exit $process.ExitCode
 
 ## Catalog and runtime
 
-The generated catalog contains 1,288 entries: 807 backend-script commands and 481 Tauri handlers. Four Tauri handlers are debug-only, so the shipped release binary executes 1,284 commands; it retains the four debug-only entries for catalog-drift auditing and refuses them at runtime.
+The generated catalog contains 1,287 entries: 807 backend-script commands and 480 Tauri handlers. Four Tauri handlers are debug-only, so the shipped release binary executes 1,283 commands; it retains the four debug-only entries for catalog-drift auditing and refuses them at runtime.
 
 `audit catalog` reports a failure only for a genuinely missing dispatcher or a
 registered command left without a declared execution boundary. A command marked
@@ -128,3 +128,21 @@ cargo test -p commander-free --lib cli::tests
 ```
 
 The generated JSON escapes command separators before it is embedded, preventing contiguous paid-command names from reappearing in the Free binary. JSON decoding restores the real identifiers at runtime.
+
+### Native policy ingestion
+
+`apply_admin_config_cmd` is no longer a renderer or CLI command. Managed policy
+is ingested by the native Fleet refresh path after signature and epoch checks.
+Use `fleet_apply_pending_epoch` to request a refresh of the native agent's
+verified pending policy. Local settings patch, replacement and import preserve
+managed locks, the verification key and device identity. A conflicting import
+returns an error before the proposed settings are persisted. Direct JSON
+imports share the native file picker's 4 MiB size limit.
+
+Fleet Connect preserves existing managed preferences and local session state
+when reconnecting. Changing an existing server, verification key or managed
+dispatch setting requires native approval bound to the full request and the
+observed enrollment state. A previously pinned verification key cannot be
+cleared with an empty input. If policy changes while approval is open, retry
+Connect; the stale request is not committed. Supplied confirmation capabilities
+now bind the entire request, rather than only the server URL.

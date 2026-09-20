@@ -2262,7 +2262,7 @@ pub struct PolicySettings {
     /// Base64 Ed25519 public key of the Fleet server this device is managed by.
     /// When set, the device is "fleet-managed": every pushed config epoch MUST
     /// carry a valid signature from this key (anti-spoofing — see
-    /// `apply_admin_config_cmd`). When `None` the device is unmanaged and config
+    /// `apply_verified_admin_config`). When `None` the device is unmanaged and config
     /// applies as before (local trust).
     #[serde(default)]
     pub fleet_signing_key: Option<String>,
@@ -2743,31 +2743,38 @@ fn patch_settings_with(
     persist: impl FnOnce(&AppSettings) -> Result<(), String>,
     notify: impl FnOnce(&serde_json::Value, &serde_json::Value),
 ) -> Result<AppSettings, String> {
+    mutate_settings_with(
+        |settings| {
+            let mut current =
+                serde_json::to_value(settings).map_err(|e| format!("Serialization error: {e}"))?;
+            merge_json(&mut current, &patch);
+            serde_json::from_value(current).map_err(|e| format!("Failed to apply patch: {e}"))
+        },
+        paid,
+        persist,
+        notify,
+    )
+}
+
+/// Keep authorization, candidate construction and persistence in one cache transaction.
+fn mutate_settings_with(
+    prepare: impl FnOnce(&AppSettings) -> Result<AppSettings, String>,
+    paid: bool,
+    persist: impl FnOnce(&AppSettings) -> Result<(), String>,
+    notify: impl FnOnce(&serde_json::Value, &serde_json::Value),
+) -> Result<AppSettings, String> {
+    if is_decoy_mode() {
+        return Err("Settings are read-only in decoy mode.".to_string());
+    }
     let mut cache = SETTINGS_CACHE
         .lock()
         .map_err(|_| "Settings cache lock poisoned".to_string())?;
-
-    // Read from cache or store (without releasing the lock)
-    let settings = if let Some(ref cached) = *cache {
-        cached.clone()
-    } else {
-        load_settings_from_store()?
+    let settings = match cache.as_ref() {
+        Some(cached) => cached.clone(),
+        None => load_settings_from_store()?,
     };
-
-    let mut current =
-        serde_json::to_value(&settings).map_err(|e| format!("Serialization error: {}", e))?;
-
-    merge_json(&mut current, &patch);
-
-    let mut updated: AppSettings =
-        serde_json::from_value(current).map_err(|e| format!("Failed to apply patch: {}", e))?;
-
+    let mut updated = prepare(&settings)?;
     updated.last_seen_at = now_iso8601();
-
-    // Write to disk and update cache while still holding the lock
-    crate::set_logging_enabled_flag(updated.app.logging_enabled.unwrap_or(true));
-    // Capture the pre-write tree for the settings-changed diff (paid-gated;
-    // skipped entirely for free installs to avoid the double-serialize cost).
     let old_json = if paid {
         serde_json::to_value(&settings).ok()
     } else {
@@ -2775,19 +2782,21 @@ fn patch_settings_with(
     };
     persist(&updated)?;
     *cache = Some(updated.clone());
-    // Flow observers read settings themselves; calling them under this lock deadlocks.
     drop(cache);
-
-    // M3: fire the flows settings-changed source. Only reached on a successful
-    // write, i.e. never in decoy mode (write_settings_internal refuses there).
+    crate::set_logging_enabled_flag(updated.app.logging_enabled.unwrap_or(true));
     if let Some(old_json) = old_json {
         if let Ok(new_json) = serde_json::to_value(&updated) {
             notify(&old_json, &new_json);
         }
     }
-
     Ok(updated)
 }
+
+#[path = "settings_local_write.rs"]
+mod local_write;
+
+#[path = "settings_fleet_enrollment.rs"]
+pub(crate) mod fleet_enrollment;
 
 /// Deep merge: patch values override base values. Objects are merged recursively.
 fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
@@ -2830,89 +2839,6 @@ pub fn is_path_locked(path: &str) -> Result<bool, String> {
         .any(|p| path.starts_with(p.as_str())))
 }
 
-/// Apply admin master config with merge/overwrite strategy.
-pub fn apply_admin_config(
-    admin_config: serde_json::Value,
-    locked_paths: Vec<String>,
-    strategy: &str,
-    config_version: u32,
-    managed: bool,
-) -> Result<AppSettings, String> {
-    // Admin config targets desired state → wrap in "ideal"
-    let wrapped = serde_json::json!({"ideal": admin_config});
-
-    if strategy == "overwrite" {
-        // Full overwrite: start from defaults but keep device identity + current state.
-        // Assemble the complete final AppSettings in memory — merged config AND all
-        // policy fields — then persist in a single write.
-        // KT: must be one atomic write; writing config first and policy second leaves a
-        // window where the new config is on disk but lockedPaths are not yet set
-        // (fail-open on exactly the paths this epoch is locking).
-        let existing = read_settings()?;
-        let mut fresh = create_default_settings();
-        fresh.device_id = existing.device_id;
-        fresh.created_at = existing.created_at;
-        fresh.current = existing.current; // preserve probed state
-
-        // Apply admin config on top of ideal
-        let mut as_json =
-            serde_json::to_value(&fresh).map_err(|e| format!("Serialization error: {}", e))?;
-        merge_json(&mut as_json, &wrapped);
-        let mut settings: AppSettings =
-            serde_json::from_value(as_json).map_err(|e| format!("Deserialization error: {}", e))?;
-
-        // Set all policy fields before the single write
-        settings.policy.locked_paths = locked_paths;
-        settings.policy.last_synced_at = Some(now_iso8601());
-        settings.policy.master_config_version = Some(config_version);
-        settings.policy.sync_mode = "managed".to_string();
-        settings.policy.managed = managed;
-
-        write_settings(&settings)?;
-        crate::net_traffic_alert::reload_from_settings(&settings);
-        Ok(settings)
-    } else {
-        // Merge: hold the cache lock for the entire read-modify-write cycle so no
-        // reader or racing patch_settings_cmd sees a partial state between writes.
-        // KT: must be one atomic write; writing config first and policy second leaves a
-        // window where the new config is on disk but lockedPaths are not yet set
-        // (fail-open on exactly the paths this epoch is locking).
-        let mut cache = SETTINGS_CACHE
-            .lock()
-            .map_err(|_| "Settings cache lock poisoned".to_string())?;
-
-        let base = if let Some(ref cached) = *cache {
-            cached.clone()
-        } else {
-            load_settings_from_store()?
-        };
-
-        let mut as_json =
-            serde_json::to_value(&base).map_err(|e| format!("Serialization error: {}", e))?;
-        merge_json(&mut as_json, &wrapped);
-        let mut settings: AppSettings =
-            serde_json::from_value(as_json).map_err(|e| format!("Failed to apply patch: {}", e))?;
-
-        settings.last_seen_at = now_iso8601();
-
-        // Set all policy fields before the single write
-        settings.policy.locked_paths = locked_paths;
-        settings.policy.last_synced_at = Some(now_iso8601());
-        settings.policy.master_config_version = Some(config_version);
-        settings.policy.sync_mode = "managed".to_string();
-        settings.policy.managed = managed;
-
-        // Single atomic write: merged config + locked paths together, through the
-        // decoy-mode choke point (write_settings_internal).
-        crate::set_logging_enabled_flag(settings.app.logging_enabled.unwrap_or(true));
-        write_settings_internal(&settings)?;
-        *cache = Some(settings.clone());
-        crate::net_traffic_alert::reload_from_settings(&settings);
-
-        Ok(settings)
-    }
-}
-
 // ═══════════════════════════════════════════════════════════════════════
 // EXPORT / IMPORT — For backup and admin distribution
 // ═══════════════════════════════════════════════════════════════════════
@@ -2926,18 +2852,7 @@ pub fn export_settings() -> Result<String, String> {
 
 /// Import settings from a JSON string (for restore or admin push).
 pub fn import_settings(json: &str) -> Result<AppSettings, String> {
-    let mut imported: AppSettings =
-        serde_json::from_str(json).map_err(|e| format!("Import failed: {}", e))?;
-
-    // Preserve device identity
-    let current = read_settings()?;
-    imported.device_id = current.device_id;
-    imported.created_at = current.created_at;
-    imported.last_seen_at = now_iso8601();
-    imported.app_version = get_app_version();
-
-    write_settings(&imported)?;
-    Ok(imported)
+    local_write::apply(local_write::Mutation::Import(json.to_string()))
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -2967,25 +2882,8 @@ pub async fn set_settings(settings: serde_json::Value) -> Result<serde_json::Val
 }
 
 fn set_settings_sync(settings: serde_json::Value) -> Result<serde_json::Value, String> {
-    let parsed: AppSettings =
-        serde_json::from_value(settings).map_err(|e| format!("Invalid settings format: {}", e))?;
-    // Capture the pre-write tree for the settings-changed diff (paid-gated).
-    let old_json = if crate::license::has_paid_entitlement() {
-        read_settings()
-            .ok()
-            .and_then(|s| serde_json::to_value(&s).ok())
-    } else {
-        None
-    };
-    write_settings(&parsed)?;
-    let v = serde_json::to_value(&parsed).map_err(|e| format!("Serialization error: {}", e))?;
-
-    // M3: fire the flows settings-changed source (paid-gated; post-write).
-    if let Some(old_json) = old_json {
-        crate::flow_bridge::on_settings_written(&old_json, &v);
-    }
-
-    Ok(v)
+    let updated = local_write::apply(local_write::Mutation::Replace(settings))?;
+    serde_json::to_value(updated).map_err(|e| format!("Serialization error: {e}"))
 }
 
 /// While ON, all settings writes are refused (see patch_settings_cmd). Set by
@@ -3030,51 +2928,8 @@ pub async fn patch_settings_cmd(patch: serde_json::Value) -> Result<serde_json::
 }
 
 fn patch_settings_cmd_sync(patch: serde_json::Value) -> Result<serde_json::Value, String> {
-    // Read-only in decoy mode: the decoy view shows appSettings=null, and this
-    // backend backstop refuses every write — even direct/programmatic patch
-    // calls — so a coerced decoy session can't mutate or leak the real config.
-    if DECOY_MODE.load(std::sync::atomic::Ordering::Relaxed) {
-        return Err("Settings are read-only in decoy mode.".to_string());
-    }
-
-    // Check locked paths for writes to ideal state
-    if let Some(ideal_obj) = patch.get("ideal").and_then(|v| v.as_object()) {
-        let settings = read_settings()?;
-        if settings.policy.sync_mode == "managed" {
-            let flat = flatten_value(&serde_json::Value::Object(ideal_obj.clone()), "");
-            for path in flat.keys() {
-                if settings
-                    .policy
-                    .locked_paths
-                    .iter()
-                    .any(|p| path.starts_with(p.as_str()))
-                {
-                    return Err(format!("Setting '{}' is locked by admin policy", path));
-                }
-            }
-        }
-    }
-
-    // M5 fleet lock: a managed device whose policy locks `app.flows` (the flows
-    // rule set) may not have `app.proFlows` mutated locally. This closes the
-    // gap where flows lived entirely outside the signed config chain — a
-    // fleet-pushed rule set can now be made read-only on the endpoint. The
-    // server remains the authoritative gate; this is the local deterrent.
-    if patch.get("app").and_then(|a| a.get("proFlows")).is_some() {
-        let settings = read_settings()?;
-        if settings.policy.sync_mode == "managed"
-            && settings
-                .policy
-                .locked_paths
-                .iter()
-                .any(|p| p == "app.flows" || p == "app.proFlows")
-        {
-            return Err("Flows are locked by admin policy".to_string());
-        }
-    }
-
-    let updated = patch_settings(patch)?;
-    serde_json::to_value(&updated).map_err(|e| format!("Serialization error: {}", e))
+    let updated = local_write::apply(local_write::Mutation::Patch(patch))?;
+    serde_json::to_value(updated).map_err(|e| format!("Serialization error: {e}"))
 }
 
 /// Get a single setting value by dot-path (e.g., "privacy.telemetry.windowsDisabled").
@@ -3130,91 +2985,54 @@ fn get_device_identity_sync() -> Result<serde_json::Value, String> {
     }))
 }
 
-/// Apply an admin config push (used by admin server sync).
-///
-/// SECURITY: if this device is fleet-managed (`policy.fleet_signing_key` is set),
-/// the push MUST carry a valid Ed25519 signature from that pinned key over the
-/// canonical epoch preimage (`version || canonical(config)`) — otherwise any
-/// tailnet peer could push policy. The `signer_key` in the push must also match
-/// the pinned key (anti key-swap). Unmanaged devices (no pinned key) keep the
-/// prior local-trust behaviour. Fail closed.
-#[tauri::command]
+/// Native-only policy ingestion. Renderer callers may request a native Fleet
+/// refresh, but cannot select or replay an arbitrary policy envelope.
 #[allow(clippy::too_many_arguments)]
-pub fn apply_admin_config_cmd(
+pub(crate) fn apply_verified_admin_config(
     config: serde_json::Value,
     locked_paths: Vec<String>,
     strategy: String,
     config_version: u32,
     signature: Option<String>,
     signer_key: Option<String>,
-    // Fleet Control Plane P2: the signed epoch envelope also binds the target
-    // scope + lock set + managed flag. These default to an org-wide unmanaged
-    // epoch for legacy/unmanaged callers. The signature is verified over the
-    // SAME envelope the fleet server signed (see epoch_signing_envelope).
     target_kind: Option<String>,
     target_id: Option<String>,
     managed: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    // KT: fail-closed guard for the canonical signing path. epoch_preimage ->
-    // write_canonical (wincmd-shared) assumes every scalar in `config` serializes;
-    // that holds while serde_json's `arbitrary_precision` feature is OFF. Reject a
-    // non-serializable config BEFORE rebuilding the verify preimage so a malicious
-    // server (or a future feature flip) yields a clean error, not a panic.
-    if serde_json::to_string(&config).is_err() {
-        return Err("config push is not canonically serializable".to_string());
-    }
-    if let Some(pinned) = read_settings()?.policy.fleet_signing_key {
-        let sig = signature
-            .ok_or_else(|| "fleet-managed device: config push requires a signature".to_string())?;
-        if let Some(provided) = signer_key.as_deref() {
-            if provided != pinned {
-                return Err(
-                    "config push signer key does not match the pinned fleet key".to_string()
-                );
-            }
-        }
-        // KT: epoch_preimage is the SSOT for epoch bytes; callers must not
-        // assemble the bytes by hand (they would silently miss new fields).
-        let msg = wincmd_shared::fleet::epoch_preimage(&wincmd_shared::fleet::EpochSigningInput {
-            version: config_version as i64,
-            config: &config,
-            locked_paths: &locked_paths,
-            managed: managed.unwrap_or(false),
-            target_kind: target_kind.as_deref().unwrap_or("org"),
-            target_id: target_id.as_deref(),
-        });
-        if !wincmd_shared::fleet::verify_signature_b64(&pinned, &msg, &sig) {
-            return Err("config push signature verification failed".to_string());
-        }
-
-        // Clipboard Guard / Ink Receipt (plan §4.4, §2.4 finding 1; task C6):
-        // the `clipboardGuard`/`inkReceipt` subtrees ride this SAME signed
-        // epoch, exactly as Privacy Shield rides `privacy.privacyShield`, so
-        // they inherit everything the check above just proved. Only reachable
-        // here because the signature verified above — see
-        // `spawn_clipboard_guard_epoch_relay`'s doc comment for why that must
-        // stay true. Fire-and-forget: must never block this command or the
-        // config apply below.
-        spawn_clipboard_guard_epoch_relay(
-            &config,
-            config_version as i64,
-            &locked_paths,
-            managed.unwrap_or(false),
-            target_kind.as_deref(),
-            target_id.as_deref(),
-            &sig,
-            &pinned,
-        );
-    }
-    let updated = apply_admin_config(
+    let epoch = epoch_write::Epoch {
         config,
         locked_paths,
-        &strategy,
-        config_version,
-        managed.unwrap_or(false),
-    )?;
-    serde_json::to_value(&updated).map_err(|e| format!("Serialization error: {}", e))
+        strategy,
+        version: config_version,
+        signature,
+        signer_key,
+        target_kind,
+        target_id,
+        managed: managed.unwrap_or(false),
+    };
+    let updated = epoch_write::apply(&epoch)?;
+    crate::net_traffic_alert::reload_from_settings(&updated);
+    // Never announce/relay an epoch that failed its local authority transaction.
+    if let (Some(signature), Some(pinned)) = (
+        epoch.signature.as_deref(),
+        updated.policy.fleet_signing_key.as_deref(),
+    ) {
+        spawn_clipboard_guard_epoch_relay(
+            &epoch.config,
+            i64::from(epoch.version),
+            &epoch.locked_paths,
+            epoch.managed,
+            epoch.target_kind.as_deref(),
+            epoch.target_id.as_deref(),
+            signature,
+            pinned,
+        );
+    }
+    serde_json::to_value(&updated).map_err(|e| format!("Serialization error: {e}"))
 }
+
+#[path = "settings_epoch_write.rs"]
+mod epoch_write;
 
 // ═══════════════════════════════════════════════════════════════════════
 // CLIPBOARD GUARD / INK RECEIPT — verified-epoch subtree relay into svc
@@ -3222,7 +3040,7 @@ pub fn apply_admin_config_cmd(
 // ═══════════════════════════════════════════════════════════════════════
 //
 // Extends the epoch-verification pattern directly above
-// (`apply_admin_config_cmd`) rather than duplicating it: the
+// (`apply_verified_admin_config`) rather than duplicating it: the
 // `clipboardGuard`/`inkReceipt` subtrees ride the SAME signed
 // `config_json` Privacy Shield uses for `privacy.privacyShield`, so
 // signing, org/group/device scoping, `locked_paths`, and monotonic
@@ -3455,7 +3273,7 @@ struct InstallEpochArgs {
 
 /// Kick off the Clipboard Guard / Ink Receipt epoch-subtree handling for a
 /// JUST-VERIFIED epoch. Call this ONLY from inside
-/// `apply_admin_config_cmd`'s `if let Some(pinned) = ...` branch, after
+/// `apply_verified_admin_config`'s `if let Some(pinned) = ...` branch, after
 /// `verify_signature_b64` has already returned `true` — this function
 /// does not itself re-check the signature, and reaching it on an
 /// unverified epoch would defeat the entire "verify before use, always"
@@ -4631,32 +4449,23 @@ mod tests {
     fn decoy_mode_refuses_all_settings_writes_via_apply_admin_config() {
         let _decoy = DecoyModeGuard::engage();
         warm_cache_with_defaults();
-
-        let admin_config = serde_json::json!({"privacy": {"telemetry": {"windowsDisabled": true}}});
-
-        let merge_result = apply_admin_config(
-            admin_config.clone(),
-            vec!["privacy.telemetry".to_string()],
-            "merge",
-            1,
-            true,
-        );
-        assert!(
-            merge_result.is_err(),
-            "apply_admin_config(merge) must refuse to write while decoy mode is active"
-        );
-
-        let overwrite_result = apply_admin_config(
-            admin_config,
-            vec!["privacy.telemetry".to_string()],
-            "overwrite",
-            1,
-            true,
-        );
-        assert!(
-            overwrite_result.is_err(),
-            "apply_admin_config(overwrite) must refuse to write while decoy mode is active"
-        );
+        for strategy in ["merge", "overwrite"] {
+            let result = apply_verified_admin_config(
+                serde_json::json!({}),
+                vec![],
+                strategy.into(),
+                1,
+                None,
+                None,
+                None,
+                None,
+                Some(true),
+            );
+            assert_eq!(
+                result,
+                Err("Settings are read-only in decoy mode.".to_string())
+            );
+        }
     }
 
     /// While decoy mode is active, patch_settings — the deep-merge partial
@@ -5068,7 +4877,7 @@ mod tests {
         );
     }
 
-    // ── apply_admin_config_cmd: forged/mismatched signature ⇒ never relayed ──
+    // ── apply_verified_admin_config: forged/mismatched signature ⇒ never relayed ──
 
     #[test]
     fn forged_signature_epoch_with_clipboard_guard_subtree_is_rejected_and_never_relayed() {
@@ -5093,7 +4902,7 @@ mod tests {
         let forged = signing_key.sign(b"not the real epoch preimage");
         let forged_b64 = STANDARD.encode(forged.to_bytes());
 
-        let result = apply_admin_config_cmd(
+        let result = apply_verified_admin_config(
             config,
             vec![],
             "merge".to_string(),
@@ -5129,7 +4938,7 @@ mod tests {
             "clipboardGuard": {"rules": [valid_clipboard_guard_rule_json()]}
         });
 
-        let result = apply_admin_config_cmd(
+        let result = apply_verified_admin_config(
             config,
             vec![],
             "merge".to_string(),
