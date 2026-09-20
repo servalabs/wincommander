@@ -5516,6 +5516,44 @@ mod tests {
     }
 
     #[test]
+    fn raw_veracrypt_partition_route_never_enters_file_policy_identity_checks() {
+        // test_store's filesystem deliberately fails every stable-file identity
+        // lookup. A native VeraCrypt partition must still classify successfully,
+        // proving this route cannot regress into Fleet's file-container policy
+        // or ACL verification path.
+        let store = test_store();
+        for (input, expected) in [
+            (
+                r"\Device\Harddisk1\Partition1",
+                r"\Device\Harddisk1\Partition1",
+            ),
+            (
+                r"\device/Harddisk12/partition3",
+                r"\device\Harddisk12\partition3",
+            ),
+        ] {
+            let route = store
+                .selected_container_mount_route(input, "S-1-5-21-owner", 7)
+                .expect("validated raw partition should be an unmanaged personal mount");
+            match route {
+                SelectedContainerMountRoute::Unmanaged { record } => {
+                    assert_eq!(record.container_path, expected);
+                    assert_eq!(record.owner_sid, "S-1-5-21-owner");
+                    assert_eq!(record.scope, VaultPresentation::PerUser);
+                    assert_eq!(record.created_by_session, 7);
+                    assert_eq!(
+                        record.container_identity,
+                        format!("raw-device:{}", expected.to_ascii_lowercase())
+                    );
+                }
+                SelectedContainerMountRoute::Managed { .. } => {
+                    panic!("raw VeraCrypt partitions must never be Fleet file-policy mounts");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn duplicate_existing_container_identity_is_rejected_before_acl_changes() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let mut duplicate = policy(1, 0);
