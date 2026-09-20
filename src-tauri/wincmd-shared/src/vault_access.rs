@@ -274,10 +274,12 @@ pub enum VaultBrokerVolumeRole {
 
 impl VaultMountPlan {
     pub fn validate(&self) -> Result<(), &'static str> {
+        let path_is_valid = is_windows_absolute_path(&self.container_path)
+            || (self.personal && is_supported_vault_device_path(&self.container_path));
         if self.operation_id == 0
             || self.container_path.is_empty()
             || self.container_path.len() > 32_767
-            || !is_windows_absolute_path(&self.container_path)
+            || !path_is_valid
             || self.password.is_empty()
             || self.password.len() > 32_767
             || self.mounted_root_acl_sddl.is_empty()
@@ -343,11 +345,11 @@ impl VaultMountPlan {
 /// Keep the accepted shape deliberately narrow: exactly one HarddiskN/PartitionN
 /// selector with decimal indices and no extra components.
 pub fn is_supported_vault_device_path(value: &str) -> bool {
-    let normalized = value.trim().replace('/', "\\");
-    let Some(rest) = normalized.strip_prefix(r"\Device\Harddisk") else {
+    let normalized = value.trim().replace('/', "\\").to_ascii_lowercase();
+    let Some(rest) = normalized.strip_prefix(r"\device\harddisk") else {
         return false;
     };
-    let Some((disk, partition)) = rest.split_once(r"\Partition") else {
+    let Some((disk, partition)) = rest.split_once(r"\partition") else {
         return false;
     };
     !disk.is_empty()
@@ -367,7 +369,7 @@ fn is_windows_absolute_path(value: &str) -> bool {
         components.next().is_some_and(|server| !server.is_empty())
             && components.next().is_some_and(|share| !share.is_empty())
     });
-    is_drive_rooted || is_unc || is_supported_vault_device_path(value)
+    is_drive_rooted || is_unc
 }
 
 impl std::fmt::Debug for VaultMountPlan {
@@ -841,8 +843,6 @@ mod tests {
             r"C:\Vaults\private.hc",
             r"C:/Vaults/private.hc",
             r"\\server\vaults\private.hc",
-            r"\Device\Harddisk1\Partition1",
-            r"\Device/Harddisk12/Partition3",
         ] {
             plan.container_path = path.into();
             assert_eq!(
@@ -851,6 +851,27 @@ mod tests {
                 "expected Windows absolute path: {path}"
             );
         }
+
+        for path in [
+            r"\Device\Harddisk1\Partition1",
+            r"\device\harddisk12\partition3",
+            r"\Device/Harddisk12/Partition3",
+        ] {
+            plan.container_path = path.into();
+            assert_eq!(
+                plan.validate(),
+                Err("vault_mount_plan_invalid"),
+                "managed plans must not accept native device targets: {path}"
+            );
+            plan.personal = true;
+            assert_eq!(
+                plan.validate(),
+                Ok(()),
+                "personal plans should accept a validated VeraCrypt device target: {path}"
+            );
+            plan.personal = false;
+        }
+
         for path in [
             r"Vaults\private.hc",
             r"C:Vaults\private.hc",
@@ -863,11 +884,13 @@ mod tests {
             r"\Device\CdRom0",
         ] {
             plan.container_path = path.into();
+            plan.personal = true;
             assert_eq!(
                 plan.validate(),
                 Err("vault_mount_plan_invalid"),
-                "expected non-absolute Windows path: {path}"
+                "expected rejected Windows path: {path}"
             );
+            plan.personal = false;
         }
     }
 
