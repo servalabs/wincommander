@@ -337,6 +337,25 @@ impl VaultMountPlan {
     }
 }
 
+/// VeraCrypt accepts native NT partition paths such as
+/// `\\Device\\Harddisk1\\Partition1`. These are not filesystem container
+/// paths and therefore must never be interpreted as Fleet ACL-managed files.
+/// Keep the accepted shape deliberately narrow: exactly one HarddiskN/PartitionN
+/// selector with decimal indices and no extra components.
+pub fn is_supported_vault_device_path(value: &str) -> bool {
+    let normalized = value.trim().replace('/', "\\");
+    let Some(rest) = normalized.strip_prefix(r"\Device\Harddisk") else {
+        return false;
+    };
+    let Some((disk, partition)) = rest.split_once(r"\Partition") else {
+        return false;
+    };
+    !disk.is_empty()
+        && !partition.is_empty()
+        && disk.bytes().all(|byte| byte.is_ascii_digit())
+        && partition.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 fn is_windows_absolute_path(value: &str) -> bool {
     let bytes = value.as_bytes();
     let is_drive_rooted = bytes.len() >= 3
@@ -348,7 +367,7 @@ fn is_windows_absolute_path(value: &str) -> bool {
         components.next().is_some_and(|server| !server.is_empty())
             && components.next().is_some_and(|share| !share.is_empty())
     });
-    is_drive_rooted || is_unc
+    is_drive_rooted || is_unc || is_supported_vault_device_path(value)
 }
 
 impl std::fmt::Debug for VaultMountPlan {
@@ -822,6 +841,8 @@ mod tests {
             r"C:\Vaults\private.hc",
             r"C:/Vaults/private.hc",
             r"\\server\vaults\private.hc",
+            r"\Device\Harddisk1\Partition1",
+            r"\Device/Harddisk12/Partition3",
         ] {
             plan.container_path = path.into();
             assert_eq!(
@@ -836,6 +857,10 @@ mod tests {
             r"\Vaults\private.hc",
             r"\\server",
             r"\\",
+            r"\Device\Harddisk\Partition1",
+            r"\Device\Harddisk1\Partition",
+            r"\Device\Harddisk1\Partition1\extra",
+            r"\Device\CdRom0",
         ] {
             plan.container_path = path.into();
             assert_eq!(
