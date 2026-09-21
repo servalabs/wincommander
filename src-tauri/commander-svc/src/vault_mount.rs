@@ -46,6 +46,9 @@ struct DurableMountRegistry {
 }
 
 const MAX_DURABLE_MOUNTS: usize = 64;
+// A shared mount remains device-writable so its attested root DACL can
+// distinguish the owner/editor from a view-only user.
+const SHARED_VAULT_DEVICE_READ_ONLY: bool = false;
 static NEXT_INTERNAL_OPERATION_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1 << 62);
 
@@ -767,7 +770,13 @@ impl VaultMountBroker {
             password: std::mem::take(password),
             hidden_protection_password: std::mem::take(hidden_protection_password),
         };
-        request.read_only = effective_access == wincmd_shared::vault_access::VaultAccess::Read;
+        // A Fleet Vault is one machine-presented volume shared by the owner
+        // and its authorized viewers. Mounting the whole device read-only
+        // because this caller is a viewer would also block the owner (and an
+        // explicitly authorized editor). The exact root DACL below is the
+        // per-user access boundary, so leave the device writable and let
+        // Windows enforce each principal's resolved grant.
+        request.read_only = SHARED_VAULT_DEVICE_READ_ONLY;
         let reply = self.broker.mount(&mut request);
         request.zeroize_secrets();
         let reply = match reply {
@@ -1301,7 +1310,13 @@ fn mounted_root_acl_sddl(grants: &[ResolvedGrant]) -> MountedRootAclSddl {
     // created after mount. Without it, a Partner-created file receives the
     // creator's default DACL and another authorized writer can be denied even
     // though both callers can open the volume root.
-    let mut sddl = String::from("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)");
+    // Do not grant BUILTIN\\Administrators (BA) access here. A policy owner
+    // can deliberately make another local administrator view-only; a BA full
+    // control ACE would silently override that resolved read grant in Explorer.
+    // SYSTEM retains full access for the service/broker. Local administrators
+    // can still exercise Windows' privileged ownership recovery outside this
+    // product boundary, but receive no ordinary file-write grant from Fleet.
+    let mut sddl = String::from("D:P(A;OICI;FA;;;SY)");
     for grant in grants {
         if grant.sid.starts_with("S-")
             && grant
@@ -1685,7 +1700,31 @@ mod tests {
         }]);
         assert!(sddl.0.starts_with("D:P"));
         assert!(sddl.0.contains("S-1-5-21-7"));
-        assert_eq!(sddl.0.matches(";OICI;").count(), 3);
+        assert!(sddl.0.contains("0x001200A9;;;S-1-5-21-7"));
+        assert!(!sddl.0.contains(";;;BA)"));
+        assert_eq!(sddl.0.matches(";OICI;").count(), 2);
+    }
+
+    #[test]
+    fn root_sddl_keeps_owner_write_and_viewer_read_without_a_broad_admin_grant() {
+        let sddl = mounted_root_acl_sddl(&[
+            ResolvedGrant {
+                sid: "S-1-5-21-1001".into(),
+                access: wincmd_shared::vault_access::VaultAccess::Write,
+            },
+            ResolvedGrant {
+                sid: "S-1-5-21-1002".into(),
+                access: wincmd_shared::vault_access::VaultAccess::Read,
+            },
+        ]);
+        assert!(sddl.0.contains("0x001301BF;;;S-1-5-21-1001"));
+        assert!(sddl.0.contains("0x001200A9;;;S-1-5-21-1002"));
+        assert!(!sddl.0.contains(";;;BA)"));
+    }
+
+    #[test]
+    fn a_viewer_mount_does_not_make_the_shared_device_read_only_for_the_owner() {
+        assert!(!SHARED_VAULT_DEVICE_READ_ONLY);
     }
     #[test]
     fn broker_drive_reply_is_bounded() {
