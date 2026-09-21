@@ -636,6 +636,29 @@ export interface ExtractStegoMp4Params {
   outputPath: string;
 }
 
+/** Attach an existing encrypted container to a carrier video without decrypting it. */
+export interface AttachStegoContainerParams {
+  carrierPath: string;
+  containerPath: string;
+  outputPath: string;
+}
+
+/** Restore the embedded container into a directory using its stored original filename. */
+export interface RestoreStegoContainerParams {
+  inputPath: string;
+  destinationDir: string;
+  /** Must be explicitly true to replace a same-named restored container. */
+  replaceExisting?: boolean;
+}
+
+/** Replace the embedded payload in an existing backup video with a dismounted container. */
+export interface RefreshStegoContainerParams {
+  backupVideoPath: string;
+  containerPath: string;
+  /** Must be explicitly true because this replaces the backup video. */
+  replaceExisting: true;
+}
+
 export interface VolumeInfo {
   size: string | null;
   filesystem: string | null;
@@ -1906,6 +1929,24 @@ export function useBackend() {
       execute("Extract-StegoMp4", {
         InputPath: params.inputPath,
         OutputPath: params.outputPath,
+      }),
+    attachStegoContainer: (params: AttachStegoContainerParams) =>
+      execute("Attach-StegoContainer", {
+        CarrierPath: params.carrierPath,
+        ContainerPath: params.containerPath,
+        OutputPath: params.outputPath,
+      }),
+    restoreStegoContainer: (params: RestoreStegoContainerParams) =>
+      execute<{ outputPath: string }>("Restore-StegoContainer", {
+        InputPath: params.inputPath,
+        DestinationDir: params.destinationDir,
+        ReplaceExisting: params.replaceExisting === true,
+      }),
+    refreshStegoContainer: (params: RefreshStegoContainerParams) =>
+      execute("Refresh-StegoContainer", {
+        BackupVideoPath: params.backupVideoPath,
+        ContainerPath: params.containerPath,
+        ReplaceExisting: params.replaceExisting === true,
       }),
     getVolumeInfo: (letter: string) =>
       execute<VolumeInfo>("Get-VolumeInfo", { DriveLetter: letter }),

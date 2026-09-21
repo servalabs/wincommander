@@ -1,251 +1,85 @@
-// src/panels/vault/StegoBackupSection.tsx
-//
-// Stego backup — hide an encrypted volume inside a playable MP4.
-// "Create" makes a container and appends it to a carrier video; "Restore" pulls
-// the container back out so it can be mounted from the Volumes list. Routes to
-// the paid Pro handlers Create-StegoMp4 / Extract-StegoMp4.
-//
-// Rules live in src/lib/stegoBackup*.ts, state in ./useStegoBackup, pieces in
-// ./StegoBackupParts — this file is the layout only.
-
-import { Button, FormGroup, HTMLSelect, InputGroup, Tooltip } from "@/components/ui/bp";
+// Stego Container Snapshots: attach, restore, and safely refresh an existing
+// encrypted container. The app never asks for the container password here.
+import { Button, Checkbox, FormGroup, HTMLSelect, InputGroup, Tooltip } from "@/components/ui/bp";
 import { useState } from "react";
 import SectionCard from "../../components/shared/SectionCard";
 import TierGate from "../../components/shared/TierGate";
 import type { SizeUnit } from "../../lib/stegoBackup";
 import { useStegoBackup } from "./useStegoBackup";
-import {
-  BusyBar,
-  CapacityEmpty,
-  CapacityPanel,
-  FailureCallout,
-  FilePick,
-  INFO,
-  InfoDot,
-  IssueLine,
-  SuccessCallout,
-} from "./StegoBackupParts";
+import { BusyBar, FailureCallout, FilePick, INFO, InfoDot, IssueLine, SuccessCallout } from "./StegoBackupParts";
 import "./StegoBackupSection.css";
 
 export default function StegoBackupSection() {
   const stego = useStegoBackup();
-  const [showPassword, setShowPassword] = useState(false);
-  // Destructured so the narrowed result types survive into the reveal callbacks.
-  const { fields, set, busy, createErrors, extractErrors, createResult, extractResult } = stego;
+  const [showLegacyPassword, setShowLegacyPassword] = useState(false);
+  const { fields, set, busy } = stego;
   const locked = busy !== null;
-
   return (
-    <SectionCard
-      title="Stego Backup"
-      icon="video"
-      headerRight={
-        <div className="stego-header-actions">
-          <Tooltip content="Do not upload or re-encode a backup video. Keep the password and the original carrier separately.">
-            <Button minimal small icon="warning-sign" aria-label="Important stego backup warning" />
-          </Tooltip>
-          <InfoDot content={INFO.what} />
-        </div>
-      }
-    >
+    <SectionCard title="Stego Backup" icon="video" headerRight={<div className="stego-header-actions"><Tooltip content="Never trim, re-encode or upload a backup video through services that rewrite it."><Button minimal small icon="warning-sign" aria-label="Important stego backup warning" /></Tooltip><InfoDot content={INFO.what} /></div>}>
       <div className="stego-section">
-        <p className="stego-intro">
-          Hide an encrypted volume inside a normal-looking video that still plays. The video carries
-          your backup; only your password opens it.
-        </p>
-
+        <p className="stego-intro">Attach an existing encrypted container to a normal-looking video that still plays. It is a sealed snapshot: this screen copies the locked container without opening it.</p>
         <TierGate tier="paid" featureLabel="Stego Backup">
           <div className="stego-blocks-row">
-            <div className="stego-block">
-              <span className="stego-block__title">Create a hidden backup</span>
-
-              <FilePick
-                label="Carrier video…"
-                value={fields.carrier}
-                onPick={() => void stego.pickCarrier()}
-                onClear={() => set.setCarrier("")}
-                disabled={locked}
-              />
-              <IssueLine issues={createErrors} field="carrier" />
-              <IssueLine issues={stego.createWarnings} field="carrier" tone="warn" />
-
-              <FilePick
-                label="Save video as…"
-                value={fields.outPath}
-                onPick={() => void stego.pickOutput()}
-                onClear={() => set.setOutPath("")}
-                disabled={locked}
-              />
-              <IssueLine issues={createErrors} field="output" />
-              <IssueLine issues={stego.createWarnings} field="output" tone="warn" />
-
-              <div className="stego-size-row">
-                <FormGroup
-                  labelFor="stego-hidden-volume-size"
-                  label={
-                    <span className="stego-label">
-                      Hidden volume size <InfoDot content={INFO.size} />
-                    </span>
-                  }
-                >
-                  <InputGroup
-                    id="stego-hidden-volume-size"
-                    type="number"
-                    min={1}
-                    value={fields.sizeRaw}
-                    disabled={locked}
-                    onChange={(e) => set.setSizeRaw(e.currentTarget.value)}
-                  />
-                </FormGroup>
-                <FormGroup label="Unit" labelFor="stego-hidden-volume-unit">
-                  <HTMLSelect
-                    id="stego-hidden-volume-unit"
-                    value={fields.sizeUnit}
-                    disabled={locked}
-                    onChange={(e) => set.setSizeUnit(e.currentTarget.value as SizeUnit)}
-                    options={[
-                      { value: "M", label: "MB" },
-                      { value: "G", label: "GB" },
-                      { value: "T", label: "TB" },
-                    ]}
-                  />
-                </FormGroup>
-              </div>
-              <IssueLine issues={createErrors} field="size" />
-
-              {fields.carrier ? (
-                <CapacityPanel
-                  plan={stego.capacity}
-                  freeBytes={stego.destinationFreeBytes}
-                  loading={stego.drivesLoading}
-                  hasOutput={!!fields.outPath}
-                  freeShare={stego.freeShare}
-                />
-              ) : (
-                <CapacityEmpty />
-              )}
-              <IssueLine issues={createErrors} field="destination" />
-
-              <div className="stego-password-row">
-                <FormGroup
-                  labelFor="stego-password"
-                  label={
-                    <span className="stego-label">
-                      Password <InfoDot content={INFO.password} />
-                    </span>
-                  }
-                  helperText="At least 8 characters. Write it down somewhere safe before you continue."
-                >
-                  <InputGroup
-                    id="stego-password"
-                    type={showPassword ? "text" : "password"}
-                    value={fields.password}
-                    autoComplete="new-password"
-                    disabled={locked}
-                    onChange={(e) => set.setPassword(e.currentTarget.value)}
-                    rightElement={
-                      <Button
-                        minimal
-                        icon={showPassword ? "eye-off" : "eye-open"}
-                        aria-label={showPassword ? "Hide password" : "Show password"}
-                        onClick={() => setShowPassword((prev) => !prev)}
-                      />
-                    }
-                  />
-                </FormGroup>
-                <FormGroup label="Confirm password" labelFor="stego-password-confirm">
-                  <InputGroup
-                    id="stego-password-confirm"
-                    type={showPassword ? "text" : "password"}
-                    value={fields.passwordConfirm}
-                    autoComplete="new-password"
-                    disabled={locked}
-                    onChange={(e) => set.setPasswordConfirm(e.currentTarget.value)}
-                  />
-                </FormGroup>
-              </div>
-              <IssueLine issues={createErrors} field="password" />
-
-              {busy === "create" && (
-                <BusyBar label="Formatting the hidden volume, then rebuilding the video around it. Minutes, not seconds." />
-              )}
-
-              {createResult?.kind === "fail" && <FailureCallout failure={createResult.failure} />}
-              {createResult?.kind === "ok" && (
-                <SuccessCallout
-                  title="Hidden backup created"
-                  path={createResult.path}
-                  onReveal={() => void stego.revealFolder(createResult.path)}
-                >
-                  Test it before you delete anything: recover it below, then mount the result.
-                </SuccessCallout>
-              )}
-
-              <Button
-                intent="primary"
-                loading={busy === "create"}
-                disabled={locked || stego.createBlocked}
-                onClick={() => void stego.runCreate()}
-              >
-                Create hidden backup
-              </Button>
-            </div>
-
-            <div className="stego-block stego-block--restore">
-              <span className="stego-block__title">
-                Restore from a video <InfoDot content={INFO.restore} />
-              </span>
-              <p className="stego-intro">
-                Copies the hidden container back out as a file. This step needs no password — you enter
-                it when you mount the container from the Volumes list above.
-              </p>
-
-              <ol className="stego-restore-steps" aria-label="Restore steps">
-                <li>Choose the backup video.</li>
-                <li>Pick a new location for the container.</li>
-                <li>Mount it from Encrypted Volumes.</li>
-              </ol>
-
-              <FilePick
-                label="Video with a backup…"
-                value={fields.inPath}
-                onPick={() => void stego.pickStegoInput()}
-                onClear={() => set.setInPath("")}
-                disabled={locked}
-              />
-              <IssueLine issues={extractErrors} field="carrier" />
-
-              <FilePick
-                label="Recover container to…"
-                value={fields.exOut}
-                onPick={() => void stego.pickContainerOutput()}
-                onClear={() => set.setExOut("")}
-                disabled={locked}
-              />
-              <IssueLine issues={extractErrors} field="output" />
-              <IssueLine issues={stego.extractWarnings} field="output" tone="warn" />
-
-              {busy === "extract" && <BusyBar label="Reading the video and copying the hidden container out." />}
-
-              {extractResult?.kind === "fail" && <FailureCallout failure={extractResult.failure} />}
-              {extractResult?.kind === "ok" && (
-                <SuccessCallout
-                  title="Container recovered"
-                  path={extractResult.path}
-                  onReveal={() => void stego.revealFolder(extractResult.path)}
-                >
-                  Mount it from the Volumes list above, with the password you used when you created it.
-                </SuccessCallout>
-              )}
-
-              <Button
-                loading={busy === "extract"}
-                disabled={locked || stego.extractBlocked}
-                onClick={() => void stego.runExtract()}
-              >
-                Recover container
-              </Button>
-            </div>
+            <section className="stego-block" aria-labelledby="stego-attach-title">
+              <span id="stego-attach-title" className="stego-block__title">Attach existing container to video</span>
+              <p className="stego-intro">Choose the video and the .hc or .tc container you already use. Its password is never requested or stored.</p>
+              <FilePick label="Carrier video…" value={fields.carrierPath} onPick={() => void stego.pickCarrier()} onClear={() => set.setCarrierPath("")} disabled={locked} />
+              <IssueLine issues={stego.attachErrors} field="carrier" /><IssueLine issues={stego.attachWarnings} field="carrier" tone="warn" />
+              <FilePick label="Existing container…" value={fields.containerPath} onPick={() => void stego.pickContainer()} onClear={() => set.setContainerPath("")} disabled={locked} />
+              <IssueLine issues={stego.attachErrors} field="container" /><IssueLine issues={stego.attachWarnings} field="container" tone="warn" />
+              <FilePick label="Save backup video as…" value={fields.outputPath} onPick={() => void stego.pickOutput()} onClear={() => set.setOutputPath("")} disabled={locked} />
+              <IssueLine issues={stego.attachErrors} field="output" /><IssueLine issues={stego.attachWarnings} field="output" tone="warn" />
+              {busy === "attach" && <BusyBar label="Copying the video and the sealed container, then verifying the snapshot." />}
+              {stego.attachResult?.kind === "fail" && <FailureCallout failure={stego.attachResult.failure} />}
+              {stego.attachResult?.kind === "ok" && <SuccessCallout title="Video backup created" path={stego.attachResult.path} onReveal={() => void stego.revealFolder(stego.attachResult!.path)}>Recover and mount it once before deleting or replacing any other copy.</SuccessCallout>}
+              <Button intent="primary" loading={busy === "attach"} disabled={locked || stego.attachBlocked} onClick={() => void stego.runAttach()}>Attach container to video</Button>
+            </section>
+            <section className="stego-block stego-block--restore" aria-labelledby="stego-restore-title">
+              <span id="stego-restore-title" className="stego-block__title">Restore from a video <InfoDot content={INFO.restore} /></span>
+              <p className="stego-intro">Choose a destination folder only. The backup restores the container using the original name saved inside the video.</p>
+              <ol className="stego-restore-steps" aria-label="Restore steps"><li>Choose the backup video.</li><li>Choose an empty or safe destination folder.</li><li>Mount the restored original-name container above.</li></ol>
+              <FilePick label="Video with a backup…" value={fields.restoreVideoPath} onPick={() => void stego.pickRestoreVideo()} onClear={() => set.setRestoreVideoPath("")} disabled={locked} />
+              <IssueLine issues={stego.restoreErrors} field="carrier" /><IssueLine issues={stego.restoreWarnings} field="carrier" tone="warn" />
+              <FilePick label="Recover into folder…" value={fields.restoreDestinationDir} onPick={() => void stego.pickRestoreDestination()} onClear={() => set.setRestoreDestinationDir("")} disabled={locked} />
+              <IssueLine issues={stego.restoreErrors} field="destination" /><IssueLine issues={stego.restoreWarnings} field="destination" tone="warn" />
+              {busy === "restore" && <BusyBar label="Reading the video and recovering the original-name container." />}
+              {stego.restoreResult?.kind === "fail" && <FailureCallout failure={stego.restoreResult.failure} />}
+              {stego.restoreResult?.kind === "ok" && <SuccessCallout title="Container recovered" path={stego.restoreResult.path} onReveal={() => void stego.revealFolder(stego.restoreResult!.path)}>Mount it from Encrypted Volumes with its existing password.</SuccessCallout>}
+              <Button loading={busy === "restore"} disabled={locked || stego.restoreBlocked} onClick={() => void stego.runRestore()}>Recover container</Button>
+            </section>
           </div>
+          <section className="stego-block stego-block--refresh" aria-labelledby="stego-refresh-title">
+            <span id="stego-refresh-title" className="stego-block__title">Refresh an existing backup video</span>
+            <p className="stego-intro">After changing and dismounting your container, rebuild the same backup video. The old video is replaced only after the new snapshot verifies.</p>
+            <FilePick label="Existing backup video…" value={fields.refreshVideoPath} onPick={() => void stego.pickRefreshVideo()} onClear={() => set.setRefreshVideoPath("")} disabled={locked} />
+            <IssueLine issues={stego.refreshErrors} field="carrier" /><IssueLine issues={stego.refreshWarnings} field="carrier" tone="warn" />
+            <FilePick label="Updated container…" value={fields.refreshContainerPath} onPick={() => void stego.pickRefreshContainer()} onClear={() => set.setRefreshContainerPath("")} disabled={locked} />
+            <IssueLine issues={stego.refreshErrors} field="container" /><IssueLine issues={stego.refreshWarnings} field="container" tone="warn" />
+            <Checkbox checked={fields.refreshConfirmed} disabled={locked} label="I understand this replaces the existing backup video after verification." onChange={(event) => set.setRefreshConfirmed(event.currentTarget.checked)} />
+            <IssueLine issues={stego.refreshErrors} field="confirmation" />
+            {busy === "refresh" && <BusyBar label="Rebuilding a verified replacement; the old backup remains until that succeeds." />}
+            {stego.refreshResult?.kind === "fail" && <FailureCallout failure={stego.refreshResult.failure} />}
+            {stego.refreshResult?.kind === "ok" && <SuccessCallout title="Backup video refreshed" path={stego.refreshResult.path} onReveal={() => void stego.revealFolder(stego.refreshResult!.path)}>Recover and mount this refreshed snapshot before relying on it alone.</SuccessCallout>}
+            <Button loading={busy === "refresh"} disabled={locked || stego.refreshBlocked} onClick={() => void stego.runRefresh()}>Refresh backup video</Button>
+          </section>
+          <details className="stego-details">
+            <summary>Advanced: create an empty hidden container</summary>
+            <section className="stego-block" aria-label="Create an empty hidden container">
+              <p className="stego-intro">This legacy option creates a new empty container. Use “Attach existing container” above for a container that already holds your files.</p>
+              <FilePick label="Carrier video…" value={fields.legacyCarrierPath} onPick={() => void stego.pickLegacyCarrier()} onClear={() => set.setLegacyCarrierPath("")} disabled={locked} />
+              <IssueLine issues={stego.legacyErrors} field="carrier" />
+              <FilePick label="Save video as…" value={fields.legacyOutputPath} onPick={() => void stego.pickLegacyOutput()} onClear={() => set.setLegacyOutputPath("")} disabled={locked} />
+              <IssueLine issues={stego.legacyErrors} field="output" />
+              <div className="stego-size-row"><FormGroup label="Empty container size"><InputGroup type="number" min={1} value={fields.legacySizeRaw} disabled={locked} onChange={(event) => set.setLegacySizeRaw(event.currentTarget.value)} /></FormGroup><FormGroup label="Unit"><HTMLSelect value={fields.legacySizeUnit} disabled={locked} onChange={(event) => set.setLegacySizeUnit(event.currentTarget.value as SizeUnit)} options={[{ value: "M", label: "MB" }, { value: "G", label: "GB" }, { value: "T", label: "TB" }]} /></FormGroup></div>
+              <IssueLine issues={stego.legacyErrors} field="size" />
+              <div className="stego-password-row"><FormGroup label="New password"><InputGroup type={showLegacyPassword ? "text" : "password"} value={fields.legacyPassword} autoComplete="new-password" disabled={locked} onChange={(event) => set.setLegacyPassword(event.currentTarget.value)} rightElement={<Button minimal icon={showLegacyPassword ? "eye-off" : "eye-open"} onClick={() => setShowLegacyPassword((current) => !current)} />} /></FormGroup><FormGroup label="Confirm password"><InputGroup type={showLegacyPassword ? "text" : "password"} value={fields.legacyPasswordConfirm} autoComplete="new-password" disabled={locked} onChange={(event) => set.setLegacyPasswordConfirm(event.currentTarget.value)} /></FormGroup></div>
+              <IssueLine issues={stego.legacyErrors} field="password" />
+              {busy === "legacy" && <BusyBar label="Creating the empty encrypted container and verifying the video." />}
+              {stego.legacyResult?.kind === "fail" && <FailureCallout failure={stego.legacyResult.failure} />}
+              {stego.legacyResult?.kind === "ok" && <SuccessCallout title="Empty container created" path={stego.legacyResult.path} onReveal={() => void stego.revealFolder(stego.legacyResult!.path)}>Recover it below before relying on it.</SuccessCallout>}
+              <Button loading={busy === "legacy"} disabled={locked || stego.legacyBlocked} onClick={() => void stego.runLegacyCreate()}>Create empty hidden container</Button>
+            </section>
+          </details>
         </TierGate>
       </div>
     </SectionCard>

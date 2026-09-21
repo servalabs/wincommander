@@ -2,7 +2,10 @@ import { describe, it, expect } from "bun:test";
 import {
   explainStegoFailure,
   validateCreateForm,
+  validateAttachForm,
   validateExtractForm,
+  validateRefreshForm,
+  validateRestoreFolderForm,
   visibleIssues,
   type CreateFormInput,
   type StegoField,
@@ -224,6 +227,32 @@ describe("validateExtractForm", () => {
   });
 });
 
+describe("Stego Container Snapshot forms", () => {
+  const attach = (over = {}) => validateAttachForm({
+    carrierPath: "C:\\Videos\\holiday.mp4", containerPath: "D:\\Vault\\Private.hc", outputPath: "D:\\Backups\\holiday.mp4", ...over,
+  });
+  it("attaches an existing .hc without a password or size field", () => {
+    expect(attach().canSubmit).toBe(true);
+  });
+  it("refuses a non-container input and either source being replaced", () => {
+    expect(attach({ containerPath: "D:\\Vault\\Private.zip" }).canSubmit).toBe(false);
+    expect(attach({ outputPath: "c:/videos/holiday.mp4" }).canSubmit).toBe(false);
+    expect(attach({ outputPath: "d:/vault/private.hc" }).canSubmit).toBe(false);
+  });
+  it("restores to a folder, leaving the original filename to V2 metadata", () => {
+    expect(validateRestoreFolderForm({ inputPath: "C:\\Backups\\holiday.mp4", destinationDir: "D:\\Recovered\\2026.09" }).canSubmit).toBe(true);
+  });
+  it("will not restore without both a video and destination folder", () => {
+    expect(validateRestoreFolderForm({ inputPath: "", destinationDir: "" }).canSubmit).toBe(false);
+  });
+  it("requires an explicit acknowledgement before refreshing a backup", () => {
+    const base = { backupVideoPath: "C:\\Backups\\holiday.mp4", containerPath: "D:\\Vault\\Private.tc", replacementConfirmed: false };
+    expect(validateRefreshForm(base).canSubmit).toBe(false);
+    expect(on(validateRefreshForm(base).errors, "confirmation")[0]).toContain("Confirm");
+    expect(validateRefreshForm({ ...base, replacementConfirmed: true }).canSubmit).toBe(true);
+  });
+});
+
 describe("visibleIssues", () => {
   const issues: StegoIssue[] = [
     { field: "carrier", message: "pick a carrier" },
@@ -290,6 +319,11 @@ describe("explainStegoFailure", () => {
   it("names the operation it could not finish when the cause is unrecognised", () => {
     expect(explainStegoFailure("exit code 9009", "create").headline).toContain("not created");
     expect(explainStegoFailure("exit code 9009", "extract").headline).toContain("not recovered");
+  });
+
+  it("names attach and refresh failures without pretending an empty container was created", () => {
+    expect(explainStegoFailure("exit code 9009", "attach").headline).toContain("not attached");
+    expect(explainStegoFailure("exit code 9009", "refresh").headline).toContain("not refreshed");
   });
 
   it("always keeps the engine's own words for the details disclosure", () => {

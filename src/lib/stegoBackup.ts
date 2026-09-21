@@ -103,6 +103,23 @@ export function isSupportedCarrier(path: string): boolean {
   return CARRIER_EXTENSIONS.includes(fileExtension(path));
 }
 
+/** An existing VeraCrypt container is copied as opaque encrypted bytes. */
+export function isSupportedContainer(path: string): boolean {
+  return CONTAINER_EXTENSIONS.includes(fileExtension(path));
+}
+
+/** Last path segment only; metadata stores this name for a restore. */
+export function fileName(path: string): string {
+  return path.trim().replace(/\//g, "\\").split("\\").pop() ?? "";
+}
+
+/** A folder picker must not accept a filename masquerading as a destination. */
+export function isDirectoryPath(path: string): boolean {
+  // The native directory picker establishes this. Do not infer from a dot:
+  // `C:\\Backups\\2026.09` is a perfectly valid directory.
+  return !!path.trim();
+}
+
 /** Give the recovered container a name VeraCrypt will offer to mount. */
 export function normalizeContainerOutputPath(path: string): string {
   const trimmed = path.trim();

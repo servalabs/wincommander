@@ -15,6 +15,8 @@ import {
   formatBytes,
   isSamePath,
   isSupportedCarrier,
+  isSupportedContainer,
+  isDirectoryPath,
   normalizeContainerOutputPath,
   parseContainerSize,
   requiredFreeBytes,
@@ -22,7 +24,7 @@ import {
   type SizeUnit,
 } from "./stegoBackup";
 
-export type StegoField = "carrier" | "output" | "size" | "password" | "destination";
+export type StegoField = "carrier" | "container" | "output" | "size" | "password" | "destination" | "confirmation";
 
 export interface StegoIssue {
   field: StegoField;
@@ -106,6 +108,68 @@ export function validateCreateForm(input: CreateFormInput): CreateFormVerdict {
     backendSize: size.mb == null ? null : toBackendSize(size.mb),
     canSubmit: errors.length === 0,
   };
+}
+
+export interface AttachFormInput {
+  carrierPath: string;
+  containerPath: string;
+  outputPath: string;
+}
+
+export interface SnapshotFormVerdict {
+  errors: StegoIssue[];
+  warnings: StegoIssue[];
+  canSubmit: boolean;
+}
+
+/** Validation for copying an already-encrypted container into a new video. */
+export function validateAttachForm(input: AttachFormInput): SnapshotFormVerdict {
+  const errors: StegoIssue[] = [];
+  const warnings: StegoIssue[] = [];
+  if (!input.carrierPath.trim()) errors.push({ field: "carrier", message: "Choose the video that will carry the encrypted container." });
+  else if (!isSupportedCarrier(input.carrierPath)) errors.push({ field: "carrier", message: `The carrier has to be a ${CARRIER_FORMATS} video.` });
+  if (!input.containerPath.trim()) errors.push({ field: "container", message: "Choose the existing .hc or .tc container to attach." });
+  else if (!isSupportedContainer(input.containerPath)) errors.push({ field: "container", message: "Choose a VeraCrypt .hc or .tc container." });
+  if (!input.outputPath.trim()) errors.push({ field: "output", message: "Choose where to save the backup video." });
+  else if (isSamePath(input.carrierPath, input.outputPath)) errors.push({ field: "output", message: "Save to a different file — writing over the carrier destroys the original video." });
+  else if (isSamePath(input.containerPath, input.outputPath)) errors.push({ field: "output", message: "The backup video cannot replace the encrypted container." });
+  else if (!isSupportedCarrier(input.outputPath)) warnings.push({ field: "output", message: `Use a ${CARRIER_FORMATS} name so the backup still opens as a video.` });
+  warnings.push(...longPathWarnings([
+    { field: "carrier", path: input.carrierPath },
+    { field: "container", path: input.containerPath },
+    { field: "output", path: input.outputPath },
+  ]));
+  return { errors, warnings, canSubmit: errors.length === 0 };
+}
+
+export interface RestoreFolderFormInput { inputPath: string; destinationDir: string; }
+
+/** The V2 trailer supplies the original filename; the user chooses only a folder. */
+export function validateRestoreFolderForm(input: RestoreFolderFormInput): SnapshotFormVerdict {
+  const errors: StegoIssue[] = [];
+  const warnings: StegoIssue[] = [];
+  if (!input.inputPath.trim()) errors.push({ field: "carrier", message: "Choose the video that has a backup hidden inside it." });
+  else if (!isSupportedCarrier(input.inputPath)) errors.push({ field: "carrier", message: `Only a ${CARRIER_FORMATS} video can hold a hidden backup.` });
+  if (!input.destinationDir.trim()) errors.push({ field: "destination", message: "Choose a folder for the recovered container." });
+  else if (!isDirectoryPath(input.destinationDir)) errors.push({ field: "destination", message: "Choose a folder, not a new filename — the backup keeps its original container name." });
+  warnings.push(...longPathWarnings([{ field: "carrier", path: input.inputPath }, { field: "destination", path: input.destinationDir }]));
+  return { errors, warnings, canSubmit: errors.length === 0 };
+}
+
+export interface RefreshFormInput { backupVideoPath: string; containerPath: string; replacementConfirmed: boolean; }
+
+/** Refresh deliberately demands an acknowledgement before it replaces a backup snapshot. */
+export function validateRefreshForm(input: RefreshFormInput): SnapshotFormVerdict {
+  const errors: StegoIssue[] = [];
+  const warnings: StegoIssue[] = [];
+  if (!input.backupVideoPath.trim()) errors.push({ field: "carrier", message: "Choose the existing backup video to refresh." });
+  else if (!isSupportedCarrier(input.backupVideoPath)) errors.push({ field: "carrier", message: `The backup has to be a ${CARRIER_FORMATS} video.` });
+  if (!input.containerPath.trim()) errors.push({ field: "container", message: "Choose the updated .hc or .tc container." });
+  else if (!isSupportedContainer(input.containerPath)) errors.push({ field: "container", message: "Choose a VeraCrypt .hc or .tc container." });
+  else if (isSamePath(input.backupVideoPath, input.containerPath)) errors.push({ field: "container", message: "The video and container must be two different files." });
+  if (!input.replacementConfirmed) errors.push({ field: "confirmation", message: "Confirm that the existing backup video will be replaced after verification." });
+  warnings.push(...longPathWarnings([{ field: "carrier", path: input.backupVideoPath }, { field: "container", path: input.containerPath }]));
+  return { errors, warnings, canSubmit: errors.length === 0 };
 }
 
 function passwordIssues(password: string, confirm: string): StegoIssue[] {
@@ -260,17 +324,26 @@ const FAILURE_RULES: FailureRule[] = [
 ];
 
 /** Turn a handler/Windows error into something a person can act on. */
-export function explainStegoFailure(raw: string, operation: "create" | "extract"): StegoFailure {
+export type StegoOperation = "create" | "extract" | "attach" | "restore" | "refresh";
+
+export function explainStegoFailure(raw: string, operation: StegoOperation): StegoFailure {
   const text = (raw ?? "").trim();
   const rule = FAILURE_RULES.find((candidate) => candidate.match.test(text));
   if (rule) return { headline: rule.headline, hint: rule.hint, raw: text };
 
   return {
-    headline:
-      operation === "create"
-        ? "The hidden backup was not created."
-        : "The hidden container was not recovered.",
+    headline: failureHeadline(operation),
     hint: "Nothing usable was written. The details below are the exact message from the engine.",
     raw: text || "The engine gave no reason.",
   };
+}
+
+function failureHeadline(operation: StegoOperation): string {
+  switch (operation) {
+    case "create": return "The empty hidden container was not created.";
+    case "attach": return "The encrypted container was not attached to the video.";
+    case "refresh": return "The backup video was not refreshed.";
+    case "extract":
+    case "restore": return "The hidden container was not recovered.";
+  }
 }
