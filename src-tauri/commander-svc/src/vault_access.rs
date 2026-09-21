@@ -1019,6 +1019,7 @@ impl VaultAccessStore {
         })
     }
 
+    #[cfg(test)]
     pub fn record_personal_broker_completion(
         &self,
         reservation: &PersonalCreationReservation,
@@ -1035,6 +1036,42 @@ impl VaultAccessStore {
         }
         let container = PathBuf::from(&reservation.normalized_path);
         let identity = self.fs.personal_creation_target_identity(&container)?;
+        self.record_personal_broker_completion_with_identity(reservation, identity, now)
+    }
+
+    /// The formatter deliberately runs in the interactive caller's session.
+    /// A selected parent directory may grant that user access without granting
+    /// SYSTEM inherited access to the newly-created file.  Bind its identity
+    /// through the authenticated caller token before hardening the DACL.
+    #[cfg(windows)]
+    pub fn record_personal_broker_completion_as_caller(
+        &self,
+        reservation: &PersonalCreationReservation,
+        broker_path: &str,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        now: i64,
+    ) -> Result<(), VaultError> {
+        let normalized_broker_path = self
+            .fs
+            .normalize_personal_creation_path(Path::new(broker_path))?;
+        if personal_key(&normalized_broker_path.to_string_lossy())
+            != personal_key(&reservation.normalized_path)
+        {
+            return Err(VaultError::Validation);
+        }
+        let container = PathBuf::from(&reservation.normalized_path);
+        let identity = with_caller_impersonation(caller_token, || {
+            self.fs.personal_creation_target_identity(&container)
+        })?;
+        self.record_personal_broker_completion_with_identity(reservation, identity, now)
+    }
+
+    fn record_personal_broker_completion_with_identity(
+        &self,
+        reservation: &PersonalCreationReservation,
+        identity: String,
+        now: i64,
+    ) -> Result<(), VaultError> {
         let key = personal_key(&reservation.normalized_path);
         let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
         let pending = state
@@ -1067,6 +1104,7 @@ impl VaultAccessStore {
 
     /// Promotes only the exact live reservation whose broker-created file was
     /// identity-bound by [`record_personal_broker_completion`].
+    #[cfg(test)]
     pub fn complete_personal_registration(
         &self,
         reservation: &PersonalCreationReservation,
@@ -1118,6 +1156,93 @@ impl VaultAccessStore {
         {
             let _ = self.acls.restore(&snapshots);
             return Err(VaultError::ContainerIdentity);
+        }
+        let record = PersonalVaultRecord {
+            container_path: pending.container_path.clone(),
+            container_identity: container_identity.clone(),
+            owner_sid: pending.owner_sid.clone(),
+            scope: VaultPresentation::PerUser,
+            created_by_session: pending.created_by_session,
+        };
+        state.personal_pending.remove(&key);
+        state.personal.insert(key.clone(), record.clone());
+        if self
+            .persist_personal(
+                &state.personal,
+                &state.personal_pending,
+                &state.legacy_recoveries,
+            )
+            .is_err()
+        {
+            state.personal.remove(&key);
+            state.personal_pending.insert(key, pending);
+            let _ = self.acls.restore(&snapshots);
+            return Err(VaultError::Persistence);
+        }
+        Ok(record)
+    }
+
+    /// Finish the first ACL transition under the authenticated creator when
+    /// the parent grants only that user inherited permissions.  Immediately
+    /// afterwards SYSTEM re-reads the identity and exact ACL, so this does
+    /// not weaken the service-owned final state.
+    #[cfg(windows)]
+    pub fn complete_personal_registration_as_caller(
+        &self,
+        reservation: &PersonalCreationReservation,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        now: i64,
+    ) -> Result<PersonalVaultRecord, VaultError> {
+        let key = personal_key(&reservation.normalized_path);
+        let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        let pending = state
+            .personal_pending
+            .get(&key)
+            .cloned()
+            .ok_or(VaultError::Validation)?;
+        if !reservation_matches(&pending, reservation, now) {
+            return Err(VaultError::Validation);
+        }
+        let PersonalCreationLifecycle::BrokerCreated { container_identity } = &pending.lifecycle
+        else {
+            return Err(VaultError::Validation);
+        };
+        let container = PathBuf::from(&pending.container_path);
+        let grants = vec![ResolvedGrant {
+            sid: pending.owner_sid.clone(),
+            access: VaultAccess::Write,
+        }];
+        let acl_plan = VaultAclPlan {
+            parent: container
+                .parent()
+                .ok_or(VaultError::Validation)?
+                .to_path_buf(),
+            container: container.clone(),
+            grants: grants.clone(),
+            authorization_grants: Vec::new(),
+            managed_groups: Vec::new(),
+        };
+        let snapshots = with_caller_impersonation(caller_token, || self.acls.snapshot(&acl_plan))?;
+        if let Err(error) = with_caller_impersonation(caller_token, || {
+            self.acls.apply_container_and_verify(&container, &grants)
+        }) {
+            let _ = with_caller_impersonation(caller_token, || self.acls.restore(&snapshots));
+            return Err(error);
+        }
+        // The new protected ACL must now make the same checks succeed as SYSTEM.
+        if self
+            .fs
+            .personal_creation_target_identity(&container)
+            .ok()
+            .as_deref()
+            != Some(container_identity.as_str())
+        {
+            let _ = self.acls.restore(&snapshots);
+            return Err(VaultError::ContainerIdentity);
+        }
+        if verify_one_acl(&container, &grants).is_err() {
+            let _ = self.acls.restore(&snapshots);
+            return Err(VaultError::AclReadback);
         }
         let record = PersonalVaultRecord {
             container_path: pending.container_path.clone(),
@@ -3126,54 +3251,63 @@ impl AclApplier for WindowsAclApplier {
     }
 }
 
-#[cfg(all(windows, test))]
-fn open_legacy_container_as_caller(
-    path: &Path,
+#[cfg(windows)]
+fn with_caller_impersonation<T>(
     caller_token: windows_sys::Win32::Foundation::HANDLE,
-) -> Result<std::fs::File, VaultError> {
-    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    operation: impl FnOnce() -> Result<T, VaultError>,
+) -> Result<T, VaultError> {
     use windows_sys::Win32::Security::{ImpersonateLoggedOnUser, RevertToSelf};
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
-        FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    };
 
     struct RevertGuard;
     impl Drop for RevertGuard {
         fn drop(&mut self) {
             if unsafe { RevertToSelf() } == 0 {
                 // Continuing a reusable service worker under a client token is
-                // a privilege-boundary failure; fail-stop is the only safe
-                // outcome when Windows cannot restore the service identity.
+                // a privilege-boundary failure; fail-stop is the only safe outcome.
                 std::process::abort();
             }
         }
     }
-
     if caller_token.is_null() || unsafe { ImpersonateLoggedOnUser(caller_token) } == 0 {
         return Err(VaultError::AclReadback);
     }
     let guard = RevertGuard;
-    let mut options = std::fs::OpenOptions::new();
-    // Adoption has to work when a vault is brought to a different Windows PC.
-    // The new signed-in account need only be able to read the selected container
-    // and prove its VeraCrypt credentials to the broker.  Requiring WRITE_DAC
-    // here made an otherwise readable copied/removable vault look like an
-    // authorization failure before its credentials were ever checked.  The
-    // SYSTEM service snapshots and applies the durable owner ACL itself after
-    // this caller-readability check, so the caller is never granted permission
-    // to edit an ACL merely by attempting an adoption.
-    options
-        .access_mode(FILE_GENERIC_READ | FILE_READ_ATTRIBUTES)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    let file = options.open(path).map_err(|_| VaultError::AclReadback)?;
-    let metadata = file.metadata().map_err(|_| VaultError::ContainerIdentity)?;
-    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(VaultError::ContainerIdentity);
-    }
+    let result = operation();
     drop(guard);
-    Ok(file)
+    result
+}
+
+#[cfg(all(windows, test))]
+fn open_legacy_container_as_caller(
+    path: &Path,
+    caller_token: windows_sys::Win32::Foundation::HANDLE,
+) -> Result<std::fs::File, VaultError> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    with_caller_impersonation(caller_token, || {
+        let mut options = std::fs::OpenOptions::new();
+        // Adoption has to work when a vault is brought to a different Windows PC.
+        // The new signed-in account need only be able to read the selected container
+        // and prove its VeraCrypt credentials to the broker.  Requiring WRITE_DAC
+        // here made an otherwise readable copied/removable vault look like an
+        // authorization failure before its credentials were ever checked.  The
+        // SYSTEM service snapshots and applies the durable owner ACL itself after
+        // this caller-readability check, so the caller is never granted permission
+        // to edit an ACL merely by attempting an adoption.
+        options
+            .access_mode(FILE_GENERIC_READ | FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        let file = options.open(path).map_err(|_| VaultError::AclReadback)?;
+        let metadata = file.metadata().map_err(|_| VaultError::ContainerIdentity)?;
+        if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(VaultError::ContainerIdentity);
+        }
+        Ok(file)
+    })
 }
 
 #[cfg(windows)]

@@ -1186,9 +1186,10 @@ async fn handle_personal_vault_create(
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
         if vault_access
-            .record_personal_broker_completion(
+            .record_personal_broker_completion_as_caller(
                 registration,
                 broker_path,
+                peer.token(),
                 crate::vault_access::unix_time_seconds(),
             )
             .is_err()
@@ -1208,7 +1209,11 @@ async fn handle_personal_vault_create(
             ));
         }
         vault_access
-            .complete_personal_registration(registration, crate::vault_access::unix_time_seconds())
+            .complete_personal_registration_as_caller(
+                registration,
+                peer.token(),
+                crate::vault_access::unix_time_seconds(),
+            )
             .map_err(|_| {
                 crate::diagnostics::record_vault_failure(
                     &diagnostic_operation_id,
