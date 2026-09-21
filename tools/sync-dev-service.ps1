@@ -52,7 +52,19 @@ function Test-Administrator {
 }
 
 function Get-Sha256([string]$Path) {
-    (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    # `Get-FileHash` lives in a PowerShell module that may be unavailable to
+    # a PATH-shadowed development shell. Use the .NET implementation directly
+    # so both the parent and the elevated sync process verify the same bytes.
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        return -join ($hasher.ComputeHash($stream) | ForEach-Object { $_.ToString('X2') })
+    }
+    finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        $hasher.Dispose()
+    }
 }
 
 function Test-DevelopmentProCurrent {
@@ -231,7 +243,11 @@ function Start-ElevatedSync([switch]$UseExistingBuild) {
     # payload contains no spaces, avoiding another quoting boundary on paths
     # such as E:\E drive\Company\wincommander.
     $processArguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand"
-    $process = Start-Process -FilePath powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList $processArguments
+    # Do not resolve `powershell.exe` through PATH here. Development runtimes
+    # can prepend a PowerShell-compatible shim that lacks Windows utility
+    # cmdlets used by this script (such as Get-FileHash).
+    $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $process = Start-Process -FilePath $windowsPowerShell -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList $processArguments
     if ($process.ExitCode -ne 0) {
         $details = if (Test-Path -LiteralPath $diagnostic) {
             Get-Content -LiteralPath $diagnostic -Raw

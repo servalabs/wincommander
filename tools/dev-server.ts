@@ -34,6 +34,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
+// The Codex/runtime environment can place a PowerShell-compatible shim ahead
+// of Windows PowerShell on PATH.  The service synchronizer needs Windows'
+// built-in utility module (notably Get-FileHash), so make that boundary
+// explicit instead of relying on PATH ordering.
+const WINDOWS_POWERSHELL = process.platform === "win32"
+  ? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+  : "powershell";
 const FREE_ONLY = process.argv.includes("--free") || process.env.WINCOMMANDER_DEV_FREE_ONLY === "1";
 const MULTI_USER = process.argv.includes("--multi-user");
 // Tauri runs this script as its beforeDevCommand. A genuine second desktop
@@ -113,7 +120,7 @@ async function main(): Promise<void> {
   const steps: Array<{ name: string; promise: Promise<number> }> = [
     {
       name: "kill:dev",
-      promise: run("[kill]", "powershell", [
+      promise: run("[kill]", WINDOWS_POWERSHELL, [
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "tools/kill-dev.ps1",
       ]),
     },
@@ -140,7 +147,7 @@ async function main(): Promise<void> {
       console.error(`[dev-server] build:pro failed (exit ${buildProResult}).`);
       process.exit(buildProResult);
     }
-    const serviceResult = await run("[service]", "powershell", [
+    const serviceResult = await run("[service]", WINDOWS_POWERSHELL, [
       "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
       "tools/sync-dev-service.ps1", "-SyncPro",
     ]);
