@@ -61,6 +61,9 @@ pub enum VaultError {
     ContainerIdentity,
     AclApply,
     AclReadback,
+    /// A requested access-group membership mutation was not attempted because
+    /// the live Vaults could not first be dismounted.
+    DismountFailed,
     Persistence,
 }
 
@@ -880,6 +883,26 @@ impl VaultAccessStore {
         ),
         VaultError,
     > {
+        self.save_access_directory_before_change(directory, || Ok(()))
+    }
+
+    /// Saves the access directory and synchronizes its Windows groups. The
+    /// service uses the callback to close active mounts only if a real group
+    /// membership change is about to be made.
+    pub fn save_access_directory_before_change<F>(
+        &self,
+        directory: VaultAccessDirectory,
+        before_change: F,
+    ) -> Result<
+        (
+            VaultAccessDirectory,
+            Vec<wincmd_shared::vault_access::VaultAccessGroupResult>,
+        ),
+        VaultError,
+    >
+    where
+        F: FnMut() -> Result<(), VaultError>,
+    {
         if !valid_access_directory(&directory) {
             return Err(VaultError::Validation);
         }
@@ -900,7 +923,7 @@ impl VaultAccessStore {
                 member_sids: group.member_sids.clone(),
             })
             .collect::<Vec<_>>();
-        let results = self.reconcile_access_groups(&requests)?;
+        let results = self.reconcile_access_groups_before_change(&requests, before_change)?;
         Ok((directory, results))
     }
 
@@ -2646,34 +2669,61 @@ impl VaultAccessStore {
         &self,
         groups: &[wincmd_shared::vault_access::VaultAccessGroupInput],
     ) -> Result<Vec<wincmd_shared::vault_access::VaultAccessGroupResult>, VaultError> {
+        self.reconcile_access_groups_before_change(groups, || Ok(()))
+    }
+
+    /// Reconciles administrator-authored access groups, calling
+    /// `before_change` once before the first membership mutation. The service
+    /// pipe uses it to dismount live Vaults before a group member gains or
+    /// retains access through an already-mounted volume.
+    pub fn reconcile_access_groups_before_change<F>(
+        &self,
+        groups: &[wincmd_shared::vault_access::VaultAccessGroupInput],
+        mut before_change: F,
+    ) -> Result<Vec<wincmd_shared::vault_access::VaultAccessGroupResult>, VaultError>
+    where
+        F: FnMut() -> Result<(), VaultError>,
+    {
         if groups.len() > MAX_RECONCILE_GROUPS {
             return Err(VaultError::Validation);
         }
-        Ok(groups
+        let mut dismounted_for_change = false;
+        groups
             .iter()
-            .map(|group| self.reconcile_one_access_group(group))
-            .collect())
+            .map(|group| {
+                self.reconcile_one_access_group(
+                    group,
+                    &mut dismounted_for_change,
+                    &mut before_change,
+                )
+            })
+            .collect()
     }
 
-    fn reconcile_one_access_group(
+    fn reconcile_one_access_group<F>(
         &self,
         group: &wincmd_shared::vault_access::VaultAccessGroupInput,
-    ) -> wincmd_shared::vault_access::VaultAccessGroupResult {
+        dismounted_for_change: &mut bool,
+        before_change: &mut F,
+    ) -> Result<wincmd_shared::vault_access::VaultAccessGroupResult, VaultError>
+    where
+        F: FnMut() -> Result<(), VaultError>,
+    {
         use wincmd_shared::vault_access::{VaultAccessGroupResult, VaultAccessGroupState};
 
         if !valid_admin_group_name(&group.local_group) {
-            return VaultAccessGroupResult {
+            return Ok(VaultAccessGroupResult {
                 local_group: group.local_group.clone(),
                 state: VaultAccessGroupState::Failed,
                 error: Some("invalid local group name".to_string()),
-            };
+            });
         }
         if group.member_sids.len() > MAX_RECONCILE_GROUP_MEMBERS {
-            return VaultAccessGroupResult {
+            return Ok(VaultAccessGroupResult {
                 local_group: group.local_group.clone(),
                 state: VaultAccessGroupState::Failed,
                 error: Some("too many members".to_string()),
-            };
+            });
         }
 
         let mut members = group.member_sids.clone();
@@ -2694,45 +2744,56 @@ impl VaultAccessStore {
         let before = match self.groups.snapshot(std::slice::from_ref(&plan)) {
             Ok(snapshots) => snapshots.into_iter().next(),
             Err(error) => {
-                return VaultAccessGroupResult {
+                return Ok(VaultAccessGroupResult {
                     local_group: group.local_group.clone(),
                     state: VaultAccessGroupState::Failed,
                     error: Some(group_error_reason(error)),
-                };
+                });
             }
         };
+
+        let changed = match &before {
+            Some(snapshot) => {
+                !snapshot.existed || {
+                    let mut before_members = snapshot.members.clone();
+                    before_members.sort();
+                    before_members != members
+                }
+            }
+            // The snapshot contract is one entry per plan. If an adapter
+            // breaks that contract, preserve the security invariant and
+            // close live mounts before allowing a possible mutation.
+            None => true,
+        };
+        if changed && !*dismounted_for_change {
+            before_change()?;
+            *dismounted_for_change = true;
+        }
 
         if let Err(error) = self
             .groups
             .reconcile_exact_members(&group.local_group, &members)
         {
-            return VaultAccessGroupResult {
+            return Ok(VaultAccessGroupResult {
                 local_group: group.local_group.clone(),
                 state: VaultAccessGroupState::Failed,
                 error: Some(group_error_reason(error)),
-            };
+            });
         }
 
         let state = match before {
             Some(snapshot) if !snapshot.existed => VaultAccessGroupState::Created,
-            Some(mut snapshot) => {
-                snapshot.members.sort();
-                if snapshot.members == members {
-                    VaultAccessGroupState::Unchanged
-                } else {
-                    VaultAccessGroupState::Updated
-                }
-            }
+            Some(_) if !changed => VaultAccessGroupState::Unchanged,
             // Defensive: `snapshot()` returns one entry per plan by
             // contract, so this should be unreachable in practice.
-            None => VaultAccessGroupState::Updated,
+            Some(_) | None => VaultAccessGroupState::Updated,
         };
 
-        VaultAccessGroupResult {
+        Ok(VaultAccessGroupResult {
             local_group: group.local_group.clone(),
             state,
             error: None,
-        }
+        })
     }
 
     fn rollback_after_apply(&self, state: &mut State, snapshots: &[AclSnapshot]) {
@@ -4011,7 +4072,9 @@ fn startup_validation_result(error: &VaultError) -> VaultEntryResult {
         VaultError::PrincipalResolution(_) => VaultEntryResult::PrincipalResolutionFailed,
         VaultError::ContainerIdentity => VaultEntryResult::ContainerIdentityFailed,
         VaultError::AclApply => VaultEntryResult::AclApplyFailed,
-        VaultError::AclReadback | VaultError::Persistence => VaultEntryResult::AclReadbackFailed,
+        VaultError::AclReadback | VaultError::DismountFailed | VaultError::Persistence => {
+            VaultEntryResult::AclReadbackFailed
+        }
     }
 }
 fn denied(reason: VaultMountDenial) -> VaultAuthorizeMountResponse {
@@ -6704,6 +6767,50 @@ mod tests {
             membership.lock().unwrap().get("WC_Sales").unwrap(),
             &vec!["S-1-5-21-3".to_string()]
         );
+    }
+
+    #[test]
+    fn group_reconciliation_calls_the_mount_boundary_only_for_real_changes() {
+        let groups = Groups::default();
+        let s = store_with_groups(Arc::new(Mutex::new(HashMap::new())), groups);
+        let request = VaultAccessGroupInput {
+            local_group: "WC_Sales".into(),
+            member_sids: vec!["S-1-5-21-1".into()],
+        };
+
+        let changes = std::cell::Cell::new(0usize);
+        let created = s
+            .reconcile_access_groups_before_change(std::slice::from_ref(&request), || {
+                changes.set(changes.get() + 1);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(created[0].state, VaultAccessGroupState::Created);
+        assert_eq!(changes.get(), 1);
+
+        // Saving the exact same directory/group must not disrupt a mounted
+        // Vault merely because the administrator pressed Save again.
+        let unchanged = s
+            .reconcile_access_groups_before_change(std::slice::from_ref(&request), || {
+                changes.set(changes.get() + 1);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(unchanged[0].state, VaultAccessGroupState::Unchanged);
+        assert_eq!(changes.get(), 1);
+
+        let updated = VaultAccessGroupInput {
+            local_group: "WC_Sales".into(),
+            member_sids: vec!["S-1-5-21-2".into()],
+        };
+        let result = s
+            .reconcile_access_groups_before_change(&[updated], || {
+                changes.set(changes.get() + 1);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(result[0].state, VaultAccessGroupState::Updated);
+        assert_eq!(changes.get(), 2);
     }
 
     /// Regression: reconciling an existing group must not be treated as a

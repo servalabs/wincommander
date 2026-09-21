@@ -161,6 +161,34 @@ pub async fn serve(
     vault_access: Arc<VaultAccessStore>,
     vault_mount: Arc<VaultMountBroker>,
 ) -> Result<()> {
+    // A named-pipe instance can be abandoned by Windows after an interrupted
+    // client connection or a failed replacement. Do not leave the SYSTEM
+    // service running without a usable listener: discard that instance and
+    // construct a fresh, explicitly protected pipe. Authorization still
+    // happens independently for every new connection.
+    loop {
+        if let Err(error) = serve_pipe_instance(
+            Arc::clone(&policy_store),
+            Arc::clone(&session_helper_gate),
+            Arc::clone(&clipboard_state),
+            Arc::clone(&vault_access),
+            Arc::clone(&vault_mount),
+        )
+        .await
+        {
+            eprintln!("[svc::pipe] listener restarted after error: {error:#}");
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
+}
+
+async fn serve_pipe_instance(
+    policy_store: Arc<PolicyStore>,
+    session_helper_gate: Arc<SessionHelperGate>,
+    clipboard_state: Arc<ClipboardGuardState>,
+    vault_access: Arc<VaultAccessStore>,
+    vault_mount: Arc<VaultMountBroker>,
+) -> Result<()> {
     // Build the SECURITY_ATTRIBUTES so the kernel creates the pipe object
     // with our explicit DACL rather than the default service-process DACL.
     let sa = build_security_attributes().context("build pipe SECURITY_ATTRIBUTES")?;
@@ -628,10 +656,12 @@ async fn dispatch_verb(
             Ok(serde_json::json!({ "can_manage_policy": caller_privileged }))
         }
         "svc.vault.reconcile_access_groups" => {
-            handle_vault_reconcile_access_groups(vault_access, args)
+            handle_vault_reconcile_access_groups(vault_access, vault_mount, args)
         }
         "svc.vault.get_access_directory" => handle_vault_get_access_directory(vault_access, args),
-        "svc.vault.save_access_directory" => handle_vault_save_access_directory(vault_access, args),
+        "svc.vault.save_access_directory" => {
+            handle_vault_save_access_directory(vault_access, vault_mount, args)
+        }
         "svc.vault.personal_status" => handle_personal_vault_status(vault_access, args, peer),
 
         // The connection loop checks `is_known_verb` before authorization.
@@ -1028,6 +1058,7 @@ fn handle_vault_forget_entry_policy_only(
 /// it never aborts the rest of the batch.
 fn handle_vault_reconcile_access_groups(
     vault_access: &VaultAccessStore,
+    vault_mount: &VaultMountBroker,
     args: serde_json::Value,
 ) -> Result<serde_json::Value, VerbError> {
     let request: wincmd_shared::vault_access::VaultReconcileAccessGroupsRequest =
@@ -1037,9 +1068,15 @@ fn handle_vault_reconcile_access_groups(
                 "access group reconciliation request is invalid",
             )
         })?;
-    let results = vault_access
-        .reconcile_access_groups(&request.groups)
-        .map_err(|error| VerbError::new("vault_validation_failed", vault_error_message(error)))?;
+    let results = vault_mount
+        .with_exclusive_operation(|| {
+            vault_access.reconcile_access_groups_before_change(&request.groups, || {
+                vault_mount
+                    .dismount_all_locked(vault_access)
+                    .map_err(|_| crate::vault_access::VaultError::DismountFailed)
+            })
+        })
+        .map_err(vault_group_update_error)?;
     serde_json::to_value(
         wincmd_shared::vault_access::VaultReconcileAccessGroupsResponse { results },
     )
@@ -1079,6 +1116,7 @@ fn handle_vault_get_access_directory(
 /// without the UI pretending every group was created successfully.
 fn handle_vault_save_access_directory(
     vault_access: &VaultAccessStore,
+    vault_mount: &VaultMountBroker,
     args: serde_json::Value,
 ) -> Result<serde_json::Value, VerbError> {
     let request: wincmd_shared::vault_access::VaultSaveAccessDirectoryRequest =
@@ -1088,11 +1126,15 @@ fn handle_vault_save_access_directory(
                 "access directory request is invalid",
             )
         })?;
-    let (directory, results) = vault_access
-        .save_access_directory(request.directory)
-        .map_err(|error| {
-            VerbError::new("vault_directory_save_failed", vault_error_message(error))
-        })?;
+    let (directory, results) = vault_mount
+        .with_exclusive_operation(|| {
+            vault_access.save_access_directory_before_change(request.directory, || {
+                vault_mount
+                    .dismount_all_locked(vault_access)
+                    .map_err(|_| crate::vault_access::VaultError::DismountFailed)
+            })
+        })
+        .map_err(vault_group_update_error)?;
     serde_json::to_value(
         wincmd_shared::vault_access::VaultSaveAccessDirectoryResponse { directory, results },
     )
@@ -2187,10 +2229,22 @@ fn vault_error_message(error: crate::vault_access::VaultError) -> String {
         crate::vault_access::VaultError::AclReadback => {
             "vault access plan read-back failed".to_string()
         }
+        crate::vault_access::VaultError::DismountFailed => {
+            "active vaults could not be dismounted before the access group changed".to_string()
+        }
         crate::vault_access::VaultError::Persistence => {
             "vault policy could not be persisted".to_string()
         }
     }
+}
+
+fn vault_group_update_error(error: crate::vault_access::VaultError) -> VerbError {
+    let kind = if error == crate::vault_access::VaultError::DismountFailed {
+        "vault_dismount_failed"
+    } else {
+        "vault_access_group_apply_failed"
+    };
+    VerbError::new(kind, vault_error_message(error))
 }
 
 /// The two epoch subtree keys `EpochInstallInput.config` may carry (plan
@@ -4036,6 +4090,7 @@ mod integration {
     #[test]
     fn vault_access_directory_pipe_save_then_get_round_trips_durable_shape() {
         let store = crate::vault_access::test_store();
+        let vault_mount = crate::vault_mount::VaultMountBroker::new();
         let request = serde_json::json!({
             "directory": {
                 "schema_version": 1,
@@ -4052,7 +4107,8 @@ mod integration {
                 }]
             }
         });
-        let saved = super::handle_vault_save_access_directory(&store, request).unwrap();
+        let saved =
+            super::handle_vault_save_access_directory(&store, &vault_mount, request).unwrap();
         assert_eq!(saved["directory"]["groups"][0]["local_group"], "WC_Sales");
         assert_eq!(saved["results"][0]["state"], "unchanged");
 
