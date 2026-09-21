@@ -91,11 +91,12 @@ describe("Vault access editor presentation", () => {
     expect(html).toContain('aria-label="Grant 1 access"');
     expect(html).toContain('aria-label="Remove grant 1"');
     expect(html).toContain('value="ExampleTeam" selected=""');
-    expect(html).toContain('aria-label="Grant 1 access">Read</output>');
+    expect(html).toContain('aria-label="Grant 1 access"');
+    expect(html).toContain('<option value="read" selected="">Read</option>');
   });
 
   test("preserves mixed read/write grants without introducing a deny value", () => {
-    const html = renderEditor({ ...entry, grants: [
+    const html = renderEditor({ ...entry, owner_account: "DifferentOwner", grants: [
       { principal_name: "ExampleTeam", access: "read" },
       { principal_name: "ExampleUser", access: "write" },
     ] });
@@ -104,6 +105,16 @@ describe("Vault access editor presentation", () => {
     expect(html).toContain('value="write" selected="">Read &amp; write</option>');
     expect(html).not.toContain('<option value="none">');
     expect(html).not.toContain("This saved vault");
+  });
+
+  test("allows a view-only share to make one selected grant writable without changing its readers", () => {
+    const html = renderEditor({ ...entry, owner_account: "ExampleUser", grants: [
+      { principal_name: "ExampleUser", access: "write" },
+      { principal_name: "ExampleTeam", access: "read" },
+    ] });
+    expect(html).toContain('aria-label="Grant 2 access"');
+    expect(html).toContain('value="read" selected="">Read</option>');
+    expect(html).toContain("Shared, view only starts with the primary owner able to edit");
   });
 
   test("shows owner-only policy access without inventing a live authorization result", () => {

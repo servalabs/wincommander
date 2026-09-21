@@ -80,16 +80,16 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, onEntr
           <span>User or group</span>
           <VaultPrincipalPicker ariaLabel={`Grant ${grantIndex + 1} principal`} value={grant.principal_name} directory={directory} onChange={value => onEntryChange({ grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, principal_name: value } : current) })} />
         </div>
-        {accessPreset === "custom" ? <label className="fleet-field"><span>Policy access</span>
+        <label className="fleet-field"><span>Policy access</span>
           <select aria-label={`Grant ${grantIndex + 1} access`} value={grant.access} onChange={event => onEntryChange({ grants: entry.grants.map((current, index) => index === grantIndex ? { ...current, access: event.target.value as "read" | "write" } : current) })}>
             <option value="read">Read</option><option value="write">Read &amp; write</option>
           </select>
-        </label> : <div className="fleet-field"><span>Policy access</span><output aria-label={`Grant ${grantIndex + 1} access`}>{grant.access === "write" ? "Read & write" : "Read"}</output></div>}
+        </label>
         <Button variant="outline" size="sm" aria-label={`Remove grant ${grantIndex + 1}`} onClick={() => onEntryChange({ grants: entry.grants.filter((_, index) => index !== grantIndex) })}>Remove</Button>
       </div>)}
       {accessPreset !== "private" && <>
-        <Button className="fleet-vault-add-grant" variant="outline" size="sm" onClick={() => onEntryChange({ grants: [...entry.grants, { principal_name: "", access: entry.grants[0]?.access ?? "write" }] })}>Add person or group</Button>
-        <p className="fleet-field-hint">Removing a grant takes effect only after saving. Other user or group grants may still allow access.</p>
+        <Button className="fleet-vault-add-grant" variant="outline" size="sm" onClick={() => onEntryChange({ grants: [...entry.grants, { principal_name: "", access: accessPreset === "shared-write" ? "write" : "read" }] })}>Add person or group</Button>
+        <p className="fleet-field-hint">Shared, view only starts with the primary owner able to edit and everyone else able to read. Change only a selected person or group to Read &amp; write for an exception; the other rows stay unchanged. Removing a grant takes effect only after saving. Other user or group grants may still allow access.</p>
       </>}
     </div>
 

@@ -431,8 +431,9 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
       entries: source.entries.map(entry => {
         if (entry.id !== id) return entry;
         const ownerChanged = { ...entry, owner_account: ownerAccount };
-        return vaultAccessPreset(entry) === "private"
-          ? applyVaultAccessPreset(ownerChanged, "private")
+        const preset = vaultAccessPreset(entry);
+        return preset === "private" || preset === "shared-read"
+          ? applyVaultAccessPreset(ownerChanged, preset)
           : ownerChanged;
       }),
     };

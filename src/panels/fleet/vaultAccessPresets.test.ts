@@ -13,19 +13,40 @@ describe("Vault access presets", () => {
     expect(vaultAccessPreset(personal)).toBe("private");
   });
 
-  test("keeps the named principals while setting one shared access level", () => {
+  test("keeps the owner writable while making every other shared-read grant read-only", () => {
     const entry = newVaultEntry("shared");
+    entry.owner_account = "PC\\Owner";
+    entry.grants = [
+      { principal_name: "PC\\Owner", access: "write" },
+      { principal_name: "PC\\Readers", access: "write" },
+    ];
     const readOnly = applyVaultAccessPreset(entry, "shared-read");
     const editable = applyVaultAccessPreset(readOnly, "shared-write");
 
     expect(readOnly.mount.presentation).toBe("machine");
-    expect(readOnly.grants.every(grant => grant.access === "read")).toBe(true);
+    expect(readOnly.grants).toEqual([
+      { principal_name: "PC\\Owner", access: "write" },
+      { principal_name: "PC\\Readers", access: "read" },
+    ]);
+    expect(vaultAccessPreset(readOnly)).toBe("shared-read");
     expect(editable.grants.map(grant => grant.principal_name)).toEqual(readOnly.grants.map(grant => grant.principal_name));
     expect(vaultAccessPreset(editable)).toBe("shared-write");
   });
 
-  test("labels mixed grants as custom without changing their policy intent", () => {
+  test("adds an explicit owner write grant when turning an existing share view-only", () => {
     const entry = newVaultEntry("shared");
+    entry.owner_account = "PC\\Owner";
+    entry.grants = [{ principal_name: "PC\\Readers", access: "write" }];
+
+    expect(applyVaultAccessPreset(entry, "shared-read").grants).toEqual([
+      { principal_name: "PC\\Owner", access: "write" },
+      { principal_name: "PC\\Readers", access: "read" },
+    ]);
+  });
+
+  test("labels extra non-owner writers as custom without changing their policy intent", () => {
+    const entry = newVaultEntry("shared");
+    entry.grants.push({ principal_name: "PC\\Editors", access: "write" });
     entry.grants.push({ principal_name: "PC\\Readers", access: "read" });
 
     expect(vaultAccessPreset(entry)).toBe("custom");
