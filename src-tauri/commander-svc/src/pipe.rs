@@ -1128,11 +1128,40 @@ fn handle_vault_save_access_directory(
         })?;
     let (directory, results) = vault_mount
         .with_exclusive_operation(|| {
-            vault_access.save_access_directory_before_change(request.directory, || {
-                vault_mount
-                    .dismount_all_locked(vault_access)
-                    .map_err(|_| crate::vault_access::VaultError::DismountFailed)
-            })
+            let mut dismounted = false;
+            let mut dismount_once = || {
+                if !dismounted {
+                    vault_mount
+                        .dismount_all_locked(vault_access)
+                        .map_err(|_| crate::vault_access::VaultError::DismountFailed)?;
+                    dismounted = true;
+                }
+                Ok(())
+            };
+            let (directory, results) =
+                vault_access.save_access_directory_before_change(request.directory, || {
+                    dismount_once()
+                })?;
+            let membership_changed = results.iter().any(|result| {
+                matches!(
+                    result.state,
+                    wincmd_shared::vault_access::VaultAccessGroupState::Created
+                        | wincmd_shared::vault_access::VaultAccessGroupState::Updated
+                )
+            });
+            if membership_changed || vault_access.active_policy_uses_access_directory_group() {
+                // A membership change has already dismounted active Vaults.
+                // A no-op Save Group may still need the one-time migration
+                // away from a local-group SID ACL, so close any active Vault
+                // before rebuilding the exact current-member ACLs.
+                dismount_once()?;
+                let applied_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|value| value.as_secs() as i64)
+                    .unwrap_or(0);
+                vault_access.refresh_active_policy_for_access_directory_change(applied_at)?;
+            }
+            Ok((directory, results))
         })
         .map_err(vault_group_update_error)?;
     serde_json::to_value(

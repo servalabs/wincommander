@@ -491,6 +491,24 @@ fn valid_access_directory(directory: &VaultAccessDirectory) -> bool {
     })
 }
 
+/// A Fleet access-control group is service-owned membership data, not a
+/// durable authorization token.  Windows only refreshes a user's local-group
+/// SIDs when that user signs in, so using its group SID directly in a Vault
+/// DACL would leave a removed, already-signed-in user authorized until their
+/// next logon.  Expand only groups from the protected access directory into
+/// their current individual members when creating a Vault access plan.
+fn access_directory_group_members<'a>(
+    directory: &'a VaultAccessDirectory,
+    principal_name: &str,
+) -> Option<&'a [String]> {
+    let local_name = principal_name.rsplit('\\').next().unwrap_or(principal_name);
+    directory
+        .groups
+        .iter()
+        .find(|group| group.local_group.eq_ignore_ascii_case(local_name))
+        .map(|group| group.member_sids.as_slice())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LegacyRecoveryRecord {
@@ -2060,7 +2078,8 @@ impl VaultAccessStore {
         }
         self.normalize_policy_paths(&mut policy)?;
         validate_policy(&policy)?;
-        let mut resolved = self.resolve_and_plan(&policy)?;
+        let access_directory = state.access_directory.clone();
+        let mut resolved = self.resolve_and_plan_with_access_directory(&policy, &access_directory)?;
         let removed = state
             .active
             .as_ref()
@@ -2434,6 +2453,20 @@ impl VaultAccessStore {
         &self,
         policy: &VaultAccessPolicy,
     ) -> Result<Vec<(VaultAccessEntry, VaultAclPlan)>, VaultError> {
+        let access_directory = self
+            .state
+            .lock()
+            .map_err(|_| VaultError::Persistence)?
+            .access_directory
+            .clone();
+        self.resolve_and_plan_with_access_directory(policy, &access_directory)
+    }
+
+    fn resolve_and_plan_with_access_directory(
+        &self,
+        policy: &VaultAccessPolicy,
+        access_directory: &VaultAccessDirectory,
+    ) -> Result<Vec<(VaultAccessEntry, VaultAclPlan)>, VaultError> {
         let resolved = policy
             .entries
             .iter()
@@ -2453,18 +2486,49 @@ impl VaultAccessStore {
                 let mut read_members = Vec::new();
                 let mut write_members = Vec::new();
                 let mut managed_groups = Vec::new();
-                let owner = self.principals.resolve_principal(&entry.owner_account)?;
-                match owner.kind {
-                    PrincipalKind::User => {
-                        write_members.push(owner.sid.clone());
-                        merge_grant(&mut authorization_grants, owner.sid, VaultAccess::Write);
+                if let Some(members) =
+                    access_directory_group_members(access_directory, &entry.owner_account)
+                {
+                    for member_sid in members {
+                        merge_grant(&mut grants, member_sid.clone(), VaultAccess::Write);
+                        merge_grant(
+                            &mut authorization_grants,
+                            member_sid.clone(),
+                            VaultAccess::Write,
+                        );
                     }
-                    PrincipalKind::Group => {
-                        merge_grant(&mut grants, owner.sid.clone(), VaultAccess::Write);
-                        merge_grant(&mut authorization_grants, owner.sid, VaultAccess::Write);
+                } else {
+                    let owner = self.principals.resolve_principal(&entry.owner_account)?;
+                    match owner.kind {
+                        PrincipalKind::User => {
+                            write_members.push(owner.sid.clone());
+                            merge_grant(&mut authorization_grants, owner.sid, VaultAccess::Write);
+                        }
+                        PrincipalKind::Group => {
+                            merge_grant(&mut grants, owner.sid.clone(), VaultAccess::Write);
+                            merge_grant(&mut authorization_grants, owner.sid, VaultAccess::Write);
+                        }
                     }
                 }
                 for grant in &entry.grants {
+                    if let Some(members) =
+                        access_directory_group_members(access_directory, &grant.principal_name)
+                    {
+                        // Do not retain the local-group SID in the container
+                        // or mounted-root DACL. An existing Windows session
+                        // can carry that SID after the member was removed.
+                        // Exact member SIDs make the removal effective as
+                        // soon as this plan is applied, without a logoff.
+                        for member_sid in members {
+                            merge_grant(&mut grants, member_sid.clone(), grant.access);
+                            merge_grant(
+                                &mut authorization_grants,
+                                member_sid.clone(),
+                                grant.access,
+                            );
+                        }
+                        continue;
+                    }
                     let principal = self.principals.resolve_principal(&grant.principal_name)?;
                     if principal.kind == PrincipalKind::User {
                         merge_grant(
@@ -2523,6 +2587,55 @@ impl VaultAccessStore {
             return Err(VaultError::Validation);
         }
         Ok(resolved)
+    }
+
+    /// Re-materialize active Fleet policies after an access-directory group
+    /// changed. This increments the protected policy version and replaces the
+    /// backing-file ACL with exact current member SIDs. Active Vaults must
+    /// already be dismounted by the caller before invoking this method.
+    pub fn refresh_active_policy_for_access_directory_change(
+        &self,
+        applied_at: i64,
+    ) -> Result<VaultPolicyStatus, VaultError> {
+        let mut policy = {
+            let state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+            let Some(active) = state.active.as_ref() else {
+                return Ok(state.status.clone());
+            };
+            active.policy.clone()
+        };
+        policy.expected_previous_version = policy.version;
+        policy.version = policy.version.checked_add(1).ok_or(VaultError::Validation)?;
+        self.apply(policy, applied_at)
+    }
+
+    /// Reports whether the active policy names a service-managed Access
+    /// control group. This also lets a no-op Save Group migrate an older
+    /// group-SID policy to exact user-SID ACLs once, without asking an
+    /// administrator to artificially add and remove a member.
+    pub fn active_policy_uses_access_directory_group(&self) -> bool {
+        let Ok(state) = self.state.lock() else {
+            return false;
+        };
+        let Some(active) = state.active.as_ref() else {
+            return false;
+        };
+        let group_names = state
+            .access_directory
+            .groups
+            .iter()
+            .map(|group| group.local_group.as_str())
+            .collect::<Vec<_>>();
+        active.policy.entries.iter().any(|entry| {
+            std::iter::once(entry.owner_account.as_str())
+                .chain(entry.grants.iter().map(|grant| grant.principal_name.as_str()))
+                .any(|principal| {
+                    let local_name = principal.rsplit('\\').next().unwrap_or(principal);
+                    group_names
+                        .iter()
+                        .any(|group| group.eq_ignore_ascii_case(local_name))
+                })
+        })
     }
 
     /// The policy file is the authoritative registry for both backend-created
@@ -6715,6 +6828,66 @@ mod tests {
         assert_eq!(
             store.save_access_directory(reserved_name),
             Err(VaultError::Validation)
+        );
+    }
+
+    #[test]
+    fn fleet_group_policy_expands_current_members_and_drops_removed_member_on_refresh() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = store_with_groups(files, Groups::default());
+        let alex = "S-1-5-21-101".to_string();
+        let removed = "S-1-5-21-202".to_string();
+
+        let mut directory = access_directory();
+        directory.users.push(wincmd_shared::vault_access::VaultAccessDirectoryUser {
+            sid: removed.clone(),
+            username: "Bailey".into(),
+            display_name: Some("Bailey Example".into()),
+        });
+        directory.groups[0].member_sids.push(removed.clone());
+        store.save_access_directory(directory.clone()).unwrap();
+
+        let mut requested = policy(1, 0);
+        requested.entries[0].grants = vec![
+            wincmd_shared::vault_access::VaultGrantInput {
+                principal_name: "Admin".into(),
+                access: VaultAccess::Write,
+            },
+            wincmd_shared::vault_access::VaultGrantInput {
+                principal_name: "WC_Sales".into(),
+                access: VaultAccess::Read,
+            },
+        ];
+        store.apply(requested, 7).unwrap();
+
+        let (before, ..) = store.mount_plan("shared").unwrap();
+        assert!(before.grants.iter().any(|grant| grant.sid == alex));
+        assert!(before.grants.iter().any(|grant| grant.sid == removed));
+        assert!(
+            !before
+                .grants
+                .iter()
+                .any(|grant| grant.sid == "S-1-test-WC_Sales"),
+            "the access-directory group SID must never survive in the mounted-root ACL"
+        );
+        assert!(store.authorize_mount("shared", std::slice::from_ref(&removed)).allowed);
+
+        directory.groups[0].member_sids = vec![alex.clone()];
+        store.save_access_directory(directory).unwrap();
+        store
+            .refresh_active_policy_for_access_directory_change(8)
+            .unwrap();
+
+        let (after, ..) = store.mount_plan("shared").unwrap();
+        assert!(after.grants.iter().any(|grant| grant.sid == alex));
+        assert!(
+            !after.grants.iter().any(|grant| grant.sid == removed),
+            "a removed member SID must be absent from the refreshed mounted-root ACL"
+        );
+        assert!(store.authorize_mount("shared", &[alex]).allowed);
+        assert!(
+            !store.authorize_mount("shared", &[removed]).allowed,
+            "a removed member must be denied immediately after policy refresh"
         );
     }
 
