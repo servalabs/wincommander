@@ -911,9 +911,19 @@ impl VaultAccessStore {
         let normalized = self
             .fs
             .normalize_personal_creation_path(Path::new(container_path))?;
-        if !valid_creation_path(&normalized)
-            || self.fs.personal_creation_target_exists(&normalized)?
-        {
+        if !valid_creation_path(&normalized) {
+            return Err(VaultError::Validation);
+        }
+        // Never overwrite an existing object.  We deliberately make the
+        // missing-target observation before looking at the service registry:
+        // a completed personal record only reserves ownership of the file it
+        // identified, not its filename forever.  If that file was deleted,
+        // retaining its record would turn an ordinary name reuse into a
+        // permanent false conflict (including for the original owner).
+        //
+        // An error while probing is not treated as missing, so inaccessible
+        // or otherwise uncertain targets remain fail-closed.
+        if self.fs.personal_creation_target_exists(&normalized)? {
             return Err(VaultError::Validation);
         }
         let normalized_path = normalized.to_string_lossy().into_owned();
@@ -936,9 +946,22 @@ impl VaultAccessStore {
         };
         let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
         let key = personal_key(&pending.container_path);
-        if contains_personal_key(&state.personal, &key)
-            || contains_personal_key(&state.legacy_recoveries, &key)
-        {
+        // A recovery journal can still need to restore ACL state.  It is not
+        // a stale-name cache, so creation must never discard it merely
+        // because the target currently does not exist.
+        if contains_personal_key(&state.legacy_recoveries, &key) {
+            return Err(VaultError::Validation);
+        }
+        // A registry written by an older release may use either DOS or
+        // verbatim spelling.  Reclaim exactly one completed record only when
+        // the filesystem probe above proved that its target is gone.  Two
+        // matching entries are ambiguous persisted state and remain blocked
+        // rather than silently choosing which ownership record to discard.
+        let matching_record_keys = [key.clone(), personal_key_alias(&key)]
+            .into_iter()
+            .filter(|candidate| state.personal.contains_key(candidate))
+            .collect::<Vec<_>>();
+        if matching_record_keys.len() > 1 {
             return Err(VaultError::Validation);
         }
         if [&key, &personal_key_alias(&key)].iter().any(|candidate| {
@@ -960,6 +983,12 @@ impl VaultAccessStore {
         }) {
             return Err(VaultError::Validation);
         }
+        let reclaimed_record = matching_record_keys.first().and_then(|candidate| {
+            state
+                .personal
+                .remove(candidate)
+                .map(|record| (candidate.clone(), record))
+        });
         state.personal_pending.remove(&key);
         state.personal_pending.remove(&personal_key_alias(&key));
         state.personal_pending.insert(key.clone(), pending);
@@ -972,6 +1001,11 @@ impl VaultAccessStore {
             .is_err()
         {
             state.personal_pending.remove(&key);
+            if let Some((record_key, record)) = reclaimed_record {
+                // The registry write did not commit, so preserve the prior
+                // durable ownership state in memory as well.
+                state.personal.insert(record_key, record);
+            }
             return Err(VaultError::Persistence);
         }
         Ok(PersonalCreationReservation {
@@ -5260,6 +5294,159 @@ mod tests {
         assert!(store
             .begin_personal_registration("C:\\vaults\\..\\escape.hc", personal_caller(), 43, 100,)
             .is_err());
+    }
+
+    #[test]
+    fn personal_creation_reclaims_only_a_deleted_completed_container_record() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = personal_store(
+            files.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let path = "C:\\vaults\\deleted.hc";
+        let stale = PersonalVaultRecord {
+            container_path: path.into(),
+            container_identity: "v:old:i:old".into(),
+            owner_sid: "S-1-5-21-former-owner".into(),
+            scope: VaultPresentation::PerUser,
+            created_by_session: 3,
+        };
+        store
+            .state
+            .lock()
+            .unwrap()
+            .personal
+            .insert(personal_key(path), stale);
+
+        let reservation = store
+            .begin_personal_registration(path, personal_caller(), 41, 100)
+            .expect("a deleted container must not reserve its old filename forever");
+        assert_eq!(reservation.normalized_path(), path);
+        let state = store.state.lock().unwrap();
+        assert!(!state.personal.contains_key(&personal_key(path)));
+        assert!(state.personal_pending.contains_key(&personal_key(path)));
+        drop(state);
+
+        let persisted = files
+            .lock()
+            .unwrap()
+            .get(&PathBuf::from("/policy").join(PERSONAL_VAULTS_FILE))
+            .cloned()
+            .expect("replacement reservation must atomically replace the stale record");
+        let registry: PersonalVaultRegistry = serde_json::from_slice(&persisted).unwrap();
+        assert!(registry.records.is_empty());
+        assert_eq!(registry.pending.len(), 1);
+        assert_eq!(registry.pending[0].container_path, path);
+    }
+
+    #[test]
+    fn personal_creation_never_reclaims_a_record_when_the_file_still_exists() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let path = PathBuf::from("C:\\vaults\\existing.hc");
+        files
+            .lock()
+            .unwrap()
+            .insert(path.clone(), b"must not overwrite".to_vec());
+        let store = personal_store(
+            files,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let stale = PersonalVaultRecord {
+            container_path: path.to_string_lossy().into_owned(),
+            container_identity: "v:old:i:old".into(),
+            owner_sid: "S-1-5-21-former-owner".into(),
+            scope: VaultPresentation::PerUser,
+            created_by_session: 3,
+        };
+        let key = personal_key(&path.to_string_lossy());
+        store
+            .state
+            .lock()
+            .unwrap()
+            .personal
+            .insert(key.clone(), stale);
+
+        assert_eq!(
+            store
+                .begin_personal_registration(&path.to_string_lossy(), personal_caller(), 41, 100)
+                .err(),
+            Some(VaultError::Validation)
+        );
+        let state = store.state.lock().unwrap();
+        assert!(state.personal.contains_key(&key));
+        assert!(!state.personal_pending.contains_key(&key));
+    }
+
+    #[test]
+    fn personal_creation_keeps_stale_record_when_replacement_reservation_cannot_persist() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let fail_next_write = Arc::new(AtomicBool::new(true));
+        let store = personal_store(
+            files,
+            Arc::clone(&fail_next_write),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let path = "C:\\vaults\\deleted.hc";
+        let stale = PersonalVaultRecord {
+            container_path: path.into(),
+            container_identity: "v:old:i:old".into(),
+            owner_sid: "S-1-5-21-former-owner".into(),
+            scope: VaultPresentation::PerUser,
+            created_by_session: 3,
+        };
+        let key = personal_key(path);
+        store
+            .state
+            .lock()
+            .unwrap()
+            .personal
+            .insert(key.clone(), stale);
+
+        assert_eq!(
+            store
+                .begin_personal_registration(path, personal_caller(), 41, 100)
+                .err(),
+            Some(VaultError::Persistence)
+        );
+        let state = store.state.lock().unwrap();
+        assert!(state.personal.contains_key(&key));
+        assert!(!state.personal_pending.contains_key(&key));
+    }
+
+    #[test]
+    fn personal_creation_does_not_choose_between_ambiguous_stale_alias_records() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = personal_store(
+            files,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let path = "C:\\vaults\\deleted.hc";
+        let record = PersonalVaultRecord {
+            container_path: path.into(),
+            container_identity: "v:old:i:old".into(),
+            owner_sid: "S-1-5-21-former-owner".into(),
+            scope: VaultPresentation::PerUser,
+            created_by_session: 3,
+        };
+        let key = personal_key(path);
+        let alias = personal_key_alias(&key);
+        let mut state = store.state.lock().unwrap();
+        state.personal.insert(key.clone(), record.clone());
+        state.personal.insert(alias, record);
+        drop(state);
+
+        assert_eq!(
+            store
+                .begin_personal_registration(path, personal_caller(), 41, 100)
+                .err(),
+            Some(VaultError::Validation)
+        );
+        let state = store.state.lock().unwrap();
+        assert_eq!(state.personal.len(), 2);
+        assert!(state.personal_pending.is_empty());
     }
 
     #[test]
