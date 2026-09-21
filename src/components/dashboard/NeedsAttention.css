@@ -101,6 +101,60 @@
     cursor: not-allowed;
 }
 
+.na-ignored {
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 11px;
+    padding: 6px 8px;
+}
+
+.na-ignored:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+}
+
+.ignored-findings-dialog__body { max-width: 640px; }
+.ignored-findings-dialog__intro, .ignored-findings-dialog__empty {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.5;
+}
+.ignored-findings-dialog__list {
+    display: grid;
+    gap: 8px;
+    list-style: none;
+    margin: 16px 0 0;
+    padding: 0;
+}
+.ignored-findings-dialog__item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    padding: 10px;
+    color: var(--text-mute);
+}
+.ignored-findings-dialog__details { display: grid; flex: 1; gap: 3px; min-width: 0; }
+.ignored-findings-dialog__details strong { color: var(--text); font-size: 13px; }
+.ignored-findings-dialog__details span, .ignored-findings-dialog__details code { color: var(--text-mute); font-size: 11px; overflow-wrap: anywhere; }
+.ignored-findings-dialog__restore, .ignored-findings-dialog__close {
+    border: 1px solid var(--accent-line);
+    border-radius: var(--r-sm);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 10px;
+}
+.ignored-findings-dialog__restore { display: inline-flex; align-items: center; gap: 5px; flex: none; }
+
 /* ── List ── */
 .na-list {
     list-style: none;

@@ -38,8 +38,18 @@ describe("Save groups persists through the protected Vault access service", () =
 
   test("reconciles the just-saved directory against a fresh Windows discovery", () => {
     const save = source.slice(source.indexOf("const save = async ()"), source.lastIndexOf("return ("));
-    expect(save).toContain("await discoverUsers(true, fromVaultAccessDirectory(saved.directory))");
+    expect(save).toContain("const refreshedUsers = await discoverUsers(true, fromVaultAccessDirectory(saved.directory))");
     expect(source).toContain("reconcileAccessDirectoryUsers(savedDirectory ?? current, discovered)");
+  });
+
+  test("hides the previous account list while Save groups refreshes Windows discovery", () => {
+    expect(source).toContain("const usersRefreshing = discovering || saving");
+    expect(source).toContain("{usersRefreshing ? <div className=\"fleet-access-empty fleet-access-user-loading\"");
+    expect(source).toContain("The previous account list is hidden until the current Windows users are confirmed.");
+  });
+
+  test("keeps the last confirmed directory only when a fresh discovery fails", () => {
+    expect(source).toContain("if (!refreshedUsers) void showError(\"Access groups were saved, but WinCommander could not refresh the current Windows users.");
   });
 
   test("reports the service's per-group Windows reconciliation outcomes honestly", () => {

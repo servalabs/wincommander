@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { ChevronDown, Zap, X, Loader2 } from "lucide-react";
 import type { ScanFinding } from "../startup/WizardAnimations";
+import IgnoredFindingsDialog from "./IgnoredFindingsDialog";
 import "./NeedsAttention.css";
 
 // "Needs Attention" — the per-finding detail list the dashboard shows beneath
@@ -29,6 +30,10 @@ export interface NeedsAttentionProps {
   onFixOne: (f: ScanFinding) => void;
   onFixAll: () => void;
   onIgnore: (f: ScanFinding) => void;
+  /** Persisted IDs remain manageable even when every active finding is ignored. */
+  ignoredFindingIds?: readonly string[];
+  knownFindings?: readonly ScanFinding[];
+  onRestoreIgnored?: (id: string) => void;
   /**
    * When set, only show findings from this category (set by clicking a radar
    * node). The header shows the active filter and a clear affordance.
@@ -52,6 +57,9 @@ export default function NeedsAttention({
   onFixOne,
   onFixAll,
   onIgnore,
+  ignoredFindingIds = [],
+  knownFindings = [],
+  onRestoreIgnored,
   categoryFilter,
   onClearFilter,
   expanded: expandedProp,
@@ -63,6 +71,7 @@ export default function NeedsAttention({
   // Controlled when `expanded`/`onExpandedChange` are passed (dashboard lifts
   // this to drive its tagline/view-toggle hide behavior).
   const [internalExpanded, setInternalExpanded] = useState(true);
+  const [ignoredDialogOpen, setIgnoredDialogOpen] = useState(false);
   const expanded = expandedProp ?? internalExpanded;
   const setExpanded = (next: boolean) => {
     if (onExpandedChange) onExpandedChange(next);
@@ -76,7 +85,7 @@ export default function NeedsAttention({
   // An empty active list means all findings were fixed or deliberately
   // ignored. Keep the dashboard focused on its clear radar instead of
   // retaining a misleading Fix All / restore card.
-  if (findings.length === 0) return null;
+  if (findings.length === 0 && ignoredFindingIds.length === 0) return null;
 
   // When a radar node is clicked, show only its category.
   const visibleFindings = categoryFilter
@@ -103,7 +112,9 @@ export default function NeedsAttention({
           <span className="na-title">
             {categoryFilter
               ? CATEGORY_LABEL[categoryFilter as ScanFinding["category"]] ?? categoryFilter
-              : `need${findings.length === 1 ? "s" : ""} attention`}
+              : findings.length > 0
+                ? `need${findings.length === 1 ? "s" : ""} attention`
+                : "no active items"}
           </span>
           <ChevronDown size={15} className="na-chevron" />
         </button>
@@ -116,6 +127,16 @@ export default function NeedsAttention({
           <Zap size={14} />
           Fix all
         </button>
+        {ignoredFindingIds.length > 0 && onRestoreIgnored && (
+          <button
+            type="button"
+            className="na-ignored"
+            onClick={() => setIgnoredDialogOpen(true)}
+            title="Review ignored Fix All items"
+          >
+            Ignored ({ignoredFindingIds.length})
+          </button>
+        )}
       </div>
 
       {expanded && (
@@ -167,6 +188,13 @@ export default function NeedsAttention({
         )}
         </>
       )}
+      <IgnoredFindingsDialog
+        isOpen={ignoredDialogOpen}
+        ignoredFindingIds={ignoredFindingIds}
+        knownFindings={knownFindings}
+        onClose={() => setIgnoredDialogOpen(false)}
+        onRestore={(id) => onRestoreIgnored?.(id)}
+      />
     </div>
   );
 }

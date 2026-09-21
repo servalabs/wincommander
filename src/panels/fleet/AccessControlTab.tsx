@@ -31,6 +31,7 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
   const [discovering, setDiscovering] = useState(false);
   const [saving, setSaving] = useState(false);
   const discoveredOnce = useRef(false);
+  const discoveryRevision = useRef(0);
   const { getFleetAccessUsers } = useBackend();
   const errors = useMemo(() => validateAccessDirectory(directory), [directory]);
   const selectedGroup = directory.groups.find(group => group.id === selectedGroupId);
@@ -41,29 +42,37 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
   }, [directory.groups, selectedGroup]);
 
   const discoverUsers = async (quiet = false, savedDirectory?: FleetAccessDirectory) => {
+    const revision = ++discoveryRevision.current;
     setDiscovering(true);
-    const result = await getFleetAccessUsers();
-    setDiscovering(false);
-    if (!result.success) {
-      if (!quiet) void showError(result.error || "Windows user discovery failed.");
-      return;
+    try {
+      const result = await getFleetAccessUsers();
+      // Ignore a slower, superseded discovery response. Otherwise it could
+      // put an older Windows account list back into the picker.
+      if (revision !== discoveryRevision.current) return false;
+      if (!result.success) {
+        if (!quiet) void showError(result.error || "Windows user discovery failed.");
+        return false;
+      }
+      const discovered = (result.data?.users ?? []).map(user => ({
+        id: user.sid ? `sid:${user.sid.toLocaleLowerCase()}` : user.name.toLocaleLowerCase(),
+        username: user.name,
+        displayName: user.displayName,
+        sid: user.sid,
+        isCurrent: user.isCurrent,
+      }));
+      onChange(current => {
+        // A successful save returns the durable group directory but not a
+        // current Windows-account inventory. Reconcile that authoritative save
+        // with this fresh discovery so deleted accounts remain unavailable and
+        // cannot reappear in the picker after Save groups.
+        const reconciled = reconcileAccessDirectoryUsers(savedDirectory ?? current, discovered);
+        return JSON.stringify(reconciled) === JSON.stringify(current) ? current : reconciled;
+      });
+      if (!quiet) void showSuccess(`Found ${discovered.length} Windows user${discovered.length === 1 ? "" : "s"}.`);
+      return true;
+    } finally {
+      if (revision === discoveryRevision.current) setDiscovering(false);
     }
-    const discovered = (result.data?.users ?? []).map(user => ({
-      id: user.sid ? `sid:${user.sid.toLocaleLowerCase()}` : user.name.toLocaleLowerCase(),
-      username: user.name,
-      displayName: user.displayName,
-      sid: user.sid,
-      isCurrent: user.isCurrent,
-    }));
-    onChange(current => {
-      // A successful save returns the durable group directory but not a
-      // current Windows-account inventory. Reconcile that authoritative save
-      // with this fresh discovery so deleted accounts remain unavailable and
-      // cannot reappear in the picker after Save groups.
-      const reconciled = reconcileAccessDirectoryUsers(savedDirectory ?? current, discovered);
-      return JSON.stringify(reconciled) === JSON.stringify(current) ? current : reconciled;
-    });
-    if (!quiet) void showSuccess(`Found ${discovered.length} Windows user${discovered.length === 1 ? "" : "s"}.`);
   };
 
   useEffect(() => {
@@ -116,6 +125,10 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
         return membershipOrder || left.username.localeCompare(right.username, undefined, { sensitivity: "base" });
       })
     : [];
+  // A saved group contains last-known membership, not a fresh Windows
+  // account inventory. Hide the picker until that inventory is reconciled so
+  // removed accounts never flash as selectable immediately after Save groups.
+  const usersRefreshing = discovering || saving;
 
   const save = async () => {
     if (errors.length) return void showError(errors[0]);
@@ -126,10 +139,11 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
       // authority for which accounts currently exist. Match the explicit
       // Refresh behavior immediately so the post-save view cannot show stale
       // service records as assignable users.
-      await discoverUsers(true, fromVaultAccessDirectory(saved.directory));
+      const refreshedUsers = await discoverUsers(true, fromVaultAccessDirectory(saved.directory));
       const { results } = saved;
       const outcome = summarizeReconcileResults(results);
-      if (outcome.intent === "danger") void showError(outcome.message);
+      if (!refreshedUsers) void showError("Access groups were saved, but WinCommander could not refresh the current Windows users. The previous list is preserved; refresh it before changing membership.");
+      else if (outcome.intent === "danger") void showError(outcome.message);
       else void showSuccess(outcome.message);
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);
@@ -195,11 +209,11 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
             </div>
             <div className="fleet-access-user-tools">
               <Input aria-label="Search Windows users" placeholder="Search Windows users" value={userSearch} onChange={event => setUserSearch(event.target.value)} />
-              <Button size="sm" variant="outline" disabled={discovering} onClick={() => void discoverUsers()}><Icon icon="refresh" />{discovering ? "Checking…" : "Refresh"}</Button>
+              <Button size="sm" variant="outline" disabled={usersRefreshing} onClick={() => void discoverUsers()}><Icon icon="refresh" />{usersRefreshing ? "Checking…" : "Refresh"}</Button>
             </div>
             <div className="fleet-access-user-panel">
               <div className="fleet-access-user-list">
-                {visibleUsers.map(user => {
+                {usersRefreshing ? <div className="fleet-access-empty fleet-access-user-loading" role="status" aria-live="polite"><Icon icon="refresh" size={24} /><strong>{saving ? "Saving and checking Windows users…" : "Checking Windows users…"}</strong><small>The previous account list is hidden until the current Windows users are confirmed.</small></div> : visibleUsers.map(user => {
                   const checked = selectedGroup.userIds.includes(user.id);
                   const totalMemberships = membershipCount(directory.groups, user.id);
                   const primary = user.displayName || user.username;
@@ -209,19 +223,19 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
                     : user.isCurrent ? "Signed-in user" : "";
                   return (
                     <label className={`fleet-access-user-row${checked ? " is-checked" : ""}`} key={user.id}>
-                      <input type="checkbox" checked={checked} onChange={event => toggleUser(user.id, event.target.checked)} />
+                      <input type="checkbox" disabled={usersRefreshing} checked={checked} onChange={event => toggleUser(user.id, event.target.checked)} />
                       <span className="fleet-access-user-copy"><strong>{primary}</strong><small>{secondary || "\u00a0"}</small></span>
                       <span className="fleet-count-badge" title={`${totalMemberships} group memberships`}>{totalMemberships}</span>
                     </label>
                   );
                 })}
-                {visibleUsers.length === 0 && <div className="fleet-access-empty"><strong>No matching Windows users</strong><small>Refresh discovery after the account is created in Windows.</small></div>}
+                {!usersRefreshing && visibleUsers.length === 0 && <div className="fleet-access-empty"><strong>No matching Windows users</strong><small>Refresh discovery after the account is created in Windows.</small></div>}
               </div>
             </div>
             {errors.length > 0 && <p className="fleet-inline-error">{errors[0]}</p>}
             <div className="fleet-access-actions">
               <Button size="sm" variant="danger" onClick={() => setPendingDelete(selectedGroup)}><Icon icon="trash" />Delete group</Button>
-              <Button size="sm" variant="primary" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save groups"}</Button>
+              <Button size="sm" variant="primary" disabled={usersRefreshing} onClick={() => void save()}>{saving ? "Saving…" : "Save groups"}</Button>
             </div>
           </CardContent>
         </> : <CardContent className="fleet-access-empty fleet-access-empty-main"><Icon icon="people" size={28} /><strong>Select or create a group</strong><small>All group details and Windows users will stay in this pane.</small></CardContent>}

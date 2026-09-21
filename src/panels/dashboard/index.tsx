@@ -430,6 +430,10 @@ export default function DashboardPanel() {
     }
     return true;
   });
+  const handleRestoreIgnoredFinding = useCallback((id: string) => {
+    const next = ignoredFindingIds.filter((ignoredId) => ignoredId !== id);
+    void patchAppSettings({ app: { ignoredFindingIds: next } }).catch(reportSettingsWriteFailure);
+  }, [ignoredFindingIds, patchAppSettings]);
   const driftFindings = useMemo(
     () => registryDriftFindings,
     [registryDriftFindings],
@@ -944,6 +948,9 @@ export default function DashboardPanel() {
                         onFixOne={handleFixOne}
                         onFixAll={handleFixAll}
                         onIgnore={handleIgnoreFinding}
+                        ignoredFindingIds={ignoredFindingIds}
+                        knownFindings={allFindings}
+                        onRestoreIgnored={handleRestoreIgnoredFinding}
                         categoryFilter={categoryFilter}
                         onClearFilter={() => setCategoryFilter(null)}
                         expanded={needsAttentionExpanded}
