@@ -23,7 +23,7 @@
 
 #![cfg(windows)]
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
@@ -786,10 +786,17 @@ fn clipboard_policy_response(policy_store: &PolicyStore) -> serde_json::Value {
     }
 }
 
-fn handle_vault_apply(
-    vault_access: &VaultAccessStore,
+const VAULT_POLICY_MAX_ENTRIES: usize = 64;
+const VAULT_POLICY_MAX_GRANTS: usize = 32;
+
+/// Parse and structurally reject an untrusted policy before taking the mount
+/// broker's exclusive operation.  That ordering is intentional: a malformed
+/// request must not turn a harmless failed Save into a dismount of an active
+/// Vault. `VaultAccessStore::apply` repeats these checks after filesystem
+/// path normalization as the authoritative defence-in-depth boundary.
+fn prepare_vault_apply_policy(
     args: serde_json::Value,
-) -> Result<serde_json::Value, VerbError> {
+) -> Result<wincmd_shared::vault_access::VaultAccessPolicy, VerbError> {
     let mut policy: wincmd_shared::vault_access::VaultAccessPolicy = serde_json::from_value(args)
         .map_err(|_| {
         VerbError::new("vault_validation_failed", "vault policy request is invalid")
@@ -800,6 +807,122 @@ fn handle_vault_apply(
     if policy.version <= policy.expected_previous_version {
         policy.version = policy.expected_previous_version.saturating_add(1);
     }
+    validate_vault_apply_structure(&policy)?;
+    Ok(policy)
+}
+
+/// Mirrors the request-only portion of `vault_access::validate_policy`.
+/// Filesystem normalization/identity and principal resolution stay in the
+/// store because they require its protected Windows seams.  These checks are
+/// deliberately enough to reject malformed and duplicate renderer requests
+/// before a live mount is touched.
+fn validate_vault_apply_structure(
+    policy: &wincmd_shared::vault_access::VaultAccessPolicy,
+) -> Result<(), VerbError> {
+    use wincmd_shared::vault_access::{VaultPresentation, VAULT_ACCESS_SCHEMA_VERSION};
+
+    let invalid = || VerbError::new("vault_validation_failed", "vault policy request is invalid");
+    if policy.schema_version != VAULT_ACCESS_SCHEMA_VERSION
+        || policy.policy_id.is_empty()
+        || policy.policy_id.len() > 64
+        || policy.version == 0
+        || policy.entries.len() > VAULT_POLICY_MAX_ENTRIES
+    {
+        return Err(invalid());
+    }
+
+    // An empty request is the intentional policy-removal shape. Its exact
+    // version/policy identity is checked against the active record below,
+    // still before any cleanup can dismount a Vault.
+    if policy.entries.is_empty() {
+        return Ok(());
+    }
+
+    let mut ids = HashSet::new();
+    let mut container_paths = HashSet::new();
+    let mut machine_letters = HashSet::new();
+    for entry in &policy.entries {
+        if !valid_vault_entry_id(&entry.id)
+            || entry.label.trim().is_empty()
+            || entry.label.len() > 128
+            || entry.owner_account.trim().is_empty()
+            || !Path::new(&entry.container_path).is_absolute()
+            || entry.grants.is_empty()
+            || entry.grants.len() > VAULT_POLICY_MAX_GRANTS
+            || !ids.insert(entry.id.as_str())
+        {
+            return Err(invalid());
+        }
+        let container_key = entry
+            .container_path
+            .trim()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_ascii_lowercase();
+        if container_key.is_empty() || !container_paths.insert(container_key) {
+            return Err(invalid());
+        }
+        if let Some(letter) = &entry.mount.preferred_letter {
+            if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() {
+                return Err(invalid());
+            }
+            if entry.mount.presentation == VaultPresentation::Machine
+                && !machine_letters.insert(letter.to_ascii_uppercase())
+            {
+                return Err(invalid());
+            }
+        }
+        let mut principals = HashSet::new();
+        for grant in &entry.grants {
+            let principal_key = grant.principal_name.trim().to_ascii_lowercase();
+            if principal_key.is_empty()
+                || grant.principal_name.len() > 256
+                || !principals.insert(principal_key)
+            {
+                return Err(invalid());
+            }
+        }
+        if entry.mount.presentation == VaultPresentation::Machine && entry.grants.len() < 2 {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
+fn valid_vault_entry_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+fn validate_vault_apply_version(
+    vault_access: &VaultAccessStore,
+    policy: &wincmd_shared::vault_access::VaultAccessPolicy,
+) -> Result<(), VerbError> {
+    let previous = vault_access.policy();
+    let previous_version = previous.as_ref().map(|active| active.version).unwrap_or(0);
+    let version_matches = policy.expected_previous_version == previous_version
+        && policy.version == previous_version.saturating_add(1);
+    let clear_matches = !policy.entries.is_empty()
+        || previous
+            .as_ref()
+            .is_some_and(|active| active.policy_id == policy.policy_id);
+    if version_matches && clear_matches {
+        Ok(())
+    } else {
+        Err(VerbError::new(
+            "vault_apply_failed",
+            "vault policy was changed elsewhere since this draft was loaded — reload the Vault tab and reapply",
+        ))
+    }
+}
+
+fn handle_vault_apply(
+    vault_access: &VaultAccessStore,
+    policy: wincmd_shared::vault_access::VaultAccessPolicy,
+) -> Result<serde_json::Value, VerbError> {
     if policy.entries.is_empty() {
         return vault_access
             .clear(policy)
@@ -829,14 +952,22 @@ fn handle_vault_apply_and_cleanup(
     vault_mount: &VaultMountBroker,
     args: serde_json::Value,
 ) -> Result<serde_json::Value, VerbError> {
+    let policy = prepare_vault_apply_policy(args)?;
     vault_mount.with_exclusive_operation(|| {
+        // A competing request can change the durable policy after the first
+        // parse. Re-check the version under the same exclusive mount gate,
+        // before dismounting anything.
+        validate_vault_apply_version(vault_access, &policy)?;
+        vault_access
+            .preflight_apply(policy.clone())
+            .map_err(|error| VerbError::new("vault_apply_failed", vault_error_message(error)))?;
         vault_mount.dismount_all_locked(vault_access).map_err(|_| {
             VerbError::new(
                 "vault_dismount_failed",
                 "active vaults could not be dismounted",
             )
         })?;
-        handle_vault_apply(vault_access, args)
+        handle_vault_apply(vault_access, policy)
     })
 }
 
@@ -2047,6 +2178,9 @@ fn vault_error_message(error: crate::vault_access::VaultError) -> String {
         crate::vault_access::VaultError::ContainerIdentity => {
             "vault container identity validation failed".to_string()
         }
+        crate::vault_access::VaultError::PolicyPathReserved => {
+            "the selected container is already governed by Vault permissions — use that Vault in Fleet or choose a different file".to_string()
+        }
         crate::vault_access::VaultError::AclApply => {
             "vault access plan could not be applied".to_string()
         }
@@ -3019,6 +3153,73 @@ mod tests {
     use super::test_support::*;
     use super::*;
     use wincmd_shared::svc::SVC_PROTOCOL_VERSION;
+
+    fn valid_vault_policy_args() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "policy_id": "policy-1",
+            "version": 1,
+            "expected_previous_version": 0,
+            "entries": [{
+                "id": "vault-1",
+                "label": "Finance",
+                "container_path": r"C:\Vaults\finance.hc",
+                "owner_account": "Owner",
+                "grants": [{ "principal_name": "Owner", "access": "write" }],
+                "mount": { "presentation": "per-user", "preferred_letter": "V" }
+            }]
+        })
+    }
+
+    #[test]
+    fn vault_apply_preflight_rejects_malformed_request_before_cleanup() {
+        let error = prepare_vault_apply_policy(serde_json::json!({ "not": "a policy" }))
+            .expect_err("malformed policy must never enter mount cleanup");
+        assert_eq!(error.kind, "vault_validation_failed");
+    }
+
+    #[test]
+    fn vault_apply_preflight_rejects_duplicate_entry_ids_before_cleanup() {
+        let mut args = valid_vault_policy_args();
+        let duplicate = args["entries"][0].clone();
+        args["entries"].as_array_mut().unwrap().push(duplicate);
+
+        let error = prepare_vault_apply_policy(args)
+            .expect_err("duplicate entry IDs must never enter mount cleanup");
+        assert_eq!(error.kind, "vault_validation_failed");
+    }
+
+    #[test]
+    fn vault_apply_preflight_rejects_duplicate_container_spellings_before_cleanup() {
+        let mut args = valid_vault_policy_args();
+        let mut duplicate = args["entries"][0].clone();
+        duplicate["id"] = serde_json::json!("vault-2");
+        duplicate["container_path"] = serde_json::json!(r"c:/vaults/FINANCE.hc\");
+        args["entries"].as_array_mut().unwrap().push(duplicate);
+
+        let error = prepare_vault_apply_policy(args)
+            .expect_err("duplicate container paths must never enter mount cleanup");
+        assert_eq!(error.kind, "vault_validation_failed");
+    }
+
+    #[test]
+    fn vault_apply_preflight_rejects_duplicate_machine_drive_letters() {
+        let mut args = valid_vault_policy_args();
+        args["entries"][0]["mount"]["presentation"] = serde_json::json!("machine");
+        args["entries"][0]["grants"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({ "principal_name": "Partner", "access": "read" }));
+        let mut duplicate = args["entries"][0].clone();
+        duplicate["id"] = serde_json::json!("vault-2");
+        duplicate["container_path"] = serde_json::json!(r"C:\\Vaults\\second.hc");
+        duplicate["mount"]["preferred_letter"] = serde_json::json!("v");
+        args["entries"].as_array_mut().unwrap().push(duplicate);
+
+        let error = prepare_vault_apply_policy(args)
+            .expect_err("one machine drive letter must not be promised twice");
+        assert_eq!(error.kind, "vault_validation_failed");
+    }
 
     #[test]
     fn personal_mount_preflight_failures_are_distinct_from_native_engine_failure() {

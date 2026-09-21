@@ -56,7 +56,7 @@ export default function VaultAccessEditor({ entry, entryIndex, directory, onEntr
           <Input aria-label={`Vault ${vaultNumber} container path`} value={entry.container_path} placeholder="Encrypted container file" onChange={event => onEntryChange({ container_path: event.target.value })} />
           <Button variant="outline" size="sm" type="button" aria-label={`Browse for Vault ${vaultNumber} container file`} onClick={() => void browseContainerFile()}>Browse</Button>
         </div>
-        <small>This permission applies to this encrypted container file only. Other containers may use the same folder.</small>
+        <small>This permission applies only to this exact encrypted file. Sibling containers can use the same folder. If this file is replaced, select the replacement here and save, or remove the obsolete policy first.</small>
       </Field>
       <Field label="Primary owner" help="The Windows account responsible for this Vault.">
         <Input aria-label={`Vault ${vaultNumber} owner`} value={entry.owner_account} placeholder="PC\username" onChange={event => onOwnerChange(event.target.value)} />

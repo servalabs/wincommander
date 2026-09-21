@@ -45,6 +45,11 @@ const RESERVED_GROUP_PREFIX: &str = "wc-vault-";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultError {
     Validation,
+    /// A live Fleet policy reserves this exact normalized container filename.
+    /// This is deliberately distinct from ordinary validation so callers can
+    /// tell an administrator to retarget or remove the policy, while siblings
+    /// in the same directory remain valid personal-container targets.
+    PolicyPathReserved,
     VersionConflict,
     /// The rejected principal or Windows local-group name, exactly as the
     /// admin supplied it (a grant/owner account name, or a managed/admin
@@ -195,6 +200,19 @@ fn container_policy_key(path: &str) -> String {
         .replace('/', "\\")
         .trim_end_matches('\\')
         .to_ascii_lowercase()
+}
+
+/// Does the currently active Fleet policy claim this exact file name?  Policy
+/// ownership is file-scoped: this comparison must never consider a common
+/// parent directory as a conflict.
+fn active_policy_claims_creation_path(active: &PersistedPolicy, path: &Path) -> bool {
+    let key = container_policy_key(&path.to_string_lossy());
+    let alias = container_policy_key(&personal_key_alias(&key));
+    active.policy.entries.iter().any(|entry| {
+        let entry_key = container_policy_key(&entry.container_path);
+        let entry_alias = container_policy_key(&personal_key_alias(&entry_key));
+        entry_key == key || entry_key == alias || entry_alias == key
+    })
 }
 
 fn personal_key_alias(key: &str) -> String {
@@ -953,7 +971,9 @@ impl VaultAccessStore {
             let normalized = self
                 .fs
                 .normalize_personal_creation_path(Path::new(container_path))?;
-            if !valid_creation_path(&normalized) || self.fs.personal_creation_target_exists(&normalized)? {
+            if !valid_creation_path(&normalized)
+                || self.fs.personal_creation_target_exists(&normalized)?
+            {
                 return Err(VaultError::Validation);
             }
             Ok(normalized)
@@ -991,6 +1011,13 @@ impl VaultAccessStore {
             lifecycle: PersonalCreationLifecycle::Reserved,
         };
         let mut state = self.state.lock().map_err(|_| VaultError::Persistence)?;
+        if state
+            .active
+            .as_ref()
+            .is_some_and(|active| active_policy_claims_creation_path(active, &normalized))
+        {
+            return Err(VaultError::PolicyPathReserved);
+        }
         let key = personal_key(&pending.container_path);
         // A recovery journal can still need to restore ACL state.  It is not
         // a stale-name cache, so creation must never discard it merely
@@ -1968,6 +1995,34 @@ impl VaultAccessStore {
             .then(|| (active.policy.policy_id.clone(), active.policy.version))
     }
 
+    /// Read-only policy validation used before the pipe handler disrupts live
+    /// mounts for a replacement. This catches missing/reparse container
+    /// targets and unresolved accounts in addition to the renderer's cheap
+    /// shape checks. `apply` repeats every check under its own state lock;
+    /// this is solely an availability guard, never an authorization boundary.
+    pub fn preflight_apply(&self, mut policy: VaultAccessPolicy) -> Result<(), VaultError> {
+        let previous = self
+            .state
+            .lock()
+            .map_err(|_| VaultError::Persistence)?
+            .active
+            .as_ref()
+            .map(|active| active.policy.version)
+            .unwrap_or(0);
+        if policy.expected_previous_version != previous
+            || policy.version != previous.saturating_add(1)
+        {
+            return Err(VaultError::VersionConflict);
+        }
+        if policy.entries.is_empty() {
+            return Ok(());
+        }
+        self.normalize_policy_paths(&mut policy)?;
+        validate_policy(&policy)?;
+        self.resolve_and_plan(&policy)?;
+        Ok(())
+    }
+
     pub fn apply(
         &self,
         mut policy: VaultAccessPolicy,
@@ -1986,7 +2041,7 @@ impl VaultAccessStore {
         let removed = state
             .active
             .as_ref()
-            .map(|active| self.removed_entry_plans(active, &policy))
+            .map(|active| self.removed_entry_plans(active, &resolved))
             .transpose()?
             .unwrap_or_default();
         let mut snapshots = Vec::new();
@@ -2476,12 +2531,15 @@ impl VaultAccessStore {
     fn removed_entry_plans(
         &self,
         active: &PersistedPolicy,
-        replacement: &VaultAccessPolicy,
+        replacement: &[(VaultAccessEntry, VaultAclPlan)],
     ) -> Result<Vec<(VaultAclPlan, String)>, VaultError> {
         let retained_ids = replacement
-            .entries
             .iter()
-            .map(|entry| entry.id.as_str())
+            .map(|(entry, _)| entry.id.as_str())
+            .collect::<HashSet<_>>();
+        let retained_identities = replacement
+            .iter()
+            .filter_map(|(entry, _)| entry.container_identity.as_deref())
             .collect::<HashSet<_>>();
         active
             .policy
@@ -2489,18 +2547,28 @@ impl VaultAccessStore {
             .iter()
             .filter(|entry| {
                 let replacement_entry = replacement
-                    .entries
                     .iter()
-                    .find(|candidate| candidate.id == entry.id);
+                    .find(|(candidate, _)| candidate.id == entry.id)
+                    .map(|(candidate, _)| candidate);
+                let active_identity = active
+                    .resolved
+                    .iter()
+                    .find(|resolved| resolved.id == entry.id)
+                    .map(|resolved| resolved.identity.as_str());
                 // Retaining an ID only retains its former ACL when the entry
                 // still names the same backing container. An Edit that moves
                 // a Vault to another file must revoke the old file just like
                 // an explicit Remove does.
-                !retained_ids.contains(entry.id.as_str())
+                (!retained_ids.contains(entry.id.as_str())
                     || replacement_entry.is_some_and(|candidate| {
                         container_policy_key(&candidate.container_path)
                             != container_policy_key(&entry.container_path)
-                    })
+                    }))
+                    // A hard-link, canonical spelling, or other filesystem
+                    // alias may change the path while retaining the exact
+                    // same backing file. The replacement just applied its
+                    // ACL; decommissioning the old spelling would revoke it.
+                    && !active_identity.is_some_and(|identity| retained_identities.contains(identity))
             })
             .map(|entry| {
                 let resolved = active
@@ -3297,7 +3365,11 @@ impl AclApplier for WindowsAclApplier {
         verify_one_acl(container, grants)
     }
     fn verify_exact(&self, plan: &VaultAclPlan) -> Result<(), VaultError> {
-        verify_one_acl(&plan.parent, &plan.grants)?;
+        // Fleet policy ACLs deliberately protect the selected encrypted file
+        // only. The parent can contain unrelated personal or shared
+        // containers and is never mutated by apply/decommission, so checking
+        // it here would turn a healthy policy into a false degraded state
+        // after service restart.
         verify_one_acl(&plan.container, &plan.grants)
     }
 }
@@ -3796,6 +3868,7 @@ fn validate_policy(policy: &VaultAccessPolicy) -> Result<(), VaultError> {
     }
     let mut ids = HashSet::new();
     let mut container_paths = HashSet::new();
+    let mut machine_letters = HashSet::new();
     for entry in &policy.entries {
         if !valid_id(&entry.id)
             || entry.label.trim().is_empty()
@@ -3816,6 +3889,14 @@ fn validate_policy(policy: &VaultAccessPolicy) -> Result<(), VaultError> {
         }
         if let Some(letter) = &entry.mount.preferred_letter {
             if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() {
+                return Err(VaultError::Validation);
+            }
+            if entry.mount.presentation == VaultPresentation::Machine
+                && !machine_letters.insert(letter.to_ascii_uppercase())
+            {
+                // A machine presentation uses one DOS drive letter for the
+                // whole device. Treat a collision as a save-time validation
+                // error instead of letting the second later fail at mount.
                 return Err(VaultError::Validation);
             }
         }
@@ -3924,7 +4005,9 @@ fn status_for(
 /// of sending an administrator down the wrong repair path.
 fn startup_validation_result(error: &VaultError) -> VaultEntryResult {
     match error {
-        VaultError::Validation | VaultError::VersionConflict => VaultEntryResult::ValidationFailed,
+        VaultError::Validation | VaultError::PolicyPathReserved | VaultError::VersionConflict => {
+            VaultEntryResult::ValidationFailed
+        }
         VaultError::PrincipalResolution(_) => VaultEntryResult::PrincipalResolutionFailed,
         VaultError::ContainerIdentity => VaultEntryResult::ContainerIdentityFailed,
         VaultError::AclApply => VaultEntryResult::AclApplyFailed,
@@ -4737,6 +4820,22 @@ mod tests {
     }
 
     #[test]
+    fn apply_preflight_rejects_a_missing_container_without_mutating_policy_state() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = VaultAccessStore::open(
+            Box::new(MissingTargetFs(files)),
+            Box::new(Resolver),
+            Box::new(RecordingAcl::default()),
+            PathBuf::from("/policy"),
+        );
+        assert_eq!(
+            store.preflight_apply(policy(1, 0)),
+            Err(VaultError::ContainerIdentity)
+        );
+        assert!(store.policy().is_none());
+    }
+
+    #[test]
     fn target_change_between_verification_and_revoke_keeps_policy_fail_closed() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let installed = VaultAccessStore::open(
@@ -5473,6 +5572,39 @@ mod tests {
     }
 
     #[test]
+    fn personal_creation_reserves_only_the_exact_active_policy_path() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = VaultAccessStore::open(
+            Box::new(Fs(files)),
+            Box::new(Resolver),
+            Box::new(Acl),
+            PathBuf::from("/policy"),
+        );
+        let mut managed = policy(1, 0);
+        managed.entries[0].container_path = "C:\\vaults\\managed.hc".into();
+        store.apply(managed, 7).unwrap();
+
+        assert_eq!(
+            store
+                .begin_personal_registration(
+                    "C:\\vaults\\managed.hc",
+                    personal_caller(),
+                    41,
+                    100,
+                )
+                .err(),
+            Some(VaultError::PolicyPathReserved),
+            "a deleted/replaced managed file must be repaired in Fleet before its exact name is reused"
+        );
+        assert!(
+            store
+                .begin_personal_registration("C:\\vaults\\sibling.hc", personal_caller(), 42, 100)
+                .is_ok(),
+            "a policy must never reserve its parent folder or a sibling container filename"
+        );
+    }
+
+    #[test]
     fn personal_creation_reclaims_only_a_deleted_completed_container_record() {
         let files = Arc::new(Mutex::new(HashMap::new()));
         let store = personal_store(
@@ -5879,6 +6011,61 @@ mod tests {
     }
 
     #[test]
+    fn file_policy_never_captures_a_sibling_container_in_the_same_directory() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let vault_store = store(files.clone());
+        let managed_path = r"D:\Vault\shared.hc";
+        let sibling_path = r"D:\Vault\personal.hc";
+        let mut managed_policy = policy(1, 0);
+        managed_policy.entries[0].container_path = managed_path.into();
+        vault_store.apply(managed_policy, 7).unwrap();
+
+        assert_eq!(
+            vault_store
+                .selected_container_mount_route(managed_path, "S-1-test-Alex", 7)
+                .unwrap(),
+            SelectedContainerMountRoute::Managed {
+                entry_id: "shared".into()
+            },
+            "only the file named by the policy is a managed Vault"
+        );
+        assert!(
+            matches!(
+                vault_store
+                    .selected_container_mount_route(sibling_path, "S-1-test-Alex", 7)
+                    .unwrap(),
+                SelectedContainerMountRoute::Unmanaged { ref record }
+                    if record.container_path == sibling_path
+                        && record.owner_sid == "S-1-test-Alex"
+            ),
+            "a sibling file must remain available for ordinary Secure Storage use"
+        );
+
+        // The persisted policy must preserve that file-only boundary after a
+        // service restart; it must not degrade into a parent-directory rule.
+        let restarted = store(files);
+        restarted.load_at_startup();
+        assert_eq!(
+            restarted.status().validation_state,
+            VaultValidationState::Current
+        );
+        assert_eq!(
+            restarted
+                .selected_container_mount_route(managed_path, "S-1-test-Alex", 7)
+                .unwrap(),
+            SelectedContainerMountRoute::Managed {
+                entry_id: "shared".into()
+            }
+        );
+        assert!(matches!(
+            restarted
+                .selected_container_mount_route(sibling_path, "S-1-test-Alex", 7)
+                .unwrap(),
+            SelectedContainerMountRoute::Unmanaged { .. }
+        ));
+    }
+
+    #[test]
     fn raw_veracrypt_partition_route_never_enters_file_policy_identity_checks() {
         // test_store's filesystem deliberately fails every stable-file identity
         // lookup. A native VeraCrypt partition must still classify successfully,
@@ -5983,6 +6170,7 @@ mod tests {
         let mut removable = original.entries[0].clone();
         removable.id = "retired".into();
         removable.container_path = "D:\\Vaults\\retired\\sales".into();
+        removable.mount.preferred_letter = Some("W".into());
         original.entries.push(removable);
         s.apply(original, 7).unwrap();
 
@@ -6049,6 +6237,57 @@ mod tests {
             "the edited entry keeps its deterministic group membership for the replacement container"
         );
     }
+
+    #[test]
+    fn editing_to_an_alias_of_the_same_file_does_not_revoke_its_new_acl() {
+        struct AliasFs(Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>);
+        impl VaultFs for AliasFs {
+            fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+            }
+            fn atomic_write(&self, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+                self.0.lock().unwrap().insert(path.into(), bytes.into());
+                Ok(())
+            }
+            fn stable_file_identity(&self, _: &Path) -> Result<String, VaultError> {
+                Ok("volume:1:file:shared".into())
+            }
+            fn normalize_personal_creation_path(&self, path: &Path) -> Result<PathBuf, VaultError> {
+                lexical_normalize_creation_path(path)
+            }
+            fn personal_creation_target_exists(&self, _: &Path) -> Result<bool, VaultError> {
+                Ok(false)
+            }
+            fn validate_dedicated_parent(&self, _: &Path, _: &Path) -> Result<(), VaultError> {
+                Ok(())
+            }
+        }
+
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let acl = TrackingDecommissionAcl::default();
+        let revoked = Arc::clone(&acl.0);
+        let store = VaultAccessStore::open_with_groups(
+            Box::new(AliasFs(files)),
+            Box::new(Resolver),
+            Box::new(acl),
+            Box::new(Groups::default()),
+            PathBuf::from("/policy"),
+        );
+        store.apply(policy(1, 0), 7).unwrap();
+        let mut moved_spelling = policy(2, 1);
+        moved_spelling.entries[0].container_path = "D:\\Aliases\\shared-link.hc".into();
+        store.apply(moved_spelling, 8).unwrap();
+
+        assert!(
+            revoked.lock().unwrap().is_empty(),
+            "an alias of the same stable file must keep its newly applied policy ACL"
+        );
+    }
     #[test]
     fn validates_machine_group_shape_and_allows_mixed_policy_entries_in_one_parent() {
         let mut p = policy(1, 0);
@@ -6099,7 +6338,10 @@ mod tests {
 
         assert_eq!(validate_policy(&shared_parent_policy), Ok(()));
         assert_eq!(
-            store.apply(shared_parent_policy, 7).unwrap().validation_state,
+            store
+                .apply(shared_parent_policy, 7)
+                .unwrap()
+                .validation_state,
             VaultValidationState::Current
         );
         assert_eq!(store.policy().unwrap().entries.len(), 2);
