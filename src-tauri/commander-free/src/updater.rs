@@ -31,7 +31,12 @@ use tauri_plugin_updater::UpdaterExt;
 const INITIAL_DELAY: Duration = Duration::from_secs(30);
 const NORMAL_INTERVAL: Duration = Duration::from_secs(7 * 24 * 60 * 60); // 7 days
 const RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60); // ~5min when offline
-const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
+/// A release installer can take longer than an ordinary manifest request, but
+/// it must still return control to the UI. This bounds a stalled download,
+/// verification, or installer hand-off and lets the user retry instead of
+/// leaving the update dialog on an endless spinner.
+pub(crate) const INSTALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Holds the verified installer bytes downloaded in the background so the
 /// "Restart now" command can install them without re-downloading.
@@ -387,15 +392,21 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
     // failure be retried without a needless re-download.
     let updater = build_updater(&app);
     let update = match updater {
-        Ok(u) => match u.check().await {
-            Ok(Some(up)) => up,
-            Ok(None) => {
+        Ok(u) => match tokio::time::timeout(CHECK_TIMEOUT, u.check()).await {
+            Err(_) => {
+                if let Some(s) = app.try_state::<StagedState>() {
+                    s.installing.store(false, Ordering::Release);
+                }
+                return Err("Update re-check timed out".to_string());
+            }
+            Ok(Ok(Some(up))) => up,
+            Ok(Ok(None)) => {
                 if let Some(s) = app.try_state::<StagedState>() {
                     s.installing.store(false, Ordering::Release);
                 }
                 return Err("No update available".to_string());
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 if let Some(s) = app.try_state::<StagedState>() {
                     s.installing.store(false, Ordering::Release);
                 }
@@ -424,13 +435,18 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
     });
 
     let result = match staged {
-        Some(bytes) => update
-            .install(bytes)
-            .map_err(|e| format!("Install failed: {}", e)),
-        None => update
-            .download_and_install(|_, _| {}, || {})
-            .await
-            .map_err(|e| format!("Install failed: {}", e)),
+        Some(bytes) => tokio::time::timeout(INSTALL_TIMEOUT, async {
+            update.install(bytes).map_err(|e| format!("Install failed: {}", e))
+        })
+        .await
+        .unwrap_or_else(|_| Err("Update installation timed out".to_string())),
+        None => tokio::time::timeout(
+            INSTALL_TIMEOUT,
+            update.download_and_install(|_, _| {}, || {}),
+        )
+        .await
+        .map_err(|_| "Update installation timed out".to_string())?
+        .map_err(|e| format!("Install failed: {}", e)),
     };
 
     if result.is_ok() {

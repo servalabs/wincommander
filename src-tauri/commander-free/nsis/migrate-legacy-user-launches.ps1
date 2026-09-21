@@ -36,9 +36,9 @@ foreach ($profile in $profiles) {
     $legacyRoot = Join-Path $profile.Path 'AppData\Local\WinCommander'
     $legacyExe = Join-Path $legacyRoot 'wincommander-free.exe'
     $shortcutRoots = @(
-        (Join-Path $profile 'Desktop'),
-        (Join-Path $profile 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs'),
-        (Join-Path $profile 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup')
+        (Join-Path $profile.Path 'Desktop'),
+        (Join-Path $profile.Path 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs'),
+        (Join-Path $profile.Path 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup')
     )
 
     foreach ($root in $shortcutRoots) {

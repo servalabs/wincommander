@@ -58,6 +58,8 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain('nsExec::ExecToStack \'sc.exe query ${WC_SERVICE_NAME}\'');
     expect(hooks).not.toContain("cmd.exe /c sc query ${WC_SERVICE_NAME} ^| findstr");
     expect(hooks).toContain("WC_LEGACY_LAUNCH_MIGRATION");
+    expect(hooks).toContain("NSIS_HOOK_PREINSTALL");
+    expect(hooks).toContain("WinCommander-license_cache.upgrade-backup.json");
     expect(hooks).toContain("wincommander-migrate-legacy-user-launches.ps1");
     expect(hooks).toContain("-SharedExecutable");
     expect(legacyLaunchMigration).toContain("ProfileList");
@@ -66,6 +68,7 @@ describe("Free machine-wide release packaging", () => {
     expect(legacyLaunchMigration).toContain("'resources', 'scripts'");
     expect(legacyLaunchMigration).toContain("file-search");
     expect(legacyLaunchMigration).toContain("HKEY_USERS");
+    expect(legacyLaunchMigration).toContain("Join-Path $profile.Path 'Desktop'");
     expect(legacyLaunchMigration).not.toContain("Remove-Item -LiteralPath $legacyRoot");
     expect(hooks).not.toContain("WC_PRO_PAYLOAD");
     expect(hooks).not.toContain("WC_PRO_EXE");
@@ -111,7 +114,12 @@ describe("Free machine-wide release packaging", () => {
     expect(verification).not.toContain("$env:LOCALAPPDATA");
 
     const hooks = readFileSync("src-tauri/commander-free/nsis/hooks.nsh", "utf8");
+    expect(hooks).toContain('${GetOptions} $CMDLINE "/UPDATE" $R7');
+    expect(hooks).toContain("An update must retain");
     expect(hooks).toContain('RMDir /r "$PROGRAMDATA\\WinCommander"');
+    expect(hooks.indexOf('${GetOptions} $CMDLINE "/UPDATE" $R7')).toBeLessThan(
+      hooks.indexOf('RMDir /r "$PROGRAMDATA\\WinCommander"'),
+    );
     expect(hooks).toContain('license_cache.json');
     expect(hooks).toContain('icacls.exe "$PROGRAMDATA\\WinCommander" /inheritance:r');
     expect(hooks).toContain('RMDir /r "$LOCALAPPDATA\\WinCommander"');

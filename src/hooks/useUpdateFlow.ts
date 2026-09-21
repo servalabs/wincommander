@@ -91,6 +91,7 @@ export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent:
             return { outcome: "updated", targetVersion: updater.version };
         }
         if (updater.phase === "staged") {
+            setPhase("installing-free");
             await invoke("app_install_staged_update");
             return { outcome: "updated", targetVersion: updater.version };
         }
@@ -98,6 +99,10 @@ export function useUpdateFlow(canUpdatePro: boolean, automaticProInstallConsent:
         if (!info.available) {
             return { outcome: "up-to-date", targetVersion: info.current_version ?? getCachedFreeVersion() };
         }
+        // The check completed; from here the native updater may download,
+        // verify, and hand off to NSIS.  Showing this separately prevents a
+        // long install from looking like an indefinitely stuck check.
+        setPhase("installing-free");
         await invoke("app_install_update_doh");
         return { outcome: "updated", targetVersion: info.version ?? null };
     }, [updater.phase, updater.version]);

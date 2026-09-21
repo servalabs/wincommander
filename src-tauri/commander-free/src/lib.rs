@@ -1053,18 +1053,21 @@ async fn app_install_update_doh(app: tauri::AppHandle) -> Result<(), String> {
             .configure_client(|cb| cb.dns_resolver(crate::net::doh_resolver()))
             .build()
             .map_err(|e| format!("Updater build failed: {}", e))?;
-        let update = updater
-            .check()
+        let update = tokio::time::timeout(crate::updater::CHECK_TIMEOUT, updater.check())
             .await
+            .map_err(|_| "Update re-check timed out".to_string())?
             .map_err(|e| format!("Update re-check failed: {}", e))?
             .ok_or_else(|| "No update available".to_string())?;
         // Captured before download_and_install consumes `update`.
         let version = update.version.clone();
         let current = update.current_version.clone();
         let body = update.body.clone();
-        update
-            .download_and_install(|_, _| {}, || {})
+        tokio::time::timeout(
+            crate::updater::INSTALL_TIMEOUT,
+            update.download_and_install(|_, _| {}, || {}),
+        )
             .await
+            .map_err(|_| "Update installation timed out".to_string())?
             .map_err(|e| format!("Install failed: {}", e))?;
         Ok((version, current, body))
     }

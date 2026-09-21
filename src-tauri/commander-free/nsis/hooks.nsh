@@ -12,11 +12,25 @@ ${Using:StrFunc} StrStr
 !define WC_SERVICE_EXE "$INSTDIR\wincommander-svc.exe"
 !define WC_LIFECYCLE_DIAGNOSTIC_LOG "$INSTDIR\installer-lifecycle.log"
 !define WC_LEGACY_LAUNCH_MIGRATION "${__FILEDIR__}\migrate-legacy-user-launches.ps1"
+!define WC_UPGRADE_LICENSE_BACKUP "$PROGRAMDATA\WinCommander-license_cache.upgrade-backup.json"
 
 !macro WC_WRITE_LIFECYCLE_DIAGNOSTIC stage exit detail
   FileOpen $R9 "${WC_LIFECYCLE_DIAGNOSTIC_LOG}" a
   FileWrite $R9 "stage=${stage} exit=${exit} detail=${detail}$\r$\n"
   FileClose $R9
+!macroend
+
+; A setup upgrade runs the installed release's uninstaller between this hook
+; and POSTINSTALL. Keep a short-lived, machine-owned fallback outside the
+; product directory so an older uninstaller cannot remove the active licence
+; token before its own preservation path restores it.
+!macro NSIS_HOOK_PREINSTALL
+  IfFileExists "$PROGRAMDATA\WinCommander\license_cache.json" 0 wc_no_upgrade_license_to_backup
+    ClearErrors
+    CopyFiles /SILENT "$PROGRAMDATA\WinCommander\license_cache.json" "${WC_UPGRADE_LICENSE_BACKUP}"
+    IfErrors 0 wc_no_upgrade_license_to_backup
+      DetailPrint "Warning: WinCommander could not make the upgrade licence backup."
+  wc_no_upgrade_license_to_backup:
 !macroend
 
 ; `sc stop` returns before SCM has necessarily released the service process.
@@ -64,6 +78,16 @@ ${Using:StrFunc} StrStr
 
 !macro NSIS_HOOK_POSTINSTALL
   Delete "${WC_LIFECYCLE_DIAGNOSTIC_LOG}"
+  ; Prefer the normal preserved token. Only restore this fallback if an older
+  ; uninstaller lost it; never overwrite a freshly activated/repaired token.
+  IfFileExists "$PROGRAMDATA\WinCommander\license_cache.json" wc_remove_upgrade_license_backup 0
+    IfFileExists "${WC_UPGRADE_LICENSE_BACKUP}" 0 wc_remove_upgrade_license_backup
+      ClearErrors
+      CopyFiles /SILENT "${WC_UPGRADE_LICENSE_BACKUP}" "$PROGRAMDATA\WinCommander\license_cache.json"
+      IfErrors 0 wc_remove_upgrade_license_backup
+        !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "upgrade-license-restore" "failed" "${WC_UPGRADE_LICENSE_BACKUP}"
+  wc_remove_upgrade_license_backup:
+    Delete "${WC_UPGRADE_LICENSE_BACKUP}"
   IfFileExists "${WC_SERVICE_PAYLOAD}" wc_service_payload_ok 0
     !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "service-payload" "missing" "${WC_SERVICE_PAYLOAD}"
     Abort "The WinCommander service payload is missing; the installation was not completed."
@@ -157,7 +181,17 @@ ${Using:StrFunc} StrStr
   Pop $0
   Pop $1
 
-  ; A product uninstall removes every machine-owned WinCommander component,
+  ; Tauri marks an in-place replacement with /UPDATE. An update must retain
+  ; every user and machine data file (preferences, encrypted settings, licence,
+  ; Pro runtime state, logs, and caches). Only an explicit uninstall may reach
+  ; the cleanup below.
+  ClearErrors
+  ${GetOptions} $CMDLINE "/UPDATE" $R7
+  ${IfNot} ${Errors}
+    Goto wc_uninstall_cleanup_done
+  ${EndIf}
+
+  ; An explicit product uninstall removes machine-owned WinCommander components,
   ; including the separately delivered Pro runtime and device policy/state.
   ; The one exception is the device-bound licence token, which is moved out of
   ; the product root and restored after cleanup.  Encrypted Vault containers
