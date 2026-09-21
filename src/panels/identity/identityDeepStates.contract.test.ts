@@ -21,4 +21,14 @@ describe("settings deep-state contracts", () => {
     expect(identity).toContain("appSettings?.app?.applyFixAllMachineWide === true");
     expect(identity).toContain("patchAppSettings({ app: { applyFixAllMachineWide: enabled } })");
   });
+
+  test("keeps automatic Fix All beside the update preference in Settings", () => {
+    const updateToggle = identity.indexOf("Automatically update installed apps");
+    const autoFixToggle = identity.indexOf("Automatically apply safe Fix All recommendations");
+
+    expect(updateToggle).toBeGreaterThan(-1);
+    expect(autoFixToggle).toBeGreaterThan(updateToggle);
+    expect(identity).toContain("appSettings?.app?.autoFixAll === true");
+    expect(identity).toContain("patchAppSettings({ app: { autoFixAll: enabled } })");
+  });
 });

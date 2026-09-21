@@ -218,6 +218,16 @@ export default function IdentityPanel() {
                             severity="none"
                             icon="automatic-updates"
                         />
+                        <UniversalToggle
+                            label="Automatically apply safe Fix All recommendations"
+                            description="Off by default. When enabled, WinCommander automatically fixes eligible safe recommendations. Ignored items and settings you have changed manually remain manual."
+                            checked={appSettings?.app?.autoFixAll === true}
+                            onChange={(enabled) => {
+                                patchAppSettings({ app: { autoFixAll: enabled } }).catch(reportSettingsWriteFailure);
+                            }}
+                            severity="none"
+                            icon="automatic-updates"
+                        />
                     </div>
                 </SectionCard>
 

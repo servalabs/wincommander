@@ -117,7 +117,19 @@
     color: var(--text);
 }
 
-.ignored-findings-dialog__body { max-width: 640px; }
+.ignored-findings-dialog {
+    display: flex;
+    flex-direction: column;
+    width: min(42rem, calc(100vw - 2rem));
+    max-height: min(40rem, calc(100vh - 2rem));
+    overflow: hidden !important;
+}
+
+.ignored-findings-dialog__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
 .ignored-findings-dialog__intro, .ignored-findings-dialog__empty {
     margin: 0;
     color: var(--text-dim);
@@ -126,18 +138,19 @@
 }
 .ignored-findings-dialog__list {
     display: grid;
-    gap: 8px;
+    gap: 6px;
     list-style: none;
-    margin: 16px 0 0;
+    margin: 12px 0 0;
     padding: 0;
 }
 .ignored-findings-dialog__item {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
     border: 1px solid var(--border);
     border-radius: var(--r);
-    padding: 10px;
+    padding: 8px 10px;
     color: var(--text-mute);
 }
 .ignored-findings-dialog__details { display: grid; flex: 1; gap: 3px; min-width: 0; }
@@ -154,6 +167,11 @@
     padding: 6px 10px;
 }
 .ignored-findings-dialog__restore { display: inline-flex; align-items: center; gap: 5px; flex: none; }
+
+@media (max-width: 460px) {
+    .ignored-findings-dialog__item { align-items: start; }
+    .ignored-findings-dialog__restore { margin-top: 1px; }
+}
 
 /* ── List ── */
 .na-list {

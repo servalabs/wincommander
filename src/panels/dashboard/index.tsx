@@ -36,6 +36,11 @@ import { getToggleDrift } from "../../lib/toggleDrift";
 import { getDisplayBranding } from "../../lib/branding";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
 import { automaticFixAllCandidates, automaticFixAllFingerprint } from "../../lib/automaticFixAll";
+import {
+  addIgnoredFindingId,
+  effectiveIgnoredFindingIds,
+  removeIgnoredFindingId,
+} from "./ignoredFindingIds";
 import { useTaskStatus } from "../../context/TaskStatusContext";
 import { Icon } from "../../components/ui/icon";
 import { showError, showWarning } from "../../utils/toast";
@@ -256,9 +261,17 @@ export default function DashboardPanel() {
 
   // Findings the user has chosen to ignore are hidden from the radar counts,
   // the Needs-Attention list, and Fix Everything (persisted in app settings).
-  const ignoredFindingIds = useMemo(
+  const savedIgnoredFindingIds = useMemo(
     () => appSettings?.app?.ignoredFindingIds ?? [],
     [appSettings?.app?.ignoredFindingIds]
+  );
+  // Settings writes are serialized deliberately. Keep newly-clicked IDs here
+  // until their own write completes so every Ignore click removes its row
+  // immediately, even if the user clicks several rows before React re-renders.
+  const [pendingIgnoredFindingIds, setPendingIgnoredFindingIds] = useState<string[]>([]);
+  const ignoredFindingIds = useMemo(
+    () => effectiveIgnoredFindingIds(savedIgnoredFindingIds, pendingIgnoredFindingIds),
+    [savedIgnoredFindingIds, pendingIgnoredFindingIds],
   );
   // These are optional/panel-gated deps — surfaced only within their own panel,
   // not in the dashboard "Needs Attention" list.
@@ -431,9 +444,13 @@ export default function DashboardPanel() {
     return true;
   });
   const handleRestoreIgnoredFinding = useCallback((id: string) => {
-    const next = ignoredFindingIds.filter((ignoredId) => ignoredId !== id);
-    void patchAppSettings({ app: { ignoredFindingIds: next } }).catch(reportSettingsWriteFailure);
-  }, [ignoredFindingIds, patchAppSettings]);
+    // A queued Ignore may not have persisted yet. Remove its optimistic entry
+    // immediately, then resolve this write against the newest saved settings.
+    setPendingIgnoredFindingIds((pending) => pending.filter((pendingId) => pendingId !== id));
+    void patchAppSettings((latest) => ({
+      app: { ignoredFindingIds: removeIgnoredFindingId(latest?.app?.ignoredFindingIds, id) },
+    })).catch(reportSettingsWriteFailure);
+  }, [patchAppSettings]);
   const driftFindings = useMemo(
     () => registryDriftFindings,
     [registryDriftFindings],
@@ -705,9 +722,22 @@ export default function DashboardPanel() {
     fixFindings([f], `Fix: ${f.label}`);
   }, [busyIds.size, fixFindings, isAppUpdateTaskRunning, fixAllInProgress]);
   const handleIgnoreFinding = useCallback((f: ScanFinding) => {
-    const next = [...new Set([...ignoredFindingIds, f.id])];
-    void patchAppSettings({ app: { ignoredFindingIds: next } }).catch(reportSettingsWriteFailure);
-  }, [ignoredFindingIds, patchAppSettings]);
+    // Optimistically hide before the IPC/settings write. This makes a batch of
+    // rapid clicks feel instant and avoids the old "one or two moved" race.
+    setPendingIgnoredFindingIds((pending) => effectiveIgnoredFindingIds(pending, [f.id]));
+    void patchAppSettings((latest) => ({
+      app: { ignoredFindingIds: addIgnoredFindingId(latest?.app?.ignoredFindingIds, f.id) },
+    }))
+      .then(() => {
+        setPendingIgnoredFindingIds((pending) => pending.filter((pendingId) => pendingId !== f.id));
+      })
+      .catch((error) => {
+        // The persisted write failed, so make the recommendation available
+        // again instead of falsely claiming it is ignored.
+        setPendingIgnoredFindingIds((pending) => pending.filter((pendingId) => pendingId !== f.id));
+        reportSettingsWriteFailure(error);
+      });
+  }, [patchAppSettings]);
 
   // KT: Use data availability instead of loading flags for the scrambler.
   // State is pre-seeded from cached settings.json (~5ms), so on subsequent runs

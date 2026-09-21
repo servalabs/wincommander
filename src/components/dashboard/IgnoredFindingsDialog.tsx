@@ -50,7 +50,13 @@ export default function IgnoredFindingsDialog({
   );
 
   return (
-    <CompatDialog isOpen={isOpen} onClose={onClose} title="Ignored Fix All items" icon="eye-off">
+    <CompatDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Ignored Fix All items"
+      icon="eye-off"
+      className="ignored-findings-dialog"
+    >
       <CompatDialogBody className="ignored-findings-dialog__body">
         <p className="ignored-findings-dialog__intro">
           Ignored items stay out of Fix All until you restore them. Restoring an item does not change Windows; it only makes the recommendation visible again.
