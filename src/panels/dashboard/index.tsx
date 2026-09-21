@@ -269,9 +269,14 @@ export default function DashboardPanel() {
   // until their own write completes so every Ignore click removes its row
   // immediately, even if the user clicks several rows before React re-renders.
   const [pendingIgnoredFindingIds, setPendingIgnoredFindingIds] = useState<string[]>([]);
+  const [pendingRestoredFindingIds, setPendingRestoredFindingIds] = useState<string[]>([]);
   const ignoredFindingIds = useMemo(
-    () => effectiveIgnoredFindingIds(savedIgnoredFindingIds, pendingIgnoredFindingIds),
-    [savedIgnoredFindingIds, pendingIgnoredFindingIds],
+    () => effectiveIgnoredFindingIds(
+      savedIgnoredFindingIds,
+      pendingIgnoredFindingIds,
+      pendingRestoredFindingIds,
+    ),
+    [savedIgnoredFindingIds, pendingIgnoredFindingIds, pendingRestoredFindingIds],
   );
   // These are optional/panel-gated deps — surfaced only within their own panel,
   // not in the dashboard "Needs Attention" list.
@@ -444,12 +449,22 @@ export default function DashboardPanel() {
     return true;
   });
   const handleRestoreIgnoredFinding = useCallback((id: string) => {
-    // A queued Ignore may not have persisted yet. Remove its optimistic entry
-    // immediately, then resolve this write against the newest saved settings.
+    // Do not wait for the settings round-trip: the recommendation should
+    // return to Fix All immediately. A later Ignore click wins by removing
+    // this pending restore before its queued write runs.
     setPendingIgnoredFindingIds((pending) => pending.filter((pendingId) => pendingId !== id));
+    setPendingRestoredFindingIds((pending) => effectiveIgnoredFindingIds(pending, [id]));
     void patchAppSettings((latest) => ({
       app: { ignoredFindingIds: removeIgnoredFindingId(latest?.app?.ignoredFindingIds, id) },
-    })).catch(reportSettingsWriteFailure);
+    }))
+      .then(() => {
+        setPendingRestoredFindingIds((pending) => pending.filter((pendingId) => pendingId !== id));
+      })
+      .catch((error) => {
+        // If the persisted removal fails, only this item returns to Ignored.
+        setPendingRestoredFindingIds((pending) => pending.filter((pendingId) => pendingId !== id));
+        reportSettingsWriteFailure(error);
+      });
   }, [patchAppSettings]);
   const driftFindings = useMemo(
     () => registryDriftFindings,
@@ -724,6 +739,7 @@ export default function DashboardPanel() {
   const handleIgnoreFinding = useCallback((f: ScanFinding) => {
     // Optimistically hide before the IPC/settings write. This makes a batch of
     // rapid clicks feel instant and avoids the old "one or two moved" race.
+    setPendingRestoredFindingIds((pending) => pending.filter((pendingId) => pendingId !== f.id));
     setPendingIgnoredFindingIds((pending) => effectiveIgnoredFindingIds(pending, [f.id]));
     void patchAppSettings((latest) => ({
       app: { ignoredFindingIds: addIgnoredFindingId(latest?.app?.ignoredFindingIds, f.id) },

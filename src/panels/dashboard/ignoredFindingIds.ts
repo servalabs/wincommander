@@ -5,9 +5,12 @@
  */
 export function effectiveIgnoredFindingIds(
   savedIds: readonly string[],
-  pendingIds: readonly string[],
+  pendingAddedIds: readonly string[],
+  pendingRestoredIds: readonly string[] = [],
 ): string[] {
-  return [...new Set([...savedIds, ...pendingIds])];
+  const restored = new Set(pendingRestoredIds);
+  return [...new Set([...savedIds, ...pendingAddedIds])]
+    .filter((id) => !restored.has(id));
 }
 
 /** Build a write-time patch so rapid Ignore clicks always union with the

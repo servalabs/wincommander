@@ -11,6 +11,16 @@ describe("dashboard ignored findings", () => {
       .toEqual(["already-saved", "first", "second"]);
   });
 
+  test("restores immediately even while the persisted ignore ID is still present", () => {
+    expect(effectiveIgnoredFindingIds(["first", "second"], [], ["first"]))
+      .toEqual(["second"]);
+  });
+
+  test("the latest click wins when restore and ignore overlap", () => {
+    expect(effectiveIgnoredFindingIds(["first"], ["first"], []))
+      .toEqual(["first"]);
+  });
+
   test("unions each write with the latest persisted list", () => {
     const first = addIgnoredFindingId([], "first");
     const second = addIgnoredFindingId(first, "second");
