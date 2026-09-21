@@ -134,6 +134,10 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
   const [status, setStatus] = useState<VaultPolicyStatus | null>(null);
   const [authorizedEntries, setAuthorizedEntries] = useState<VaultAuthorizedEntry[]>([]);
   const [canManagePolicy, setCanManagePolicy] = useState(false);
+  // Only a successful service read can establish that a policy is saved.
+  // A status object exists even for `never_applied`, so it must not be used
+  // as evidence that a browser-local draft has a live counterpart.
+  const [hasSavedPolicy, setHasSavedPolicy] = useState(false);
   const [policyLoadUnavailable, setPolicyLoadUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -221,8 +225,22 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
         try {
           const loadedPolicy = await getPolicy().then(value => value ? normalizeVaultAccessPolicy(value) : null);
           if (revision !== refreshRevision.current) return false;
+          setHasSavedPolicy(loadedPolicy !== null);
           if (replaceDirtyDraft || !dirtyRef.current) replacePolicy(loadedPolicy, false);
-          else if (!draftBaseRef.current && loadedPolicy && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
+          else if (!loadedPolicy) {
+            // The service has authoritatively removed the saved policy. Keep
+            // the user's unsent draft, but sever its stale saved-policy base
+            // so it cannot display or rebase as if Windows still owned it.
+            // A first service save must be revision 1 against previous 0;
+            // retaining the deleted policy's revision makes every otherwise
+            // valid retry fail the service optimistic-lock check.
+            const draft = policyRef.current;
+            if (draft) {
+              replacePolicy({ ...draft, version: 0, expected_previous_version: 0 }, true, null);
+            } else {
+              draftBaseRef.current = null;
+            }
+          } else if (!draftBaseRef.current && policyRef.current?.version === loadedPolicy.version) draftBaseRef.current = loadedPolicy;
 
           // Status is advisory.  A failure here must not hide an elevated
           // administrator's policy editor or turn into an elevation warning.
@@ -242,9 +260,11 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           // editing until the original policy can be loaded again.
           if (revision !== refreshRevision.current) return false;
           setPolicyLoadUnavailable(true);
+          setHasSavedPolicy(false);
           setStatus(null);
         }
       } else {
+        setHasSavedPolicy(false);
         setStatus(null);
       }
       return true;
@@ -890,7 +910,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
             </div>
           </div>}
           {activePolicy && <p className="fleet-field-hint">{draftDirty ? "Draft auto-saved on this PC — not yet applied to Windows." : "Showing the policy saved by the security service."}</p>}
-          {activePolicy && draftDirty && status && <div className="fleet-vault-verification-warning" role="status">
+          {activePolicy && draftDirty && hasSavedPolicy && <div className="fleet-vault-verification-warning" role="status">
             <Icon icon="info-sign" size={16} />
             <div>
               <strong>Saved Vault settings are available</strong>
