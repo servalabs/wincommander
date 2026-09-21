@@ -10,8 +10,8 @@ import { Input } from "@/components/ui/input";
 import useBackend from "@/hooks/useBackend";
 import { showError, showSuccess } from "@/utils/toast";
 import {
-  createAccessGroup, membershipCount, reconcileAccessDirectoryUsers, summarizeReconcileResults,
-  validateAccessDirectory,
+  createAccessGroup, fromVaultAccessDirectory, membershipCount, reconcileAccessDirectoryUsers,
+  summarizeReconcileResults, validateAccessDirectory,
 } from "./accessControlPolicy";
 import type { FleetAccessDirectory, FleetAccessGroup, VaultSaveAccessDirectoryResponse } from "./accessControlTypes";
 import FleetField from "./FleetField";
@@ -40,7 +40,7 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
     setSelectedGroupId(directory.groups[0].id);
   }, [directory.groups, selectedGroup]);
 
-  const discoverUsers = async (quiet = false) => {
+  const discoverUsers = async (quiet = false, savedDirectory?: FleetAccessDirectory) => {
     setDiscovering(true);
     const result = await getFleetAccessUsers();
     setDiscovering(false);
@@ -56,7 +56,11 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
       isCurrent: user.isCurrent,
     }));
     onChange(current => {
-      const reconciled = reconcileAccessDirectoryUsers(current, discovered);
+      // A successful save returns the durable group directory but not a
+      // current Windows-account inventory. Reconcile that authoritative save
+      // with this fresh discovery so deleted accounts remain unavailable and
+      // cannot reappear in the picker after Save groups.
+      const reconciled = reconcileAccessDirectoryUsers(savedDirectory ?? current, discovered);
       return JSON.stringify(reconciled) === JSON.stringify(current) ? current : reconciled;
     });
     if (!quiet) void showSuccess(`Found ${discovered.length} Windows user${discovered.length === 1 ? "" : "s"}.`);
@@ -117,7 +121,13 @@ export default function AccessControlTab({ directory, onChange, onSave }: Access
     if (errors.length) return void showError(errors[0]);
     setSaving(true);
     try {
-      const { results } = await onSave(directory);
+      const saved = await onSave(directory);
+      // Saving persists membership, but Windows user discovery is the
+      // authority for which accounts currently exist. Match the explicit
+      // Refresh behavior immediately so the post-save view cannot show stale
+      // service records as assignable users.
+      await discoverUsers(true, fromVaultAccessDirectory(saved.directory));
+      const { results } = saved;
       const outcome = summarizeReconcileResults(results);
       if (outcome.intent === "danger") void showError(outcome.message);
       else void showSuccess(outcome.message);

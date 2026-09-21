@@ -208,7 +208,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("const current = await getPolicy();");
     expect(vaultPresentation).toContain("needs to refresh this older Vault status");
     expect(vaultPresentation).toContain("pending_mount_broker");
-    expect(vaultEditor).toContain("own dedicated parent folder");
+    expect(vaultEditor).toContain("container file only");
     expect(vault).toContain("Draft auto-saved on this PC");
     expect(vault).toContain("dirtyRef.current");
     expect(vault).toContain("Rebase draft with saved settings");

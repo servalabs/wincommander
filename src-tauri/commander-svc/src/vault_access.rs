@@ -81,6 +81,7 @@ pub trait VaultFs: Send + Sync {
     fn personal_creation_target_identity(&self, path: &Path) -> Result<String, VaultError> {
         self.stable_file_identity(path)
     }
+    #[allow(dead_code)]
     fn validate_dedicated_parent(&self, parent: &Path, container: &Path) -> Result<(), VaultError>;
 }
 
@@ -265,6 +266,10 @@ fn valid_legacy_recovery(recovery: &LegacyRecoveryRecord) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultAclPlan {
+    /// Retained as a lexical companion of `container` for mount and legacy
+    /// recovery planning. Fleet policy ACLs deliberately never modify this
+    /// directory: a policy belongs to one container file, not to every file
+    /// that happens to share its folder.
     pub parent: PathBuf,
     pub container: PathBuf,
     pub grants: Vec<ResolvedGrant>,
@@ -914,18 +919,59 @@ impl VaultAccessStore {
         if !valid_creation_path(&normalized) {
             return Err(VaultError::Validation);
         }
-        // Never overwrite an existing object.  We deliberately make the
-        // missing-target observation before looking at the service registry:
-        // a completed personal record only reserves ownership of the file it
-        // identified, not its filename forever.  If that file was deleted,
-        // retaining its record would turn an ordinary name reuse into a
-        // permanent false conflict (including for the original owner).
-        //
-        // An error while probing is not treated as missing, so inaccessible
-        // or otherwise uncertain targets remain fail-closed.
+        // The ordinary, non-brokered entry point is retained for tests and
+        // callers that deliberately run as the destination owner.
         if self.fs.personal_creation_target_exists(&normalized)? {
             return Err(VaultError::Validation);
         }
+        self.reserve_personal_registration(normalized, caller, operation_id, now)
+    }
+
+    /// Reserve a file-container name using the authenticated interactive
+    /// user's filesystem access. A selected folder can be intentionally
+    /// private to that user; checking it as SYSTEM would reject a safe new
+    /// filename before the caller-session formatter is even invoked.
+    #[cfg(windows)]
+    pub fn begin_personal_registration_as_caller(
+        &self,
+        container_path: &str,
+        caller: PersonalCreationCaller<'_>,
+        caller_token: windows_sys::Win32::Foundation::HANDLE,
+        operation_id: u64,
+        now: i64,
+    ) -> Result<PersonalCreationReservation, VaultError> {
+        if caller.owner_sid.is_empty()
+            || caller.session_id == 0
+            || caller.client_pid == 0
+            || operation_id == 0
+            || now <= 0
+            || !valid_creation_path(Path::new(container_path))
+        {
+            return Err(VaultError::Validation);
+        }
+        let normalized = with_caller_impersonation(caller_token, || {
+            let normalized = self
+                .fs
+                .normalize_personal_creation_path(Path::new(container_path))?;
+            if !valid_creation_path(&normalized) || self.fs.personal_creation_target_exists(&normalized)? {
+                return Err(VaultError::Validation);
+            }
+            Ok(normalized)
+        })?;
+        self.reserve_personal_registration(normalized, caller, operation_id, now)
+    }
+
+    fn reserve_personal_registration(
+        &self,
+        normalized: PathBuf,
+        caller: PersonalCreationCaller<'_>,
+        operation_id: u64,
+        now: i64,
+    ) -> Result<PersonalCreationReservation, VaultError> {
+        // The caller-owned missing-target observation was completed before
+        // this durable reservation. A completed personal record reserves the
+        // identity of the file it created, not its filename forever: if the
+        // file was deleted, the original owner may reuse the name.
         let normalized_path = normalized.to_string_lossy().into_owned();
         let mut reservation_nonce = [0u8; 32];
         OsRng
@@ -1051,16 +1097,21 @@ impl VaultAccessStore {
         caller_token: windows_sys::Win32::Foundation::HANDLE,
         now: i64,
     ) -> Result<(), VaultError> {
-        let normalized_broker_path = self
-            .fs
-            .normalize_personal_creation_path(Path::new(broker_path))?;
-        if personal_key(&normalized_broker_path.to_string_lossy())
-            != personal_key(&reservation.normalized_path)
-        {
-            return Err(VaultError::Validation);
-        }
         let container = PathBuf::from(&reservation.normalized_path);
         let identity = with_caller_impersonation(caller_token, || {
+            // The formatter and this validation must observe the selected
+            // path under the same authenticated user.  The parent directory
+            // may be intentionally private to that user, in which case a
+            // SYSTEM canonicalization would fail even though the formatter
+            // has just created the requested file safely.
+            let normalized_broker_path = self
+                .fs
+                .normalize_personal_creation_path(Path::new(broker_path))?;
+            if personal_key(&normalized_broker_path.to_string_lossy())
+                != personal_key(&reservation.normalized_path)
+            {
+                return Err(VaultError::Validation);
+            }
             self.fs.personal_creation_target_identity(&container)
         })?;
         self.record_personal_broker_completion_with_identity(reservation, identity, now)
@@ -2375,7 +2426,6 @@ impl VaultAccessStore {
                     .parent()
                     .ok_or(VaultError::Validation)?
                     .to_path_buf();
-                self.fs.validate_dedicated_parent(&parent, &container)?;
                 Ok((
                     entry,
                     VaultAclPlan {
@@ -3095,15 +3145,11 @@ pub struct WindowsAclApplier;
 #[cfg(windows)]
 impl AclApplier for WindowsAclApplier {
     fn apply_and_verify(&self, plan: &VaultAclPlan) -> Result<(), VaultError> {
-        apply_one_acl(&plan.parent, &plan.grants)?;
         apply_one_acl(&plan.container, &plan.grants)?;
         Ok(())
     }
     fn snapshot(&self, plan: &VaultAclPlan) -> Result<Vec<AclSnapshot>, VaultError> {
-        [plan.parent.as_path(), plan.container.as_path()]
-            .into_iter()
-            .map(snapshot_one_acl)
-            .collect()
+        Ok(vec![snapshot_one_acl(&plan.container)?])
     }
     fn restore(&self, snapshots: &[AclSnapshot]) -> Result<(), VaultError> {
         for snapshot in snapshots {
@@ -3181,7 +3227,12 @@ impl AclApplier for WindowsAclApplier {
     ) -> Result<Vec<AclSnapshot>, VaultError> {
         let mut snapshots = Vec::new();
         let mut locks = Vec::new();
-        for path in [&plan.parent, &plan.container] {
+        // A Vault policy owns the selected container only. In particular, do
+        // not require or alter a parent folder that may also hold unrelated
+        // personal containers. This also lets an administrator adopt a valid
+        // file created in a user-owned folder whose directory ACL excludes
+        // SYSTEM, while still identity-locking and verifying the file itself.
+        for path in [&plan.container] {
             let lock = match open_acl_target_without_delete_share(path) {
                 Ok(Some(lock)) => lock,
                 Ok(None) => continue,
@@ -3744,7 +3795,6 @@ fn validate_policy(policy: &VaultAccessPolicy) -> Result<(), VaultError> {
         return Err(VaultError::Validation);
     }
     let mut ids = HashSet::new();
-    let mut parents = HashSet::new();
     let mut container_paths = HashSet::new();
     for entry in &policy.entries {
         if !valid_id(&entry.id)
@@ -3762,14 +3812,6 @@ fn validate_policy(policy: &VaultAccessPolicy) -> Result<(), VaultError> {
         }
         let container_key = container_policy_key(&entry.container_path);
         if container_key.is_empty() || !container_paths.insert(container_key) {
-            return Err(VaultError::Validation);
-        }
-        let parent = Path::new(&entry.container_path)
-            .parent()
-            .ok_or(VaultError::Validation)?
-            .to_string_lossy()
-            .to_ascii_lowercase();
-        if !parents.insert(parent) {
             return Err(VaultError::Validation);
         }
         if let Some(letter) = &entry.mount.preferred_letter {
@@ -6008,7 +6050,7 @@ mod tests {
         );
     }
     #[test]
-    fn validates_machine_group_shape_owner_and_dedicated_parent() {
+    fn validates_machine_group_shape_and_allows_mixed_policy_entries_in_one_parent() {
         let mut p = policy(1, 0);
         p.entries[0].grants.remove(1);
         assert_eq!(validate_policy(&p), Err(VaultError::Validation));
@@ -6019,7 +6061,7 @@ mod tests {
         second.mount.presentation = VaultPresentation::PerUser;
         second.grants.truncate(1);
         p.entries.push(second);
-        assert_eq!(validate_policy(&p), Err(VaultError::Validation));
+        assert_eq!(validate_policy(&p), Ok(()));
         let s = store(Arc::new(Mutex::new(HashMap::new())));
         let resolved = s.resolve_and_plan(&policy(1, 0)).unwrap();
         assert_eq!(
@@ -6041,6 +6083,26 @@ mod tests {
                 .access,
             VaultAccess::Write
         );
+    }
+
+    #[test]
+    fn applies_two_distinct_file_containers_from_the_same_parent_directory() {
+        let files = Arc::new(Mutex::new(HashMap::new()));
+        let store = store(files);
+        let mut shared_parent_policy = policy(1, 0);
+        let mut second = shared_parent_policy.entries[0].clone();
+        second.id = "finance".into();
+        second.label = "Finance".into();
+        second.container_path = "C:\\vaults\\finance.hc".into();
+        second.mount.preferred_letter = Some("W".into());
+        shared_parent_policy.entries.push(second);
+
+        assert_eq!(validate_policy(&shared_parent_policy), Ok(()));
+        assert_eq!(
+            store.apply(shared_parent_policy, 7).unwrap().validation_state,
+            VaultValidationState::Current
+        );
+        assert_eq!(store.policy().unwrap().entries.len(), 2);
     }
 
     #[test]

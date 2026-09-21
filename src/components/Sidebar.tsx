@@ -19,6 +19,7 @@ import { DEFAULT_ALWAYS_PANELS, DEFAULT_BORROWED_PANELS } from "../lib/visibilit
 import { canOpenFleetNavigation } from "../lib/fleetNavigationAccess";
 import { Icon, type IconName } from "./ui/icon";
 import { Spinner } from "./ui/spinner";
+import { Switch } from "./ui/switch";
 import { invoke } from "@tauri-apps/api/core";
 import './Sidebar.css';
 
@@ -102,6 +103,14 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
   const preferencesHidden =
     appSettings?.app?.hideSidebarPreferences === true ||
     (borrowedActive && (appSettings?.app?.borrowedHidden ?? []).includes("sidebar-preferences"));
+  const autoFixAll = appSettings?.app?.autoFixAll === true;
+  const toggleAutoFixAll = async (enabled: boolean) => {
+    try {
+      await patchAppSettings({ app: { autoFixAll: enabled } });
+    } catch {
+      // Keep the persisted value authoritative if a settings write fails.
+    }
+  };
 
   useEffect(() => {
     const revealSecretSettings = () => setSecretSettingsRevealed(true);
@@ -388,10 +397,26 @@ export default function Sidebar({ activePanel, onPanelChange, onPanelHover, show
           <RdpQuickAction isCollapsed={collapsed} />
         </Suspense>
         {!preferencesHidden && (
-          <div className="preferences-row" data-tour="persona-density-switches">
-            <ExperienceLevelSwitch compact />
-            <PersonaSwitch compact />
-          </div>
+          <>
+            <div className="preferences-row" data-tour="persona-density-switches">
+              <ExperienceLevelSwitch compact />
+              <PersonaSwitch compact />
+            </div>
+            <label
+              className="sidebar-auto-fix-all"
+              title="Off by default. When on, safe recommendations are fixed automatically. Ignored or manually chosen settings remain manual."
+            >
+              <span>
+                <strong>FIX ALL</strong>
+                <small>Auto-apply safe fixes</small>
+              </span>
+              <Switch
+                checked={autoFixAll}
+                onCheckedChange={toggleAutoFixAll}
+                aria-label="Automatically apply safe Fix All recommendations"
+              />
+            </label>
+          </>
         )}
         {isDevBuild && (
           <button

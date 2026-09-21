@@ -108,16 +108,14 @@ describe("Vault Access service intent", () => {
     });
   });
 
-  test("rejects two managed containers in one parent folder", () => {
+  test("allows two managed containers in one parent folder because policy is file-scoped", () => {
     const policy = newVaultPolicy();
     // entries[0] is the machine-presentation "shared" starter; give it a
-    // second grant so this test isolates the parent-folder collision it
+    // second grant so this test isolates the file-scope behavior it
     // targets, rather than tripping the separate too-few-grants check.
     policy.entries[0]!.grants.push({ principal_name: "Partner", access: "read" });
     policy.entries.forEach((entry, index) => { entry.container_path = `C:\\Vaults\\vault-${index}.hc`; });
-    expect(validateVaultAccessIntent(policy)).toBe(
-      "Each managed container needs its own dedicated parent folder; vaults cannot share a parent.",
-    );
+    expect(validateVaultAccessIntent(policy)).toBeNull();
   });
 
   test("allows a dual outer plus hidden container to be shared through Fleet policy", () => {

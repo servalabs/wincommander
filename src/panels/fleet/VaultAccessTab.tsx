@@ -113,7 +113,7 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ADMI
   if (detail.includes("validation") || detail.includes("invalid") || detail.includes("duplicate") || detail.includes("persist")) {
     return {
       code: "VLT.POLICY.INVALID",
-      message: "Windows rejected these Vault settings before saving them. Check the container file, its dedicated parent folder, the selected users or groups, and any preferred drive letter, then save again.",
+      message: "Windows rejected these Vault settings before saving them. Check the encrypted container file, the selected users or groups, and any preferred drive letter, then save again.",
     };
   }
   return {

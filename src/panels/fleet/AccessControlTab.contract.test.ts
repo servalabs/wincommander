@@ -36,6 +36,12 @@ describe("Save groups persists through the protected Vault access service", () =
     expect(save).toContain("await onSave(directory)");
   });
 
+  test("reconciles the just-saved directory against a fresh Windows discovery", () => {
+    const save = source.slice(source.indexOf("const save = async ()"), source.lastIndexOf("return ("));
+    expect(save).toContain("await discoverUsers(true, fromVaultAccessDirectory(saved.directory))");
+    expect(source).toContain("reconcileAccessDirectoryUsers(savedDirectory ?? current, discovered)");
+  });
+
   test("reports the service's per-group Windows reconciliation outcomes honestly", () => {
     expect(source).toContain("summarizeReconcileResults(results)");
     expect(source).toContain('outcome.intent === "danger"');

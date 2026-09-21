@@ -58,9 +58,10 @@ describe("Vault access editor presentation", () => {
     // Actual hover/focus/Escape interaction is covered by check-vault-access-ui.cjs.
   });
 
-  test("keeps folder and grant-removal guidance outside collapsed help", () => {
+  test("keeps file-scoped and grant-removal guidance outside collapsed help", () => {
     const visible = renderEditor().split('<details class="vault-access-details">')[0];
-    expect(visible).toContain("own dedicated parent folder");
+    expect(visible).toContain("container file only");
+    expect(visible).toContain("same folder");
     expect(visible).toContain("Removing a grant takes effect only after saving.");
     expect(visible).toContain("Other user or group grants may still allow access.");
   });

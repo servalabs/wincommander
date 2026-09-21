@@ -1121,7 +1121,7 @@ async fn handle_personal_vault_create(
     let registration = if let PersonalVaultCreateTarget::File { path } = target {
         let now = crate::vault_access::unix_time_seconds();
         let registration = vault_access
-            .begin_personal_registration(
+            .begin_personal_registration_as_caller(
                 &path,
                 crate::vault_access::PersonalCreationCaller {
                     owner_sid: peer.caller_sid(),
@@ -1129,6 +1129,7 @@ async fn handle_personal_vault_create(
                     client_pid: peer.client_pid(),
                     authentication_id: peer.authentication_id(),
                 },
+                peer.token(),
                 operation_id,
                 now,
             )

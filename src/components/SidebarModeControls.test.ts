@@ -14,6 +14,8 @@ describe("Sidebar mode controls", () => {
     const groupMarkup = sidebar.slice(groupStart, groupEnd);
     expect(groupMarkup).toContain("<ExperienceLevelSwitch compact />");
     expect(groupMarkup).toContain("<PersonaSwitch compact />");
+    expect(groupMarkup).toContain("sidebar-auto-fix-all");
+    expect(groupMarkup).toContain("Automatically apply safe Fix All recommendations");
     expect(sidebar).toContain("hideSidebarPreferences === true");
     expect(sidebar).toContain('includes("sidebar-preferences")');
     expect(sidebar).toContain("{!preferencesHidden && (");

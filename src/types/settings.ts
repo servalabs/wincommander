@@ -318,6 +318,10 @@ export interface AppPreferences {
    *  machine-wide; it does not replace other users' saved preferences.
    *  Missing resolves to false. */
   applyFixAllMachineWide?: boolean;
+  /** Per-Windows-user automatic Fix All choice. Defaults to off. Only safe
+   * recommendations are applied; an ignored or manually chosen setting is
+   * never changed automatically. */
+  autoFixAll?: boolean;
   /** Low Performance Mode — disables UI animations AND the periodic active-panel
    *  polling, which is the expensive half: each refresh spawns a cold
    *  powershell.exe (no runspace reuse), and on a multi-user server every

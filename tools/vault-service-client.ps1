@@ -1,7 +1,7 @@
 # Authenticated acceptance client for the local WinCommander SYSTEM service.
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('get-policy', 'get-status', 'get-access-directory', 'personal-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe', 'apply', 'forget-entry-policy-only', 'mount', 'unmount', 'unknown-verb')]
+    [ValidateSet('get-policy', 'get-status', 'get-access-directory', 'personal-status', 'capabilities', 'list', 'diagnostics', 'engine-log', 'broker-log', 'container-probe', 'apply', 'forget-entry-policy-only', 'mount', 'unmount', 'create-personal-probe', 'unknown-verb')]
     [string]$Action,
 
     [string]$EntryId,
@@ -170,6 +170,11 @@ $feature = switch ($Action) {
     'forget-entry-policy-only' { 'svc.vault.forget_entry_policy_only' }
     'mount' { 'svc.vault.mount' }
     'unmount' { 'svc.vault.unmount' }
+    # This intentionally cannot format a volume: it exercises the same
+    # personal-creation service route only through its pre-format ownership
+    # reservation, with a blank password that the broker must reject if it is
+    # ever reached. It is safe for diagnosing a selected file path.
+    'create-personal-probe' { 'svc.vault.create_personal' }
     # Fixed acceptance probe only; this does not expose arbitrary service verbs.
     'unknown-verb' { 'svc.vault.__unknown_acceptance_probe' }
 }
@@ -202,6 +207,19 @@ try {
     } elseif ($Action -eq 'unmount') {
         if (-not $EntryId) { throw '-EntryId is required for unmount.' }
         $argsValue = [ordered]@{ entry_id = $EntryId }
+    } elseif ($Action -eq 'create-personal-probe') {
+        if ([string]::IsNullOrWhiteSpace($ContainerPath)) { throw '-ContainerPath is required for create-personal-probe.' }
+        $argsValue = [ordered]@{
+            TargetKind = 'file'
+            Path = $ContainerPath
+            Size = '32M'
+            Password = ''
+            Encryption = 'AES'
+            Hash = 'sha-512'
+            Filesystem = 'NTFS'
+            Quick = $true
+            Dynamic = $false
+        }
     }
 
     $pipe = New-Object System.IO.Pipes.NamedPipeClientStream(

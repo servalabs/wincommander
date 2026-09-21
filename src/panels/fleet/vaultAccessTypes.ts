@@ -243,13 +243,6 @@ export function validateVaultAccessIntent(policy: VaultAccessPolicy): string | n
   if (policy.entries.some(entry => entry.mount.preferred_letter && !/^[A-Z]$/i.test(entry.mount.preferred_letter))) {
     return "Preferred drive letters must be one letter from A to Z.";
   }
-  const parents = policy.entries.map(entry => containerParent(entry.container_path));
-  if (parents.some(parent => !parent)) {
-    return "Every file container must be inside its own dedicated parent folder.";
-  }
-  if (new Set(parents.map(parent => parent!.toLocaleLowerCase())).size !== parents.length) {
-    return "Each managed container needs its own dedicated parent folder; vaults cannot share a parent.";
-  }
   return null;
 }
 
@@ -258,12 +251,4 @@ let fallbackSequence = 0;
 function fallbackId(prefix: string): string {
   fallbackSequence = (fallbackSequence + 1) % Number.MAX_SAFE_INTEGER;
   return `${prefix}-${Date.now().toString(36)}-${fallbackSequence.toString(36)}`;
-}
-
-function containerParent(containerPath: string): string | null {
-  const normalized = containerPath.trim().replaceAll("/", "\\").replace(/\\+$/, "");
-  const separator = normalized.lastIndexOf("\\");
-  // A drive root is never a dedicated parent folder for managed containers.
-  if (separator <= 2) return null;
-  return normalized.slice(0, separator) || null;
 }

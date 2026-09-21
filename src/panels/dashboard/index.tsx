@@ -35,6 +35,7 @@ import { getByPath, getToggleVisibility, resolveToggleText } from "../../types/t
 import { getToggleDrift } from "../../lib/toggleDrift";
 import { getDisplayBranding } from "../../lib/branding";
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from "../../lib/machineScopeElevation";
+import { automaticFixAllCandidates, automaticFixAllFingerprint } from "../../lib/automaticFixAll";
 import { useTaskStatus } from "../../context/TaskStatusContext";
 import { Icon } from "../../components/ui/icon";
 import { showError, showWarning } from "../../utils/toast";
@@ -151,6 +152,9 @@ export default function DashboardPanel() {
   // drift healing remain user-scoped so people sharing a PC keep control of
   // their own choices.
   const applyFixAllMachineWide = appSettings?.app?.applyFixAllMachineWide === true;
+  // This is intentionally distinct from the machine-wide next-action option:
+  // automatic work is always a local, per-Windows-user preference.
+  const autoFixAllEnabled = appSettings?.app?.autoFixAll === true;
   // App-update ids claimed by any in-flight upgrade (marked synchronously at
   // every queuing site). Lets us drop app-update findings the instant they're
   // queued — before the update task even registers as "running".
@@ -430,6 +434,14 @@ export default function DashboardPanel() {
     () => registryDriftFindings,
     [registryDriftFindings],
   );
+  const automaticFixCandidates = useMemo(
+    () => automaticFixAllCandidates(activeFindings, ignoredFindingIds),
+    [activeFindings, ignoredFindingIds],
+  );
+  const automaticFixFingerprint = automaticFixAllFingerprint(automaticFixCandidates);
+  // A failed automatic operation must not retry forever. A changed finding set
+  // gets a new fingerprint and can be considered once on the next probe.
+  const automaticFixAttemptRef = useRef<string | null>(null);
   const hasPendingFixes = radar.phase === "complete" && activeFindings.length > 0;
   // The Map/Risk/Products view toggle hides while the pending-fix (NeedsAttention)
   // list is expanded — so the fixes own the center while you're working through
@@ -660,6 +672,27 @@ export default function DashboardPanel() {
       setIsFixAllRunning(false);
     });
   }, [fixFindings, activeFindings, fixAllInProgress, applyFixAllMachineWide]);
+  useEffect(() => {
+    if (!autoFixAllEnabled || automaticFixCandidates.length === 0) {
+      automaticFixAttemptRef.current = null;
+      return;
+    }
+    if (fixAllInProgress || automaticFixAttemptRef.current === automaticFixFingerprint) return;
+
+    automaticFixAttemptRef.current = automaticFixFingerprint;
+    setIsFixAllRunning(true);
+    // Never infer the separate machine-wide preference for background work.
+    // A user must still press Fix All for an all-users operation.
+    void fixFindings(automaticFixCandidates, "Automatic Fix Everything").finally(() => {
+      setIsFixAllRunning(false);
+    });
+  }, [
+    autoFixAllEnabled,
+    automaticFixCandidates,
+    automaticFixFingerprint,
+    fixAllInProgress,
+    fixFindings,
+  ]);
   const handleHealDrift = useCallback(() => fixFindings(driftFindings, "Heal Drift"), [fixFindings, driftFindings]);
   const handleFixOne = useCallback((f: ScanFinding) => {
     if (busyIds.size > 0) return;

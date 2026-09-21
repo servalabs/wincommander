@@ -172,3 +172,4 @@ src-tauri/target-scoop/
 /tmp-test-la/
 .target-fleet-full-detail/
 src-tauri/target-rdp-redirection-check
+.codex-target-file-scope-tests/

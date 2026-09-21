@@ -456,6 +456,11 @@ pub struct AppPreferences {
     /// policy itself, so another profile retains its own default-off choice.
     #[serde(default)]
     pub apply_fix_all_machine_wide: bool,
+    /// Per-Windows-user opt-in for automatic Dashboard Fix All.  It is kept
+    /// separate from auto-heal: this applies only safe recommendations found
+    /// by the dashboard, while user-selected drift remains manual.
+    #[serde(default)]
+    pub auto_fix_all: bool,
     /// Low Performance Mode: "auto" (default), "on" or "off". Disables UI
     /// animations AND the periodic active-panel polling — the latter being the
     /// expensive half, since every refresh spawns a cold powershell.exe
@@ -862,6 +867,7 @@ impl Default for AppPreferences {
             internet_kill_switch: false,
             disable_updates: false,
             apply_fix_all_machine_wide: false,
+            auto_fix_all: false,
             // None means "auto" — the frontend decides from this machine's cores
             // and RAM. Storing None rather than Some("auto") keeps the key out of
             // settings.json until a user makes an explicit choice.
@@ -4095,6 +4101,7 @@ mod tests {
     fn machine_wide_fix_all_opt_in_is_per_user_and_defaults_off() {
         let defaults = create_default_settings();
         assert!(!defaults.app.apply_fix_all_machine_wide);
+        assert!(!defaults.app.auto_fix_all);
 
         let mut opted_in = serde_json::to_value(defaults).unwrap();
         opted_in["app"]["applyFixAllMachineWide"] = serde_json::json!(true);
@@ -4114,6 +4121,29 @@ mod tests {
         )
         .unwrap();
         assert!(!fresh.app.apply_fix_all_machine_wide);
+    }
+
+    #[test]
+    fn automatic_fix_all_opt_in_is_per_user_and_defaults_off() {
+        let defaults = create_default_settings();
+        let mut opted_in = serde_json::to_value(defaults).unwrap();
+        opted_in["app"]["autoFixAll"] = serde_json::json!(true);
+        let (machine, user_overlay) = split_settings_value(opted_in).unwrap();
+
+        assert!(machine.pointer("/app/autoFixAll").is_none());
+        assert_eq!(
+            user_overlay.pointer("/app/autoFixAll"),
+            Some(&serde_json::json!(true))
+        );
+
+        let (_, fresh_user_overlay) =
+            split_settings_value(serde_json::to_value(create_default_settings()).unwrap()).unwrap();
+        let fresh = merge_user_overlay(
+            parse_and_migrate_json_val(machine).unwrap(),
+            fresh_user_overlay,
+        )
+        .unwrap();
+        assert!(!fresh.app.auto_fix_all);
     }
 
     #[test]
