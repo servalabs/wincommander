@@ -120,6 +120,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
     const [targetKind, setTargetKind] = useState<"file" | "device">("file");
     const [partitions, setPartitions] = useState<EncryptionPartition[]>([]);
     const [selectedDevicePath, setSelectedDevicePath] = useState("");
+    const [deviceEraseAcknowledged, setDeviceEraseAcknowledged] = useState(false);
 
     // Form state
     const [volumeFolder, setVolumeFolder] = useState("");
@@ -184,7 +185,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
         switch (currentStep?.id) {
             case "location": return targetKind === "file"
                 ? volumeFolder.trim().length > 0 && volumeName.trim().length > 0
-                : Boolean(selectedPartition?.safeForCreation);
+                : Boolean(selectedPartition?.safeForCreation) && deviceEraseAcknowledged;
             case "size": {
                 if (targetKind === "file") return sizeValue > 0 && (!isDual || (secondSizeValue > 0 && secondSizeValue < sizeValue));
                 if (!isDual) return true;
@@ -207,7 +208,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
             case "summary": return false;
             default: return false;
         }
-    }, [currentStep, hashAlgo, keyfile, password, passwordConfirm, pim, secondKeyfile, secondPim, selectedPartition, sizeUnit, sizeValue, targetKind, volumeFolder, volumeName, isDual, secondSizeValue, secondPassword, secondPasswordConfirm]);
+    }, [currentStep, deviceEraseAcknowledged, hashAlgo, keyfile, password, passwordConfirm, pim, secondKeyfile, secondPim, selectedPartition, sizeUnit, sizeValue, targetKind, volumeFolder, volumeName, isDual, secondSizeValue, secondPassword, secondPasswordConfirm]);
 
     const handleBrowse = async () => {
         try {
@@ -353,6 +354,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
         setVolumeName("");
         setTargetKind("file");
         setSelectedDevicePath("");
+        setDeviceEraseAcknowledged(false);
         setSizeValue(500);
         setSizeUnit("M");
         setEncAlgo("AES");
@@ -394,10 +396,10 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                             </button>
                         </div>
                         <div className="fs-grid" style={{ marginBottom: 16 }}>
-                            <button type="button" className={`fs-card ${targetKind === "file" ? "selected" : ""}`} aria-pressed={targetKind === "file"} onClick={() => setTargetKind("file")}>
+                            <button type="button" className={`fs-card ${targetKind === "file" ? "selected" : ""}`} aria-pressed={targetKind === "file"} onClick={() => { setTargetKind("file"); setDeviceEraseAcknowledged(false); }}>
                                 <strong>File container</strong><span>Portable encrypted file</span>
                             </button>
-                            <button type="button" className={`fs-card ${targetKind === "device" ? "selected" : ""}`} aria-pressed={targetKind === "device"} onClick={() => setTargetKind("device")}>
+                            <button type="button" className={`fs-card ${targetKind === "device" ? "selected" : ""}`} aria-pressed={targetKind === "device"} onClick={() => { setTargetKind("device"); setDeviceEraseAcknowledged(false); }}>
                                 <strong>Partition / drive</strong><span>Erase and encrypt a whole partition</span>
                             </button>
                         </div>
@@ -412,12 +414,12 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                         </>) : (<>
                             <div className="info-callout">
                                 <Icon icon="warning-sign" intent="danger" />
-                                <span><strong>Irreversible:</strong> the selected partition’s filesystem and every file on it will be replaced.</span>
+                                <span><strong>Irreversible:</strong> creating a Vault here replaces the selected partition’s filesystem and every file on it. Only partitions WinCommander identifies as safe are listed; do not select a partition containing data you need.</span>
                             </div>
                             <FormGroup label="Partition" labelFor="create-device">
                                 <div className="partition-list" id="create-device" role="listbox" aria-label="Partition to erase and encrypt">
                                     {partitions.filter(partition => partition.safeForCreation).map(partition => (
-                                        <button type="button" key={partition.devicePath} role="option" aria-selected={selectedDevicePath === partition.devicePath} className={`partition-row${selectedDevicePath === partition.devicePath ? " is-selected" : ""}`} onClick={() => setSelectedDevicePath(partition.devicePath)}>
+                                        <button type="button" key={partition.devicePath} role="option" aria-selected={selectedDevicePath === partition.devicePath} className={`partition-row${selectedDevicePath === partition.devicePath ? " is-selected" : ""}`} onClick={() => { setSelectedDevicePath(partition.devicePath); setDeviceEraseAcknowledged(false); }}>
                                             <span className="partition-row-main">
                                                 <span className="partition-row-title">{partition.label || "Unlabeled partition"}<span className="partition-row-size">{partition.size}</span></span>
                                                 <span className="partition-row-sub">{partition.model} · Disk {partition.diskNumber} · Part {partition.partitionNumber} · {partition.filesystem || "Raw"}</span>
@@ -426,6 +428,16 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                     ))}
                                 </div>
                             </FormGroup>
+                            {selectedPartition && (
+                                <label className="quick-toggle device-erase-acknowledgment">
+                                    <CheckboxControl
+                                        checked={deviceEraseAcknowledged}
+                                        ariaLabel="Acknowledge that the selected partition will be erased"
+                                        onChange={event => setDeviceEraseAcknowledged(event.currentTarget.checked)}
+                                    />
+                                    <span>I understand that creating this Vault will permanently erase Disk {selectedPartition.diskNumber}, Partition {selectedPartition.partitionNumber} ({selectedPartition.size}).</span>
+                                </label>
+                            )}
                         </>)}
                     </div>
                 );

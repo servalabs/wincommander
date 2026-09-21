@@ -468,6 +468,24 @@ pub(crate) fn record_vault_failure(
     ));
 }
 
+/// A creation completes only after its caller-specific service route has
+/// either registered a file identity or the signed broker has revalidated the
+/// reviewed raw-device identity.  The persisted record is intentionally
+/// path-free and contains no credential or partition metadata.
+pub(crate) fn record_vault_create_success(operation_id: &str, started: Instant) {
+    let _ = record_event(vault_event(
+        operation_id,
+        "create",
+        DiagnosticOutcome::Succeeded,
+        "VLT.CREATE.COMPLETED",
+        DiagnosticSeverity::Info,
+        false,
+        "none",
+        started,
+        BTreeMap::new(),
+    ));
+}
+
 #[allow(clippy::too_many_arguments)] // Stable diagnostic fields are intentionally explicit at call sites.
 fn vault_event(
     operation_id: &str,
@@ -825,6 +843,26 @@ mod tests {
             BTreeMap::new(),
         );
         assert_eq!(event.operation_id, "VLT-mount-client-1");
+    }
+    #[test]
+    fn create_diagnostic_is_bounded_and_has_no_partition_context() {
+        let event = vault_event(
+            "VLT-create-client-1",
+            "create",
+            DiagnosticOutcome::Succeeded,
+            "VLT.CREATE.COMPLETED",
+            DiagnosticSeverity::Info,
+            false,
+            "none",
+            Instant::now(),
+            BTreeMap::new(),
+        );
+        assert_eq!(event.action, "create");
+        assert_eq!(event.error_code.as_deref(), Some("VLT.CREATE.COMPLETED"));
+        assert!(event.redacted_context.is_empty());
+        let raw = serde_json::to_string(&event).unwrap();
+        assert!(!raw.contains("partition_guid"));
+        assert!(!raw.contains("disk_unique_id"));
     }
     #[test]
     fn time_has_a_valid_date_prefix() {

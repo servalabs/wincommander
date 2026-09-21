@@ -32,4 +32,14 @@ describe("Create encrypted volume wizard layout", () => {
     expect(dialog).toContain("hideHeader = false");
     expect(dialog).toContain('{title ?? "Dialog"}');
   });
+
+  test("requires a fresh acknowledgment before erasing a selected partition", async () => {
+    const wizard = await Bun.file("src/panels/vault/CreateVolumeWizard.tsx").text();
+
+    expect(wizard).toContain("deviceEraseAcknowledged");
+    expect(wizard).toContain("Boolean(selectedPartition?.safeForCreation) && deviceEraseAcknowledged");
+    expect(wizard).toContain("setDeviceEraseAcknowledged(false)");
+    expect(wizard).toContain("Only partitions WinCommander identifies as safe are listed");
+    expect(wizard).toContain("permanently erase Disk {selectedPartition.diskNumber}");
+  });
 });

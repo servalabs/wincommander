@@ -1050,73 +1050,107 @@ async fn handle_personal_vault_create(
     mut args: serde_json::Value,
     peer: Option<&AuthenticatedPipePeer>,
 ) -> Result<serde_json::Value, VerbError> {
+    let started = Instant::now();
+    let diagnostic_operation_id = format!("VLT-{operation_id}");
     let Some(peer) = peer else {
         zeroize_json(&mut args);
+        crate::diagnostics::record_vault_failure(
+            &diagnostic_operation_id,
+            "create",
+            "VLT.CREATE.SESSION_UNAVAILABLE",
+            "sign_in_interactively",
+            true,
+            started,
+        );
         return Err(VerbError::new(
             PERSONAL_VAULT_SESSION_ABSENT,
             "no interactive Windows session",
         ));
     };
-    let path = args
-        .get("Path")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    if path.is_empty() || !Path::new(path).is_absolute() {
-        zeroize_json(&mut args);
-        return Err(VerbError::new(
-            "vault_validation_failed",
-            "personal vault path is invalid",
-        ));
-    }
-    if !matches!(
-        args.get("TargetKind").and_then(serde_json::Value::as_str),
-        None | Some("") | Some("file")
-    ) {
-        zeroize_json(&mut args);
-        return Err(VerbError::new(
-            "vault_validation_failed",
-            "personal vault creation requires a file container",
-        ));
-    }
     if peer.caller_sid().is_empty() || !peer_has_active_interactive_session(peer) {
         zeroize_json(&mut args);
+        crate::diagnostics::record_vault_failure(
+            &diagnostic_operation_id,
+            "create",
+            "VLT.CREATE.SESSION_UNAVAILABLE",
+            "sign_in_interactively",
+            true,
+            started,
+        );
         return Err(VerbError::new(
             PERSONAL_VAULT_SESSION_ABSENT,
             "no interactive Windows session",
         ));
     }
+    let target = parse_personal_vault_create_target(&args).map_err(|(kind, message)| {
+        zeroize_json(&mut args);
+        crate::diagnostics::record_vault_failure(
+            &diagnostic_operation_id,
+            "create",
+            kind,
+            "review_selected_target",
+            false,
+            started,
+        );
+        VerbError::new("vault_validation_failed", message)
+    })?;
     // Prepare only the fixed, service-owned driver. The native engine remains
     // in the authenticated caller's session so it never needs a UAC prompt to
     // create a file in that user's chosen location.
     if let Err(error) = ensure_vault_driver_for_personal_operation(operation_id).await {
         zeroize_json(&mut args);
+        crate::diagnostics::record_vault_failure(
+            &diagnostic_operation_id,
+            "create",
+            "VLT.CREATE.DRIVER_UNAVAILABLE",
+            "repair_wincommander",
+            true,
+            started,
+        );
         return Err(VerbError::new(
             PERSONAL_VAULT_DRIVER_STOPPED,
             error.public_message(),
         ));
     }
-    let requested_path = path.to_string();
-    let now = crate::vault_access::unix_time_seconds();
-    let registration = vault_access
-        .begin_personal_registration(
-            &requested_path,
-            crate::vault_access::PersonalCreationCaller {
-                owner_sid: peer.caller_sid(),
-                session_id: peer.session_id(),
-                client_pid: peer.client_pid(),
-                authentication_id: peer.authentication_id(),
-            },
-            operation_id,
-            now,
-        )
-        .map_err(|_| {
-            VerbError::new(
-                "vault_owner_record_failed",
-                "personal vault ownership could not be recorded",
+    // File containers receive the durable owner record and file identity
+    // reservation that has always guarded their lifecycle.  A raw device has
+    // no stable file identity or ACL to persist, so it deliberately avoids
+    // that route.  It is admitted only with a complete reviewed identity;
+    // the signed Pro broker then re-probes every identity field immediately
+    // before it can format the partition.
+    let registration = if let PersonalVaultCreateTarget::File { path } = target {
+        let now = crate::vault_access::unix_time_seconds();
+        let registration = vault_access
+            .begin_personal_registration(
+                &path,
+                crate::vault_access::PersonalCreationCaller {
+                    owner_sid: peer.caller_sid(),
+                    session_id: peer.session_id(),
+                    client_pid: peer.client_pid(),
+                    authentication_id: peer.authentication_id(),
+                },
+                operation_id,
+                now,
             )
-        })?;
-    let requested_path = registration.normalized_path().to_string();
-    args["Path"] = serde_json::Value::String(requested_path.clone());
+            .map_err(|_| {
+                crate::diagnostics::record_vault_failure(
+                    &diagnostic_operation_id,
+                    "create",
+                    "VLT.CREATE.OWNER_RECORD_FAILED",
+                    "review_destination",
+                    false,
+                    started,
+                );
+                VerbError::new(
+                    "vault_owner_record_failed",
+                    "personal vault ownership could not be recorded",
+                )
+            })?;
+        args["Path"] = serde_json::Value::String(registration.normalized_path().to_string());
+        Some(registration)
+    } else {
+        None
+    };
     args["TargetSessionId"] = serde_json::Value::from(peer.session_id());
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(crate::pro_broker::vault_call(
@@ -1133,36 +1167,153 @@ async fn handle_personal_vault_create(
         ))
     })
     .map_err(|reason| {
-        vault_access.cancel_personal_registration(&registration);
+        if let Some(registration) = &registration {
+            vault_access.cancel_personal_registration(registration);
+        }
+        crate::diagnostics::record_vault_failure(
+            &diagnostic_operation_id,
+            "create",
+            "VLT.CREATE.BROKER_FAILED",
+            "review_create_diagnostics",
+            false,
+            started,
+        );
         personal_vault_creation_failure(reason)
     })?;
-    let broker_path = result
-        .get("path")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    if vault_access
-        .record_personal_broker_completion(
-            &registration,
-            broker_path,
-            crate::vault_access::unix_time_seconds(),
-        )
-        .is_err()
-    {
-        vault_access.cancel_personal_registration(&registration);
-        return Err(VerbError::new(
-            "vault_creation_verification_failed",
-            "personal vault creation could not be verified",
-        ));
-    }
-    vault_access
-        .complete_personal_registration(&registration, crate::vault_access::unix_time_seconds())
-        .map_err(|_| {
-            VerbError::new(
-                "vault_owner_record_failed",
-                "personal vault ownership could not be recorded",
+    if let Some(registration) = &registration {
+        let broker_path = result
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if vault_access
+            .record_personal_broker_completion(
+                registration,
+                broker_path,
+                crate::vault_access::unix_time_seconds(),
             )
-        })?;
+            .is_err()
+        {
+            vault_access.cancel_personal_registration(registration);
+            crate::diagnostics::record_vault_failure(
+                &diagnostic_operation_id,
+                "create",
+                "VLT.CREATE.VERIFICATION_FAILED",
+                "do_not_use_created_target",
+                false,
+                started,
+            );
+            return Err(VerbError::new(
+                "vault_creation_verification_failed",
+                "personal vault creation could not be verified",
+            ));
+        }
+        vault_access
+            .complete_personal_registration(registration, crate::vault_access::unix_time_seconds())
+            .map_err(|_| {
+                crate::diagnostics::record_vault_failure(
+                    &diagnostic_operation_id,
+                    "create",
+                    "VLT.CREATE.OWNER_RECORD_FAILED",
+                    "review_destination",
+                    false,
+                    started,
+                );
+                VerbError::new(
+                    "vault_owner_record_failed",
+                    "personal vault ownership could not be recorded",
+                )
+            })?;
+    }
+    crate::diagnostics::record_vault_create_success(&diagnostic_operation_id, started);
     Ok(result)
+}
+
+/// The service does not accept an arbitrary raw path for a destructive
+/// creation.  `TargetKind=device` must carry the complete partition identity
+/// the user reviewed in the UI.  The trusted broker independently compares
+/// these fields to the live partition before formatting it.
+enum PersonalVaultCreateTarget {
+    File { path: String },
+    Device,
+}
+
+fn parse_personal_vault_create_target(
+    args: &serde_json::Value,
+) -> Result<PersonalVaultCreateTarget, (&'static str, &'static str)> {
+    match args.get("TargetKind").and_then(serde_json::Value::as_str) {
+        None | Some("") | Some("file") => {
+            let path = args
+                .get("Path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            if path.is_empty() || !Path::new(path).is_absolute() {
+                return Err((
+                    "VLT.CREATE.REQUEST_INVALID",
+                    "personal vault path is invalid",
+                ));
+            }
+            Ok(PersonalVaultCreateTarget::File {
+                path: path.to_string(),
+            })
+        }
+        Some("device") => {
+            if args
+                .get("Path")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|path| !path.trim().is_empty())
+                || !complete_device_create_identity(args)
+            {
+                return Err((
+                    "VLT.CREATE.DEVICE_IDENTITY_INVALID",
+                    "selected partition identity is incomplete or invalid",
+                ));
+            }
+            Ok(PersonalVaultCreateTarget::Device)
+        }
+        _ => Err((
+            "VLT.CREATE.REQUEST_INVALID",
+            "personal vault target is invalid",
+        )),
+    }
+}
+
+/// A renderer value is not enough to identify a raw partition.  Require the
+/// immutable disk/partition tuple and its reviewed GUID, offset, size, and
+/// disk ID.  Keep this structural check local; the signed Pro broker performs
+/// the authoritative live Windows re-probe before it writes anything.
+fn complete_device_create_identity(args: &serde_json::Value) -> bool {
+    let unsigned = |key: &str, nonzero: bool, max: u64| {
+        let value = match args.get(key) {
+            Some(serde_json::Value::Number(value)) => value.as_u64(),
+            // The desktop backend serializes invocation arguments as strings.
+            // Admit only canonical decimal text; signs, whitespace, floats,
+            // and exponent notation all fail closed.
+            Some(serde_json::Value::String(value))
+                if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                value.parse::<u64>().ok()
+            }
+            _ => None,
+        };
+        value.is_some_and(|value| value <= max && (!nonzero || value > 0))
+    };
+    let bounded_token = |key: &str, max: usize| {
+        args.get(key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| {
+                let value = value.trim();
+                !value.is_empty()
+                    && value.len() <= max
+                    && value.is_ascii()
+                    && !value.chars().any(char::is_control)
+            })
+    };
+    unsigned("DeviceDiskNumber", false, u32::MAX.into())
+        && unsigned("DevicePartitionNumber", true, u32::MAX.into())
+        && unsigned("DeviceOffsetBytes", true, u64::MAX)
+        && unsigned("DeviceSizeBytes", true, u64::MAX)
+        && bounded_token("DevicePartitionGuid", 128)
+        && bounded_token("DeviceDiskUniqueId", 512)
 }
 
 /// A fixed-payload repair may require the signed Pro helper to copy the
@@ -2950,6 +3101,100 @@ mod tests {
         ] {
             assert_eq!(personal_vault_creation_failure(reason).kind, expected);
         }
+    }
+
+    #[test]
+    fn personal_file_create_target_keeps_the_existing_absolute_path_contract() {
+        let args = serde_json::json!({
+            "TargetKind": "file",
+            "Path": r"C:\Users\Parth\vault.hc",
+        });
+        let target = parse_personal_vault_create_target(&args).expect("file target is valid");
+        assert!(matches!(
+            target,
+            PersonalVaultCreateTarget::File { ref path }
+                if path == r"C:\Users\Parth\vault.hc"
+        ));
+    }
+
+    #[test]
+    fn personal_device_create_requires_the_complete_reviewed_identity() {
+        let args = serde_json::json!({
+            "TargetKind": "device",
+            "Path": "",
+            "DeviceDiskNumber": 4,
+            "DevicePartitionNumber": 2,
+            "DevicePartitionGuid": "{4a46e8c1-dac0-4b7a-8b5e-0f9f0e719a4a}",
+            "DeviceOffsetBytes": 1_048_576,
+            "DeviceSizeBytes": 5_368_709_120u64,
+            "DeviceDiskUniqueId": "SCSI\\Disk&Ven_Test&Prod_Test",
+        });
+        assert!(matches!(
+            parse_personal_vault_create_target(&args),
+            Ok(PersonalVaultCreateTarget::Device)
+        ));
+    }
+
+    #[test]
+    fn personal_device_create_accepts_the_backend_decimal_string_wire_shape() {
+        let args = serde_json::json!({
+            "TargetKind": "device",
+            "Path": "",
+            "DeviceDiskNumber": "4",
+            "DevicePartitionNumber": "2",
+            "DevicePartitionGuid": "{4a46e8c1-dac0-4b7a-8b5e-0f9f0e719a4a}",
+            "DeviceOffsetBytes": "1048576",
+            "DeviceSizeBytes": "5368709120",
+            "DeviceDiskUniqueId": "SCSI\\Disk&Ven_Test&Prod_Test",
+        });
+        assert!(matches!(
+            parse_personal_vault_create_target(&args),
+            Ok(PersonalVaultCreateTarget::Device)
+        ));
+
+        let malformed = serde_json::json!({
+            "TargetKind": "device",
+            "Path": "",
+            "DeviceDiskNumber": "4.0",
+            "DevicePartitionNumber": "2",
+            "DevicePartitionGuid": "guid",
+            "DeviceOffsetBytes": "1048576",
+            "DeviceSizeBytes": "5368709120",
+            "DeviceDiskUniqueId": "disk",
+        });
+        assert!(parse_personal_vault_create_target(&malformed).is_err());
+    }
+
+    #[test]
+    fn personal_device_create_rejects_missing_identity_or_a_file_path() {
+        let missing_disk_id = serde_json::json!({
+            "TargetKind": "device",
+            "Path": "",
+            "DeviceDiskNumber": 4,
+            "DevicePartitionNumber": 2,
+            "DevicePartitionGuid": "guid",
+            "DeviceOffsetBytes": 1_048_576,
+            "DeviceSizeBytes": 5_368_709_120u64,
+        });
+        assert!(matches!(
+            parse_personal_vault_create_target(&missing_disk_id),
+            Err((
+                "VLT.CREATE.DEVICE_IDENTITY_INVALID",
+                "selected partition identity is incomplete or invalid",
+            ))
+        ));
+
+        let device_with_path = serde_json::json!({
+            "TargetKind": "device",
+            "Path": r"C:\\not-a-device.hc",
+            "DeviceDiskNumber": 4,
+            "DevicePartitionNumber": 2,
+            "DevicePartitionGuid": "guid",
+            "DeviceOffsetBytes": 1_048_576,
+            "DeviceSizeBytes": 5_368_709_120u64,
+            "DeviceDiskUniqueId": "disk",
+        });
+        assert!(parse_personal_vault_create_target(&device_with_path).is_err());
     }
 
     #[test]

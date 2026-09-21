@@ -19,5 +19,8 @@ export function vaultCreationFailureDetail(cause: unknown): string {
   if (normalized.includes("vault_creation_verification_failed")) {
     return "WinCommander could not verify the newly created Vault. Do not use the selected file until Secure Storage confirms it.";
   }
+  if (normalized.includes("vault_validation_failed")) {
+    return "WinCommander rejected this request because the selected settings or partition no longer pass its safety checks. Go Back, refresh the partition selection, and try again. No Vault was created. Diagnostic code: VLT.CREATE.VALIDATION_FAILED.";
+  }
   return "WinCommander could not create this Vault. No successful Vault was confirmed; try again and send the diagnostic reference if it repeats.";
 }
