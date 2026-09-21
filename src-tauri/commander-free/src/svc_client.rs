@@ -12,6 +12,12 @@ use zeroize::Zeroize;
 const SVC_TRANSPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const VAULT_MOUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(130);
 const VAULT_MUTATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+#[cfg(windows)]
+const PIPE_CONNECT_RETRY_DELAYS: [std::time::Duration; 3] = [
+    std::time::Duration::from_millis(50),
+    std::time::Duration::from_millis(150),
+    std::time::Duration::from_millis(350),
+];
 #[cfg(any(windows, test))]
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -117,14 +123,14 @@ async fn call_via_with_timeout(
     request_timeout: std::time::Duration,
     diagnostic_operation_id: Option<String>,
 ) -> Result<Value, String> {
-    use tokio::net::windows::named_pipe::{ClientOptions, PipeMode};
     use tokio::time::timeout;
     use uuid::Uuid;
 
-    let mut client = ClientOptions::new()
-        .pipe_mode(PipeMode::Byte)
-        .open(pipe_name)
-        .map_err(|e| format!("service connect failed: {e}"))?;
+    // The service swaps in a fresh pipe instance immediately after accepting
+    // a client. Windows can nevertheless report ERROR_PIPE_BUSY/SEM_TIMEOUT
+    // in that tiny hand-off window. Retry only the connection, before Hello
+    // or a request is written, so a policy mutation can never be duplicated.
+    let mut client = open_service_pipe(pipe_name).await?;
     // Authenticate before writing even Hello: the server could otherwise
     // impersonate the caller or receive a Vault credential.
     let _verified_peer = verify_connected_service(&client, pipe_name)?;
@@ -212,6 +218,42 @@ async fn call_via_with_timeout(
         }
         _ => Err("service returned an unexpected reply".to_string()),
     }
+}
+
+#[cfg(windows)]
+async fn open_service_pipe(
+    pipe_name: &str,
+) -> Result<tokio::net::windows::named_pipe::NamedPipeClient, String> {
+    use tokio::net::windows::named_pipe::{ClientOptions, PipeMode};
+
+    for (attempt, delay) in PIPE_CONNECT_RETRY_DELAYS.iter().enumerate() {
+        match ClientOptions::new()
+            .pipe_mode(PipeMode::Byte)
+            .open(pipe_name)
+        {
+            Ok(client) => return Ok(client),
+            Err(error) if transient_pipe_connect_error(&error) => {
+                tokio::time::sleep(*delay).await;
+                if attempt + 1 == PIPE_CONNECT_RETRY_DELAYS.len() {
+                    return ClientOptions::new()
+                        .pipe_mode(PipeMode::Byte)
+                        .open(pipe_name)
+                        .map_err(|final_error| format!("service connect failed: {final_error}"));
+                }
+            }
+            Err(error) => return Err(format!("service connect failed: {error}")),
+        }
+    }
+
+    unreachable!("the bounded retry list is non-empty")
+}
+
+#[cfg(windows)]
+fn transient_pipe_connect_error(error: &std::io::Error) -> bool {
+    // ERROR_SEM_TIMEOUT (121) and ERROR_PIPE_BUSY (231) mean the named-pipe
+    // server has an instance but is between accepting and replacing it. Do
+    // not retry access-denied, a missing pipe, or any authentication error.
+    matches!(error.raw_os_error(), Some(121 | 231))
 }
 
 #[cfg(windows)]
@@ -319,6 +361,23 @@ mod tests {
             request_timeout_for(wincmd_shared::svc::APPLY_MACHINE_SETTING_VERB),
             SVC_TRANSPORT_TIMEOUT
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retries_only_transient_named_pipe_connect_failures() {
+        assert!(transient_pipe_connect_error(
+            &std::io::Error::from_raw_os_error(121)
+        ));
+        assert!(transient_pipe_connect_error(
+            &std::io::Error::from_raw_os_error(231)
+        ));
+        assert!(!transient_pipe_connect_error(
+            &std::io::Error::from_raw_os_error(2)
+        ));
+        assert!(!transient_pipe_connect_error(
+            &std::io::Error::from_raw_os_error(5)
+        ));
     }
 }
 

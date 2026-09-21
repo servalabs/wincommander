@@ -83,7 +83,7 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ADMI
   if (detail.includes("container identity")) {
     return {
       code: "VLT.POLICY.CONTAINER_UNAVAILABLE",
-      message: "The saved Vault container file is missing, moved, or not readable. Choose the encrypted file itself in Edit, then save again.",
+      message: "The exact encrypted file saved in this Vault permission is missing, moved, replaced, or not readable. In Edit, select the current encrypted file and save again. If that file is no longer managed, remove the obsolete policy instead.",
     };
   }
   if (detail.includes("principal resolution") || detail.includes("could not find one or more named")) {
@@ -95,7 +95,7 @@ export function vaultPolicySaveFailure(cause: unknown): { code: "VLT.POLICY.ADMI
   if (detail.includes("acl") || detail.includes("access plan") || detail.includes("read-back")) {
     return {
       code: "VLT.POLICY.ACL_UNVERIFIED",
-      message: "Windows could not set or verify the Vault's file permissions. Keep the container in its own folder, check that the folder still exists, then save again. The previous Vault permission was left unchanged.",
+      message: "Windows could not set or verify the Vault's file permissions. Check that the encrypted file and its folder still exist and that Windows allows the selected users or groups to be applied, then save again. The previous Vault permission was left unchanged.",
     };
   }
   if (detail.includes("dismount") || detail.includes("active vault")) {
@@ -1008,7 +1008,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
           <DialogHeader>
             <DialogTitle>Add existing Vault</DialogTitle>
             <DialogDescription>
-              Select or enter an encrypted container file already on this PC. A filename extension is not required. WinCommander checks the file path and access when you save; it verifies the encrypted container when you unlock it.
+              Select or enter the exact encrypted container file already on this PC. A filename extension is not required. This policy does not reserve its folder, so sibling containers can use that folder. WinCommander checks the file path and access when you save; it verifies the encrypted container when you unlock it.
             </DialogDescription>
           </DialogHeader>
           <label className="fleet-field"><span>Container file</span>
@@ -1016,7 +1016,7 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
               <Input aria-label="Existing Vault container path" value={existingVaultPath} placeholder="D:\\Vault\\sales" onChange={event => setExistingVaultPath(event.target.value)} />
               <Button variant="outline" type="button" onClick={() => void browseExistingVault()}>Browse</Button>
             </div>
-            <small>Choose the encrypted file itself, not its parent folder. Existing files do not need a particular extension.</small>
+            <small>Choose the encrypted file itself, not its parent folder. Existing files do not need a particular extension; sibling containers can use the same folder.</small>
           </label>
           <label className="fleet-field"><span>Vault name</span><Input aria-label="Existing Vault label" value={existingVaultLabel} placeholder="Sales" onChange={event => setExistingVaultLabel(event.target.value)} /><small>This is only the label people see in WinCommander.</small></label>
           <DialogFooter>

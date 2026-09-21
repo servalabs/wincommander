@@ -43,7 +43,7 @@ const boundedMountError = (error: unknown) => {
     return "This container is managed by a Vault permission. Open Fleet, choose Vault permissions, then mount the assigned Vault there.";
   }
   if (normalized.includes("vault_policy_identity_changed")) {
-    return "This container was replaced after its Vault permission was saved. In Fleet, edit that Vault permission to select and save the current container before mounting it.";
+    return "This exact encrypted file was replaced after its Vault permission was saved. In Fleet, edit that Vault permission to select and save the current file, or remove the obsolete policy. Other containers in the same folder are unaffected.";
   }
   if (normalized.includes("vault_policy_unavailable")) {
     return "A Vault permission controls this container but could not be verified. Open Fleet, review the Vault permission, then try again.";

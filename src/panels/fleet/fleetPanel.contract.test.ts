@@ -115,7 +115,8 @@ describe("Fleet access-control panel contracts", () => {
 
   test("turns a missing Vault container into an actionable save error", () => {
     expect(vault).toContain('detail.includes("container identity")');
-    expect(vault).toContain("The saved Vault container file is missing, moved, or not readable.");
+    expect(vault).toContain("The exact encrypted file saved in this Vault permission is missing, moved, replaced, or not readable.");
+    expect(vault).toContain("remove the obsolete policy instead");
     expect(vault).toContain("VLT.POLICY.CONTAINER_UNAVAILABLE");
   });
 
@@ -172,7 +173,7 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("Add existing Vault");
     expect(vault).toContain("open as openFileDialog");
     expect(vault).toContain("Existing Vault container path");
-    expect(vault).toContain("Existing files do not need a particular extension.");
+    expect(vault).toContain("Existing files do not need a particular extension; sibling containers can use the same folder.");
     expect(vault).toContain("openEntryEditor(entry.id, \"details\")");
     expect(vault).toContain("openEntryEditor(entry.id, \"access\")");
     expect(css).toContain(".fleet-vault-policy-grid-wrap");
@@ -208,7 +209,8 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("const current = await getPolicy();");
     expect(vaultPresentation).toContain("needs to refresh this older Vault status");
     expect(vaultPresentation).toContain("pending_mount_broker");
-    expect(vaultEditor).toContain("container file only");
+    expect(vaultEditor).toContain("exact encrypted file");
+    expect(vaultEditor).toContain("Sibling containers can use the same folder");
     expect(vault).toContain("Draft auto-saved on this PC");
     expect(vault).toContain("dirtyRef.current");
     expect(vault).toContain("Rebase draft with saved settings");

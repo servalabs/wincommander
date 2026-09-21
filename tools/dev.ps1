@@ -85,9 +85,14 @@ try {
         # Release an old debug executable before Tauri starts its build. The
         # beforeDevCommand also handles stale processes for direct CLI starts.
         & (Join-Path $PSScriptRoot "kill-dev.ps1")
-        # `bun x tauri` resolves an unrelated package when node_modules is not
-        # materialized. Pin the project's Tauri CLI package and invoke its bin.
-        & $bun x --package "@tauri-apps/cli@2.11.4" tauri dev --config src-tauri/commander-free/tauri.conf.json
+        # Use the repository's installed, pinned Tauri CLI. `bun x` uses a
+        # disposable cache under %TEMP%, which can disappear between runs and
+        # leave Node trying to load a deleted tauri.js file.
+        $tauriCli = Join-Path $repoRoot "node_modules\.bin\tauri.exe"
+        if (-not (Test-Path -LiteralPath $tauriCli)) {
+            throw "The local Tauri CLI is missing. Run bun install, then start tools/dev.ps1 again."
+        }
+        & $tauriCli dev --config src-tauri/commander-free/tauri.conf.json
     }
     $exitCode = $LASTEXITCODE
 } finally {
