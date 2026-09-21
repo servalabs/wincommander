@@ -7,10 +7,11 @@ const hiddenFallbackIsSafe = (result: BackendResponse<MountVolumeResult>) =>
 
 /**
  * The native encrypted-volume engine needs a mount mode, while the normal
- * Secure Storage UI deliberately does not expose container internals. A
- * read-only standard attempt is harmless to a hidden volume; only a password
- * rejection falls back to hidden mode. All other failures keep their original
- * error instead of masking a driver, service, or drive-letter problem.
+ * Secure Storage UI deliberately does not expose container internals. The
+ * caller chooses whether this one mount is read-only; the normal default is
+ * writable. Only a password rejection falls back to hidden mode, retaining
+ * the requested access. All other failures keep their original error instead
+ * of masking a driver, service, or drive-letter problem.
  */
 export async function mountPasswordSelectedVolume(
   mount: MountAttempt,

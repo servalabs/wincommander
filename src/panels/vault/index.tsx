@@ -153,6 +153,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
   const [mountPassword, setMountPassword] = useState("");
   const [mountKeyfile, setMountKeyfile] = useState("");
   const [mountPim, setMountPim] = useState("");
+  const [mountReadOnly, setMountReadOnly] = useState(false);
   const [mountRemovable, setMountRemovable] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [createWizardOpen, setCreateWizardOpen] = useState(false);
@@ -190,6 +191,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
     setMountPassword("");
     setMountKeyfile("");
     setMountPim("");
+    setMountReadOnly(false);
     setMountRemovable(false);
     setMountLetter("Y");
     setMountType('file');
@@ -302,7 +304,9 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
         password: mountPassword,
         keyfiles: mountKeyfile ? [mountKeyfile] : [],
         pim: mountPim || undefined,
-        readOnly: true,
+        // A normal Secure Storage mount is writable. Read-only is an
+        // explicit, per-mount choice and is never remembered.
+        readOnly: mountReadOnly,
         removable: mountRemovable,
         protectHidden: false,
         hiddenKeyfiles: [],
@@ -341,7 +345,7 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
       setMountPassword("");
       setMounting(false);
     }
-  }, [getAvailableDriveLetters, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountRemovable, mountVolume, refreshVault, resetMountForm, verifyVaultDrive]);
+  }, [getAvailableDriveLetters, mountKeyfile, mountLetter, mountPassword, mountPim, mountPath, mountReadOnly, mountRemovable, mountVolume, refreshVault, resetMountForm, verifyVaultDrive]);
 
   const handleOpenMountedVolume = useCallback(async () => {
     if (!mountedVolume) return;
@@ -716,11 +720,15 @@ function EncryptedVolumesTab({ volumes, refreshVault, initialLoading }: Encrypte
           </FormGroup>
 
           <div className="mount-options-grid" aria-label="Mount options">
-            <div className="quick-toggle quick-toggle--locked" aria-label="Automatic mount is read-only">
-              <Icon icon="lock" size={14} />
-              <span>Read-only automatic mount</span>
-              <span className="quick-desc">Your password selects the matching volume without risking hidden data.</span>
-            </div>
+            <label className="quick-toggle">
+              <CheckboxControl
+                checked={mountReadOnly}
+                ariaLabel="Mount read-only"
+                onChange={event => setMountReadOnly(event.currentTarget.checked)}
+              />
+              <span>Mount read-only</span>
+              <span className="quick-desc">Blocks changes for this mount only. Off by default.</span>
+            </label>
             <label className="quick-toggle">
               <CheckboxControl
                 checked={mountRemovable}

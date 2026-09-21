@@ -69,8 +69,9 @@ describe("secure storage deep-state contracts", () => {
     expect(vaultSource).not.toContain("Open visible decoy");
     expect(vaultSource).toContain("mountPasswordSelectedVolume");
     expect(vaultSource).toContain("The password selects the matching standard, outer, or hidden volume automatically.");
-    expect(mountHandlerSource).toContain("readOnly: true");
-    expect(vaultSource).toContain("Read-only automatic mount");
+    expect(mountHandlerSource).toContain("readOnly: mountReadOnly");
+    expect(vaultSource).toContain("Mount read-only");
+    expect(vaultSource).toContain("Off by default.");
     expect(backendSource).toContain("VolumeKind: params.volumeKind");
     expect(backendSource).toContain("VolumeRole: params.volumeRole");
   });
