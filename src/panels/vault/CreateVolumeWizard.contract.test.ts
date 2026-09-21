@@ -15,6 +15,23 @@ describe("Create encrypted volume wizard layout", () => {
     expect(wizard).toContain("letter, a number, and a special character");
   });
 
+  test("does not expose new-volume passwords to browser or password-manager autofill", async () => {
+    const [wizard, inputGroup] = await Promise.all([
+      Bun.file("src/panels/vault/CreateVolumeWizard.tsx").text(),
+      Bun.file("src/components/ui/bp.tsx").text(),
+    ]);
+
+    expect(wizard).toContain('<form className="wizard-step-content" autoComplete="off"');
+    expect(wizard).toContain('name="wincommander-new-volume-password"');
+    expect(wizard).not.toContain('autoComplete="new-password"');
+    expect(wizard.match(/data-1p-ignore="true"/g)?.length).toBe(4);
+    expect(wizard.match(/data-bwignore="true"/g)?.length).toBe(4);
+    expect(wizard.match(/data-lpignore="true"/g)?.length).toBe(4);
+    expect(inputGroup).toContain('data-1p-ignore={dataOnePasswordIgnore}');
+    expect(inputGroup).toContain('data-bwignore={dataBitwardenIgnore}');
+    expect(inputGroup).toContain('data-lpignore={dataLastPassIgnore}');
+  });
+
   test("reserves a persistent footer for Back and Next", async () => {
     const [wizard, styles, dialog] = await Promise.all([
       Bun.file("src/panels/vault/CreateVolumeWizard.tsx").text(),

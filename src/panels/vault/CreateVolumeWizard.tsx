@@ -555,7 +555,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
 
             case "password":
                 return (
-                    <div className="wizard-step-content">
+                    <form className="wizard-step-content" autoComplete="off" onSubmit={event => event.preventDefault()}>
                         <p className="step-description">Set a strong password to protect your volume.</p>
                         <div className="info-callout" style={{ marginBottom: 16 }}>
                             <Icon icon="shield" intent="success" />
@@ -564,9 +564,13 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                         <FormGroup label={isDual ? "First password" : "Password"} labelFor="pw">
                             <InputGroup
                                 id="pw"
+                                name="wincommander-new-volume-password"
                                 type={showPassword ? "text" : "password"}
                                 value={password}
-                                autoComplete="new-password"
+                                autoComplete="off"
+                                data-1p-ignore="true"
+                                data-bwignore="true"
+                                data-lpignore="true"
                                 onChange={e => setPassword(e.target.value)}
                                 onKeyDown={handleAdvanceFromInput}
                                 rightElement={
@@ -591,9 +595,13 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                         <FormGroup label="Confirm Password" labelFor="pw-confirm">
                             <InputGroup
                                 id="pw-confirm"
+                                name="wincommander-new-volume-password-confirmation"
                                 type={showPassword ? "text" : "password"}
                                 value={passwordConfirm}
-                                autoComplete="new-password"
+                                autoComplete="off"
+                                data-1p-ignore="true"
+                                data-bwignore="true"
+                                data-lpignore="true"
                                 onChange={e => setPasswordConfirm(e.target.value)}
                                 onKeyDown={handleAdvanceFromInput}
                             />
@@ -609,9 +617,13 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                 <FormGroup label="Second password" labelFor="second-pw" style={{ marginTop: 16 }} helperText="A different password — it opens the second (inner) volume.">
                                     <InputGroup
                                         id="second-pw"
+                                        name="wincommander-second-volume-password"
                                         type={showPassword ? "text" : "password"}
                                         value={secondPassword}
-                                        autoComplete="new-password"
+                                        autoComplete="off"
+                                        data-1p-ignore="true"
+                                        data-bwignore="true"
+                                        data-lpignore="true"
                                         onChange={e => setSecondPassword(e.target.value)}
                                         onKeyDown={handleAdvanceFromInput}
                                     />
@@ -619,9 +631,13 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                                 <FormGroup label="Confirm Second Password" labelFor="second-pw-confirm">
                                     <InputGroup
                                         id="second-pw-confirm"
+                                        name="wincommander-second-volume-password-confirmation"
                                         type={showPassword ? "text" : "password"}
                                         value={secondPasswordConfirm}
-                                        autoComplete="new-password"
+                                        autoComplete="off"
+                                        data-1p-ignore="true"
+                                        data-bwignore="true"
+                                        data-lpignore="true"
                                         onChange={e => setSecondPasswordConfirm(e.target.value)}
                                         onKeyDown={handleAdvanceFromInput}
                                     />
@@ -671,7 +687,7 @@ function CreateVolumeWizard({ isOpen, onClose, onCreated }: CreateVolumeWizardPr
                             />
                         </FormGroup>
                         </>
-                    </div>
+                    </form>
                 );
 
             case "summary":

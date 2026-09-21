@@ -1341,6 +1341,9 @@ export function InputGroup({
   tabIndex,
   min,
   max,
+  "data-1p-ignore": dataOnePasswordIgnore,
+  "data-bwignore": dataBitwardenIgnore,
+  "data-lpignore": dataLastPassIgnore,
 }: {
   leftIcon?: IconName;
   leftElement?: React.ReactNode;
@@ -1373,6 +1376,12 @@ export function InputGroup({
   tabIndex?: number;
   min?: number;
   max?: number;
+  /** Ask common password managers not to inspect a sensitive field. */
+  "data-1p-ignore"?: "true";
+  /** Ask common password managers not to inspect a sensitive field. */
+  "data-bwignore"?: "true";
+  /** Ask common password managers not to inspect a sensitive field. */
+  "data-lpignore"?: "true";
 }) {
   const hasLeft = leftIcon != null || leftElement != null;
   return (
@@ -1410,6 +1419,9 @@ export function InputGroup({
         tabIndex={tabIndex}
         min={min}
         max={max}
+        data-1p-ignore={dataOnePasswordIgnore}
+        data-bwignore={dataBitwardenIgnore}
+        data-lpignore={dataLastPassIgnore}
         className={cn(
           "w-full rounded-[var(--r)] border border-[var(--border)] bg-[var(--surface-2)] px-3 text-[13px] text-[var(--text)] placeholder:text-[var(--text-mute)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-line)] focus-visible:border-[var(--accent-line)] transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none",
           large ? "h-10" : small ? "h-8" : "h-9",
