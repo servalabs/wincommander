@@ -99,6 +99,29 @@ fn local_or_elevated_writes_cannot_disable_a_locked_monitor_reporter() {
 }
 
 #[test]
+fn local_or_elevated_writes_cannot_disable_each_locked_extended_monitor_reporter() {
+    for reporter in ["print", "usb", "dlp", "tamper"] {
+        let fixture = Fixture::managed();
+        {
+            let mut state = SETTINGS_CACHE.lock().unwrap();
+            let current = state.as_mut().unwrap();
+            current.policy.locked_paths = vec![format!("security.monitorAlertReporting.{reporter}")];
+            let reporting = &mut current.ideal.security.monitor_alert_reporting;
+            match reporter {
+                "print" => reporting.print = Some(true),
+                "usb" => reporting.usb = Some(true),
+                "dlp" => reporting.dlp = Some(true),
+                "tamper" => reporting.tamper = Some(true),
+                _ => unreachable!(),
+            }
+        }
+        fixture.deny(Mutation::Patch(json!({
+            "ideal": { "security": { "monitorAlertReporting": { (reporter): false } } }
+        })));
+    }
+}
+
+#[test]
 fn imported_backup_cannot_bypass_a_locked_preference() {
     let fixture = Fixture::managed();
     let mut proposed = fixture.current();

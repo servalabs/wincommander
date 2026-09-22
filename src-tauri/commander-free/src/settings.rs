@@ -193,14 +193,19 @@ pub struct SecuritySettings {
 }
 
 /// Fleet-owned reporting gates for monitor events whose local detector has no
-/// independent reporting preference (remote access, driver health, and the
-/// network honeypot). `None` preserves the local default on older policies.
+/// independent reporting preference. `None` preserves the local default on
+/// older policies. The field names are the signed Fleet contract; payload
+/// content remains bounded by the respective monitor/reporting implementation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FleetMonitorAlertReporting {
     pub remote_access: Option<bool>,
     pub driver_health: Option<bool>,
     pub network_honeypot: Option<bool>,
+    pub print: Option<bool>,
+    pub usb: Option<bool>,
+    pub dlp: Option<bool>,
+    pub tamper: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -4383,13 +4388,21 @@ mod tests {
             "security": { "monitorAlertReporting": {
                 "remoteAccess": true,
                 "driverHealth": true,
-                "networkHoneypot": true
+                "networkHoneypot": true,
+                "print": true,
+                "usb": true,
+                "dlp": true,
+                "tamper": true
             }}
         });
         let locked_paths = vec![
             "security.monitorAlertReporting.remoteAccess".to_string(),
             "security.monitorAlertReporting.driverHealth".to_string(),
             "security.monitorAlertReporting.networkHoneypot".to_string(),
+            "security.monitorAlertReporting.print".to_string(),
+            "security.monitorAlertReporting.usb".to_string(),
+            "security.monitorAlertReporting.dlp".to_string(),
+            "security.monitorAlertReporting.tamper".to_string(),
         ];
         let mut raw = serde_json::to_value(create_default_settings()).unwrap();
         merge_json(&mut raw, &serde_json::json!({ "ideal": payload }));
@@ -4402,6 +4415,10 @@ mod tests {
         assert_eq!(reread.ideal.security.monitor_alert_reporting.remote_access, Some(true));
         assert_eq!(reread.ideal.security.monitor_alert_reporting.driver_health, Some(true));
         assert_eq!(reread.ideal.security.monitor_alert_reporting.network_honeypot, Some(true));
+        assert_eq!(reread.ideal.security.monitor_alert_reporting.print, Some(true));
+        assert_eq!(reread.ideal.security.monitor_alert_reporting.usb, Some(true));
+        assert_eq!(reread.ideal.security.monitor_alert_reporting.dlp, Some(true));
+        assert_eq!(reread.ideal.security.monitor_alert_reporting.tamper, Some(true));
         assert_eq!(reread.policy.locked_paths, locked_paths);
     }
 

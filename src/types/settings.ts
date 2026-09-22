@@ -48,6 +48,14 @@ export interface FleetMonitorAlertReporting {
   remoteAccess?: boolean | null;
   driverHealth?: boolean | null;
   networkHoneypot?: boolean | null;
+  /** Signed Fleet reporting choice for print-monitor security events. */
+  print?: boolean | null;
+  /** Signed Fleet reporting choice for USB/removable-media security events. */
+  usb?: boolean | null;
+  /** Signed Fleet reporting choice for DLP policy violations. */
+  dlp?: boolean | null;
+  /** Signed Fleet reporting choice for tamper-protection events. */
+  tamper?: boolean | null;
 }
 
 export interface DriverHealthSettings {
