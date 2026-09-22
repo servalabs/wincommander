@@ -84,7 +84,17 @@ export function renderProInstallStep({
         const stage = installState.stage;
         let title = "Install failed";
         let hint: React.ReactNode = null;
-        if (stage === "defender_exclusion") {
+        if (stage === "elevation") {
+            title = "Administrator permission is required";
+            hint = (
+                <p style={{ fontSize: 12, marginBottom: 12 }}>
+                    Pro is shared by everyone on this PC, so Windows must approve an
+                    administrator update before WinCommander can close the old shared
+                    component and replace it. Select <strong>Yes</strong> in the UAC prompt,
+                    or select <strong>No</strong> to leave the current version unchanged.
+                </p>
+            );
+        } else if (stage === "defender_exclusion") {
             title = "Couldn't add Defender exclusion";
             hint = (
                 <p style={{ fontSize: 12, marginBottom: 12 }}>

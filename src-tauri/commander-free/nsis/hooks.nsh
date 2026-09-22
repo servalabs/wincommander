@@ -84,6 +84,21 @@ ${Using:StrFunc} UnStrStr
   ${EndIf}
 !macroend
 
+; The Pro binary, its verified version record, and the licence cache are
+; machine-owned artifacts. Every local user needs read/execute access so a
+; completed administrator update is visible in every session; only SYSTEM and
+; Administrators may replace them. Per-user preferences remain under each
+; profile's LocalAppData and are not part of this ACL change.
+!macro WC_ENSURE_SHARED_MACHINE_DATA_ACL_OR_ABORT stage
+  nsExec::ExecToStack 'icacls.exe "$R5\WinCommander" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX" /T /C'
+  Pop $0
+  Pop $1
+  !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-shared-machine-data-acl" "$0" "$1"
+  ${If} $0 != 0
+    Abort "WinCommander could not secure its shared machine data for all local users."
+  ${EndIf}
+!macroend
+
 ; `sc stop` returns before SCM has necessarily released the service process.
 ; Replacing its executable early can fail silently, then leave the next start
 ; using a stale image. Wait until SCM confirms STOPPED before copying.
@@ -202,6 +217,7 @@ ${Using:StrFunc} UnStrStr
 
 !macro NSIS_HOOK_POSTINSTALL
   !insertmacro WC_LOAD_PROGRAMDATA_OR_ABORT "postinstall"
+  !insertmacro WC_ENSURE_SHARED_MACHINE_DATA_ACL_OR_ABORT "postinstall"
   ; Prefer the normal preserved token. Only restore this fallback if an older
   ; uninstaller lost it; never overwrite a freshly activated/repaired token.
   IfFileExists "$R5\WinCommander\license_cache.json" wc_remove_upgrade_license_backup 0

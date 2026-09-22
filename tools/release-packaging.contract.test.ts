@@ -27,6 +27,7 @@ const closeInstalledApp = readFileSync(
   "src-tauri/commander-free/nsis/close-installed-app.ps1",
   "utf8",
 );
+const proInstaller = readFileSync("src-tauri/commander-free/src/pro_install.rs", "utf8");
 
 describe("Free machine-wide release packaging", () => {
   test("uses a shared Program Files install and a product-specific Start Menu location", () => {
@@ -70,6 +71,13 @@ describe("Free machine-wide release packaging", () => {
     expect(closeInstalledApp).toContain("Normal close request for WinCommander process ID $processId was refused; waiting before forced shutdown");
     expect(closeInstalledApp).toContain("Forced close request for WinCommander process ID $processId");
     expect(closeInstalledApp).not.toContain(" /IM ");
+    expect(proInstaller).toContain("Name = 'wincommander-pro.exe'");
+    expect(proInstaller).toContain("$_.ExecutablePath -and ($_.ExecutablePath -ieq $target)");
+    expect(proInstaller).toContain("verified Pro process still running");
+    expect(proInstaller).toContain("atomic_replace_shared_file");
+    expect(proInstaller).toContain("MACHINE_PRO_UPDATE_FLAG");
+    expect(proInstaller).toContain("ShellExecuteExW");
+    expect(proInstaller).toContain("if !crate::startup_elevation::is_current_process_elevated()");
     expect(hooks).toContain("configure-elevated-launchers.ps1");
     expect(hooks).toContain("WinCommander Elevated Launcher");
     expect(hooks).toContain("WinCommander Elevated Autostart");
@@ -82,6 +90,9 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain('nsExec::ExecToStack \'sc.exe query ${WC_SERVICE_NAME}\'');
     expect(hooks).not.toContain("cmd.exe /c sc query ${WC_SERVICE_NAME} ^| findstr");
     expect(hooks).toContain("WC_LEGACY_LAUNCH_MIGRATION");
+    expect(hooks).toContain("WC_ENSURE_SHARED_MACHINE_DATA_ACL_OR_ABORT");
+    expect(hooks).toContain('"*S-1-5-32-545:(OI)(CI)RX"');
+    expect(hooks).toContain('!insertmacro WC_ENSURE_SHARED_MACHINE_DATA_ACL_OR_ABORT "postinstall"');
     expect(hooks).toContain("NSIS_HOOK_PREINSTALL");
     expect(hooks).toContain("WinCommander-license_cache.upgrade-backup.json");
     expect(hooks).toContain("wincommander-migrate-legacy-user-launches.ps1");

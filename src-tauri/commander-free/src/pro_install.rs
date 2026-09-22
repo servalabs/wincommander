@@ -24,12 +24,41 @@
 // full host-pinned download + SHA-256 verify flow and calls
 // `add_defender_exclusion` after explicit consent.
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+// A Pro binary is deliberately machine-scoped: it lives under ProgramData and
+// is shared by every interactive Windows user.  A standard token may read and
+// run that verified artifact, but it must never replace it.  The foreground
+// application therefore hands the narrow, validated update request to a
+// second copy of this signed executable through Windows UAC.
+const MACHINE_PRO_UPDATE_FLAG: &str = "--machine-pro-update";
+const MACHINE_PRO_UPDATE_JOB_FLAG: &str = "--machine-pro-job";
+const MACHINE_PRO_UPDATE_URL_FLAG: &str = "--machine-pro-url";
+const MACHINE_PRO_UPDATE_SHA256_FLAG: &str = "--machine-pro-sha256";
+const MACHINE_PRO_UPDATE_VERSION_FLAG: &str = "--machine-pro-version";
+const MACHINE_PRO_UPDATE_DEFENDER_CONSENT_FLAG: &str = "--machine-pro-defender-consent";
+const MACHINE_PRO_UPDATE_TIMEOUT_MS: u32 = 310_000;
+
+#[derive(Debug, Clone)]
+struct MachineProUpdateRequest {
+    job_id: String,
+    download_url: String,
+    expected_sha256: String,
+    consent_defender_exclusion: bool,
+    pro_version: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MachineProUpdateOutcome {
+    ok: bool,
+    result: Option<serde_json::Value>,
+    error: Option<String>,
+}
 
 // F-1: every outbound URL accepted from the frontend (manifest fetch +
 // binary download) must point at this host. Any other host is rejected
@@ -327,6 +356,9 @@ fn stop_running_pro_at_path(path: &std::path::Path) -> Result<bool, String> {
              $procs=Get-CimInstance Win32_Process -Filter \"Name = 'wincommander-pro.exe'\" -ErrorAction SilentlyContinue | \
                Where-Object {{ $_.ExecutablePath -and ($_.ExecutablePath -ieq $target) }}; \
              foreach ($p in $procs) {{ Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop }}; \
+             $remaining=Get-CimInstance Win32_Process -Filter \"Name = 'wincommander-pro.exe'\" -ErrorAction SilentlyContinue | \
+               Where-Object {{ $_.ExecutablePath -and ($_.ExecutablePath -ieq $target) }}; \
+             if (@($remaining).Count -gt 0) {{ throw ('verified Pro process still running: ' + (@($remaining | ForEach-Object ProcessId) -join ',')) }}; \
              @($procs).Count",
             literal
         ),
@@ -415,6 +447,57 @@ pub(crate) fn install_metadata_has_hash(hash: &str) -> bool {
     read_pro_install_metadata(Some(hash)).is_some()
 }
 
+/// Replace the shared version/hash record without leaving a partially-written
+/// JSON file for another Windows session to observe.
+fn atomic_replace_shared_file(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| "disk:shared metadata has no parent directory".to_string())?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "disk:shared metadata has no file name".to_string())?;
+    let temporary = parent.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
+    {
+        let mut file = std::fs::File::create(&temporary)
+            .map_err(|error| format!("disk:metadata temp create: {error}"))?;
+        file.write_all(bytes)
+            .map_err(|error| format!("disk:metadata temp write: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("disk:metadata temp sync: {error}"))?;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+        const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+        const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+        let from: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+        let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        if unsafe {
+            MoveFileExW(
+                from.as_ptr(),
+                to.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        } == 0
+        {
+            let _ = std::fs::remove_file(&temporary);
+            return Err("disk:metadata atomic replace failed".to_string());
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::rename(&temporary, path).map_err(|error| {
+            let _ = std::fs::remove_file(&temporary);
+            format!("disk:metadata atomic replace: {error}")
+        })?;
+    }
+    Ok(())
+}
+
 fn write_pro_install_metadata(version: Option<String>, sha256: &str) -> Result<(), String> {
     let path = pro_install_metadata_path()?;
     let metadata = ProInstallMetadata {
@@ -423,7 +506,7 @@ fn write_pro_install_metadata(version: Option<String>, sha256: &str) -> Result<(
     };
     let bytes =
         serde_json::to_vec_pretty(&metadata).map_err(|e| format!("disk:metadata encode: {}", e))?;
-    std::fs::write(&path, bytes).map_err(|e| format!("disk:metadata write: {}", e))
+    atomic_replace_shared_file(&path, &bytes)
 }
 
 fn remove_file_if_present(
@@ -851,8 +934,361 @@ fn check_pro_version_not_newer(pro_version: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_machine_pro_update_request(request: &MachineProUpdateRequest) -> Result<(), String> {
+    if uuid::Uuid::parse_str(&request.job_id).is_err() {
+        return Err("invalid machine Pro update job id".to_string());
+    }
+    if request.download_url.len() > 4_096 {
+        return Err("validation:download url is too long".to_string());
+    }
+    if request.expected_sha256.len() != 64
+        || !request
+            .expected_sha256
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(
+            "validation:expected_sha256 must be a 64-character hexadecimal value".to_string(),
+        );
+    }
+    validate_update_url(&request.download_url, "download_url")?;
+    if let Some(version) = &request.pro_version {
+        if version.len() > 128 {
+            return Err("validation:Pro version is too long".to_string());
+        }
+        check_pro_version_not_newer(version)?;
+    }
+    Ok(())
+}
+
+fn machine_pro_update_result_path(job_id: &str) -> Result<PathBuf, String> {
+    let job = uuid::Uuid::parse_str(job_id)
+        .map_err(|_| "invalid machine Pro update job id".to_string())?;
+    Ok(crate::paths::machine_data_dir()?.join(format!(".pro-update-{job}.json")))
+}
+
+fn write_machine_pro_update_outcome(
+    job_id: &str,
+    outcome: &MachineProUpdateOutcome,
+) -> Result<(), String> {
+    let path = machine_pro_update_result_path(job_id)?;
+    let encoded = serde_json::to_vec(outcome)
+        .map_err(|error| format!("machine update result encode: {error}"))?;
+    std::fs::write(&path, encoded).map_err(|error| format!("machine update result write: {error}"))
+}
+
+fn read_machine_pro_update_outcome(job_id: &str) -> Result<serde_json::Value, String> {
+    let path = machine_pro_update_result_path(job_id)?;
+    let encoded = std::fs::read(&path)
+        .map_err(|error| format!("elevation:could not read elevated Pro update result: {error}"))?;
+    let outcome = serde_json::from_slice::<MachineProUpdateOutcome>(&encoded).map_err(|error| {
+        format!("elevation:elevated Pro update returned an invalid result: {error}")
+    })?;
+    if outcome.ok {
+        outcome
+            .result
+            .ok_or_else(|| "elevation:elevated Pro update returned no result".to_string())
+    } else {
+        Err(format!(
+            "{}",
+            outcome
+                .error
+                .unwrap_or_else(|| "elevation:elevated Pro update failed".to_string())
+        ))
+    }
+}
+
+fn parse_machine_pro_update_request(
+    args: &[String],
+) -> Result<Option<MachineProUpdateRequest>, String> {
+    if args.first().map(String::as_str) != Some(MACHINE_PRO_UPDATE_FLAG) {
+        return Ok(None);
+    }
+    if args.len() < 3 || args.len() % 2 == 0 {
+        return Err("machine Pro update arguments are incomplete".to_string());
+    }
+
+    let mut values = BTreeMap::new();
+    for pair in args[1..].chunks_exact(2) {
+        let key = &pair[0];
+        let value = &pair[1];
+        if !matches!(
+            key.as_str(),
+            MACHINE_PRO_UPDATE_JOB_FLAG
+                | MACHINE_PRO_UPDATE_URL_FLAG
+                | MACHINE_PRO_UPDATE_SHA256_FLAG
+                | MACHINE_PRO_UPDATE_VERSION_FLAG
+                | MACHINE_PRO_UPDATE_DEFENDER_CONSENT_FLAG
+        ) || values.insert(key.as_str(), value.as_str()).is_some()
+        {
+            return Err("machine Pro update arguments are invalid".to_string());
+        }
+    }
+
+    let required = |flag: &str| {
+        values
+            .get(flag)
+            .map(|value| (*value).to_string())
+            .ok_or_else(|| "machine Pro update arguments are incomplete".to_string())
+    };
+    let consent = match required(MACHINE_PRO_UPDATE_DEFENDER_CONSENT_FLAG)?.as_str() {
+        "0" => false,
+        "1" => true,
+        _ => return Err("machine Pro update consent argument is invalid".to_string()),
+    };
+    let request = MachineProUpdateRequest {
+        job_id: required(MACHINE_PRO_UPDATE_JOB_FLAG)?,
+        download_url: required(MACHINE_PRO_UPDATE_URL_FLAG)?,
+        expected_sha256: required(MACHINE_PRO_UPDATE_SHA256_FLAG)?,
+        consent_defender_exclusion: consent,
+        pro_version: values
+            .get(MACHINE_PRO_UPDATE_VERSION_FLAG)
+            .map(|value| (*value).to_string())
+            .filter(|value| !value.is_empty()),
+    };
+    validate_machine_pro_update_request(&request)?;
+    Ok(Some(request))
+}
+
+/// Called by the GUI executable before Tauri starts.  The helper has no
+/// webview, no IPC listener, and accepts only the fixed update argument set
+/// constructed below.  Its sole capability is replacing the verified shared
+/// Pro artifact after Windows has issued an elevated token.
+pub fn run_machine_pro_update_if_requested(args: &[String]) -> Option<i32> {
+    let request = match parse_machine_pro_update_request(args) {
+        Ok(Some(request)) => request,
+        Ok(None) => return None,
+        Err(error) => {
+            crate::log_message(
+                "error",
+                &format!("[ProInstall] invalid machine update helper invocation: {error}"),
+            );
+            return Some(1);
+        }
+    };
+
+    #[cfg(windows)]
+    if !crate::startup_elevation::is_current_process_elevated() {
+        return Some(1);
+    }
+
+    let outcome = match tauri::async_runtime::block_on(install_pro_binary_machine(
+        request.download_url.clone(),
+        request.expected_sha256.clone(),
+        request.consent_defender_exclusion,
+        request.pro_version.clone(),
+    )) {
+        Ok(result) => MachineProUpdateOutcome {
+            ok: true,
+            result: Some(result),
+            error: None,
+        },
+        Err(error) => MachineProUpdateOutcome {
+            ok: false,
+            result: None,
+            error: Some(error),
+        },
+    };
+    let exit_code = if outcome.ok { 0 } else { 1 };
+    if let Err(error) = write_machine_pro_update_outcome(&request.job_id, &outcome) {
+        crate::log_message(
+            "error",
+            &format!("[ProInstall] could not write machine update outcome: {error}"),
+        );
+        return Some(1);
+    }
+    Some(exit_code)
+}
+
+fn quote_windows_argument(argument: &str) -> String {
+    if !argument.is_empty()
+        && !argument
+            .chars()
+            .any(|character| character.is_whitespace() || character == '"')
+    {
+        return argument.to_string();
+    }
+    let mut quoted = String::from("\"");
+    let mut slashes = 0usize;
+    for character in argument.chars() {
+        match character {
+            '\\' => slashes += 1,
+            '"' => {
+                quoted.push_str(&"\\".repeat(slashes.saturating_mul(2).saturating_add(1)));
+                quoted.push('"');
+                slashes = 0;
+            }
+            _ => {
+                quoted.push_str(&"\\".repeat(slashes));
+                quoted.push(character);
+                slashes = 0;
+            }
+        }
+    }
+    quoted.push_str(&"\\".repeat(slashes.saturating_mul(2)));
+    quoted.push('"');
+    quoted
+}
+
+#[cfg(windows)]
+fn launch_elevated_machine_pro_update(
+    request: MachineProUpdateRequest,
+) -> Result<serde_json::Value, String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[repr(C)]
+    struct ShellExecuteInfoW {
+        cb_size: u32,
+        f_mask: u32,
+        hwnd: *mut std::ffi::c_void,
+        lp_verb: *const u16,
+        lp_file: *const u16,
+        lp_parameters: *const u16,
+        lp_directory: *const u16,
+        n_show: i32,
+        h_inst_app: *mut std::ffi::c_void,
+        lp_id_list: *mut std::ffi::c_void,
+        lp_class: *const u16,
+        hkey_class: *mut std::ffi::c_void,
+        dw_hot_key: u32,
+        h_icon_or_monitor: *mut std::ffi::c_void,
+        h_process: *mut std::ffi::c_void,
+    }
+
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn ShellExecuteExW(info: *mut ShellExecuteInfoW) -> i32;
+    }
+
+    validate_machine_pro_update_request(&request)?;
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("elevation:could not resolve WinCommander executable: {error}"))?;
+    let mut arguments = vec![
+        MACHINE_PRO_UPDATE_FLAG.to_string(),
+        MACHINE_PRO_UPDATE_JOB_FLAG.to_string(),
+        request.job_id.clone(),
+        MACHINE_PRO_UPDATE_URL_FLAG.to_string(),
+        request.download_url.clone(),
+        MACHINE_PRO_UPDATE_SHA256_FLAG.to_string(),
+        request.expected_sha256.clone(),
+        MACHINE_PRO_UPDATE_DEFENDER_CONSENT_FLAG.to_string(),
+        if request.consent_defender_exclusion {
+            "1"
+        } else {
+            "0"
+        }
+        .to_string(),
+    ];
+    if let Some(version) = &request.pro_version {
+        arguments.push(MACHINE_PRO_UPDATE_VERSION_FLAG.to_string());
+        arguments.push(version.clone());
+    }
+    let parameters = arguments
+        .iter()
+        .map(|argument| quote_windows_argument(argument))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+    let executable: Vec<u16> = executable
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let parameters: Vec<u16> = parameters.encode_utf16().chain(Some(0)).collect();
+    let mut info = ShellExecuteInfoW {
+        cb_size: std::mem::size_of::<ShellExecuteInfoW>() as u32,
+        f_mask: 0x0000_0040, // SEE_MASK_NOCLOSEPROCESS
+        hwnd: std::ptr::null_mut(),
+        lp_verb: verb.as_ptr(),
+        lp_file: executable.as_ptr(),
+        lp_parameters: parameters.as_ptr(),
+        lp_directory: std::ptr::null(),
+        n_show: 0, // SW_HIDE: this is a headless updater helper, not another UI.
+        h_inst_app: std::ptr::null_mut(),
+        lp_id_list: std::ptr::null_mut(),
+        lp_class: std::ptr::null(),
+        hkey_class: std::ptr::null_mut(),
+        dw_hot_key: 0,
+        h_icon_or_monitor: std::ptr::null_mut(),
+        h_process: std::ptr::null_mut(),
+    };
+    if unsafe { ShellExecuteExW(&mut info) } == 0 || info.h_process.is_null() {
+        return Err(format!(
+            "elevation:Administrator permission was not granted for the shared Pro update: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    use windows_sys::Win32::{
+        Foundation::CloseHandle,
+        System::Threading::{GetExitCodeProcess, WaitForSingleObject},
+    };
+    const WAIT_OBJECT_0: u32 = 0;
+    let wait = unsafe { WaitForSingleObject(info.h_process, MACHINE_PRO_UPDATE_TIMEOUT_MS) };
+    if wait != WAIT_OBJECT_0 {
+        unsafe { CloseHandle(info.h_process) };
+        return Err(
+            "elevation:The elevated shared Pro update did not finish within five minutes."
+                .to_string(),
+        );
+    }
+    let mut exit_code = 1u32;
+    let read_exit_code = unsafe { GetExitCodeProcess(info.h_process, &mut exit_code) } != 0;
+    unsafe { CloseHandle(info.h_process) };
+    if !read_exit_code || exit_code != 0 {
+        return read_machine_pro_update_outcome(&request.job_id).map_err(|error| {
+            if error.starts_with("elevation:") {
+                error
+            } else {
+                format!("elevation:{error}")
+            }
+        });
+    }
+    read_machine_pro_update_outcome(&request.job_id)
+}
+
+#[cfg(not(windows))]
+fn launch_elevated_machine_pro_update(
+    _request: MachineProUpdateRequest,
+) -> Result<serde_json::Value, String> {
+    Err("elevation:shared Pro updates are only available on Windows".to_string())
+}
+
 #[tauri::command]
 pub async fn install_pro_binary(
+    download_url: String,
+    expected_sha256: String,
+    consent_defender_exclusion: bool,
+    pro_version: Option<String>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    if !crate::startup_elevation::is_current_process_elevated() {
+        // Do not create a download, touch ProgramData, or attempt to close a
+        // shared sidecar from a limited token.  Windows owns the consent or
+        // credential decision; declining it leaves the existing artifact and
+        // every user's data exactly as it was.
+        let request = MachineProUpdateRequest {
+            job_id: uuid::Uuid::new_v4().to_string(),
+            download_url,
+            expected_sha256,
+            consent_defender_exclusion,
+            pro_version,
+        };
+        return tokio::task::spawn_blocking(move || launch_elevated_machine_pro_update(request))
+            .await
+            .map_err(|error| format!("elevation:shared Pro update worker failed: {error}"))?;
+    }
+
+    install_pro_binary_machine(
+        download_url,
+        expected_sha256,
+        consent_defender_exclusion,
+        pro_version,
+    )
+    .await
+}
+
+async fn install_pro_binary_machine(
     download_url: String,
     expected_sha256: String,
     consent_defender_exclusion: bool,
@@ -909,12 +1345,7 @@ pub async fn install_pro_binary(
             .unwrap_or(false)
     {
         clear_disabled_markers();
-        if let Err(e) = write_pro_install_metadata(pro_version.clone(), &expected_sha256) {
-            crate::log_message(
-                "warn",
-                &format!("[ProInstall] metadata write failed: {}", e),
-            );
-        }
+        write_pro_install_metadata(pro_version.clone(), &expected_sha256)?;
         // KT: clean up legacy Roaming copy even on the already-installed fast-path.
         if let Ok(legacy) = crate::paths::legacy_pro_sidecar_path() {
             if legacy.exists() {
@@ -1009,12 +1440,7 @@ pub async fn install_pro_binary(
     remove_existing_pro_binary(&install_path).await?;
     std::fs::rename(&tmp_path, &install_path).map_err(|e| format!("disk:atomic rename: {}", e))?;
     clear_disabled_markers();
-    if let Err(e) = write_pro_install_metadata(pro_version.clone(), &expected_sha256) {
-        crate::log_message(
-            "warn",
-            &format!("[ProInstall] metadata write failed: {}", e),
-        );
-    }
+    write_pro_install_metadata(pro_version.clone(), &expected_sha256)?;
 
     // KT: remove legacy Roaming copy after a successful ProgramData install so only
     // one canonical binary remains and pro_resolve_path never picks the stale copy.
@@ -1047,4 +1473,87 @@ pub async fn install_pro_binary(
         "version": pro_version,
         "defender_exclusion_warning": defender_exclusion_warning,
     }))
+}
+
+#[cfg(test)]
+mod machine_update_tests {
+    use super::{
+        parse_machine_pro_update_request, quote_windows_argument, MachineProUpdateRequest,
+        MACHINE_PRO_UPDATE_DEFENDER_CONSENT_FLAG, MACHINE_PRO_UPDATE_FLAG,
+        MACHINE_PRO_UPDATE_JOB_FLAG, MACHINE_PRO_UPDATE_SHA256_FLAG, MACHINE_PRO_UPDATE_URL_FLAG,
+        MACHINE_PRO_UPDATE_VERSION_FLAG,
+    };
+
+    fn valid_args() -> Vec<String> {
+        vec![
+            MACHINE_PRO_UPDATE_FLAG.into(),
+            MACHINE_PRO_UPDATE_JOB_FLAG.into(),
+            "c4c52637-6d5a-4f05-9a66-c7091dba2b33".into(),
+            MACHINE_PRO_UPDATE_URL_FLAG.into(),
+            "https://winupdates.servalabs.com/pro/wincommander-pro.exe".into(),
+            MACHINE_PRO_UPDATE_SHA256_FLAG.into(),
+            "a".repeat(64),
+            MACHINE_PRO_UPDATE_DEFENDER_CONSENT_FLAG.into(),
+            "1".into(),
+            MACHINE_PRO_UPDATE_VERSION_FLAG.into(),
+            "3.6.2".into(),
+        ]
+    }
+
+    #[test]
+    fn machine_update_helper_accepts_only_the_validated_fixed_argument_set() {
+        let request = parse_machine_pro_update_request(&valid_args())
+            .expect("valid helper arguments")
+            .expect("helper invocation");
+        assert_eq!(request.pro_version.as_deref(), Some("3.6.2"));
+        assert!(request.consent_defender_exclusion);
+
+        let mut unknown = valid_args();
+        unknown.extend(["--unexpected".into(), "value".into()]);
+        assert!(parse_machine_pro_update_request(&unknown).is_err());
+
+        let mut duplicate = valid_args();
+        duplicate.extend([
+            MACHINE_PRO_UPDATE_JOB_FLAG.into(),
+            "c4c52637-6d5a-4f05-9a66-c7091dba2b33".into(),
+        ]);
+        assert!(parse_machine_pro_update_request(&duplicate).is_err());
+    }
+
+    #[test]
+    fn machine_update_helper_rejects_non_pinned_url_before_any_machine_write() {
+        let mut args = valid_args();
+        let url_index = args
+            .iter()
+            .position(|argument| argument == MACHINE_PRO_UPDATE_URL_FLAG)
+            .unwrap()
+            + 1;
+        args[url_index] = "https://example.invalid/wincommander-pro.exe".into();
+        assert!(parse_machine_pro_update_request(&args).is_err());
+    }
+
+    #[test]
+    fn uac_helper_arguments_quote_paths_without_shell_interpretation() {
+        assert_eq!(
+            quote_windows_argument("--machine-pro-update"),
+            "--machine-pro-update"
+        );
+        assert_eq!(
+            quote_windows_argument(r#"C:\Path With Spaces\pro.exe"#),
+            r#""C:\Path With Spaces\pro.exe""#,
+        );
+    }
+
+    #[test]
+    fn request_shape_keeps_the_machine_update_inputs_explicit() {
+        let request = MachineProUpdateRequest {
+            job_id: "c4c52637-6d5a-4f05-9a66-c7091dba2b33".into(),
+            download_url: "https://winupdates.servalabs.com/pro/wincommander-pro.exe".into(),
+            expected_sha256: "b".repeat(64),
+            consent_defender_exclusion: false,
+            pro_version: None,
+        };
+        assert!(!request.consent_defender_exclusion);
+        assert!(request.pro_version.is_none());
+    }
 }

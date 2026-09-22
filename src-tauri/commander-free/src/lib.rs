@@ -140,6 +140,13 @@ pub(crate) use log::{
     LOG_SRC_PRO,
 };
 
+/// Dispatch the signed, headless UAC helper before the GUI runtime starts.
+/// `main.rs` is a separate binary crate, so this narrow public bridge keeps
+/// the updater implementation private to the library.
+pub fn run_machine_pro_update_if_requested(args: &[String]) -> Option<i32> {
+    pro_install::run_machine_pro_update_if_requested(args)
+}
+
 struct TrayShieldState {
     running: Mutex<bool>,
     menu_item: MenuItem<tauri::Wry>,

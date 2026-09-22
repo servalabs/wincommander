@@ -6,6 +6,13 @@
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // A limited desktop session asks Windows for this one narrow UAC helper
+    // when it needs to replace the machine-wide Pro sidecar.  Handle it before
+    // CLI/Tauri startup so the elevated child never creates a second window,
+    // listener, or normal application instance.
+    if let Some(exit_code) = wincommander_lib::run_machine_pro_update_if_requested(&args) {
+        std::process::exit(exit_code);
+    }
     #[cfg(all(feature = "autonomous-test", debug_assertions))]
     if wincommander_lib::autonomous_test::is_invocation(&args) {
         attach_parent_console();
