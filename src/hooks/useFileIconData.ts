@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Fetches the native Windows shell icon (data URL) for a file path via
-// `get_file_icon_data`, cached per path for the app session.
+// `get_file_icon_data`, with bounded per-path caching and lazy expiry.
 
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";

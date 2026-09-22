@@ -5,6 +5,10 @@ Public release notes are published with each versioned
 
 ## Unreleased
 
+- File-icon reuse now has entry and string-byte limits with least-recently-used
+  eviction. Later lookups refresh aged icons and retry temporary failures while
+  preserving visible-row priority and shared in-flight requests.
+
 - Startup benchmark reports reject empty or malformed measurements, record
   per-phase sample counts, and distinguish partial diagnostics from complete
   supplied data. Strict reports require build/environment provenance and a

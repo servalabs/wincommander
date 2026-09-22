@@ -2,9 +2,11 @@
 // A small shared queue prevents a large result set from turning native shell
 // icon lookup into an unbounded IPC burst.
 
+import { FileIconCache, type FileIconCacheOptions, type FileIconData } from "./fileIconCache";
+
 export const MAX_CONCURRENT_FILE_ICON_REQUESTS = 8;
 
-type IconData = string | null;
+type IconData = FileIconData;
 type IconListener = (data: IconData) => void;
 type IconLoader = (path: string) => Promise<IconData>;
 
@@ -16,7 +18,7 @@ interface PendingIcon {
 }
 
 export class FileIconQueue {
-  private readonly cache = new Map<string, IconData>();
+  private readonly cache: FileIconCache;
   private readonly pending = new Map<string, PendingIcon>();
   private activeRequests = 0;
   private pumpScheduled = false;
@@ -24,7 +26,10 @@ export class FileIconQueue {
   constructor(
     private readonly loadIcon: IconLoader,
     private readonly concurrency = MAX_CONCURRENT_FILE_ICON_REQUESTS,
-  ) {}
+    cacheOptions: FileIconCacheOptions = {},
+  ) {
+    this.cache = new FileIconCache(cacheOptions);
+  }
 
   get(path: string): IconData | undefined {
     return this.cache.get(path);
@@ -36,8 +41,8 @@ export class FileIconQueue {
 
   request(path: string, priority: number, listener: IconListener): () => void {
     const cached = this.cache.get(path);
-    if (cached !== undefined || this.cache.has(path)) {
-      listener(cached ?? null);
+    if (cached !== undefined) {
+      listener(cached);
       return () => {};
     }
 

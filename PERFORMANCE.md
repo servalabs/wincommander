@@ -38,6 +38,20 @@ architecture; see [FEATURES.md](FEATURES.md) and [ARCHITECTURE.md](ARCHITECTURE.
   frontend job milestones. It stores no paths, settings values, command
   arguments, licence material, or error text.
 
+## File-icon reuse
+
+Native icon lookup keeps the existing eight-request concurrency limit and
+visible-row priority. Reusable results use a least-recently-used cache capped at
+1,024 entries and 8 MiB of conservatively counted UTF-16 key/data strings; the
+entry cap also bounds per-entry overhead, which is not included in that byte
+figure. Oversized icons still reach waiting rows but are not retained.
+
+Successful entries expire after five minutes and unavailable/failed lookups
+after ten seconds. Expiry is lazy: a later lookup reloads the icon; no recurring
+timer or automatic retry loop runs while a row is idle. This bounds retention
+and permits recovery; it does not claim a measured rendering-speed improvement
+or immediate notification of every Windows icon-association change.
+
 ## Startup sample reports
 
 `bun run startup:benchmark samples.json report.json --require-complete`
