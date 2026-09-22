@@ -63,7 +63,7 @@ interface Props {
   customWatchDirs: string[];
   action: RansomwareAction;
   reportToFleet: boolean;
-  fleetReportingRequired: boolean;
+  fleetReportingLocked?: boolean;
   onPatchRansomware: (patch: {
     enabled?: boolean;
     threshold?: number;
@@ -90,7 +90,7 @@ export default function RansomwareMonitorSection({
   customWatchDirs,
   action,
   reportToFleet,
-  fleetReportingRequired,
+  fleetReportingLocked = false,
   onPatchRansomware,
   expanded: expandedProp,
   onExpandedChange,
@@ -440,11 +440,11 @@ export default function RansomwareMonitorSection({
                   featureLabel="Fleet ransomware reporting"
                   fallback={<p className="text-[10px] text-[var(--shield-text-muted)]">Pro can send path-free ransomware alarms to the Fleet console for an organisation-wide response.</p>}
                 >
-                <label className={`flex items-start gap-2 rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[11px] text-[var(--shield-text-subtle)] ${fleetReportingRequired ? "opacity-70" : "cursor-pointer"}`}>
+                <label className={`flex items-start gap-2 rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[11px] text-[var(--shield-text-subtle)] ${fleetReportingLocked ? "opacity-70" : "cursor-pointer"}`}>
                   <input
                     type="checkbox"
                     checked={reportToFleet}
-                    disabled={fleetReportingRequired}
+                    disabled={fleetReportingLocked}
                     onChange={(e) => onPatchRansomware({ reportToFleet: e.currentTarget.checked })}
                     aria-label="Notify Fleet admins about ransomware detections"
                     className="mt-0.5 accent-[var(--color-accent)]"
@@ -452,7 +452,7 @@ export default function RansomwareMonitorSection({
                   <span>
                     Notify Fleet admins
                     <span className="block text-[10px] text-[var(--shield-text-muted)]">
-                      Sends only the alarm class and file count—never filenames or paths.{fleetReportingRequired ? " Required by your Fleet policy." : ""}
+                      Sends only the alarm class and file count—never filenames or paths.{fleetReportingLocked ? " Required by your Fleet policy." : ""}
                     </span>
                   </span>
                 </label>

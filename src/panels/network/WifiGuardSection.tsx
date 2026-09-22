@@ -18,6 +18,7 @@ import { useAppConfirm } from '../../components/shared/AppConfirmDialog';
 import { useAppState } from '../../context/AppContext';
 import { isPrivilegedWriteBlocked, MACHINE_SCOPE_ELEVATION_MESSAGE } from '../../lib/machineScopeElevation';
 import { reportSettingsWriteFailure } from '../../lib/settingsWriteRecovery';
+import { isFleetReportControlLocked } from '../../lib/fleetReportingPolicyLock';
 import {
   DEFAULT_WIFI_GUARD_ALERT_DEBOUNCE_SECS,
   DEFAULT_WIFI_GUARD_LEARNING_WINDOW_SECS,
@@ -160,6 +161,7 @@ function WifiGuardPolicyControls({
   alertDebounceSecs,
   reportToFleet,
   fleetReportingRequired,
+  fleetReportingLocked,
   onPatch,
 }: {
   enabled: boolean;
@@ -168,6 +170,7 @@ function WifiGuardPolicyControls({
   alertDebounceSecs: number;
   reportToFleet: boolean;
   fleetReportingRequired: boolean;
+  fleetReportingLocked: boolean;
   onPatch: (patch: {
     enabled?: boolean;
     learningWindowSecs?: number;
@@ -228,9 +231,9 @@ function WifiGuardPolicyControls({
       </div>
       <Switch
         checked={fleetReportingRequired || reportToFleet}
-        disabled={fleetReportingRequired}
+        disabled={fleetReportingLocked}
         onChange={(event) => onPatch({ reportToFleet: (event.target as HTMLInputElement).checked })}
-        label={fleetReportingRequired
+        label={fleetReportingLocked
           ? 'Fleet reporting required by device policy'
           : 'Report a coarse Wi-Fi Guard alert to Fleet'}
         style={{ marginBottom: 0 }}
@@ -261,6 +264,11 @@ export default function WifiGuardSection({
   const alertDebounceSecs = persisted?.alertDebounceSecs ?? DEFAULT_WIFI_GUARD_ALERT_DEBOUNCE_SECS;
   const reportToFleet = persisted?.reportToFleet ?? false;
   const fleetReportingRequired = appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true;
+  const fleetReportingLocked = isFleetReportControlLocked({
+    lockedPaths: appSettings?.policy?.lockedPaths,
+    reportPath: 'network.wifiGuard.reportToFleet',
+    requireAllDeviceAlertsInFleet: fleetReportingRequired,
+  });
   const [status, setStatus] = useState<WifiGuardStatus | null>(null);
   const [recent, setRecent] = useState<WifiGuardHit[]>([]);
   const [known, setKnown] = useState<KnownEntry[]>([]);
@@ -518,6 +526,7 @@ export default function WifiGuardSection({
           alertDebounceSecs={alertDebounceSecs}
           reportToFleet={reportToFleet}
           fleetReportingRequired={fleetReportingRequired}
+          fleetReportingLocked={fleetReportingLocked}
           onPatch={patchWifiGuard}
         />
 
@@ -828,6 +837,7 @@ export default function WifiGuardSection({
           alertDebounceSecs={alertDebounceSecs}
           reportToFleet={reportToFleet}
           fleetReportingRequired={fleetReportingRequired}
+          fleetReportingLocked={fleetReportingLocked}
           onPatch={patchWifiGuard}
         />
 

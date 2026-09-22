@@ -45,6 +45,7 @@ import {
 import type { AuthAnomalyTimeBasis, RansomwareAction } from "../../types/settings";
 import useClipboardGuardRules from "../../hooks/useClipboardGuardRules";
 import { executeBackendCommand } from "../../hooks/useBackend";
+import { isFleetReportControlLocked } from "../../lib/fleetReportingPolicyLock";
 import './index.css';
 
 export default function PrivacyPanel() {
@@ -109,6 +110,12 @@ export default function PrivacyPanel() {
         patchAppSettings({ ideal: { privacy: { decoyMonitor: patch } } } as any).catch(reportSettingsWriteFailure);
 
     const allDeviceAlertsRequired = appSettings?.ideal?.security?.requireAllDeviceAlertsInFleet === true;
+    const fleetLockedPaths = appSettings?.policy?.lockedPaths ?? [];
+    const isFleetReportLocked = (reportPath: string) => isFleetReportControlLocked({
+        lockedPaths: fleetLockedPaths,
+        reportPath,
+        requireAllDeviceAlertsInFleet: allDeviceAlertsRequired,
+    });
     const ransomwareEnabled = appSettings?.ideal?.privacy?.ransomwareMonitor?.enabled ?? false;
     const ransomwareThreshold = appSettings?.ideal?.privacy?.ransomwareMonitor?.threshold ?? DEFAULT_RANSOMWARE_THRESHOLD;
     const ransomwareWindowSeconds = appSettings?.ideal?.privacy?.ransomwareMonitor?.windowSeconds ?? DEFAULT_RANSOMWARE_WINDOW_SECONDS;
@@ -160,15 +167,11 @@ export default function PrivacyPanel() {
     const patchScreenCapture = (patch: { detectionEnabled?: boolean; protectWindow?: boolean; reportToFleet?: boolean }) =>
         patchAppSettings({ ideal: { privacy: { screenCapture: patch } } } as any).catch(reportSettingsWriteFailure);
     const fleetEnabled = appSettings?.app?.fleet?.enabled === true;
-    const fleetLockedPaths = appSettings?.policy?.lockedPaths ?? [];
-    const masterFleetAlertsLocked = fleetLockedPaths.some((p) =>
-        p.trim().length > 0 &&
-        ("security.requireAllDeviceAlertsInFleet".startsWith(p) || "ideal.security.requireAllDeviceAlertsInFleet".startsWith(p))
-    );
-    const screenCaptureReportLocked = (allDeviceAlertsRequired && masterFleetAlertsLocked) || fleetLockedPaths.some((p) =>
-        p.trim().length > 0 &&
-        ("notifications.screenCapture.reportToFleet".startsWith(p) || "ideal.notifications.screenCapture.reportToFleet".startsWith(p))
-    );
+    const screenCaptureReportLocked = isFleetReportLocked("privacy.screenCapture.reportToFleet")
+        || isFleetReportLocked("notifications.screenCapture.reportToFleet");
+    const ransomwareReportLocked = isFleetReportLocked("privacy.ransomwareMonitor.reportToFleet");
+    const authAnomalyReportLocked = isFleetReportLocked("privacy.authAnomalyMonitor.reportToFleet");
+    const decoyReportLocked = isFleetReportLocked("privacy.decoyMonitor.fleetAlertEnabled");
 
     // Stats strip — counts active privacy controls and armed monitors
     const activePrivacyCount = useMemo(() => {
@@ -387,6 +390,7 @@ export default function PrivacyPanel() {
                                                     enabled={authAnomalyEnabled}
                                                     {...authAnomalyPolicy}
                                                     fleetReportingRequired={allDeviceAlertsRequired}
+                                                    fleetReportingLocked={authAnomalyReportLocked}
                                                     onPatch={patchAuthAnomaly}
                                                 />
                                             </div>
@@ -407,7 +411,7 @@ export default function PrivacyPanel() {
                                                     customWatchDirs={ransomwareCustomDirs}
                                                     action={ransomwareAction}
                                                     reportToFleet={ransomwareReportToFleet}
-                                                    fleetReportingRequired={allDeviceAlertsRequired}
+                                                    fleetReportingLocked={ransomwareReportLocked}
                                                     onPatchRansomware={patchRansomware}
                                                 />
                                             </div>
@@ -420,6 +424,7 @@ export default function PrivacyPanel() {
                                                         enrolledPaths: decoyEnrolledPaths,
                                                         readAuditEnabled: decoyReadAuditEnabled,
                                                         fleetAlertEnabled: decoyFleetAlertEnabled,
+                                                        fleetAlertLocked: decoyReportLocked,
                                                         onPatchDecoy: patchDecoy,
                                                     }}
                                                 />

@@ -133,4 +133,24 @@ describe("Privacy Monitor control accessibility", () => {
     expect(rightSidebar).toContain('ariaLabel="Open metadata scrubber"');
     expect(rightSidebar).toContain('ariaLabel={sdCountdown !== null ? "Abort lockdown countdown" : "Run configured lockdown"}');
   });
+
+  test("keeps every Fleet-selected local reporting control visibly locked", async () => {
+    const [panel, ransomware, decoy, auth, screenCapture, wifi] = await Promise.all([
+      Bun.file("src/panels/privacy/index.tsx").text(),
+      Bun.file("src/panels/privacy/RansomwareMonitorSection.tsx").text(),
+      Bun.file("src/panels/privacy/DecoyMonitorSection.tsx").text(),
+      Bun.file("src/panels/privacy/AuthAnomalySection.tsx").text(),
+      Bun.file("src/panels/privacy/ScreenCaptureSection.tsx").text(),
+      Bun.file("src/panels/network/WifiGuardSection.tsx").text(),
+    ]);
+
+    expect(panel).toContain('fleetReportingLocked={authAnomalyReportLocked}');
+    expect(panel).toContain('fleetReportingLocked={ransomwareReportLocked}');
+    expect(panel).toContain('fleetAlertLocked: decoyReportLocked');
+    expect(ransomware).toContain('disabled={fleetReportingLocked}');
+    expect(decoy).toContain('disabled={fleetAlertLocked}');
+    expect(auth).toContain('disabled={fleetReportingLocked}');
+    expect(screenCapture).toContain('disabled={busy || reportToFleetLocked}');
+    expect(wifi).toContain('disabled={fleetReportingLocked}');
+  });
 });

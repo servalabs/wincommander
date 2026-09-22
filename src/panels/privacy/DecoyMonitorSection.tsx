@@ -51,6 +51,9 @@ interface Props {
   enrolledPaths: string[];
   readAuditEnabled: boolean;
   fleetAlertEnabled: boolean;
+  /** The signed Fleet reporting policy owns this one switch, not the decoy
+   * detector's local arm/configuration controls. */
+  fleetAlertLocked?: boolean;
   onPatchDecoy: (patch: { enabled?: boolean; enrolledPaths?: string[]; readAuditEnabled?: boolean; fleetAlertEnabled?: boolean }) => void;
   /** Controlled expand for accordion behaviour in monitoring/safeguards grids. */
   expanded?: boolean;
@@ -63,6 +66,7 @@ export default function DecoyMonitorSection({
   enrolledPaths,
   readAuditEnabled,
   fleetAlertEnabled,
+  fleetAlertLocked = false,
   onPatchDecoy,
   expanded: expandedProp,
   onExpandedChange,
@@ -333,10 +337,11 @@ export default function DecoyMonitorSection({
                   </span>
                 </span>
               </label>
-              <label className="flex items-start gap-2 rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[11px] text-[var(--shield-text-subtle)] cursor-pointer">
+              <label className={`flex items-start gap-2 rounded border border-[var(--shield-inner-border)] px-3 py-2 text-[11px] text-[var(--shield-text-subtle)] ${fleetAlertLocked ? "opacity-70" : "cursor-pointer"}`}>
                 <input
                   type="checkbox"
                   checked={fleetAlertEnabled}
+                  disabled={fleetAlertLocked}
                   onChange={(e) => onPatchDecoy({ fleetAlertEnabled: e.currentTarget.checked })}
                   aria-label="Notify Fleet admins about decoy access"
                   className="mt-0.5 accent-[var(--color-accent)]"
@@ -344,7 +349,9 @@ export default function DecoyMonitorSection({
                 <span>
                   Notify Fleet admins
                   <span className="block text-[10px] text-[var(--shield-text-muted)]">
-                    Sends a redacted tripwire signal to Fleet. Local path and user details stay on this PC.
+                    {fleetAlertLocked
+                      ? "Required by your Fleet policy. Local path and user details stay on this PC."
+                      : "Sends a redacted tripwire signal to Fleet. Local path and user details stay on this PC."}
                   </span>
                 </span>
               </label>

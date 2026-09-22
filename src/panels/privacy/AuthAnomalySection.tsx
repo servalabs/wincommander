@@ -39,10 +39,11 @@ interface AuthAnomalyPolicyProps {
   alertDebounceSecs: number;
   reportToFleet: boolean;
   fleetReportingRequired: boolean;
+  fleetReportingLocked?: boolean;
   onPatch: (patch: AuthAnomalyPolicyPatch) => void;
 }
 
-type AuthAnomalyPolicyPatch = Partial<Omit<AuthAnomalyPolicyProps, 'onPatch' | 'fleetReportingRequired'>>;
+type AuthAnomalyPolicyPatch = Partial<Omit<AuthAnomalyPolicyProps, 'onPatch' | 'fleetReportingRequired' | 'fleetReportingLocked'>>;
 
 function sevIntent(sev: string): Intent | undefined {
   return sev === 'high' ? 'danger' : undefined;
@@ -62,6 +63,7 @@ export default function AuthAnomalySection({
   alertDebounceSecs,
   reportToFleet,
   fleetReportingRequired,
+  fleetReportingLocked = false,
   onPatch,
 }: AuthAnomalyPolicyProps) {
   const requestConfirm = useAppConfirm();
@@ -281,9 +283,9 @@ export default function AuthAnomalySection({
               <Switch checked={detectOffHours} onChange={(e) => onPatch({ detectOffHours: e.currentTarget.checked })} label="Alert on interactive sign-ins outside the schedule" />
               <Switch
                 checked={fleetReportingRequired || reportToFleet}
-                disabled={fleetReportingRequired}
+                disabled={fleetReportingLocked}
                 onChange={(e) => onPatch({ reportToFleet: e.currentTarget.checked })}
-                label={fleetReportingRequired
+                label={fleetReportingLocked
                   ? 'Fleet reporting required by device policy'
                   : 'Send aggregate access signals to Fleet'}
               />
