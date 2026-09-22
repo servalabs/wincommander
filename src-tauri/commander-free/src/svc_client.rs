@@ -18,6 +18,16 @@ const PIPE_CONNECT_RETRY_DELAYS: [std::time::Duration; 3] = [
     std::time::Duration::from_millis(150),
     std::time::Duration::from_millis(350),
 ];
+/// `list_authorized` and `capabilities` are read-only desktop startup probes.
+/// A SYSTEM-service restart can leave the pipe present while its peer identity
+/// or Hello session is still being replaced. These delays retry only before a
+/// request is written, so a Vault mutation is never replayed.
+#[cfg(windows)]
+const SERVICE_PROBE_HANDSHAKE_RETRY_DELAYS: [std::time::Duration; 3] = [
+    std::time::Duration::from_millis(100),
+    std::time::Duration::from_millis(300),
+    std::time::Duration::from_millis(700),
+];
 #[cfg(any(windows, test))]
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -124,36 +134,9 @@ async fn call_via_with_timeout(
     diagnostic_operation_id: Option<String>,
 ) -> Result<Value, String> {
     use tokio::time::timeout;
-    use uuid::Uuid;
 
-    // The service swaps in a fresh pipe instance immediately after accepting
-    // a client. Windows can nevertheless report ERROR_PIPE_BUSY/SEM_TIMEOUT
-    // in that tiny hand-off window. Retry only the connection, before Hello
-    // or a request is written, so a policy mutation can never be duplicated.
-    let mut client = open_service_pipe(pipe_name).await?;
-    // Authenticate before writing even Hello: the server could otherwise
-    // impersonate the caller or receive a Vault credential.
-    let _verified_peer = verify_connected_service(&client, pipe_name)?;
-    let session_token = Uuid::new_v4().to_string();
-    let hello = wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(&session_token));
-
-    timeout(
-        SVC_TRANSPORT_TIMEOUT,
-        wincmd_shared::write_envelope(&mut client, &hello),
-    )
-    .await
-    .map_err(|_| "service Hello write timed out".to_string())?
-    .map_err(|e| format!("service Hello write failed: {e}"))?;
-    let ack = timeout(
-        SVC_TRANSPORT_TIMEOUT,
-        wincmd_shared::read_envelope(&mut client),
-    )
-    .await
-    .map_err(|_| "service Hello acknowledgement timed out".to_string())?
-    .map_err(|e| format!("service Hello acknowledgement failed: {e}"))?;
-    if !matches!(ack, wincmd_shared::Envelope::Hello(_)) {
-        return Err("service returned an invalid Hello acknowledgement".to_string());
-    }
+    let (mut client, session_token) =
+        open_authenticated_service_session(pipe_name, feature_id).await?;
 
     let request_id = next_request_id();
     let mut request = wincmd_shared::Envelope::Request(wincmd_shared::Request {
@@ -218,6 +201,78 @@ async fn call_via_with_timeout(
         }
         _ => Err("service returned an unexpected reply".to_string()),
     }
+}
+
+#[cfg(windows)]
+fn retries_service_startup_handshake(feature_id: &str) -> bool {
+    // Keep this deliberately narrower than the protocol's `ReadOnly` class:
+    // mount/unmount are authorized as ReadOnly but still change Windows state.
+    // These two verbs only fetch startup/page state and have no mutation
+    // request to repeat.
+    matches!(
+        feature_id,
+        "svc.vault.list_authorized" | "svc.vault.capabilities"
+    )
+}
+
+#[cfg(windows)]
+async fn open_authenticated_service_session(
+    pipe_name: &str,
+    feature_id: &str,
+) -> Result<(tokio::net::windows::named_pipe::NamedPipeClient, String), String> {
+    let retry = retries_service_startup_handshake(feature_id);
+    for (attempt, delay) in SERVICE_PROBE_HANDSHAKE_RETRY_DELAYS.iter().enumerate() {
+        match open_authenticated_service_session_once(pipe_name).await {
+            Ok(session) => return Ok(session),
+            Err(_error) if retry => {
+                tokio::time::sleep(*delay).await;
+                if attempt + 1 == SERVICE_PROBE_HANDSHAKE_RETRY_DELAYS.len() {
+                    return open_authenticated_service_session_once(pipe_name).await;
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the bounded retry list is non-empty")
+}
+
+/// Establishes and authenticates one pipe session. No service request has
+/// been written when this returns an error, which makes retrying a caller's
+/// startup probe safe.
+#[cfg(windows)]
+async fn open_authenticated_service_session_once(
+    pipe_name: &str,
+) -> Result<(tokio::net::windows::named_pipe::NamedPipeClient, String), String> {
+    use tokio::time::timeout;
+    use uuid::Uuid;
+
+    // The service swaps in a fresh pipe instance immediately after accepting
+    // a client. `open_service_pipe` handles the connection hand-off window.
+    let mut client = open_service_pipe(pipe_name).await?;
+    // Authenticate before writing even Hello: the server could otherwise
+    // impersonate the caller or receive a Vault credential.
+    let _verified_peer = verify_connected_service(&client, pipe_name)?;
+    let session_token = Uuid::new_v4().to_string();
+    let hello = wincmd_shared::Envelope::Hello(wincmd_shared::svc::hello_from_ui(&session_token));
+
+    timeout(
+        SVC_TRANSPORT_TIMEOUT,
+        wincmd_shared::write_envelope(&mut client, &hello),
+    )
+    .await
+    .map_err(|_| "service Hello write timed out".to_string())?
+    .map_err(|e| format!("service Hello write failed: {e}"))?;
+    let ack = timeout(
+        SVC_TRANSPORT_TIMEOUT,
+        wincmd_shared::read_envelope(&mut client),
+    )
+    .await
+    .map_err(|_| "service Hello acknowledgement timed out".to_string())?
+    .map_err(|e| format!("service Hello acknowledgement failed: {e}"))?;
+    if !matches!(ack, wincmd_shared::Envelope::Hello(_)) {
+        return Err("service returned an invalid Hello acknowledgement".to_string());
+    }
+    Ok((client, session_token))
 }
 
 #[cfg(windows)]
@@ -353,6 +408,18 @@ mod tests {
         assert!(may_still_be_completing("svc.vault.unmount"));
         assert!(may_still_be_completing("svc.vault.mount"));
         assert!(!may_still_be_completing("svc.vault.get_status"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_read_only_vault_startup_probes_retry_the_handshake() {
+        assert!(retries_service_startup_handshake(
+            "svc.vault.list_authorized"
+        ));
+        assert!(retries_service_startup_handshake("svc.vault.capabilities"));
+        assert!(!retries_service_startup_handshake("svc.vault.apply_policy"));
+        assert!(!retries_service_startup_handshake("svc.vault.mount"));
+        assert!(!retries_service_startup_handshake("svc.vault.unmount"));
     }
 
     #[test]

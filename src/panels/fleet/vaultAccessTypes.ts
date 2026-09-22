@@ -158,13 +158,18 @@ export function newVaultEntry(kind: "shared" | "private" = "private"): VaultAcce
   const shared = kind === "shared";
   return {
     id,
-    label: shared ? "Shared vault" : "Administrator vault",
+    label: shared ? "Shared vault" : "Personal vault",
     container_path: "",
     container_kind: "standard",
-    owner_account: "Administrator",
+    // Never guess that this machine has an enabled account named
+    // "Administrator". On a renamed, domain-joined, or different PC that
+    // name may not resolve at all, which used to make a new policy fail only
+    // after it reached the SYSTEM service. The administrator must choose a
+    // current Windows user or group from the directory instead.
+    owner_account: "",
     // A shared presentation changes only where Windows exposes the mounted
     // drive. It must not silently grant a generic local account write access.
-    grants: [{ principal_name: "Administrator", access: "write" }],
+    grants: [{ principal_name: "", access: "write" }],
     mount: { presentation: shared ? "machine" : "per-user" },
   };
 }

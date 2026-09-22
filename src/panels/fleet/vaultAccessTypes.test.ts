@@ -48,21 +48,22 @@ describe("Vault Access service intent", () => {
     expect(validateVaultAccessIntent(policy)).toBe("Every vault needs a label, container path, and owner account.");
   });
 
-  test("uses owner-only defaults and permits an explicit empty revoke policy", () => {
-    expect(newVaultEntry("shared").grants).toEqual([{ principal_name: "Administrator", access: "write" }]);
+  test("requires an explicit owner selection and permits an empty revoke policy", () => {
+    expect(newVaultEntry("shared").grants).toEqual([{ principal_name: "", access: "write" }]);
     const policy = newVaultPolicy();
     policy.entries = [];
     expect(validateVaultAccessIntent(policy)).toBeNull();
   });
 
-  test("rejects a Shared vault left with only the owner's default grant", () => {
-    // newVaultEntry("shared") is the app's own starter shape: machine
-    // presentation with exactly one grant. The service rejects that
+  test("rejects a Shared vault left with only one named grant", () => {
+    // A Shared vault is machine-presented with exactly one named grant. The service rejects that
     // combination outright, so the draft must be caught before Apply.
     const policy = newVaultPolicy();
     const entry = policy.entries[0]!;
     policy.entries = [entry];
     entry.container_path = "C:\\Vaults\\shared\\vault.hc";
+    entry.owner_account = "Owner";
+    entry.grants = [{ principal_name: "Owner", access: "write" }];
     expect(entry.mount.presentation).toBe("machine");
     expect(entry.grants).toHaveLength(1);
     expect(validateVaultAccessIntent(policy)).toBe(
@@ -75,6 +76,7 @@ describe("Vault Access service intent", () => {
     const entry = policy.entries[0]!;
     policy.entries = [entry];
     entry.container_path = "C:\\Vaults\\shared\\vault.hc";
+    entry.owner_account = "Owner";
     entry.grants = [
       { principal_name: "DOMAIN\\Partner", access: "read" },
       { principal_name: " domain\\partner ", access: "write" },
@@ -114,7 +116,11 @@ describe("Vault Access service intent", () => {
     // second grant so this test isolates the file-scope behavior it
     // targets, rather than tripping the separate too-few-grants check.
     policy.entries[0]!.grants.push({ principal_name: "Partner", access: "read" });
-    policy.entries.forEach((entry, index) => { entry.container_path = `C:\\Vaults\\vault-${index}.hc`; });
+    policy.entries.forEach((entry, index) => {
+      entry.container_path = `C:\\Vaults\\vault-${index}.hc`;
+      entry.owner_account = `Owner${index}`;
+      entry.grants[0] = { principal_name: `Owner${index}`, access: "write" };
+    });
     expect(validateVaultAccessIntent(policy)).toBeNull();
   });
 

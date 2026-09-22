@@ -4,7 +4,7 @@
 //! available in this crate. This module preserves the frozen snake_case wire
 //! and contains that temporary adaptation at one boundary.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -94,6 +94,16 @@ fn vault_failure_code(
             "VLT.OPERATION.TIMEOUT",
             DiagnosticRetryability::Manual,
             "refresh_status",
+        )
+    } else if lower.contains("principal resolution") {
+        // This is a deterministic Windows account/group lookup failure while
+        // preflighting a Vault policy. It happens before the broker, driver,
+        // or mount engine is involved, so reporting it as a broker failure
+        // sends an administrator to the wrong recovery path.
+        (
+            "VLT.POLICY.PRINCIPAL_UNAVAILABLE",
+            DiagnosticRetryability::Manual,
+            "refresh_access_directory",
         )
     } else if lower.contains("not_authorized") || lower.contains("forbidden") {
         (
@@ -613,6 +623,14 @@ mod tests {
         assert_eq!(
             vault_failure_code("dismount", "unrecognized service reply").0,
             "VLT.DISMOUNT.FAILED"
+        );
+        assert_eq!(
+            vault_failure_code(
+                "apply_policy",
+                "service rejected request: vault_apply_failed (vault principal resolution failed)"
+            )
+            .0,
+            "VLT.POLICY.PRINCIPAL_UNAVAILABLE"
         );
     }
 
