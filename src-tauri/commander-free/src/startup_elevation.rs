@@ -169,11 +169,24 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     // child without another consent dialog. If the task is absent, blocked by
     // policy, or this is a standard user, deliberately fall through to UAC.
     let task_name = ELEVATED_LAUNCH_TASK;
-    let task_status = std::process::Command::new("schtasks.exe")
-        .args(["/Run", "/TN", task_name])
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .status();
-    if matches!(task_status, Ok(status) if status.success()) {
+    // Never hand a dev/portable launch to an unrelated installed executable.
+    // RunEx binds the task to this interactive session on multi-user machines.
+    let task_script = std::env::current_exe().ok().map(|path| format!(
+        "$ErrorActionPreference='Stop'; $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $task=$scheduler.GetFolder('\\').GetTask('{task_name}'); $d=$task.Definition; if ($d.Actions.Count -ne 1 -or $d.Actions.Item(1).Path -ine '{}' -or $d.Actions.Item(1).Arguments -ne '--elevated-relaunch' -or $d.Principal.RunLevel -ne 1 -or $d.Settings.MultipleInstances -ne 0) {{ exit 1 }}; $sid=$d.Principal.GroupId; if ($sid -notmatch '^S-1-') {{ $sid=([Security.Principal.NTAccount]$sid).Translate([Security.Principal.SecurityIdentifier]).Value }}; if ($sid -ne 'S-1-5-32-544') {{ exit 1 }}; $session=[Diagnostics.Process]::GetCurrentProcess().SessionId; $null=$task.RunEx($null,4,$session,$null)",
+        path.to_string_lossy().replace('\'', "''")
+    ));
+    let task_status = if !cfg!(debug_assertions) && current_user_has_split_admin_token() {
+        task_script.and_then(|script| {
+            std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                .status()
+                .ok()
+        })
+    } else {
+        None
+    };
+    if matches!(task_status, Some(status) if status.success()) {
         crate::log_message_src(
             "info",
             "core",

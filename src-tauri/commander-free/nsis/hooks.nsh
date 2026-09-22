@@ -15,6 +15,7 @@ ${Using:StrFunc} UnStrStr
 !define WC_LEGACY_LAUNCH_MIGRATION "${__FILEDIR__}\migrate-legacy-user-launches.ps1"
 !define WC_CLOSE_INSTALLED_APP "${__FILEDIR__}\close-installed-app.ps1"
 !define WC_CONFIGURE_ELEVATED_LAUNCHERS "${__FILEDIR__}\configure-elevated-launchers.ps1"
+!define WC_REPAIR_SHARED_SETTINGS "${__FILEDIR__}\repair-shared-settings.ps1"
 !define WC_UPGRADE_LICENSE_BACKUP "$R5\WinCommander-license_cache.upgrade-backup.json"
 ; The service advertises this same bounded cleanup interval to SCM while it
 ; dismounts an active Vault.  The installer must not replace its EXE sooner.
@@ -84,51 +85,18 @@ ${Using:StrFunc} UnStrStr
   ${EndIf}
 !macroend
 
-; The Pro binary, its verified version record, and the licence cache are
-; machine-owned artifacts. Every local user needs read/execute access so a
-; completed administrator update is visible in every session; only SYSTEM and
-; Administrators may replace them. Per-user preferences remain under each
-; profile's LocalAppData and are not part of this ACL change.
-!macro WC_ENSURE_SHARED_MACHINE_DATA_ACL_OR_ABORT stage
-  nsExec::ExecToStack 'icacls.exe "$R5\WinCommander" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX" /T /C'
-  Pop $0
-  Pop $1
-  !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-shared-machine-data-acl" "$0" "$1"
-  ${If} $0 != 0
-    Abort "WinCommander could not secure its shared machine data for all local users."
-  ${EndIf}
-!macroend
-
-; Older builds could leave an individual ProgramData file (most importantly
-; `store\settings.dat` or `.install.material`) with a protected ACL owned by
-; SYSTEM.  `icacls /T /C` then continues past that file and reports success for
-; the directory, while every desktop account later fails before it can read
-; settings.  The elevated installer owns this product root, so first reclaim
-; ownership of its machine-owned files and then apply the deliberate shared
-; read-only ACL.  Per-user preferences are in LocalAppData and are untouched.
-; A clean installation has no product ProgramData folder yet.  `takeown`
-; correctly returns ERROR_FILE_NOT_FOUND in that case, so create the narrow
-; product root before attempting the legacy-owner repair.  CreateDirectory is
-; idempotent and does not modify an existing store.
-!macro WC_ENSURE_SHARED_MACHINE_DATA_DIRECTORY_OR_ABORT stage
-  ClearErrors
-  CreateDirectory "$R5\WinCommander"
-  ${If} ${Errors}
-    !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-shared-machine-data-directory" "failed" "Could not create the product ProgramData directory"
-    Abort "WinCommander could not prepare its shared machine data directory."
-  ${EndIf}
-!macroend
-
+; Repair only desktop settings paths. Do not recursively take ownership of
+; private service state or replace any existing encrypted contents.
 !macro WC_REPAIR_SHARED_MACHINE_DATA_ACL_OR_ABORT stage
-  !insertmacro WC_ENSURE_SHARED_MACHINE_DATA_DIRECTORY_OR_ABORT "${stage}"
-  nsExec::ExecToStack 'takeown.exe /F "$R5\WinCommander" /A /R /D Y'
+  InitPluginsDir
+  File /oname=$PLUGINSDIR\wincommander-repair-shared-settings.ps1 "${WC_REPAIR_SHARED_SETTINGS}"
+  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\wincommander-repair-shared-settings.ps1" -DataRoot "$R5\WinCommander"'
   Pop $0
   Pop $1
-  !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-shared-machine-data-owner-repair" "$0" "$1"
+  !insertmacro WC_WRITE_LIFECYCLE_DIAGNOSTIC "${stage}-shared-settings-repair" "$0" "$1"
   ${If} $0 != 0
-    Abort "WinCommander could not repair ownership of its shared machine data."
+    Abort "WinCommander could not verify shared settings permissions. See installer-lifecycle.log."
   ${EndIf}
-  !insertmacro WC_ENSURE_SHARED_MACHINE_DATA_ACL_OR_ABORT "${stage}"
 !macroend
 
 ; `sc stop` returns before SCM has necessarily released the service process.

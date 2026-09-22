@@ -51,6 +51,11 @@ pub fn ensure_autostart_task() -> Result<(), String> {
 fn ensure_autostart_task_named(covered: bool) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
+    // A development window must never repoint the installed machine's logon task.
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
+
     let exe = std::env::current_exe()
         .map_err(|e| format!("current_exe: {e}"))?
         .to_string_lossy()
@@ -68,7 +73,11 @@ $needsRepair = $null -eq $task
 if (-not $needsRepair) {{
   $action = @($task.Actions)
   $logonTrigger = @($task.Triggers | Where-Object {{ $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }})
-  $needsRepair = $action.Count -ne 1 -or $action[0].Execute -ne '{exe}' -or $action[0].Arguments -ne '{action_args}' -or $logonTrigger.Count -ne 1 -or $task.Principal.GroupId -ne 'S-1-5-32-545' -or $task.Principal.RunLevel -ne 'Limited' -or $task.Settings.MultipleInstances -ne 'IgnoreNew' -or $task.Settings.ExecutionTimeLimit -ne 'PT0S'
+  $groupSid = $task.Principal.GroupId
+  if ($groupSid -and $groupSid -notmatch '^S-1-') {{
+    try {{ $groupSid = ([System.Security.Principal.NTAccount]$groupSid).Translate([System.Security.Principal.SecurityIdentifier]).Value }} catch {{ $groupSid = '' }}
+  }}
+  $needsRepair = $action.Count -ne 1 -or $action[0].Execute -ne '{exe}' -or $action[0].Arguments -ne '{action_args}' -or $logonTrigger.Count -ne 1 -or $groupSid -ne 'S-1-5-32-545' -or $task.Principal.RunLevel -ne 'Limited' -or $task.Settings.MultipleInstances -ne 'Parallel' -or $task.Settings.ExecutionTimeLimit -ne 'PT0S'
 }}
 $staleTask = Get-ScheduledTask -TaskName '{stale_name}' -ErrorAction SilentlyContinue
 $obsoleteElevatedAutostart = Get-ScheduledTask -TaskName 'WinCommander Elevated Autostart' -ErrorAction SilentlyContinue
@@ -76,10 +85,11 @@ $legacyTasks = @('Sys Health Checker', 'WinCommander Input Service') | Where-Obj
 $legacyRun = Get-ItemPropertyValue -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{run}' -ErrorAction SilentlyContinue
 if ($staleTask -or $obsoleteElevatedAutostart -or $legacyTasks.Count -gt 0 -or $null -ne $legacyRun -or (Test-Path -LiteralPath \"$env:ProgramData\\WinCommander\\reopen.cfg\")) {{ $needsRepair = $true }}
 if ($needsRepair) {{
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {{ throw 'Autostart repair requires administrator approval; normal startup is still available.' }}
 $a = New-ScheduledTaskAction -Execute '{exe}' -Argument '{action_args}'
 $t = New-ScheduledTaskTrigger -AtLogOn
 $p = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
-$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
 Register-ScheduledTask -TaskName '{name}' -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
 Unregister-ScheduledTask -TaskName '{stale_name}' -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName 'WinCommander Elevated Autostart' -Confirm:$false -ErrorAction SilentlyContinue

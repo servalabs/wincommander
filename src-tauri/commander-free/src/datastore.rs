@@ -546,16 +546,27 @@ fn atomic_write_bytes(path: &std::path::Path, data: &[u8]) -> Result<(), String>
 /// Load a settings section from disk. Returns an empty object if the section
 /// file does not yet exist (first run). Returns an error on I/O or decode failure.
 pub fn load(section: &str) -> Result<Value, String> {
-    let path = section_path(section)?;
-    if !path.exists() {
+    validate_section_name(section)?;
+    // Reading a first-run store must not require creating an administrator-owned
+    // subdirectory. Only NotFound means defaults; denied/corrupt policy stays an error.
+    let path = crate::paths::datastore_data_dir()?
+        .join(STORE_SUBDIR)
+        .join(format!("{section}.dat"));
+    let Some(raw) = read_section_file(&path, section)? else {
         return Ok(Value::Object(Default::default()));
-    }
-    let raw = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read section '{section}': {e}"))?;
+    };
     let material = install_material()?;
     let key = derive_section_key(&material, None)?;
     let bytes = decode_section(&key, raw.trim(), &format!("machine:{section}"))?;
     serde_json::from_slice(&bytes).map_err(|e| format!("Failed to parse section '{section}': {e}"))
+}
+
+fn read_section_file(path: &std::path::Path, section: &str) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Failed to read section '{section}': {error}")),
+    }
 }
 
 /// Write a settings section to disk (replaces the full section).
@@ -754,6 +765,29 @@ pub fn log_decrypt_line(line: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn missing_section_read_does_not_create_the_store() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("absent-store").join("settings.dat");
+        assert_eq!(super::read_section_file(&path, "settings").unwrap(), None);
+        assert!(!path.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn section_io_errors_are_not_treated_as_empty_policy() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(super::read_section_file(temp.path(), "settings").is_err());
+        let path = temp.path().join("settings.dat");
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert!(super::read_section_file(&path, "settings").is_err());
+        std::fs::write(&path, "encrypted-settings").unwrap();
+        assert_eq!(
+            super::read_section_file(&path, "settings")
+                .unwrap()
+                .as_deref(),
+            Some("encrypted-settings")
+        );
+    }
     use super::*;
     use serde_json::json;
 

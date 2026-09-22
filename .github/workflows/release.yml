@@ -328,6 +328,14 @@ jobs:
       # This is an artifact-level gate, not a source-contract check. It proves
       # one consented machine-wide setup serves all Windows accounts and leaves
       # no machine service behind.
+      - name: Verify shared settings permission repair against isolated Windows fixtures
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP ("wc-settings-test-" + [guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $fixture | Out-Null
+          & .\tools\test-shared-settings-repair.ps1 -FixtureParent $fixture
+          if (-not (Test-Path -LiteralPath (Join-Path $fixture "result.txt"))) { throw "Missing settings repair test result." }
+          Get-Content -LiteralPath (Join-Path $fixture "result.txt")
       - name: Verify Free setup installs and removes the machine-wide installation
         shell: pwsh
         env:
@@ -361,6 +369,24 @@ jobs:
           $service = Get-CimInstance Win32_Service -Filter "Name='WinCommanderSvc'" -ErrorAction SilentlyContinue
           if ($null -eq $service -or $service.State -ne "Running") {
             throw "The Free setup did not create and start WinCommanderSvc."
+          }
+
+          foreach ($taskName in @("WinCommander Autostart", "WinCommander Elevated Launcher")) {
+            $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+            if ($task.Settings.MultipleInstances -ne "Parallel" -or @($task.Actions).Count -ne 1 -or $task.Actions[0].Execute -ine $mainBinary) {
+              throw "The installer did not configure the per-session launch route: $taskName."
+            }
+          }
+          # Exercise the packaged WebView/IPC/settings path, not merely EXE existence.
+          # Capture privately: settings must never be printed into CI logs.
+          $settingsResult = Join-Path $env:RUNNER_TEMP "installed-settings-result.json"
+          try {
+            $settingsProcess = Start-Process -FilePath $mainBinary -ArgumentList "run tauri:get_settings --timeout-ms 60000" -RedirectStandardOutput $settingsResult -Wait -PassThru
+            if ($settingsProcess.ExitCode -ne 0) { throw "Installed settings read failed (exit $($settingsProcess.ExitCode))." }
+            $settingsReply = Get-Content -LiteralPath $settingsResult -Raw | ConvertFrom-Json
+            if ($settingsReply.ok -ne $true) { throw "Installed settings read did not report success." }
+          } finally {
+            Remove-Item -LiteralPath $settingsResult -Force -ErrorAction SilentlyContinue
           }
 
           $uninstaller = Join-Path $env:ProgramFiles "WinCommander\uninstall.exe"

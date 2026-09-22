@@ -436,7 +436,9 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
 
     let result = match staged {
         Some(bytes) => tokio::time::timeout(INSTALL_TIMEOUT, async {
-            update.install(bytes).map_err(|e| format!("Install failed: {}", e))
+            update
+                .install(bytes)
+                .map_err(|e| format!("Install failed: {}", e))
         })
         .await
         .unwrap_or_else(|_| Err("Update installation timed out".to_string())),
@@ -445,8 +447,8 @@ pub async fn app_install_staged_update(app: AppHandle) -> Result<(), String> {
             update.download_and_install(|_, _| {}, || {}),
         )
         .await
-        .map_err(|_| "Update installation timed out".to_string())?
-        .map_err(|e| format!("Install failed: {}", e)),
+        .map(|result| result.map_err(|e| format!("Install failed: {}", e)))
+        .unwrap_or_else(|_| Err("Update installation timed out".to_string())),
     };
 
     if result.is_ok() {

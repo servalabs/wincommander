@@ -33,6 +33,19 @@ if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
     exit 1
 }
 
+function Assert-TaskContract($Task, [string]$GroupSid, [string]$RunLevel, [string]$Arguments) {
+    $actualSid = $Task.Principal.GroupId
+    if ($actualSid -notmatch '^S-1-') {
+        $actualSid = ([Security.Principal.NTAccount]$actualSid).Translate([Security.Principal.SecurityIdentifier]).Value
+    }
+    $actions = @($Task.Actions)
+    if ($actualSid -ne $GroupSid -or $Task.Principal.RunLevel -ne $RunLevel -or
+        $Task.Settings.MultipleInstances -ne 'Parallel' -or $actions.Count -ne 1 -or
+        $actions[0].Execute -ine $targetPath -or $actions[0].Arguments -ne $Arguments) {
+        throw 'The registered WinCommander task did not match the required security and session contract.'
+    }
+}
+
 function Register-ElevatedLauncherTask {
     param(
         [Parameter(Mandatory)]
@@ -50,7 +63,7 @@ function Register-ElevatedLauncherTask {
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit ([TimeSpan]::Zero) `
-        -MultipleInstances IgnoreNew
+        -MultipleInstances Parallel
 
     Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 
@@ -59,9 +72,7 @@ function Register-ElevatedLauncherTask {
     # (for example, "Administrators") when reading it back. The task was
     # created with the fixed Administrators SID above; verify the stable
     # privilege property here rather than comparing localized display text.
-    if ($registered.Principal.RunLevel -ne 'Highest') {
-        throw "Task $TaskName was not registered with the required Highest security context."
-    }
+    Assert-TaskContract $registered $administratorsSid 'Highest' $Arguments
 }
 
 function Register-LogonRouterTask {
@@ -72,12 +83,10 @@ function Register-LogonRouterTask {
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit ([TimeSpan]::Zero) `
-        -MultipleInstances IgnoreNew
+        -MultipleInstances Parallel
     Register-ScheduledTask -TaskName $autostartTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
     $registered = Get-ScheduledTask -TaskName $autostartTaskName -ErrorAction Stop
-    if ($registered.Principal.RunLevel -ne 'Limited') {
-        throw "Task $autostartTaskName was not registered with the required Limited security context."
-    }
+    Assert-TaskContract $registered $usersSid 'Limited' '--autostart'
 }
 
 try {
