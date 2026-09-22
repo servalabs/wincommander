@@ -16,7 +16,7 @@ describe("Privacy Monitor control accessibility", () => {
     );
   });
 
-  test("places RDP beside Privacy Shield, moves DLP to its former left-column position, and keeps Print Monitoring on the right", async () => {
+  test("places the complete RDP access surface at the top of the right column without nesting cards", async () => {
     const [panel, remoteAccess, rdp] = await Promise.all([
       Bun.file("src/panels/privacy/index.tsx").text(),
       Bun.file("src/panels/privacy/RemoteAccessMonitorSection.tsx").text(),
@@ -33,8 +33,10 @@ describe("Privacy Monitor control accessibility", () => {
     const rightColumn = panel.slice(rightColumnStart);
     expect(leftColumn).toContain('<PrivacyShieldCard />');
     expect(leftColumn).toContain('<ArgusDlpSection />');
-    expect(leftColumn).toContain('rdpProtection={<RdpIdleCard embedded />}');
-    expect(rightColumn).not.toContain('<RdpIdleCard />');
+    expect(leftColumn).not.toContain('rdpProtection={<RdpIdleCard embedded />}');
+    expect(rightColumn.indexOf('rdpProtection={<RdpIdleCard embedded />}')).toBeLessThan(
+      rightColumn.indexOf('<RansomwareMonitorSection'),
+    );
     expect(rightColumn).toContain('<RansomwareMonitorSection');
     expect(rightColumn).toContain('<PrintMonitoringSection />');
   });

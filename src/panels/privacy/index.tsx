@@ -377,16 +377,6 @@ export default function PrivacyPanel() {
                                                 />
                                             </div>
                                             <div className="privacy-monitor-cell">
-                                                <RemoteAccessMonitorSection
-                                                    isAdvanced={isAdvanced}
-                                                    searchQuery=""
-                                                    enabled={remoteAccessEnabled}
-                                                    toolOverrides={remoteAccessTools}
-                                                    onPatch={patchRemoteAccess}
-                                                    rdpProtection={<RdpIdleCard embedded />}
-                                                />
-                                            </div>
-                                            <div className="privacy-monitor-cell">
                                                 <AuthAnomalySection
                                                     enabled={authAnomalyEnabled}
                                                     {...authAnomalyPolicy}
@@ -399,6 +389,16 @@ export default function PrivacyPanel() {
                                             <div className="privacy-monitor-cell"><UsbDevicesSection /></div>
                                         </div>
                                         <div className="privacy-monitor-col">
+                                            <div className="privacy-monitor-cell">
+                                                <RemoteAccessMonitorSection
+                                                    isAdvanced={isAdvanced}
+                                                    searchQuery=""
+                                                    enabled={remoteAccessEnabled}
+                                                    toolOverrides={remoteAccessTools}
+                                                    onPatch={patchRemoteAccess}
+                                                    rdpProtection={<RdpIdleCard embedded />}
+                                                />
+                                            </div>
                                             <div className="privacy-monitor-cell">
                                                 <RansomwareMonitorSection
                                                     isAdvanced={isAdvanced}
