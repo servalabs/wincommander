@@ -861,13 +861,13 @@ export default function VaultAccessTab({ isAdmin, directory }: { isAdmin: boolea
                 const mounted = authorized?.mount_state === "mounted";
                 const canRepairSharedAccess = result === "acl_apply_failed" || result === "acl_readback_failed";
                 return <tr className={selectedEntry?.id === entry.id ? "is-selected" : ""} key={entry.id}>
-                  <td><strong>{entry.label}</strong></td>
-                  <td className="fleet-vault-policy-path" title={entry.container_path}>{entry.container_path}</td>
-                  <td>{entry.mount.presentation === "machine" ? "Shared" : "Personal"}</td>
-                  <td title={entry.grants.map(grant => grant.principal_name).join(", ")}>{entry.grants.map(grant => `${grant.principal_name} (${grant.access === "write" ? "edit" : "view"})`).join(", ")}</td>
-                  <td>{mounted ? authorized?.drive_letter ?? "Mounted" : "Not mounted"}</td>
-                  <td className={result && result !== "applied" ? "is-warning" : ""}>{result ? vaultEntryResultLabel(result) : "Not yet verified"}</td>
-                  <td><div className="fleet-vault-policy-actions">
+                  <td data-label="Vault"><strong>{entry.label}</strong></td>
+                  <td data-label="Container path" className="fleet-vault-policy-path" title={entry.container_path}>{entry.container_path}</td>
+                  <td data-label="Scope">{entry.mount.presentation === "machine" ? "Shared" : "Personal"}</td>
+                  <td data-label="Allowed users / groups" title={entry.grants.map(grant => grant.principal_name).join(", ")}>{entry.grants.map(grant => `${grant.principal_name} (${grant.access === "write" ? "edit" : "view"})`).join(", ")}</td>
+                  <td data-label="Mounted">{mounted ? authorized?.drive_letter ?? "Mounted" : "Not mounted"}</td>
+                  <td data-label="Health" className={result && result !== "applied" ? "is-warning" : ""}>{result ? vaultEntryResultLabel(result) : "Not yet verified"}</td>
+                  <td data-label="Actions"><div className="fleet-vault-policy-actions">
                     <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry.id, "details")}>Edit</Button>
                     <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry.id, "access")}>Manage access</Button>
                     {mounted ? <Button variant="outline" size="sm" disabled={unmountingEntryId === entry.id} onClick={() => void unmountSelectedEntry(entry.id)}>{unmountingEntryId === entry.id ? "Unmounting…" : "Dismount"}</Button>

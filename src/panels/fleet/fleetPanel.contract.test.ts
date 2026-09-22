@@ -179,6 +179,10 @@ describe("Fleet access-control panel contracts", () => {
     expect(vault).toContain("openEntryEditor(entry.id, \"access\")");
     expect(css).toContain(".fleet-vault-policy-grid-wrap");
     expect(css).toContain(".fleet-vault-policy-actions");
+    expect(css).toContain("container-type: inline-size;");
+    expect(css).toContain("@container (max-width: 1100px)");
+    expect(vault).toContain('data-label="Actions"');
+    expect(vault).toContain('data-label="Container path"');
   });
 
   test("opens real information popovers for access groups and Vault permissions", () => {

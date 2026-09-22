@@ -2104,6 +2104,7 @@
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
+  container-type: inline-size;
 }
 
 .fleet-vault-policy-grid {
@@ -2160,6 +2161,79 @@
 
 .fleet-vault-policy-actions { flex-wrap: wrap; }
 .fleet-vault-existing-path > input { min-width: 0; flex: 1; }
+
+/* At high Windows display scaling, a seven-column table makes its action
+   buttons fall outside the visible panel. Turn each saved Vault into a
+   labelled record using the space the table actually receives. */
+@container (max-width: 1100px) {
+  .fleet-vault-policy-grid {
+    min-width: 0;
+    font-size: 12px;
+  }
+
+  .fleet-vault-policy-grid thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .fleet-vault-policy-grid,
+  .fleet-vault-policy-grid tbody,
+  .fleet-vault-policy-grid tr {
+    display: block;
+    width: 100%;
+  }
+
+  .fleet-vault-policy-grid tr {
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .fleet-vault-policy-grid tbody tr:last-child { border-bottom: 0; }
+
+  .fleet-vault-policy-grid td,
+  .fleet-vault-policy-grid td:last-child {
+    display: grid;
+    grid-template-columns: minmax(130px, .8fr) minmax(0, 1.7fr);
+    gap: 10px;
+    max-width: none;
+    padding: 7px 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .fleet-vault-policy-grid td::before {
+    content: attr(data-label);
+    color: var(--text-mute);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+
+  .fleet-vault-policy-path {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .fleet-vault-policy-actions {
+    min-width: 0;
+  }
+}
+
+@container (max-width: 620px) {
+  .fleet-vault-policy-grid td,
+  .fleet-vault-policy-grid td:last-child {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+}
 
 .fleet-vault-grants {
   display: grid;
