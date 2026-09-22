@@ -44,7 +44,7 @@ export const MAX_PATH_LENGTH = 260;
 /** The three containers the carrier file picker offers, i.e. what the handler is fed today. */
 export const CARRIER_EXTENSIONS = ["mp4", "m4v", "mov"];
 
-/** VeraCrypt only recognises these as container files when you go to mount one. */
+/** Common names for a container; VeraCrypt also supports extensionless files. */
 export const CONTAINER_EXTENSIONS = ["hc", "tc"];
 
 const UNIT_MB: Record<SizeUnit, number> = { M: 1, G: 1024, T: 1024 * 1024 };
@@ -103,9 +103,14 @@ export function isSupportedCarrier(path: string): boolean {
   return CARRIER_EXTENSIONS.includes(fileExtension(path));
 }
 
-/** An existing VeraCrypt container is copied as opaque encrypted bytes. */
+/**
+ * VeraCrypt containers can have `.hc`, `.tc`, or no extension at all (for
+ * example an NTFS container named `Vault`). The handler verifies that the
+ * chosen item is a regular, safe file before copying it.
+ */
 export function isSupportedContainer(path: string): boolean {
-  return CONTAINER_EXTENSIONS.includes(fileExtension(path));
+  const name = fileName(path);
+  return !!name && name !== "." && name !== "..";
 }
 
 /** Last path segment only; metadata stores this name for a restore. */

@@ -21,18 +21,20 @@ export default function StegoBackupSection() {
         <TierGate tier="paid" featureLabel="Stego Backup">
           <div className="stego-blocks-row">
             <section className="stego-block" aria-labelledby="stego-attach-title">
-              <span id="stego-attach-title" className="stego-block__title">Attach existing container to video</span>
-              <p className="stego-intro">Choose the video and the .hc or .tc container you already use. Its password is never requested or stored.</p>
-              <FilePick label="Carrier video…" value={fields.carrierPath} onPick={() => void stego.pickCarrier()} onClear={() => set.setCarrierPath("")} disabled={locked} />
+              <span id="stego-attach-title" className="stego-block__title">Create or update a video backup</span>
+              <p className="stego-intro">Choose a carrier video and the container you already use. `.hc`, `.tc`, and extensionless NTFS containers are accepted. Its password is never requested or stored.</p>
+              <FilePick label="Carrier video or existing backup…" value={fields.carrierPath} onPick={() => void stego.pickCarrier()} onClear={() => set.setCarrierPath("")} disabled={locked} />
               <IssueLine issues={stego.attachErrors} field="carrier" /><IssueLine issues={stego.attachWarnings} field="carrier" tone="warn" />
               <FilePick label="Existing container…" value={fields.containerPath} onPick={() => void stego.pickContainer()} onClear={() => set.setContainerPath("")} disabled={locked} />
               <IssueLine issues={stego.attachErrors} field="container" /><IssueLine issues={stego.attachWarnings} field="container" tone="warn" />
-              <FilePick label="Save backup video as…" value={fields.outputPath} onPick={() => void stego.pickOutput()} onClear={() => set.setOutputPath("")} disabled={locked} />
+              <FilePick label="Save new backup video as… (optional)" value={fields.outputPath} onPick={() => void stego.pickOutput()} onClear={() => set.setOutputPath("")} disabled={locked} />
               <IssueLine issues={stego.attachErrors} field="output" /><IssueLine issues={stego.attachWarnings} field="output" tone="warn" />
-              {busy === "attach" && <BusyBar label="Copying the video and the sealed container, then verifying the snapshot." />}
+              <Checkbox checked={fields.replacementConfirmed} disabled={locked} label="If no new path is chosen, update the selected existing backup video after verification." onChange={(event) => set.setReplacementConfirmed(event.currentTarget.checked)} />
+              <IssueLine issues={stego.attachErrors} field="confirmation" />
+              {busy === "attach" && <BusyBar label="Copying and verifying the sealed container; an existing backup is replaced only after this succeeds." />}
               {stego.attachResult?.kind === "fail" && <FailureCallout failure={stego.attachResult.failure} />}
               {stego.attachResult?.kind === "ok" && <SuccessCallout title="Video backup created" path={stego.attachResult.path} onReveal={() => void stego.revealFolder(stego.attachResult!.path)}>Recover and mount it once before deleting or replacing any other copy.</SuccessCallout>}
-              <Button intent="primary" loading={busy === "attach"} disabled={locked || stego.attachBlocked} onClick={() => void stego.runAttach()}>Attach container to video</Button>
+              <Button intent="primary" loading={busy === "attach"} disabled={locked || stego.attachBlocked} onClick={() => void stego.runAttach()}>Create or update backup video</Button>
             </section>
             <section className="stego-block stego-block--restore" aria-labelledby="stego-restore-title">
               <span id="stego-restore-title" className="stego-block__title">Restore from a video <InfoDot content={INFO.restore} /></span>
@@ -48,20 +50,6 @@ export default function StegoBackupSection() {
               <Button loading={busy === "restore"} disabled={locked || stego.restoreBlocked} onClick={() => void stego.runRestore()}>Recover container</Button>
             </section>
           </div>
-          <section className="stego-block stego-block--refresh" aria-labelledby="stego-refresh-title">
-            <span id="stego-refresh-title" className="stego-block__title">Refresh an existing backup video</span>
-            <p className="stego-intro">After changing and dismounting your container, rebuild the same backup video. The old video is replaced only after the new snapshot verifies.</p>
-            <FilePick label="Existing backup video…" value={fields.refreshVideoPath} onPick={() => void stego.pickRefreshVideo()} onClear={() => set.setRefreshVideoPath("")} disabled={locked} />
-            <IssueLine issues={stego.refreshErrors} field="carrier" /><IssueLine issues={stego.refreshWarnings} field="carrier" tone="warn" />
-            <FilePick label="Updated container…" value={fields.refreshContainerPath} onPick={() => void stego.pickRefreshContainer()} onClear={() => set.setRefreshContainerPath("")} disabled={locked} />
-            <IssueLine issues={stego.refreshErrors} field="container" /><IssueLine issues={stego.refreshWarnings} field="container" tone="warn" />
-            <Checkbox checked={fields.refreshConfirmed} disabled={locked} label="I understand this replaces the existing backup video after verification." onChange={(event) => set.setRefreshConfirmed(event.currentTarget.checked)} />
-            <IssueLine issues={stego.refreshErrors} field="confirmation" />
-            {busy === "refresh" && <BusyBar label="Rebuilding a verified replacement; the old backup remains until that succeeds." />}
-            {stego.refreshResult?.kind === "fail" && <FailureCallout failure={stego.refreshResult.failure} />}
-            {stego.refreshResult?.kind === "ok" && <SuccessCallout title="Backup video refreshed" path={stego.refreshResult.path} onReveal={() => void stego.revealFolder(stego.refreshResult!.path)}>Recover and mount this refreshed snapshot before relying on it alone.</SuccessCallout>}
-            <Button loading={busy === "refresh"} disabled={locked || stego.refreshBlocked} onClick={() => void stego.runRefresh()}>Refresh backup video</Button>
-          </section>
           <details className="stego-details">
             <summary>Advanced: create an empty hidden container</summary>
             <section className="stego-block" aria-label="Create an empty hidden container">

@@ -23,12 +23,14 @@ test("attach sends an opaque existing container and never accepts a password", (
   const body = interfaceBody("AttachStegoContainerParams");
   expect(body).toContain("carrierPath: string");
   expect(body).toContain("containerPath: string");
-  expect(body).toContain("outputPath: string");
+  expect(body).toContain("outputPath?: string");
+  expect(body).toContain("replaceExisting?: boolean");
   expect(body.toLowerCase()).not.toContain("password");
 
   const call = backendHook.match(/attachStegoContainer:[\s\S]*?\n\s*\}\),/);
   expect(call?.[0]).toContain("CarrierPath: params.carrierPath");
   expect(call?.[0]).toContain("ContainerPath: params.containerPath");
+  expect(call?.[0]).toContain("ReplaceExisting: params.replaceExisting === true");
   expect(call?.[0]).not.toContain("Password");
 });
 

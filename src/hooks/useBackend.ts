@@ -640,7 +640,10 @@ export interface ExtractStegoMp4Params {
 export interface AttachStegoContainerParams {
   carrierPath: string;
   containerPath: string;
-  outputPath: string;
+  /** Omit to update the selected existing Stego video in place. */
+  outputPath?: string;
+  /** Required when outputPath is omitted because that replaces the video. */
+  replaceExisting?: boolean;
 }
 
 /** Restore the embedded container into a directory using its stored original filename. */
@@ -1935,6 +1938,7 @@ export function useBackend() {
         CarrierPath: params.carrierPath,
         ContainerPath: params.containerPath,
         OutputPath: params.outputPath,
+        ReplaceExisting: params.replaceExisting === true,
       }),
     restoreStegoContainer: (params: RestoreStegoContainerParams) =>
       execute<{ outputPath: string }>("Restore-StegoContainer", {

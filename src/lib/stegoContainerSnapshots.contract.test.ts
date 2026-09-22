@@ -12,8 +12,8 @@ import {
 // real carrier video and VeraCrypt container on Windows.
 
 describe("Stego container snapshots", () => {
-  test("attaches an existing .hc or .tc container without collecting a password", () => {
-    for (const containerPath of ["D:\\Vault\\Personal.hc", "D:\\Vault\\Archive.TC"]) {
+  test("attaches .hc, .tc, and extensionless containers without collecting a password", () => {
+    for (const containerPath of ["D:\\Vault\\Personal.hc", "D:\\Vault\\Archive.TC", "D:\\Vault\\NtfsVault"]) {
       const verdict = validateAttachForm({
         carrierPath: "D:\\Videos\\holiday.mp4",
         containerPath,
@@ -25,15 +25,7 @@ describe("Stego container snapshots", () => {
     }
   });
 
-  test("refuses a non-container or any attach output that would replace either input", () => {
-    expect(
-      validateAttachForm({
-        carrierPath: "D:\\Videos\\holiday.mp4",
-        containerPath: "D:\\Vault\\not-a-container.zip",
-        outputPath: "D:\\Backups\\holiday-private.mp4",
-      }).canSubmit,
-    ).toBe(false);
-
+  test("does not overwrite either input when making a new backup", () => {
     for (const outputPath of ["D:\\Videos\\holiday.mp4", "D:\\Vault\\Personal.hc"]) {
       expect(
         validateAttachForm({
@@ -43,6 +35,24 @@ describe("Stego container snapshots", () => {
         }).canSubmit,
       ).toBe(false);
     }
+  });
+
+  test("uses the same action to update a selected backup video in place", () => {
+    const needsConfirmation = validateAttachForm({
+      carrierPath: "D:\\Backups\\holiday-private.mp4",
+      containerPath: "D:\\Vault\\NtfsVault",
+      outputPath: "",
+      replacementConfirmed: false,
+    });
+    expect(needsConfirmation.canSubmit).toBe(false);
+    expect(needsConfirmation.errors.some((issue) => issue.field === "confirmation")).toBe(true);
+
+    expect(validateAttachForm({
+      carrierPath: "D:\\Backups\\holiday-private.mp4",
+      containerPath: "D:\\Vault\\NtfsVault",
+      outputPath: "",
+      replacementConfirmed: true,
+    }).canSubmit).toBe(true);
   });
 
   test("restores into a destination folder, retaining the embedded original filename", () => {

@@ -234,8 +234,10 @@ describe("Stego Container Snapshot forms", () => {
   it("attaches an existing .hc without a password or size field", () => {
     expect(attach().canSubmit).toBe(true);
   });
-  it("refuses a non-container input and either source being replaced", () => {
-    expect(attach({ containerPath: "D:\\Vault\\Private.zip" }).canSubmit).toBe(false);
+  it("allows arbitrary VeraCrypt container names but refuses either source being replaced", () => {
+    // VeraCrypt permits extensionless and custom-named containers; an extension
+    // cannot prove whether encrypted bytes are a genuine container.
+    expect(attach({ containerPath: "D:\\Vault\\Private.zip" }).canSubmit).toBe(true);
     expect(attach({ outputPath: "c:/videos/holiday.mp4" }).canSubmit).toBe(false);
     expect(attach({ outputPath: "d:/vault/private.hc" }).canSubmit).toBe(false);
   });

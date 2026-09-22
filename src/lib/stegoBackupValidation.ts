@@ -113,7 +113,9 @@ export function validateCreateForm(input: CreateFormInput): CreateFormVerdict {
 export interface AttachFormInput {
   carrierPath: string;
   containerPath: string;
+  /** Blank means update the selected existing Stego video in place. */
   outputPath: string;
+  replacementConfirmed?: boolean;
 }
 
 export interface SnapshotFormVerdict {
@@ -128,9 +130,13 @@ export function validateAttachForm(input: AttachFormInput): SnapshotFormVerdict 
   const warnings: StegoIssue[] = [];
   if (!input.carrierPath.trim()) errors.push({ field: "carrier", message: "Choose the video that will carry the encrypted container." });
   else if (!isSupportedCarrier(input.carrierPath)) errors.push({ field: "carrier", message: `The carrier has to be a ${CARRIER_FORMATS} video.` });
-  if (!input.containerPath.trim()) errors.push({ field: "container", message: "Choose the existing .hc or .tc container to attach." });
-  else if (!isSupportedContainer(input.containerPath)) errors.push({ field: "container", message: "Choose a VeraCrypt .hc or .tc container." });
-  if (!input.outputPath.trim()) errors.push({ field: "output", message: "Choose where to save the backup video." });
+  if (!input.containerPath.trim()) errors.push({ field: "container", message: "Choose the existing VeraCrypt container to attach." });
+  else if (!isSupportedContainer(input.containerPath)) errors.push({ field: "container", message: "Choose a container file, including an extensionless NTFS container if that is how it was created." });
+  if (!input.outputPath.trim() && !input.replacementConfirmed) errors.push({ field: "confirmation", message: "To update the selected backup video in place, confirm its verified replacement. Or choose a new backup-video path." });
+  else if (!input.outputPath.trim()) {
+    // The protected handler checks that the selected video is a V2 backup
+    // before it can replace it; a normal carrier is never overwritten.
+  }
   else if (isSamePath(input.carrierPath, input.outputPath)) errors.push({ field: "output", message: "Save to a different file — writing over the carrier destroys the original video." });
   else if (isSamePath(input.containerPath, input.outputPath)) errors.push({ field: "output", message: "The backup video cannot replace the encrypted container." });
   else if (!isSupportedCarrier(input.outputPath)) warnings.push({ field: "output", message: `Use a ${CARRIER_FORMATS} name so the backup still opens as a video.` });

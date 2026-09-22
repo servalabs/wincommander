@@ -134,10 +134,11 @@ describe("isSupportedCarrier", () => {
 });
 
 describe("existing container helpers", () => {
-  it("accepts only mountable .hc and .tc source containers", () => {
+  it("accepts common container extensions and an extensionless NTFS container", () => {
     expect(isSupportedContainer("D:\\Vault\\Private.HC")).toBe(true);
     expect(isSupportedContainer("D:\\Vault\\Private.tc")).toBe(true);
-    expect(isSupportedContainer("D:\\Vault\\Private.zip")).toBe(false);
+    expect(isSupportedContainer("D:\\Vault\\NtfsVault")).toBe(true);
+    expect(isSupportedContainer("")).toBe(false);
   });
   it("keeps the embedded filename separate from its source folder", () => {
     expect(fileName("D:/Vault/Private Files.hc")).toBe("Private Files.hc");
