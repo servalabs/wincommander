@@ -27,6 +27,10 @@ const closeInstalledApp = readFileSync(
   "src-tauri/commander-free/nsis/close-installed-app.ps1",
   "utf8",
 );
+const elevatedLaunchers = readFileSync(
+  "src-tauri/commander-free/nsis/configure-elevated-launchers.ps1",
+  "utf8",
+);
 const proInstaller = readFileSync("src-tauri/commander-free/src/pro_install.rs", "utf8");
 
 describe("Free machine-wide release packaging", () => {
@@ -81,6 +85,12 @@ describe("Free machine-wide release packaging", () => {
     expect(hooks).toContain("configure-elevated-launchers.ps1");
     expect(hooks).toContain("WinCommander Elevated Launcher");
     expect(hooks).toContain("WinCommander Elevated Autostart");
+    expect(elevatedLaunchers).toContain("$manualTaskName = 'WinCommander Elevated Launcher'");
+    expect(elevatedLaunchers).toContain("$autostartTaskName = 'WinCommander Autostart'");
+    expect(elevatedLaunchers).toContain("$obsoleteElevatedAutostartTaskName = 'WinCommander Elevated Autostart'");
+    expect(elevatedLaunchers).toContain("Register-LogonRouterTask");
+    expect(elevatedLaunchers).toContain("-Argument '--autostart'");
+    expect(elevatedLaunchers).not.toContain("--elevated-relaunch --autostart");
     expect(hooks).toContain("WC_SERVICE_STOP_TIMEOUT_SECONDS 135");
     expect(hooks).toContain("SCM's STATE, CHECKPOINT and WAIT_HINT");
     expect(hooks).toContain('!insertmacro WC_STOP_OWNED_SERVICE_OR_ABORT "uninstall" "un"');

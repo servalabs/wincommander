@@ -19,7 +19,6 @@ pub enum StartupElevationResult {
 
 const ELEVATED_RELAUNCH_FLAG: &str = "--elevated-relaunch";
 const ELEVATED_LAUNCH_TASK: &str = "WinCommander Elevated Launcher";
-const ELEVATED_AUTOSTART_TASK: &str = "WinCommander Elevated Autostart";
 
 /// A UAC prompt is useful for every interactive desktop launch, including the
 /// logon launch. This lets Windows show its normal consent/credential prompt
@@ -41,21 +40,56 @@ fn is_helper_launch(args: &[String]) -> bool {
     })
 }
 
-pub fn is_elevated_relaunch(args: &[String]) -> bool {
-    args.iter().any(|arg| arg == ELEVATED_RELAUNCH_FLAG)
+fn is_logon_router_launch(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--autostart")
 }
 
-fn elevated_launcher_task(args: &[String]) -> &'static str {
-    if args.iter().any(|arg| arg == "--autostart") {
-        ELEVATED_AUTOSTART_TASK
-    } else {
-        ELEVATED_LAUNCH_TASK
-    }
+fn should_continue_normal_logon(args: &[String], user_has_split_admin_token: bool) -> bool {
+    is_logon_router_launch(args) && !user_has_split_admin_token
+}
+
+pub fn is_elevated_relaunch(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == ELEVATED_RELAUNCH_FLAG)
 }
 
 #[cfg(windows)]
 pub fn is_current_process_elevated() -> bool {
     (unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() }) != 0
+}
+
+/// A UAC-filtered Administrator token is not elevated, so IsUserAnAdmin()
+/// returns false. TokenElevationTypeLimited is the Windows-supported way to
+/// distinguish that account from a standard account without parsing localized
+/// group names or invoking a shell command. This only decides whether a broken
+/// trusted logon route should fall back to consent; it grants no authority.
+#[cfg(windows)]
+fn current_user_has_split_admin_token() -> bool {
+    use windows_sys::Win32::{
+        Foundation::CloseHandle,
+        Security::{
+            GetTokenInformation, TokenElevationType, TokenElevationTypeLimited,
+            TOKEN_ELEVATION_TYPE, TOKEN_QUERY,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+
+    unsafe {
+        let mut token = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let mut elevation_type: TOKEN_ELEVATION_TYPE = 0;
+        let mut bytes_returned = 0;
+        let read_ok = GetTokenInformation(
+            token,
+            TokenElevationType,
+            &mut elevation_type as *mut TOKEN_ELEVATION_TYPE as *mut _,
+            std::mem::size_of::<TOKEN_ELEVATION_TYPE>() as u32,
+            &mut bytes_returned,
+        ) != 0;
+        CloseHandle(token);
+        read_ok && elevation_type == TokenElevationTypeLimited
+    }
 }
 
 #[cfg(not(windows))]
@@ -134,7 +168,7 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
     // Scheduler verifies group membership and starts the configured high-token
     // child without another consent dialog. If the task is absent, blocked by
     // policy, or this is a standard user, deliberately fall through to UAC.
-    let task_name = elevated_launcher_task(args);
+    let task_name = ELEVATED_LAUNCH_TASK;
     let task_status = std::process::Command::new("schtasks.exe")
         .args(["/Run", "/TN", task_name])
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
@@ -146,6 +180,20 @@ pub fn offer_startup_elevation(args: &[String]) -> StartupElevationResult {
             &format!("[StartupElevation] trusted task started: {task_name}"),
         );
         return StartupElevationResult::ElevatedCopyStarted;
+    }
+
+    // The sole logon task runs at the caller's normal token. For a standard
+    // user the Administrators-only launcher is correctly unavailable; logon
+    // must continue normally without a disruptive UAC prompt. A split-token
+    // Administrator instead falls through to Windows UAC if the installer
+    // task is missing or blocked, rather than silently losing elevation.
+    if should_continue_normal_logon(args, current_user_has_split_admin_token()) {
+        crate::log_message_src(
+            "info",
+            "core",
+            "[StartupElevation] elevated launcher unavailable at logon; continuing with the normal user token",
+        );
+        return StartupElevationResult::ContinueNormally;
     }
 
     let executable = match std::env::current_exe() {
@@ -213,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn helpers_never_prompt_but_autostart_uses_the_same_uac_contract() {
+    fn helpers_never_prompt_but_autostart_is_routed_without_ui() {
         for flag in ["--safe-copy", "--context-shred", "--scrub", "--safe-paste"] {
             assert!(!should_offer_startup_elevation(
                 false,
@@ -228,23 +276,28 @@ mod tests {
     }
 
     #[test]
+    fn logon_router_is_distinguished_from_foreground_launches() {
+        assert!(is_logon_router_launch(&[
+            "app.exe".into(),
+            "--autostart".into()
+        ]));
+        assert!(!is_logon_router_launch(&["app.exe".into()]));
+    }
+
+    #[test]
+    fn only_standard_user_logon_skips_uac_when_the_trusted_task_is_unavailable() {
+        let logon = ["app.exe".into(), "--autostart".into()];
+        assert!(should_continue_normal_logon(&logon, false));
+        assert!(!should_continue_normal_logon(&logon, true));
+        assert!(!should_continue_normal_logon(&["app.exe".into()], false));
+    }
+
+    #[test]
     fn elevated_child_cannot_loop_back_into_uac() {
         assert!(!should_offer_startup_elevation(
             false,
             &["app.exe".into(), ELEVATED_RELAUNCH_FLAG.into()]
         ));
-    }
-
-    #[test]
-    fn elevated_launchers_preserve_manual_and_autostart_contracts() {
-        assert_eq!(
-            elevated_launcher_task(&["app.exe".into()]),
-            ELEVATED_LAUNCH_TASK
-        );
-        assert_eq!(
-            elevated_launcher_task(&["app.exe".into(), "--autostart".into()]),
-            ELEVATED_AUTOSTART_TASK
-        );
     }
 
     #[test]

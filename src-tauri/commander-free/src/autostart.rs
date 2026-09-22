@@ -11,9 +11,12 @@
 //      consent/credential flow as a foreground launch.
 //
 // The task uses a BUILTIN\Users (S-1-5-32-545) group principal + an at-logon
-// trigger, so it fires for any user's logon inside that user's interactive
-// session. Task Scheduler starts it in that session; WinCommander then asks
-// Windows for elevation instead of suppressing UAC.
+// trigger, so it fires once for any user's logon inside that user's interactive
+// session.  It is the single logon router: an Administrator immediately hands
+// off to the separate Administrators-only elevated-launch task before creating
+// a window; a standard user continues with the limited process.  Do not add a
+// second elevated logon trigger: two independent triggers race and can create
+// duplicate desktop processes.
 
 const COVERED_TASK_NAME: &str = "System Update Service";
 
@@ -34,21 +37,6 @@ fn covered_identity_active() -> bool {
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-#[cfg(windows)]
-const AUTOSTART_POWERSHELL: &str = "powershell.exe";
-
-/// Task Scheduler discards a child process's stderr. Keep that evidence in the
-/// relevant profile rather than ProgramData, which a standard user cannot
-/// write. The file is overwritten on each autostart attempt so it stays useful
-/// for the latest failure and cannot grow without bound.
-#[cfg(windows)]
-fn autostart_action_args(exe: &str) -> String {
-    let exe_ps = exe.replace('\'', "''");
-    format!(
-        "-NoProfile -NonInteractive -WindowStyle Hidden -Command \"$ErrorActionPreference='Stop'; $dir=Join-Path $env:LOCALAPPDATA 'WinCommander'; New-Item -ItemType Directory -Path $dir -Force | Out-Null; $log=Join-Path $dir 'autostart.stderr.log'; & '{exe_ps}' --autostart 2> $log; exit $LASTEXITCODE\""
-    )
-}
 
 /// Repair the machine-wide logon autostart task only when its identity or
 /// execution contract has drifted. A correct task is left untouched, avoiding
@@ -71,37 +59,30 @@ fn ensure_autostart_task_named(covered: bool) -> Result<(), String> {
     let name_ps = task_name(covered).replace('\'', "''");
     let stale_name_ps = task_name(!covered).replace('\'', "''");
     let run_value = crate::paths::app_display_name().replace('\'', "''");
-    let action_args = autostart_action_args(&exe);
-    let action_args_b64 = {
-        use base64::{engine::general_purpose::STANDARD, Engine as _};
-        let utf16: Vec<u8> = action_args
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect();
-        STANDARD.encode(utf16)
-    };
+    let action_args = "--autostart";
 
     let script = format!(
         "$ErrorActionPreference='Stop'
-$actionArgs = [System.Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{action_args_b64}'))
 $task = Get-ScheduledTask -TaskName '{name}' -ErrorAction SilentlyContinue
 $needsRepair = $null -eq $task
 if (-not $needsRepair) {{
   $action = @($task.Actions)
   $logonTrigger = @($task.Triggers | Where-Object {{ $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }})
-  $needsRepair = $action.Count -ne 1 -or $action[0].Execute -ne '{powershell}' -or $action[0].Arguments -ne $actionArgs -or $logonTrigger.Count -ne 1 -or $task.Principal.GroupId -ne 'S-1-5-32-545' -or $task.Principal.RunLevel -ne 'Limited' -or $task.Settings.MultipleInstances -ne 'IgnoreNew' -or $task.Settings.ExecutionTimeLimit -ne 'PT0S'
+  $needsRepair = $action.Count -ne 1 -or $action[0].Execute -ne '{exe}' -or $action[0].Arguments -ne '{action_args}' -or $logonTrigger.Count -ne 1 -or $task.Principal.GroupId -ne 'S-1-5-32-545' -or $task.Principal.RunLevel -ne 'Limited' -or $task.Settings.MultipleInstances -ne 'IgnoreNew' -or $task.Settings.ExecutionTimeLimit -ne 'PT0S'
 }}
 $staleTask = Get-ScheduledTask -TaskName '{stale_name}' -ErrorAction SilentlyContinue
+$obsoleteElevatedAutostart = Get-ScheduledTask -TaskName 'WinCommander Elevated Autostart' -ErrorAction SilentlyContinue
 $legacyTasks = @('Sys Health Checker', 'WinCommander Input Service') | Where-Object {{ Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue }}
 $legacyRun = Get-ItemPropertyValue -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '{run}' -ErrorAction SilentlyContinue
-if ($staleTask -or $legacyTasks.Count -gt 0 -or $null -ne $legacyRun -or (Test-Path -LiteralPath \"$env:ProgramData\\WinCommander\\reopen.cfg\")) {{ $needsRepair = $true }}
+if ($staleTask -or $obsoleteElevatedAutostart -or $legacyTasks.Count -gt 0 -or $null -ne $legacyRun -or (Test-Path -LiteralPath \"$env:ProgramData\\WinCommander\\reopen.cfg\")) {{ $needsRepair = $true }}
 if ($needsRepair) {{
-$a = New-ScheduledTaskAction -Execute '{powershell}' -Argument $actionArgs
+$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '{action_args}'
 $t = New-ScheduledTaskTrigger -AtLogOn
 $p = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited
 $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName '{name}' -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
 Unregister-ScheduledTask -TaskName '{stale_name}' -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName 'WinCommander Elevated Autostart' -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName 'Sys Health Checker' -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName 'WinCommander Input Service' -Confirm:$false -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath \"$env:ProgramData\\WinCommander\\reopen.cfg\" -Force -ErrorAction SilentlyContinue
@@ -110,8 +91,8 @@ Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\
         name = name_ps,
         stale_name = stale_name_ps,
         run = run_value,
-        action_args_b64 = action_args_b64,
-        powershell = AUTOSTART_POWERSHELL,
+        exe = exe.replace('\'', "''"),
+        action_args = action_args,
     );
 
     let out = std::process::Command::new("powershell")

@@ -6,16 +6,19 @@ param(
 )
 
 # UAC correctly prevents a normal process from silently making itself elevated.
-# These two installer-owned tasks are the trusted Windows boundary instead:
-# only an Administrators-group principal can run them, and Task Scheduler gives
-# that principal its highest available token. Standard users cannot use them
-# and remain on the normal ShellExecute("runas") consent/credential path.
+# The Administrators-only task below is the trusted Windows elevation boundary.
+# A separate single, limited Users-group logon task routes every interactive
+# session: Administrator sessions start this trusted task before a window is
+# created, while standard users retain one normal process. Do not install a
+# second elevated logon trigger because it races the router at logon.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $administratorsSid = 'S-1-5-32-544'
+$usersSid = 'S-1-5-32-545'
 $manualTaskName = 'WinCommander Elevated Launcher'
-$autostartTaskName = 'WinCommander Elevated Autostart'
+$autostartTaskName = 'WinCommander Autostart'
+$obsoleteElevatedAutostartTaskName = 'WinCommander Elevated Autostart'
 
 try {
     $targetPath = [System.IO.Path]::GetFullPath($ExecutablePath)
@@ -36,9 +39,7 @@ function Register-ElevatedLauncherTask {
         [string]$TaskName,
 
         [Parameter(Mandatory)]
-        [string]$Arguments,
-
-        [switch]$AtLogon
+        [string]$Arguments
     )
 
     $action = New-ScheduledTaskAction -Execute $targetPath -Argument $Arguments
@@ -51,13 +52,7 @@ function Register-ElevatedLauncherTask {
         -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -MultipleInstances IgnoreNew
 
-    if ($AtLogon) {
-        $trigger = New-ScheduledTaskTrigger -AtLogOn
-        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    }
-    else {
-        Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-    }
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 
     $registered = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
     # Task Scheduler normalizes the SID to the localized group display name
@@ -69,10 +64,27 @@ function Register-ElevatedLauncherTask {
     }
 }
 
+function Register-LogonRouterTask {
+    $action = New-ScheduledTaskAction -Execute $targetPath -Argument '--autostart'
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    $principal = New-ScheduledTaskPrincipal -GroupId $usersSid -RunLevel Limited
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName $autostartTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    $registered = Get-ScheduledTask -TaskName $autostartTaskName -ErrorAction Stop
+    if ($registered.Principal.RunLevel -ne 'Limited') {
+        throw "Task $autostartTaskName was not registered with the required Limited security context."
+    }
+}
+
 try {
     Register-ElevatedLauncherTask -TaskName $manualTaskName -Arguments '--elevated-relaunch'
-    Register-ElevatedLauncherTask -TaskName $autostartTaskName -Arguments '--elevated-relaunch --autostart' -AtLogon
-    Write-Output "Configured trusted elevated WinCommander launchers for Administrators."
+    Register-LogonRouterTask
+    Unregister-ScheduledTask -TaskName $obsoleteElevatedAutostartTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Output "Configured one WinCommander logon router and the trusted elevated Administrator launcher."
 }
 catch {
     Write-Error "Could not configure trusted elevated WinCommander launchers: $($_.Exception.Message)"
